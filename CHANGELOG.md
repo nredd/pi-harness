@@ -33,6 +33,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [2.13.0] - 2026-10-11
 
+### Added
+
+- Clickable `▾`/`▸` disclosure markers on the todo heading for collapsing and expanding the overlay.
+
 ## [2.12.0] - 2026-09-30
 
 ### Fixed

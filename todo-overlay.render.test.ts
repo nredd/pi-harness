@@ -60,13 +60,14 @@ afterEach(() => {
 });
 
 describe("TodoOverlay — heading", () => {
-	it("includes 'Todos (completed/total)' count", async () => {
+	it("includes an expanded disclosure marker and 'Todos (completed/total)' count", async () => {
 		const { widget } = await setup([
 			{ action: "create", subject: "a" },
 			{ action: "create", subject: "b" },
 			{ action: "update", id: 1, status: "completed" },
 		]);
 		const lines = widget.render(200);
+		expect(lines[0]).toContain("▾");
 		expect(lines[0]).toContain("Todos (1/2)");
 	});
 
@@ -291,6 +292,7 @@ describe("TodoOverlay — collapse/expand render", () => {
 		overlay.toggleCollapse(); // collapse
 		const lines = widget.render(200);
 		expect(lines).toHaveLength(3); // heading + hint + trailing spacer
+		expect(lines[0]).toContain("▸");
 		expect(lines[0]).toContain("Todos (1/2)");
 		expect(lines[1]).toContain("└─");
 		expect(lines[1]).toContain("ctrl+shift+t to expand");

@@ -26,7 +26,7 @@ snapshots are saved.
 ## Anatomy of a row
 
 ```
-● Todos (2/5)
+▾ ● Todos (2/5)
 ├─ ✓ Create DemoTodo domain entity
 ├─ ✓ Create IDemoTodoRepository interface
 ├─ ◐ Create DemoTodoRepository (creating the repository)
@@ -34,9 +34,10 @@ snapshots are saved.
 └─ ○ Add integration tests
 ```
 
-- **Heading** — `● Todos (done/total)` in the accent color while any task is
-  `pending` or `in_progress`; `○ Todos (done/total)` dimmed once everything is
-  completed.
+- **Heading** — `▾ ● Todos (done/total)` in the accent color while any task is
+  `pending` or `in_progress`; `▾ ○ Todos (done/total)` dimmed once everything is
+  completed. The marker becomes `▸` while collapsed. Click anywhere on the
+  heading to toggle it.
 - **Glyphs** — `○` pending, `◐` in_progress, `✓` completed, `✗` deleted.
   Completed and deleted subjects render dim and struck through.
 - **activeForm** — appended dim in parentheses, only while the task is
@@ -77,9 +78,10 @@ session resets that tracking, so a fresh session shows the full list again.
 
 ## Collapsing
 
-Press `ctrl+shift+t` to collapse the panel to two lines — the heading plus a dim
-`└─ ctrl+shift+t to expand` hint — and again to expand it. The hint always shows
-the currently configured key.
+Click the heading to collapse the panel to two lines -- the heading plus a dim
+`└─ ctrl+shift+t to expand` hint -- and click it again to expand. The disclosure
+marker changes from `▾` to `▸`. The configured keyboard shortcut performs the
+same toggle, and the hint always shows that key.
 
 Rebind or disable the shortcut with the `collapseKey` option; see
 [configuration.md](./configuration.md#collapsekey). If the shortcut is set to

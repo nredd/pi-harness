@@ -310,6 +310,60 @@ describe("TodoOverlay — collapse/expand state", () => {
 		expect(widget.render(200).some((l) => l.includes("ctrl+shift+t to expand"))).toBe(false);
 	});
 
+	it("left-clicking the heading toggles collapse and forces a redraw", async () => {
+		const { widget, requestRender } = await setupRegistered();
+		const interactive = widget as typeof widget & {
+			handleMouse: (event: {
+				type: "click";
+				button: "left";
+				x: number;
+				y: number;
+				screenX: number;
+				screenY: number;
+				shift: boolean;
+				alt: boolean;
+				ctrl: boolean;
+			}) => { handled?: boolean } | undefined;
+		};
+
+		const result = interactive.handleMouse({
+			type: "click",
+			button: "left",
+			x: 2,
+			y: 0,
+			screenX: 2,
+			screenY: 0,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		});
+
+		expect(result).toMatchObject({ handled: true });
+		expect(requestRender).toHaveBeenCalledWith(true);
+		expect(widget.render(200)[0]).toContain("▸");
+	});
+
+	it("does not capture clicks outside the heading", async () => {
+		const { widget, requestRender } = await setupRegistered();
+		const interactive = widget as typeof widget & { handleMouse: (event: Record<string, unknown>) => unknown };
+
+		const result = interactive.handleMouse({
+			type: "click",
+			button: "left",
+			x: 2,
+			y: 1,
+			screenX: 2,
+			screenY: 1,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		});
+
+		expect(result).toBeUndefined();
+		expect(requestRender).not.toHaveBeenCalled();
+		expect(widget.render(200)[0]).toContain("▾");
+	});
+
 	it("isRegistered() reflects the widget registration state", async () => {
 		const overlay = new TodoOverlay();
 		expect(overlay.isRegistered()).toBe(false);

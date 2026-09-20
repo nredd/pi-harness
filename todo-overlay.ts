@@ -28,6 +28,12 @@ const OVERLAY_MORE = "more";
 const OVERLAY_EXPAND_HINT = "{key} to expand";
 const OVERLAY_COLLAPSED = "collapsed";
 
+interface TodoMouseEvent {
+	type: string;
+	button: string;
+	y: number;
+}
+
 export class TodoOverlay {
 	private uiCtx: ExtensionUIContext | undefined;
 	private widgetRegistered = false;
@@ -68,6 +74,7 @@ export class TodoOverlay {
 					this.tui = tui;
 					return {
 						render: (width: number) => this.renderWidget(this.uiCtx?.theme ?? factoryTheme, width),
+						handleMouse: (event: TodoMouseEvent) => this.handleMouse(event),
 						invalidate: () => {
 							// No rendered strings are cached. Pi invalidates on theme changes;
 							// the next render reads uiCtx.theme.
@@ -107,6 +114,12 @@ export class TodoOverlay {
 
 	isRegistered(): boolean {
 		return this.widgetRegistered;
+	}
+
+	private handleMouse(event: TodoMouseEvent): { handled: true } | undefined {
+		if (event.type !== "click" || event.button !== "left" || event.y !== 0) return undefined;
+		this.toggleCollapse();
+		return { handled: true };
 	}
 
 	private getSnapshot() {
@@ -149,7 +162,10 @@ export class TodoOverlay {
 		const headingColor = hasActive ? "accent" : "dim";
 		const headingIcon = hasActive ? "●" : "○";
 		const headingText = `${t("overlay.heading", OVERLAY_HEADING)} (${counts.completed}/${counts.total})`;
-		const heading = truncate(`${theme.fg(headingColor, headingIcon)} ${theme.fg(headingColor, headingText)}`);
+		const disclosure = this.collapsed ? "▸" : "▾";
+		const heading = truncate(
+			`${theme.fg("dim", disclosure)} ${theme.fg(headingColor, headingIcon)} ${theme.fg(headingColor, headingText)}`,
+		);
 
 		// Collapsed view: just the heading + a dim "└─" expand hint, then the
 		// trailing spacer. Short-circuit before the budget math and the completed-
