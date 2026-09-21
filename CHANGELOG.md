@@ -1,5 +1,17 @@
 # @nredd/pi-plan-mode
 
+## 0.58.0-nredd.5
+
+### Changed
+
+- Restored once-only automatic ready-plan approval after a valid completion
+  settles idle with no queued messages. Cancellation, incomplete prose,
+  reload, supersession, exit, and session replacement do not open it.
+- Replaced the verbose ready-plan selector with responsive, keyboard- and
+  mouse-operable action cells. The fullscreen chooser has no policy,
+  reinjection, or per-action description text; RPC keeps a description-free
+  selector fallback.
+
 ## 0.58.0-nredd.4
 
 ### Changed

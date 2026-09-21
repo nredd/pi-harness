@@ -576,7 +576,7 @@ test("manual thinking changes survive active Plan-mode shutdown and resume", asy
   }
 });
 
-test("completed plans keep transcript scrolling available until /plan opens review", async () => {
+test("completed plans automatically open the ready-plan chooser once", async () => {
   let modalCalls = 0;
   const mock = createMockPi({ activeTools: ["read"] });
   planMode(mock.pi);
@@ -601,12 +601,9 @@ test("completed plans keep transcript scrolling available until /plan opens revi
   );
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
 
-  assert.equal(modalCalls, 0, "automatic review must not capture the editor or block transcript scrolling");
+  assert.equal(modalCalls, 1, "the ready-plan chooser opens after settlement");
   assert.equal(context.statuses.get("plan-mode"), "plan ready");
-  assert.ok(context.widgets.get("plan-mode-plan"), "the compact ready-plan affordance remains visible");
-
-  await mock.commands.get("plan")?.handler("", context.ctx);
-  assert.equal(modalCalls, 1, "review opens only when the user requests it");
+  assert.ok(context.widgets.get("plan-mode-plan"), "the completed plan remains available for review");
 });
 
 test("Plan lifecycle enters with a prompt and hands a valid plan to implementation", async () => {
@@ -1098,7 +1095,7 @@ test("plan_mode_complete stores a visible terminating plan contract", async () =
   assert.equal(context.statuses.get("plan-mode"), "plan ready");
 });
 
-test("plan completion waits for an explicit /plan before opening the ready menu", async () => {
+test("plan completion opens the ready menu once after settlement", async () => {
   let selectCalls = 0;
   const mock = createMockPi({ activeTools: ["read"] });
   planMode(mock.pi);
@@ -1119,15 +1116,12 @@ test("plan completion waits for an explicit /plan before opening the ready menu"
   assert.equal(selectCalls, 0);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-  assert.equal(selectCalls, 0);
-  assert.equal(mock.sentMessages.length, 1, "only the hidden Plan contract is published");
-  assert.equal(context.statuses.get("plan-mode"), "plan ready");
-
-  await mock.commands.get("plan")?.handler("", context.ctx);
   assert.equal(selectCalls, 1);
+  assert.equal(mock.sentMessages.length, 2, "the selected ready-plan action can display the completed plan");
+  assert.equal(context.statuses.get("plan-mode"), "plan ready");
 });
 
-test("legacy plan completion is presented once after settlement without forcing its menu", async () => {
+test("legacy plan completion opens the ready menu once after settlement", async () => {
   let selectCalls = 0;
   const mock = createMockPi({ activeTools: ["read"] });
   planMode(mock.pi);
@@ -1148,12 +1142,8 @@ test("legacy plan completion is presented once after settlement without forcing 
 
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-  assert.equal(selectCalls, 0);
-  assert.equal(mock.sentMessages.length, 2);
-  assert.match((mock.sentMessages.at(-1)?.message as { content?: string })?.content ?? "", /# Legacy/);
-
-  await mock.commands.get("plan")?.handler("", context.ctx);
   assert.equal(selectCalls, 1);
+  assert.equal(mock.sentMessages.length, 2);
 });
 
 test("settled legacy plan presentation waits for idle without pending messages", async () => {
@@ -1188,7 +1178,7 @@ test("settled legacy plan presentation waits for idle without pending messages",
   pending = false;
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.equal(mock.sentMessages.length, 2);
-  assert.equal(selectCalls, 0);
+  assert.equal(selectCalls, 1);
 });
 
 test("duplicate and replacement completions present only the latest plan once", async () => {
@@ -1213,11 +1203,8 @@ test("duplicate and replacement completions present only the latest plan once", 
   await execute("replacement", { plan: "# Replacement" }, undefined, undefined, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-  assert.equal(selectCalls, 0);
-  assert.equal((mock.entries.at(-1)?.data as { latestPlan?: string })?.latestPlan, "# Replacement");
-
-  await mock.commands.get("plan")?.handler("", context.ctx);
   assert.equal(selectCalls, 1);
+  assert.equal((mock.entries.at(-1)?.data as { latestPlan?: string })?.latestPlan, "# Replacement");
 });
 
 test("repeated legacy agent_end events produce one settled presentation", async () => {
@@ -1238,11 +1225,8 @@ test("repeated legacy agent_end events produce one settled presentation", async 
   await mock.events.get("agent_end")?.[0]?.(event, context.ctx);
   await mock.events.get("agent_end")?.[0]?.(event, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-  assert.equal(selectCalls, 0);
-  assert.equal(mock.sentMessages.length, 2);
-
-  await mock.commands.get("plan")?.handler("", context.ctx);
   assert.equal(selectCalls, 1);
+  assert.equal(mock.sentMessages.length, 2);
 });
 
 test("no-UI completion remains ready without opening or duplicating presentation", async () => {

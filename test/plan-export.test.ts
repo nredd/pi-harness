@@ -497,6 +497,11 @@ function containsTerminalControl(value: string) {
 }
 
 function chooseExportMenu(harness: ReturnType<typeof createCustomSelectorHarness>) {
+  if (harness.render().join("\n").includes("[ Export plan… ]")) {
+    for (let index = 0; index < 3; index += 1) harness.handleInput("tui.select.down");
+    harness.handleInput("tui.select.confirm");
+    return;
+  }
   for (let index = 0; index < 10; index += 1) {
     if (selectedMenuLabel(harness.render()).startsWith("Export plan")) break;
     harness.handleInput("tui.select.down");

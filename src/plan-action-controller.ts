@@ -99,6 +99,29 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         clear: () => options.clearSaved(ctx),
       });
     },
+    async showReady(ctx: ExtensionContext, readyIsCurrent: () => boolean) {
+      if (!ctx.hasUI) return;
+      const lifecycle = options.captureLifecycle();
+      const isCurrent = () => lifecycle.isCurrent() && readyIsCurrent();
+      if (!isCurrent() || lifecycle.signal.aborted) return;
+      const ui = await options.loadInteractiveUi();
+      if (!isCurrent() || lifecycle.signal.aborted) return;
+      await ui.showReadyPlanMenu(ctx, {
+        planThinkingLevel: options.getThinkingLevel(),
+        implementationDefaults: configuredDefaults(),
+        implementationOutcome: options.implementationOutcome,
+        getExportDestination: () => options.getExportDestination(ctx),
+        signal: lifecycle.signal,
+        isCurrent,
+        show: () => options.show(ctx),
+        implementHere: () => options.implementHere(ctx),
+        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
+        exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, isCurrent),
+        save: () => options.save(ctx),
+        stay: () => options.stay(ctx),
+        exit: () => options.exitReady(ctx),
+      });
+    },
     async showCurrent(ctx: ExtensionContext) {
       if (!ctx.hasUI) {
         ctx.ui.notify(options.statusText(), "info");

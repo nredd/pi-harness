@@ -10,6 +10,7 @@ function menuOptions(overrides: Record<string, unknown> = {}) {
     implementationOutcome: () => "The plan remains available until implementation ends.",
     planThinkingLevel: undefined,
     getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
+    show: () => undefined,
     implementHere: () => undefined,
     implementFresh: () => undefined,
     exportPlan: async () => true,
@@ -28,6 +29,38 @@ const AVAILABLE_MODELS = [
   },
   { provider: "provider-two", id: "model-two", name: "Beta specialist" },
 ];
+
+test("the ready-plan chooser is compact and opens its selected action", async () => {
+  let screen = "";
+  let implemented = 0;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: async (factory: unknown) => {
+      const harness = createCustomSelectorHarness(factory, 120);
+      screen = harness.render().join("\n");
+      harness.handleInput("tui.select.down");
+      harness.handleInput("tui.select.confirm");
+      return harness.resultPromise;
+    },
+  });
+
+  await showReadyPlanMenu(
+    context.ctx,
+    menuOptions({
+      implementHere: () => {
+        implemented += 1;
+      },
+    }),
+  );
+
+  assert.equal(implemented, 1);
+  assert.equal(screen.split("\n").length, 3);
+  assert.match(screen, /Show latest proposed plan.*Implement here.*Start fresh and implement.*Export plan…/u);
+  assert.match(screen, /Save for later.*Stay in Plan mode.*Discard plan and exit/u);
+  assert.equal(screen.includes("Continue in this session"), false);
+  assert.equal(screen.includes("planning conversation"), false);
+});
 
 test("fresh settings select sanitized model metadata and fixed thinking in one menu flow", async () => {
   const dialogs: Array<{ title: string; options: string[] }> = [];
@@ -136,6 +169,7 @@ test("fresh settings prioritize start and show the plan runtime defaults", async
       const harness = createCustomSelectorHarness(factory, 90);
       screen += 1;
       if (screen === 1) {
+        harness.handleInput("tui.select.down");
         harness.handleInput("tui.select.down");
         harness.handleInput("tui.select.confirm");
       } else {
@@ -301,6 +335,7 @@ test("fresh thinking choice mirrors the built-in thinking layout", async () => {
       screen += 1;
       if (screen === 1) {
         harness.handleInput("tui.select.down");
+        harness.handleInput("tui.select.down");
         harness.handleInput("tui.select.confirm");
       } else if (screen === 2) {
         harness.handleInput("tui.select.down");
@@ -464,6 +499,7 @@ test("fresh model choice mirrors the searchable built-in model layout in TUI mod
       const harness = createCustomSelectorHarness(factory, 80);
       screen += 1;
       if (screen === 1) {
+        harness.handleInput("tui.select.down");
         harness.handleInput("tui.select.down");
         harness.handleInput("tui.select.confirm");
       } else if (screen === 2) {

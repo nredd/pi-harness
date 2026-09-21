@@ -25,6 +25,14 @@ Reopen the selector to refresh newly registered tools.
 Active and ready workflows lock tools and settings; exit and start a new workflow to change the allowlist.
 See [Planning and implementation](../README.md#-planning-and-implementation) for the first-request policy boundary, completion, and same-session versus fresh-session handoff.
 
+## Ready-plan approval
+
+After a valid standalone `plan_mode_complete` call, or an accepted legacy completion, the ready-plan chooser opens once when the run is idle and has no queued messages. It does not open for incomplete prose, cancellation, session replacement, reload, supersession, or exit.
+
+The fullscreen chooser has no policy or reinjection copy. It packs `Show latest proposed plan`, `Implement here`, `Start fresh and implement`, `Export plan…`, `Save for later`, `Stay in Plan mode`, and `Discard plan and exit` into responsive action cells. Use arrows or Tab to select, Enter to confirm, Escape or Ctrl+C to close, or click a cell. Narrow terminals wrap cells safely. RPC retains the same description-free selector fallback.
+
+The stored plan and ready state remain intact until the selected action completes. `/plan` still opens the state-aware management menu when needed.
+
 ## Busy transitions and recovery
 
 Wait for Pi's run to settle before starting, exiting, saving, exporting a ready plan, implementing, or using another state-changing menu action or configured shortcut.

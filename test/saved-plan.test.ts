@@ -159,9 +159,15 @@ test("user-opened ready menu exposes Save for later", async () => {
   const mock = createMockPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
   const context = createMockContext({
+    mode: "tui",
     hasUI: true,
+    custom: async (factory: unknown) => {
+      const harness = createCustomSelectorHarness(factory);
+      harness.handleInput("tui.select.cancel");
+      return harness.resultPromise;
+    },
     select: async (title: string, options: string[]) => {
-      assert.match(title, /Plan reinjection: Off; use conversation history only/i);
+      assert.doesNotMatch(title, /Plan reinjection: Off; use conversation history only/i);
       assert.deepEqual(
         options.filter((option) => option !== "Close"),
         [

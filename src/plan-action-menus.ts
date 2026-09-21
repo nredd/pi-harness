@@ -7,6 +7,7 @@ import {
   snapshotAvailableImplementationModels,
 } from "./implementation-models.js";
 import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
+import { chooseReadyPlanAction } from "./ready-plan-chooser.js";
 import { IMPLEMENTATION_THINKING_LEVELS, type PlanModeFixedThinkingLevel } from "./settings.js";
 import type { ImplementationRuntimeSelection } from "./state.js";
 
@@ -14,11 +15,6 @@ interface MenuLifecycle {
   signal: AbortSignal;
   isCurrent(): boolean;
 }
-
-const IMPLEMENTATION_CONTEXT_LINES = [
-  "Implement here keeps this planning conversation.",
-  "Start fresh transfers only the approved plan to a new session.",
-] as const;
 
 const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = {
   off: "No reasoning",
@@ -72,25 +68,12 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
       main: () => ({
         kind: "actions",
         title: "Plan mode",
-        lines: [
-          options.statusText,
-          ...(options.hasReadyPlan ? [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()] : []),
-        ],
+        lines: [options.statusText],
         items: options.hasReadyPlan
           ? [
               { id: "show", label: "Show latest proposed plan", action: "show" },
-              {
-                id: "implement-here",
-                label: "Implement here",
-                description: "Continue in this session with the planning conversation.",
-                action: "implement-here",
-              },
-              {
-                id: "implement-fresh",
-                label: "Start fresh and implement",
-                description: "Configure one-shot model and thinking choices first.",
-                to: "fresh",
-              },
+              { id: "implement-here", label: "Implement here", action: "implement-here" },
+              { id: "implement-fresh", label: "Start fresh and implement", to: "fresh" },
               { id: "export", label: "Export plan…", to: "export" },
               { id: "save", label: "Save for later", action: "save" },
               { id: "stay", label: "Stay in Plan mode", action: "stay" },
@@ -161,6 +144,7 @@ interface ReadyPlanMenuOptions extends MenuLifecycle {
   implementationDefaults?: ImplementationRuntimeSelection;
   implementationOutcome(): string;
   getExportDestination: PlanExportDestinationProvider;
+  show(): void;
   implementHere(): void | Promise<void>;
   implementFresh(runtime: ImplementationRuntimeSelection, signal: AbortSignal): void | Promise<void>;
   exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
@@ -170,8 +154,43 @@ interface ReadyPlanMenuOptions extends MenuLifecycle {
 }
 
 export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPlanMenuOptions) {
+  if (ctx.mode === "tui" && ctx.hasUI) {
+    const action = await chooseReadyPlanAction(ctx);
+    if (!action || options.signal.aborted || !options.isCurrent()) return;
+    if (action === "show") {
+      options.show();
+      return;
+    }
+    if (action === "implement-here") {
+      await options.implementHere();
+      return;
+    }
+    if (action === "save") {
+      options.save();
+      return;
+    }
+    if (action === "stay") {
+      options.stay();
+      return;
+    }
+    if (action === "exit") {
+      options.exit();
+      return;
+    }
+    await runReadyPlanMenu(ctx, options, action === "implement-fresh" ? "fresh" : "export");
+    return;
+  }
+  await runReadyPlanMenu(ctx, options, "ready");
+}
+
+async function runReadyPlanMenu(
+  ctx: ExtensionContext,
+  options: ReadyPlanMenuOptions,
+  start: "ready" | "fresh" | "export",
+) {
   type Screen = "ready" | "fresh" | "models" | "thinking" | "export";
   type Action =
+    | "show"
     | "implement-here"
     | "select-model"
     | "select-thinking"
@@ -187,25 +206,15 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
     options.implementFresh,
   );
   const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
-    start: "ready",
+    start,
     screens: {
       ready: () => ({
         kind: "actions",
-        title: "Proposed plan ready. What next?",
-        lines: [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()],
+        title: "Proposed plan ready",
         items: [
-          {
-            id: "implement-here",
-            label: "Implement here",
-            description: "Continue in this session with the planning conversation.",
-            action: "implement-here",
-          },
-          {
-            id: "implement-fresh",
-            label: "Start fresh and implement",
-            description: "Configure one-shot model and thinking choices first.",
-            to: "fresh",
-          },
+          { id: "show", label: "Show latest proposed plan", action: "show" },
+          { id: "implement-here", label: "Implement here", action: "implement-here" },
+          { id: "implement-fresh", label: "Start fresh and implement", to: "fresh" },
           { id: "export", label: "Export plan…", to: "export" },
           { id: "save", label: "Save for later", action: "save" },
           { id: "stay", label: "Stay in Plan mode", action: "stay" },
@@ -219,6 +228,10 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
       export: () => planExportInputScreen(options.getExportDestination),
     },
     actions: {
+      show: async () => {
+        options.show();
+        return { kind: "close" };
+      },
       "implement-here": async () => {
         await options.implementHere();
         return { kind: "close" };

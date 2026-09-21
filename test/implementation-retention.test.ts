@@ -339,9 +339,8 @@ test("Implement menus preview each configured retention outcome before confirmat
     assert.ok(complete);
     await complete("complete", { plan: PLAN }, undefined, undefined, context.ctx);
     await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-    assert.equal(menuTitle, "", "completion does not force the action menu open");
-    await mock.commands.get("plan")?.handler("", context.ctx);
-    assert.match(menuTitle, new RegExp(preview.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "i"));
+    assert.match(menuTitle, /Proposed plan ready/u);
+    assert.doesNotMatch(menuTitle, new RegExp(preview.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "i"));
   }
 });
 

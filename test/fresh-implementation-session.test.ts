@@ -63,11 +63,12 @@ test("user-opened ready menu presents both implementation contexts in one flat g
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await completePlan(mock, context.ctx);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-  assert.equal(observedMenu, undefined, "completion leaves transcript navigation active");
+  assert.ok(observedMenu, "completion opens the compact ready-plan chooser");
+  assert.match(observedMenu.title, /Proposed plan ready/u);
 
   await mock.commands.get("plan")?.handler("", context.ctx);
   assert.ok(observedMenu);
-  assertImplementationChoiceCopy(observedMenu.title, observedMenu.options);
+  assert.doesNotMatch(observedMenu.title, /Implement here keeps this planning conversation/i);
   assert.ok(observedMenu.options.includes("Show latest proposed plan"));
   assert.ok(observedMenu.options.includes("Discard plan and exit"));
 });
@@ -85,10 +86,9 @@ test("ready choice descriptions stay bounded and cancellation has no side effect
           const lines = harness.render(width);
           assert.ok(lines.every((line) => visibleWidth(line) <= width));
         }
-        assert.match(harness.render().join("\n"), /Continue in this session/i);
+        assert.doesNotMatch(harness.render().join("\n"), /Continue in this session|Open a new linked session/i);
         harness.handleInput("tui.select.down");
-        assert.match(harness.render(40).join("\n"), /Open a new linked session/i);
-        assert.match(harness.render(24).join("\n"), /Start fresh and implement/i);
+        assert.match(harness.render(24).join("\n"), /Start fresh and\s+implement/i);
         harness.handleInput(cancel);
         return harness.resultPromise;
       },
@@ -99,6 +99,9 @@ test("ready choice descriptions stay bounded and cancellation has no side effect
       planThinkingLevel: undefined,
       implementationOutcome: () => "Plan reinjection: Until /plan exit\u001b]8;;unsafe\u0007.",
       getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
+      show: () => {
+        actionCalls += 1;
+      },
       implementHere: () => {
         actionCalls += 1;
       },
@@ -123,7 +126,7 @@ test("ready choice descriptions stay bounded and cancellation has no side effect
   }
 });
 
-test("completion leaves the ready menu closed until explicitly requested", async () => {
+test("completion opens the ready menu once and does not send a follow-up", async () => {
   const mock = createMockPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let menuCount = 0;
@@ -141,11 +144,8 @@ test("completion leaves the ready menu closed until explicitly requested", async
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
 
   assert.deepEqual(mock.sentUserMessages, []);
-  assert.equal(menuCount, 0);
+  assert.equal(menuCount, 1);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-  assert.equal(menuCount, 0);
-
-  await mock.commands.get("plan")?.handler("", context.ctx);
   assert.equal(menuCount, 1);
   assert.equal(mock.sentUserMessages.length, 0);
 });

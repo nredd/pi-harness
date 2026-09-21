@@ -97,7 +97,6 @@ import {
 import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
-const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
 const BLOCKED_MUTATING_TOOLS = new Set(["edit", "write", "update_plan"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
@@ -163,6 +162,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let publishedContractMode: PlanModeContract | undefined;
   let modeContractsRelevant = false;
   let readyPresentationIntent: ReadyPresentationIntent | undefined;
+  let readyPresentationInFlightNonce: number | undefined;
   let nextReadyPresentationNonce = 0;
   let menuGeneration = 0;
   let workflowGeneration = 0;
@@ -771,6 +771,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
 
     const text = latestAssistantText(event.messages);
+    if (finalizationRunOutcome(event.messages) === "cancelled") {
+      finalizationRequest.observeRunEnd(workflowGeneration, "cancelled");
+      return;
+    }
     const parsedPlan = parseProposedPlan(text);
     if (parsedPlan.kind !== "valid") {
       finalizationRequest.observeRunEnd(workflowGeneration, finalizationRunOutcome(event.messages));
@@ -806,24 +810,16 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const intent = readyPresentationIntent;
     if (!intent || !readyPresentationIsCurrent(intent)) return;
     if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
+    if (readyPresentationInFlightNonce === intent.nonce) return;
 
-    readyPresentationIntent = undefined;
-    // Do not open the action menu automatically. `ctx.ui.custom()` captures
-    // editor input, which prevents transcript scrolling exactly when the user
-    // needs to review the completed plan. The persistent ready-plan widget
-    // keeps `/plan` visible as the explicit, user-controlled review action.
-    if (intent.source !== "legacy_proposed_plan") return;
+    readyPresentationInFlightNonce = intent.nonce;
     try {
-      pi.sendMessage(
-        {
-          customType: PROPOSED_PLAN_MESSAGE_TYPE,
-          content: `**Proposed Plan**\n\n${intent.plan}`,
-          display: true,
-        },
-        { triggerTurn: false },
-      );
+      await planActions.showReady(ctx, () => readyPresentationIsCurrent(intent));
     } catch (error: unknown) {
       if (!isStaleExtensionContextError(error)) throw error;
+    } finally {
+      if (readyPresentationIntent?.nonce === intent.nonce) readyPresentationIntent = undefined;
+      if (readyPresentationInFlightNonce === intent.nonce) readyPresentationInFlightNonce = undefined;
     }
   });
 
