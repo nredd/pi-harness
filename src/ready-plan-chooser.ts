@@ -81,8 +81,12 @@ export async function chooseReadyPlanAction(ctx: ExtensionContext): Promise<Read
       },
       invalidate() {},
       handleInput(data: string) {
-        if (matchesKey(data, Key.ctrl("c")) || keybindings.matches(data, "tui.select.cancel")) {
+        if (matchesKey(data, Key.ctrl("c"))) {
           finish(undefined);
+          return;
+        }
+        if (keybindings.matches(data, "tui.select.cancel")) {
+          finish("exit");
           return;
         }
         if (keybindings.matches(data, "tui.select.down") || matchesKey(data, Key.right) || data === "\t") {

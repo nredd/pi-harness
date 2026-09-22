@@ -73,8 +73,11 @@ test("user-opened ready menu presents both implementation contexts in one flat g
   assert.ok(observedMenu.options.includes("Discard plan and exit"));
 });
 
-test("ready choice descriptions stay bounded and cancellation has no side effects", async () => {
-  for (const cancel of ["tui.select.cancel", "\u0003"] as const) {
+test("Escape exits a ready plan while Ctrl-C only dismisses its chooser", async () => {
+  for (const [cancel, expectedActionCalls] of [
+    ["tui.select.cancel", 1],
+    ["\u0003", 0],
+  ] as const) {
     const owner = new AbortController();
     let actionCalls = 0;
     const context = createMockContext({
@@ -122,7 +125,7 @@ test("ready choice descriptions stay bounded and cancellation has no side effect
         actionCalls += 1;
       },
     });
-    assert.equal(actionCalls, 0);
+    assert.equal(actionCalls, expectedActionCalls);
   }
 });
 

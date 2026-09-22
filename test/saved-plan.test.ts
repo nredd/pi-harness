@@ -163,7 +163,7 @@ test("user-opened ready menu exposes Save for later", async () => {
     hasUI: true,
     custom: async (factory: unknown) => {
       const harness = createCustomSelectorHarness(factory);
-      harness.handleInput("tui.select.cancel");
+      harness.handleInput("\u0003");
       return harness.resultPromise;
     },
     select: async (title: string, options: string[]) => {
