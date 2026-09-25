@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Steering from the conversation viewer or the fleet list now emits `subagents:steered`.** Only the `steer_subagent` tool and an `@handle` steer did before, so an extension watching the event missed every steer typed into a viewer. The event now fires from `AgentManager.steer`, which every path except the steer tools goes through.
 - **Resumed agents are bounded by `max_turns` again, and their turn counter moves** (fixes [#368](https://github.com/tintinweb/pi-subagents/issues/368) — thanks [@mratsim](https://github.com/mratsim)). The steer → grace → abort machine ran only over a spawn's first prompt, so a resume — from the `Agent` tool, an `@handle`, a nested agent or a workflow — had no turn limit at all and its widget row stayed at `↻1`. A resumed run now gets a fresh budget counted from the resume prompt, resolved as for a spawn, and can end `steered` or `aborted` like the first run.
+- **An explicit `Agent({ model })` selection now overrides an agent frontmatter model default.** Agent definitions are reusable specialist defaults, not a provider-policy boundary: a caller that deliberately selects a model (e.g. a `router/*` virtual model) now runs it instead of silently taking `Explore`'s Haiku default. Thinking and the remaining frontmatter execution policy stay authoritative. The same precedence applies to nested delegation.
 
 ## [0.22.0] - 2026-10-13
 
