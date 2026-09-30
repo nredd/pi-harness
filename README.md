@@ -11,6 +11,7 @@ Differences from upstream. The first three are presentational; the last two chan
 - `plan_mode_question` now has a `renderResult`, so the transcript shows a short Markdown summary of the questions and answers instead of the raw JSON payload. `plan_mode_complete` already had this upstream; this fork brings the question tool in line with it.
 - Ready-plan approval opens by itself once a valid `plan_mode_complete` settles idle with no queued messages. Upstream leaves it closed until `/plan`. Cancellation, incomplete prose, reload, supersession, exit, and session replacement don't open it.
 - Escape in the ready-plan chooser runs `exit`: it *discards* the plan and leaves Plan mode, same as the `Discard plan and exit` action. Upstream only dismisses the chooser and keeps the Plan contract active. Ctrl+C still just dismisses.
+- `Start fresh and implement` starts the fresh session right away. Upstream stages it until the run that produced the plan settles (`fresh-handoff-coordinator.ts`); the fork drops that path because its chooser only opens once the run is already idle.
 
 Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.3.
 
