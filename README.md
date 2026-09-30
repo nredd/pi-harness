@@ -35,13 +35,13 @@ This release requires Pi 0.80.6 or newer.
 Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
 
 ```bash
-pi install git:github.com/nredd/pi-plan-mode
+pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.2
 ```
 
 Try without installing permanently:
 
 ```bash
-pi -e git:github.com/nredd/pi-plan-mode
+pi -e git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.2
 ```
 
 Build and try this package locally from the repository root:
