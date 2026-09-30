@@ -2,15 +2,17 @@
 
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), extracted from its monorepo into a standalone repo so it can be installed with `pi install git:github.com/nredd/pi-plan-mode`.
+Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.58.3` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.2`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
 
-Differences from upstream (all purely presentational, no tool-policy or contract changes):
+Differences from upstream. The first three are presentational; the last two change the ready-plan flow. None touch tool policy or the Plan contract:
 
 - "Planning" and "implementing" (Plan mode on with no plan ready yet, and actively implementing an approved plan) have no above-editor widget at all -- no `Plan mode — ...` / `Implementing plan — ...` line, no divider. Both are steady states with nothing pending, so the widget only duplicated the footer. The only indicator is the footer status chip, colored with the theme's `accent` role like Codex's `Plan mode` footer badge, instead of upstream's plain unstyled text. The tool policy is still reachable via `/plan` and `/plan settings`.
-- States with a concrete pending action (`plan ready`, `plan saved`) keep their existing one-line above-editor widget, since there's a decision to make that the footer chip alone doesn't surface. After a valid plan settles, Pi opens a compact, once-only action chooser with no policy prose: use arrows, Tab, Enter, Escape, or click an action cell. The completed plan remains directly above it for review.
+- States with a concrete pending action (`plan ready`, `plan saved`) keep their existing one-line above-editor widget, since there's a decision to make that the footer chip alone doesn't surface. After a valid plan settles, Pi opens a compact, once-only action chooser with no policy prose: use arrows, Tab, Enter, or click an action cell. The completed plan remains directly above it for review.
 - `plan_mode_question` now has a `renderResult`, so the transcript shows a short Markdown summary of the questions and answers instead of the raw JSON payload. `plan_mode_complete` already had this upstream; this fork brings the question tool in line with it.
+- Ready-plan approval opens by itself once a valid `plan_mode_complete` settles idle with no queued messages. Upstream leaves it closed until `/plan`. Cancellation, incomplete prose, reload, supersession, exit, and session replacement don't open it.
+- Escape in the ready-plan chooser runs `exit`: it *discards* the plan and leaves Plan mode, same as the `Discard plan and exit` action. Upstream only dismisses the chooser and keeps the Plan contract active. Ctrl+C still just dismisses.
 
-Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.0.
+Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.3.
 
 Use a Codex-like `/plan` mode to explore a codebase, resolve important questions, and approve an implementation-ready plan before Pi edits files.
 

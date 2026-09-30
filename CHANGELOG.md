@@ -1,5 +1,22 @@
 # @nredd/pi-plan-mode
 
+## 0.58.3-nredd.2
+
+### Fixed
+
+- Deflaked the `default-tools` watched-reload test by re-saving settings until
+  the reload lands; macOS FSEvents can drop a write made during watch startup.
+
+## 0.58.3-nredd.1
+
+### Changed
+
+- Rebased the fork onto upstream 0.58.3 as a patch queue. `package.json` keeps
+  upstream's name and version; `dist/` is built in the upstream monorepo and
+  committed last.
+- Escape in the ready-plan chooser now discards the plan and exits Plan mode
+  instead of only dismissing the chooser.
+
 ## 0.58.0-nredd.5
 
 ### Changed
