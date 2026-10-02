@@ -15,6 +15,7 @@ export interface TasksByStatus {
 	pending: readonly Task[];
 	inProgress: readonly Task[];
 	completed: readonly Task[];
+	deferred: readonly Task[];
 }
 export function selectTasksByStatus(state: TaskState): TasksByStatus {
 	const visible = selectVisibleTasks(state);
@@ -22,6 +23,7 @@ export function selectTasksByStatus(state: TaskState): TasksByStatus {
 		pending: visible.filter((t) => t.status === "pending"),
 		inProgress: visible.filter((t) => t.status === "in_progress"),
 		completed: visible.filter((t) => t.status === "completed"),
+		deferred: visible.filter((t) => t.status === "deferred"),
 	};
 }
 
@@ -31,14 +33,16 @@ export interface TodoCounts {
 	pending: number;
 	inProgress: number;
 	completed: number;
+	deferred: number;
 }
 export function selectTodoCounts(state: TaskState): TodoCounts {
 	const groups = selectTasksByStatus(state);
 	return {
-		total: groups.pending.length + groups.inProgress.length + groups.completed.length,
+		total: groups.pending.length + groups.inProgress.length + groups.completed.length + groups.deferred.length,
 		pending: groups.pending.length,
 		inProgress: groups.inProgress.length,
 		completed: groups.completed.length,
+		deferred: groups.deferred.length,
 	};
 }
 

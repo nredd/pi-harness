@@ -61,6 +61,18 @@ the full list grouped by status.
 - **The agent can sequence work, not just list it.** `blockedBy` dependencies are
   validated before anything is written — dangling ids, deleted dependencies,
   self-blocks, and cycles are all rejected.
+- **An approved plan becomes the list, verbatim (nredd fork).** With
+  [`pi-plan-mode`](https://github.com/nredd/pi-plan-mode), approving a plan seeds
+  one todo per actionable bullet, copied word for word and tagged `[plan]`;
+  context sections (`Summary`, `Not adopted`, `Assumptions`, ...) are skipped.
+  Plan items can't be edited or deleted, only completed or deferred, and a
+  revised plan replaces them. The heading shows `N/M plan items open`.
+- **Done needs proof (nredd fork).** `completed` requires an `evidence` string
+  (command + result, commit, test name); `deferred` requires a `reason`, and
+  the user is notified when a plan item is deferred. If a run tries to finish
+  with plan items open, the model gets one reminder listing them before it can
+  wrap up. Details in the
+  [tool reference](./docs/tool-schema.md#plan-items).
 - **Parallel sessions stay separate.** Task state is keyed by session, so a
   detached or child session can neither read nor overwrite the foreground list.
 - **Localized UI, no setup required.** Nine locales ship with the package and

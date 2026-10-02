@@ -29,10 +29,38 @@ export const ERR_REQUIRES_INTERACTIVE = "/todos requires interactive mode";
 export const MSG_NO_TODOS = "No todos yet. Ask the agent to add some!";
 
 // ---------------------------------------------------------------------------
+// Plan integration. pi-plan-mode emits PLAN_APPROVED_EVENT on `pi.events` when
+// the user approves a plan and implementation starts. The payload shape is a
+// cross-package contract (pi-plan-mode `src/plan-approval.ts`); neither
+// package imports the other, so both declare it. Version-gated so a future
+// shape change is ignored instead of misread.
+// ---------------------------------------------------------------------------
+
+export const PLAN_APPROVED_EVENT = "pi-plan-mode:plan-approved";
+export const PLAN_APPROVED_VERSION = 1;
+
+export interface PlanApprovedPayload {
+	version: typeof PLAN_APPROVED_VERSION;
+	/** Unique per approval; re-announcing the same id is a no-op. */
+	planId: string;
+	/** The approved plan Markdown, verbatim. */
+	plan: string;
+	/** Session the plan was approved for. */
+	sessionId: string;
+}
+
+/**
+ * Hidden custom message appended at `agent_before_settle` when the run would
+ * end with plan items open. Persisted only as a short marker; the `context`
+ * hook swaps in the open-item list for the one request that follows it.
+ */
+export const PLAN_REMINDER_MESSAGE_TYPE = "rpiv-todo-plan-reminder";
+
+// ---------------------------------------------------------------------------
 // Public domain types
 // ---------------------------------------------------------------------------
 
-export type TaskStatus = "pending" | "in_progress" | "completed" | "deleted";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "deferred" | "deleted";
 
 export type TaskAction = "create" | "update" | "list" | "get" | "delete" | "clear";
 
@@ -45,6 +73,22 @@ export interface Task {
 	blockedBy?: number[];
 	owner?: string;
 	metadata?: Record<string, unknown>;
+	/** `"plan"` for items seeded verbatim from an approved plan; absent for agent-created todos. */
+	source?: "plan";
+	/** Plan section (heading text, verbatim) the item came from. */
+	planGroup?: string;
+	/** Nested plan lines under the item's bullet, verbatim. */
+	planText?: string;
+	/** The check that proves a `completed` task: command + result, commit, or test name. */
+	evidence?: string;
+	/** Why a `deferred` task was descoped. */
+	reason?: string;
+}
+
+/** The approved plan the `source: "plan"` todos came from. */
+export interface PlanRef {
+	id: string;
+	title: string;
 }
 
 /**
@@ -59,7 +103,11 @@ export interface TaskDetails {
 	tasks: Task[];
 	nextId: number;
 	error?: string;
+	plan?: PlanRef;
 }
+
+/** Payload of a `rpiv-todo-state` custom entry: the replay-relevant part of `TaskDetails`. */
+export type TaskSnapshot = Pick<TaskDetails, "tasks" | "nextId" | "plan">;
 
 /**
  * Open-shape input bag the reducer accepts. Stays an interface so the index
@@ -79,6 +127,8 @@ export interface TaskMutationParams {
 	metadata?: Record<string, unknown>;
 	id?: number;
 	includeDeleted?: boolean;
+	evidence?: string;
+	reason?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,10 +146,19 @@ export const TodoParamsSchema = Type.Object({
 		}),
 	),
 	status: Type.Optional(
-		StringEnum(["pending", "in_progress", "completed", "deleted"] as const, {
+		StringEnum(["pending", "in_progress", "completed", "deferred", "deleted"] as const, {
 			description:
-				"Set this task's status (update): one of pending, in_progress, completed, deleted. When action is list, filters returned tasks by this status.",
+				"Set this task's status (update): one of pending, in_progress, completed, deferred, deleted. completed requires evidence; deferred requires reason. When action is list, filters returned tasks by this status.",
 		}),
+	),
+	evidence: Type.Optional(
+		Type.String({
+			description:
+				"Required with status completed: the check that proves it (command + result, commit, or test name)",
+		}),
+	),
+	reason: Type.Optional(
+		Type.String({ description: "Required with status deferred: why the task is descoped (the user is told)" }),
 	),
 	blockedBy: Type.Optional(
 		Type.Array(Type.Number(), {

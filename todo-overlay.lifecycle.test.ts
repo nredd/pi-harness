@@ -224,7 +224,7 @@ describe("TodoOverlay — lifecycle", () => {
 		const { captured } = registerTool();
 		await seed(captured, [
 			{ action: "create", subject: "done" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
 		const overlay = new TodoOverlay();
 		const ui = makeCtx();
@@ -272,7 +272,7 @@ describe("TodoOverlay — collapse/expand state", () => {
 		await seed(captured, [
 			{ action: "create", subject: "a" },
 			{ action: "create", subject: "b" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
 		const overlay = new TodoOverlay();
 		const ui = makeCtx();

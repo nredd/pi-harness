@@ -14,11 +14,14 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, validateGuidanceFields } from "./config.ts";
-import { formatStatusLabel, t } from "./state/i18n-bridge.ts";
+import { formatPlanOpen, formatStatusLabel, t } from "./state/i18n-bridge.ts";
+import { selectPlanProgress } from "./state/plan.ts";
 import { selectTasksByStatus, selectTodoCounts, selectVisibleTasks } from "./state/selectors.ts";
-import { applyTaskMutation, changesState } from "./state/state-reducer.ts";
+import type { TaskState } from "./state/state.ts";
+import { applyTaskMutation, changesState, type Op } from "./state/state-reducer.ts";
 import { commitState, getRenderState, getState, sid } from "./state/store.ts";
 import { buildToolResult } from "./tool/response-envelope.ts";
+import { sanitizeTerminalText } from "./tool/sanitize.ts";
 import {
 	COMMAND_NAME,
 	ERR_REQUIRES_INTERACTIVE,
@@ -36,6 +39,7 @@ import { formatCommandTaskLine, renderTodoCall, renderTodoResult } from "./view/
 const SECTION_PENDING = "── Pending ──";
 const SECTION_IN_PROGRESS = "── In Progress ──";
 const SECTION_COMPLETED = "── Completed ──";
+const SECTION_DEFERRED = "── Deferred ──";
 
 // ---------------------------------------------------------------------------
 // Public re-exports — existing consumers (overlay, tests, index.ts) keep
@@ -58,8 +62,10 @@ export const DEFAULT_PROMPT_GUIDELINES: string[] = [
 	"Use `todo` for complex work with 3+ steps, when the user gives you a list of tasks, or immediately after receiving new instructions to capture requirements. Skip it for single trivial tasks and purely conversational requests.",
 	"When starting a task from the todo list, mark it in_progress BEFORE beginning work. Mark it completed IMMEDIATELY when done — never batch completions. Exactly one task in_progress at a time.",
 	"Never mark a task completed if tests are failing, the implementation is partial, or you hit unresolved errors — keep it in_progress and create a new task for the blocker instead.",
-	"Task status is a 4-state machine: pending → in_progress → completed, plus deleted as a tombstone. Pass activeForm (present-continuous label, e.g. 'researching existing tool') when marking in_progress.",
-	'To change a task\'s status, call update with the task id and the target status, e.g. {"action":"update","id":3,"status":"completed"} or {"action":"update","id":3,"status":"in_progress","activeForm":"writing tests"}. status is the field that changes the task; an update without a mutable field (status or another) is rejected.',
+	"Task status: pending → in_progress → completed, plus deferred (descoped, needs a reason) and deleted as a tombstone. Pass activeForm (present-continuous label, e.g. 'researching existing tool') when marking in_progress.",
+	'To change a task\'s status, call update with the task id and the target status, e.g. {"action":"update","id":3,"status":"in_progress","activeForm":"writing tests"}. status is the field that changes the task; an update without a mutable field (status or another) is rejected.',
+	'Marking a task completed requires evidence: the check that proves it (command + result, commit, or test name), e.g. {"action":"update","id":3,"status":"completed","evidence":"npm test: 42 passed"}. No evidence means it is not done.',
+	"Todos marked [plan] are the approved plan's items, verbatim. They can't be edited or deleted: complete each with evidence, or set status deferred with a reason and tell the user. Never tell the user the work is done while plan items are open.",
 	"Use blockedBy to express dependencies (A is blocked by B). On create, pass blockedBy as the initial set. On update, use addBlockedBy / removeBlockedBy (additive merge — do not resend the full array). Cycles are rejected.",
 	"list hides tombstoned (deleted) tasks by default; pass includeDeleted:true to see them. Pass status to filter by a single status.",
 	"Subject must be short and imperative (e.g. 'Research existing tool'); description is for long-form detail. activeForm is a present-continuous label shown while in_progress.",
@@ -79,6 +85,7 @@ export function registerTodoTool(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const result = applyTaskMutation(getState(sid(ctx)), params.action, params as TaskMutationParams);
 			commitState(sid(ctx), result.state);
+			notifyPlanDeferral(ctx, result.op, result.state);
 			const toolResult = buildToolResult(params.action, params as TaskMutationParams, result.state, result.op);
 			// Persist the snapshot as a custom entry on the calling session's branch, however the
 			// tool was reached: a call made through another tool (`ctx.executeTool`, e.g. codemode)
@@ -100,10 +107,28 @@ export function registerTodoTool(pi: ExtensionAPI): void {
 			return renderTodoCall(args as never, theme, getRenderState());
 		},
 
-		renderResult(result, _opts, theme, _context) {
-			return renderTodoResult(result, theme);
+		renderResult(result, opts, theme, _context) {
+			return renderTodoResult(result, theme, opts);
 		},
 	});
+}
+
+/**
+ * Descoping a plan item is the user's call to review, so tell them directly
+ * instead of trusting the model to mention it. Headless runs have no UI.
+ */
+function notifyPlanDeferral(
+	ctx: { hasUI?: boolean; ui: { notify(message: string, type?: "info" | "warning" | "error"): void } },
+	op: Op,
+	state: TaskState,
+): void {
+	if (!ctx.hasUI || op.kind !== "update" || op.toStatus !== "deferred" || op.fromStatus === "deferred") return;
+	const task = state.tasks.find((x) => x.id === op.id);
+	if (task?.source !== "plan") return;
+	ctx.ui.notify(
+		`Plan item deferred: #${task.id} ${sanitizeTerminalText(task.subject)} -- ${sanitizeTerminalText(task.reason ?? "")}`,
+		"warning",
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +156,9 @@ export function registerTodosCommand(pi: ExtensionAPI): void {
 			if (counts.completed > 0) header.push(`${counts.completed}/${counts.total} ${formatStatusLabel("completed")}`);
 			if (counts.inProgress > 0) header.push(`${counts.inProgress} ${formatStatusLabel("in_progress")}`);
 			if (counts.pending > 0) header.push(`${counts.pending} ${formatStatusLabel("pending")}`);
+			if (counts.deferred > 0) header.push(`${counts.deferred} ${formatStatusLabel("deferred")}`);
+			const plan = selectPlanProgress(state);
+			if (plan) header.push(formatPlanOpen(plan.open, plan.total));
 
 			const lines: string[] = [header.join(" · ")];
 			if (groups.pending.length > 0) {
@@ -144,6 +172,10 @@ export function registerTodosCommand(pi: ExtensionAPI): void {
 			if (groups.completed.length > 0) {
 				lines.push(t("command.section.completed", SECTION_COMPLETED));
 				for (const task of groups.completed) lines.push(formatCommandTaskLine(task, "✓"));
+			}
+			if (groups.deferred.length > 0) {
+				lines.push(t("command.section.deferred", SECTION_DEFERRED));
+				for (const task of groups.deferred) lines.push(formatCommandTaskLine(task, "⊖"));
 			}
 
 			ctx.ui.notify(lines.join("\n"), "info");

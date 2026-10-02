@@ -15,7 +15,8 @@
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, getMaxWidgetLines, resolveCollapseKey } from "./config.ts";
-import { formatStatusLabel, t } from "./state/i18n-bridge.ts";
+import { formatPlanOpen, formatStatusLabel, t } from "./state/i18n-bridge.ts";
+import { selectPlanProgress } from "./state/plan.ts";
 import { selectHasActive, selectOverlayLayout, selectShowTaskIds, selectTodoCounts } from "./state/selectors.ts";
 import { getRenderState } from "./state/store.ts";
 import { formatOverlayTaskLine } from "./view/format.ts";
@@ -161,7 +162,11 @@ export class TodoOverlay {
 
 		const headingColor = hasActive ? "accent" : "dim";
 		const headingIcon = hasActive ? "●" : "○";
-		const headingText = `${t("overlay.heading", OVERLAY_HEADING)} (${counts.completed}/${counts.total})`;
+		// Plan progress reads the full state: completed rows hidden from a
+		// previous turn still count as closed plan items.
+		const plan = selectPlanProgress(getRenderState());
+		const planSuffix = plan ? ` · ${formatPlanOpen(plan.open, plan.total)}` : "";
+		const headingText = `${t("overlay.heading", OVERLAY_HEADING)} (${counts.completed}/${counts.total})${planSuffix}`;
 		const disclosure = this.collapsed ? "▸" : "▾";
 		const heading = truncate(
 			`${theme.fg("dim", disclosure)} ${theme.fg(headingColor, headingIcon)} ${theme.fg(headingColor, headingText)}`,

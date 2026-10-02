@@ -36,6 +36,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Clickable `▾`/`▸` disclosure markers on the todo heading for collapsing and expanding the overlay.
+- Plan-seeded todos: on `pi-plan-mode:plan-approved` (`pi.events`), the approved plan's actionable bullets become verbatim todos tagged `source: "plan"`, grouped by heading, context sections skipped. Re-approval replaces them; agent todos are untouched. Persisted as a `rpiv-todo-state` custom entry.
+- `deferred` status with a required `reason`; deferring a plan item notifies the user.
+- `N/M plan items open` in the overlay heading, `/todos`, and `list`.
+- One wrap-up reminder per prompt (`agent_before_settle` + `context`) listing open plan items when a run would end with them open.
+
+### Changed
+
+- `completed` requires an `evidence` string, shown in `list`, `get`, and the expanded row. Plan items can't be edited or deleted; `clear` keeps them.
+- A rejected `todo` call renders `✗ <error>` instead of echoing the requested status.
 
 ## [2.12.0] - 2026-09-30
 

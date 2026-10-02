@@ -37,9 +37,10 @@ snapshots are saved.
 - **Heading** — `▾ ● Todos (done/total)` in the accent color while any task is
   `pending` or `in_progress`; `▾ ○ Todos (done/total)` dimmed once everything is
   completed. The marker becomes `▸` while collapsed. Click anywhere on the
-  heading to toggle it.
-- **Glyphs** — `○` pending, `◐` in_progress, `✓` completed, `✗` deleted.
-  Completed and deleted subjects render dim and struck through.
+  heading to toggle it. With plan items it ends in `· N/M plan items open`
+  (open = `pending` or `in_progress`, counted over the whole list).
+- **Glyphs** — `○` pending, `◐` in_progress, `✓` completed, `⊖` deferred, `✗` deleted.
+  Completed and deleted subjects render dim and struck through; deferred ones dim.
 - **activeForm** — appended dim in parentheses, only while the task is
   `in_progress`.
 - **Dependencies** — appended as `⛓ #1,#2` when the task has a `blockedBy` set.

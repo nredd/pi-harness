@@ -41,7 +41,7 @@ describe("formatContent", () => {
 	});
 
 	it("clear — emits prior count", () => {
-		expect(formatContent({ kind: "clear", count: 4 }, stateWith())).toBe("Cleared 4 tasks");
+		expect(formatContent({ kind: "clear", count: 4, kept: 0 }, stateWith())).toBe("Cleared 4 tasks");
 	});
 
 	it("list — 'No tasks' when filtered view is empty", () => {

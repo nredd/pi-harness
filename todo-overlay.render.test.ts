@@ -64,7 +64,7 @@ describe("TodoOverlay — heading", () => {
 		const { widget } = await setup([
 			{ action: "create", subject: "a" },
 			{ action: "create", subject: "b" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
 		const lines = widget.render(200);
 		expect(lines[0]).toContain("▾");
@@ -79,7 +79,7 @@ describe("TodoOverlay — heading", () => {
 	it("uses hollow icon '○' when all tasks are completed", async () => {
 		const { widget } = await setup([
 			{ action: "create", subject: "a" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
 		expect(widget.render(200)[0]).toContain("○");
 	});
@@ -133,7 +133,7 @@ describe("TodoOverlay — per-task formatting", () => {
 	it("completed task stays visible until the next agent turn starts", async () => {
 		const { widget, overlay } = await setup([
 			{ action: "create", subject: "done" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
 		const firstRender = widget.render(200);
 		expect(firstRender[1]).toContain("✓");
@@ -174,7 +174,7 @@ describe("TodoOverlay — overflow collapse", () => {
 		for (let i = 1; i <= 8; i++) actions.push({ action: "create", subject: `p${i}` });
 		for (let i = 9; i <= 12; i++) {
 			actions.push({ action: "create", subject: `c${i}` });
-			actions.push({ action: "update", id: i, status: "completed" });
+			actions.push({ action: "update", id: i, status: "completed", evidence: "ok" });
 		}
 		const { widget } = await setup(actions);
 		const lines = widget.render(200);
@@ -210,7 +210,7 @@ describe("TodoOverlay — overflow collapse", () => {
 		for (let i = 1; i <= 12; i++) actions.push({ action: "create", subject: `p${i}` });
 		for (let i = 13; i <= 15; i++) {
 			actions.push({ action: "create", subject: `c${i}` });
-			actions.push({ action: "update", id: i, status: "completed" });
+			actions.push({ action: "update", id: i, status: "completed", evidence: "ok" });
 		}
 		const { widget } = await setup(actions);
 		// Last line is the trailing spacer, so the summary is the second-to-last.
@@ -225,7 +225,7 @@ describe("TodoOverlay — overflow collapse", () => {
 		for (let i = 1; i <= 11; i++) actions.push({ action: "create", subject: `p${i}` });
 		for (let i = 12; i <= 16; i++) {
 			actions.push({ action: "create", subject: `c${i}` });
-			actions.push({ action: "update", id: i, status: "completed" });
+			actions.push({ action: "update", id: i, status: "completed", evidence: "ok" });
 		}
 		const { widget, overlay } = await setup(actions);
 		const beforeNextTurn = widget.render(200).join("\n");
@@ -287,7 +287,7 @@ describe("TodoOverlay — collapse/expand render", () => {
 		const { widget, overlay } = await setup([
 			{ action: "create", subject: "a" },
 			{ action: "create", subject: "b" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
 		overlay.toggleCollapse(); // collapse
 		const lines = widget.render(200);
@@ -314,7 +314,7 @@ describe("TodoOverlay — collapse/expand render", () => {
 	it("collapsed render short-circuits before completed-display tracking (no task queued for hide while collapsed)", async () => {
 		const { widget, overlay } = await setup([
 			{ action: "create", subject: "done" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
 		overlay.toggleCollapse(); // collapse
 		widget.render(200); // collapsed render — must NOT queue the completed task
@@ -386,7 +386,7 @@ describe("TodoOverlay — width truncation", () => {
 	it("drops completed tasks from counts after the next agent turn starts", async () => {
 		const { widget, overlay } = await setup([
 			{ action: "create", subject: "done" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 			{ action: "create", subject: "next" },
 		]);
 		expect(widget.render(200).join("\n")).toContain("Todos (1/2)");

@@ -106,7 +106,7 @@ describe("/todos command — grouped output", () => {
 		const { tool, cmd } = setup();
 		await seed(tool, [
 			{ action: "create", subject: "ship" },
-			{ action: "update", id: 1, status: "completed" },
+			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
 		const ctx = createMockCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
@@ -123,7 +123,7 @@ describe("/todos command — grouped output", () => {
 			{ action: "create", subject: "ip" },
 			{ action: "update", id: 2, status: "in_progress" },
 			{ action: "create", subject: "done" },
-			{ action: "update", id: 3, status: "completed" },
+			{ action: "update", id: 3, status: "completed", evidence: "ok" },
 		]);
 		const ctx = createMockCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);

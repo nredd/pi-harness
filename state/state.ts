@@ -1,4 +1,4 @@
-import type { Task } from "../tool/types.ts";
+import type { PlanRef, Task } from "../tool/types.ts";
 
 /**
  * Canonical state for the todo tool. Single source of truth — both the reducer
@@ -13,6 +13,8 @@ import type { Task } from "../tool/types.ts";
 export interface TaskState {
 	tasks: Task[];
 	nextId: number;
+	/** The approved plan behind the `source: "plan"` tasks, when one was announced. */
+	plan?: PlanRef;
 }
 
 export const EMPTY_STATE: TaskState = { tasks: [], nextId: 1 };

@@ -1,3 +1,4 @@
+import { selectPlanProgress } from "../state/plan.ts";
 import type { TaskState } from "../state/state.ts";
 import type { Op } from "../state/state-reducer.ts";
 import { deriveBlocks } from "../state/task-graph.ts";
@@ -12,7 +13,28 @@ import type { Task, TaskAction, TaskDetails, TaskMutationParams } from "./types.
 function formatListLine(t: Task): string {
 	const block = t.blockedBy?.length ? ` ⛓ ${t.blockedBy.map((id) => `#${id}`).join(",")}` : "";
 	const form = t.status === "in_progress" && t.activeForm ? ` (${sanitizeTerminalText(t.activeForm)})` : "";
-	return `[${t.status}] #${t.id} ${sanitizeTerminalText(t.subject)}${form}${block}`;
+	const plan = t.source === "plan" ? ` [plan${t.planGroup ? `: ${sanitizeTerminalText(t.planGroup)}` : ""}]` : "";
+	const lines = [`[${t.status}] #${t.id} ${sanitizeTerminalText(t.subject)}${form}${block}${plan}`];
+	// Open plan items carry their verbatim nested plan text, so the model works
+	// from the plan, not from a paraphrase of it.
+	if (t.planText && (t.status === "pending" || t.status === "in_progress")) {
+		lines.push(...indented(t.planText));
+	}
+	if (t.evidence) lines.push(`    evidence: ${sanitizeTerminalText(t.evidence)}`);
+	if (t.reason) lines.push(`    deferred: ${sanitizeTerminalText(t.reason)}`);
+	return lines.join("\n");
+}
+
+/** Multi-line verbatim text, each line sanitized and indented four spaces. */
+function indented(text: string): string[] {
+	return text.split("\n").map((line) => `    ${sanitizeTerminalText(line)}`);
+}
+
+/** `Plan: <title> -- N/M plan items open`, or nothing without plan items. */
+function formatPlanHeader(state: TaskState): string | undefined {
+	const progress = selectPlanProgress(state);
+	if (!state.plan || !progress) return undefined;
+	return `Plan: ${sanitizeTerminalText(state.plan.title)} -- ${progress.open}/${progress.total} plan items open`;
 }
 
 /**
@@ -32,6 +54,12 @@ function formatGetLines(task: Task, state: TaskState): string {
 		lines.push(`  blocks: ${blocks.map((id) => `#${id}`).join(", ")}`);
 	}
 	if (task.owner) lines.push(`  owner: ${sanitizeTerminalText(task.owner)}`);
+	if (task.source === "plan") {
+		lines.push(`  plan item${task.planGroup ? `: ${sanitizeTerminalText(task.planGroup)}` : ""}`);
+		if (task.planText) lines.push(...indented(task.planText));
+	}
+	if (task.evidence) lines.push(`  evidence: ${sanitizeTerminalText(task.evidence)}`);
+	if (task.reason) lines.push(`  deferred: ${sanitizeTerminalText(task.reason)}`);
 	return lines.join("\n");
 }
 
@@ -54,17 +82,25 @@ export function formatContent(op: Op, state: TaskState): string {
 				return `No change: #${op.id} already matches the requested values (status: ${op.toStatus})`;
 			}
 			const transition = op.fromStatus !== op.toStatus ? ` (${op.fromStatus} → ${op.toStatus})` : "";
+			const task = state.tasks.find((x) => x.id === op.id);
+			if (task?.source === "plan" && op.toStatus === "deferred" && op.fromStatus !== "deferred") {
+				return `Updated #${op.id}${transition}. Tell the user this plan item is descoped and why: ${sanitizeTerminalText(task.reason ?? "")}`;
+			}
 			return `Updated #${op.id}${transition}`;
 		}
 		case "delete":
 			return `Deleted #${op.id}: ${sanitizeTerminalText(op.subject)}`;
 		case "clear":
-			return `Cleared ${op.count} tasks`;
+			return op.kept > 0
+				? `Cleared ${op.count} tasks; kept ${op.kept} plan items (complete them with evidence or defer them with a reason)`
+				: `Cleared ${op.count} tasks`;
 		case "list": {
 			let view = state.tasks;
 			if (!op.includeDeleted) view = view.filter((t) => t.status !== "deleted");
 			if (op.statusFilter) view = view.filter((t) => t.status === op.statusFilter);
-			return view.length === 0 ? "No tasks" : view.map(formatListLine).join("\n");
+			const header = formatPlanHeader(state);
+			const body = view.length === 0 ? "No tasks" : view.map(formatListLine).join("\n");
+			return header ? `${header}\n${body}` : body;
 		}
 		case "get":
 			return formatGetLines(op.task, state);
@@ -93,6 +129,7 @@ export function buildToolResult(
 		tasks: state.tasks,
 		nextId: state.nextId,
 		...(op.kind === "error" ? { error: op.message } : {}),
+		...(state.plan ? { plan: state.plan } : {}),
 	};
 	return { content: [{ type: "text", text }], details };
 }

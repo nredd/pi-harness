@@ -1,43 +1,23 @@
 import type { TaskDetails } from "../tool/types.ts";
 import { EMPTY_STATE, type TaskState } from "./state.ts";
 
-/**
- * Discriminator for `details` envelopes that match the persisted `TaskDetails`
- * shape. Defensive — branch entries from older or corrupt sessions are
- * skipped silently.
- */
+/** Discriminate persisted task snapshots, ignoring unrelated branch entries. */
 export function isTaskDetails(value: unknown): value is TaskDetails {
 	if (!value || typeof value !== "object") return false;
 	const v = value as Record<string, unknown>;
 	return Array.isArray(v.tasks) && typeof v.nextId === "number";
 }
 
-/** Fresh `TaskState` from a persisted snapshot — copies each task so replay never aliases branch data. */
+/** Copy persisted state so replay never aliases branch data. */
 function stateOf(details: TaskDetails): TaskState {
-	return { tasks: details.tasks.map((t) => ({ ...t })), nextId: details.nextId };
+	return {
+		tasks: details.tasks.map((t) => ({ ...t })),
+		nextId: details.nextId,
+		...(details.plan ? { plan: { ...details.plan } } : {}),
+	};
 }
 
-/**
- * Walk the current branch in chronological order and return the last persisted
- * snapshot (last-write-wins). Two sources carry the same `TaskDetails` shape:
- *
- * - `custom` entries of type `"rpiv-todo-state"` (mirrors `STATE_ENTRY_TYPE` in
- *   `tool/types.ts` — a literal here, like `"todo"`, so `state/` keeps no value
- *   import of the Pi-aware tool layer). Written by `todo.ts` for EVERY
- *   state-changing call, including calls made through another tool
- *   (`ctx.executeTool`, e.g. codemode) that never land as a `toolResult`.
- * - `toolResult` messages with `toolName === "todo"` — the `details` envelope.
- *
- * Once the branch carries any state entry, state entries are authoritative:
- * they are appended at commit time for every change, so a `toolResult`
- * snapshot can only repeat or predate them. Branches with no state entry
- * (sessions written before entries existed) replay from `toolResult` snapshots.
- * When neither exists, returns `EMPTY_STATE`.
- *
- * Pure of module state — `index.ts` writes the returned snapshot into the
- * store after this returns. The function explicitly does NOT touch the store
- * cell.
- */
+/** Prefer mutation-time custom entries over potentially stale outer tool results. */
 export function replayFromBranch(ctx: { sessionManager: { getBranch(): Iterable<unknown> } }): TaskState {
 	let fromEntries: TaskState | undefined;
 	let fromToolResults: TaskState | undefined;

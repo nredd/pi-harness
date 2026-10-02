@@ -49,6 +49,7 @@ const STATUS_LABEL_PENDING = "pending";
 const STATUS_LABEL_IN_PROGRESS = "in progress";
 const STATUS_LABEL_COMPLETED = "completed";
 const STATUS_LABEL_DELETED = "deleted";
+const STATUS_LABEL_DEFERRED = "deferred";
 
 export function formatStatusLabel(status: TaskStatus): string {
 	switch (status) {
@@ -58,7 +59,16 @@ export function formatStatusLabel(status: TaskStatus): string {
 			return t("status.in_progress", STATUS_LABEL_IN_PROGRESS);
 		case "completed":
 			return t("status.completed", STATUS_LABEL_COMPLETED);
+		case "deferred":
+			return t("status.deferred", STATUS_LABEL_DEFERRED);
 		case "deleted":
 			return t("status.deleted", STATUS_LABEL_DELETED);
 	}
+}
+
+const PLAN_OPEN = "{open}/{total} plan items open";
+
+/** `N/M plan items open`, localized; shared by the overlay heading and `/todos`. */
+export function formatPlanOpen(open: number, total: number): string {
+	return t("overlay.planOpen", PLAN_OPEN).replace("{open}", String(open)).replace("{total}", String(total));
 }

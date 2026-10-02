@@ -18,6 +18,7 @@ export const STATUS_GLYPH: Record<TaskStatus, string> = {
 	pending: "○",
 	in_progress: "◐",
 	completed: "●",
+	deferred: "⊖",
 	deleted: "⊘",
 };
 
@@ -30,6 +31,7 @@ export const STATUS_COLOR: Record<TaskStatus, "dim" | "warning" | "success" | "m
 	pending: "dim",
 	in_progress: "warning",
 	completed: "success",
+	deferred: "muted",
 	deleted: "muted",
 };
 
@@ -60,6 +62,8 @@ export function overlayStatusGlyph(status: TaskStatus, theme: Theme): string {
 			return theme.fg("warning", "◐");
 		case "completed":
 			return theme.fg("success", "✓");
+		case "deferred":
+			return theme.fg("muted", "⊖");
 		case "deleted":
 			return theme.fg("error", "✗");
 	}
@@ -72,7 +76,11 @@ export function overlayStatusGlyph(status: TaskStatus, theme: Theme): string {
 export function formatOverlayTaskLine(t: Task, theme: Theme, showId: boolean): string {
 	const glyph = overlayStatusGlyph(t.status, theme);
 	const subjectColor =
-		t.status === "in_progress" ? "accent" : t.status === "completed" || t.status === "deleted" ? "muted" : "text";
+		t.status === "in_progress"
+			? "accent"
+			: t.status === "completed" || t.status === "deleted" || t.status === "deferred"
+				? "muted"
+				: "text";
 	let subject = theme.fg(subjectColor, sanitizeTerminalText(t.subject));
 	if (t.status === "completed" || t.status === "deleted") {
 		subject = theme.strikethrough(subject);
@@ -136,8 +144,17 @@ export function renderTodoCall(
  * fall back to plain `✓`). Identical visual output to pre-refactor
  * `todo.ts:533-565`.
  */
-export function renderTodoResult(result: { details?: unknown }, theme: Theme): Text {
+export function renderTodoResult(
+	result: { details?: unknown },
+	theme: Theme,
+	options: { expanded?: boolean } = {},
+): Text {
 	const details = result.details as TaskDetails | undefined;
+	// A rejected call must never echo the status it asked for: a refused
+	// `completed` rendered as `● completed` is exactly a false "done".
+	if (details?.error) {
+		return new Text(theme.fg("error", `✗ ${sanitizeTerminalText(details.error)}`), 0, 0);
+	}
 	let status: TaskStatus | undefined;
 	if (details) {
 		const params = details.params as TaskMutationParams;
@@ -158,7 +175,19 @@ export function renderTodoResult(result: { details?: unknown }, theme: Theme): T
 		}
 	}
 	if (status) {
-		return new Text(theme.fg(STATUS_COLOR[status], `${STATUS_GLYPH[status]} ${formatStatusLabel(status)}`), 0, 0);
+		// Core folds a collapsed row to `call · <first line>`, so the status stays
+		// first and the proof only appears expanded.
+		let text = theme.fg(STATUS_COLOR[status], `${STATUS_GLYPH[status]} ${formatStatusLabel(status)}`);
+		const task = details?.tasks.find((t) => t.id === (details.params as TaskMutationParams).id);
+		if (options.expanded && details?.action === "update" && task) {
+			if (status === "completed" && task.evidence) {
+				text += `\n${theme.fg("muted", `evidence: ${sanitizeTerminalText(task.evidence)}`)}`;
+			}
+			if (status === "deferred" && task.reason) {
+				text += `\n${theme.fg("muted", `reason: ${sanitizeTerminalText(task.reason)}`)}`;
+			}
+		}
+		return new Text(text, 0, 0);
 	}
 	return new Text(theme.fg("success", "✓"), 0, 0);
 }

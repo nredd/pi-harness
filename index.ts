@@ -22,6 +22,7 @@
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, resolveCollapseKey } from "./config.ts";
+import { registerPlanHooks } from "./plan-hooks.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import {
@@ -149,6 +150,9 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 
 	registerTodoTool(pi);
 	registerTodosCommand(pi);
+	const planHooks = registerPlanHooks(pi, async (sessionId) => {
+		if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
+	});
 
 	// Collapse/expand hotkey for the todo overlay. The key is resolved once at
 	// factory scope from config (register-once contract: a config change needs
@@ -204,6 +208,9 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 			if (!isStaleCtxError(e)) throw e;
 			return;
 		}
+		// On top of the replayed state: an approval announced before this
+		// session started here lands now.
+		await planHooks.sessionStarted(id);
 		if (!ctx.hasUI) return;
 		// First UI-bearing session_start claims the foreground (the interactive
 		// launcher, by spawn-ordering) without eagerly loading the overlay.
@@ -237,6 +244,7 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		}
 		// The shutting-down session's own data slot is always evicted.
 		evictSession(s);
+		planHooks.sessionEnded(s);
 		// Overlay teardown is sid-gated: a child shutdown (distinct sid) must not
 		// dispose the foreground's overlay. Only the foreground's own shutdown
 		// (or an unknown/stale sid) tears it down and clears the pointer.
