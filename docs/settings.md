@@ -15,7 +15,7 @@
 
 Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, and **Plan mode shortcut**.
 You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually.
-`safeSubcommands` is JSON-only.
+`safeSubcommands` and `trustedDirectories` are JSON-only, and are read from this global file only (there are no project-level plan-mode settings, so a repository cannot widen its own shell policy).
 The optional file is read at session start, watched for changes, and created only by an explicit Settings save or manual edit.
 The shortcut is disabled when `toggleShortcut` is omitted.
 ```json
@@ -35,6 +35,7 @@ The shortcut is disabled when `toggleShortcut` is omitted.
     "kubectl": ["get", "apply"],
     "npm": ["run inspect-custom"]
   },
+  "trustedDirectories": ["~/code", "~/.local/share/chezmoi"],
   "toggleShortcut": "<your_key>"
 }
 ```
@@ -182,25 +183,35 @@ Tree navigation and compaction do not apply pending shortcut changes.
 
 ### Safe shell subcommands
 
-`safeSubcommands` maps command prefixes to subcommand prefixes that the user chooses to trust within individual parsed segments of limited `bash` and `powershell` commands.
-For example, `"kubectl": ["get", "apply"]` trusts segments beginning with `kubectl get` or `kubectl apply`, while `"npm": ["run inspect-custom"]` trusts segments beginning with `npm run inspect-custom`.
+`safeSubcommands` maps any command prefix to subcommand prefixes that the user chooses to trust in limited `bash` and `powershell`.
+For example, `"kubectl": ["get", "apply"]` trusts a command segment beginning with `kubectl get` or `kubectl apply`, while `"npm": ["run inspect-custom"]` trusts a segment beginning with `npm run inspect-custom`.
 Command keys and subcommand entries are trimmed and must be non-empty strings.
-Matches are literal and case-sensitive after surrounding whitespace in each segment is removed.
-A match requires the complete `<command> <subcommand>` prefix followed by a token boundary, so `"kubectl": ["apply"]` does not match `kubectl applies`; extra whitespace or quotes inside the prefix do not match.
+Matches are literal and case-sensitive after leading whitespace in the segment is ignored.
+A match requires the complete `<command> <subcommand>` prefix followed by whitespace or the end of the segment, or a prefix that itself ends in a non-alphanumeric character (`"gh": ["api repos/"]` matches `gh api repos/x`), so `"kubectl": ["apply"]` does not match `kubectl applies`.
 Duplicate values and command keys that become equal after trimming are merged in first-seen order.
 Omitted `safeSubcommands`, an empty object, and empty arrays preserve the default policy.
 
-Plan mode parses the complete submission before considering any configured exemption.
-Bash supports `&&`, `||`, `;`, and `|`; PowerShell supports `;` and `|`, not `&&` or `||`.
-Every segment must either match its own configured prefix or pass the built-in reviewed policy, regardless of its position in the chain.
-For example, `"kubectl": ["apply"]` permits `git status && kubectl apply -f deployment.yaml` but does not permit `kubectl apply -f deployment.yaml && rm -rf build` unless the second segment is also explicitly trusted.
-Parser-unsupported syntax remains blocked even after a trusted prefix, including unquoted redirects, multiline input, and unquoted substitutions such as `kubectl apply $(cat generated-args)`.
+A matching prefix approves *only its own segment*: Plan mode splits the submitted command on `&&`, `||`, `;` and `|`, and every other segment is validated independently.
+For example, `"kubectl": ["apply"]` permits `kubectl apply -f deployment.yaml && git status` but not `kubectl apply -f deployment.yaml && rm -rf build`.
+The matched segment skips the command-specific argument checks, so `gh pr view 218 --web` is still permitted by `"gh": ["pr view"]`; choose entries that are as specific as your workflow permits.
+Shell syntax is still enforced for the whole command, prefix or not: redirections, `$(...)` or backtick substitution, multiline input, and background `&` are rejected, and piping into an interpreter (`sh`, `bash`, `zsh`, `python`, `node`, `perl`, `ruby`, `awk`, `env`, `xargs`, `eval`, `pwsh`, ...) is rejected even when that interpreter is itself configured.
+A trusted command can still read or modify anything available to Pi's process, so it is not a sandbox or a read-only guarantee.
 
-A matching segment bypasses command and argument checks: `"gh": ["pr view"]` still permits `gh pr view 218 --web`, and `"kubectl": ["apply"]` still permits deployment changes.
-Parser-accepted Bash arguments remain trusted, including variable expansion and double-quoted substitutions; an argument such as `"$(touch output)"` can itself execute code.
-The setting can therefore allow arbitrary code execution with Pi's permissions within a trusted segment.
-It is not a sandbox, confirmation gate, or read-only guarantee.
-Choose entries that are as specific as your workflow permits, and configure them only for commands and repositories you fully trust.
+Three commands keep built-in argument checks even when a prefix names them:
+
+- `ssh <host> <command>` needs a configured `ssh <host>` prefix (e.g. `"ssh": ["home"]`). The remote command must be non-empty, must not start with an ssh option, and is re-validated recursively with the same policy; `cd` and `git -C` are rejected on the remote side.
+- `gh api` is allowed without configuration but is GET only: `-X`/`--method` other than `GET`, `-f`, `-F`, `--field`, `--raw-field`, `--input`, and the `graphql` endpoint are rejected.
+- `curl` is allowed without configuration but rejects output (`-o`, `-O`, `--output`, `--remote-name*`), data (`-d`, `--data*`, `-F`, `--form*`, `--json`), upload (`-T`, `--upload-file`), config and file-writing flags (`-K`, `-D`, `-c`), and any non-GET `-X`/`--request`. Quote URLs containing `?`, `*`, `[` or `{`.
+
+### Trusted directories
+
+`trustedDirectories` lists extra directories, beyond Pi's working directory, that `cd` and `git -C` may target in limited `bash` and `powershell` (`cd` is `bash` only).
+Entries must be absolute paths or start with `~`/`~/`, which is expanded to the home directory; anything else invalidates the settings file.
+A target is accepted only when it resolves under the working directory or a trusted directory, has no `..` component or flag, and uses no shell expansion other than a leading `~`.
+Resolution is lexical: symlinks are not followed.
+`cd <dir>` takes exactly one such argument and moves the effective directory for the following segments, so `cd ~/code/pi && git -C sub log` resolves `sub` under `~/code/pi`; a `cd` followed by `|` is rejected.
+`git -C <dir>` additionally keeps rejecting `-c`, `--git-dir`, `--work-tree`, and `--exec-path`.
+Omitted or empty `trustedDirectories` limits both to the working directory.
 
 **Migration from whole-command trust:** a configured prefix no longer exempts trailing commands or unsupported syntax.
 Simple configured commands continue to work; for supported chains, each additional segment must be reviewed independently or explicitly trusted through its own narrow entry.
@@ -215,9 +226,10 @@ Use the negative flags when you want to suppress those configured helpers.
 Mixed read/write surfaces remain narrower: use `git remote show -n` to avoid invoking a transport helper, while mutating `branch` and `remote` forms remain blocked unless explicitly trusted through `safeSubcommands`.
 
 Read-only does not mean private: Git inspection can expose repository history and tracked secrets, while configured commands can expose or modify any data available to Pi's process.
-A built-in-policy `git -C <path>` inspection is accepted only when the path keeps Git in Pi's current working directory.
-The default policy reduces accidental mutation and cross-repository executable configuration; configured `safeSubcommands` bypass command and argument protection only within matching segments.
+A built-in-policy `git -C <path>` inspection is accepted only when the path stays under Pi's working directory or a trusted directory.
+The default policy reduces accidental mutation and cross-repository executable configuration; the segment a configured `safeSubcommands` prefix approves bypasses that protection.
 A non-object `safeSubcommands`, empty command or subcommand string, non-array value, or non-string entry invalidates the entire settings file and triggers the normal warning/default fallback on session start.
+Likewise a `trustedDirectories` value that is not an array of absolute or `~`-prefixed path strings invalidates the file.
 
 ### Thinking level
 

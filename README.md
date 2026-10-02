@@ -16,6 +16,10 @@ Differences from upstream. The presentational ones come first; the ready-plan fl
 - Declined plans (decline gate). Escape / `Stay in Plan mode` on a ready plan, or sending a message while a plan awaits action, counts as a decline (`declinedPlans`, once per proposal, persisted with the Plan state). The counter resets when a new planning workflow starts or Plan mode exits.
   - Hard gate: after a decline `plan_mode_complete` returns an error until a `plan_mode_question` has been *answered* (cancelled questions do not count) or you run `/plan finalize`, which lifts the gate. A `<proposed_plan>` block is ignored with a warning while gated.
   - Contract: with 1 decline the model is told to restate what changed and what is open, re-verify the facts your feedback touched, and ask at least one question. With 2 or more it must list every thread raised since the last proposal as resolved/open, ask "anything else before I re-propose?", and re-propose only on an explicit go-ahead. The text is injected per request (`src/decline-contract.ts`), not into the stable Plan contract. Upstream's "clarification-only, resubmit the unchanged plan" rule is removed.
+- Bash policy (`src/tool-policy.ts`), tightened and extended:
+  - A `safeSubcommands` prefix approves only its own segment; the rest of a compound command is validated independently. Redirections and pipes into interpreters are rejected. Upstream trusts the whole command.
+  - `cd <dir>` and `git -C <dir>` are allowed under the cwd or a `trustedDirectories` entry (new global-only setting); `cd` moves the effective directory for later segments.
+  - `ssh <host> <cmd>` (with a configured prefix) re-validates the remote command; `gh api` is GET only; `curl` has no output/data/upload flags.
 - `Start fresh and implement` starts the fresh session right away. Upstream stages it until the run that produced the plan settles (`fresh-handoff-coordinator.ts`); the fork drops that path because its chooser only opens once the run is already idle.
 
 Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.3.
@@ -161,9 +165,11 @@ It accepts common inspection commands, read-only Git and npm queries, pipelines 
 Case-insensitive `-i` is allowed for inspection commands such as `rg`, `grep`, and `git grep`. Commands where `-i` edits in place, including `sed`, stay blocked.
 It also accepts `hostname` without arguments and local Windows `tasklist` queries using reviewed display, filter, module, and service flags.
 Reviewed Git inspections may place `--no-pager` before the accepted subcommand.
-They may also place one or more complete `-C <path>` pairs before the accepted subcommand only when every path is `.` or the exact current Pi working directory.
-Other targets are rejected so `git -C` cannot introduce executable configuration, hooks, filters, signing programs, or lazy-fetch remotes from another repository.
-It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, incomplete or directory-changing `-C` pairs, other Git global options, Git config overrides, mutating flags, dependency changes, editors, and unknown commands.
+They may also place one or more complete `-C <path>` pairs before the accepted subcommand only when every path stays under the Pi working directory or a `trustedDirectories` entry (no `..`, no flags, no expansion beyond a leading `~`).
+Other targets are rejected so `git -C` cannot introduce executable configuration, hooks, filters, signing programs, or lazy-fetch remotes from an untrusted repository.
+`cd <dir>` follows the same rule and moves the effective directory for the following segments (`cd ~/code/pi && git status`).
+`gh api` (GET only) and `curl` (no output, data, or upload flags, GET only) are accepted with fixed argument checks, and `ssh <host> <cmd>` is accepted for a configured `ssh <host>` prefix with the remote command re-validated.
+It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, piping into interpreters (`sh`, `bash`, `python`, `node`, ...), incomplete `-C` pairs, other Git global options, Git config overrides, mutating flags, dependency changes, editors, and unknown commands.
 
 Limited `powershell` uses a separate fail-closed PowerShell policy, including when an extension overrides the canonical `powershell` tool name.
 It accepts canonical inspection cmdlets such as `Get-ChildItem`, `Get-Content`, `Get-Item`, `Get-Location`, `Resolve-Path`, `Select-String`, `Test-Path`, `Measure-Object`, `Sort-Object`, `Format-List`, `Format-Table`, `Out-String`, and `Write-Output`.
@@ -175,8 +181,7 @@ Use canonical cmdlet names because PowerShell aliases are intentionally outside 
 A rejected parsed command list or pipeline identifies its first blocked command segment; malformed or unsupported shell syntax reports the complete submitted input instead.
 Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted.
 Both limited-shell policies reduce risk but do not provide an OS sandbox or confidentiality boundary.
-A configured `safeSubcommands` match trusts only its parsed command segment and arguments; neighboring segments must pass their own policy, and parser-unsupported syntax remains blocked.
-Trusted commands can still mutate data or execute code with Pi's permissions; see [safe shell subcommands](./docs/settings.md#safe-shell-subcommands) for the trust boundary and migration guidance.
+A configured `safeSubcommands` match bypasses the argument checks for *its own segment only*; the other segments of a `&&`/`||`/`;`/`|` list are validated independently, and redirections, substitutions, and pipes into interpreters stay rejected.
 
 ## 🧭 Planning and implementation
 
@@ -400,9 +405,10 @@ The export destination affects the next export immediately.
 Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
 
 > [!WARNING]
-> `safeSubcommands` is a JSON-only segment-scoped trust override, not a read-only allowlist.
-> It trusts a matching command and its arguments, not trailing commands or parser-unsupported syntax such as redirects.
-> Configure it only for commands and repositories you fully trust; trusted arguments can still cause mutation or code execution.
+> `safeSubcommands` is a JSON-only trust override for the matched command segment, not a read-only allowlist.
+> A matching prefix skips the argument checks for that one segment (e.g. `gh pr view 1 --web`); other segments, redirects, substitutions, and pipes into interpreters are still checked.
+> `trustedDirectories` (JSON-only, global settings only) widens where `cd` and `git -C` may point. See [`docs/settings.md`](docs/settings.md).
+> Configure both only for commands and directories you fully trust.
 
 Saves are ordered within one Pi process, preserve unknown fields, and publish atomically; separate Pi processes can still race.
 Invalid settings remain untouched and make Settings read-only; session-start failures use safe defaults.

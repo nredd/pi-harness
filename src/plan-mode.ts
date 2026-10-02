@@ -686,7 +686,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       };
     }
     if (event.toolName === "bash") {
-      const blocked = findBlockedCommandSegment(readCommand(event.input), settings.safeSubcommands, ctx.cwd);
+      const blocked = findBlockedCommandSegment(
+        readCommand(event.input),
+        settings.safeSubcommands,
+        ctx.cwd,
+        process.platform,
+        settings.trustedDirectories,
+      );
       if (blocked !== undefined) {
         return {
           block: true,
@@ -695,7 +701,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
     }
     if (event.toolName === "powershell") {
-      const blocked = findBlockedPowerShellCommandSegment(readCommand(event.input), settings.safeSubcommands, ctx.cwd);
+      const blocked = findBlockedPowerShellCommandSegment(
+        readCommand(event.input),
+        settings.safeSubcommands,
+        ctx.cwd,
+        settings.trustedDirectories,
+      );
       if (blocked !== undefined) {
         return {
           block: true,

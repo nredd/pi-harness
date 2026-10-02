@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
@@ -90,6 +90,8 @@ export interface PlanModeSettings {
   defaultImplementationThinkingLevel?: PlanModeFixedThinkingLevel;
   defaultPlanExportPath?: string;
   safeSubcommands?: SafeSubcommands;
+  /** Extra directories `cd`/`git -C` may target in limited shells (a leading `~` is expanded). Global settings only. */
+  trustedDirectories?: string[];
   toggleShortcut?: KeyId;
 }
 export interface PlanModeSettingsPatch {
@@ -176,6 +178,11 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
     if (!safeSubcommands) return undefined;
     settings.safeSubcommands = safeSubcommands;
   }
+  if (Object.hasOwn(value, "trustedDirectories")) {
+    const trustedDirectories = normalizeTrustedDirectories(Reflect.get(value, "trustedDirectories"));
+    if (!trustedDirectories) return undefined;
+    settings.trustedDirectories = trustedDirectories;
+  }
   return settings;
 }
 
@@ -237,6 +244,26 @@ export function normalizeKeyId(value: unknown): KeyId | undefined {
     return undefined;
   }
   return normalized as KeyId;
+}
+
+/** Non-empty absolute (or `~`-relative) paths without control characters; duplicates are dropped. */
+function normalizeTrustedDirectories(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const directories: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return undefined;
+    const directory = item.trim();
+    if (
+      !directory ||
+      directory.length > MAX_PLAN_EXPORT_PATH_LENGTH ||
+      !(directory === "~" || directory.startsWith("~/") || isAbsolute(directory)) ||
+      [...directory].some((character) => (character.codePointAt(0) ?? 0) <= 0x1f || character === "\u007f")
+    ) {
+      return undefined;
+    }
+    if (!directories.includes(directory)) directories.push(directory);
+  }
+  return directories;
 }
 
 function normalizeSafeSubcommands(value: unknown): SafeSubcommands | undefined {

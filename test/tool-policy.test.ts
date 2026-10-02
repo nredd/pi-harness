@@ -155,31 +155,64 @@ test("configured safe subcommands trust individual Bash and PowerShell commands"
     "kubectl apply -f deployment.yaml",
     "git status && kubectl apply -f deployment.yaml",
     "  kubectl apply --dangerously-anything",
+    "kubectl apply -f deployment.yaml && git status",
+    "git status | kubectl apply -f -",
   ]) {
     assert.equal(isSafeCommand(command, safeSubcommands), true, command);
     assert.equal(findBlockedCommandSegment(command, safeSubcommands), undefined, command);
   }
-  for (const command of ["Invoke-Trusted run", "Get-Location; Invoke-Trusted run"]) {
+  for (const command of ["Invoke-Trusted run", "Get-Location; Invoke-Trusted run", "Invoke-Trusted run; Get-Location"]) {
     assert.equal(isSafePowerShellCommand(command, safeSubcommands), true, command);
     assert.equal(findBlockedPowerShellCommandSegment(command, safeSubcommands), undefined, command);
   }
 
+  assert.equal(
+    findBlockedCommandSegment("kubectl apply -f deployment.yaml && rm -rf build", safeSubcommands),
+    "rm -rf build",
+  );
   for (const command of [
-    "kubectl applies -f deployment.yaml",
-    "Kubectl apply -f deployment.yaml",
-    "kubectl apply -f deployment.yaml && rm -rf build",
     "kubectl apply -f deployment.yaml > result.txt",
     "kubectl apply $(cat generated-args)\nrm -rf build",
+    'kubectl apply "$(cat generated-args)"',
+    "kubectl applies -f deployment.yaml",
+    "Kubectl apply -f deployment.yaml",
+    "git status && kubectl apply -f deployment.yaml && touch x",
   ]) {
     assert.equal(isSafeCommand(command, safeSubcommands), false, command);
   }
   for (const command of [
-    "Invoke-Trusted runner; Remove-Item src",
     "Invoke-Trusted run; Remove-Item -Recurse src",
     "Invoke-Trusted run > result.txt",
     "Invoke-Trusted run $(Remove-Item src)",
+    "Invoke-Trusted runner; Remove-Item src",
   ]) {
     assert.equal(isSafePowerShellCommand(command, safeSubcommands), false, command);
+  }
+});
+
+test("a configured prefix ending in a non-alphanumeric character is bounded by itself", () => {
+  const safeSubcommands = { kubectl: ["get pods/"] };
+  assert.equal(isSafeCommand("kubectl get pods/web-1", safeSubcommands), true);
+  assert.equal(isSafeCommand("kubectl get pods", safeSubcommands), false);
+  assert.equal(isSafeCommand("kubectl get podsx", { kubectl: ["get pods"] }), false);
+  assert.equal(isSafeCommand("kubectl get pods -o wide", { kubectl: ["get pods"] }), true);
+});
+
+test("piping into an interpreter is rejected even for configured prefixes", () => {
+  const safeSubcommands = { kubectl: ["get"], sh: ["-c"], python3: ["-c"] };
+  for (const command of [
+    "kubectl get pods | sh",
+    "kubectl get pods | bash -s",
+    "git status | /bin/zsh",
+    "git log | python3 -c 'print(1)'",
+    "git log | python3.12",
+    "git log | node",
+    "git log | perl -e 1",
+    "git log | ruby",
+    "git log | xargs rm",
+    "git log | sh -c ls",
+  ]) {
+    assert.equal(isSafeCommand(command, safeSubcommands), false, command);
   }
 });
 
@@ -303,20 +336,17 @@ test("PowerShell diagnostics identify the first rejected segment", () => {
   assert.equal(findBlockedPowerShellCommandSegment("   "), "(empty command)");
 });
 
-test("PowerShell policy fully trusts configured Git and gh subcommands", () => {
+test("PowerShell policy trusts configured Git and gh subcommands for their own segment only", () => {
   assert.equal(isSafePowerShellCommand("git rev-parse --show-toplevel"), false);
   assert.equal(isSafePowerShellCommand("git rev-parse --show-toplevel", { git: ["rev-parse"] }), true);
   assert.equal(isSafePowerShellCommand("gh issue view 973 --json number,title"), false);
   assert.equal(isSafePowerShellCommand("gh issue view 973 --json number,title", { gh: ["issue view"] }), true);
-  assert.equal(
-    isSafePowerShellCommand("gh issue view 973; Remove-Item -Recurse src", {
-      gh: ["issue view"],
-    }),
-    false,
-  );
+  assert.equal(isSafePowerShellCommand("gh issue view 973; Get-Location", { gh: ["issue view"] }), true);
+  assert.equal(isSafePowerShellCommand("gh issue view 973; Remove-Item -Recurse src", { gh: ["issue view"] }), false);
+  assert.equal(isSafePowerShellCommand("Get-ChildItem | pwsh", {}), false);
 });
 
-test("configured Git subcommands are additive, exact, and fully trusted", () => {
+test("configured Git subcommands are additive, exact, and trusted for their own segment", () => {
   const cases = [
     ["rev-parse", "git rev-parse --show-toplevel"],
     ["blame", "git blame --no-textconv -- path/to/file"],
@@ -347,6 +377,7 @@ test("configured Git subcommands are additive, exact, and fully trusted", () => 
       git: ["rev-parse"],
     }),
     false,
+    "other segments are validated independently",
   );
   assert.equal(
     isSafeCommandWithPolicy("git rev-parse --show-toplevel | touch output", {
@@ -357,7 +388,7 @@ test("configured Git subcommands are additive, exact, and fully trusted", () => 
   assert.equal(isSafeCommandWithPolicy("git rev-parser --show-toplevel", { git: ["rev-parse"] }), false);
 });
 
-test("configured gh paths are exact and fully trusted", () => {
+test("configured gh paths are exact and trusted for their own segment", () => {
   const cases = [
     ["pr view", "gh pr view 218 --json number,title,state"],
     ["pr list", "gh pr list --limit 20 --json=number,title"],
@@ -395,7 +426,7 @@ test("configured gh paths are exact and fully trusted", () => {
   }
 });
 
-test("arbitrary configured Git subcommands trust arguments but not neighboring segments or redirects", () => {
+test("arbitrary configured Git subcommands skip argument checks but not shell syntax checks", () => {
   for (const command of [
     "git cat-file --filters HEAD",
     "git cat-file -p HEAD --output=copy",
@@ -409,6 +440,7 @@ test("arbitrary configured Git subcommands trust arguments but not neighboring s
   assert.equal(isSafeCommandWithPolicy("git status > status.txt"), false);
   assert.equal(isSafeCommandWithPolicy("git status > status.txt", { git: ["status"] }), false);
   assert.equal(isSafeCommandWithPolicy("git rev-parse HEAD && rm -rf build", { git: ["rev-parse"] }), false);
+  assert.equal(isSafeCommandWithPolicy('git rev-parse "$(rm -rf build)"', { git: ["rev-parse"] }), false);
 });
 
 test("Git validators allow ordinary inspection while rejecting explicit helpers", () => {

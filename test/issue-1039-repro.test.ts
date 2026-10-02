@@ -138,6 +138,7 @@ test("issue 1039: reviewed git -C inspections stay in Pi's working directory", a
     "git --no-pager -C . log -1 --oneline",
     "git -C . -C . diff --check",
     `git -C ${quotedWorkingDirectory} status --short`,
+    "git -C packages status --short",
   ]) {
     assert.equal(isSafeCommand(command, {}, workingDirectory), true, `Bash: ${command}`);
     assert.equal(isSafePowerShellCommand(command, {}, workingDirectory), true, `PowerShell: ${command}`);
@@ -164,7 +165,6 @@ test("issue 1039: git -C rejects other repositories and unsafe commands", () => 
     "git -C",
     "git -C --no-pager status",
     "git -C /tmp/repository status --short",
-    "git -C packages status --short",
     "git -C packages -C .. status --short",
     "git -C ./packages/.. status --short",
     "git -c core.fsmonitor=false -C . status --short",
