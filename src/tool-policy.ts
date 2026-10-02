@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, normalize, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 
 export const BUILTIN_SAFE_GIT_SUBCOMMANDS = [
@@ -567,12 +567,17 @@ const CURL_VALUE_SHORT = new Set(["A", "b", "e", "E", "H", "m", "u", "w", "x", "
 
 /** GET only, no output files, bodies, uploads, or config files. */
 function isSafeCurlArguments(args: string[]) {
-  for (let index = 0; index < args.length; index += 1) {
+  let index = 0;
+  const takeNext = () => {
+    index += 1;
+    return args[index];
+  };
+  for (; index < args.length; index += 1) {
     const argument = args[index] ?? "";
     const name = argument.split("=", 1)[0] ?? "";
     // curl accepts unambiguous abbreviations of long options, so match prefixes too.
     if (argument.startsWith("--") && name.length >= 5 && "--request".startsWith(name)) {
-      const method = argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : args[(index += 1)];
+      const method = argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext();
       if (method?.toUpperCase() !== "GET") return false;
     } else if (argument.startsWith("--")) {
       if (CURL_FORBIDDEN_LONG.some((forbidden) => forbidden.startsWith(name) || name.startsWith(`${forbidden}-`))) {
@@ -584,7 +589,7 @@ function isSafeCurlArguments(args: string[]) {
         if (CURL_FORBIDDEN_SHORT.has(flag)) return false;
         if (flag === "X") {
           const attached = argument.slice(position + 1);
-          const method = attached || args[(index += 1)];
+          const method = attached || takeNext();
           if (method?.toUpperCase() !== "GET") return false;
           break;
         }
@@ -602,11 +607,16 @@ function isSafeCurlArguments(args: string[]) {
 /** `gh api` is GET only: no `-X`/`--method` other than GET, no body flags, no `graphql`. */
 function isSafeGhApiArguments(args: string[]) {
   const isGet = (method: string | undefined) => method?.toUpperCase() === "GET";
-  for (let index = 0; index < args.length; index += 1) {
+  let index = 0;
+  const takeNext = () => {
+    index += 1;
+    return args[index];
+  };
+  for (; index < args.length; index += 1) {
     const argument = args[index] ?? "";
     if (argument === "graphql") return false;
     if (argument === "--method" || argument.startsWith("--method=")) {
-      if (!isGet(argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : args[(index += 1)])) return false;
+      if (!isGet(argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext())) return false;
     } else if (argument.startsWith("--")) {
       if (["--field", "--raw-field", "--input"].some((flag) => argument === flag || argument.startsWith(`${flag}=`))) {
         return false;
@@ -617,7 +627,7 @@ function isSafeGhApiArguments(args: string[]) {
         const flag = argument[position];
         if (flag === "f" || flag === "F") return false;
         if (flag === "X") {
-          if (!isGet(argument.slice(position + 1) || args[(index += 1)])) return false;
+          if (!isGet(argument.slice(position + 1) || takeNext())) return false;
           break;
         }
         if ("Hqpt".includes(flag ?? "")) {

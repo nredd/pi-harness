@@ -1,5 +1,51 @@
 # @nredd/pi-plan-mode
 
+## 0.58.3-nredd.4
+
+Targets Pi 1.0.0 (`devDependencies` move from 0.86.0 to 1.0.0).
+
+### Changed
+
+- Escape in the ready-plan chooser now keeps the plan and stays in Plan mode
+  (it discarded the plan in nredd.1 to nredd.3). Ctrl+C closes the chooser with
+  no action. Only `Discard plan and exit` discards.
+- `plan_mode_question` and `plan_mode_complete` render for Pi 1.0's one-line
+  collapsed rows: a meaningful first line from `renderCall` and `renderResult`
+  (`plan question · Scope`, `Scope → Small`, `cancelled (reason)`, the plan title,
+  `plan proposed · <title>`), with the full content when expanded.
+- A `safeSubcommands` prefix now approves only its own command segment; other
+  segments of a `&&`/`||`/`;`/`|` list are validated independently. Redirections,
+  `$(...)` in double quotes, and pipes into interpreters are rejected even for
+  configured prefixes. Prefixes match on whitespace/end or when they end in a
+  non-alphanumeric character.
+- `git -C <dir>` is allowed under the working directory or a trusted directory.
+- The fork now builds and tests standalone: vendored `runtime-builder`, test
+  harness, `biome.json` and `vitest.config.ts`; `npm test` runs vitest.
+
+### Added
+
+- Decline gate. Escape/Stay on a ready plan, or a reply while a plan awaits
+  action, counts as a decline (`declinedPlans`, persisted, reset on a new
+  workflow or exit). After a decline `plan_mode_complete` errors until a
+  `plan_mode_question` is answered or `/plan finalize` runs. The model gets a
+  decline contract (1 decline: restate, re-verify, ask; 2 or more: list threads
+  as resolved/open and wait for an explicit go-ahead). The "resubmit the
+  unchanged plan" rule is removed.
+- `cd <dir>` in limited `bash` (single plain path under the cwd or a trusted
+  directory; moves the effective directory for later segments).
+- `trustedDirectories` setting (global settings only) for `cd` and `git -C`.
+- `ssh <host> <cmd>` for a configured `ssh <host>` prefix, with the remote command
+  re-validated recursively.
+- `gh api` (GET only) and `curl` (no output, data, or upload flags, GET only).
+
+## 0.58.3-nredd.3
+
+### Fixed
+
+- Allow `-i` (ignore case) for `rg`, `grep`, `egrep`, `fgrep` and `git` in the
+  reviewed shell policy. It was rejected for every command because `sed -i`
+  edits in place, which is still blocked.
+
 ## 0.58.3-nredd.2
 
 ### Fixed
