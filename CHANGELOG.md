@@ -1,5 +1,14 @@
 # @nredd/pi-plan-mode
 
+## Unreleased
+
+### Fixed
+
+- Print and JSON mode: `/plan finalize`, `/plan implement`, and `/plan <prompt>`
+  return only after the turn they send has run. They used to return right after
+  `pi.sendUserMessage`, so print mode exited with the turn saved but unanswered,
+  and a following prompt failed with "Agent is already processing a prompt".
+
 ## 0.58.3-nredd.4
 
 Targets Pi 1.0.0 (`devDependencies` move from 0.86.0 to 1.0.0).

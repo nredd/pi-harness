@@ -20,6 +20,7 @@ Differences from upstream. The presentational ones come first; the ready-plan fl
   - A `safeSubcommands` prefix approves only its own segment; the rest of a compound command is validated independently. Redirections and pipes into interpreters are rejected. Upstream trusts the whole command.
   - `cd <dir>` and `git -C <dir>` are allowed under the cwd or a `trustedDirectories` entry (new global-only setting); `cd` moves the effective directory for later segments.
   - `ssh <host> <cmd>` (with a configured prefix) re-validates the remote command; `gh api` is GET only; `curl` has no output/data/upload flags.
+- In print and JSON mode, `/plan` commands that send a model turn (`finalize`, `implement`, `/plan <prompt>`) return only after that turn has run, so a scripted `pi -p "/plan start" "plan it" "/plan finalize"` gets every turn answered. Upstream returns right after sending, and print mode exits with the turn unanswered.
 - `Start fresh and implement` starts the fresh session right away. Upstream stages it until the run that produced the plan settles (`fresh-handoff-coordinator.ts`); the fork drops that path because its chooser only opens once the run is already idle.
 
 Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.3.
