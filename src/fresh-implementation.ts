@@ -3,6 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { PLAN_HISTORY_IMPLEMENTATION_PROMPT } from "./message-transform.js";
 import { createModeContractMessage } from "./mode-contract.js";
+import { createPlanApproval, PLAN_APPROVAL_ENTRY_TYPE } from "./plan-approval.js";
 import type { ImplementationPlanRetention } from "./settings.js";
 import {
   type ImplementationRuntimeSelection,
@@ -149,6 +150,8 @@ export async function startFreshImplementationSession(
             contract.display,
             contract.details,
           );
+          // The destination's plan-mode instance announces this before the first prompt.
+          sessionManager.appendCustomEntry(PLAN_APPROVAL_ENTRY_TYPE, createPlanApproval(request.plan));
           if (destinationState) {
             sessionManager.appendCustomEntry(request.stateEntryType, destinationState);
           }

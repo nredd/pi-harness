@@ -212,6 +212,7 @@ test("saved Plan management can show, implement, clear, or cancel", async () => 
       model: MODEL,
       modelRegistry: AVAILABLE_MODEL_REGISTRY,
       sessionManager: {
+        getSessionId: () => "test-session",
         getBranch: () => [savedEntry],
         getEntries: () => [savedEntry],
       },
@@ -301,6 +302,7 @@ test("saved Plan direct routes show, reject busy implementation, roll back failu
     model: MODEL,
     modelRegistry: AVAILABLE_MODEL_REGISTRY,
     sessionManager: {
+      getSessionId: () => "test-session",
       getBranch: () => [savedEntry],
       getEntries: () => [savedEntry],
     },
@@ -344,6 +346,7 @@ test("saved Plan direct routes show, reject busy implementation, roll back failu
   planMode(clearMock.pi);
   const clearContext = createMockContext({
     sessionManager: {
+      getSessionId: () => "test-session",
       getBranch: () => [savedEntry],
       getEntries: () => [savedEntry],
     },
@@ -370,6 +373,7 @@ test("saved Plan implementation preflight retains state on auth failure or sessi
       getApiKeyAndHeaders: async () => ({ ok: false as const, error: "No test auth" }),
     },
     sessionManager: {
+      getSessionId: () => "test-session",
       getBranch: () => [savedEntry],
       getEntries: () => [savedEntry],
     },
@@ -391,6 +395,7 @@ test("saved Plan implementation preflight retains state on auth failure or sessi
     model: MODEL,
     modelRegistry: { getApiKeyAndHeaders: () => authPending },
     sessionManager: {
+      getSessionId: () => "test-session",
       getBranch: () => [savedEntry],
       getEntries: () => [savedEntry],
     },
@@ -415,6 +420,7 @@ test("saved Plan survives resume and blocks replacement workflows", async () => 
   const context = createMockContext({
     hasUI: true,
     sessionManager: {
+      getSessionId: () => "test-session",
       getBranch: () => [savedEntry],
       getEntries: () => [savedEntry],
     },
@@ -444,6 +450,7 @@ test("saved Plan no-UI management is observable without changing state", async (
       mode,
       hasUI: false,
       sessionManager: {
+        getSessionId: () => "test-session",
         getBranch: () => [savedEntry],
         getEntries: () => [savedEntry],
       },
@@ -523,6 +530,7 @@ test("session shutdown disposes a saved Plan menu without a late transition", as
   const context = createMockContext({
     mode: "tui",
     sessionManager: {
+      getSessionId: () => "test-session",
       getBranch: () => [savedEntry],
       getEntries: () => [savedEntry],
     },

@@ -143,7 +143,7 @@ test("Plan holds the workflow mutex through planning, ready review, and revision
   let idle = true;
   const mock = createMockPi({ activeTools: ["read", "write"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const sessionManager = { getBranch: () => [], getEntries: () => [] };
+  const sessionManager = { getSessionId: () => "test-session", getBranch: () => [], getEntries: () => [] };
   const context = createMockContext({
     mode: "tui",
     hasUI: true,
@@ -186,7 +186,7 @@ test("Plan holds the workflow mutex through planning, ready review, and revision
 
 test("busy direct starts preserve state in every command mode", async () => {
   for (const mode of ["tui", "rpc", "print", "json"] as const) {
-    const sessionManager = { getBranch: () => [], getEntries: () => [] };
+    const sessionManager = { getSessionId: () => "test-session", getBranch: () => [], getEntries: () => [] };
     const mock = createMockPi({ activeTools: ["read", "write"], thinkingLevel: "low" });
     blockAgentWorkflow(mock, sessionManager);
     planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
@@ -265,7 +265,7 @@ test("busy restored activation does not widen the startup tool envelope", async 
 
 test("busy menu, selected-tool, shortcut, and active-implementation starts stay atomic", async () => {
   for (const mode of ["tui", "rpc"] as const) {
-    const sessionManager = { getBranch: () => [], getEntries: () => [] };
+    const sessionManager = { getSessionId: () => "test-session", getBranch: () => [], getEntries: () => [] };
     const mock = createMockPi({ activeTools: ["read", "write"] });
     blockAgentWorkflow(mock, sessionManager);
     let launchOptions:
@@ -356,7 +356,7 @@ test("Plan releases only after exit, save, export, implementation handoff, and s
   const exportRoot = await mkdtemp(join(tmpdir(), "pi-plan-mutex-release-"));
   try {
     for (const action of ["exit", "save", "export", "implement", "shutdown"] as const) {
-      const sessionManager = { getBranch: () => [], getEntries: () => [] };
+      const sessionManager = { getSessionId: () => "test-session", getBranch: () => [], getEntries: () => [] };
       const mock = createMockPi({ activeTools: ["read", "write"] });
       planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
       const context = createMockContext({

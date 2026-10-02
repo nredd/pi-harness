@@ -53,6 +53,7 @@ import {
   reconcileModeContract,
 } from "./mode-contract.js";
 import { createPlanActionController } from "./plan-action-controller.js";
+import { createPlanApprovals } from "./plan-approval.js";
 import { createPlanExportController } from "./plan-export-controller.js";
 import {
   clearPlanModeUi,
@@ -190,6 +191,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   const implementationRetention = createImplementationRetentionCoordinator();
   const finalizationRequest = createFinalizationRequestCoordinator();
   const headlessTurns = createHeadlessTurns(dependencies.headlessTurnStartTimeoutMs);
+  const planApprovals = createPlanApprovals(pi);
   const persistState = () => pi.appendEntry<PlanModeState>(STATE_ENTRY_TYPE, state);
   const planExports = createPlanExportController({
     getState: () => state,
@@ -515,6 +517,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (!installRestoredState(restoredState, ctx)) return;
     implementationRetention.restore(state.activeImplementation);
     updateUi(ctx);
+    planApprovals.announceLatest(ctx);
     // A new session receives its setup entries after session_start, so its input gate refreshes
     // them. Resumed and forked sessions already have the intent and must apply it here because
     // extension-triggered custom-message turns bypass the user-input gates.
@@ -805,6 +808,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   pi.on("before_agent_start", (event, ctx) => {
     if (event.messageType === "custom") return;
     refreshStateForFirstPrompt(ctx);
+    // A fresh implementation session's approval entry arrives with its setup, after
+    // session_start; announce it before the first model request.
+    planApprovals.announceLatest(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
       readyPresentationIntent = undefined;
@@ -1222,6 +1228,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       restoreThinkingLevel();
       state = { ...state, manualThinkingLevel: undefined };
     }
+    // Before the state entry: callers and resume read the newest entry as Plan state.
+    planApprovals.record(ctx, plan);
     persistState();
     updateUi(ctx);
 

@@ -8,6 +8,7 @@ import {
   startFreshImplementationSession,
 } from "../src/fresh-implementation.js";
 import { showReadyPlanMenu } from "../src/plan-action-menus.js";
+import { PLAN_APPROVAL_ENTRY_TYPE } from "../src/plan-approval.js";
 import planMode from "../src/plan-mode.js";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
 
@@ -242,8 +243,14 @@ test("fresh implementation creates a linked destination and hands off only throu
   assert.equal(destinationContracts.length, 1);
   assert.equal(destinationContracts[0]?.customType, "plan-mode-transition");
   assert.match(String(destinationContracts[0]?.content), /CONTRACT v1: NORMAL/u);
-  assert.equal(destinationEntries.length, 1);
-  const destinationState = destinationEntries[0]?.data as {
+  // The approval record for listeners (rpiv-todo) comes first, then the Plan state.
+  assert.equal(destinationEntries.length, 2);
+  assert.equal(destinationEntries[0]?.customType, PLAN_APPROVAL_ENTRY_TYPE);
+  assert.deepEqual(
+    { ...(destinationEntries[0]?.data as object), planId: "<uuid>" },
+    { version: 1, planId: "<uuid>", plan: PLAN },
+  );
+  const destinationState = destinationEntries[1]?.data as {
     enabled?: boolean;
     activeImplementation?: { plan?: string; retention?: string };
   };

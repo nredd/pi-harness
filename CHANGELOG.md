@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- `pi-plan-mode:plan-approved` event on `pi.events` (`{ version: 1, planId, plan,
+  sessionId }`) when an approved plan's implementation starts, in this session
+  or a fresh one, plus a `plan-mode-approved-plan` session entry so a fresh
+  session or a resume can announce it. rpiv-todo seeds verbatim plan todos from it.
+
 ### Fixed
 
 - Print and JSON mode: `/plan finalize`, `/plan implement`, and `/plan <prompt>`
