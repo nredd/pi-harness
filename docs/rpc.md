@@ -83,7 +83,8 @@ Every failure reaches the caller as `{ success: false, error }`, where `error` i
 | `SpawnOptions.cwd must be an absolute path: "<value>"` | `assertValidSpawnCwd`, `src/agent-manager.ts` |
 | `SpawnOptions.cwd does not exist: "<cwd>"` | `assertValidSpawnCwd` |
 | `SpawnOptions.cwd is not a directory: "<cwd>"` | `assertValidSpawnCwd` |
-| ``Cannot run with isolation: "worktree" — not a git repo, no commits yet, or `git worktree add` failed. Initialize git and commit at least once, or omit `isolation`.`` | `AgentManager.startAgent`, surfaced through `awaitStartup`. Every git failure ends here: `createWorktree` (`src/worktree.ts`) catches git's own error and returns nothing |
+| `Cannot run with isolation: "worktree": <cause>. <hint>` | `AgentManager.startAgent`, surfaced through `awaitStartup`. `<cause>` names the directory tried and why: not inside a git repository, no commits yet, a git timeout, or `git worktree add`'s stderr |
+| git plumbing failures | `src/worktree.ts` |
 | `Agent not found` | stop handler, `src/cross-extension-rpc.ts` |
 | `Agent is owned by another agent or workflow` | stop handler |
 | `Agent is not running` | stop handler. The record exists, so it has already settled |
