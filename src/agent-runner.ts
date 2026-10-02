@@ -27,6 +27,7 @@ import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
+import type { ModelCallEvent } from "./model-call.js";
 import { createNestedSubagentTools, getMaxSubagentDepth, NESTED_WORKFLOW_ERROR, type NestedAgentManager } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
@@ -535,6 +536,8 @@ export interface RunOptions {
   onToolActivity?: (activity: ToolActivity) => void;
   /** Called on streaming text deltas from the assistant response. */
   onTextDelta?: (delta: string, fullText: string) => void;
+  /** Called for every streaming event of each model call, so a UI can say what an in-flight call is doing. */
+  onModelCall?: (event: ModelCallEvent) => void;
   onSessionCreated?: (session: AgentSession) => void;
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
@@ -640,6 +643,27 @@ function getLastAssistantText(session: AgentSession, startIndex = 0): string {
 }
 
 /**
+ * Translate a session event into the in-flight model call it belongs to. Only
+ * assistant messages count; user and tool-result messages are not model calls.
+ * Tool-call argument streaming counts as writing: the model is producing output.
+ */
+export function forwardModelCall(event: AgentSessionEvent, emit: (event: ModelCallEvent) => void): void {
+  if (event.type === "message_start") {
+    if (event.message.role === "assistant") emit({ type: "start" });
+  } else if (event.type === "message_end") {
+    if (event.message.role === "assistant") emit({ type: "end" });
+  } else if (event.type === "message_update") {
+    const e = event.assistantMessageEvent;
+    if (e.type === "thinking_delta") emit({ type: "delta", kind: "thinking", chars: e.delta.length });
+    else if (e.type === "text_delta" || e.type === "toolcall_delta") emit({ type: "delta", kind: "writing", chars: e.delta.length });
+    else emit({ type: "beat" });
+  } else if (event.type === "tool_execution_start") {
+    // Tools run between calls: the call that requested them has ended.
+    emit({ type: "end" });
+  }
+}
+
+/**
  * Whether THIS invocation's last assistant message is a finished answer: text,
  * no tool call pending, and a stop that was not an abort, a tool-use handoff or
  * a token-limit cut. Anything else is a teaser or a cut-off report.
@@ -704,7 +728,7 @@ function finalTurnError(session: AgentSession, startIndex = 0): string | undefin
 }
 
 /** The per-run callbacks a spawn and a resume share, plus the resolved turn limit. */
-type RunObserverOptions = Pick<RunOptions, "onTurnEnd" | "onTextDelta" | "onToolActivity" | "onAssistantUsage" | "onCompaction"> & {
+type RunObserverOptions = Pick<RunOptions, "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction"> & {
   /** Already resolved: undefined = unlimited. */
   maxTurns?: number;
 };
@@ -740,6 +764,7 @@ function observeRun(session: AgentSession, options: RunObserverOptions) {
         }
       }
     }
+    if (options.onModelCall) forwardModelCall(event, options.onModelCall);
     if (event.type === "message_start") {
       currentMessageText = "";
     }
