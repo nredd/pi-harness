@@ -702,20 +702,38 @@ function endedWithReport(session: AgentSession, startIndex = 0): boolean {
   return false;
 }
 
+/** The reason a tool call gets during the forced report turn. */
+const FINAL_REPORT_TOOL_BLOCKED = "No tools are available for the final report. Write the report as text now.";
+
 /**
  * Prompt the session once more with its tools switched off and ask for the full
  * report. Returns whether that produced assistant text. Never throws: the run
  * keeps whatever it had if the extra turn fails.
+ *
+ * Clearing the active set alone is not enough: `prompt()` fires
+ * `before_agent_start`, and an extension may re-activate its tools there
+ * (pi-deferred-context-engine re-pins its always-active spine), after which the
+ * turn's tools are snapshotted. So for this turn the loadout is pinned empty by
+ * shadowing `setActiveToolsByName` (the path `pi.setActiveTools` takes), and any
+ * call that still gets through (a tool activated by a registry refresh) is
+ * blocked with `terminate`, which ends the loop after that batch. The caller's
+ * turn hook is the hard stop behind both.
  */
 async function forceFinalReport(session: AgentSession, startIndex: number): Promise<boolean> {
   const previousTools = session.getActiveToolNames();
+  const setActiveTools = session.setActiveToolsByName;
+  const priorBeforeToolCall = session.agent.beforeToolCall;
   try {
     await session.waitForIdle?.();
-    session.setActiveToolsByName([]);
+    setActiveTools.call(session, []);
+    session.setActiveToolsByName = () => setActiveTools.call(session, []);
+    session.agent.beforeToolCall = async () => ({ block: true, terminate: true, reason: FINAL_REPORT_TOOL_BLOCKED });
     await session.prompt(FINAL_REPORT_PROMPT);
   } catch {
     return false;
   } finally {
+    session.setActiveToolsByName = setActiveTools;
+    session.agent.beforeToolCall = priorBeforeToolCall;
     session.setActiveToolsByName(previousTools);
   }
   return endedWithReport(session, startIndex);
@@ -767,6 +785,7 @@ type RunObserverOptions = Pick<RunOptions, "onTurnEnd" | "onTextDelta" | "onMode
 function observeRun(session: AgentSession, options: RunObserverOptions) {
   let turnCount = 0;
   let currentMessageText = "";
+  let finalizingTurns = 0;
   const run = {
     steered: false,
     aborted: false,
@@ -777,7 +796,14 @@ function observeRun(session: AgentSession, options: RunObserverOptions) {
     if (event.type === "turn_end") {
       turnCount++;
       options.onTurnEnd?.(turnCount);
-      if (options.maxTurns != null && !run.finalizing) {
+      if (run.finalizing) {
+        // The report gets one tool-free turn, even if an extension promotes tools.
+        finalizingTurns++;
+        if (finalizingTurns > 1 || (event.toolResults?.length ?? 0) > 0) {
+          run.aborted = true;
+          session.abort();
+        }
+      } else if (options.maxTurns != null) {
         if (!run.steered && turnCount >= options.maxTurns) {
           run.steered = true;
           session.steer("You have reached your turn limit. Wrap up immediately — provide your final answer now.");
