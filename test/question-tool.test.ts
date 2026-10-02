@@ -8,8 +8,10 @@ import {
   MAX_PLAN_MODE_RESPONSE_LENGTH,
   type PlanModeQuestion,
   planModeQuestionAnswered,
+  planModeQuestionCallSummary,
   planModeQuestionCancelled,
-  planModeQuestionMarkdown,
+  planModeQuestionCollapsedText,
+  planModeQuestionExpandedText,
   renderPlanModeQuestion,
 } from "../src/question-tool.js";
 import { createMockContext, createMockPi } from "./support.js";
@@ -52,16 +54,9 @@ test("plan_mode_question reports non-interactive cancellation", async () => {
   assert.equal(result.details?.reason, "ui_unavailable");
 });
 
-test("renderPlanModeQuestion summarizes answers instead of dumping the raw JSON payload", () => {
+test("plan_mode_question collapses to `H1 -> answer` segments and expands to the full questions", () => {
   const result = planModeQuestionAnswered(questions, [
-    {
-      id: "scope",
-      header: "Scope",
-      question: "How broad?",
-      answer: "Small",
-      wasCustom: false,
-      optionIndex: 1,
-    },
+    { id: "scope", header: "Scope", question: "How broad?", answer: "Small", wasCustom: false, optionIndex: 1 },
     {
       id: "tests",
       header: "Tests",
@@ -72,24 +67,37 @@ test("renderPlanModeQuestion summarizes answers instead of dumping the raw JSON 
     },
   ]);
 
-  const markdown = planModeQuestionMarkdown(result);
-  assert.doesNotMatch(markdown, /"cancelled"/);
-  assert.doesNotMatch(markdown, /\{/);
-  assert.match(markdown, /2 answered/);
-  assert.match(markdown, /\*\*Scope\*\* — Small/);
-  assert.match(markdown, /\*\*Tests\*\* — Run the linter too \(custom\)/);
-  assert.match(markdown, /Note: Only the linter, skip the full suite\./);
+  const collapsed = planModeQuestionCollapsedText(result);
+  assert.equal(collapsed, "Scope \u2192 Small \u00b7 Tests \u2192 Run the linter too");
+  assert.deepEqual(renderPlanModeQuestion(result, { expanded: false }).render(80), [collapsed]);
 
-  const component = renderPlanModeQuestion(result);
-  assert.ok(component);
+  const expanded = renderPlanModeQuestion(result, { expanded: true }).render(80).join("\n");
+  assert.equal(expanded, planModeQuestionExpandedText(result));
+  assert.doesNotMatch(expanded, /\{/);
+  assert.match(expanded, /Scope: How broad\?/);
+  assert.match(expanded, /\u25cf Small -- Only the bug\./);
+  assert.match(expanded, /\u25cb Broad -- Include cleanup\./);
+  assert.match(expanded, /\u25cf \(custom\) Run the linter too/);
+  assert.match(expanded, /note: Only the linter, skip the full suite\./);
 });
 
-test("renderPlanModeQuestion summarizes a cancelled question without dumping JSON", () => {
+test("plan_mode_question collapses a cancelled question to `cancelled (reason)`", () => {
   const result = planModeQuestionCancelled(questions, "ui_unavailable", "Unable to ask.");
-  const markdown = planModeQuestionMarkdown(result);
-  assert.doesNotMatch(markdown, /\{/);
-  assert.match(markdown, /cancelled/i);
-  assert.match(markdown, /ui_unavailable/);
+  assert.equal(planModeQuestionCollapsedText(result), "cancelled (ui_unavailable)");
+  const expanded = planModeQuestionExpandedText(result);
+  assert.match(expanded, /Scope: How broad\?/);
+  assert.match(expanded, /cancelled \(ui_unavailable\)/);
+  assert.doesNotMatch(expanded, /\{/);
+});
+
+test("plan_mode_question renderCall lists the headers", () => {
+  assert.equal(planModeQuestionCallSummary({ questions }), "plan question \u00b7 Scope, Tests");
+  assert.equal(planModeQuestionCallSummary({}), "plan question");
+  const tool = createMockPi();
+  planMode(tool.pi);
+  const registered = tool.tools.find((candidate) => candidate.name === "plan_mode_question");
+  const renderCall = registered?.renderCall as (args: unknown) => { render(width: number): string[] };
+  assert.deepEqual(renderCall({ questions }).render(80), ["plan question \u00b7 Scope, Tests"]);
 });
 
 test("normalizePlanModeQuestionParams validates question shape without changing schema", () => {

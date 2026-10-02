@@ -131,7 +131,7 @@ test("plan_mode_complete result renders the plan as Markdown", () => {
   const renderResult = tool?.renderResult as (result: unknown, options: unknown) => { render(width: number): string[] };
   const ansiPattern = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
   const renderMarkdown = (result: unknown) =>
-    renderResult(result, { expanded: false, isPartial: false })
+    renderResult(result, { expanded: true, isPartial: false })
       .render(80)
       .map((line) => line.replace(ansiPattern, ""))
       .join("\n");
@@ -1447,7 +1447,8 @@ test("Plan prompt requires the standalone completion contract", () => {
   assert.match(prompt, /plan_mode_complete/i);
   assert.match(prompt, /alone as (?:your )?(?:final|last) action/i);
   assert.match(prompt, /end.*plan_mode_question.*plan_mode_complete/is);
-  assert.match(prompt, /clarification.*plan_mode_complete.*unchanged/is);
+  assert.doesNotMatch(prompt, /complete unchanged plan/i);
+  assert.match(prompt, /decline contract/i);
   assert.match(prompt, /listed in the current request's active tools/i);
   assert.match(prompt, /actual error/i);
   assert.match(prompt, /behavior-level/i);

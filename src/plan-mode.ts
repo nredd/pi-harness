@@ -10,7 +10,9 @@ import {
   PLAN_MODE_COMPLETE_TOOL_NAME,
   planModeCompleted,
   renderPlanModeCompletion,
+  renderPlanModeCompletionCall,
 } from "./completion-tool.js";
+import { createDeclineContractMessage, DECLINE_GATE_ERROR } from "./decline-contract.js";
 import { isStaleExtensionContextError } from "./extension-runtime.js";
 import {
   createFinalizationRequestCoordinator,
@@ -58,6 +60,7 @@ import {
   PLAN_MODE_QUESTION_TOOL_NAME,
   planModeQuestionCancelled,
   renderPlanModeQuestion,
+  renderPlanModeQuestionCall,
 } from "./question-tool.js";
 import { assertPlanModeHelperToolsAvailable, planModeHelperToolsAvailable } from "./required-tools.js";
 import { preflightSavedPlanImplementation, savedPlanBlocksNewWorkflow } from "./saved-plan-preflight.js";
@@ -100,6 +103,8 @@ const STATE_ENTRY_TYPE = "plan-mode-state";
 const RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
 const BLOCKED_MUTATING_TOOLS = new Set(["edit", "write", "update_plan"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
+/** Decline-gate fields cleared whenever a planning workflow starts or ends. */
+const DECLINE_RESET = { declinedPlans: 0, declineGated: false, planDeclined: false } as const;
 interface ReadyPresentationIntent {
   nonce: number;
   plan: string;
@@ -201,7 +206,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     exportPlan: exportPlan,
     settings: showSettings,
     save: savePlanForLater,
-    stay: updateUi,
+    stay: (ctx) => {
+      recordPlanDecline();
+      updateUi(ctx);
+    },
     exitReady: (ctx) => {
       if (exitPlanMode(ctx)) {
         ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
@@ -218,6 +226,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     description:
       "Ask one to three structured questions only when the latest effective Plan contract explicitly says /plan mode is active. Tool visibility alone does not activate Plan mode. Never call for ordinary planning requests, the writing-plans skill, roadmaps, checklists, or plan-file work.",
     parameters: PLAN_MODE_QUESTION_PARAMS,
+    renderCall: renderPlanModeQuestionCall,
     renderResult: renderPlanModeQuestion,
     async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
       if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
@@ -245,13 +254,16 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       const sessionGeneration = menuGeneration;
       const questionWorkflowGeneration = workflowGeneration;
       const questionOwner = workflowOwner;
-      return answerPlanModeQuestions(parsed.questions, ctx, {
+      const result = await answerPlanModeQuestions(parsed.questions, ctx, {
         isCurrent: () =>
           sessionGeneration === menuGeneration &&
           questionWorkflowGeneration === workflowGeneration &&
           workflowMutex.isOwner(questionOwner),
         isEnabled: () => state.enabled,
       });
+      // Only a real answer lifts the decline gate; cancelled or stale questions do not.
+      if (!result.details.cancelled) liftDeclineGate();
+      return result;
     },
   });
 
@@ -261,11 +273,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     description:
       "Submit a decision-ready plan only when the latest effective Plan contract explicitly says /plan mode is active, and call it alone as the final action. Tool visibility alone does not activate Plan mode. Never call for ordinary planning requests, the writing-plans skill, roadmaps, checklists, or plan-file work.",
     parameters: PLAN_MODE_COMPLETE_PARAMS,
+    renderCall: renderPlanModeCompletionCall,
     renderResult: renderPlanModeCompletion,
     async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
       if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
         throw new Error("plan_mode_complete is only available while Plan mode is active");
       }
+      if (state.declineGated) throw new Error(DECLINE_GATE_ERROR);
       const parsed = normalizePlanModeCompletion(params);
       if (!parsed.ok) throw new Error(parsed.error);
 
@@ -711,11 +725,18 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       state.enabled || modeContractsRelevant
         ? reconcileModeContract(result.messages, state.enabled ? "plan" : "normal")
         : result.messages;
-    return { messages: messages as typeof event.messages };
+    const declined = state.enabled ? (state.declinedPlans ?? 0) : 0;
+    const withDecline =
+      declined > 0
+        ? [...messages, createDeclineContractMessage(declined, state.declineGated === true, Date.now())]
+        : messages;
+    return { messages: withDecline as typeof event.messages };
   });
 
   pi.on("input", async (event, ctx) => {
     refreshStateForFirstPrompt(ctx);
+    // A reply typed while a plan awaits action declines it; the extension's own prompts do not.
+    if (event.source !== "extension") recordPlanDecline();
     const waitsForRuntimeAdmission =
       activeImplementationRuntimeApplication?.sessionManager === ctx.sessionManager ||
       pendingRuntimeAdmissionSession === ctx.sessionManager;
@@ -761,6 +782,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         latestPlan: undefined,
         latestPlanSource: undefined,
         awaitingAction: false,
+        planDeclined: false,
       };
       persistState();
       updateUi(ctx);
@@ -781,6 +803,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       if (parsedPlan.kind !== "absent") {
         ctx.ui.notify(invalidPlanMessage(parsedPlan.kind), "warning");
       }
+      persistState();
+      updateUi(ctx);
+      return;
+    }
+    if (state.declineGated) {
+      ctx.ui.notify(`Proposed plan ignored. ${DECLINE_GATE_ERROR}`, "warning");
       persistState();
       updateUi(ctx);
       return;
@@ -852,6 +880,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         ...state,
         enabled: true,
         awaitingAction: false,
+        ...DECLINE_RESET,
         savedPlan: undefined,
         activeImplementation: undefined,
         pendingImplementationRuntime: undefined,
@@ -876,6 +905,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (!enterPlanMode(ctx)) return;
     if (!wasEnabled) {
       ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+    } else {
+      recordPlanDecline();
     }
     if (sendPlanModeUserMessage(prompt, ctx)) return;
     if (wasEnabled) return;
@@ -897,6 +928,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       latestPlan: undefined,
       latestPlanSource: undefined,
       awaitingAction: false,
+      ...DECLINE_RESET,
       savedPlan: undefined,
       activeImplementation: undefined,
       pendingImplementationRuntime: undefined,
@@ -974,6 +1006,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       latestPlan: normalized.plan,
       latestPlanSource: source,
       awaitingAction: true,
+      planDeclined: false,
     };
     readyPresentationIntent = {
       nonce: ++nextReadyPresentationNonce,
@@ -1026,7 +1059,27 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       return;
     }
     finalizationRequest.request(workflowGeneration);
+    liftDeclineGate();
     if (!sendPlanModeUserMessage(FINALIZE_PLAN_PROMPT, ctx)) finalizationRequest.reset();
+  }
+
+  /** Counts the ready plan as declined (once per proposal) and closes the completion gate. */
+  function recordPlanDecline() {
+    if (!state.enabled || !state.awaitingAction || !state.latestPlan) return;
+    if (state.planDeclined) {
+      if (state.declineGated) return;
+      state = { ...state, declineGated: true };
+    } else {
+      state = { ...state, declinedPlans: (state.declinedPlans ?? 0) + 1, declineGated: true, planDeclined: true };
+    }
+    persistState();
+  }
+
+  /** Reopens `plan_mode_complete` after a question was answered or `/plan finalize` ran. */
+  function liftDeclineGate() {
+    if (!state.enabled || !state.declineGated) return;
+    state = { ...state, declineGated: false };
+    persistState();
   }
 
   function savePlanForLater(ctx: ExtensionContext) {
@@ -1050,6 +1103,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       latestPlan: undefined,
       latestPlanSource: undefined,
       awaitingAction: false,
+      ...DECLINE_RESET,
       savedPlan: { plan, source },
       activeImplementation: undefined,
       pendingImplementationRuntime: undefined,
@@ -1117,6 +1171,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       latestPlan: undefined,
       latestPlanSource: undefined,
       awaitingAction: false,
+      ...DECLINE_RESET,
       savedPlan: undefined,
       pendingImplementationRuntime: undefined,
       activeImplementation: usesConversationHistory

@@ -4,13 +4,18 @@
 
 Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.58.3` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.2`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
 
-Differences from upstream. The first three are presentational; the last two change the ready-plan flow. None touch tool policy or the Plan contract:
+Differences from upstream. The presentational ones come first; the ready-plan flow, decline gate, and bash policy changes follow:
 
 - "Planning" and "implementing" (Plan mode on with no plan ready yet, and actively implementing an approved plan) have no above-editor widget at all -- no `Plan mode — ...` / `Implementing plan — ...` line, no divider. Both are steady states with nothing pending, so the widget only duplicated the footer. The only indicator is the footer status chip, colored with the theme's `accent` role like Codex's `Plan mode` footer badge, instead of upstream's plain unstyled text. The tool policy is still reachable via `/plan` and `/plan settings`.
 - States with a concrete pending action (`plan ready`, `plan saved`) keep their existing one-line above-editor widget, since there's a decision to make that the footer chip alone doesn't surface. After a valid plan settles, Pi opens a compact, once-only action chooser with no policy prose: use arrows, Tab, Enter, or click an action cell. The completed plan remains directly above it for review.
-- `plan_mode_question` now has a `renderResult`, so the transcript shows a short Markdown summary of the questions and answers instead of the raw JSON payload. `plan_mode_complete` already had this upstream; this fork brings the question tool in line with it.
+- Both Plan tools render for Pi 1.0's one-line collapsed rows (`<renderCall first line> · <renderResult first line>`), so the summary sits on the first line and expanded rendering carries the detail:
+  - `plan_mode_question`: call `plan question · Scope, Tests`; collapsed result `Scope → Small · Tests → Full` or `cancelled (reason)`; expanded shows every question with its options (the chosen one marked) and notes. No more raw JSON.
+  - `plan_mode_complete`: call is the plan title (first heading); collapsed result `plan proposed · <title>`; expanded shows the full plan.
 - Ready-plan approval opens by itself once a valid `plan_mode_complete` settles idle with no queued messages. Upstream leaves it closed until `/plan`. Cancellation, incomplete prose, reload, supersession, exit, and session replacement don't open it.
 - Escape in the ready-plan chooser runs `Stay in Plan mode`: the plan is kept and Plan mode stays active. Ctrl+C closes the chooser with no action. The plan is discarded *only* through the explicit `Discard plan and exit` item.
+- Declined plans (decline gate). Escape / `Stay in Plan mode` on a ready plan, or sending a message while a plan awaits action, counts as a decline (`declinedPlans`, once per proposal, persisted with the Plan state). The counter resets when a new planning workflow starts or Plan mode exits.
+  - Hard gate: after a decline `plan_mode_complete` returns an error until a `plan_mode_question` has been *answered* (cancelled questions do not count) or you run `/plan finalize`, which lifts the gate. A `<proposed_plan>` block is ignored with a warning while gated.
+  - Contract: with 1 decline the model is told to restate what changed and what is open, re-verify the facts your feedback touched, and ask at least one question. With 2 or more it must list every thread raised since the last proposal as resolved/open, ask "anything else before I re-propose?", and re-propose only on an explicit go-ahead. The text is injected per request (`src/decline-contract.ts`), not into the stable Plan contract. Upstream's "clarification-only, resubmit the unchanged plan" rule is removed.
 - `Start fresh and implement` starts the fresh session right away. Upstream stages it until the run that produced the plan settles (`fresh-handoff-coordinator.ts`); the fork drops that path because its chooser only opens once the run is already idle.
 
 Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.3.
@@ -108,7 +113,7 @@ sequenceDiagram
 | `/plan <prompt>` | Start planning with a prompt, or send a follow-up while already active. |
 | `/plan tools` | Choose a session-specific tool policy, then start; cancellation changes nothing. |
 | `/plan show` | Display the stored plan without starting a model turn. |
-| `/plan finalize` | Ask the active planner to finish or ask one remaining material question. |
+| `/plan finalize` | Ask the active planner to finish or ask one remaining material question. Also lifts the decline gate. |
 | `/plan implement` | Implement a completed or saved plan in this session, without a selector. |
 | `/plan save` | Save a ready plan in this Pi session and leave Plan mode. |
 | `/plan settings` | Open the same Plan Settings screen available from the menus. |
@@ -290,7 +295,7 @@ The extension deliberately does not infer completion from assistant prose or age
 Under **Off — conversation history only**, implementation messages remain ordinary conversation history and there is no active plan for `/plan exit` to remove.
 Choosing Stay before implementation keeps the plan ready.
 Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives.
-For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable.
+Any reply to a ready plan counts as a decline (see Declined plans); the agent answers and asks questions instead of resubmitting the unchanged plan.
 Before saving or implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context.
 
 While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines.

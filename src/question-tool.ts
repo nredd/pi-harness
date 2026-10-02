@@ -1,6 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import type { QuestionnaireAnswer, QuestionnaireQuestion, RunQuestionnaireResult } from "@narumitw/pi-tui-kit";
 
 export const PLAN_MODE_QUESTION_TOOL_NAME = "plan_mode_question";
@@ -298,35 +297,72 @@ type PlanModeQuestionRenderResult = {
   details?: unknown;
 };
 
-/**
- * Renders plan_mode_question results as a short Markdown summary instead of
- * dumping the raw JSON payload into the transcript. Mirrors
- * `renderPlanModeCompletion` in completion-tool.ts so both Plan-mode tools
- * present consistently.
- */
-export function renderPlanModeQuestion(result: PlanModeQuestionRenderResult) {
-  return new Markdown(planModeQuestionMarkdown(result), 0, 0, getMarkdownTheme());
+/** A one-line-per-row component; core folds and truncates collapsed rows itself. */
+function textLines(lines: string[]): Component {
+  return { render: () => lines, invalidate() {} };
 }
 
-export function planModeQuestionMarkdown(result: PlanModeQuestionRenderResult): string {
+/**
+ * `renderCall`: the first line is what Pi core folds into the collapsed row, so it carries the
+ * question headers (`plan question · Scope, Tests`).
+ */
+export function renderPlanModeQuestionCall(args: unknown): Component {
+  return textLines([planModeQuestionCallSummary(args)]);
+}
+
+export function planModeQuestionCallSummary(args: unknown): string {
+  const questions = isRecord(args) && Array.isArray(args.questions) ? args.questions : [];
+  const headers = questions
+    .map((question) => (isRecord(question) ? stringField(question.header) : undefined))
+    .filter((header): header is string => Boolean(header));
+  return headers.length > 0 ? `plan question \u00b7 ${headers.join(", ")}` : "plan question";
+}
+
+/**
+ * `renderResult`: collapsed -> `H1 \u2192 answer \u00b7 H2 \u2192 answer` or `cancelled (reason)`;
+ * expanded -> every question with its options, the chosen one marked, and any notes.
+ */
+export function renderPlanModeQuestion(result: PlanModeQuestionRenderResult, options?: { expanded?: boolean }) {
+  const text = options?.expanded ? planModeQuestionExpandedText(result) : planModeQuestionCollapsedText(result);
+  return textLines(text.split("\n"));
+}
+
+export function planModeQuestionCollapsedText(result: PlanModeQuestionRenderResult): string {
+  const details = isPlanModeQuestionDetails(result.details) ? result.details : undefined;
+  if (!details) return singleLine(fallbackText(result));
+  if (details.cancelled) return cancelledText(details);
+  const answers = details.answers ?? [];
+  if (answers.length === 0) return singleLine(fallbackText(result));
+  return answers.map((answer) => `${answer.header} \u2192 ${singleLine(answer.answer)}`).join(" \u00b7 ");
+}
+
+export function planModeQuestionExpandedText(result: PlanModeQuestionRenderResult): string {
   const details = isPlanModeQuestionDetails(result.details) ? result.details : undefined;
   if (!details) return fallbackText(result);
-
-  if (details.cancelled) {
-    const reason = details.reason ? ` (${details.reason})` : "";
-    return `**Plan question cancelled${reason}**`;
+  const lines: string[] = [];
+  for (const [index, question] of details.questions.entries()) {
+    const answer = details.answers?.[index];
+    if (lines.length > 0) lines.push("");
+    lines.push(`${question.header}: ${question.question}`);
+    for (const [optionIndex, option] of question.options.entries()) {
+      const chosen = answer !== undefined && !answer.wasCustom && answer.optionIndex === optionIndex + 1;
+      lines.push(
+        `  ${chosen ? "\u25cf" : "\u25cb"} ${option.label}${option.description ? ` -- ${option.description}` : ""}`,
+      );
+    }
+    if (answer?.wasCustom) lines.push(`  \u25cf (custom) ${answer.answer}`);
+    if (answer?.note?.trim()) lines.push(`  note: ${answer.note.trim()}`);
   }
-
-  const answers = details.answers ?? [];
-  if (answers.length === 0) return fallbackText(result);
-
-  const lines = [`**Plan question** \u00b7 ${answers.length} answered`, ""];
-  for (const answer of answers) {
-    const suffix = answer.wasCustom ? " (custom)" : "";
-    lines.push(`- **${answer.header}** \u2014 ${answer.answer}${suffix}`);
-    if (answer.note?.trim()) lines.push(`  - Note: ${answer.note.trim()}`);
-  }
+  if (details.cancelled) lines.push("", cancelledText(details));
   return lines.join("\n");
+}
+
+function cancelledText(details: PlanModeQuestionDetails) {
+  return details.reason ? `cancelled (${details.reason})` : "cancelled";
+}
+
+function singleLine(value: string) {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
 function fallbackText(result: PlanModeQuestionRenderResult): string {

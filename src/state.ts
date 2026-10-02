@@ -53,6 +53,12 @@ export interface PlanModeState {
   latestPlan?: string;
   latestPlanSource?: PlanCompletionSource;
   awaitingAction: boolean;
+  /** Ready plans the user declined (Esc/Stay or a reply) since this planning workflow began. */
+  declinedPlans?: number;
+  /** While true, `plan_mode_complete` errors until a question is answered or `/plan finalize` runs. */
+  declineGated?: boolean;
+  /** The current proposal already counted as declined; keeps Esc then a reply from double counting. */
+  planDeclined?: boolean;
   savedPlan?: SavedPlan;
   activeImplementation?: ActiveImplementationPlan;
   pendingImplementationRuntime?: PendingImplementationRuntime;
@@ -105,6 +111,9 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
       ? ((persistedPlan ? persistedSource : undefined) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
       : undefined,
     awaitingAction: enabled && latestPlan !== undefined,
+    declinedPlans: enabled ? nonNegativeInteger(entry.data.declinedPlans) : 0,
+    declineGated: enabled && entry.data.declineGated === true,
+    planDeclined: enabled && latestPlan !== undefined && entry.data.planDeclined === true,
     savedPlan,
     activeImplementation,
     pendingImplementationRuntime,
@@ -215,6 +224,10 @@ function fixedThinkingLevel(value: unknown): PlanModeFixedThinkingLevel | undefi
     PLAN_MODE_THINKING_LEVELS.includes(value as (typeof PLAN_MODE_THINKING_LEVELS)[number])
     ? (value as PlanModeFixedThinkingLevel)
     : undefined;
+}
+
+function nonNegativeInteger(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 function stringArray(value: unknown) {

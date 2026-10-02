@@ -59,3 +59,7 @@ A successful ready-plan export ends Plan mode, restores thinking, and clears the
 Saved and active implementation exports preserve their existing state.
 Failed or cancelled exports leave Plan state unchanged.
 Export is an explicit user-requested file mutation, and the resulting file can be read with normal tools; model-initiated Plan-mode writes remain blocked.
+
+## Declined plans
+
+Escape or `Stay in Plan mode` on a ready plan, or a message sent while a plan awaits action, is a decline. After one, `plan_mode_complete` errors until a `plan_mode_question` is answered or `/plan finalize` runs. One decline asks the model to restate what changed, re-verify what the feedback touched, and ask a question; two or more require a resolved/open thread list and an explicit go-ahead before re-proposing. The counter resets when Plan mode exits or a new workflow starts.

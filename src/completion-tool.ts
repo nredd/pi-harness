@@ -1,5 +1,5 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
+import { type Component, Markdown } from "@earendil-works/pi-tui";
 
 export const PLAN_MODE_COMPLETE_TOOL_NAME = "plan_mode_complete";
 export const PLAN_MODE_COMPLETE_VERSION = 1;
@@ -79,8 +79,33 @@ export function planModeCompletionMarkdown(result: PlanModeCompletionRenderResul
   return plan ? `**Proposed Plan**\n\n${plan}` : "";
 }
 
-export function renderPlanModeCompletion(result: PlanModeCompletionRenderResult) {
-  return new Markdown(planModeCompletionMarkdown(result), 0, 0, getMarkdownTheme());
+/** First Markdown heading of the plan, else its first non-empty line, else `plan`. */
+export function planTitle(plan: unknown): string {
+  if (typeof plan !== "string") return "plan";
+  const lines = plan.split("\n").map((line) => line.trim());
+  const heading = lines.find((line) => /^#{1,6}\s+\S/u.test(line));
+  const title = (heading ?? lines.find(Boolean) ?? "")
+    .replace(/^#{1,6}\s+/u, "")
+    .replace(/[*_`]/gu, "")
+    .trim();
+  return title || "plan";
+}
+
+/** `renderCall`: the plan title, so the collapsed row's first segment is meaningful. */
+export function renderPlanModeCompletionCall(args: unknown): Component {
+  return { render: () => [planTitle(isRecord(args) ? args.plan : undefined)], invalidate() {} };
+}
+
+/** `renderResult`: `plan proposed \u00b7 <title>` collapsed, the full plan expanded. */
+export function renderPlanModeCompletion(result: PlanModeCompletionRenderResult, options?: { expanded?: boolean }) {
+  if (options?.expanded) return new Markdown(planModeCompletionMarkdown(result), 0, 0, getMarkdownTheme());
+  const plan = planFromCompletionDetails(result.details);
+  const line = plan
+    ? `plan proposed \u00b7 ${planTitle(plan)}`
+    : (planModeCompletionMarkdown(result)
+        .split("\n")
+        .find((text) => text.trim()) ?? "plan");
+  return { render: () => [line], invalidate() {} } satisfies Component;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

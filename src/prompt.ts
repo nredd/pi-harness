@@ -41,7 +41,7 @@ Every Plan-mode turn that advances or finalizes the plan must end in exactly one
 - If a material decision remains, use plan_mode_question. If interactive UI is unavailable, ask one concise plain-text question instead.
 - If the implementation plan is decision-complete, call plan_mode_complete alone as your final action. Do not call other tools in the same batch and do not emit a normal assistant response after it.
 
-If a follow-up asks only for clarification and does not change or challenge the plan, answer it directly, then call plan_mode_complete alone as the final action with the complete unchanged plan so it remains available for implementation.
+If the user declines a proposed plan (dismisses it or replies instead of approving), a decline contract follows: restate what changed, ask questions, and do not re-submit the plan until it allows.
 
 Never end with prose that merely announces you are about to present, write, or finalize the plan. Submit the actual plan with plan_mode_complete in that turn.
 
