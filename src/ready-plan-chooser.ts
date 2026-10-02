@@ -23,7 +23,12 @@ const READY_PLAN_LABELS: Record<ReadyPlanAction, string> = {
   exit: "Discard plan and exit",
 };
 
-/** Shows the compact ready-plan action chooser used in fullscreen TUI sessions. */
+/**
+ * Shows the compact ready-plan action chooser used in fullscreen TUI sessions.
+ *
+ * Escape resolves to `stay` (keep the plan, remain in Plan mode), Ctrl+C closes with no action,
+ * and the plan is only discarded through the explicit `exit` item.
+ */
 export async function chooseReadyPlanAction(ctx: ExtensionContext): Promise<ReadyPlanAction | undefined> {
   if (ctx.mode !== "tui" || !ctx.hasUI) return undefined;
 
@@ -86,7 +91,7 @@ export async function chooseReadyPlanAction(ctx: ExtensionContext): Promise<Read
           return;
         }
         if (keybindings.matches(data, "tui.select.cancel")) {
-          finish("exit");
+          finish("stay");
           return;
         }
         if (keybindings.matches(data, "tui.select.down") || matchesKey(data, Key.right) || data === "\t") {

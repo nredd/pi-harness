@@ -73,13 +73,13 @@ test("user-opened ready menu presents both implementation contexts in one flat g
   assert.ok(observedMenu.options.includes("Discard plan and exit"));
 });
 
-test("Escape exits a ready plan while Ctrl-C only dismisses its chooser", async () => {
-  for (const [cancel, expectedActionCalls] of [
-    ["tui.select.cancel", 1],
-    ["\u0003", 0],
+test("Escape stays in Plan mode, Ctrl-C closes with no action, and only the menu item discards", async () => {
+  for (const [cancel, expectedActions] of [
+    ["tui.select.cancel", ["stay"]],
+    ["\u0003", []],
   ] as const) {
     const owner = new AbortController();
-    let actionCalls = 0;
+    const actions: string[] = [];
     const context = createMockContext({
       mode: "tui",
       hasUI: true,
@@ -103,29 +103,29 @@ test("Escape exits a ready plan while Ctrl-C only dismisses its chooser", async 
       implementationOutcome: () => "Plan reinjection: Until /plan exit\u001b]8;;unsafe\u0007.",
       getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
       show: () => {
-        actionCalls += 1;
+        actions.push("show");
       },
       implementHere: () => {
-        actionCalls += 1;
+        actions.push("implementHere");
       },
       implementFresh: () => {
-        actionCalls += 1;
+        actions.push("implementFresh");
       },
       exportPlan: async () => {
-        actionCalls += 1;
+        actions.push("exportPlan");
         return true;
       },
       save: () => {
-        actionCalls += 1;
+        actions.push("save");
       },
       stay: () => {
-        actionCalls += 1;
+        actions.push("stay");
       },
       exit: () => {
-        actionCalls += 1;
+        actions.push("exit");
       },
     });
-    assert.equal(actionCalls, expectedActionCalls);
+    assert.deepEqual(actions, expectedActions);
   }
 });
 

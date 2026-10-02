@@ -29,7 +29,7 @@ See [Planning and implementation](../README.md#-planning-and-implementation) for
 
 After a valid standalone `plan_mode_complete` call, or an accepted legacy completion, the ready-plan chooser opens once when the run is idle and has no queued messages. It does not open for incomplete prose, cancellation, session replacement, reload, supersession, or exit.
 
-The fullscreen chooser has no policy or reinjection copy. It packs `Show latest proposed plan`, `Implement here`, `Start fresh and implement`, `Export plan…`, `Save for later`, `Stay in Plan mode`, and `Discard plan and exit` into responsive action cells. Use arrows or Tab to select, Enter to confirm, or click a cell. Escape runs `Discard plan and exit`; Ctrl+C closes the chooser and keeps the plan ready. Narrow terminals wrap cells safely. RPC retains the same description-free selector fallback.
+The fullscreen chooser has no policy or reinjection copy. It packs `Show latest proposed plan`, `Implement here`, `Start fresh and implement`, `Export plan…`, `Save for later`, `Stay in Plan mode`, and `Discard plan and exit` into responsive action cells. Use arrows or Tab to select, Enter to confirm, or click a cell. Escape runs `Stay in Plan mode` (the plan is kept); Ctrl+C closes the chooser with no action. Only `Discard plan and exit` discards the plan. Narrow terminals wrap cells safely. RPC retains the same description-free selector fallback.
 
 The stored plan and ready state remain intact until the selected action completes. `/plan` still opens the state-aware management menu when needed.
 
