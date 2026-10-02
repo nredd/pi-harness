@@ -2,7 +2,7 @@
 
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createRuntimeBuilder } from "../../../scripts/runtime-builder.mjs";
+import { createRuntimeBuilder } from "./runtime-builder.mjs";
 
 export const { buildRuntime, validateEagerGraph, validateGeneratedFiles, publishRuntime } = createRuntimeBuilder({
   packageRoot: resolve(dirname(fileURLToPath(import.meta.url)), ".."),

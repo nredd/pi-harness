@@ -6,9 +6,9 @@ import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
 import { type PlanModeSettings, updatePlanModeSettings } from "../src/settings.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
+import { builtinTool, createMockContext, extensionTool } from "./harness/support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 const AVAILABLE_MODELS = [
