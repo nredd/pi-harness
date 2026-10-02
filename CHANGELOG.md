@@ -11,8 +11,8 @@ Targets Pi 1.0.0 (`devDependencies` move from 0.86.0 to 1.0.0).
   no action. Only `Discard plan and exit` discards.
 - `plan_mode_question` and `plan_mode_complete` render for Pi 1.0's one-line
   collapsed rows: a meaningful first line from `renderCall` and `renderResult`
-  (`plan question · Scope`, `Scope → Small`, `cancelled (reason)`, the plan title,
-  `plan proposed · <title>`), with the full content when expanded.
+  (`plan question · Scope · Scope → Small`, `cancelled (reason)`, and
+  `<title> · plan proposed`), with the full content when expanded.
 - A `safeSubcommands` prefix now approves only its own command segment; other
   segments of a `&&`/`||`/`;`/`|` list are validated independently. Redirections,
   `$(...)` in double quotes, and pipes into interpreters are rejected even for

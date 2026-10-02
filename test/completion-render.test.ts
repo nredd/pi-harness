@@ -25,7 +25,7 @@ test("plan_mode_complete renderCall is the title and the collapsed result leads 
 
   const result = planModeCompleted(PLAN);
   const collapsed = renderPlanModeCompletion(result, { expanded: false }).render(80);
-  assert.deepEqual(collapsed, ["plan proposed \u00b7 Ship the thing"]);
+  assert.deepEqual(collapsed, ["plan proposed"]);
 });
 
 test("plan_mode_complete expanded result shows the full plan", () => {

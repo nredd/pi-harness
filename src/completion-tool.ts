@@ -96,12 +96,15 @@ export function renderPlanModeCompletionCall(args: unknown): Component {
   return { render: () => [planTitle(isRecord(args) ? args.plan : undefined)], invalidate() {} };
 }
 
-/** `renderResult`: `plan proposed \u00b7 <title>` collapsed, the full plan expanded. */
+/**
+ * `renderResult`: `plan proposed` collapsed (core joins it after the title from `renderCall`,
+ * giving `<title> \u00b7 plan proposed`), the full plan expanded.
+ */
 export function renderPlanModeCompletion(result: PlanModeCompletionRenderResult, options?: { expanded?: boolean }) {
   if (options?.expanded) return new Markdown(planModeCompletionMarkdown(result), 0, 0, getMarkdownTheme());
   const plan = planFromCompletionDetails(result.details);
   const line = plan
-    ? `plan proposed \u00b7 ${planTitle(plan)}`
+    ? "plan proposed"
     : (planModeCompletionMarkdown(result)
         .split("\n")
         .find((text) => text.trim()) ?? "plan");
