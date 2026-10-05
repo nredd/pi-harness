@@ -496,6 +496,13 @@ export interface ToolActivity {
   toolName: string;
 }
 
+/** Physical model identity carried by an assistant message. */
+export interface AssistantMessageInfo {
+  api?: string;
+  provider?: string;
+  model?: string;
+}
+
 export interface RunOptions {
   /** ExtensionAPI instance — used for pi.exec() instead of execSync. */
   pi: ExtensionAPI;
@@ -574,7 +581,7 @@ export interface RunOptions {
    * We never price anything ourselves; every dollar figure this extension shows
    * or reports traces back to this field.
    */
-  onAssistantUsage?: (usage: LifetimeUsage) => void;
+  onAssistantUsage?: (usage: LifetimeUsage, message: AssistantMessageInfo) => void;
   /**
    * Called when the session successfully compacts. `tokensBefore` is upstream's
    * pre-compaction context size estimate. Aborted compactions don't fire.
@@ -835,7 +842,7 @@ function observeRun(session: AgentSession, options: RunObserverOptions) {
         cacheWrite: u.cacheWrite ?? 0,
         cacheRead: u.cacheRead ?? 0,
         cost: u.cost?.total ?? 0,
-      });
+      }, event.message as AssistantMessageInfo);
     }
     if (event.type === "compaction_end" && !event.aborted && event.result) {
       options.onCompaction?.({ reason: event.reason, tokensBefore: event.result.tokensBefore });
