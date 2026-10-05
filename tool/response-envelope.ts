@@ -104,6 +104,11 @@ export function formatContent(op: Op, state: TaskState): string {
 		}
 		case "get":
 			return formatGetLines(op.task, state);
+		case "batch": {
+			const lines = op.results.map((result, index) => `[${index}] ${formatContent(result, state)}`);
+			const header = formatPlanHeader(state);
+			return [`Applied ${op.results.length} ops`, ...lines, ...(header ? [header] : [])].join("\n");
+		}
 		case "error":
 			return `Error: ${op.message}`;
 	}

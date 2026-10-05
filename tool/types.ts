@@ -62,7 +62,11 @@ export const PLAN_REMINDER_MESSAGE_TYPE = "rpiv-todo-plan-reminder";
 
 export type TaskStatus = "pending" | "in_progress" | "completed" | "deferred" | "deleted";
 
-export type TaskAction = "create" | "update" | "list" | "get" | "delete" | "clear";
+/** One operation of the `todo` tool. */
+export type TaskOpAction = "create" | "update" | "list" | "get" | "delete" | "clear";
+
+/** What a call did: a single operation, or an `ops` batch of them. */
+export type TaskAction = TaskOpAction | "batch";
 
 export interface Task {
 	id: number;
@@ -129,6 +133,8 @@ export interface TaskMutationParams {
 	includeDeleted?: boolean;
 	evidence?: string;
 	reason?: string;
+	/** An `ops` batch; mutually exclusive with every other field. */
+	ops?: Array<TaskMutationParams & { action?: TaskOpAction }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,8 +142,10 @@ export interface TaskMutationParams {
 // copy. Field order and wording are pinned by registration tests.
 // ---------------------------------------------------------------------------
 
-export const TodoParamsSchema = Type.Object({
-	action: StringEnum(["create", "update", "list", "get", "delete", "clear"] as const),
+const OP_ACTIONS = ["create", "update", "list", "get", "delete", "clear"] as const;
+
+/** Fields shared by a flat call and each entry of `ops`. Descriptions double as LLM-facing prompt copy. */
+const OpFields = {
 	subject: Type.Optional(Type.String({ description: "Task subject line (required for create)" })),
 	description: Type.Optional(Type.String({ description: "Long-form task description" })),
 	activeForm: Type.Optional(
@@ -160,20 +168,12 @@ export const TodoParamsSchema = Type.Object({
 	reason: Type.Optional(
 		Type.String({ description: "Required with status deferred: why the task is descoped (the user is told)" }),
 	),
-	blockedBy: Type.Optional(
-		Type.Array(Type.Number(), {
-			description: "Initial blockedBy ids (create only)",
-		}),
-	),
+	blockedBy: Type.Optional(Type.Array(Type.Number(), { description: "Initial blockedBy ids (create only)" })),
 	addBlockedBy: Type.Optional(
-		Type.Array(Type.Number(), {
-			description: "Task ids to add to blockedBy (update only, additive merge)",
-		}),
+		Type.Array(Type.Number(), { description: "Task ids to add to blockedBy (update only, additive merge)" }),
 	),
 	removeBlockedBy: Type.Optional(
-		Type.Array(Type.Number(), {
-			description: "Task ids to remove from blockedBy (update only, additive merge)",
-		}),
+		Type.Array(Type.Number(), { description: "Task ids to remove from blockedBy (update only, additive merge)" }),
 	),
 	owner: Type.Optional(Type.String({ description: "Agent/owner assigned to this task" })),
 	metadata: Type.Optional(
@@ -181,14 +181,21 @@ export const TodoParamsSchema = Type.Object({
 			description: "Arbitrary metadata; pass null value for a key to delete that key on update",
 		}),
 	),
-	id: Type.Optional(
-		Type.Number({
-			description: "Task id (required for update, get, delete)",
-		}),
-	),
+	id: Type.Optional(Type.Number({ description: "Task id (required for update, get, delete)" })),
 	includeDeleted: Type.Optional(
-		Type.Boolean({
-			description: "If true, list action returns deleted (tombstoned) tasks as well. Default: false.",
+		Type.Boolean({ description: "If true, list action returns deleted (tombstoned) tasks as well. Default: false." }),
+	),
+};
+
+const OpSchema = Type.Object({ action: StringEnum(OP_ACTIONS), ...OpFields });
+
+export const TodoParamsSchema = Type.Object({
+	action: Type.Optional(StringEnum(OP_ACTIONS, { description: "The operation. Omit when passing ops." })),
+	...OpFields,
+	ops: Type.Optional(
+		Type.Array(OpSchema, {
+			description:
+				"Batch: many operations in ONE call, instead of the top-level action and fields (mutually exclusive). Applied in order and atomically: if any op is invalid nothing changes and the error names the op index (ops[3]: ...). list/get ops are answered from the final state. Give each completed op its own evidence.",
 		}),
 	),
 });

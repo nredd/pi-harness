@@ -4,10 +4,7 @@ import type { Op } from "../state/state-reducer.ts";
 import { buildToolResult, formatContent } from "./response-envelope.ts";
 import type { Task } from "./types.ts";
 
-const stateWith = (...tasks: Task[]): TaskState => ({
-	tasks,
-	nextId: Math.max(0, ...tasks.map((t) => t.id)) + 1,
-});
+const stateWith = (...tasks: Task[]): TaskState => ({ tasks, nextId: Math.max(0, ...tasks.map((t) => t.id)) + 1 });
 
 const t = (over: Partial<Task> & { id: number; subject: string }): Task => ({ status: "pending", ...over });
 

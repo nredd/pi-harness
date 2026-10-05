@@ -26,7 +26,7 @@ snapshots are saved.
 ## Anatomy of a row
 
 ```
-▾ ● Todos (2/5)
+▾ ● Todos (2 done, 3 open)
 ├─ ✓ Create DemoTodo domain entity
 ├─ ✓ Create IDemoTodoRepository interface
 ├─ ◐ Create DemoTodoRepository (creating the repository)
@@ -34,11 +34,13 @@ snapshots are saved.
 └─ ○ Add integration tests
 ```
 
-- **Heading** — `▾ ● Todos (done/total)` in the accent color while any task is
-  `pending` or `in_progress`; `▾ ○ Todos (done/total)` dimmed once everything is
-  completed. The marker becomes `▸` while collapsed. Click anywhere on the
-  heading to toggle it. With plan items it ends in `· N/M plan items open`
-  (open = `pending` or `in_progress`, counted over the whole list).
+- **Heading** — `▾ ● Todos (19 done, 1 deferred, 4 open)` in the accent color while
+  any task is `pending` or `in_progress`; dimmed with `○` once nothing is open.
+  The counts cover the whole list, never just the visible rows, and always sum to
+  the total (open = `pending` or `in_progress`; zero buckets are omitted). The
+  marker becomes `▸` while collapsed. Click anywhere on the heading to toggle it.
+  When non-plan todos exist next to plan items it also ends in
+  `· N/M plan items open`.
 - **Glyphs** — `○` pending, `◐` in_progress, `✓` completed, `⊖` deferred, `✗` deleted.
   Completed and deleted subjects render dim and struck through; deferred ones dim.
 - **activeForm** — appended dim in parentheses, only while the task is
@@ -52,30 +54,25 @@ snapshots are saved.
 
 Rows longer than the terminal width are truncated with `…`.
 
-## Overflow
+## Scrolling
 
 The content-row budget is `maxWidgetLines` (default `12`), and the heading counts
-against it. When there are more tasks than fit:
+against it. When there are more tasks than fit, the panel is a fixed-height
+window over the whole list, in task order:
 
-1. one row is reserved for the summary line;
-2. completed tasks are dropped first, newest first — the oldest completed rows
-   are the last completed rows to go;
-3. if the unfinished tasks alone still overflow, the tail of that list is
-   truncated;
-4. the last row becomes `+N more (X completed, Y pending)`.
+- scroll with the mouse wheel over the panel; one notch moves `|wheelDelta|` rows,
+  so it follows Pi's `fullscreenWheelScrollLines` and the Alt multiplier;
+- the first or last row becomes a dim `↑ N above` / `↓ N below` hint while tasks
+  are out of view;
+- a wheel at either end (or over a list that fits) falls through to the
+  transcript;
+- when the first `in_progress` task changes and is out of view, the window jumps
+  to it once; a manual scroll then sticks until the active task moves again;
+- collapsing resets the position.
 
-Use Pi's tool-output expansion shortcut (`ctrl+o` by default) to expand the
-widget and show every task. Collapsing Pi's tool output reapplies the configured
-row budget. Unfinished work is therefore the last thing to disappear in the
-compact view. See [configuration.md](./configuration.md#maxwidgetlines) for the
-budget's floor and reload semantics.
-
-## Completed tasks fading out
-
-A completed task stays on screen for the remainder of the turn in which it was
-completed. At the start of the next agent turn, every completed row that has
-already been displayed is hidden from later renders. Reloading or compacting the
-session resets that tracking, so a fresh session shows the full list again.
+There are no keyboard scroll bindings. Use Pi's tool-output expansion shortcut
+(`ctrl+o` by default) to show every task at once; collapsing it reapplies the
+budget. See [configuration.md](./configuration.md#maxwidgetlines).
 
 ## Collapsing
 

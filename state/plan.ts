@@ -23,7 +23,7 @@ export interface PlanItem {
  * Markdown emphasis and a leading section number.
  */
 const CONTEXT_LABEL =
-	/^(summary|overview|context|background|(key )?findings|not adopted|non-goals|out of scope|assumptions|risks|open questions|notes|references|alternatives( considered)?|rejected)\b/i;
+	/^(summary|overview|context|background|(key )?findings|not adopted|non-goals|out of scope|assumptions|risks|open questions|notes|references|alternatives( considered)?|rejected|decisions?|scope|diagnosis|current state|constraints|defaults?|goals?|success criteria|intent|compatibility|rationale|approved)\b/i;
 
 const HEADING = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
 const BULLET = /^([-*+]|\d+[.)])\s+(.*)$/;

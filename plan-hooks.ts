@@ -91,6 +91,7 @@ export function formatPlanReminder(state: TaskState): string {
 		`Plan check: the approved plan "${title}" still has ${progress?.open ?? open.length}/${progress?.total ?? open.length} items open. Do not tell the user the work is done.`,
 		"Open plan items:",
 		...open.map((t) => line(t.id, t.planGroup, t.subject)),
+		"These already exist as todos: update them by id (complete with evidence, or defer with a reason). Do not create new todos for them.",
 		"Keep working on them now. For any item you can't finish in this run: if it is actually done, complete it with evidence; otherwise set status deferred with a reason. Then tell the user exactly which plan items are still open or deferred, and why.",
 	];
 	const deferred = state.tasks.filter((t) => t.source === "plan" && t.status === "deferred");

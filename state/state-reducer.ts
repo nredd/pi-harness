@@ -1,4 +1,4 @@
-import type { Task, TaskAction, TaskMutationParams, TaskStatus } from "../tool/types.ts";
+import type { Task, TaskAction, TaskMutationParams, TaskOpAction, TaskStatus } from "../tool/types.ts";
 import { isTransitionValid } from "./invariants.ts";
 import type { TaskState } from "./state.ts";
 import { detectCycle } from "./task-graph.ts";
@@ -19,6 +19,7 @@ export type Op =
 	| { kind: "list"; statusFilter?: TaskStatus; includeDeleted: boolean }
 	| { kind: "get"; task: Task }
 	| { kind: "clear"; count: number; kept: number }
+	| { kind: "batch"; results: Op[] }
 	| { kind: "error"; message: string };
 
 export interface ApplyResult {
@@ -49,6 +50,15 @@ export function changesState(op: Op): boolean {
 
 function errorResult(state: TaskState, message: string): ApplyResult {
 	return { state, op: { kind: "error", message } };
+}
+
+const normalizeSubject = (text: string): string => text.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** The live plan item whose subject equals `subject` (case and whitespace-insensitive), if any. */
+function findPlanItemBySubject(state: TaskState, subject: string): Task | undefined {
+	if (!state.plan) return undefined;
+	const key = normalizeSubject(subject);
+	return state.tasks.find((t) => t.source === "plan" && t.status !== "deleted" && normalizeSubject(t.subject) === key);
 }
 
 export const ERR_EVIDENCE_REQUIRED =
@@ -109,12 +119,14 @@ function taskChanged(before: Task, after: Task): boolean {
  * dangling/deleted blockedBy, self-block, cycles). Decision: validation stays
  * in-reducer.
  */
-export function applyTaskMutation(state: TaskState, action: TaskAction, params: TaskMutationParams): ApplyResult {
+export function applyTaskMutation(state: TaskState, action: TaskOpAction, params: TaskMutationParams): ApplyResult {
 	switch (action) {
 		case "create": {
 			if (!params.subject?.trim()) {
 				return errorResult(state, "subject required for create");
 			}
+			const duplicate = findPlanItemBySubject(state, params.subject);
+			if (duplicate) return errorResult(state, `#${duplicate.id} is already a plan item; update it`);
 			if (params.blockedBy?.length) {
 				for (const dep of params.blockedBy) {
 					const depTask = state.tasks.find((t) => t.id === dep);
@@ -122,11 +134,7 @@ export function applyTaskMutation(state: TaskState, action: TaskAction, params: 
 					if (depTask.status === "deleted") return errorResult(state, `blockedBy: #${dep} is deleted`);
 				}
 			}
-			const newTask: Task = {
-				id: state.nextId,
-				subject: params.subject,
-				status: "pending",
-			};
+			const newTask: Task = { id: state.nextId, subject: params.subject, status: "pending" };
 			if (params.description) newTask.description = params.description;
 			if (params.activeForm) newTask.activeForm = params.activeForm;
 			if (params.blockedBy?.length) newTask.blockedBy = [...params.blockedBy];
@@ -303,10 +311,55 @@ export function applyTaskMutation(state: TaskState, action: TaskAction, params: 
 				if (!blockedBy.length) delete next.blockedBy;
 				return next;
 			});
-			return {
-				state: { ...state, tasks },
-				op: { kind: "clear", count, kept: kept.length },
-			};
+			return { state: { ...state, tasks }, op: { kind: "clear", count, kept: kept.length } };
 		}
 	}
+}
+
+export interface CallResult extends ApplyResult {
+	/** What the call did, as recorded in `details.action`. */
+	action: TaskAction;
+}
+
+const READ_ACTIONS: ReadonlySet<TaskOpAction> = new Set(["list", "get"]);
+
+/**
+ * Entry point for one `todo` call: a single operation, or an `ops` batch.
+ *
+ * A batch is atomic. Mutations apply in order against a running state; the
+ * first failure discards everything and the error names the op (`ops[3]: ...`).
+ * `list`/`get` are answered from the FINAL state, so they report what the batch
+ * produced. Ids of todos a batch creates are sequential from `nextId`, which a
+ * later op in the same batch may reference but a caller should not rely on.
+ */
+export function applyTaskCall(state: TaskState, params: TaskMutationParams): CallResult {
+	const { ops, action, ...flat } = params;
+	if (ops === undefined) {
+		if (!action) return { ...errorResult(state, "action required (or pass ops)"), action: "batch" };
+		return { ...applyTaskMutation(state, action as TaskOpAction, params), action: action as TaskOpAction };
+	}
+	const fail = (message: string): CallResult => ({ ...errorResult(state, message), action: "batch" });
+	if (action !== undefined || Object.values(flat).some((v) => v !== undefined)) {
+		return fail("ops can't be combined with a top-level action or fields: put them inside each op");
+	}
+	if (ops.length === 0) return fail("ops must not be empty");
+
+	let running = state;
+	const results: Op[] = new Array(ops.length);
+	for (const [index, op] of ops.entries()) {
+		if (!op.action) return fail(`ops[${index}]: action required`);
+		if (op.ops !== undefined) return fail(`ops[${index}]: ops can't be nested`);
+		if (READ_ACTIONS.has(op.action)) continue;
+		const applied = applyTaskMutation(running, op.action, op);
+		if (applied.op.kind === "error") return fail(`ops[${index}]: ${applied.op.message}`);
+		running = applied.state;
+		results[index] = applied.op;
+	}
+	for (const [index, op] of ops.entries()) {
+		if (!READ_ACTIONS.has(op.action as TaskOpAction)) continue;
+		const read = applyTaskMutation(running, op.action as TaskOpAction, op);
+		if (read.op.kind === "error") return fail(`ops[${index}]: ${read.op.message}`);
+		results[index] = read.op;
+	}
+	return { state: running, op: { kind: "batch", results }, action: "batch" };
 }

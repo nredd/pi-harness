@@ -20,6 +20,9 @@
  */
 
 import type { TaskStatus } from "../tool/types.ts";
+import { selectPlanProgress } from "./plan.ts";
+import { selectTodoCounts } from "./selectors.ts";
+import type { TaskState } from "./state.ts";
 
 export const I18N_NAMESPACE = "@juicesharp/rpiv-todo";
 
@@ -71,4 +74,27 @@ const PLAN_OPEN = "{open}/{total} plan items open";
 /** `N/M plan items open`, localized; shared by the overlay heading and `/todos`. */
 export function formatPlanOpen(open: number, total: number): string {
 	return t("overlay.planOpen", PLAN_OPEN).replace("{open}", String(open)).replace("{total}", String(total));
+}
+
+const PROGRESS_DONE = "done";
+const PROGRESS_OPEN = "open";
+
+/**
+ * Heading progress, e.g. `19 done, 1 deferred, 4 open`. Computed from the full
+ * state (never the rows the overlay happens to show), so the numbers always sum
+ * to the total. Zero buckets are omitted. With plan items AND other todos it
+ * appends the plan's own `N/M plan items open`.
+ */
+export function formatProgress(state: TaskState): string {
+	const counts = selectTodoCounts(state);
+	const parts: string[] = [];
+	if (counts.completed > 0) parts.push(`${counts.completed} ${t("overlay.done", PROGRESS_DONE)}`);
+	if (counts.deferred > 0) parts.push(`${counts.deferred} ${formatStatusLabel("deferred")}`);
+	const open = counts.pending + counts.inProgress;
+	if (open > 0) parts.push(`${open} ${t("overlay.open", PROGRESS_OPEN)}`);
+	let text = parts.join(", ");
+	const plan = selectPlanProgress(state);
+	const planCount = state.tasks.filter((x) => x.source === "plan" && x.status !== "deleted").length;
+	if (plan && counts.total > planCount) text += ` · ${formatPlanOpen(plan.open, plan.total)}`;
+	return text;
 }

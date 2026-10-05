@@ -19,6 +19,39 @@ const SMALL_PLAN = `# Add widgets
 - \`make test\` passes
 `;
 
+describe("parsePlanItems — context labels", () => {
+	const LABELS = [
+		"Decisions",
+		"Scope",
+		"Diagnosis so far",
+		"Current state",
+		"Constraints",
+		"Defaults",
+		"Goals",
+		"Success criteria",
+		"Intent",
+		"Compatibility",
+		"Rationale",
+		"Approved approach",
+	];
+	for (const label of LABELS) {
+		it(`skips a '${label}' section but keeps the work sections`, () => {
+			const items = parsePlanItems(`# T\n\n## ${label}\n- not work\n\n## Work\n- do it\n`);
+			expect(items.map((i) => i.subject)).toEqual(["do it"]);
+		});
+	}
+
+	it("skips a 'Decisions:' lead-in list", () => {
+		const items = parsePlanItems("# T\n\n## Work\nDecisions:\n- not work\n\n## More\n- do it\n");
+		expect(items.map((i) => i.subject)).toEqual(["do it"]);
+	});
+
+	it("does not skip sections that merely start with the same letters", () => {
+		const items = parsePlanItems("# T\n\n## Scoped changes\n- do it\n");
+		expect(items.map((i) => i.subject)).toEqual(["do it"]);
+	});
+});
+
 function empty(): TaskState {
 	return { tasks: [], nextId: 1 };
 }

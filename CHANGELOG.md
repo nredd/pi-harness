@@ -41,8 +41,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `N/M plan items open` in the overlay heading, `/todos`, and `list`.
 - One wrap-up reminder per prompt (`agent_before_settle` + `context`) listing open plan items when a run would end with them open.
 
+- The overlay is a mouse-wheel scrollable window over every todo, with `↑ N above` / `↓ N below` hints; it follows the active task.
+- `ops` batching: open, close, update, or read many todos in one atomic `todo` call (`ops[3]: ...` names the failing op).
+- `create` is rejected when it duplicates a plan item's subject while a plan is active.
+
 ### Changed
 
+- Heading counts are spelled out and computed from the whole list: `Todos (19 done, 1 deferred, 4 open)`. `/todos` uses the same line. The separate `N/M plan items open` suffix appears only next to non-plan todos.
+- Plan parsing also skips `Decisions`, `Scope`, `Diagnosis`, `Current state`, `Constraints`, `Defaults`, `Goals`, `Success criteria`, `Intent`, `Compatibility`, `Rationale`, and `Approved` sections.
+- The plan reminder tells the model to update the listed ids rather than create duplicates.
+- Completed rows are no longer hidden at the next turn: every todo stays reachable by scrolling.
 - `completed` requires an `evidence` string, shown in `list`, `get`, and the expanded row. Plan items can't be edited or deleted; `clear` keeps them.
 - A rejected `todo` call renders `✗ <error>` instead of echoing the requested status.
 

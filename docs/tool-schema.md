@@ -15,6 +15,39 @@ for the `todo` tool registered by
 | `delete` | `id` | Tombstones the task (`status: "deleted"`); it is not removed. Plan items can't be deleted. |
 | `clear` | — | Drops every agent-created task. Plan items stay; the id counter resets to `1` only when nothing is kept. |
 
+## Batching with `ops`
+
+Pass `ops` instead of a top-level `action` and fields to open or close many todos
+in one call. The two forms are mutually exclusive.
+
+```ts
+todo({
+  ops: [
+    { action: "update", id: 1, status: "completed", evidence: "npm test: 42 passed" },
+    { action: "update", id: 2, status: "deferred", reason: "needs a design call" },
+    { action: "create", subject: "Follow up" },
+    { action: "list" },
+  ],
+});
+```
+
+- Mutations (`create`, `update`, `delete`, `clear`) apply in order, so a later op
+  sees an earlier one. Ids of todos a batch creates are sequential from the
+  current next id; don't rely on referencing them in the same call.
+- Atomic: the first invalid op discards the whole batch, and the error names it
+  (`Error: ops[2]: evidence required ...`). Nothing is partially applied.
+- `list` and `get` are answered from the FINAL state, whatever their position.
+- Each op carries its own `evidence` / `reason`; plan-item rules (verbatim,
+  undeletable, evidence to complete) hold inside a batch.
+- No nesting, and `ops` can't be empty.
+- Result: `Applied N ops`, then one `[i] ...` block per op, then the plan header
+  when a plan is active. `details.action` is `"batch"`.
+
+## Duplicate guard
+
+While a plan is active, `create` fails when its subject matches a plan item
+(case and whitespace-insensitive): `#7 is already a plan item; update it`.
+
 ## Parameters
 
 ```ts
@@ -175,6 +208,7 @@ fall back to the last `todo` tool result's `details`. Either way, tasks survive
 | Deleted | `Deleted #3: Write the parser` |
 | Cleared | `Cleared 7 tasks` (with plan items: `...; kept 5 plan items (...)`) |
 | Deferred plan item | `Updated #3 (pending → deferred). Tell the user this plan item is descoped and why: <reason>` |
+| Batch | `Applied 3 ops`, `[0] Created #1: ...`, ... |
 | `list` header with a plan | `Plan: <title> -- 3/5 plan items open` |
 | `list` row | `[in_progress] #3 Write the parser (writing the parser) ⛓ #1,#2` |
 | `list` plan row | `[pending] #3 <subject> [plan: <group>]`, then the item's `planText`, `evidence:`, or `deferred:` lines indented |

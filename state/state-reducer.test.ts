@@ -61,10 +61,7 @@ describe("applyTaskMutation — update", () => {
 	it("rejects illegal transition completed → in_progress", () => {
 		const state = stateWith(task({ id: 1, subject: "x", status: "completed" }));
 		const result = applyTaskMutation(state, "update", { id: 1, status: "in_progress" });
-		expect(result.op).toEqual({
-			kind: "error",
-			message: "illegal transition completed → in_progress",
-		});
+		expect(result.op).toEqual({ kind: "error", message: "illegal transition completed → in_progress" });
 	});
 
 	it("allows completed → deleted transition", () => {
@@ -121,10 +118,7 @@ describe("applyTaskMutation — update", () => {
 	it("rejects cycle in blockedBy graph", () => {
 		const state = stateWith(task({ id: 1, subject: "a", blockedBy: [2] }), task({ id: 2, subject: "b" }));
 		const result = applyTaskMutation(state, "update", { id: 2, addBlockedBy: [1] });
-		expect(result.op).toEqual({
-			kind: "error",
-			message: "addBlockedBy would create a cycle in the blockedBy graph",
-		});
+		expect(result.op).toEqual({ kind: "error", message: "addBlockedBy would create a cycle in the blockedBy graph" });
 	});
 
 	it("drops blockedBy field when merged set becomes empty", () => {
@@ -286,6 +280,23 @@ describe("applyTaskMutation — evidence and deferral", () => {
 		]) {
 			expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining("can't be deleted") });
 		}
+	});
+
+	it("rejects a create that duplicates a plan item's subject, naming the id", () => {
+		const state = {
+			...stateWith(task({ id: 7, subject: "Add the  Widget", source: "plan" })),
+			plan: { id: "p1", title: "T" },
+		};
+		const result = applyTaskMutation(state, "create", { subject: "  add the widget " });
+		expect(result.op).toEqual({ kind: "error", message: "#7 is already a plan item; update it" });
+		expect(result.state.tasks).toHaveLength(1);
+	});
+
+	it("allows a duplicate subject without an active plan, or of a non-plan todo", () => {
+		const noPlan = stateWith(task({ id: 1, subject: "x", source: "plan" }));
+		expect(applyTaskMutation(noPlan, "create", { subject: "x" }).op.kind).toBe("create");
+		const plain = { ...stateWith(task({ id: 1, subject: "x" })), plan: { id: "p1", title: "T" } };
+		expect(applyTaskMutation(plain, "create", { subject: "x" }).op.kind).toBe("create");
 	});
 
 	it("keeps a plan item's text verbatim", () => {

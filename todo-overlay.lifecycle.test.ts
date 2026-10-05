@@ -220,34 +220,6 @@ describe("TodoOverlay — lifecycle", () => {
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 
-	it("resetCompletedDisplayState() lets replayed completed tasks be shown once again", async () => {
-		const { captured } = registerTool();
-		await seed(captured, [
-			{ action: "create", subject: "done" },
-			{ action: "update", id: 1, status: "completed", evidence: "ok" },
-		]);
-		const overlay = new TodoOverlay();
-		const ui = makeCtx();
-		overlay.setUICtx(ui);
-		overlay.update();
-		const setWidget = ui.setWidget as ReturnType<typeof vi.fn>;
-		const factory = setWidget.mock.calls[0][1] as (
-			tui: { requestRender: () => void },
-			theme: typeof identityTheme,
-		) => { render: (w: number) => string[]; invalidate: () => void };
-		const widget = factory({ requestRender: vi.fn() }, identityTheme);
-		expect(widget.render(200).join("\n")).toContain("done");
-		overlay.hideCompletedTasksFromPreviousTurn();
-		expect(widget.render(200)).toEqual([]);
-		overlay.resetCompletedDisplayState();
-		expect(widget.render(200).join("\n")).toContain("done");
-	});
-
-	it("hideCompletedTasksFromPreviousTurn() is a no-op when nothing is pending hide", () => {
-		const overlay = new TodoOverlay();
-		expect(() => overlay.hideCompletedTasksFromPreviousTurn()).not.toThrow();
-	});
-
 	it("all-deleted todos count as empty (no widget)", async () => {
 		const { captured } = registerTool();
 		const tool = await seed(captured, [{ action: "create", subject: "a" }]);
@@ -375,15 +347,5 @@ describe("TodoOverlay — collapse/expand state", () => {
 		expect(overlay.isRegistered()).toBe(true);
 		overlay.dispose();
 		expect(overlay.isRegistered()).toBe(false);
-	});
-
-	it("resetCompletedDisplayState() does NOT reset collapsed", async () => {
-		const { overlay, widget } = await setupRegistered();
-		overlay.toggleCollapse(); // collapsed = true
-		expect(widget.render(200).some((l) => l.includes("ctrl+shift+t to expand"))).toBe(true);
-		// resetCompletedDisplayState clears the completed-display bookkeeping but
-		// must leave the ephemeral `collapsed` flag alone (the "respect collapsed" seam).
-		overlay.resetCompletedDisplayState();
-		expect(widget.render(200).some((l) => l.includes("ctrl+shift+t to expand"))).toBe(true);
 	});
 });

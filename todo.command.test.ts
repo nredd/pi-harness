@@ -85,7 +85,7 @@ describe("/todos command — grouped output", () => {
 		const out = grabOutput(ctx);
 		expect(out).toContain("── Pending ──");
 		expect(out).toContain("○ #1 research");
-		expect(out).toContain("1 pending");
+		expect(out).toContain("1 open");
 	});
 
 	it("renders 'In Progress' group with ◐ glyph and activeForm suffix", async () => {
@@ -99,7 +99,7 @@ describe("/todos command — grouped output", () => {
 		const out = grabOutput(ctx);
 		expect(out).toContain("── In Progress ──");
 		expect(out).toContain("◐ #1 build (Building)");
-		expect(out).toContain("1 in progress");
+		expect(out).toContain("1 open");
 	});
 
 	it("renders 'Completed' group with ✓ glyph and 'N/M completed' header", async () => {
@@ -113,10 +113,10 @@ describe("/todos command — grouped output", () => {
 		const out = grabOutput(ctx);
 		expect(out).toContain("── Completed ──");
 		expect(out).toContain("✓ #1 ship");
-		expect(out).toContain("1/1 completed");
+		expect(out).toContain("1 done");
 	});
 
-	it("emits the header parts in 'completed · in progress · pending' order", async () => {
+	it("emits the header as 'done, deferred, open' counts that sum to the total", async () => {
 		const { tool, cmd } = setup();
 		await seed(tool, [
 			{ action: "create", subject: "p" },
@@ -124,17 +124,12 @@ describe("/todos command — grouped output", () => {
 			{ action: "update", id: 2, status: "in_progress" },
 			{ action: "create", subject: "done" },
 			{ action: "update", id: 3, status: "completed", evidence: "ok" },
+			{ action: "create", subject: "later" },
+			{ action: "update", id: 4, status: "deferred", reason: "no" },
 		]);
 		const ctx = createMockCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
-		const out = grabOutput(ctx);
-		const header = out.split("\n")[0];
-		const iC = header.indexOf("completed");
-		const iIP = header.indexOf("in progress");
-		const iP = header.indexOf("pending");
-		expect(iC).toBeGreaterThanOrEqual(0);
-		expect(iIP).toBeGreaterThan(iC);
-		expect(iP).toBeGreaterThan(iIP);
+		expect(grabOutput(ctx).split("\n")[0]).toBe("1 done, 1 deferred, 2 open");
 	});
 
 	it("appends '⛓ #deps' suffix for tasks with blockedBy", async () => {

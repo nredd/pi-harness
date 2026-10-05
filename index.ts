@@ -132,10 +132,7 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 	let uiCtx: ExtensionUIContext | undefined;
 	let lifecycleGeneration = 0;
 
-	async function updateTodoOverlay(
-		resetCompletedDisplayState = false,
-		generation = lifecycleGeneration,
-	): Promise<void> {
+	async function updateTodoOverlay(generation = lifecycleGeneration): Promise<void> {
 		const hasVisibleTasks = getRenderState().tasks.some((task) => task.status !== "deleted");
 		if (!uiCtx || (!todoOverlay && !hasVisibleTasks)) return;
 
@@ -144,7 +141,6 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 
 		todoOverlay ??= new TodoOverlay();
 		todoOverlay.setUICtx(uiCtx);
-		if (resetCompletedDisplayState) todoOverlay.resetCompletedDisplayState();
 		todoOverlay.update();
 	}
 
@@ -192,7 +188,7 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;
 		}
-		if (isForeground) await updateTodoOverlay(true);
+		if (isForeground) await updateTodoOverlay();
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -220,7 +216,7 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		if (id !== getActiveRenderSession()) return;
 		const generation = ++lifecycleGeneration;
 		uiCtx = ctx.ui;
-		await updateTodoOverlay(true, generation);
+		await updateTodoOverlay(generation);
 	});
 
 	pi.on("session_compact", async (_event, ctx) => {
@@ -291,8 +287,4 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 	// the first real update to retry. unref avoids holding an embedder open.
 	const prewarmTimer = setTimeout(() => void loadTodoOverlay().catch(() => undefined), PREWARM_DELAY_MS);
 	prewarmTimer.unref?.();
-
-	pi.on("agent_start", async () => {
-		todoOverlay?.hideCompletedTasksFromPreviousTurn();
-	});
 }

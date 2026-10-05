@@ -46,6 +46,7 @@ export const ACTION_GLYPH: Record<TaskAction, string> = {
 	get: "›",
 	list: "☰",
 	clear: "∅",
+	batch: "≡",
 };
 
 /**
@@ -117,10 +118,21 @@ export function formatCommandTaskLine(t: Task, glyph: string): string {
  * node identical to pre-refactor `todo.ts:507-525`.
  */
 export function renderTodoCall(
-	args: TaskMutationParams & { action: TaskAction },
+	args: TaskMutationParams & { action?: TaskAction },
 	theme: Theme,
 	state: TaskState,
 ): Text {
+	if (args.ops) {
+		const count = `${args.ops.length} op${args.ops.length === 1 ? "" : "s"}`;
+		return new Text(
+			theme.fg("toolTitle", theme.bold("todo ")) +
+				theme.fg("muted", ACTION_GLYPH.batch) +
+				` ${theme.fg("dim", count)}`,
+			0,
+			0,
+		);
+	}
+	if (!args.action) return new Text(theme.fg("toolTitle", theme.bold("todo ")), 0, 0);
 	const glyph = ACTION_GLYPH[args.action] ?? args.action;
 	let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", glyph);
 
@@ -171,6 +183,7 @@ export function renderTodoResult(
 			case "list":
 			case "get":
 			case "clear":
+			case "batch":
 				break;
 		}
 	}

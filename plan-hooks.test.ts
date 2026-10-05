@@ -211,6 +211,8 @@ describe("wrap-up reminder", () => {
 		expect(reminder).toContain('the approved plan "Add widgets" still has 1/3 items open');
 		expect(reminder).toContain("- #2 [Work] Wire `beta` into the CLI");
 		expect(reminder).not.toContain("#1 ");
+		expect(reminder).toContain("update them by id");
+		expect(reminder).toContain("Do not create new todos for them");
 		expect(reminder).toContain("- #3 [Verification] `make test` passes -- CI is down");
 		// Only the request right after the marker sees the list.
 		expect(await context({ messages: [user, assistant, marker, assistant] }, ctx)).toBeUndefined();
