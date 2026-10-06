@@ -58,6 +58,8 @@ import { createPlanExportController } from "./plan-export-controller.js";
 import {
   clearPlanModeUi,
   planModeStatusText as formatPlanModeStatusText,
+  PLAN_MESSAGE_TYPE,
+  renderPlanMessage,
   showStoredPlan,
   updatePlanModeUi,
 } from "./presentation.js";
@@ -231,6 +233,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       if (exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
     },
   });
+
+  pi.registerMessageRenderer(PLAN_MESSAGE_TYPE, renderPlanMessage);
 
   pi.registerTool({
     name: PLAN_MODE_QUESTION_TOOL_NAME,

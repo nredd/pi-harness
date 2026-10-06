@@ -1,9 +1,9 @@
 import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+import { PLAN_MESSAGE_TYPE } from "./presentation.js";
 import type { ActiveImplementationPlan } from "./state.js";
 
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 export const PLAN_IMPLEMENTATION_CONTEXT_MESSAGE_TYPE = "plan-mode-implementation-context";
-const PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 const PLAN_IMPLEMENTATION_HANDOFF_PREFIX =
   "Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:";
 export const PLAN_HISTORY_IMPLEMENTATION_PROMPT = "Implement the plan.";
@@ -135,7 +135,7 @@ function activeImplementationContextContent(activeImplementation: ActiveImplemen
 export function messageContainsInactivePlanModeArtifact(message: unknown) {
   const candidate = unwrapSessionMessage(message);
   return (
-    candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE ||
+    candidate.customType === PLAN_MESSAGE_TYPE ||
     (candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_COMPLETE_TOOL_NAME)
   );
 }
@@ -183,7 +183,7 @@ function findHistoryImplementationArtifactBeforeKickoff(
       }
       continue;
     }
-    if (candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE) {
+    if (candidate.customType === PLAN_MESSAGE_TYPE) {
       return { messageIndex: index, kind: "presentation" };
     }
     if (candidate.role === "assistant" && contentText(candidate.content).match(PROPOSED_PLAN_BLOCK_PATTERN)) {

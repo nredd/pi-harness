@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { renderPlanModeWidget, sanitizePlanModeWidgetLine, updatePlanModeUi } from "../src/presentation.js";
+import planMode from "../src/plan-mode.js";
+import {
+  PLAN_MESSAGE_TYPE,
+  planMessageParts,
+  renderPlanMessage,
+  renderPlanModeWidget,
+  sanitizePlanModeWidgetLine,
+  showPlanModePlan,
+  updatePlanModeUi,
+} from "../src/presentation.js";
 import type { PlanModeState } from "../src/state.js";
-import { createMockContext } from "./support.js";
+import { createMockContext, createMockPi } from "./support.js";
 
 const BASE_STATE: PlanModeState = {
   enabled: false,
@@ -101,4 +111,89 @@ test("clears the footer chip and widget once Plan mode is fully off", () => {
 
   assert.equal(context.statuses.get("plan-mode"), undefined);
   assert.equal(context.widgets.get("plan-mode-plan"), undefined);
+});
+
+const PLAN = "Intro line\n\n## Ship the thing\n\n- step one\n- step two";
+
+type PlanMessage = Parameters<MessageRenderer>[0];
+
+function planMessage(overrides: Partial<PlanMessage> = {}): PlanMessage {
+  return {
+    role: "custom",
+    customType: PLAN_MESSAGE_TYPE,
+    content: `**Proposed Plan**\n\n${PLAN}`,
+    display: true,
+    timestamp: 0,
+    ...overrides,
+  };
+}
+
+test("showPlanModePlan sends a proposed-plan message with structured details", () => {
+  const mock = createMockPi();
+  const context = createMockContext({ hasUI: true });
+
+  showPlanModePlan(mock.pi, context.ctx, "Saved Plan", PLAN);
+
+  assert.deepEqual(mock.sentMessages, [
+    {
+      message: {
+        customType: PLAN_MESSAGE_TYPE,
+        content: `**Saved Plan**\n\n${PLAN}`,
+        display: true,
+        details: { version: 1, title: "Saved Plan", plan: PLAN },
+      },
+      options: { triggerTurn: false },
+    },
+  ]);
+});
+
+test("planMessageParts prefers details and falls back to the legacy bold-title content", () => {
+  assert.deepEqual(planMessageParts(planMessage({ details: { version: 1, title: "Active Plan", plan: "# X" } })), {
+    version: 1,
+    title: "Active Plan",
+    plan: "# X",
+  });
+  assert.deepEqual(planMessageParts(planMessage()), { version: 1, title: "Proposed Plan", plan: PLAN });
+  assert.deepEqual(planMessageParts(planMessage({ content: [{ type: "text", text: "**Saved Plan**\n\nbody" }] })), {
+    version: 1,
+    title: "Saved Plan",
+    plan: "body",
+  });
+  assert.deepEqual(planMessageParts(planMessage({ content: "no title here" })), {
+    version: 1,
+    title: "Plan",
+    plan: "no title here",
+  });
+});
+
+test("the proposed-plan renderer collapses to `Title · heading` and expands to the full plan", () => {
+  const liveTheme = {
+    fg: (role: string, text: string) => `[${role}]${text}[/${role}]`,
+    bold: (text: string) => `[b]${text}[/b]`,
+  } as unknown as Theme;
+  const collapsed = renderPlanMessage(planMessage(), { expanded: false, outputPad: 1 }, liveTheme).render(80);
+  assert.deepEqual(collapsed, ["[b]Proposed Plan[/b][muted] · [/muted]Ship the thing"]);
+
+  const headingless = renderPlanMessage(
+    planMessage({ details: { version: 1, title: "Saved Plan", plan: "" } }),
+    { expanded: false, outputPad: 1 },
+    liveTheme,
+  ).render(80);
+  assert.deepEqual(headingless, ["[b]Saved Plan[/b]"]);
+
+  initTheme("dark");
+  const expanded = renderPlanMessage(planMessage(), { expanded: true, outputPad: 0 }, liveTheme)
+    .render(80)
+    .map(stripTerminalSequences)
+    .join("\n");
+  assert.match(expanded, /Proposed Plan/u);
+  assert.match(expanded, /Ship the thing/u);
+  assert.match(expanded, /step one/u);
+  assert.match(expanded, /step two/u);
+});
+
+test("plan mode registers the proposed-plan message renderer", () => {
+  const mock = createMockPi();
+  planMode(mock.pi);
+  assert.equal(mock.messageRenderers.get(PLAN_MESSAGE_TYPE), renderPlanMessage);
 });

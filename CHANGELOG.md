@@ -4,6 +4,10 @@
 
 ### Added
 
+- A `proposed-plan` message renderer: the plan shown after `plan_mode_complete`
+  settles and by `/plan show` collapses to `<Title> · <plan heading>` in Pi 1.0's
+  disclosure gutter and expands to the full plan. Messages carry
+  `details: { version: 1, title, plan }`; older content-only messages still render.
 - `pi-plan-mode:plan-approved` event on `pi.events` (`{ version: 1, planId, plan,
   sessionId }`) when an approved plan's implementation starts, in this session
   or a fresh one, plus a `plan-mode-approved-plan` session entry so a fresh

@@ -1,8 +1,29 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  getMarkdownTheme,
+  type MessageRenderer,
+  type MessageRenderOptions,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { type Component, Markdown, stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
+import { planTitle } from "./completion-tool.js";
 import type { PlanModeState } from "./state.js";
 
 const STATUS_KEY = "plan-mode";
+
+/** `customType` of the transcript message that shows a proposed, saved, or active plan. */
+export const PLAN_MESSAGE_TYPE = "proposed-plan";
+export const PLAN_MESSAGE_VERSION = 1;
+
+type PlanMessage = Parameters<MessageRenderer>[0];
+type TextBlock = Extract<Exclude<PlanMessage["content"], string>[number], { type: "text" }>;
+
+export type PlanMessageDetails = {
+  version: typeof PLAN_MESSAGE_VERSION;
+  title: string;
+  plan: string;
+};
 const PLAN_WIDGET_KEY = "plan-mode-plan";
 const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 
@@ -68,9 +89,10 @@ export function showPlanModePlan(pi: ExtensionAPI, ctx: ExtensionContext, title:
   try {
     pi.sendMessage(
       {
-        customType: "proposed-plan",
-        content: `**${title}**\n\n${plan}`,
+        customType: PLAN_MESSAGE_TYPE,
+        content: planMessageMarkdown(title, plan),
         display: true,
+        details: { version: PLAN_MESSAGE_VERSION, title, plan } satisfies PlanMessageDetails,
       },
       { triggerTurn: false },
     );
@@ -78,6 +100,52 @@ export function showPlanModePlan(pi: ExtensionAPI, ctx: ExtensionContext, title:
     const detail = error instanceof Error ? error.message : String(error);
     ctx.ui.notify(`Unable to show completed plan: ${detail}`, "error");
   }
+}
+
+export function planMessageMarkdown(title: string, plan: string) {
+  return `**${title}**\n\n${plan}`;
+}
+
+/**
+ * Title and plan of a plan message. Prefers `details`; older sessions persisted only the
+ * `**Title**\n\nplan` content, so that shape is parsed as a fallback.
+ */
+export function planMessageParts(message: Pick<PlanMessage, "content" | "details">): PlanMessageDetails {
+  const details = message.details;
+  if (
+    isRecord(details) &&
+    details.version === PLAN_MESSAGE_VERSION &&
+    typeof details.title === "string" &&
+    typeof details.plan === "string"
+  ) {
+    return { version: PLAN_MESSAGE_VERSION, title: details.title, plan: details.plan };
+  }
+  const text =
+    typeof message.content === "string"
+      ? message.content
+      : message.content
+          .filter((block): block is TextBlock => block.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+  const match = /^\*\*(?<title>[^*\n]+)\*\*\n+(?<plan>[\s\S]*)$/u.exec(text.trim());
+  if (match?.groups) {
+    return { version: PLAN_MESSAGE_VERSION, title: match.groups.title.trim(), plan: match.groups.plan.trim() };
+  }
+  return { version: PLAN_MESSAGE_VERSION, title: "Plan", plan: text.trim() };
+}
+
+/**
+ * Message renderer for `proposed-plan`. Collapsed (core's disclosure gutter keeps only the first
+ * line) it is `<Title> · <plan heading>`; expanded it is the full plan as Markdown.
+ */
+export function renderPlanMessage(message: PlanMessage, options: MessageRenderOptions, theme: Theme): Component {
+  const { title, plan } = planMessageParts(message);
+  if (options.expanded) {
+    return new Markdown(planMessageMarkdown(title, plan), options.outputPad, 0, getMarkdownTheme());
+  }
+  const heading = planTitle(plan);
+  const line = `${theme.bold(title)}${heading === "plan" ? "" : `${theme.fg("muted", " · ")}${heading}`}`;
+  return { render: () => [line], invalidate() {} };
 }
 
 export function planModeStatusText(state: PlanModeState, toolSummary: () => string) {
@@ -90,6 +158,10 @@ export function planModeStatusText(state: PlanModeState, toolSummary: () => stri
   if (state.savedPlan) return "A plan is saved for later.";
   if (state.activeImplementation) return "An implementation plan is active.";
   return "Plan mode is off.";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function publishPlanModeWidget(ctx: ExtensionContext, lines: readonly string[] | undefined) {
