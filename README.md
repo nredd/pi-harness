@@ -124,7 +124,7 @@ The optional native `powershell` tool must be active when an automatic Plan poli
 Tools named `edit`, `write`, or `update_plan` and deselected tools are blocked at execution time even though active schemas remain visible.
 Tools outside the reviewed core policy—including native MCP tools, native orchestration, extensions, and custom tools—are denied by default; explicitly allow their names before starting only when you accept the risk.
 Server annotations such as `readOnlyHint` are unverified hints, not permission or a safety guarantee.
-For example, opt into `mcp__docs__read`, `firecrawl_scrape`, or `lsp_diagnostics` through `/plan tools` or `defaultPlanTools` before the next workflow.
+For example, opt into `mcp__docs__read`, `mcp__firecrawl__firecrawl_scrape`, or `lsp_diagnostics` through `/plan tools` or `defaultPlanTools` before the next workflow.
 
 Direct and `model-only` tools must be active in Pi; `model-only` tools cannot be called by another tool.
 Registered `codemode` and `deferred` tools are selectable without direct activation and can run through Pi's nested tool pipeline.
