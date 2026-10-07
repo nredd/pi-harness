@@ -1449,6 +1449,9 @@ test("Plan prompt requires the standalone completion contract", () => {
   assert.match(prompt, /end.*plan_mode_question.*plan_mode_complete/is);
   assert.doesNotMatch(prompt, /complete unchanged plan/i);
   assert.match(prompt, /decline contract/i);
+  assert.match(prompt, /NEVER ask the user a question in assistant text/);
+  assert.match(prompt, /Only after a plan_mode_question call has actually returned ui_unavailable/);
+  assert.doesNotMatch(prompt, /If interactive UI is unavailable, ask one concise plain-text/);
   assert.match(prompt, /listed in the current request's active tools/i);
   assert.match(prompt, /actual error/i);
   assert.match(prompt, /behavior-level/i);

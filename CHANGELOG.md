@@ -42,6 +42,9 @@ watcher flake fix (upstream's `waitForSettingsWatch`). Upstream's per-segment
 
 ### Fixed
 
+- Decline loop: the Plan prompt, decline contract, and `plan_mode_complete` gate error now
+  forbid plain-text questions (they never lifted the gate) and require `plan_mode_question`.
+  Plain text is allowed only after the tool returned `ui_unavailable`.
 - Print and JSON mode: `/plan finalize`, `/plan implement`, and `/plan <prompt>`
   return only after the turn they send has run. They used to return right after
   `pi.sendUserMessage`, so print mode exited with the turn saved but unanswered,

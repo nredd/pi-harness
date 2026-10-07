@@ -206,7 +206,7 @@ The editor's submitted value is retained, including any whitespace normalization
 Without a custom editor, existing editing and cancellation behavior is unchanged.
 The TUI rejects either field above 4,000 characters instead of truncating it.
 RPC keeps the existing sequential `select` and `editor` dialogs because Pi RPC cannot render custom TUI components.
-If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
+If you cancel, the agent should call `plan_mode_question` again or proceed only with a clearly stated low-risk assumption. The agent must never ask questions in assistant text; plain text is allowed only after `plan_mode_question` actually returned `ui_unavailable`. Plain-text questions do not lift the decline gate.
 
 Pi identifies tools by tool name.
 The pre-start selector stores accepted session policy names and shows each effective tool's source and availability from Pi metadata, including native built-in extension registrations.

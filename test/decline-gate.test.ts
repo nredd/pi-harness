@@ -188,7 +188,8 @@ test("the injected contract follows the decline count", async () => {
   assert.match(once ?? "", /PLAN DECLINED x1/);
   assert.match(once ?? "", /Restate what changed and what is still open/);
   assert.match(once ?? "", /Re-verify/);
-  assert.match(once ?? "", /at least one plan_mode_question/);
+  assert.match(once ?? "", /plan_mode_question tool at least once/);
+  assert.match(once ?? "", /Never ask in assistant text/);
   assert.doesNotMatch(once ?? "", /anything else before I re-propose/);
 
   await f.ask();
@@ -198,6 +199,8 @@ test("the injected contract follows the decline count", async () => {
   const twice = await f.contract();
   assert.match(twice ?? "", /PLAN DECLINED x2/);
   assert.match(twice ?? "", /resolved or open/);
+  assert.match(twice ?? "", /plan_mode_question tool to ask "anything else before I re-propose/);
+  assert.match(twice ?? "", /Never ask in assistant text/);
   assert.match(twice ?? "", /anything else before I re-propose\?/);
   assert.match(twice ?? "", /explicit go-ahead/);
 });
@@ -232,4 +235,11 @@ test("the decline state persists and restores with the rest of the Plan state", 
   );
   assert.equal(disabled.declinedPlans, 0);
   assert.equal(disabled.declineGated, false);
+});
+
+test("the gate error names the tool and rejects plain-text answers", async () => {
+  const f = await fixture();
+  await f.complete();
+  await f.settle();
+  await assert.rejects(f.complete(), /plan_mode_question tool now[\s\S]*plain-text question or reply does not unblock/);
 });
