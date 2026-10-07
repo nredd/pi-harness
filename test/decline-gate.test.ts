@@ -190,6 +190,7 @@ test("the injected contract follows the decline count", async () => {
   assert.match(once ?? "", /Re-verify/);
   assert.match(once ?? "", /plan_mode_question tool at least once/);
   assert.match(once ?? "", /Never ask in assistant text/);
+  assert.match(once ?? "", /ui_unavailable[\s\S]*\/plan finalize/);
   assert.doesNotMatch(once ?? "", /anything else before I re-propose/);
 
   await f.ask();
@@ -241,5 +242,8 @@ test("the gate error names the tool and rejects plain-text answers", async () =>
   const f = await fixture();
   await f.complete();
   await f.settle();
-  await assert.rejects(f.complete(), /plan_mode_question tool now[\s\S]*plain-text question or reply does not unblock/);
+  await assert.rejects(
+    f.complete(),
+    /plan_mode_question tool now[\s\S]*plain-text question or reply does not unblock[\s\S]*\/plan finalize/,
+  );
 });
