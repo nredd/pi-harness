@@ -167,7 +167,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       undefined,
       runner.createToolContext("complete-generated-plan", signal),
     );
-    await runner.emit({ type: "agent_settled" });
+    await runner.emit({ type: "agent_settled", aborted: false });
     assert.deepEqual(errors, []);
   } finally {
     try {
