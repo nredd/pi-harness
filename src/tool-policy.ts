@@ -127,13 +127,15 @@ export function isBuiltinTool(tool: ToolInfo) {
 }
 
 /**
- * A tool from an installed extension (local file or package) whose author declares it does not
- * modify its environment. Built-in extensions, including native MCP (`builtin:mcp`), are excluded:
- * their annotations come from third-party servers and still need explicit opt-in.
+ * A tool from an extension the user installed (user-scope package or file, or an explicit `-e`)
+ * whose author declares it does not modify its environment. Excluded, so they keep explicit opt-in:
+ * built-in extensions including native MCP (`builtin:mcp`), whose hints come from third-party
+ * servers, and project-scope extensions, which an untrusted repository could ship.
  */
 export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
   const source = tool.sourceInfo;
   if (!source?.source || source.source === "builtin" || source.path?.startsWith("builtin:")) return false;
+  if (source.scope === "project") return false;
   return tool.annotations?.readOnlyHint === true;
 }
 
@@ -158,24 +160,41 @@ export function readCommand(input: unknown) {
 /** The typed remote-shell tool Plan mode re-validates like `ssh <host> <command>`. */
 export const SSH_EXEC_TOOL_NAME = "ssh_exec";
 
+/** `ssh_exec` parameters Plan mode understands; anything else fails closed. `cwd` is a plain path. */
+const SSH_EXEC_ALLOWED_KEYS = new Set(["host", "command", "cwd", "timeout"]);
+
 /**
- * Returns why an `ssh_exec` call is rejected, or `undefined` when it passes: the host must be a
- * configured `ssh` prefix and the remote command must pass the remote reviewed policy.
+ * Returns why an `ssh_exec` call is rejected, or `undefined` when it passes: only known parameters,
+ * a host that is a configured `ssh` prefix, and a remote command that passes the remote reviewed
+ * policy. `stdin` is refused outright because the gate cannot see what a remote command does with it.
  */
 export function findBlockedSshExecCall(
   input: unknown,
   safeSubcommands: SafeSubcommands = {},
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-  const call = input as { host?: unknown; command?: unknown } | undefined;
-  const host = typeof call?.host === "string" ? call.host.trim() : "";
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return "input is not an object";
+  const unknownKey = Object.keys(input).find((key) => !SSH_EXEC_ALLOWED_KEYS.has(key));
+  if (unknownKey !== undefined) return `parameter '${unknownKey}' is not allowed in Plan mode`;
+  const call = input as { host?: unknown; cwd?: unknown };
+  const host = typeof call.host === "string" ? call.host.trim() : "";
   if (!host) return "host is required";
   if (!(safeSubcommands.ssh ?? []).some((prefix) => prefix.trim() === host)) {
     return `host '${host}' is not a configured ssh prefix`;
   }
-  const command = readCommand(input);
-  const blocked = findBlockedCommandSegment(command, safeSubcommands, undefined, platform, [], true);
+  if (
+    call.cwd !== undefined &&
+    (typeof call.cwd !== "string" || hasShellExpansion(call.cwd) || /[\s;&|<>]/.test(call.cwd))
+  ) {
+    return "cwd must be a plain path";
+  }
+  const blocked = findBlockedRemoteCommand(readCommand(input), safeSubcommands, platform);
   return blocked === undefined ? undefined : `remote command: ${blocked}`;
+}
+
+/** The remote side of `ssh <host> <command>` and `ssh_exec`: local directories mean nothing there. */
+function findBlockedRemoteCommand(command: string, safeSubcommands: SafeSubcommands, platform: NodeJS.Platform) {
+  return findBlockedCommandSegment(command, safeSubcommands, undefined, platform, [], true);
 }
 
 /**
@@ -573,7 +592,7 @@ function isSafeSshSegment(
   const remainder = segment.trimStart().slice(prefix.length);
   const words = shellWords(remainder);
   if (!words || words.length === 0 || words[0]?.startsWith("-")) return false;
-  return findBlockedCommandSegment(words.join(" "), safeSubcommands, undefined, platform, [], true) === undefined;
+  return findBlockedRemoteCommand(words.join(" "), safeSubcommands, platform) === undefined;
 }
 
 const CURL_FORBIDDEN_LONG = [

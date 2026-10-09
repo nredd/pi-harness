@@ -208,10 +208,10 @@ Three commands keep built-in argument checks even when a prefix names them:
 
 A tool registered by an installed extension or package with `annotations: { readOnlyHint: true }` classifies as `read-only (annotated)` and is admitted to the default Plan policy alongside `defaultPlanTools` (or the safe built-ins when that is unset).
 A session-selected list from **Choose tools, then start…** or `/plan tools` still takes precedence, and the usual activation and exposure rules apply.
-The hint is author-asserted and unverified, so it only covers tools whose extension you installed; native MCP tools (`builtin:mcp`) and other built-in extensions keep needing explicit opt-in even when their servers declare the hint.
+The hint is author-asserted and unverified, so it only covers user-scope extensions and packages and explicit `-e` files; native MCP tools (`builtin:mcp`), other built-in extensions, and project-scope extensions keep needing explicit opt-in even when they declare the hint. A user-installed package that proxies an MCP server is trusted as that package.
 A tool with a mutating mode must not declare the hint.
 
-`ssh_exec` calls (`{ host, command }`) are validated like `ssh <host> <command>`: `host` must be a configured `ssh` prefix in `safeSubcommands` and `command` must pass the remote reviewed policy, so `cd`, `git -C`, redirects and mutations are rejected.
+`ssh_exec` calls (`{ host, command }`) are validated like `ssh <host> <command>`: `host` must be a configured `ssh` prefix in `safeSubcommands` and `command` must pass the remote reviewed policy, so `cd`, `git -C`, redirects and mutations are rejected; `cwd` must be a plain path and parameters other than `host`, `command`, `cwd` and `timeout` (notably `stdin`) are refused.
 
 ### Trusted directories
 

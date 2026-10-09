@@ -45,6 +45,24 @@ test("extension tools that declare readOnlyHint classify as read-only", () => {
     } as ToolInfo),
     "read-only",
   );
+  // Project-scope extensions could come from an untrusted repository; they keep explicit opt-in.
+  assert.equal(
+    classifyPlanModeTool({
+      ...extensionTool("repo_tool"),
+      sourceInfo: { source: "auto", scope: "project", origin: "top-level", path: "/repo/.pi/extensions/x.ts" },
+      annotations: { readOnlyHint: true },
+    } as ToolInfo),
+    "user-opt-in",
+  );
+  // An explicit `-e` on the command line is the user's own choice.
+  assert.equal(
+    classifyPlanModeTool({
+      ...extensionTool("cli_tool"),
+      sourceInfo: { source: "local", scope: "temporary", origin: "top-level", path: "/x.ts" },
+      annotations: { readOnlyHint: true },
+    } as ToolInfo),
+    "read-only",
+  );
   // Missing source metadata is never trusted, annotation or not.
   assert.equal(classifyPlanModeTool({ name: "x", annotations: { readOnlyHint: true } } as ToolInfo), "blocked");
 });
@@ -78,7 +96,69 @@ test("ssh_exec is gated on a configured host and the remote reviewed policy", ()
   );
   assert.match(findBlockedSshExecCall({ host: "home", command: "" }, safe) ?? "", /remote command: \(empty command\)/);
   assert.match(findBlockedSshExecCall({ host: "home", command: "ls $(id)" }, safe) ?? "", /remote command/);
+  assert.match(
+    findBlockedSshExecCall({ host: "home", command: "git -C /x log" }, safe) ?? "",
+    /remote command: git -C/,
+  );
+  assert.match(findBlockedSshExecCall({ host: "home", command: "ls > /tmp/out" }, safe) ?? "", /remote command/);
   assert.match(findBlockedSshExecCall({ host: "home" }, {}) ?? "", /not a configured ssh prefix/);
+  // Parameters the gate cannot reason about fail closed.
+  assert.match(
+    findBlockedSshExecCall({ host: "home", command: "cat", stdin: "rm -rf /" }, safe) ?? "",
+    /'stdin' is not allowed/,
+  );
+  assert.match(findBlockedSshExecCall({ host: "home", command: "ls", env: {} }, safe) ?? "", /'env' is not allowed/);
+  assert.equal(findBlockedSshExecCall({ host: "home", command: "ls", cwd: "/config", timeout: 30 }, safe), undefined);
+  assert.match(
+    findBlockedSshExecCall({ host: "home", command: "ls", cwd: "/config; rm x" }, safe) ?? "",
+    /cwd must be a plain path/,
+  );
+  assert.match(
+    findBlockedSshExecCall({ host: "home", command: "ls", cwd: "$(id)" }, safe) ?? "",
+    /cwd must be a plain path/,
+  );
+  for (const input of [null, "ls", 5, ["home"]]) {
+    assert.match(findBlockedSshExecCall(input, safe) ?? "", /input is not an object/, JSON.stringify(input));
+  }
+});
+
+test("configured defaultPlanTools and annotated tools are both admitted through the hook", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "plan-annotated-defaults-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await writeFile(join(agentDir, "pi-plan-mode.json"), JSON.stringify({ defaultPlanTools: ["read"] }));
+    const mock = createMockPi({
+      activeTools: ["read", "grep", "git_status", "git_commit"],
+      allTools: [
+        builtinTool("read"),
+        builtinTool("grep"),
+        annotated("git_status", true),
+        annotated("git_commit", false),
+      ],
+    });
+    planMode(mock.pi);
+    const context = createMockContext();
+    const hook = mock.events.get("tool_call")?.[0];
+    assert.ok(hook);
+    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.commands.get("plan")?.handler("start", context.ctx);
+    assert.equal(await hook({ toolName: "read", input: {} }, context.ctx), undefined);
+    assert.equal(await hook({ toolName: "git_status", input: {} }, context.ctx), undefined);
+    // The configured list still excludes what it excludes.
+    assert.match(
+      (await hook({ toolName: "grep", input: {} }, context.ctx))?.reason ?? "",
+      /not selected by the Plan policy/,
+    );
+    assert.match(
+      (await hook({ toolName: "git_commit", input: {} }, context.ctx))?.reason ?? "",
+      /not selected by the Plan policy/,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(agentDir, { recursive: true, force: true });
+  }
 });
 
 test("active Plan mode admits annotated tools and gates ssh_exec at the tool hook", async () => {

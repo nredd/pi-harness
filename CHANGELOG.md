@@ -12,10 +12,12 @@ watcher flake fix (upstream's `waitForSettingsWatch`). Upstream's per-segment
 
 - Extension tools with `annotations.readOnlyHint: true` classify as
   `read-only (annotated)` and join the default Plan policy next to
-  `defaultPlanTools` or the safe built-ins. Installed extensions and packages
-  only; native MCP and other built-in extensions keep explicit opt-in.
+  `defaultPlanTools` or the safe built-ins. User-scope extensions, packages
+  and explicit `-e` files only; native MCP, other built-in extensions and
+  project-scope extensions keep explicit opt-in.
 - `ssh_exec` tool calls are gated like `ssh <host> <cmd>`: configured host,
-  remote command re-validated with the remote reviewed policy.
+  remote command re-validated with the remote reviewed policy, plain `cwd`,
+  no `stdin` or unknown parameters.
 
 ### Fixed
 

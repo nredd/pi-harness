@@ -195,5 +195,9 @@ function formatStatus(state: PlanModeState, ctx: ExtensionContext) {
   // rather than blending into the rest of the status line. Headless sessions (print, JSON, SDK)
   // have no initialized theme, and the status is invisible there anyway.
   if (!ctx.hasUI) return text;
-  return ctx.ui.theme.fg("accent", text);
+  try {
+    return ctx.ui.theme.fg("accent", text);
+  } catch {
+    return text;
+  }
 }
