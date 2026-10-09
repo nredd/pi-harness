@@ -10,7 +10,7 @@ const { minVersion, gte } = createRequire(import.meta.url)("semver") as {
 };
 
 test("Plan mode's Kit floor excludes releases without custom-editor questionnaire support", () => {
-  const manifest = JSON.parse(readFileSync(path.resolve("packages/pi-plan-mode/package.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(path.resolve("package.json"), "utf8"));
   const range = manifest.dependencies["@narumitw/pi-tui-kit"];
   const minimum = minVersion(range);
   assert.ok(minimum, `Expected a valid Kit dependency range, received ${range}`);

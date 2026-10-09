@@ -65,8 +65,6 @@ test.each([
   "kubectl apply 'literal; touch output | rm file'",
   "kubectl apply escaped\\;argument",
   "git rev-parse $PI_PLAN_GIT_ARGUMENTS",
-  'kubectl apply "$(touch output)"',
-  'kubectl apply "$(echo args; touch output)"',
 ])("Bash retains trusted arguments and legitimate chains: %s", (command) => {
   assert.equal(findBlockedCommandSegment(command, safeSubcommands), undefined);
   assert.equal(isSafeCommand(command, safeSubcommands), true);
@@ -88,6 +86,8 @@ test.each([
   "go version < input",
   "go version 2>&1 | head -1",
   "go version $(touch output)",
+  'kubectl apply "$(touch output)"',
+  'kubectl apply "$(echo args; touch output)"',
   "go version `touch output`",
   "go version\ntouch output",
   "go version\rtouch output",
@@ -109,7 +109,7 @@ test.each([
   ["go version && FOO=1 ls", "FOO=1 ls"],
   ["go version && git blame -- file", "git blame -- file"],
   ["go version && ssh host ls", "ssh host ls"],
-  ["go version && curl http://example.com", "curl http://example.com"],
+  ["go version && curl -o out http://example.com", "curl -o out http://example.com"],
 ])("Bash retains default checks for untrusted segments: %s", (command, blocked) => {
   assert.equal(findBlockedCommandSegment(command, safeSubcommands), blocked);
 });

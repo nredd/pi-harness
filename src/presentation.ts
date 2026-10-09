@@ -192,6 +192,8 @@ function formatStatus(state: PlanModeState, ctx: ExtensionContext) {
   }
   if (!text) return undefined;
   // Codex-style: accent-colored so the footer chip reads as a mode indicator
-  // rather than blending into the rest of the status line.
+  // rather than blending into the rest of the status line. Headless sessions (print, JSON, SDK)
+  // have no initialized theme, and the status is invisible there anyway.
+  if (!ctx.hasUI) return text;
   return ctx.ui.theme.fg("accent", text);
 }

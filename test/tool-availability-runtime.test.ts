@@ -65,7 +65,7 @@ for (const fixture of fixtures) {
           noExtensions: true,
           noSkills: true,
           noContextFiles: true,
-          additionalExtensionPaths: [resolve("packages/pi-plan-mode")],
+          additionalExtensionPaths: [resolve(".")],
         });
         await loader.reload();
         assert.deepEqual(loader.getExtensions().errors, []);

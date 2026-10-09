@@ -161,7 +161,11 @@ test("configured safe subcommands trust individual Bash and PowerShell commands"
     assert.equal(isSafeCommand(command, safeSubcommands), true, command);
     assert.equal(findBlockedCommandSegment(command, safeSubcommands), undefined, command);
   }
-  for (const command of ["Invoke-Trusted run", "Get-Location; Invoke-Trusted run", "Invoke-Trusted run; Get-Location"]) {
+  for (const command of [
+    "Invoke-Trusted run",
+    "Get-Location; Invoke-Trusted run",
+    "Invoke-Trusted run; Get-Location",
+  ]) {
     assert.equal(isSafePowerShellCommand(command, safeSubcommands), true, command);
     assert.equal(findBlockedPowerShellCommandSegment(command, safeSubcommands), undefined, command);
   }

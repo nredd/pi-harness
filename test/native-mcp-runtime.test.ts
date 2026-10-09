@@ -48,7 +48,7 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
         mcpServers: {
           fixture: {
             command: process.execPath,
-            args: [resolve("packages/pi-plan-mode/test/fixtures/native-mcp-server.mjs"), callLog],
+            args: [resolve("test/fixtures/native-mcp-server.mjs"), callLog],
             exposure: "codemode",
             toolExposure: {
               direct: "direct",
@@ -107,7 +107,7 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
       noSkills: true,
       noContextFiles: true,
       additionalExtensionPaths: [
-        resolve("packages/pi-plan-mode/src/index.ts"),
+        resolve("src/index.ts"),
         "builtin:codemode",
         "builtin:mcp",
         "builtin:tool-search",

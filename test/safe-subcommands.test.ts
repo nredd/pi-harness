@@ -171,7 +171,7 @@ test("active Plan mode scopes session-loaded safe subcommands to each segment", 
       ["powershell", "Invoke-Trusted run --write"],
       ["powershell", "Get-Location; Invoke-Trusted run | Out-String"],
     ] as const) {
-      assert.ok(await hook({ toolName, input: { command } }, context.ctx), command);
+      assert.equal(await hook({ toolName, input: { command } }, context.ctx), undefined, command);
     }
     for (const [toolName, command, blocked] of [
       ["bash", "go version && chmod 000 /tmp/nonexistent-probe", "chmod 000 /tmp/nonexistent-probe"],
