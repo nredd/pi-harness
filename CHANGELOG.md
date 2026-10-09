@@ -1,6 +1,31 @@
 # @nredd/pi-plan-mode
 
-## Unreleased
+## 0.59.2-nredd.1
+
+Rebased onto upstream `@narumitw/pi-plan-mode@0.59.2`. Two fork patches were
+dropped because upstream now carries them: ignore-case `-i` for inspection
+commands (upstream allows it for more commands) and the `default-tools`
+watcher flake fix (upstream's `waitForSettingsWatch`). Upstream's per-segment
+`safeSubcommands` scoping is subsumed by the fork's policy.
+
+### Added
+
+- Extension tools with `annotations.readOnlyHint: true` classify as
+  `read-only (annotated)` and join the default Plan policy next to
+  `defaultPlanTools` or the safe built-ins. Installed extensions and packages
+  only; native MCP and other built-in extensions keep explicit opt-in.
+- `ssh_exec` tool calls are gated like `ssh <host> <cmd>`: configured host,
+  remote command re-validated with the remote reviewed policy.
+
+### Fixed
+
+- Entering Plan mode no longer throws in headless sessions without a theme
+  (SDK, print, JSON): the footer chip is left uncolored when `ctx.hasUI` is
+  false. Before, `/plan start` rolled back to normal mode.
+- Upstream 0.59.2's suite runs standalone: monorepo-relative paths resolve
+  to the package root and `semver` is a devDependency.
+
+## Unreleased before 0.59.2-nredd.1
 
 ### Added
 

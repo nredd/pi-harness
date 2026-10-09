@@ -2,7 +2,7 @@
 
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.58.3` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.6`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
+Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.59.2` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.1`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
 
 Differences from upstream. The presentational ones come first; the ready-plan flow, decline gate, and bash policy changes follow:
 
@@ -21,11 +21,13 @@ Differences from upstream. The presentational ones come first; the ready-plan fl
   - A `safeSubcommands` prefix approves only its own segment; the rest of a compound command is validated independently. Redirections and pipes into interpreters are rejected. Upstream trusts the whole command.
   - `cd <dir>` and `git -C <dir>` are allowed under the cwd or a `trustedDirectories` entry (new global-only setting); `cd` moves the effective directory for later segments.
   - `ssh <host> <cmd>` (with a configured prefix) re-validates the remote command; `gh api` is GET only; `curl` has no output/data/upload flags.
+- Extension tools that declare `annotations.readOnlyHint: true` classify as `read-only (annotated)` and are admitted by default, on top of `defaultPlanTools` or the safe built-ins. Only tools from installed extensions and packages count; native MCP tools (`builtin:mcp`) and other built-in extensions keep upstream's explicit opt-in, since their hints are third-party. Mutating tools must stay unannotated.
+- An `ssh_exec` tool call (`{ host, command }`, from [`pi-dev-tools`](https://github.com/nredd/pi-dev-tools)) is gated like `ssh <host> <cmd>`: `host` must be a configured `ssh` prefix and `command` must pass the remote reviewed policy.
 - Approving a plan for implementation (Implement here, `/plan implement`, Start fresh) emits `pi-plan-mode:plan-approved` on `pi.events` with `{ version: 1, planId, plan, sessionId }`, the plan verbatim. [`rpiv-todo`](https://github.com/nredd/rpiv-todo) turns it into plan-sourced todos that need evidence to complete. The approval is also recorded as a `plan-mode-approved-plan` session entry; a fresh implementation session announces it before its first prompt, and a resume re-announces the same `planId` (listeners treat that as a no-op). Nothing listening is fine.
 - In print and JSON mode, `/plan` commands that send a model turn (`finalize`, `implement`, `/plan <prompt>`) return only after that turn has run, so a scripted `pi -p "/plan start" "plan it" "/plan finalize"` gets every turn answered. Upstream returns right after sending, and print mode exits with the turn unanswered.
 - `Start fresh and implement` starts the fresh session right away. Upstream stages it until the run that produced the plan settles (`fresh-handoff-coordinator.ts`); the fork drops that path because its chooser only opens once the run is already idle.
 
-Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.3.
+Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.59.2.
 
 Use a Codex-like `/plan` mode to explore a codebase, resolve important questions, and approve an implementation-ready plan before Pi edits files.
 
@@ -47,13 +49,13 @@ This release requires Pi 0.80.6 or newer.
 Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
 
 ```bash
-pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.6
+pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.1
 ```
 
 Try without installing permanently:
 
 ```bash
-pi -e git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.6
+pi -e git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.1
 ```
 
 Build and try this package locally from the repository root:

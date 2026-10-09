@@ -51,6 +51,7 @@ The retired `toolVisibility` key is ignored and preserved as unknown data when a
 
 `defaultPlanTools` defines the initial runtime allowlist when a session has no stored pre-start selection.
 Omit it—or choose **Use automatic safe built-ins**—to allow already-active safe built-ins by default.
+Extension tools that declare `annotations.readOnlyHint: true` are admitted in addition to either list; see [annotated read-only tools](#annotated-read-only-tools).
 An explicit empty array appears as **No optional tools** and denies every ordinary tool while the required helpers remain callable in Plan mode.
 Neither setting changes model-visible tool schemas.
 
@@ -202,6 +203,15 @@ Three commands keep built-in argument checks even when a prefix names them:
 - `ssh <host> <command>` needs a configured `ssh <host>` prefix (e.g. `"ssh": ["home"]`). The remote command must be non-empty, must not start with an ssh option, and is re-validated recursively with the same policy; `cd` and `git -C` are rejected on the remote side.
 - `gh api` is allowed without configuration but is GET only: `-X`/`--method` other than `GET`, `-f`, `-F`, `--field`, `--raw-field`, `--input`, and the `graphql` endpoint are rejected.
 - `curl` is allowed without configuration but rejects output (`-o`, `-O`, `--output`, `--remote-name*`), data (`-d`, `--data*`, `-F`, `--form*`, `--json`), upload (`-T`, `--upload-file`), config and file-writing flags (`-K`, `-D`, `-c`), and any non-GET `-X`/`--request`. Quote URLs containing `?`, `*`, `[` or `{`.
+
+### Annotated read-only tools
+
+A tool registered by an installed extension or package with `annotations: { readOnlyHint: true }` classifies as `read-only (annotated)` and is admitted to the default Plan policy alongside `defaultPlanTools` (or the safe built-ins when that is unset).
+A session-selected list from **Choose tools, then start…** or `/plan tools` still takes precedence, and the usual activation and exposure rules apply.
+The hint is author-asserted and unverified, so it only covers tools whose extension you installed; native MCP tools (`builtin:mcp`) and other built-in extensions keep needing explicit opt-in even when their servers declare the hint.
+A tool with a mutating mode must not declare the hint.
+
+`ssh_exec` calls (`{ host, command }`) are validated like `ssh <host> <command>`: `host` must be a configured `ssh` prefix in `safeSubcommands` and `command` must pass the remote reviewed policy, so `cd`, `git -C`, redirects and mutations are rejected.
 
 ### Trusted directories
 

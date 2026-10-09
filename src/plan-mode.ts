@@ -99,7 +99,9 @@ import {
   classifyPlanModeTool,
   findBlockedCommandSegment,
   findBlockedPowerShellCommandSegment,
+  findBlockedSshExecCall,
   readCommand,
+  SSH_EXEC_TOOL_NAME,
 } from "./tool-policy.js";
 import {
   compareTools,
@@ -723,6 +725,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         return {
           block: true,
           reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${blocked}`,
+        };
+      }
+    }
+    if (event.toolName === SSH_EXEC_TOOL_NAME) {
+      const blocked = findBlockedSshExecCall(event.input, settings.safeSubcommands);
+      if (blocked !== undefined) {
+        return {
+          block: true,
+          reason: `Plan mode blocks ssh_exec calls outside its reviewed remote inspection policy.\nBlocked: ${blocked}`,
         };
       }
     }
@@ -2061,4 +2072,10 @@ export { buildPlanModePrompt } from "./prompt.js";
 export { normalizePlanModeQuestionParams } from "./question-tool.js";
 export { withRequiredPlanModeTools } from "./required-tools.js";
 export { normalizePlanModeSettings, readPlanModeSettings } from "./settings.js";
-export { canSelectToolInPlanMode, classifyPlanModeTool, isSafeCommand } from "./tool-policy.js";
+export {
+  canSelectToolInPlanMode,
+  classifyPlanModeTool,
+  findBlockedSshExecCall,
+  isAnnotatedReadOnlyTool,
+  isSafeCommand,
+} from "./tool-policy.js";

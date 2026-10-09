@@ -3,6 +3,7 @@ import { planModeToolAvailability } from "./tool-availability.js";
 import {
   canSelectToolInPlanMode,
   classifyPlanModeTool,
+  isAnnotatedReadOnlyTool,
   isBuiltinTool,
   SAFE_BUILTIN_PLAN_TOOLS,
 } from "./tool-policy.js";
@@ -23,7 +24,7 @@ export function compareTools(left: ToolInfo, right: ToolInfo) {
 
 export function toolPolicyLabel(tool: ToolInfo) {
   const policy = classifyPlanModeTool(tool);
-  if (policy === "read-only") return "built-in read-only";
+  if (policy === "read-only") return isBuiltinTool(tool) ? "built-in read-only" : "read-only (annotated)";
   if (policy === "limited") return "built-in limited";
   if (policy === "blocked") return tool.sourceInfo?.source ? "built-in blocked" : "policy metadata unavailable";
   return `user opt-in: ${toolSourceLabel(tool)}`;
@@ -95,9 +96,19 @@ export function filterAvailableSelectedToolNames(
   return unique(names.filter((name) => availableNames.has(name)));
 }
 
+/**
+ * The names Plan mode admits when the user has not curated a selection: the configured
+ * `defaultPlanTools` (or the safe built-ins when unset), plus every extension tool that declares
+ * `annotations.readOnlyHint`. The annotation is author-asserted, so it only ever adds tools the
+ * extension itself vouches for; mutating tools must stay unannotated.
+ */
 export function defaultPlanModeToolNames(tools: ToolInfo[], configuredNames: string[] | undefined) {
-  if (configuredNames !== undefined) return unique(configuredNames);
-  return tools.filter((tool) => isBuiltinTool(tool) && SAFE_BUILTIN_PLAN_TOOLS.has(tool.name)).map((tool) => tool.name);
+  const annotated = tools.filter(isAnnotatedReadOnlyTool).map((tool) => tool.name);
+  if (configuredNames !== undefined) return unique([...configuredNames, ...annotated]);
+  return unique([
+    ...tools.filter((tool) => isBuiltinTool(tool) && SAFE_BUILTIN_PLAN_TOOLS.has(tool.name)).map((tool) => tool.name),
+    ...annotated,
+  ]);
 }
 
 interface PlanModeToolSelectionSnapshot {

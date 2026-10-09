@@ -126,8 +126,20 @@ export function isBuiltinTool(tool: ToolInfo) {
   return !source.path || (source.path === `builtin:${tool.name}` && tool.exposure !== "model-only");
 }
 
+/**
+ * A tool from an installed extension (local file or package) whose author declares it does not
+ * modify its environment. Built-in extensions, including native MCP (`builtin:mcp`), are excluded:
+ * their annotations come from third-party servers and still need explicit opt-in.
+ */
+export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
+  const source = tool.sourceInfo;
+  if (!source?.source || source.source === "builtin" || source.path?.startsWith("builtin:")) return false;
+  return tool.annotations?.readOnlyHint === true;
+}
+
 export function classifyPlanModeTool(tool: ToolInfo): PlanModeToolPolicy {
   if (!tool.sourceInfo?.source) return "blocked";
+  if (isAnnotatedReadOnlyTool(tool)) return "read-only";
   if (!isBuiltinTool(tool)) return "user-opt-in";
   if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "blocked";
   if (tool.name === "bash" || tool.name === "powershell") return "limited";
@@ -141,6 +153,29 @@ export function canSelectToolInPlanMode(tool: ToolInfo) {
 export function readCommand(input: unknown) {
   const command = input as { command?: unknown } | undefined;
   return typeof command?.command === "string" ? command.command : "";
+}
+
+/** The typed remote-shell tool Plan mode re-validates like `ssh <host> <command>`. */
+export const SSH_EXEC_TOOL_NAME = "ssh_exec";
+
+/**
+ * Returns why an `ssh_exec` call is rejected, or `undefined` when it passes: the host must be a
+ * configured `ssh` prefix and the remote command must pass the remote reviewed policy.
+ */
+export function findBlockedSshExecCall(
+  input: unknown,
+  safeSubcommands: SafeSubcommands = {},
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  const call = input as { host?: unknown; command?: unknown } | undefined;
+  const host = typeof call?.host === "string" ? call.host.trim() : "";
+  if (!host) return "host is required";
+  if (!(safeSubcommands.ssh ?? []).some((prefix) => prefix.trim() === host)) {
+    return `host '${host}' is not a configured ssh prefix`;
+  }
+  const command = readCommand(input);
+  const blocked = findBlockedCommandSegment(command, safeSubcommands, undefined, platform, [], true);
+  return blocked === undefined ? undefined : `remote command: ${blocked}`;
 }
 
 /**
