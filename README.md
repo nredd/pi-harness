@@ -2,7 +2,7 @@
 
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.59.2` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.1`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
+Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.59.2` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.2`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
 
 Differences from upstream. The presentational ones come first; the ready-plan flow, decline gate, and bash policy changes follow:
 
@@ -49,13 +49,13 @@ This release requires Pi 0.80.6 or newer.
 Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
 
 ```bash
-pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.1
+pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.2
 ```
 
 Try without installing permanently:
 
 ```bash
-pi -e git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.1
+pi -e git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.2
 ```
 
 Build and try this package locally from the repository root:

@@ -1,5 +1,13 @@
 # @nredd/pi-plan-mode
 
+## 0.59.2-nredd.2
+
+### Fixed
+
+- Restore the two 0.58.3-nredd.7 commits the 0.59.2 rebase missed (the local
+  queue was at nredd.6): plain-text questions are forbidden in Plan mode and
+  the decline-gate error points to `/plan finalize` and `ui_unavailable`.
+
 ## 0.59.2-nredd.1
 
 Rebased onto upstream `@narumitw/pi-plan-mode@0.59.2`. Two fork patches were
