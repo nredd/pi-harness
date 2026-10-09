@@ -106,12 +106,7 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
       noExtensions: true,
       noSkills: true,
       noContextFiles: true,
-      additionalExtensionPaths: [
-        resolve("src/index.ts"),
-        "builtin:codemode",
-        "builtin:mcp",
-        "builtin:tool-search",
-      ],
+      additionalExtensionPaths: [resolve("src/index.ts"), "builtin:codemode", "builtin:mcp", "builtin:tool-search"],
       extensionFactories: [
         { name: "codemode", builtin: true, factory: createCodemodeExtension({ models: false }) },
         { name: "tool-search", builtin: true, factory: createToolSearchExtension() },
