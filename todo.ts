@@ -16,13 +16,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, validateGuidanceFields } from "./config.js";
 import { formatStatusLabel, t } from "./state/i18n-bridge.js";
 import { selectTasksByStatus, selectTodoCounts, selectVisibleTasks } from "./state/selectors.js";
-import { applyTaskMutation } from "./state/state-reducer.js";
+import { applyTaskMutation, changesState } from "./state/state-reducer.js";
 import { commitState, getRenderState, getState, sid } from "./state/store.js";
 import { buildToolResult } from "./tool/response-envelope.js";
 import {
 	COMMAND_NAME,
 	ERR_REQUIRES_INTERACTIVE,
 	MSG_NO_TODOS,
+	STATE_ENTRY_TYPE,
 	type TaskMutationParams,
 	TOOL_LABEL,
 	TOOL_NAME,
@@ -78,7 +79,13 @@ export function registerTodoTool(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const result = applyTaskMutation(getState(sid(ctx)), params.action, params as TaskMutationParams);
 			commitState(sid(ctx), result.state);
-			return buildToolResult(params.action, params as TaskMutationParams, result.state, result.op);
+			const toolResult = buildToolResult(params.action, params as TaskMutationParams, result.state, result.op);
+			// Persist the snapshot as a custom entry on the calling session's branch, however the
+			// tool was reached: a call made through another tool (`ctx.executeTool`, e.g. codemode)
+			// never lands as a standalone `toolResult`, so its `details` alone would not survive
+			// replay. Pi's own codemode persists its `store()` the same way.
+			if (changesState(result.op)) pi.appendEntry(STATE_ENTRY_TYPE, toolResult.details);
+			return toolResult;
 		},
 
 		// renderCall reflects the FOREGROUND slot, not the calling session's. Pi's

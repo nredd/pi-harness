@@ -26,6 +26,27 @@ export interface ApplyResult {
 	op: Op;
 }
 
+/**
+ * True when `op` changed the task state — the calls whose post-commit snapshot
+ * must be persisted for replay. Reads (`list`/`get`), failures, and a no-effect
+ * `update` leave state untouched. Exhaustive over `Op` (compiler-enforced), so a
+ * new action must decide here whether it persists.
+ */
+export function changesState(op: Op): boolean {
+	switch (op.kind) {
+		case "create":
+		case "delete":
+		case "clear":
+			return true;
+		case "update":
+			return op.changed;
+		case "list":
+		case "get":
+		case "error":
+			return false;
+	}
+}
+
 function errorResult(state: TaskState, message: string): ApplyResult {
 	return { state, op: { kind: "error", message } };
 }

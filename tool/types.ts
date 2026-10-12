@@ -12,6 +12,15 @@ export const TOOL_NAME = "todo";
 export const TOOL_LABEL = "Todo";
 export const COMMAND_NAME = "todos";
 
+/**
+ * Custom session-entry type carrying the `details` snapshot of every
+ * state-changing `todo` call — the replay source that survives calls made
+ * through another tool (`ctx.executeTool`, e.g. Pi's codemode), whose results
+ * never land on the branch as standalone `toolResult` messages. Persistence key
+ * for branch replay, like `TOOL_NAME`. DO NOT rename.
+ */
+export const STATE_ENTRY_TYPE = "rpiv-todo-state";
+
 // ---------------------------------------------------------------------------
 // User-facing strings (kept stable for /todos UX parity).
 // ---------------------------------------------------------------------------
