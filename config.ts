@@ -11,6 +11,8 @@ interface TodoConfig {
 	 * entirely. Validation happens in `resolveCollapseKey`, not at load.
 	 */
 	collapseKey?: string;
+	/** Start the panel collapsed when a session is resumed. Default `true`; only `false` disables. */
+	collapseOnResume?: boolean;
 }
 
 /** Default content-row budget when the config is missing/invalid — the prior
@@ -28,6 +30,11 @@ export const COLLAPSE_KEY_OFF: CollapseKeySpec = "off";
 
 export function loadConfig(): TodoConfig {
 	return loadJsonConfigWithLegacyFallback<TodoConfig>("rpiv-todo");
+}
+
+/** Whether a resumed session starts with the panel collapsed. Read fresh per session start. */
+export function getCollapseOnResume(): boolean {
+	return loadConfig().collapseOnResume !== false;
 }
 
 /** Content-row budget for the overlay, read fresh on every call (per-render —

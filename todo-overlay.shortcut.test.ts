@@ -171,6 +171,24 @@ describe("rpiv-todo — collapse/expand shortcut config resolution", () => {
 });
 
 describe("rpiv-todo — collapsed on resume", () => {
+	it("stays expanded on resume when collapseOnResume is false", async () => {
+		writeConfigFile(JSON.stringify({ collapseOnResume: false }));
+		const { sessionStart } = setup();
+		const branch = buildSessionEntries([
+			makeTodoToolResult({
+				action: "create",
+				params: { subject: "kept" },
+				tasks: [{ id: 1, subject: "kept", status: "pending" }],
+				nextId: 2,
+			}),
+		]);
+		const ctx = createMockCtx({ branch, hasUI: true, sessionId: "s-off" });
+		await sessionStart({ reason: "resume" } as never, ctx as never);
+		const factory = (ctx.ui.setWidget as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+		const widget = factory({ requestRender: () => {} }, makeTheme());
+		expect(widget.render(200).some((l: string) => l.includes("to expand"))).toBe(false);
+	});
+
 	it.each([
 		["resume", true],
 		["startup", false],

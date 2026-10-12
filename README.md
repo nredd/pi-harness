@@ -40,7 +40,7 @@ input box, updating as work moves:
 ![Todo overlay panel: a Todos (2/7) heading above two struck-through completed rows, one in-progress row with its activity label, and four pending rows](https://raw.githubusercontent.com/juicesharp/rpiv-mono/main/packages/rpiv-todo/docs/overlay.jpg)
 
 Click the heading's `▾`/`▸` marker to collapse or expand the panel. The
-`ctrl+shift+t` shortcut does the same thing. Resuming a session starts the panel collapsed. Run `/todos` at any time to print
+`ctrl+shift+t` shortcut does the same thing. Resuming a session starts the panel collapsed (`collapseOnResume`). Run `/todos` at any time to print
 the full list grouped by status.
 
 ## What you get
@@ -95,6 +95,7 @@ Optional. Create `~/.config/rpiv-todo/config.json` (or
 | --- | --- | --- |
 | `maxWidgetLines` | Content rows the overlay may use, heading included. Minimum `3`. Applies on the next repaint. Pi's tool-output expansion mode shows all tasks. | `12` |
 | `collapseKey` | Key that collapses and expands the panel, in Pi keybinding form (`alt+o`, `ctrl+shift+t`). Set `"off"` to register no shortcut. Needs `/reload` to rebind. | `"ctrl+shift+t"` |
+| `collapseOnResume` | Start the panel collapsed when a session is resumed. Set `false` to keep it expanded. Read at each session start. | `true` |
 | `guidance` | Replaces the built-in instructions the extension gives the model about when and how to use the todo list. Needs `/reload`. | _(built-ins)_ |
 
 A missing or malformed file falls back to these defaults. `rpiv-todo` only reads

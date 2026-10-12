@@ -47,7 +47,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Resuming a session (`session_start` reason `resume`) renders the Todos panel collapsed. Startup, reload, new and fork stay expanded.
+- Resuming a session (`session_start` reason `resume`) renders the Todos panel collapsed. Startup, reload, new and fork stay expanded. `collapseOnResume: false` in the config disables it.
 - Heading counts are spelled out and computed from the whole list: `Todos (19 done, 1 deferred, 4 open)`. `/todos` uses the same line. The separate `N/M plan items open` suffix appears only next to non-plan todos.
 - Plan parsing also skips `Decisions`, `Scope`, `Diagnosis`, `Current state`, `Constraints`, `Defaults`, `Goals`, `Success criteria`, `Intent`, `Compatibility`, `Rationale`, and `Approved` sections.
 - The plan reminder tells the model to update the listed ids rather than create duplicates.

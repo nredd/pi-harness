@@ -43,6 +43,12 @@ extension only reads it.
 }
 ```
 
+## `collapseOnResume`
+
+**Default `true`.** A resumed session (`session_start` reason `resume`) renders the
+panel collapsed. Only the boolean `false` disables it; any other value keeps the
+default. Read at each session start, no `/reload`.
+
 ## `maxWidgetLines`
 
 **Default `12`.** The content-row budget for the overlay — the heading row and,

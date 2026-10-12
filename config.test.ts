@@ -5,6 +5,7 @@ import {
 	COLLAPSE_KEY_OFF,
 	DEFAULT_COLLAPSE_KEY,
 	DEFAULT_MAX_WIDGET_LINES,
+	getCollapseOnResume,
 	getMaxWidgetLines,
 	isValidCollapseKeySpec,
 	loadConfig,
@@ -65,6 +66,16 @@ describe("loadConfig — collapseKey", () => {
 	it("passes invalid specs through verbatim — the resolver, not the loader, decides validity", () => {
 		writeConfigFile(JSON.stringify({ collapseKey: "ctr+t" }));
 		expect(loadConfig().collapseKey).toBe("ctr+t");
+	});
+});
+
+describe("getCollapseOnResume", () => {
+	it("defaults to true, and only boolean false disables it", () => {
+		expect(getCollapseOnResume()).toBe(true);
+		writeConfigFile(JSON.stringify({ collapseOnResume: "no" }));
+		expect(getCollapseOnResume()).toBe(true);
+		writeConfigFile(JSON.stringify({ collapseOnResume: false }));
+		expect(getCollapseOnResume()).toBe(false);
 	});
 });
 
