@@ -40,7 +40,7 @@ input box, updating as work moves:
 ![Todo overlay panel: a Todos (2/7) heading above two struck-through completed rows, one in-progress row with its activity label, and four pending rows](https://raw.githubusercontent.com/juicesharp/rpiv-mono/main/packages/rpiv-todo/docs/overlay.jpg)
 
 Click the heading's `▾`/`▸` marker to collapse or expand the panel. The
-`ctrl+shift+t` shortcut does the same thing. Run `/todos` at any time to print
+`ctrl+shift+t` shortcut does the same thing. Resuming a session starts the panel collapsed. Run `/todos` at any time to print
 the full list grouped by status.
 
 ## What you get

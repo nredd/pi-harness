@@ -1,6 +1,12 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
+import {
+	buildSessionEntries,
+	createMockCtx,
+	createMockPi,
+	makeTheme,
+	makeTodoToolResult,
+} from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerTodo from "./index.ts";
 import { __resetState } from "./todo.ts";
@@ -161,5 +167,32 @@ describe("rpiv-todo — collapse/expand shortcut config resolution", () => {
 	it("default config registers the default key (ctrl+shift+t)", () => {
 		const { captured } = setup();
 		expect(captured.shortcuts.has("ctrl+shift+t")).toBe(true);
+	});
+});
+
+describe("rpiv-todo — collapsed on resume", () => {
+	it.each([
+		["resume", true],
+		["startup", false],
+		["reload", false],
+	] as const)("session_start reason %s renders the panel collapsed: %s", async (reason, collapsed) => {
+		const { sessionStart } = setup();
+		const branch = buildSessionEntries([
+			makeTodoToolResult({
+				action: "create",
+				params: { subject: "kept" },
+				tasks: [{ id: 1, subject: "kept", status: "pending" }],
+				nextId: 2,
+			}),
+		]);
+		const ctx = createMockCtx({ branch, hasUI: true, sessionId: `s-${reason}` });
+		await sessionStart({ reason } as never, ctx as never);
+		const setWidget = ctx.ui.setWidget as ReturnType<typeof vi.fn>;
+		const factory = setWidget.mock.calls[0]?.[1] as (
+			tui: { requestRender: () => void },
+			theme: unknown,
+		) => { render: (w: number) => string[] };
+		const widget = factory({ requestRender: () => {} }, makeTheme());
+		expect(widget.render(200).some((l) => l.includes("to expand"))).toBe(collapsed);
 	});
 });

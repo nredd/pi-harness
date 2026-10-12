@@ -131,6 +131,8 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 	const loadTodoOverlay = makeTodoOverlayLoader(importOverlay);
 	let uiCtx: ExtensionUIContext | undefined;
 	let lifecycleGeneration = 0;
+	// Set by a resumed session_start so the panel first renders collapsed.
+	let collapseOnBind = false;
 
 	async function updateTodoOverlay(generation = lifecycleGeneration): Promise<void> {
 		const hasVisibleTasks = getRenderState().tasks.some((task) => task.status !== "deleted");
@@ -140,6 +142,8 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		if (generation !== lifecycleGeneration || !uiCtx) return;
 
 		todoOverlay ??= new TodoOverlay();
+		if (collapseOnBind) todoOverlay.collapse();
+		collapseOnBind = false;
 		todoOverlay.setUICtx(uiCtx);
 		todoOverlay.update();
 	}
@@ -191,7 +195,7 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		if (isForeground) await updateTodoOverlay();
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		let id: string;
 		try {
 			id = sid(ctx);
@@ -216,7 +220,13 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		if (id !== getActiveRenderSession()) return;
 		const generation = ++lifecycleGeneration;
 		uiCtx = ctx.ui;
-		await updateTodoOverlay(generation);
+		collapseOnBind = event.reason === "resume";
+		try {
+			await updateTodoOverlay(generation);
+		} finally {
+			// An empty resumed session must not collapse a panel created later.
+			collapseOnBind = false;
+		}
 	});
 
 	pi.on("session_compact", async (_event, ctx) => {

@@ -110,6 +110,12 @@ export class TodoOverlay {
 		}
 	}
 
+	/** Start collapsed (no redraw: called before the widget is first registered). */
+	collapse(): void {
+		this.collapsed = true;
+		this.scrollOffset = 0;
+	}
+
 	toggleCollapse(): void {
 		this.collapsed = !this.collapsed;
 		this.scrollOffset = 0;
