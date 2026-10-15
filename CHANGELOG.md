@@ -1,5 +1,14 @@
 # @nredd/pi-plan-mode
 
+## 0.59.2-nredd.3
+
+### Fixed
+
+- Pi 1.2 fires `before_agent_start` for extension-triggered runs
+  (`sendMessage` with `triggerTurn`, e.g. a subagent notice waking an idle
+  session). Plan mode no longer treats those as a newer Plan turn, so a plan
+  waiting on the user stays `plan ready`.
+
 ## 0.59.2-nredd.2
 
 ### Fixed
