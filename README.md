@@ -28,6 +28,7 @@ their own licenses. See [its README](packages/preset/README.md) and
 
 Imported sources and every deliberate sanitization: [source provenance](docs/source-provenance.md).
 Standalone Bun evidence and limits: [Bun prerequisite](docs/bun-prerequisite.md).
+Packed-package independence against exact stock Pi: [package contracts](docs/package-contracts.md).
 
 Validated development toolchain: Node `26.12.0` (`.node-version`), Python `3.13.15`
 (`.python-version`), Bun `1.3.14` (`.bun-version`), npm `11.20.0` (`packageManager`), uv `0.13.1`.
@@ -40,14 +41,20 @@ make install               # npm ci --ignore-scripts; uv sync --locked (integrat
 make check                 # owned-code gates, see below
 make bootstrap-forks       # init/update fork submodules; refuses if any initialized fork is dirty
 make bootstrap-forks-check # preflight only
+make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, see docs/package-contracts.md
 ```
 
 `make check` runs, without rewriting files:
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*` (`@nredd/pi-*`, all `private: true`
   until a publication pipeline exists)
-- `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories)
-- `check-integration`: ruff, ty, unit tests, and the capture probe test for `integration/`
+- `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
+- `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
+  import parser (installed TypeScript 7 `unstable/sync` API; real parses, no mocks)
+- `check-integration`: ruff, ty, unit tests for `integration/`, then `check-probes`
+- `check-probes`: Biome and strict `tsc` for `integration/probes/process-lifecycle.test.ts` (real
+  `dev-tools` and `session-kit` runner sources), then `node --test` on the explicit
+  `transcript-types.test.ts` and `process-lifecycle.test.ts` (no glob; `todo-history.test.ts` is not in this gate)
 - `check-benchmark`: ruff, ty, all unit tests with the 90% coverage threshold for
   `benchmarks/comparison`, including the `native_runtime` Codex sandbox test (see below)
 
@@ -64,6 +71,10 @@ CODEX_HOME="$T/codex" XDG_CACHE_HOME="$T/cache" \
 
 The package has no install scripts; the native binary comes from the `@openai/codex-darwin-arm64`
 optional dependency. No credentials or model calls are used: only `codex sandbox` runs.
+
+`make check-package-contracts` is deliberately not part of `make check`: it installs exact stock Pi
+from the npm registry on first use and runs real Pi processes. Its tooling is unit tested in
+`check-scripts`. A pass says nothing about the Bun candidate or the full stack.
 
 `make check` is the owned-code unit gate *only*. It does not run fork gates (use each fork's native
 tooling, see [forks.md](docs/forks.md)), the integration scenarios (`make verify-fast`/`verify` in

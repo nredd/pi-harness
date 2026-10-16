@@ -6,6 +6,7 @@
   "author": "nredd",
   "license": "MIT",
   "type": "module",
+  "files": ["src", "dist/pi-stats-export.mjs", "docs/stats-snapshots.md", "LICENSE", "README.md"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nredd/pi-harness.git",
@@ -16,8 +17,8 @@
     "pi-extension"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=1.0.0",
-    "@earendil-works/pi-tui": ">=1.0.0",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "scripts": {
