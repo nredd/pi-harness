@@ -1,9 +1,13 @@
 # pi-dev-tools
 
 Migration snapshot: this workspace is named `@nredd/pi-dev-tools` but is not published yet.
-Use the [monorepo development commands](../../README.md). References below to standalone repositories,
+Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). References below to standalone repositories,
 chezmoi pins, and installed-runtime harness gates describe the legacy deployment, not verification
 of this unpublished workspace.
+
+## Standalone use
+
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, there are no runtime dependencies and no sibling plugin is required. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 Typed pi tools for the workflows agents otherwise drive through raw Bash: git, ssh, Python
 (uv, ruff, ty, pytest) and Rust (cargo). Each tool spawns the real binary with an argv array,
@@ -25,6 +29,10 @@ Tool groups land one per PR. Current state is in the table below.
 - No shell. `spawn(cmd, argv)`, stdin closed or fed a fixed script, child in its own process
   group, SIGTERM then SIGKILL 2s later on timeout or abort, hard resolve 1s after that so a
   grandchild holding the pipes cannot hang the caller. macOS and Linux only
+- When a command settles, including a normal leader exit, whatever is left of its process group
+  is SIGKILLed, so a background descendant cannot outlive the tool call. Only the owned group is
+  signalled (never a bare pid). SSH is the exception: the local `ssh` is the group, so remote
+  processes it started can keep running after the local client exits
 - Output is capped at pi's `DEFAULT_MAX_BYTES` / `DEFAULT_MAX_LINES`, truncation notice
   included. When cut, the full text is written to `$TMPDIR/pi-dev-tools-*/<label>-N.txt` and
   the path is named in the result
