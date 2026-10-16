@@ -6,6 +6,7 @@
   "author": "nredd",
   "license": "MIT",
   "type": "module",
+  "files": ["src", "LICENSE", "README.md"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nredd/pi-harness.git",

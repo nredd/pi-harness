@@ -37,6 +37,9 @@ Workspace and licensing (`packages/*`):
   `@earendil-works/pi-*` `0.99.x` pins, which npm nests); no upgrades. The originals remain in the
   source commits
 - Root `LICENSE` is the benchmark's MIT license (copyright holder Redd), copied verbatim
+- Each package gained a `files` allowlist and a `LICENSE` identical to the root one (npm tarballs
+  previously had no license and shipped tests and dev config); session-kit's host peer ranges moved
+  from `>=1.0.0` to `*` as Pi's package docs require. See [package contracts](package-contracts.md)
 - Three exact `.gitattributes` entries preserve raw parser fixtures: space-prefixed empty context
   lines in the Cargo/Ruff formatter diffs, and the SSH configuration's intentional CRLF line.
   Git's ordinary trailing-whitespace check misclassifies those fixture bytes; source checks remain
