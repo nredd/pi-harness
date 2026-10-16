@@ -1,0 +1,365 @@
+{
+  "accepted_plan": {
+    "byte_count": 1323,
+    "captured": true,
+    "path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/accepted-plan.md",
+    "sha256": "afcfefc90a182689d9a4991d23eee4f961150343371e368c4a92760acffb354a"
+  },
+  "activity": {
+    "combined": {
+      "blocked_calls": 1,
+      "blocked_calls_by_name": {
+        "unknown": 1
+      },
+      "tool_calls": 15,
+      "tool_calls_by_name": {
+        "exec": 14,
+        "request_user_input": 1
+      },
+      "turns": 12
+    },
+    "implementation": {
+      "blocked_calls": 1,
+      "blocked_calls_by_name": {
+        "unknown": 1
+      },
+      "tool_calls": 10,
+      "tool_calls_by_name": {
+        "exec": 10
+      },
+      "turns": 8
+    },
+    "plan": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 5,
+      "tool_calls_by_name": {
+        "exec": 4,
+        "request_user_input": 1
+      },
+      "turns": 4
+    }
+  },
+  "actual_metadata": {
+    "model": "gpt-5.6-terra",
+    "provider": "openai",
+    "reasoning_level": "medium"
+  },
+  "agent_started_at": "2026-09-16T00:59:29.621725Z",
+  "auxiliary_usage": {
+    "categories": [
+      "subagent"
+    ],
+    "detected": true,
+    "full_accounting_established": false,
+    "included": true,
+    "limitation": "Equivalent complete auxiliary accounting cannot be established across native formats; Codex subagent usage uses native interval counts when exposed and otherwise excludes each rollout's first cumulative snapshot as a possible inherited baseline, but rollout discovery and fallback first-turn usage cannot be proven complete.",
+    "separable": true,
+    "usage": {
+      "cache_read_tokens": 9728,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 32245,
+      "output_tokens": 316,
+      "reasoning_tokens": 190,
+      "total_tokens": 42289
+    }
+  },
+  "cache_hit_ratio": 0.8299188437721563,
+  "cli_version": "0.154.0",
+  "documentation_status": "updated",
+  "failure_reason": null,
+  "finalized_at": "2026-09-16T01:06:37.835382Z",
+  "git": {
+    "added_lines": 24,
+    "changed_paths": [
+      "README.md",
+      "src/identifier_tools/normalize.py",
+      "tests/test_normalize.py"
+    ],
+    "deleted_lines": 5,
+    "diff_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/agent.diff",
+    "diff_stat_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/agent.diffstat",
+    "dirty": true,
+    "head": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+    "patch_bytes": 2501,
+    "patch_lines": 67
+  },
+  "hidden_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/hidden-gate-environment",
+    "name": "hidden",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--project",
+          "<benchmark-root>",
+          "--frozen",
+          "--all-groups",
+          "--no-install-project"
+        ],
+        "duration_seconds": 0.6806828749831766,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/hidden-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/hidden-gate.sb",
+          "--",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/hidden-gate-environment/bin/python",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider",
+          "-c",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/hidden-suite/pytest.ini",
+          "--rootdir",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/hidden-suite",
+          "-q",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/hidden-suite"
+        ],
+        "duration_seconds": 0.2143360839691013,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/hidden-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "implementation_started_at": "2026-09-16T01:04:15.993538Z",
+  "launch_argv": [
+    "/opt/homebrew/Caskroom/codex/0.154.0/bin/codex",
+    "--model",
+    "gpt-5.6-terra",
+    "--config",
+    "model_reasoning_effort=\"medium\"",
+    "--config",
+    "default_permissions=\"benchmark_isolated\"",
+    "--config",
+    "permissions.benchmark_isolated=<redacted-permission-profile>",
+    "--cd",
+    "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/worktree"
+  ],
+  "parser_warnings": [
+    "Equivalent complete auxiliary accounting cannot be established across native formats; Codex subagent usage uses native interval counts when exposed and otherwise excludes each rollout's first cumulative snapshot as a possible inherited baseline, but rollout discovery and fallback first-turn usage cannot be proven complete.",
+    "Import sanitization: private absolute benchmark-root paths replaced with `<benchmark-root>`; no metrics changed.",
+    "Import sanitization: Codex `launch_argv` `permissions.benchmark_isolated` profile value redacted whole (contained private volume and username paths); flag structure preserved."
+  ],
+  "planning_quality": {
+    "asked_before_choosing": null,
+    "evidence": null,
+    "required": false
+  },
+  "prepared_at": "2026-09-16T00:59:02.413434Z",
+  "prompt_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/prompt.txt",
+  "prompt_sha256": "9f181e81478c6108521024c73c8cb950e752ab4736e35c6445c16e0e3a68ecbd",
+  "protocol_valid": false,
+  "protocol_violations": [
+    "Operator supplied an unapproved Unicode-policy product clarification in a localized-bug run with no predetermined answer."
+  ],
+  "result_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/result.json",
+  "schema_version": "3.0",
+  "seed_commit": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+  "seed_verification": {
+    "clone_head_at_prepare": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+    "contamination_paths": [],
+    "expected_commit": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+    "generated_seed_head_at_finalize": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+    "seed_is_final_ancestor": true,
+    "verified_at_start": "2026-09-16T00:59:29.621725Z"
+  },
+  "sessions": [
+    {
+      "byte_count": 591987,
+      "redacted_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/session-logs/terminal.log",
+      "sha256": "591a1c2ae58c8e5754b53fb750f3792710967ef40b7c109d8cb990d712520cd0",
+      "source_kind": "terminal",
+      "source_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/session-logs/terminal.log"
+    },
+    {
+      "byte_count": 404174,
+      "redacted_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/session-logs/native-00.jsonl",
+      "sha256": "8d33a5f6bb82a5df34b999eafe2bbc50d9df9f64e6c0b34a07ef8b463de921c1",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/session-logs/native-00.jsonl"
+    },
+    {
+      "byte_count": 184425,
+      "redacted_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/session-logs/native-01.jsonl",
+      "sha256": "fb185c3fd07142dfe4857009931b449cb6486399c680451ea314f86d0865c892",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/session-logs/native-01.jsonl"
+    }
+  ],
+  "spec": {
+    "clarification": null,
+    "documentation_required": false,
+    "fixture": "localized-bug",
+    "harness": "codex",
+    "matrix_position": 15,
+    "model": "gpt-5.6-terra",
+    "pair": "openai",
+    "pair_order": 1,
+    "reasoning_level": "medium",
+    "repetition": 2,
+    "run_id": "15-openai-localized-bug-r2-codex"
+  },
+  "stages": [
+    {
+      "duration_seconds": 286.371813,
+      "ended_at": "2026-09-16T01:04:15.993538Z",
+      "source_events": 6,
+      "stage": "plan",
+      "started_at": "2026-09-16T00:59:29.621725Z",
+      "usage": {
+        "cache_read_tokens": 118272,
+        "cache_write_tokens": null,
+        "cost_usd": null,
+        "input_tokens": 45115,
+        "output_tokens": 1789,
+        "reasoning_tokens": 721,
+        "total_tokens": 165176
+      }
+    },
+    {
+      "duration_seconds": 139.228521,
+      "ended_at": "2026-09-16T01:06:35.222059Z",
+      "source_events": 13,
+      "stage": "implementation",
+      "started_at": "2026-09-16T01:04:15.993538Z",
+      "usage": {
+        "cache_read_tokens": 374528,
+        "cache_write_tokens": null,
+        "cost_usd": null,
+        "input_tokens": 55878,
+        "output_tokens": 3983,
+        "reasoning_tokens": 1636,
+        "total_tokens": 434389
+      }
+    }
+  ],
+  "status": "finalized",
+  "stopped_at": "2026-09-16T01:06:35.222059Z",
+  "success": true,
+  "terminal_log_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/session-logs/terminal.log",
+  "usage": {
+    "cache_read_tokens": 492800,
+    "cache_write_tokens": null,
+    "cost_usd": null,
+    "input_tokens": 100993,
+    "output_tokens": 5772,
+    "reasoning_tokens": 2357,
+    "total_tokens": 599565
+  },
+  "visible_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gate-environment",
+    "name": "visible",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--frozen",
+          "--all-groups"
+        ],
+        "duration_seconds": 0.39455237518996,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "format",
+          "--check",
+          "."
+        ],
+        "duration_seconds": 0.30192091688513756,
+        "exit_code": 0,
+        "name": "ruff-format",
+        "output_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gates/ruff-format.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "check",
+          "--ignore-noqa",
+          "."
+        ],
+        "duration_seconds": 0.02657375019043684,
+        "exit_code": 0,
+        "name": "ruff-lint",
+        "output_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gates/ruff-lint.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ty",
+          "check"
+        ],
+        "duration_seconds": 0.33586441702209413,
+        "exit_code": 0,
+        "name": "ty",
+        "output_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gates/ty.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "pytest",
+          "-q"
+        ],
+        "duration_seconds": 0.3281509999651462,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/15-openai-localized-bug-r2-codex/visible-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "wall_duration_seconds": 425.600334
+}

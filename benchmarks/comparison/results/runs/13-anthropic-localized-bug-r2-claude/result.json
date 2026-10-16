@@ -1,0 +1,370 @@
+{
+  "accepted_plan": {
+    "byte_count": 2403,
+    "captured": true,
+    "path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/accepted-plan.md",
+    "sha256": "3378acd7a5f0266e375acf3ab16aae352b4b15853737cf4b8e9d7a9cfc1aa6bc"
+  },
+  "activity": {
+    "combined": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 17,
+      "tool_calls_by_name": {
+        "Agent": 1,
+        "Bash": 4,
+        "Edit": 1,
+        "ExitPlanMode": 1,
+        "Read": 8,
+        "ToolSearch": 1,
+        "Write": 1
+      },
+      "turns": 13
+    },
+    "implementation": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 4,
+      "tool_calls_by_name": {
+        "Bash": 2,
+        "Edit": 1,
+        "Read": 1
+      },
+      "turns": 5
+    },
+    "plan": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 13,
+      "tool_calls_by_name": {
+        "Agent": 1,
+        "Bash": 2,
+        "ExitPlanMode": 1,
+        "Read": 7,
+        "ToolSearch": 1,
+        "Write": 1
+      },
+      "turns": 8
+    }
+  },
+  "actual_metadata": {
+    "model": "claude-sonnet-5",
+    "provider": "anthropic",
+    "reasoning_level": "medium"
+  },
+  "agent_started_at": "2026-09-16T00:53:30.489512Z",
+  "auxiliary_usage": {
+    "categories": [
+      "sidechain"
+    ],
+    "detected": true,
+    "full_accounting_established": false,
+    "included": true,
+    "limitation": "Equivalent complete auxiliary accounting cannot be established across native formats; Claude sidechain usage is included when discovered, but native linkage cannot prove that every auxiliary session was retained.",
+    "separable": true,
+    "usage": {
+      "cache_read_tokens": 31272,
+      "cache_write_tokens": 18775,
+      "cost_usd": null,
+      "input_tokens": 6,
+      "output_tokens": 3310,
+      "reasoning_tokens": 13,
+      "total_tokens": 53363
+    }
+  },
+  "cache_hit_ratio": 0.9999605347241302,
+  "cli_version": "2.1.268",
+  "documentation_status": "missing",
+  "failure_reason": null,
+  "finalized_at": "2026-09-16T00:55:27.696226Z",
+  "git": {
+    "added_lines": 13,
+    "changed_paths": [
+      "src/identifier_tools/normalize.py"
+    ],
+    "deleted_lines": 2,
+    "diff_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/agent.diff",
+    "diff_stat_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/agent.diffstat",
+    "dirty": true,
+    "head": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+    "patch_bytes": 1206,
+    "patch_lines": 36
+  },
+  "hidden_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/hidden-gate-environment",
+    "name": "hidden",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--project",
+          "<benchmark-root>",
+          "--frozen",
+          "--all-groups",
+          "--no-install-project"
+        ],
+        "duration_seconds": 0.6936012499500066,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/hidden-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/hidden-gate.sb",
+          "--",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/hidden-gate-environment/bin/python",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider",
+          "-c",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/hidden-suite/pytest.ini",
+          "--rootdir",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/hidden-suite",
+          "-q",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/hidden-suite"
+        ],
+        "duration_seconds": 0.21262874989770353,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/hidden-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "implementation_started_at": "2026-09-16T00:54:42.389958Z",
+  "launch_argv": [
+    "/opt/homebrew/Caskroom/claude-code@latest/2.1.268/claude",
+    "--model",
+    "sonnet",
+    "--effort",
+    "medium",
+    "--permission-mode",
+    "plan"
+  ],
+  "parser_warnings": [
+    "Equivalent complete auxiliary accounting cannot be established across native formats; Claude sidechain usage is included when discovered, but native linkage cannot prove that every auxiliary session was retained.",
+    "Import sanitization: private absolute benchmark-root paths replaced with `<benchmark-root>`; no metrics changed."
+  ],
+  "planning_quality": {
+    "asked_before_choosing": null,
+    "evidence": null,
+    "required": false
+  },
+  "prepared_at": "2026-09-16T00:53:05.842049Z",
+  "prompt_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/prompt.txt",
+  "prompt_sha256": "9f181e81478c6108521024c73c8cb950e752ab4736e35c6445c16e0e3a68ecbd",
+  "protocol_valid": true,
+  "protocol_violations": [],
+  "result_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/result.json",
+  "schema_version": "3.0",
+  "seed_commit": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+  "seed_verification": {
+    "clone_head_at_prepare": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+    "contamination_paths": [],
+    "expected_commit": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+    "generated_seed_head_at_finalize": "863738d59227fb5bc94c83536ee9cdfa2e074d47",
+    "seed_is_final_ancestor": true,
+    "verified_at_start": "2026-09-16T00:53:30.489512Z"
+  },
+  "sessions": [
+    {
+      "byte_count": 104611,
+      "redacted_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/terminal.log",
+      "sha256": "2dadd0f4403b47f6dd0993f67486699d044a29c817b163eab735444b6d95c499",
+      "source_kind": "terminal",
+      "source_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/terminal.log"
+    },
+    {
+      "byte_count": 131079,
+      "redacted_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/native-00.jsonl",
+      "sha256": "b9df0884fc92fb1846acd11f230ffa6f412a45a6b02d926437704eaaf6634503",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/native-00.jsonl"
+    },
+    {
+      "byte_count": 195,
+      "redacted_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/native-01.json",
+      "sha256": "704ba21863cd2d10eff4492ea28e7e5776b8a1a77207b0c097610c7ff67b36c0",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/native-01.json"
+    },
+    {
+      "byte_count": 409033,
+      "redacted_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/native-02.jsonl",
+      "sha256": "b8739be1b2433d462a2e77847a58292ffd2063869b1f60220761be707cc4b8e8",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/native-02.jsonl"
+    }
+  ],
+  "spec": {
+    "clarification": null,
+    "documentation_required": false,
+    "fixture": "localized-bug",
+    "harness": "claude",
+    "matrix_position": 13,
+    "model": "sonnet",
+    "pair": "anthropic",
+    "pair_order": 1,
+    "reasoning_level": "medium",
+    "repetition": 2,
+    "run_id": "13-anthropic-localized-bug-r2-claude"
+  },
+  "stages": [
+    {
+      "duration_seconds": 71.900446,
+      "ended_at": "2026-09-16T00:54:42.389958Z",
+      "source_events": 8,
+      "stage": "plan",
+      "started_at": "2026-09-16T00:53:30.489512Z",
+      "usage": {
+        "cache_read_tokens": 319533,
+        "cache_write_tokens": 45669,
+        "cost_usd": null,
+        "input_tokens": 16,
+        "output_tokens": 5011,
+        "reasoning_tokens": 231,
+        "total_tokens": 370229
+      }
+    },
+    {
+      "duration_seconds": 42.497085,
+      "ended_at": "2026-09-16T00:55:24.887043Z",
+      "source_events": 5,
+      "stage": "implementation",
+      "started_at": "2026-09-16T00:54:42.389958Z",
+      "usage": {
+        "cache_read_tokens": 339248,
+        "cache_write_tokens": 3841,
+        "cost_usd": null,
+        "input_tokens": 10,
+        "output_tokens": 1278,
+        "reasoning_tokens": 0,
+        "total_tokens": 344377
+      }
+    }
+  ],
+  "status": "finalized",
+  "stopped_at": "2026-09-16T00:55:24.887043Z",
+  "success": true,
+  "terminal_log_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/session-logs/terminal.log",
+  "usage": {
+    "cache_read_tokens": 658781,
+    "cache_write_tokens": 49510,
+    "cost_usd": null,
+    "input_tokens": 26,
+    "output_tokens": 6289,
+    "reasoning_tokens": 231,
+    "total_tokens": 714606
+  },
+  "visible_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gate-environment",
+    "name": "visible",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--frozen",
+          "--all-groups"
+        ],
+        "duration_seconds": 0.43620950006879866,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "format",
+          "--check",
+          "."
+        ],
+        "duration_seconds": 0.2951125418767333,
+        "exit_code": 0,
+        "name": "ruff-format",
+        "output_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gates/ruff-format.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "check",
+          "--ignore-noqa",
+          "."
+        ],
+        "duration_seconds": 0.0259095411747694,
+        "exit_code": 0,
+        "name": "ruff-lint",
+        "output_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gates/ruff-lint.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ty",
+          "check"
+        ],
+        "duration_seconds": 0.327987166820094,
+        "exit_code": 0,
+        "name": "ty",
+        "output_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gates/ty.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "pytest",
+          "-q"
+        ],
+        "duration_seconds": 0.3239662500564009,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/13-anthropic-localized-bug-r2-claude/visible-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "wall_duration_seconds": 114.397531
+}

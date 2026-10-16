@@ -1,0 +1,6 @@
+# Raw formatter diffs contain space-prefixed empty context lines, including EOF.
+# Preserve those bytes: removing the spaces changes the diff format under test.
+packages/dev-tools/test/fixtures/cargo/fmt-check.txt whitespace=-blank-at-eol,-blank-at-eof
+packages/dev-tools/test/fixtures/py/ruff-format-diff.txt whitespace=-blank-at-eol,-blank-at-eof
+# The SSH parser fixture intentionally mixes a CRLF line with LF lines.
+packages/dev-tools/test/fixtures/ssh/config whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
