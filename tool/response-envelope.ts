@@ -21,6 +21,11 @@ function formatListLine(t: Task): string {
 		lines.push(...indented(t.planText));
 	}
 	if (t.evidence) lines.push(`    evidence: ${sanitizeTerminalText(t.evidence)}`);
+	if (t.evidence && t.planProvenance) {
+		lines.push(
+			`    carried from plan ${sanitizeTerminalText(t.planProvenance.planId)} task #${t.planProvenance.taskId}`,
+		);
+	}
 	if (t.reason) lines.push(`    deferred: ${sanitizeTerminalText(t.reason)}`);
 	return lines.join("\n");
 }
@@ -59,6 +64,11 @@ function formatGetLines(task: Task, state: TaskState): string {
 		if (task.planText) lines.push(...indented(task.planText));
 	}
 	if (task.evidence) lines.push(`  evidence: ${sanitizeTerminalText(task.evidence)}`);
+	if (task.evidence && task.planProvenance) {
+		lines.push(
+			`  carried from plan ${sanitizeTerminalText(task.planProvenance.planId)} task #${task.planProvenance.taskId}`,
+		);
+	}
 	if (task.reason) lines.push(`  deferred: ${sanitizeTerminalText(task.reason)}`);
 	return lines.join("\n");
 }
@@ -72,24 +82,26 @@ function formatGetLines(task: Task, state: TaskState): string {
 export function formatContent(op: Op, state: TaskState): string {
 	switch (op.kind) {
 		case "create": {
-			const t = state.tasks.find((x) => x.id === op.taskId);
-			// Defensive — `op.taskId` always resolves on success path.
-			if (!t) return `Created #${op.taskId}`;
-			return `Created #${t.id}: ${sanitizeTerminalText(t.subject)} (pending)`;
+			const task = op.task ?? state.tasks.find((candidate) => candidate.id === op.taskId);
+			return task ? `Created #${task.id}: ${sanitizeTerminalText(task.subject)} (pending)` : `Created #${op.taskId}`;
 		}
 		case "update": {
 			if (!op.changed) {
 				return `No change: #${op.id} already matches the requested values (status: ${op.toStatus})`;
 			}
 			const transition = op.fromStatus !== op.toStatus ? ` (${op.fromStatus} → ${op.toStatus})` : "";
-			const task = state.tasks.find((x) => x.id === op.id);
-			if (task?.source === "plan" && op.toStatus === "deferred" && op.fromStatus !== "deferred") {
-				return `Updated #${op.id}${transition}. Tell the user this plan item is descoped and why: ${sanitizeTerminalText(task.reason ?? "")}`;
+			const task = op.task ?? state.tasks.find((candidate) => candidate.id === op.id);
+			if (task?.source === "plan" && op.deferredReason !== undefined) {
+				return `Updated #${op.id}${transition}. Tell the user this plan item is descoped and why: ${sanitizeTerminalText(op.deferredReason)}`;
 			}
 			return `Updated #${op.id}${transition}`;
 		}
-		case "delete":
-			return `Deleted #${op.id}: ${sanitizeTerminalText(op.subject)}`;
+		case "delete": {
+			const task = op.task;
+			return task
+				? `Deleted #${task.id}: ${sanitizeTerminalText(task.subject)}`
+				: `Deleted #${op.id}: ${sanitizeTerminalText(op.subject)}`;
+		}
 		case "clear":
 			return op.kept > 0
 				? `Cleared ${op.count} tasks; kept ${op.kept} plan items (complete them with evidence or defer them with a reason)`

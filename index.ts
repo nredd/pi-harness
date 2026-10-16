@@ -131,6 +131,10 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 	const loadTodoOverlay = makeTodoOverlayLoader(importOverlay);
 	let uiCtx: ExtensionUIContext | undefined;
 	let lifecycleGeneration = 0;
+	// Capture identity before a host can invalidate its context getters. Unknown
+	// stale shutdowns must never guess that they own the foreground.
+	const contextSessions = new WeakMap<object, string>();
+	const managerSessions = new WeakMap<object, string>();
 	// Set by a resumed session_start so the panel first renders collapsed.
 	let collapseOnBind = false;
 
@@ -199,6 +203,8 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		let id: string;
 		try {
 			id = sid(ctx);
+			contextSessions.set(ctx, id);
+			managerSessions.set(ctx.sessionManager, id);
 			// Every session replays into its OWN data slot (Phase 1 isolation).
 			replaceState(id, replayFromBranch(ctx));
 		} catch (e) {
@@ -238,23 +244,25 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		// Best-effort sid: disposal can race a stale ctx (like compact). An
-		// unknown/stale sid resolves to "" and is treated as foreground — the
-		// safe pre-isolation default that disposes as before.
-		let s: string;
+		let s = contextSessions.get(ctx);
+		let manager: object | undefined;
 		try {
-			s = sid(ctx);
+			manager = ctx.sessionManager;
+			s ??= managerSessions.get(manager) ?? sid(ctx);
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;
-			s = "";
 		}
+		// Pi may create a fresh context whose getters are already invalidated.
+		// With no recoverable identity there is no authority to tear down any UI.
+		if (s === undefined) return;
+		contextSessions.delete(ctx);
+		if (manager) managerSessions.delete(manager);
 		// The shutting-down session's own data slot is always evicted.
 		evictSession(s);
 		planHooks.sessionEnded(s);
 		// Overlay teardown is sid-gated: a child shutdown (distinct sid) must not
-		// dispose the foreground's overlay. Only the foreground's own shutdown
-		// (or an unknown/stale sid) tears it down and clears the pointer.
-		if (s === "" || s === getActiveRenderSession()) {
+		// dispose the foreground's overlay. Only its owner's shutdown clears it.
+		if (s === getActiveRenderSession()) {
 			// Invalidate pending imports before clearing the foreground binding so a
 			// replaced session cannot inherit the stale overlay or UI context.
 			lifecycleGeneration++;

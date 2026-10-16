@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Task } from "../tool/types.ts";
 import { isTransitionValid } from "./invariants.ts";
 import type { TaskState } from "./state.ts";
-import { applyTaskMutation, changesState, ERR_EVIDENCE_REQUIRED, ERR_REASON_REQUIRED } from "./state-reducer.ts";
+import { applyTaskCall, applyTaskMutation, changesState, ERR_EVIDENCE_REQUIRED, ERR_REASON_REQUIRED } from "./state-reducer.ts";
 
 const emptyState = (): TaskState => ({ tasks: [], nextId: 1 });
 
@@ -43,7 +43,11 @@ describe("applyTaskMutation — create", () => {
 		expect(result.state.tasks[0]).toMatchObject({ id: 1, subject: "write tests", status: "pending" });
 		expect(result.state.nextId).toBe(2);
 		expect(result.state.tasks).not.toBe(state.tasks);
-		expect(result.op).toEqual({ kind: "create", taskId: 1 });
+		expect(result.op).toMatchObject({
+			kind: "create",
+			taskId: 1,
+			task: { id: 1, subject: "write tests", status: "pending" },
+		});
 	});
 });
 
@@ -67,14 +71,28 @@ describe("applyTaskMutation — update", () => {
 	it("allows completed → deleted transition", () => {
 		const state = stateWith(task({ id: 1, subject: "x", status: "completed" }));
 		const result = applyTaskMutation(state, "update", { id: 1, status: "deleted" });
-		expect(result.op).toEqual({ kind: "update", id: 1, fromStatus: "completed", toStatus: "deleted", changed: true });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "completed",
+			toStatus: "deleted",
+			changed: true,
+			task: { id: 1, subject: "x", status: "deleted" },
+		});
 		expect(result.state.tasks[0].status).toBe("deleted");
 	});
 
 	it("flags a no-effect status update (status set to its current value) as changed:false", () => {
 		const state = stateWith(task({ id: 1, subject: "x", status: "pending" }));
 		const result = applyTaskMutation(state, "update", { id: 1, status: "pending" });
-		expect(result.op).toEqual({ kind: "update", id: 1, fromStatus: "pending", toStatus: "pending", changed: false });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "pending",
+			toStatus: "pending",
+			changed: false,
+			task: { id: 1, subject: "x", status: "pending" },
+		});
 	});
 
 	it("flags a re-sent identical field as changed:false", () => {
@@ -86,7 +104,14 @@ describe("applyTaskMutation — update", () => {
 	it("flags a blockedBy-only update as changed:true even when status is unchanged", () => {
 		const state = stateWith(task({ id: 1, subject: "a" }), task({ id: 2, subject: "b" }));
 		const result = applyTaskMutation(state, "update", { id: 1, addBlockedBy: [2] });
-		expect(result.op).toEqual({ kind: "update", id: 1, fromStatus: "pending", toStatus: "pending", changed: true });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "pending",
+			toStatus: "pending",
+			changed: true,
+			task: { id: 1, subject: "a", status: "pending", blockedBy: [2] },
+		});
 	});
 
 	it("flags a subject-only update on a task with existing deps as changed:true (blockedBy unchanged)", () => {
@@ -94,7 +119,14 @@ describe("applyTaskMutation — update", () => {
 		// not the dependency list, which round-trips identically.
 		const state = stateWith(task({ id: 1, subject: "old", blockedBy: [2] }), task({ id: 2, subject: "dep" }));
 		const result = applyTaskMutation(state, "update", { id: 1, subject: "new" });
-		expect(result.op).toEqual({ kind: "update", id: 1, fromStatus: "pending", toStatus: "pending", changed: true });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "pending",
+			toStatus: "pending",
+			changed: true,
+			task: { id: 1, subject: "new", status: "pending", blockedBy: [2] },
+		});
 		expect(result.state.tasks[0].blockedBy).toEqual([2]);
 	});
 
@@ -105,7 +137,14 @@ describe("applyTaskMutation — update", () => {
 			task({ id: 3, subject: "c" }),
 		);
 		const result = applyTaskMutation(state, "update", { id: 1, removeBlockedBy: [2], addBlockedBy: [3] });
-		expect(result.op).toEqual({ kind: "update", id: 1, fromStatus: "pending", toStatus: "pending", changed: true });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "pending",
+			toStatus: "pending",
+			changed: true,
+			task: { id: 1, subject: "a", status: "pending", blockedBy: [3] },
+		});
 		expect(result.state.tasks[0].blockedBy).toEqual([3]);
 	});
 
@@ -171,7 +210,12 @@ describe("applyTaskMutation — list/get/delete/clear", () => {
 	it("delete emits Op with id + subject", () => {
 		const state = stateWith(task({ id: 1, subject: "x" }));
 		const result = applyTaskMutation(state, "delete", { id: 1 });
-		expect(result.op).toEqual({ kind: "delete", id: 1, subject: "x" });
+		expect(result.op).toMatchObject({
+			kind: "delete",
+			id: 1,
+			subject: "x",
+			task: { id: 1, subject: "x", status: "deleted" },
+		});
 		expect(result.state.tasks[0].status).toBe("deleted");
 	});
 
@@ -218,6 +262,47 @@ describe("changesState — which results persist a replay snapshot", () => {
 		const { op } = run();
 		expect(op.kind).toBe(kind);
 		expect(changesState(op)).toBe(false);
+	});
+});
+
+describe("applyTaskCall — batch operation outcomes", () => {
+	it("retains each mutation's immutable task snapshot across clear and id reuse", () => {
+		const result = applyTaskCall(emptyState(), {
+			ops: [{ action: "create", subject: "first" }, { action: "clear" }, { action: "create", subject: "second" }],
+		});
+		expect(result.op).toMatchObject({
+			kind: "batch",
+			results: [
+				{ kind: "create", task: { id: 1, subject: "first", status: "pending" } },
+				{ kind: "clear", count: 1, kept: 0 },
+				{ kind: "create", task: { id: 1, subject: "second", status: "pending" } },
+			],
+		});
+	});
+
+	it("retains each deferred reason across repeated updates", () => {
+		const state: TaskState = {
+			tasks: [task({ id: 1, subject: "plan item", source: "plan" })],
+			nextId: 2,
+			plan: { id: "p1", title: "Plan" },
+		};
+		const result = applyTaskCall(state, {
+			ops: [
+				{ action: "update", id: 1, status: "deferred", reason: "needs design" },
+				{ action: "update", id: 1, status: "deferred", reason: "needs approval" },
+			],
+		});
+		expect(result.op).toMatchObject({
+			kind: "batch",
+			results: [
+				{ kind: "update", task: { status: "deferred", reason: "needs design" }, deferredReason: "needs design" },
+				{
+					kind: "update",
+					task: { status: "deferred", reason: "needs approval" },
+					deferredReason: "needs approval",
+				},
+			],
+		});
 	});
 });
 

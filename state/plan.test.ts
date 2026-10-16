@@ -113,7 +113,12 @@ describe("parsePlanItems — full plan", () => {
 describe("parsePlanItems — edge cases", () => {
 	it("turns a prose-only work section into one item named by its heading", () => {
 		expect(parsePlanItems("# T\n\n## Migrate the DB\nRun the migration in prod.\n")).toEqual([
-			{ group: "Migrate the DB", subject: "Migrate the DB" },
+			{
+				group: "Migrate the DB",
+				subject: "Migrate the DB",
+				detail: "Run the migration in prod.",
+				identity: { version: 1, headingPath: ["Migrate the DB"], workBody: "Run the migration in prod." },
+			},
 		]);
 	});
 
@@ -135,13 +140,200 @@ describe("parsePlanItems — edge cases", () => {
 	});
 });
 
+describe("plan reconciliation", () => {
+	it("preserves a versioned full-path identity and verbatim prose-only work body", () => {
+		const [{ identity, detail, group, subject }] = parsePlanItems(
+			"# Release\n## Platform\n### Migration\nMove traffic after the canary.\nKeep the rollback window open.\n",
+		);
+		expect({ identity, detail, group, subject }).toEqual({
+			identity: {
+				version: 1,
+				headingPath: ["Platform", "Migration"],
+				workBody: "Move traffic after the canary.\nKeep the rollback window open.",
+			},
+			detail: "Move traffic after the canary.\nKeep the rollback window open.",
+			group: "Migration",
+			subject: "Migration",
+		});
+	});
+
+	it("projects section prose alongside bullets and invalidates their carry when it changes", () => {
+		const first = applyPlanApproval(
+			empty(),
+			"p1",
+			"# Plan\n## Migration\nMigrate database A.\n- Verify migration\n",
+		).state;
+		first.tasks.find((task) => task.subject === "Verify migration")!.status = "completed";
+		first.tasks.find((task) => task.subject === "Verify migration")!.evidence = "verified A";
+		const { state } = applyPlanApproval(
+			first,
+			"p2",
+			"# Plan\n## Migration\nMigrate database B.\n- Verify migration\n",
+		);
+		expect(state.tasks.map((task) => [task.subject, task.status, task.evidence])).toEqual([
+			["Migration", "pending", undefined],
+			["Verify migration", "pending", undefined],
+		]);
+	});
+
+	it("does not carry a status when prose-only work changes", () => {
+		const first = applyPlanApproval(empty(), "p1", "# Plan\n## Migration\nMigrate database A.\n").state;
+		first.tasks[0] = { ...first.tasks[0], status: "completed", evidence: "A migrated" };
+		const { state } = applyPlanApproval(first, "p2", "# Plan\n## Migration\nMigrate database B.\n");
+		expect(state.tasks[0].status).toBe("pending");
+		expect(state.tasks[0].evidence).toBeUndefined();
+	});
+
+	it("carries unchanged work once and records its prior plan provenance", () => {
+		const first = applyPlanApproval(empty(), "p1", "# Plan\n## Work\n- Ship it\n").state;
+		first.tasks[0] = { ...first.tasks[0], status: "completed", evidence: "tests pass" };
+		const { state } = applyPlanApproval(first, "p2", "# Plan\n## Work\n- Ship it\n");
+		expect(state.tasks[0]).toMatchObject({
+			status: "completed",
+			evidence: "tests pass",
+			planProvenance: { planId: "p1", taskId: 1 },
+		});
+	});
+
+	it("uses the full heading path to carry repeated labels independently", () => {
+		const plan = "# Plan\n## Backend\n### Tests\n- Add tests\n## Frontend\n### Tests\n- Add tests\n";
+		const first = applyPlanApproval(empty(), "p1", plan).state;
+		first.tasks[0] = { ...first.tasks[0], status: "in_progress" };
+		first.tasks[1] = { ...first.tasks[1], status: "deferred", reason: "frontend unavailable" };
+		const { state } = applyPlanApproval(first, "p2", plan);
+		expect(state.tasks.map((task) => [task.status, task.reason, task.planProvenance])).toEqual([
+			["pending", undefined, undefined],
+			["deferred", "frontend unavailable", { planId: "p1", taskId: 2 }],
+		]);
+	});
+
+	it("restarts duplicate identities pending rather than guessing which prior task matches", () => {
+		const first = applyPlanApproval(empty(), "p1", "# Plan\n## Work\n- Ship it\n- Ship it\n").state;
+		first.tasks[1] = { ...first.tasks[1], status: "completed", evidence: "second only" };
+		const { state } = applyPlanApproval(first, "p2", "# Plan\n## Work\n- Ship it\n- Ship it\n");
+		expect(state.tasks.map((task) => [task.status, task.evidence, task.planProvenance])).toEqual([
+			["pending", undefined, undefined],
+			["pending", undefined, undefined],
+		]);
+	});
+
+	it("does not carry legacy plan tasks without a versioned identity", () => {
+		const legacy: TaskState = {
+			tasks: [
+				{ id: 1, subject: "Ship it", status: "completed", source: "plan", planGroup: "Work", evidence: "old" },
+			],
+			nextId: 2,
+			plan: { id: "p1", title: "Plan" },
+		};
+		const { state } = applyPlanApproval(legacy, "p2", "# Plan\n## Work\n- Ship it\n");
+		expect(state.tasks[0]).toMatchObject({ status: "pending" });
+		expect(state.tasks[0].evidence).toBeUndefined();
+	});
+
+	it("keeps prose-only work without a title heading", () => {
+		expect(parsePlanItems("## Migration\nRun the migration.\n")).toEqual([
+			{
+				group: "Migration",
+				subject: "Migration",
+				detail: "Run the migration.",
+				identity: { version: 1, headingPath: ["Migration"], workBody: "Run the migration." },
+			},
+		]);
+	});
+
+	it("tracks indented closing fences and keeps prose-attached commands in the identity", () => {
+		const items = parsePlanItems("## Migration\nRun migration:\n  ~~~~sql\n  - example only\n  ~~~~\n");
+		expect(items).toMatchObject([
+			{
+				subject: "Migration",
+				identity: {
+					workBody: "Run migration:\n  ~~~~sql\n  - example only\n  ~~~~",
+				},
+			},
+		]);
+	});
+
+	it("treats root four-space backticks as code, not a fence", () => {
+		const items = parsePlanItems("## Work\n    ```\n    example\n- Real task\n");
+		expect(items.map((item) => item.subject)).toEqual(["Real task"]);
+	});
+
+	it("does not turn an indented fenced example into a task", () => {
+		const items = parsePlanItems("## Work\n    ~~~~markdown\n    - example only\n    ~~~~\n- Real task\n");
+		expect(items.map((item) => item.subject)).toEqual(["Real task"]);
+	});
+
+	it("keeps a leading fenced command once later prose makes the section work", () => {
+		const [item] = parsePlanItems("## Migration\n```sql\nALTER TABLE widgets;\n```\nRun the migration.\n");
+		expect(item.identity.workBody).toBe("```sql\nALTER TABLE widgets;\n```\nRun the migration.");
+	});
+
+	it("does not close a root fence with four-space indented backticks", () => {
+		const items = parsePlanItems("## Work\n```markdown\n    ```\n- example only\n```\n- Real task\n");
+		expect(items.map((item) => item.subject)).toEqual(["Real task"]);
+	});
+
+	it("retains code-only work sections and invalidates evidence when commands change", () => {
+		const first = applyPlanApproval(empty(), "p1", "## Migration\n```sql\nMIGRATE A;\n```\n").state;
+		expect(first.tasks).toHaveLength(1);
+		first.tasks[0] = { ...first.tasks[0], status: "completed", evidence: "A migrated" };
+		const changed = applyPlanApproval(first, "p2", "## Migration\n```sql\nMIGRATE B;\n```\n").state;
+		expect(changed.tasks[0].status).toBe("pending");
+	});
+
+	it("retains colon-ended work context and leading commands in bullet identity", () => {
+		for (const context of ["Migrate database A:", "```sql\nMIGRATE A;\n```\n"]) {
+			const plan = `## Migration\n${context}\n- Verify migration\n`;
+			const first = applyPlanApproval(empty(), "p1", plan).state;
+			const task = first.tasks.find((item) => item.subject === "Verify migration")!;
+			task.status = "completed";
+			task.evidence = "A verified";
+			const changed = applyPlanApproval(first, "p2", plan.replace(" A", " B")).state;
+			expect(changed.tasks.find((item) => item.subject === "Verify migration")?.status).toBe("pending");
+		}
+	});
+
+	it("invalidates descendant evidence when enclosing work prose changes", () => {
+		const plan = "# Plan\n## Migration\nMigrate database A.\n### Verification\n- Check the migrated database\n";
+		const first = applyPlanApproval(empty(), "p1", plan).state;
+		const verification = first.tasks.find((task) => task.subject === "Check the migrated database")!;
+		verification.status = "completed";
+		verification.evidence = "A checked";
+		const revised = applyPlanApproval(first, "p2", plan.replace("database A", "database B")).state;
+		expect(revised.tasks.find((task) => task.subject === verification.subject)?.status).toBe("pending");
+	});
+
+	it("ends a nested fence with its list container", () => {
+		const items = parsePlanItems("## Work\n- Task\n  ```markdown\n  - example\n- Next\n");
+		expect(items.map((item) => item.subject)).toEqual(["Task", "Next"]);
+	});
+
+	it("checks nested closing-fence indentation relative to the list content", () => {
+		const items = parsePlanItems("## Work\n- Task\n  ```markdown\n      ```\n  - example\n  ```\n- Next\n");
+		expect(items.map((item) => item.subject)).toEqual(["Task", "Next"]);
+		expect(items[0].identity.workBody).toContain("  - example\n  ```");
+	});
+
+	it("tracks fence characters and opening run length", () => {
+		const items = parsePlanItems("# Plan\n## Work\n~~~~markdown\n```\n- example only\n```\n~~~~\n- Real task\n");
+		expect(items.map((item) => item.subject)).toEqual(["Real task"]);
+	});
+});
+
 describe("applyPlanApproval", () => {
 	it("seeds verbatim plan items tagged source: plan", () => {
 		const { state, changed } = applyPlanApproval(empty(), "p1", SMALL_PLAN);
 		expect(changed).toBe(true);
 		expect(state.plan).toEqual({ id: "p1", title: "Add widgets" });
-		expect(state.tasks).toEqual([
-			{ id: 1, subject: "Add the `alpha` module", status: "pending", source: "plan", planGroup: "Work" },
+		expect(state.tasks).toMatchObject([
+			{
+				id: 1,
+				subject: "Add the `alpha` module",
+				status: "pending",
+				source: "plan",
+				planGroup: "Work",
+				planIdentity: { version: 1, headingPath: ["Work"], workBody: "Add the `alpha` module" },
+			},
 			{
 				id: 2,
 				subject: "Wire `beta` into the CLI",
@@ -149,8 +341,20 @@ describe("applyPlanApproval", () => {
 				source: "plan",
 				planGroup: "Work",
 				planText: "- flag `--beta`",
+				planIdentity: {
+					version: 1,
+					headingPath: ["Work"],
+					workBody: "Wire `beta` into the CLI\n  - flag `--beta`",
+				},
 			},
-			{ id: 3, subject: "`make test` passes", status: "pending", source: "plan", planGroup: "Verification" },
+			{
+				id: 3,
+				subject: "`make test` passes",
+				status: "pending",
+				source: "plan",
+				planGroup: "Verification",
+				planIdentity: { version: 1, headingPath: ["Verification"], workBody: "`make test` passes" },
+			},
 		]);
 		expect(state.nextId).toBe(4);
 	});

@@ -46,9 +46,10 @@ interface ReminderDraft {
 	display: boolean;
 	details?: unknown;
 }
+type PlanContext = Parameters<typeof sid>[0] & { sessionManager: { getBranch(): readonly unknown[] } };
 type SettleHandler = (
 	event: AgentBeforeSettleEvent,
-	ctx: Parameters<typeof sid>[0],
+	ctx: PlanContext,
 ) => { entries: unknown[]; continue: boolean } | undefined;
 
 /** Narrow an event-bus payload to the versioned plan-approval contract. */
@@ -62,6 +63,37 @@ export function isPlanApprovedPayload(value: unknown): value is PlanApprovedPayl
 		typeof v.plan === "string" &&
 		typeof v.sessionId === "string"
 	);
+}
+
+/**
+ * Read the active branch rather than only its compacted model projection. The
+ * versioned mode contract survives reload/tree navigation; legacy restored
+ * workflows may instead have only a plan-mode-state entry. No runtime import
+ * or event cache couples the independently installable packages.
+ */
+function planningMode(entries: readonly unknown[]): boolean | undefined {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (!entry || typeof entry !== "object") continue;
+		const record = entry as Record<string, unknown>;
+		if (record.type === "custom" && record.customType === "plan-mode-state") {
+			const data = record.data as { enabled?: unknown } | undefined;
+			if (data && typeof data.enabled === "boolean") return data.enabled;
+		}
+		const message = (record.type === "message" ? record.message : record) as
+			| { role?: string; customType?: string; details?: { version?: unknown; mode?: unknown } }
+			| undefined;
+		if (message?.role !== "custom" || message.customType !== "plan-mode-transition") continue;
+		if (message.details?.version !== 1) continue;
+		if (message.details.mode === "plan") return true;
+		if (message.details.mode === "normal") return false;
+	}
+	return undefined;
+}
+
+/** The persisted branch is authoritative after compaction or a mode change. */
+function isPlanning(ctx: PlanContext, messages: readonly unknown[]): boolean {
+	return planningMode(ctx.sessionManager.getBranch()) ?? planningMode(messages) ?? false;
 }
 
 function isReminder(message: SettleMessage | undefined): boolean {
@@ -146,7 +178,7 @@ export function registerPlanHooks(
 	});
 
 	const onSettle: SettleHandler = (event, ctx) => {
-		if (event.outcome !== "completed") return undefined;
+		if (event.outcome !== "completed" || isPlanning(ctx, event.context.contextMessages)) return undefined;
 		if (remindedSinceLastPrompt(event.context.contextMessages)) return undefined;
 		const open = selectOpenPlanItems(getState(sid(ctx)));
 		if (!open.length) return undefined;
@@ -165,6 +197,7 @@ export function registerPlanHooks(
 	);
 
 	pi.on("context", async (event, ctx) => {
+		if (isPlanning(ctx, event.messages)) return undefined;
 		const last = event.messages[event.messages.length - 1] as SettleMessage | undefined;
 		if (!isReminder(last)) return undefined;
 		const state = getState(sid(ctx));

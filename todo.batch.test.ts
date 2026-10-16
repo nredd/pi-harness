@@ -100,6 +100,87 @@ describe("todo ops batch", () => {
 		expect(text).toContain("[2] #1 [pending] fresh");
 	});
 
+	it("reports mutation outcomes from the operation that produced them", async () => {
+		const { call } = setup();
+		const { text } = await call({
+			ops: [{ action: "create", subject: "first" }, { action: "clear" }, { action: "create", subject: "second" }],
+		});
+		expect(text).toContain("[0] Created #1: first (pending)");
+		expect(text).toContain("[2] Created #1: second (pending)");
+	});
+
+	it("renders repeated plan deferral reasons locally and notifies the final reason once", async () => {
+		const { call, ctx } = setup();
+		(ctx as { hasUI: boolean }).hasUI = true;
+		const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
+		const plan = applyPlanApproval(getState(sid), "p1", "# T\n\n- one\n");
+		commitState(sid, plan.state);
+
+		const { text } = await call({
+			ops: [
+				{ action: "update", id: 1, status: "deferred", reason: "needs design" },
+				{ action: "update", id: 1, status: "deferred", reason: "needs approval" },
+			],
+		});
+		expect(text).toContain(
+			"[0] Updated #1 (pending → deferred). Tell the user this plan item is descoped and why: needs design",
+		);
+		expect(text).toContain("[1] Updated #1. Tell the user this plan item is descoped and why: needs approval");
+		expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+		expect(ctx.ui.notify).toHaveBeenCalledWith("Plan item deferred: #1 one -- needs approval", "warning");
+	});
+
+	it("reports and notifies a normal single plan deferral", async () => {
+		const { call, ctx } = setup();
+		(ctx as { hasUI: boolean }).hasUI = true;
+		const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
+		const plan = applyPlanApproval(getState(sid), "p1", "# T\n\n- one\n");
+		commitState(sid, plan.state);
+
+		const { text } = await call({ action: "update", id: 1, status: "deferred", reason: "needs design" });
+		expect(text).toContain("Tell the user this plan item is descoped and why: needs design");
+		expect(ctx.ui.notify).toHaveBeenCalledWith("Plan item deferred: #1 one -- needs design", "warning");
+	});
+
+	it("does not notify for a transient batch deferral that is reopened", async () => {
+		const { call, ctx } = setup();
+		(ctx as { hasUI: boolean }).hasUI = true;
+		const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
+		const plan = applyPlanApproval(getState(sid), "p1", "# T\n\n- one\n");
+		commitState(sid, plan.state);
+
+		const { text } = await call({
+			ops: [
+				{ action: "update", id: 1, status: "deferred", reason: "needs design" },
+				{ action: "update", id: 1, status: "pending" },
+			],
+		});
+		expect(text).toContain("Tell the user this plan item is descoped and why: needs design");
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+	});
+
+	it("shows the source of carried plan evidence in list and get results", async () => {
+		const { call, ctx } = setup();
+		const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
+		commitState(sid, {
+			tasks: [
+				{
+					id: 2,
+					subject: "Ship it",
+					status: "completed",
+					source: "plan",
+					evidence: "npm test",
+					planProvenance: { planId: "p1", taskId: 7 },
+				},
+			],
+			nextId: 3,
+			plan: { id: "p2", title: "Revised plan" },
+		});
+
+		expect((await call({ action: "list" })).text).toContain("    carried from plan p1 task #7");
+		expect((await call({ action: "get", id: 2 })).text).toContain("  carried from plan p1 task #7");
+	});
+
 	it("supports delete and clear inside a batch", async () => {
 		const { call } = setup();
 		await call({

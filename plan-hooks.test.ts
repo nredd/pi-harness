@@ -218,6 +218,42 @@ describe("wrap-up reminder", () => {
 		expect(await context({ messages: [user, assistant, marker, assistant] }, ctx)).toBeUndefined();
 	});
 
+	it("suspends old-plan reminders while replanning, including after compaction and restore", async () => {
+		const { handler, announce, call } = setup();
+		const ctx = createMockCtx({ sessionId: "s1" });
+		await handler("session_start")({}, ctx);
+		await announce(approval("p1"));
+		const transition = (mode: string) => ({
+			role: "custom",
+			customType: "plan-mode-transition",
+			details: { version: 1, mode },
+		});
+		const branch: unknown[] = [{ type: "message", message: transition("plan") }];
+		vi.mocked(ctx.sessionManager.getBranch).mockImplementation(() => branch as never);
+		const settle = handler("agent_before_settle");
+		// The projected messages can lose the transition to compaction; the active branch retains it.
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		expect(await handler("context")({ messages: [user, marker] }, ctx)).toBeUndefined();
+		expect(text(await call(ctx, { action: "list" }))).toContain("3/3 plan items open");
+		// Exit without approval resumes the old obligations, without replacing them.
+		branch.push({ type: "message", message: transition("normal") });
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeDefined();
+		// Legacy restored workflows can carry state but no persisted mode transition.
+		branch.push({ type: "custom", customType: "plan-mode-state", data: { enabled: true } });
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		branch.push({ type: "custom", customType: "plan-mode-state", data: { enabled: false } });
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeDefined();
+	});
+
+	it("honors a current projected mode contract when the branch has no mode history", async () => {
+		const { handler, announce } = setup();
+		const ctx = createMockCtx({ sessionId: "s1" });
+		await handler("session_start")({}, ctx);
+		await announce(approval("p1"));
+		const planning = { role: "custom", customType: "plan-mode-transition", details: { version: 1, mode: "plan" } };
+		expect(await handler("agent_before_settle")(settleEvent([planning, user, assistant]), ctx)).toBeUndefined();
+	});
+
 	it("stays silent with no plan, or once every plan item is closed", async () => {
 		const { handler, announce, call } = setup();
 		const ctx = createMockCtx({ sessionId: "s1" });

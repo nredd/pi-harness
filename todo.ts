@@ -15,9 +15,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, validateGuidanceFields } from "./config.ts";
 import { formatProgress, t } from "./state/i18n-bridge.ts";
+import { isTaskDetails } from "./state/replay.ts";
 import { selectTasksByStatus, selectVisibleTasks } from "./state/selectors.ts";
 import type { TaskState } from "./state/state.ts";
-import { applyTaskCall, changesState, type Op } from "./state/state-reducer.ts";
+import { applyTaskCall, changesState } from "./state/state-reducer.ts";
 import { commitState, getRenderState, getState, sid } from "./state/store.ts";
 import { buildToolResult } from "./tool/response-envelope.ts";
 import { sanitizeTerminalText } from "./tool/sanitize.ts";
@@ -64,7 +65,7 @@ export const DEFAULT_PROMPT_GUIDELINES: string[] = [
 	"Task status: pending → in_progress → completed, plus deferred (descoped, needs a reason) and deleted as a tombstone. Pass activeForm (present-continuous label, e.g. 'researching existing tool') when marking in_progress.",
 	'To change a task\'s status, call update with the task id and the target status, e.g. {"action":"update","id":3,"status":"in_progress","activeForm":"writing tests"}. status is the field that changes the task; an update without a mutable field (status or another) is rejected.',
 	'Marking a task completed requires evidence: the check that proves it (command + result, commit, or test name), e.g. {"action":"update","id":3,"status":"completed","evidence":"npm test: 42 passed"}. No evidence means it is not done.',
-	"Todos marked [plan] are the approved plan's items, verbatim. They can't be edited or deleted: complete each with evidence, or set status deferred with a reason and tell the user. Never tell the user the work is done while plan items are open.",
+	"Todos marked [plan] preserve the approved plan's text: their subject and description cannot change and they cannot be deleted. Update activity labels, ownership, dependencies, or metadata as needed. Complete each with evidence, or defer with a reason and tell the user. Never tell the user the work is done while plan items are open.",
 	"Use blockedBy to express dependencies (A is blocked by B). On create, pass blockedBy as the initial set. On update, use addBlockedBy / removeBlockedBy (additive merge — do not resend the full array). Cycles are rejected.",
 	'Batch with ops: to open or close many todos, pass ONE call {"ops":[{"action":"update","id":1,"status":"completed","evidence":"..."}, ...]} instead of one call per todo. Each op carries its own evidence/reason. A batch is atomic: if any op is invalid nothing changes and the error names the op (ops[3]: ...). list/get ops are answered from the final state. Do not mix ops with top-level fields.',
 	"list hides tombstoned (deleted) tasks by default; pass includeDeleted:true to see them. Pass status to filter by a single status.",
@@ -83,9 +84,10 @@ export function registerTodoTool(pi: ExtensionAPI): void {
 		parameters: TodoParamsSchema,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = applyTaskCall(getState(sid(ctx)), params as TaskMutationParams);
+			const before = getState(sid(ctx));
+			const result = applyTaskCall(before, params as TaskMutationParams);
 			commitState(sid(ctx), result.state);
-			notifyPlanDeferral(ctx, result.op, result.state);
+			notifyPlanDeferral(ctx, before, result.state);
 			const toolResult = buildToolResult(result.action, params as TaskMutationParams, result.state, result.op);
 			// Persist the snapshot as a custom entry on the calling session's branch, however the
 			// tool was reached: a call made through another tool (`ctx.executeTool`, e.g. codemode)
@@ -95,19 +97,29 @@ export function registerTodoTool(pi: ExtensionAPI): void {
 			return toolResult;
 		},
 
-		// renderCall reflects the FOREGROUND slot, not the calling session's. Pi's
-		// `ToolRenderContext` carries no session identity (no sessionManager/sessionId),
-		// so this ctx-less hook cannot re-key by caller. For the foreground session's
-		// own transcript that is exactly right. A detached/child call rendered in the
-		// lane-transcript viewer whose task lives only in the child's slot misses the
-		// foreground lookup and falls back to `#<id>` (see renderTodoCall). That is the
-		// safe outcome: per-session ids restart at 1, so searching sibling slots could
-		// surface the WRONG subject — the `#<id>` fallback is intentional, not a gap.
-		renderCall(args, theme, _context) {
-			return renderTodoCall(args as never, theme, getRenderState());
+		// `ToolRenderContext` has no session identity, so a call renders from the
+		// foreground while it is running. Once it settles, its shared render state
+		// holds the result snapshot -- never search another session because ids can
+		// collide between foreground and child task slots.
+		renderCall(args, theme, context) {
+			const snapshot = (context?.state as { taskSnapshot?: TaskState } | undefined)?.taskSnapshot;
+			return renderTodoCall(args as never, theme, snapshot ?? getRenderState());
 		},
 
-		renderResult(result, opts, theme, _context) {
+		renderResult(result, opts, theme, context) {
+			// Pi shares `state` between this result and its call renderer. Once the
+			// call settles, preserve the result's immutable transcript snapshot so
+			// historical rows never resolve an id against today's foreground tasks.
+			// The first result render happens while Pi is building the collapsed row,
+			// so invalidate on the next microtask after that row commits. Probes
+			// receive disposable state and a no-op invalidator, and must stay effect-free.
+			const probe = (context as { probe?: boolean } | undefined)?.probe === true;
+			const details = result.details;
+			const state = context?.state as { taskSnapshot?: TaskState } | undefined;
+			if (state && !probe && !opts.isPartial && state.taskSnapshot === undefined && isTaskDetails(details)) {
+				state.taskSnapshot = { tasks: details.tasks, nextId: details.nextId };
+				queueMicrotask(() => context?.invalidate());
+			}
 			return renderTodoResult(result, theme, opts);
 		},
 	});
@@ -119,21 +131,19 @@ export function registerTodoTool(pi: ExtensionAPI): void {
  */
 function notifyPlanDeferral(
 	ctx: { hasUI?: boolean; ui: { notify(message: string, type?: "info" | "warning" | "error"): void } },
-	op: Op,
-	state: TaskState,
+	before: TaskState,
+	after: TaskState,
 ): void {
 	if (!ctx.hasUI) return;
-	if (op.kind === "batch") {
-		for (const sub of op.results) notifyPlanDeferral(ctx, sub, state);
-		return;
+	for (const task of after.tasks) {
+		if (task.source !== "plan" || task.status !== "deferred") continue;
+		const previous = before.tasks.find((candidate) => candidate.id === task.id);
+		if (previous?.source === "plan" && previous.status === "deferred" && previous.reason === task.reason) continue;
+		ctx.ui.notify(
+			`Plan item deferred: #${task.id} ${sanitizeTerminalText(task.subject)} -- ${sanitizeTerminalText(task.reason ?? "")}`,
+			"warning",
+		);
 	}
-	if (op.kind !== "update" || op.toStatus !== "deferred" || op.fromStatus === "deferred") return;
-	const task = state.tasks.find((x) => x.id === op.id);
-	if (task?.source !== "plan") return;
-	ctx.ui.notify(
-		`Plan item deferred: #${task.id} ${sanitizeTerminalText(task.subject)} -- ${sanitizeTerminalText(task.reason ?? "")}`,
-		"warning",
-	);
 }
 
 // ---------------------------------------------------------------------------

@@ -33,12 +33,21 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [2.13.0] - 2026-10-11
 
+### Fixed
+
+- Reconcile approved tasks by versioned full heading scope and verbatim work text. Ambiguous matches and legacy identities restart pending; carried state records its prior plan and task.
+- Preserve prose, code-only work, and shared ancestor context; distinguish fence markers, lengths, and indentation so examples cannot become enforced tasks.
+- Render settled todo subjects from validated historical result snapshots, including after reload and resize.
+- Suspend old-plan implementation reminders during replanning, including restored and compacted sessions, without discarding approved work.
+- Report batch mutations from their own outcomes and notify only net plan deferrals with the final reason.
+- Keep stale child shutdowns from clearing foreground ownership; skip malformed replay snapshots while retaining valid historical tasks.
+
 ### Added
 
 - Clickable `▾`/`▸` disclosure markers on the todo heading for collapsing and expanding the overlay.
 - Plan-seeded todos: on `pi-plan-mode:plan-approved` (`pi.events`), the approved plan's actionable bullets become verbatim todos tagged `source: "plan"`, grouped by heading, context sections skipped. Re-approval replaces them; agent todos are untouched. Persisted as a `rpiv-todo-state` custom entry.
 - `deferred` status with a required `reason`; deferring a plan item notifies the user.
-- `N/M plan items open` in the overlay heading, `/todos`, and `list`.
+- `N/M plan items open` in the overlay heading and `list`; `/todos` reports overall status counts.
 - One wrap-up reminder per prompt (`agent_before_settle` + `context`) listing open plan items when a run would end with them open.
 
 - The overlay is a mouse-wheel scrollable window over every todo, with `↑ N above` / `↓ N below` hints; it follows the active task.
@@ -52,7 +61,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Plan parsing also skips `Decisions`, `Scope`, `Diagnosis`, `Current state`, `Constraints`, `Defaults`, `Goals`, `Success criteria`, `Intent`, `Compatibility`, `Rationale`, and `Approved` sections.
 - The plan reminder tells the model to update the listed ids rather than create duplicates.
 - Completed rows are no longer hidden at the next turn: every todo stays reachable by scrolling.
-- `completed` requires an `evidence` string, shown in `list`, `get`, and the expanded row. Plan items can't be edited or deleted; `clear` keeps them.
+- `completed` requires an `evidence` string, shown in `list`, `get`, and the expanded row. Plan item text cannot change and plan items cannot be deleted; activity labels, ownership, dependencies, and metadata remain editable. `clear` keeps plan items.
 - A rejected `todo` call renders `✗ <error>` instead of echoing the requested status.
 
 ## [2.12.0] - 2026-09-30

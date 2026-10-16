@@ -68,6 +68,21 @@ export type TaskOpAction = "create" | "update" | "list" | "get" | "delete" | "cl
 /** What a call did: a single operation, or an `ops` batch of them. */
 export type TaskAction = TaskOpAction | "batch";
 
+/** Stable, versioned source identity for reconciling an approved plan item. */
+export interface PlanTaskIdentity {
+	version: 1;
+	/** Every enclosing work-section heading (`##` and deeper), verbatim. */
+	headingPath: string[];
+	/** The item's actual Markdown work body, excluding its heading, verbatim. */
+	workBody: string;
+}
+
+/** The prior plan task from which status-bearing work was carried forward. */
+export interface PlanTaskProvenance {
+	planId: string;
+	taskId: number;
+}
+
 export interface Task {
 	id: number;
 	subject: string;
@@ -83,6 +98,10 @@ export interface Task {
 	planGroup?: string;
 	/** Nested plan lines under the item's bullet, verbatim. */
 	planText?: string;
+	/** Versioned, verbatim source identity used only for plan re-approval reconciliation. */
+	planIdentity?: PlanTaskIdentity;
+	/** Previous plan task that supplied this task's carried status-bearing state. */
+	planProvenance?: PlanTaskProvenance;
 	/** The check that proves a `completed` task: command + result, commit, or test name. */
 	evidence?: string;
 	/** Why a `deferred` task was descoped. */

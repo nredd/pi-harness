@@ -65,16 +65,31 @@ the full list grouped by status.
   [`pi-plan-mode`](https://github.com/nredd/pi-plan-mode), approving a plan seeds
   one todo per actionable bullet, copied word for word and tagged `[plan]`;
   context sections (`Summary`, `Not adopted`, `Assumptions`, ...) are skipped.
-  Plan items can't be edited or deleted, only completed or deferred, and a
-  revised plan replaces them. The heading shows `N/M plan items open`.
+  Approved text cannot be edited and plan items cannot be deleted; activity
+  labels, ownership, dependencies, and metadata remain editable. A revised
+  approved plan replaces them. Status and evidence carry forward only for an
+  unambiguous unchanged item, identified by its full heading path and work text.
+  Legacy items without that identity restart pending on their next reapproval.
+  See [reconciliation and migration](./docs/plan-reconciliation.md).
+  The heading shows `N/M plan items open`.
 - **Done needs proof (nredd fork).** `completed` requires an `evidence` string
   (command + result, commit, test name); `deferred` requires a `reason`, and
-  the user is notified when a plan item is deferred. If a run tries to finish
-  with plan items open, the model gets one reminder listing them before it can
-  wrap up. Details in the
+  the user is notified when a plan item is deferred. Batches notify only final
+  deferrals, while each operation reports its own outcome and reason. See
+  [batch outcomes](./docs/batch-outcomes.md). If a run tries to finish with plan
+  items open, the model gets one reminder listing them before it can wrap up.
+  Reminders pause while Plan mode is active; old approved todos remain until a
+  replacement is approved. Exiting planning without approval resumes the old
+  obligations. Details in the
   [tool reference](./docs/tool-schema.md#plan-items).
 - **Parallel sessions stay separate.** Task state is keyed by session, so a
   detached or child session can neither read nor overwrite the foreground list.
+  Stale shutdowns use captured session identity and never assume ownership of
+  the foreground. Replay skips malformed snapshots rather than replacing valid
+  tasks, while accepting valid historical tasks without newer evidence fields.
+- **Historical rows keep their own subjects.** Settled calls render from their
+  validated result snapshots, not the current task list, including after reload
+  and resize. Partial results and renderer probes do not change cached history.
 - **Localized UI, no setup required.** Nine locales ship with the package and
   activate when [`@juicesharp/rpiv-i18n`](https://www.npmjs.com/package/@juicesharp/rpiv-i18n)
   is installed; without it, everything falls back to English.

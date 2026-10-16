@@ -275,6 +275,56 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 		expect(widgetSpy(parentCtx)).not.toHaveBeenCalledWith(WIDGET_KEY, undefined);
 	});
 
+	it("a stale child shutdown uses its captured identity without clearing foreground", async () => {
+		const { start, shutdown, tool } = setup();
+		const parent = createMockCtx({ hasUI: true, sessionId: PARENT });
+		const child = createMockCtx({ hasUI: true, sessionId: CHILD });
+		await start?.({}, parent);
+		await start?.({}, child);
+		await tool?.execute?.(
+			"tc",
+			{ action: "create", subject: "child task" } as never,
+			undefined as never,
+			undefined as never,
+			child as never,
+		);
+		Object.defineProperty(child, "sessionManager", {
+			get: () => {
+				throw new Error("stale after session replacement");
+			},
+		});
+		await shutdown?.({}, child);
+		expect(getActiveRenderSession()).toBe(PARENT);
+		expect(getState(CHILD).tasks).toEqual([]);
+	});
+
+	it("an unidentifiable stale shutdown cannot tear down a live foreground", async () => {
+		const { start, shutdown } = setup();
+		await start?.({}, createMockCtx({ hasUI: true, sessionId: PARENT }));
+		const stale = createMockCtx({ sessionId: CHILD });
+		Object.defineProperty(stale, "sessionManager", {
+			get: () => {
+				throw new Error("stale after session replacement");
+			},
+		});
+		await shutdown?.({}, stale);
+		expect(getActiveRenderSession()).toBe(PARENT);
+	});
+
+	it("a fresh shutdown context can use its captured session manager identity", async () => {
+		const { start, shutdown } = setup();
+		const parent = createMockCtx({ hasUI: true, sessionId: PARENT });
+		const child = createMockCtx({ hasUI: true, sessionId: CHILD });
+		await start?.({}, parent);
+		await start?.({}, child);
+		const shutdownCtx = { sessionManager: child.sessionManager };
+		(shutdownCtx.sessionManager.getSessionId as ReturnType<typeof vi.fn>).mockImplementation(() => {
+			throw new Error("stale after session replacement");
+		});
+		await shutdown?.({}, shutdownCtx);
+		expect(getActiveRenderSession()).toBe(PARENT);
+	});
+
 	it("the foreground's own session_shutdown disposes the overlay and clears foreground", async () => {
 		const { start, shutdown, toolEnd, tool } = setup();
 		const parentCtx = createMockCtx({ hasUI: true, sessionId: PARENT });

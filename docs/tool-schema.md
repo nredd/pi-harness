@@ -42,6 +42,10 @@ todo({
 - No nesting, and `ops` can't be empty.
 - Result: `Applied N ops`, then one `[i] ...` block per op, then the plan header
   when a plan is active. `details.action` is `"batch"`.
+- Mutation results describe each operation at its own point in the batch,
+  including its reason. User notifications describe only net plan deferrals:
+  defer-then-reopen sends no warning; repeated deferrals notify once with the
+  final reason. See [batch outcomes](./batch-outcomes.md).
 
 ## Duplicate guard
 
@@ -120,10 +124,14 @@ tagged `source: "plan"`, text copied verbatim:
   `Assumptions`, `Risks`, and a list led in by `Not adopted:` and the like.
   `Verification` / definition-of-done bullets are items.
 
-Plan items can't be edited or deleted, only completed with `evidence` or
-`deferred` with a `reason` (which the user is notified of). A newly approved
-plan replaces the plan items (an item identical to one of the old plan keeps
-its status and evidence); agent-created todos are untouched. Announcing the
+Plan items' subject and description cannot change and they cannot be deleted.
+Their activity labels, ownership, dependencies, and metadata remain editable.
+Complete them with `evidence` or mark them `deferred` with a `reason`. A newly
+approved plan replaces the plan items; status and evidence carry only between
+unambiguous unchanged items with matching full scope and work text. Legacy
+items without versioned identity restart pending on their next reapproval.
+See [plan reconciliation](./plan-reconciliation.md) for provenance and migration.
+Agent-created todos are untouched. Announcing the
 same `planId` again is a no-op. The seeding is persisted as a `rpiv-todo-state`
 custom entry, which replay reads like a tool result.
 
@@ -135,7 +143,11 @@ items `pending` or `in_progress`, rpiv-todo appends one hidden marker message
 and requests one more model turn. The `context` hook replaces the marker, on
 that request only, with the open items and the deferred ones with their
 reasons, telling the model not to report the work as done. One reminder per
-user prompt; none without a plan or once every plan item is closed.
+user prompt; none without a plan, once every plan item is closed, or while
+Plan mode is active. The active session branch retains mode history through
+compaction, reload, and tree navigation. Old approved todos remain while
+replanning; only replacement approval replaces them. Exiting planning without
+approval resumes the old obligations.
 
 ## Dependencies
 
@@ -180,22 +192,14 @@ tasks' `blockedBy` arrays.
 }
 ```
 
-## Persistence
-
 `details` is the persistence format. Every successful call embeds the complete
-post-mutation snapshot. Every call that changes the list (`create`, `delete`,
-`clear`, or an `update` that changed something) also saves the same `details`
-object as a `rpiv-todo-state` custom entry on the session branch. Custom entries
-are never sent to the model.
-
-The custom entry matters when `todo` is called from another tool, such as a Pi
-codemode script: Pi records that call only as a short summary on the outer
-tool's result, so its own `details` never reach the branch.
-
-The session-lifecycle handlers rebuild state by walking the branch and taking
-the last `rpiv-todo-state` snapshot. Sessions saved before these entries existed
-fall back to the last `todo` tool result's `details`. Either way, tasks survive
-`/reload`, `/resume`, `/tree` and compaction without any disk writes.
+post-mutation snapshot, and the session-lifecycle handlers rebuild state by
+walking the branch and taking the last valid snapshot they find, which is why
+tasks survive `/reload` and compaction without any disk writes. Invalid task
+shapes, duplicate ids, invalid counters, and dangling dependencies cause a
+snapshot to be skipped, not partially installed. Historical completed tasks
+without evidence remain readable; the current evidence rule applies to new
+mutations.
 
 ## Content strings
 

@@ -112,6 +112,42 @@ describe("replayFromBranch", () => {
 		expect(state.tasks[0]?.subject).toBe("good");
 	});
 
+	it.each([
+		{ tasks: [null], nextId: 2 },
+		{ tasks: [{}], nextId: 2 },
+		{ tasks: [taskFixture(1, "bad", { status: "unknown" as never })], nextId: 2 },
+		{ tasks: [taskFixture(1, "bad", { subject: 7 as never })], nextId: 2 },
+		{ tasks: [taskFixture(1, "bad", { blockedBy: "oops" as never })], nextId: 2 },
+		{ tasks: [taskFixture(1, "bad", { blockedBy: [2] })], nextId: 3 },
+		{ tasks: [taskFixture(1, "bad", { metadata: [] as never })], nextId: 2 },
+		{
+			tasks: [taskFixture(1, "bad", { planIdentity: { version: 1, headingPath: [7], workBody: "work" } as never })],
+			nextId: 2,
+		},
+		{ tasks: [taskFixture(1, "bad", { planProvenance: { planId: "old", taskId: -1 } })], nextId: 2 },
+		{ tasks: [taskFixture(1, "one"), taskFixture(1, "duplicate")], nextId: 2 },
+		{ tasks: [taskFixture(1, "bad")], nextId: 1 },
+		{ tasks: [], nextId: Number.NaN },
+		{ tasks: [], nextId: Number.POSITIVE_INFINITY },
+		{ tasks: [], nextId: -1 },
+		{ tasks: [], nextId: 1.5 },
+		{ tasks: [], nextId: 1, plan: { id: 7, title: "bad" } },
+	])("keeps the last valid snapshot when a later snapshot is corrupt: %j", (data) => {
+		const ctx = createMockCtx({
+			branch: [
+				...buildBranch([{ action: "create", params: {}, tasks: [taskFixture(1, "good")], nextId: 2 }]),
+				{ type: "custom", customType: "rpiv-todo-state", data } as never,
+			],
+		});
+		expect(replayFromBranch(ctx)).toEqual({ tasks: [taskFixture(1, "good")], nextId: 2 });
+	});
+
+	it("accepts historical completed tasks without newer evidence fields", () => {
+		const data = { tasks: [taskFixture(1, "old done", { status: "completed" })], nextId: 2 };
+		const ctx = createMockCtx({ branch: [null, { type: "custom", customType: "rpiv-todo-state", data }] as never });
+		expect(replayFromBranch(ctx)).toEqual(data);
+	});
+
 	it("returns a fresh empty TaskState when called with an empty branch", () => {
 		const ctx1 = createMockCtx({
 			branch: buildBranch([{ action: "create", params: {}, tasks: [taskFixture(1, "x")], nextId: 2 }]),
