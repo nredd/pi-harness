@@ -1,8 +1,12 @@
 # pi-subscription-router
 
 Migration snapshot: this workspace is named `@nredd/pi-subscription-router` but is not published yet.
-Use the [monorepo development commands](../../README.md). The Git install and installed-Pi scenarios
+Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and installed-Pi scenarios
 below describe the legacy deployment, not installation or candidate verification of this workspace.
+
+## Standalone use
+
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, there are no runtime dependencies and no sibling plugin is required. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 `router/<profile>` virtual models for pi (>= 0.99) that route across included subscription quota.
 Each profile has a chain of physical models and an optional routing strategy. Ordered routing

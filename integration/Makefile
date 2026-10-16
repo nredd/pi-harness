@@ -17,9 +17,9 @@ lint:  ## Lint with ruff
 type:  ## Type check with ty
 	uv run ty check
 
-test:  ## Unit tests for the harness library and content-free capture probe
+test:  ## Unit tests for the harness library plus the root-owned probe gate (check-probes)
 	$(PYTEST) tests -v
-	node --test probes/transcript-types.test.ts
+	$(MAKE) -C .. check-probes
 
 verify-fast: format lint type test  ## Static + integration scenarios, under 2 min
 	$(PYTEST) scenarios -m "static or integration"
