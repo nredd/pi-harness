@@ -1,0 +1,15 @@
+{
+  "name": "pi-harness",
+  "private": true,
+  "type": "module",
+  "description": "Development monorepo for owned Pi plugins, integration tests, and benchmarks.",
+  "license": "MIT",
+  "packageManager": "npm@11.20.0",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "lint": "npm run lint --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run test --workspaces",
+    "check": "npm run check --workspaces"
+  }
+}

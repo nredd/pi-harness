@@ -1,0 +1,582 @@
+{
+  "schema_version": "3.0",
+  "result_count": 36,
+  "aggregation": "within-provider pairs only",
+  "decision_rule": "Say Pi is more token-efficient only if both complete eligible provider pairs have Pi pass rate greater than or equal to native pass rate and Pi successful-run median combined tokens lower than native successful-run median combined tokens.",
+  "auxiliary_accounting": {
+    "equivalent_full_accounting_established": false,
+    "limitation": "Native Pi tool-result, Claude sidechain, and Codex rollout schemas do not guarantee equivalent complete classifier/subagent discovery; token medians include detected auxiliary usage but are not complete cross-harness efficiency measurements."
+  },
+  "pairs": [
+    {
+      "provider_pair": "anthropic",
+      "complete": true,
+      "parity_eligible": false,
+      "actual_identities": {
+        "pi-anthropic": {
+          "providers": [
+            "anthropic"
+          ],
+          "models": [
+            "claude-sonnet-5"
+          ],
+          "reasoning_levels": [
+            "medium"
+          ]
+        },
+        "claude": {
+          "providers": [
+            "anthropic"
+          ],
+          "models": [
+            "claude-sonnet-5"
+          ],
+          "reasoning_levels": [
+            "medium"
+          ]
+        }
+      },
+      "harnesses": {
+        "pi-anthropic": {
+          "runs": 9,
+          "successful_runs": 8,
+          "visible_pass_rate": {
+            "value": 1.0,
+            "n": 9
+          },
+          "hidden_pass_rate": {
+            "value": 0.8888888888888888,
+            "n": 9
+          },
+          "success_rate": {
+            "value": 0.8888888888888888,
+            "n": 9
+          },
+          "successful_only": {
+            "combined_tokens": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 323169.0,
+              "min": 187210.0,
+              "max": 784323.0
+            },
+            "plan_token_share": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 0.3782451699061985,
+              "min": 0.23561787522591637,
+              "max": 0.5083340633803791
+            },
+            "turns": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 14.5,
+              "min": 9.0,
+              "max": 32.0
+            },
+            "tool_calls": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 21.0,
+              "min": 12.0,
+              "max": 32.0
+            },
+            "blocked_calls": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 1.0,
+              "min": 0.0,
+              "max": 2.0
+            },
+            "elapsed_seconds": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 117.8144185,
+              "min": 75.539066,
+              "max": 170.028394
+            },
+            "cache_hit_ratio": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 0.9998983736460112,
+              "min": 0.9998856220571508,
+              "max": 0.9999133434793677
+            }
+          },
+          "auxiliary_usage": {
+            "detected_runs": 0,
+            "included_runs": 0,
+            "separable_runs": 0,
+            "full_accounting_runs": 0
+          },
+          "limitations": []
+        },
+        "claude": {
+          "runs": 9,
+          "successful_runs": 7,
+          "visible_pass_rate": {
+            "value": 1.0,
+            "n": 9
+          },
+          "hidden_pass_rate": {
+            "value": 0.8888888888888888,
+            "n": 9
+          },
+          "success_rate": {
+            "value": 0.7777777777777778,
+            "n": 9
+          },
+          "successful_only": {
+            "combined_tokens": {
+              "n": 7,
+              "expected_n": 7,
+              "partial": false,
+              "available": true,
+              "median": 1208063.0,
+              "min": 714606.0,
+              "max": 2333068.0
+            },
+            "plan_token_share": {
+              "n": 7,
+              "expected_n": 7,
+              "partial": false,
+              "available": true,
+              "median": 0.46998221530386264,
+              "min": 0.22406676530645483,
+              "max": 0.525011379968866
+            },
+            "turns": {
+              "n": 7,
+              "expected_n": 7,
+              "partial": false,
+              "available": true,
+              "median": 20.0,
+              "min": 13.0,
+              "max": 34.0
+            },
+            "tool_calls": {
+              "n": 7,
+              "expected_n": 7,
+              "partial": false,
+              "available": true,
+              "median": 24.0,
+              "min": 15.0,
+              "max": 39.0
+            },
+            "blocked_calls": {
+              "n": 7,
+              "expected_n": 7,
+              "partial": false,
+              "available": true,
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0
+            },
+            "elapsed_seconds": {
+              "n": 7,
+              "expected_n": 7,
+              "partial": false,
+              "available": true,
+              "median": 114.397531,
+              "min": 101.746613,
+              "max": 184.05508
+            },
+            "cache_hit_ratio": {
+              "n": 7,
+              "expected_n": 7,
+              "partial": false,
+              "available": true,
+              "median": 0.9999645663213008,
+              "min": 0.9999595788112129,
+              "max": 0.9999698349572921
+            }
+          },
+          "auxiliary_usage": {
+            "detected_runs": 9,
+            "included_runs": 9,
+            "separable_runs": 9,
+            "full_accounting_runs": 0
+          },
+          "limitations": []
+        }
+      },
+      "matched_runs": 9,
+      "matched_successful_runs": 6,
+      "matched_native_minus_pi_deltas": {
+        "combined_tokens": {
+          "n": 6,
+          "expected_n": 6,
+          "partial": false,
+          "available": true,
+          "median": 686607.5,
+          "min": 472690.0,
+          "max": 1548745.0
+        },
+        "plan_token_share": {
+          "n": 6,
+          "expected_n": 6,
+          "partial": false,
+          "available": true,
+          "median": 0.04985026150575686,
+          "min": -0.043905740918659036,
+          "max": 0.1747076477799566
+        },
+        "turns": {
+          "n": 6,
+          "expected_n": 6,
+          "partial": false,
+          "available": true,
+          "median": 2.5,
+          "min": -5.0,
+          "max": 5.0
+        },
+        "tool_calls": {
+          "n": 6,
+          "expected_n": 6,
+          "partial": false,
+          "available": true,
+          "median": 3.0,
+          "min": -6.0,
+          "max": 7.0
+        },
+        "blocked_calls": {
+          "n": 6,
+          "expected_n": 6,
+          "partial": false,
+          "available": true,
+          "median": -1.0,
+          "min": -2.0,
+          "max": 0.0
+        },
+        "elapsed_seconds": {
+          "n": 6,
+          "expected_n": 6,
+          "partial": false,
+          "available": true,
+          "median": 5.349997500000001,
+          "min": -48.783530999999996,
+          "max": 28.662887000000012
+        },
+        "cache_hit_ratio": {
+          "n": 6,
+          "expected_n": 6,
+          "partial": false,
+          "available": true,
+          "median": 6.434589149822978e-05,
+          "min": 5.5999285601182613e-05,
+          "max": 7.425854390108455e-05
+        }
+      },
+      "winner_claim": null,
+      "limitations": [
+        "Protocol-invalid run '34-anthropic-ambiguity-heavy-change-r3-claude': Operator selected 'Before filter/order', contradicting the predetermined answer requiring the limit after filtering and ordering.",
+        "Equivalent complete auxiliary accounting cannot be established across native formats; Pi tool-result auxiliary usage is included only when optional native usage fields are present.",
+        "Equivalent complete auxiliary accounting cannot be established across native formats; Claude sidechain usage is included when discovered, but native linkage cannot prove that every auxiliary session was retained."
+      ]
+    },
+    {
+      "provider_pair": "openai",
+      "complete": true,
+      "parity_eligible": false,
+      "actual_identities": {
+        "pi-openai": {
+          "providers": [
+            "openai-codex"
+          ],
+          "models": [
+            "gpt-5.6-terra"
+          ],
+          "reasoning_levels": [
+            "medium"
+          ]
+        },
+        "codex": {
+          "providers": [
+            "openai"
+          ],
+          "models": [
+            "gpt-5.6-terra"
+          ],
+          "reasoning_levels": [
+            "medium"
+          ]
+        }
+      },
+      "harnesses": {
+        "pi-openai": {
+          "runs": 9,
+          "successful_runs": 8,
+          "visible_pass_rate": {
+            "value": 1.0,
+            "n": 9
+          },
+          "hidden_pass_rate": {
+            "value": 0.8888888888888888,
+            "n": 9
+          },
+          "success_rate": {
+            "value": 0.8888888888888888,
+            "n": 9
+          },
+          "successful_only": {
+            "combined_tokens": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 398906.0,
+              "min": 351452.0,
+              "max": 587763.0
+            },
+            "plan_token_share": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 0.10799595593186698,
+              "min": 0.07590134118683892,
+              "max": 0.15614934614115156
+            },
+            "turns": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 26.5,
+              "min": 24.0,
+              "max": 30.0
+            },
+            "tool_calls": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 34.5,
+              "min": 29.0,
+              "max": 49.0
+            },
+            "blocked_calls": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 1.0,
+              "min": 0.0,
+              "max": 2.0
+            },
+            "elapsed_seconds": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 161.20707149999998,
+              "min": 126.643966,
+              "max": 206.332094
+            },
+            "cache_hit_ratio": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 0.8653254337339054,
+              "min": 0.8517163448064854,
+              "max": 0.9225642097414665
+            }
+          },
+          "auxiliary_usage": {
+            "detected_runs": 0,
+            "included_runs": 0,
+            "separable_runs": 0,
+            "full_accounting_runs": 0
+          },
+          "limitations": []
+        },
+        "codex": {
+          "runs": 9,
+          "successful_runs": 8,
+          "visible_pass_rate": {
+            "value": 0.8888888888888888,
+            "n": 9
+          },
+          "hidden_pass_rate": {
+            "value": 1.0,
+            "n": 9
+          },
+          "success_rate": {
+            "value": 0.8888888888888888,
+            "n": 9
+          },
+          "successful_only": {
+            "combined_tokens": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 605211.0,
+              "min": 500816.0,
+              "max": 797650.0
+            },
+            "plan_token_share": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 0.1937480483140407,
+              "min": 0.15007550452035506,
+              "max": 0.29268547174816517
+            },
+            "turns": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 11.0,
+              "min": 9.0,
+              "max": 13.0
+            },
+            "tool_calls": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 15.5,
+              "min": 13.0,
+              "max": 19.0
+            },
+            "blocked_calls": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 0.5,
+              "min": 0.0,
+              "max": 1.0
+            },
+            "elapsed_seconds": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 175.1484335,
+              "min": 120.320566,
+              "max": 425.600334
+            },
+            "cache_hit_ratio": {
+              "n": 8,
+              "expected_n": 8,
+              "partial": false,
+              "available": true,
+              "median": 0.8990665823430585,
+              "min": 0.8299188437721563,
+              "max": 0.9196909194627392
+            }
+          },
+          "auxiliary_usage": {
+            "detected_runs": 9,
+            "included_runs": 9,
+            "separable_runs": 9,
+            "full_accounting_runs": 0
+          },
+          "limitations": []
+        }
+      },
+      "matched_runs": 9,
+      "matched_successful_runs": 7,
+      "matched_native_minus_pi_deltas": {
+        "combined_tokens": {
+          "n": 7,
+          "expected_n": 7,
+          "partial": false,
+          "available": true,
+          "median": 191868.0,
+          "min": 107988.0,
+          "max": 260788.0
+        },
+        "plan_token_share": {
+          "n": 7,
+          "expected_n": 7,
+          "partial": false,
+          "available": true,
+          "median": 0.10403925797832833,
+          "min": 0.05678118384429888,
+          "max": 0.1821866164002442
+        },
+        "turns": {
+          "n": 7,
+          "expected_n": 7,
+          "partial": false,
+          "available": true,
+          "median": -17.0,
+          "min": -19.0,
+          "max": -12.0
+        },
+        "tool_calls": {
+          "n": 7,
+          "expected_n": 7,
+          "partial": false,
+          "available": true,
+          "median": -18.0,
+          "min": -30.0,
+          "max": -16.0
+        },
+        "blocked_calls": {
+          "n": 7,
+          "expected_n": 7,
+          "partial": false,
+          "available": true,
+          "median": 0.0,
+          "min": -1.0,
+          "max": 0.0
+        },
+        "elapsed_seconds": {
+          "n": 7,
+          "expected_n": 7,
+          "partial": false,
+          "available": true,
+          "median": 15.619963000000013,
+          "min": -6.323400000000007,
+          "max": 254.88398899999999
+        },
+        "cache_hit_ratio": {
+          "n": 7,
+          "expected_n": 7,
+          "partial": false,
+          "available": true,
+          "median": -0.010642796340460725,
+          "min": -0.027216616790304293,
+          "max": 0.060572916928599674
+        }
+      },
+      "winner_claim": null,
+      "limitations": [
+        "Protocol-invalid run '35-openai-ambiguity-heavy-change-r3-pi-openai': Operator selected 'Raw input rows', contradicting the predetermined answer requiring the limit after filtering and ordering.",
+        "Protocol-invalid run '07-openai-cross-file-feature-r1-codex': Operator supplied an unapproved real-environment precedence clarification in a cross-file-feature run with no predetermined answer.",
+        "Protocol-invalid run '03-openai-localized-bug-r1-pi-openai': Operator supplied an unapproved Unicode-policy product clarification in a localized-bug run with no predetermined answer.",
+        "Protocol-invalid run '04-openai-localized-bug-r1-codex': Operator supplied an unapproved Unicode-policy product clarification in a localized-bug run with no predetermined answer.",
+        "Protocol-invalid run '15-openai-localized-bug-r2-codex': Operator supplied an unapproved Unicode-policy product clarification in a localized-bug run with no predetermined answer.",
+        "Protocol-invalid run '28-openai-localized-bug-r3-codex': Operator supplied an unapproved Unicode-policy product clarification in a localized-bug run with no predetermined answer.",
+        "Equivalent complete auxiliary accounting cannot be established across native formats; Pi tool-result auxiliary usage is included only when optional native usage fields are present.",
+        "Equivalent complete auxiliary accounting cannot be established across native formats; Codex subagent usage uses native interval counts when exposed and otherwise excludes each rollout's first cumulative snapshot as a possible inherited baseline, but rollout discovery and fallback first-turn usage cannot be proven complete."
+      ]
+    }
+  ],
+  "global_decision": {
+    "pi_observed_rule_met": false,
+    "pi_claimed": false,
+    "claim": "No global Pi efficiency claim"
+  }
+}

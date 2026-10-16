@@ -1,0 +1,11 @@
+{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"codex-session","cwd":"/tmp/worktree","model_provider":"openai"}}
+{"timestamp":"2026-01-01T00:00:01Z","type":"turn_context","payload":{"model":"gpt-5.6-terra","effort":"medium"}}
+{"timestamp":"2026-01-01T00:00:03Z","type":"response_item","payload":{"id":"assistant-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Should limit apply before filtering or after deterministic ordering?"}]}}
+{"timestamp":"2026-01-01T00:00:04Z","type":"response_item","payload":{"id":"function-1","type":"function_call","name":"exec_command","call_id":"call-1"}}
+{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":60,"output_tokens":20,"reasoning_output_tokens":8,"total_tokens":120}}}}
+{"timestamp":"2026-01-01T00:00:09Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":180,"cached_input_tokens":100,"output_tokens":35,"reasoning_output_tokens":14,"total_tokens":215}}}}
+{"timestamp":"2026-01-01T00:00:11Z","type":"event_msg","payload":{"type":"user_message","message":"`limit` counts emitted active records after filtering and deterministic ordering, not input rows."}}
+{"timestamp":"2026-01-01T00:00:14Z","type":"response_item","payload":{"id":"assistant-2","type":"message","role":"assistant","content":[{"type":"output_text","text":"Implementing."}]}}
+{"timestamp":"2026-01-01T00:00:15Z","type":"response_item","payload":{"id":"function-2","type":"function_call","name":"apply_patch","call_id":"call-2"}}
+{"timestamp":"2026-01-01T00:00:16Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"call-2","status":"blocked","message":"blocked by approval policy"}}
+{"timestamp":"2026-01-01T00:00:19Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":400,"cached_input_tokens":250,"output_tokens":90,"reasoning_output_tokens":40,"total_tokens":490}}}}

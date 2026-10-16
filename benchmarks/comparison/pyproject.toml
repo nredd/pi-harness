@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pi-harness-benchmark"
+version = "0.1.0"
+description = "Operator-driven benchmark of native coding-agent harnesses"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Redd" }]
+dependencies = ["pydantic>=2.12,<3"]
+
+[project.scripts]
+pi-harness-benchmark = "pi_harness_benchmark.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0,<10",
+  "pytest-cov>=7.0,<8",
+  "ruff>=0.15,<0.16",
+  "tox>=4.40,<5",
+  "tox-uv>=1.33,<2",
+  "ty>=0.0.24,<0.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pi_harness_benchmark"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+# Generated seeds, hidden suites, and run artifacts are disposable data, not framework source.
+extend-exclude = ["artifacts", "workspace"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812", # Ruff formatter owns trailing commas.
+  "D203",   # D211 is the project convention.
+  "D213",   # D212 is the project convention.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Pydantic evaluates model annotations at runtime; fields carry descriptions instead of docstrings.
+"src/pi_harness_benchmark/models.py" = ["D101", "TC003"]
+# House logging style deliberately uses f-strings.
+"src/pi_harness_benchmark/cli.py" = ["G004"]
+# Embedded fixture source is formatted after generation, not as the containing string literal.
+"src/pi_harness_benchmark/fixtures.py" = ["E501", "S603"]
+# Absolute binaries are validated before these narrowly scoped subprocess calls.
+"src/pi_harness_benchmark/artifacts.py" = ["S603"]
+"src/pi_harness_benchmark/finalize.py" = ["S603"]
+"src/pi_harness_benchmark/process.py" = ["S603"]
+# Tests use local absolute binaries and pytest-driven signatures; test docstrings add no value.
+"tests/**" = ["D", "E501", "PLR0913", "PLR2004", "S101", "S603", "TC003"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+markers = [
+  "native_runtime: runs the real pinned native CLI (no stubs); always part of the gate",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["pi_harness_benchmark"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+
+[tool.ty.environment]
+python-version = "3.12"
+root = ["./src"]
+
+[tool.ty.rules]
+possibly-unresolved-reference = "error"
+
+[tool.tox]
+requires = ["tox>=4.40", "tox-uv>=1.33"]
+env_list = ["py312", "py313", "py314"]
+
+[tool.tox.env_run_base]
+description = "Run tests under Python {base_python}"
+runner = "uv-venv-lock-runner"
+commands = [["pytest", "-q"]]

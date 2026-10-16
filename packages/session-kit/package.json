@@ -1,0 +1,46 @@
+{
+  "name": "@nredd/pi-session-kit",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Session-scoped pi tools and commands, offline cross-machine usage stats and a portable privacy-only stats CLI. No daemon.",
+  "author": "nredd",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nredd/pi-harness.git",
+    "directory": "packages/session-kit"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.0.0",
+    "@earendil-works/pi-tui": ">=1.0.0",
+    "typebox": "*"
+  },
+  "scripts": {
+    "lint": "biome check src/ test/",
+    "format": "biome check --write src/ test/",
+    "typecheck": "tsc --noEmit",
+    "build:stats-export": "esbuild src/stats/cli.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/pi-stats-export.mjs",
+    "test": "npm run build:stats-export && vitest run",
+    "check": "npm run lint && npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-tui": "1.0.0",
+    "@types/node": "26.6.5",
+    "esbuild": "0.28.2",
+    "typebox": "1.3.36",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

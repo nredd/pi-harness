@@ -1,0 +1,164 @@
+# pi-session-kit
+
+Migration snapshot: this workspace is named `@nredd/pi-session-kit` but is not published yet.
+Use the [monorepo development commands](../../README.md). The Git install and standalone harness
+references below describe the legacy deployment, not installation or candidate verification of
+this unpublished workspace.
+
+Session-scoped pi extensions for tmux users. No daemon, supervisor, core patch or cross-pane
+registry. Each runtime owns its goal, loops and monitors; persisted goal state follows the active
+session branch. Closing pi stops its work.
+
+## Install and config
+
+```sh
+pi install git:github.com/nredd/pi-session-kit@v0.3.0
+```
+
+Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
+
+```json
+{
+  "titles": { "enabled": true, "model": "anthropic/claude-haiku-5-5" },
+  "rules": { "enabled": true },
+  "goal": { "enabled": true },
+  "loop": { "enabled": true },
+  "monitor": { "enabled": true },
+  "diff": { "enabled": true },
+  "stats": { "enabled": true }
+}
+```
+
+Every module defaults on. Malformed config reports a diagnostic and uses defaults. No daemon or
+persistent cron is installed. Deferred-tool configurations need `goal_update` in `neverDefer`
+(without forcing it active), and `monitor_read` in `alwaysActive` and `neverDefer` for Plan mode.
+
+## Goal and loop
+
+- `/goal <objective> [--turns N] [--tokens N]`: keep working toward an explicit objective. Default
+  budget: 30 parent turns. Token accounting uses reported usage. `status`, `pause`, `resume` and
+  `clear` manage it; the footer chip shows turn and token consumption.
+- `goal_update({status: "complete" | "blocked", evidence})`: complete requires nonempty evidence.
+  This is a self-report, not an independent verifier; it does not replace tests or todo evidence.
+- The settle nudge respects existing continuations, background-agent delivery and Plan permissions.
+  Abort, settled provider error, budgets and a Plan-mode excursion pause/stop it. Resume restores a
+  goal paused. Quota recovery is left to the router; a parked dispatch or direct refusal pauses
+  goals and loops, cancels goal wake timers, and requires explicit resume. Goal resume is refused
+  while a quota-parked dispatch remains. A settled provider failure also pauses rather than spinning.
+- `/loop <interval> <prompt> [--max N]`: repeat a prompt in the current conversation, unlike
+  `Agent({schedule: ...})`, which launches fresh children. Minimum interval 30s; maximum 50 runs.
+  `list` and `stop [id|all]` manage loops. Busy ticks are skipped, never queued. Plan mode and an
+  active goal suspend ticks; settled errors pause loops. Loops are not persisted across restarts.
+
+## Monitor
+
+- `monitor_start({argv, name, match?, wake?, timeout_s?})`: run an argv command with stdin closed,
+  no implicit shell. Five active monitors maximum, one-hour default timeout. Explicitly passing a
+  shell remains arbitrary command execution; this is not a sandbox.
+- `monitor_read({id, since?})`: numbered output since a cursor. Ring buffers retain 2000 lines.
+- `monitor_stop({id})`, `/monitor list`, `/monitor stop <id|all>`: stop and inspect owned monitors.
+- Output batches every two seconds with bounded pending storage and dropped-line reporting. Passive
+  batches do not start turns; regex matches, exit and `wake: true` can wake the agent.
+- Children run in process groups: SIGTERM, then SIGKILL. Exit cleanup and pidfiles cover orderly quit
+  and later recovery after SIGKILL. Files live at
+  `$TMPDIR/pi-monitors-<uid>/<sessionId>.<ownerPid>/<monitorId>.json`. Startup checks dead-owner
+  records, including a resumed session, and validates process identity before signalling. It never
+  sweeps a live owner's monitors. Two panes resuming the same session have separate directories.
+- Plan mode admits only `monitor_read`; start and stop are mutating tools. Ordinary tool hooks apply
+  to the tool call, but a custom argv tool does not automatically inherit Bash-specific policies.
+
+## Diff
+
+`/diff [ref]` opens a read-only file/patch overlay. Default: staged and working changes against HEAD,
+with untracked files listed. `j/k` or arrows scroll, `n/p` select files, `g/G` and PageUp/PageDown
+navigate, `q` or Escape closes. Output is capped. Invalid refs and non-repositories produce clear
+errors. Print mode emits a stat (pi currently redirects extension stdout to stderr); JSON emits a
+non-triggering display message. The overlay is TUI-only and works in Plan mode.
+
+## Stats
+
+`/stats` is Claude Code's `/stats` pane over fresh local sessions plus imported machine snapshots,
+split by provider and model. It NEVER performs network I/O. Machine coverage and the last successful
+remote import are shown; unsynced machines show `local-only` / `never synced`. Invalid or missing
+snapshots retain last-good data and show `incomplete coverage`. Overview: an activity heatmap (one column per week), headline numbers (favorite model, total tokens,
+sessions, longest session, active days, streaks, cache tokens, notional cost) and the token chart.
+Models: the chart, then every model grouped under its provider with in/out/cache/cost, two-up from
+80 columns. Tab switches tabs, `r` cycles All / 7d / 30d / 5h / 24h (default All), `m`/`M` cycle the filter
+(All, each provider, each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
+
+- The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All, else the top
+  three models. Where lines overlap they merge into junctions (`┴┬├┤┼`) so every line stays
+  connected; the larger series keeps the colour. Line colours start at the theme's `accent` hue,
+  saturated, with hues spread evenly over the lines drawn (two providers get opposite hues), so
+  muted themes still separate them. The heatmap and the chart span 75% of the pane, with the same right edge; the heatmap shows as
+  many weeks as fit, never less than a year when the pane allows. Days sum into 1/2/3/7/14/30-day buckets (longer
+  when needed) so the range fits the width; short ranges are interpolated, not stepped. Y ticks land
+  on round values with little headroom. Height follows the pane in whole tick steps (5 to 40 rows):
+  Overview grows the chart into the rows it has left, Models gives it about half.
+- Rolling 5h/24h use the original call timestamps in zero-filled one-hour UTC buckets, with
+  partial edges labeled. Labels use viewer-local time and UTC offsets, including repeated DST
+  hours. The same rolling filter feeds chart/model/overview totals; future calls are ignored in
+  every range. Long ranges retain the daily chart and activity heatmap.
+- Tokens = input + output + cache read + cache write. Anthropic reports almost every prompt token
+  as a cache read or write while Codex reports it as input, so anything less undercounts agentic
+  use by orders of magnitude. Cost is pi's recorded list price: notional on a subscription.
+- Counted: assistant messages, under the provider/model that answered. Not counted: tool-result
+  usage (pi-subagents' parent-side report; its child sessions already hold those calls), compaction
+  usage, `router/*` rows, `faux` and zero-usage rows. A `/fork` or cross-machine copy counts once.
+  Preserved assistant entry IDs distinguish equal-value events. Legacy records use the old tuple
+  identity and are discarded when an identified counterpart exists. Raw names drive dedup;
+  only display text is sanitized.
+- Subagent children (parent link plus a `<type>#<8 hex>` name, or the matching persisted child
+  marker, including renamed children) count toward tokens but not
+  Sessions. A filter narrows Sessions to the sessions that used the filtered models.
+- Source: `*.jsonl` under `$PI_CODING_AGENT_SESSION_DIR` or `<agentDir>/sessions`. Cache:
+  `<agentDir>/pi-session-kit/stats-cache.json`, re-parsing only files whose size or mtime changed;
+  deleted sessions keep counting; machine views also retain history from previously configured
+  session roots. Version 1 caches migrate without dropping deleted-file records; available files
+  are reparsed for preserved IDs. A corrupt record is dropped and rebuilt. Lines that are not JSON
+  objects show as `! N unreadable lines`.
+- Print mode prints a per-model table and coverage; JSON emits a display message. Works in Plan mode.
+- After `make install` at the monorepo root, `npm run build:stats-export --workspace @nredd/pi-session-kit`
+  reproduces `dist/pi-stats-export.mjs` inside this package. Copy this standalone Node 22+ artifact
+  to another machine: neither Pi nor the loaded session-kit extension is needed at runtime.
+  `node ARTIFACT export --agent-dir DIR --output OUT` writes ONLY `OUT/machines/<UUID>/`.
+  `node ARTIFACT import --agent-dir DIR --input REPO` validates all machines and atomically
+  publishes the local global cache. Both emit one JSON object on success; partial imports emit
+  JSON and diagnostics with a nonzero exit. No Git/network operations are part of the CLI.
+  Schema, identity, atomicity and harness API details: [here](docs/stats-snapshots.md).
+
+## Titles and rules
+
+- Titles: one attempt after the first eligible TUI run of an unnamed persisted session. Default
+  candidates are Haiku 5.5, validated enterprise alias candidates (including the legacy Haiku 4.5
+  logical key), then GPT 6 Luna. `titles.model` overrides the preferred candidate. No silent retry
+  after provider failure; explicit names and session switches win races. Children, headless runs,
+  no-session runs and active planning are skipped. Output is capped at six words/60 characters;
+  shorter names are accepted.
+- Rules: Markdown files in `.pi/rules/` and the agent directory's `rules/`, with YAML frontmatter
+  `paths: ["src/**/*.ts"]`. No `paths`, no injection. Successful read/edit/write results receive
+  matching rules once per context lifetime. Compaction resets deduplication. Eight rules per turn,
+  4096 UTF-8 bytes per appended block. The system prompt is not rewritten. Rules injected after an
+  edit inform subsequent work, not the edit already performed.
+
+## Subagents and verification
+
+`pi-subagents` exposes no public child-context marker. The kit recognises its generated
+`<type>#<8 hex>` session names; this is a compatibility heuristic, not a security boundary.
+Commands/continuations are guarded. At `session_start`, parent-only goal/monitor tools are
+re-registered with Pi's `hidden` exposure: child scoping and deferred promotion cannot reactivate
+their schemas or nested-call capabilities. Tool-call and execute guards also deny child calls,
+even after a child renames itself and reloads. Initial child binding persists a
+`session-kit:child` entry with its session id; reload reads the active branch, not a generic
+parent-session link (fresh Plan sessions also have parents). Replacement sessions do not inherit
+cached identity or another session's marker. Goal/monitor factories register the shared identity
+hook before their rebuild hooks, without querying an unbound runtime during factory loading.
+No private subagent marker is imported. Existing tool permissions are not widened.
+
+A prior settle handler's continuation (including a todo reminder) suppresses the goal nudge;
+the kit does not append a second reminder or request another continuation.
+
+`npm run check`: Biome, TypeScript and Vitest. `pi-harness-e2e` adds faux-provider integration tests,
+real tmux width matrices (60 through 320 columns), Plan-mode tests, background-agent/todo interaction
+and two-pane lifecycle/isolation scenarios. Run its full `make verify` before tags or pins. Real
+monitor/display testing remains manual; see that repo's `docs/footer-cache-ultrawide.md`.
