@@ -22,13 +22,28 @@ GIT = bf.GIT
 
 
 def git(repo: Path, *args: str) -> str:
-    """Run git in `repo` and return stripped stdout."""
+    """Run git and capture its output.
+
+    Parameters:
+        repo (Path): Disposable checkout.
+        *args (str): Git arguments.
+
+    Returns:
+        str: Stripped standard output.
+    """
     done = subprocess.run([GIT, "-C", str(repo), *args], capture_output=True, text=True, check=True)
     return done.stdout.strip()
 
 
 def init_repo(path: Path) -> Path:
-    """Create a repository with one commit."""
+    """Create a repository with one commit.
+
+    Parameters:
+        path (Path): New disposable repository directory.
+
+    Returns:
+        Path: Initialized checkout.
+    """
     path.mkdir(parents=True)
     git(path, "init", "-q", "-b", "main")
     git(path, "config", "user.email", "t@example.invalid")
@@ -41,7 +56,16 @@ def init_repo(path: Path) -> Path:
 
 
 def commit_file(repo: Path, name: str, text: str) -> str:
-    """Commit a file change and return the new HEAD."""
+    """Commit a fixture change.
+
+    Parameters:
+        repo (Path): Disposable checkout.
+        name (str): Relative file name.
+        text (str): Replacement file contents.
+
+    Returns:
+        str: New HEAD commit.
+    """
     (repo / name).write_text(text)
     git(repo, "add", name)
     git(repo, "commit", "-q", "-m", f"change {name}")
@@ -50,7 +74,14 @@ def commit_file(repo: Path, name: str, text: str) -> str:
 
 @pytest.fixture(autouse=True)
 def allow_file_protocol(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Allow `file://` submodule clones for the child git processes."""
+    """Isolate Git configuration and allow local fixture clones.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Scoped environment overrides.
+
+    Returns:
+        None: Environment overrides are restored by pytest.
+    """
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
@@ -68,7 +99,15 @@ class World:
 
 
 def make_world(tmp_path: Path, names: tuple[str, ...] = ("forks/alpha", "forks/beta")) -> World:
-    """Build upstream repos, a parent that records them as gitlinks, and a fresh clone of the parent."""
+    """Build upstream repositories, a parent, and its fresh clone.
+
+    Parameters:
+        tmp_path (Path): Temporary fixture root.
+        names (tuple[str, ...]): Relative submodule paths.
+
+    Returns:
+        World: Disposable repositories with uninitialized cloned submodules.
+    """
     upstreams = {name: init_repo(tmp_path / "up" / name.replace("/", "_")) for name in names}
     origin = init_repo(tmp_path / "origin")
     for name, up in upstreams.items():
@@ -82,12 +121,27 @@ def make_world(tmp_path: Path, names: tuple[str, ...] = ("forks/alpha", "forks/b
 
 
 def init_all(world: World) -> None:
-    """Initialize every submodule via the tool under test."""
+    """Initialize every submodule via the tool under test.
+
+    Parameters:
+        world (World): Disposable repositories.
+
+    Returns:
+        None: Successful initialization is asserted.
+    """
     assert bf.main(["--repo", str(world.parent)]) == bf.EXIT_OK
 
 
 def bump_gitlink(world: World, name: str) -> str:
-    """Advance one upstream and the parent's gitlink in the clone; return the new commit."""
+    """Advance a gitlink while leaving its checkout at the previous revision.
+
+    Parameters:
+        world (World): Disposable repositories.
+        name (str): Relative submodule path.
+
+    Returns:
+        str: Commit recorded in the updated parent gitlink.
+    """
     new = commit_file(world.upstreams[name], "tracked.txt", "two\n")
     sub = world.parent / name
     git(sub, "fetch", "-q", "origin")
@@ -128,20 +182,41 @@ def test_idempotent_on_clean_initialized_checkouts(tmp_path: Path) -> None:
 
 
 def _dirty_tracked(sub: Path) -> str:
-    """Create an unstaged tracked-file edit and return its relative path."""
+    """Create an unstaged tracked-file edit.
+
+    Parameters:
+        sub (Path): Disposable submodule checkout.
+
+    Returns:
+        str: Modified file's relative path.
+    """
     (sub / "tracked.txt").write_text("local edit\n")
     return "tracked.txt"
 
 
 def _dirty_staged(sub: Path) -> str:
-    """Create a staged addition and return its relative path."""
+    """Create a staged addition.
+
+    Parameters:
+        sub (Path): Disposable submodule checkout.
+
+    Returns:
+        str: Added file's relative path.
+    """
     (sub / "staged.txt").write_text("staged work\n")
     git(sub, "add", "staged.txt")
     return "staged.txt"
 
 
 def _dirty_untracked(sub: Path) -> str:
-    """Create an untracked nested file and return its relative path."""
+    """Create an untracked nested file.
+
+    Parameters:
+        sub (Path): Disposable submodule checkout.
+
+    Returns:
+        str: Untracked file's relative path.
+    """
     (sub / "deep").mkdir()
     (sub / "deep" / "new.txt").write_text("untracked work\n")
     return "deep/new.txt"

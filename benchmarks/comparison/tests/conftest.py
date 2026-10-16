@@ -34,8 +34,16 @@ def pinned_native_cli_stubs(
 
     Unit tests exercise `prepare` against the historical pinned CLIs; they must not depend on
     whichever native CLIs or Pi packages happen to be installed on the host. The stub `pi`/`claude`/
-    `codex` binaries report the pinned versions and are never launched; the plan-mode package and
-    configuration paths point at temporary files carrying the pinned values.
+    `codex` binaries report the pinned versions without launching model sessions; the plan-mode
+    package and configuration paths point at temporary files carrying the pinned values.
+
+    Parameters:
+        request (pytest.FixtureRequest): Current test and its native-runtime marker.
+        tmp_path_factory (pytest.TempPathFactory): Temporary fixture directories.
+        monkeypatch (pytest.MonkeyPatch): Scoped environment and module overrides.
+
+    Returns:
+        None: Test-local overrides are restored by pytest.
     """
     if request.node.get_closest_marker("native_runtime"):
         return  # Real-CLI tests must see the real pinned CLI on `PATH`, not stubs.

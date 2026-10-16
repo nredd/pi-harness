@@ -108,12 +108,29 @@ def gitlink_paths(repo: Path) -> list[Path]:
 
 
 def _is_initialized(path: Path) -> bool:
-    """Return whether `path` is the root of its own checkout (has a `.git` entry)."""
+    """Return whether `path` is the root of its own checkout.
+
+    Parameters:
+        path (Path): Candidate submodule directory.
+
+    Returns:
+        bool: Whether the directory contains a `.git` entry.
+    """
     return (path / ".git").exists()
 
 
 def _status_entries(path: Path) -> tuple[str, ...]:
-    """Return porcelain status lines, including every untracked file and nested-submodule change."""
+    """Read porcelain status, including untracked files and nested-submodule changes.
+
+    Parameters:
+        path (Path): Initialized submodule checkout.
+
+    Returns:
+        tuple[str, ...]: Status entries, with rename origins joined to their destination.
+
+    Raises:
+        BootstrapError: If git cannot inspect the checkout.
+    """
     out = _git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none")
     tokens = out.split("\0")
     entries: list[str] = []
@@ -159,7 +176,15 @@ def find_dirt(repo: Path) -> list[Dirt]:
 
 
 def _report(dirt: list[Dirt], root: Path) -> None:
-    """Log every dirty checkout (bounded) so the user can commit, stash, or move it."""
+    """Log bounded dirty-checkout details without changing any files.
+
+    Parameters:
+        dirt (list[Dirt]): Dirty checkouts found during preflight.
+        root (Path): Parent checkout used to display relative paths.
+
+    Returns:
+        None: Details are emitted through the module logger.
+    """
     LOGGER.error("Refusing to update: local changes would be at risk. Nothing was modified.")
     for item in dirt:
         LOGGER.error(f"- `{item.path.relative_to(root)}`")
