@@ -1,0 +1,32 @@
+{
+  "$schema": "https://pi.dev/schemas/settings.schema.json",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-sonnet-5-5",
+  "defaultThinkingLevel": "medium",
+  "theme": "belafonte-day/tokyonight-storm",
+  "tuiMode": "fullscreen",
+  "fullscreenExitOutput": "resume-hint",
+  "enableInstallTelemetry": false,
+  "hideThinkingBlock": true,
+  "outputPad": 0,
+  "quietStartup": "header",
+  "compaction": {
+    "enabled": true
+  },
+  "terminal": {
+    "showTerminalProgress": false
+  },
+  "warnings": {
+    "anthropicExtraUsage": false
+  },
+  "enabledModels": [
+    "anthropic/claude-opus-5-5",
+    "anthropic/claude-fable-5-1",
+    "anthropic/claude-haiku-5-5",
+    "anthropic/claude-sonnet-5-5",
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex/gpt-6-astra",
+    "openai-codex/gpt-6-luna",
+    "openai-codex/gpt-6.1-sol"
+  ]
+}

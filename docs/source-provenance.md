@@ -101,6 +101,67 @@ validity/protocol annotations are unchanged; only the sanitizations listed above
 `report.json`, `report.md`, and `OPERATOR_NOTES.md` are byte-identical. Evidence: a local script,
 `~/code/pi-harness-builds/check-import-metrics.mjs`, kept outside this repository.
 
+## Preset resource snapshot (`packages/preset`)
+
+Copied read-only from the private dotfiles source tree at commit
+`fa63fc507bc0b8c0253f8d98b1d6600e1537251a` (clean working tree). Only the paths below were read;
+no history, author data, applied or live files, or global instructions were imported. Nothing under
+the live installation or chezmoi symlinks was changed.
+
+| Destination | Source path | Source tree/blob |
+|---|---|---|
+| `agents/*.md` (7) | `private_dot_pi/agent/agents` | `9d4812574021a362ab72952aaed4408180b392e1` |
+| `extensions/expanded-footer.ts` | `private_dot_pi/agent/extensions` | `899e980e12dd8a74e8a6d5cfc09b6654bca1f629` |
+| `lib/footer-{cache,quota}.ts` | `private_dot_pi/agent/lib` | `bf69447c462ef79878e7c913e9e60b51d896590c` |
+| `themes/*.json` (2) | `private_dot_pi/agent/themes` | `183c83a1dfccf2e549e5b1d84dbfc3a96d5b0007` |
+| `skills/code-review` | `private_dot_agents/skills/code-review` | `e3f5b3a9a99154de137faf80bfb67c466c83fcfa` |
+| `skills/ship-issue` | `private_dot_agents/skills/ship-issue` | `4667df171c35370188531cda38af673a6e347999` |
+| `skills/get-it-merged` | `private_dot_agents/skills/get-it-merged` | `dcdcbf94935a9915a8d99f85700165c29bbdbbcc` |
+| `skills/coding-like-redd` | `private_dot_agents/skills/coding-like-redd` | `fc60e18dd59dc523e9ebbf646c7587fa9051cca1` |
+| `test/footer-cache.test.mjs` | `tests/footer-cache.test.mjs` | `06c653786b0d67288f354ea7fd845cec8344bc8a` |
+| `test/footer-quota.test.mjs` | `tests/footer-quota.test.mjs` | `44c763fc83556d89c39929885f9276960964bbc2` |
+| `settings/personal-defaults.json` | subset of `third_party/pi-agent-settings.base.json` | `b87629eaffe93f73e03af3f647c90842885838f5` |
+
+Not imported: the empty `keybindings.json`, `chezmoi-sync` and the home-automation skills, vendored
+third-party skills, global `AGENTS.md`, `mcp.json`, router/subagents/enterprise configuration.
+
+Byte-identical to the source (`cmp`): 6 of 7 agents (all but `architect`) and `coding-like-redd`.
+
+Also byte-identical: `lib/footer-cache.ts`. NOT byte-identical: `extensions/expanded-footer.ts`,
+`lib/footer-quota.ts`, and the two migrated test files were reformatted with the package's Biome
+configuration (tabs, 120 columns, wrapping, trailing commas). Verified token-identical to the
+source after removing whitespace and trailing commas before closing brackets. The two
+tests additionally differ by one import path each (`private_dot_pi/agent/lib/` -> `lib/`). No
+assertion was changed.
+
+New in this package (not from the source): `test/{discovery,resources,package}.test.ts`,
+`test/support.ts`.
+
+Deliberate modifications:
+
+- `agents/architect.md`: the `~/.agents/skills/codebase-design/...` path to its reference files became
+  "live next to its `SKILL.md`" (no personal path; the skill is an external dependency)
+- `skills/ship-issue/SKILL.md`: branch prefix `redd/issue-<N>` -> `<prefix>/issue-<N>` (repo
+  convention, else the operator's GitHub login); the `/Users/redd/code/PLUGIN/...` example path -> a
+  neutral `/work/plugins/...`; "their global `AGENTS.md`" -> "their configured writing style". Workflow
+  steps, the `critic` `sonnet`/`opus` models, and the PR/merge procedure are unchanged
+- `skills/get-it-merged/SKILL.md`: "global `AGENTS.md`" -> "configured writing style", nothing else
+- `skills/code-review/SKILL.md`: the `~/.pi/agent/agents/code-reviewer.md` path -> "the `code-reviewer`
+  agent". The explicit `openai-codex/gpt-6.1-sol` reviewer model is unchanged
+- `themes/*.json`: only `$schema` changed, to the published `https://pi.dev/schemas/theme.schema.json`
+  (matches Pi 1.3.0's built-in themes). Theme color provenance, per-color origin, and the license
+  situation are in `packages/preset/NOTICE.md`
+- `settings/personal-defaults.json`: dropped `packages` (pins), `externalEditor`, and the `router/*`
+  `enabledModels` entries; added `$schema`
+
+Theme source verification (done for this snapshot, from the pinned upstream commits):
+tokyonight.nvim `LICENSE` is Apache-2.0 (not MIT) and the Enkia `LICENSE.txt` is MIT, "Copyright (c)
+2018-present Enkia"; both copies are byte-identical to upstream and hash-pinned by tests. Belafonte
+Day's origin README attributes Jan T. Sott under CC BY-SA 4.0. The 8 retained Belafonte palette
+values were compared with the origin file's RGB floats (all round-trip to 8-bit hex exactly); the 18
+retained tokyonight palette values match `storm.lua`. Still unverified: the origin of the theme's
+earlier `yellow` `#d08b30`, which is no longer shipped.
+
 ## Review and commit status
 
 Protected `main` review statuses (separate Standards and Spec reviewers on the final HEAD) apply to
