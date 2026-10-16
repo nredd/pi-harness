@@ -1,0 +1,366 @@
+{
+  "accepted_plan": {
+    "byte_count": 5196,
+    "captured": true,
+    "path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/accepted-plan.md",
+    "sha256": "c47599aee7a1c2098abe0722fdee7ef0c6c0f48f7aa50e72b7b8fd8cff0267e4"
+  },
+  "activity": {
+    "combined": {
+      "blocked_calls": 1,
+      "blocked_calls_by_name": {
+        "bash": 1
+      },
+      "tool_calls": 23,
+      "tool_calls_by_name": {
+        "bash": 8,
+        "edit": 7,
+        "grep": 1,
+        "plan_mode_complete": 1,
+        "plan_mode_question": 1,
+        "read": 5
+      },
+      "turns": 22
+    },
+    "implementation": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 14,
+      "tool_calls_by_name": {
+        "bash": 6,
+        "edit": 7,
+        "read": 1
+      },
+      "turns": 15
+    },
+    "plan": {
+      "blocked_calls": 1,
+      "blocked_calls_by_name": {
+        "bash": 1
+      },
+      "tool_calls": 9,
+      "tool_calls_by_name": {
+        "bash": 2,
+        "grep": 1,
+        "plan_mode_complete": 1,
+        "plan_mode_question": 1,
+        "read": 4
+      },
+      "turns": 7
+    }
+  },
+  "actual_metadata": {
+    "model": "claude-sonnet-5",
+    "provider": "anthropic",
+    "reasoning_level": "medium"
+  },
+  "agent_started_at": "2026-09-16T03:08:03.078535Z",
+  "auxiliary_usage": {
+    "categories": [],
+    "detected": false,
+    "full_accounting_established": false,
+    "included": false,
+    "limitation": "Equivalent complete auxiliary accounting cannot be established across native formats; Pi tool-result auxiliary usage is included only when optional native usage fields are present.",
+    "separable": false,
+    "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "reasoning_tokens": null,
+      "total_tokens": null
+    }
+  },
+  "cache_hit_ratio": 0.9999070435627667,
+  "cli_version": "0.85.1",
+  "documentation_status": "updated",
+  "failure_reason": null,
+  "finalized_at": "2026-09-16T03:10:17.157699Z",
+  "git": {
+    "added_lines": 77,
+    "changed_paths": [
+      "README.md",
+      "TASK.md",
+      "src/record_summary/summary.py",
+      "tests/test_summary.py"
+    ],
+    "deleted_lines": 8,
+    "diff_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/agent.diff",
+    "diff_stat_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/agent.diffstat",
+    "dirty": true,
+    "head": "ddb9f5a40c26606951648762fcaa15c0d7c88c19",
+    "patch_bytes": 5533,
+    "patch_lines": 132
+  },
+  "hidden_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/hidden-gate-environment",
+    "name": "hidden",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--project",
+          "<benchmark-root>",
+          "--frozen",
+          "--all-groups",
+          "--no-install-project"
+        ],
+        "duration_seconds": 2.10017358395271,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/hidden-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/hidden-gate.sb",
+          "--",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/hidden-gate-environment/bin/python",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider",
+          "-c",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/hidden-suite/pytest.ini",
+          "--rootdir",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/hidden-suite",
+          "-q",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/hidden-suite"
+        ],
+        "duration_seconds": 0.19990266603417695,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/hidden-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "implementation_started_at": "2026-09-16T03:08:58.063383Z",
+  "launch_argv": [
+    "/opt/homebrew/Cellar/pi-coding-agent/0.85.1/bin/pi",
+    "--provider",
+    "anthropic",
+    "--model",
+    "claude-sonnet-5",
+    "--thinking",
+    "medium",
+    "--session-dir",
+    "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/native-sessions/pi",
+    "--name",
+    "33-anthropic-ambiguity-heavy-change-r3-pi-anthropic"
+  ],
+  "parser_warnings": [
+    "Equivalent complete auxiliary accounting cannot be established across native formats; Pi tool-result auxiliary usage is included only when optional native usage fields are present.",
+    "Import sanitization: private absolute benchmark-root paths replaced with `<benchmark-root>`; no metrics changed."
+  ],
+  "planning_quality": {
+    "asked_before_choosing": true,
+    "evidence": "structured-question: Should `limit` cap the raw input rows before filtering/ordering, or cap the returned records after filtering and ordering?",
+    "required": true
+  },
+  "prepared_at": "2026-09-16T03:08:03.005136Z",
+  "prompt_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/prompt.txt",
+  "prompt_sha256": "4edc7b75792ecea1e16b30ac28e609833f3922aa8b035b1cbc3c7180dfb58a37",
+  "protocol_valid": true,
+  "protocol_violations": [],
+  "result_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/result.json",
+  "schema_version": "3.0",
+  "seed_commit": "4be6c2caa58c0640e58cb3dd4d86e50e25a8746c",
+  "seed_verification": {
+    "clone_head_at_prepare": "4be6c2caa58c0640e58cb3dd4d86e50e25a8746c",
+    "contamination_paths": [],
+    "expected_commit": "4be6c2caa58c0640e58cb3dd4d86e50e25a8746c",
+    "generated_seed_head_at_finalize": "4be6c2caa58c0640e58cb3dd4d86e50e25a8746c",
+    "seed_is_final_ancestor": true,
+    "verified_at_start": "2026-09-16T03:08:03.078535Z"
+  },
+  "sessions": [
+    {
+      "byte_count": 1246478,
+      "redacted_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/session-logs/terminal.log",
+      "sha256": "a87f5b91ccd0733c548ae9aa938b81d9dc4192469bd46bbcc2ea3ab3d88ea831",
+      "source_kind": "terminal",
+      "source_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/session-logs/terminal.log"
+    },
+    {
+      "byte_count": 137172,
+      "redacted_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/session-logs/native-00.jsonl",
+      "sha256": "0632088e38546d2396ed8ba291d150f75e770d53cbd839d1f8760781092acb0e",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/session-logs/native-00.jsonl"
+    }
+  ],
+  "spec": {
+    "clarification": {
+      "answer": "`limit` counts emitted active records after filtering and deterministic ordering, not input rows.",
+      "question": "Should `limit` apply to raw input rows before filtering and deterministic ordering, or to emitted active records after filtering and deterministic ordering?"
+    },
+    "documentation_required": false,
+    "fixture": "ambiguity-heavy-change",
+    "harness": "pi-anthropic",
+    "matrix_position": 33,
+    "model": "claude-sonnet-5",
+    "pair": "anthropic",
+    "pair_order": 1,
+    "reasoning_level": "medium",
+    "repetition": 3,
+    "run_id": "33-anthropic-ambiguity-heavy-change-r3-pi-anthropic"
+  },
+  "stages": [
+    {
+      "duration_seconds": 54.984848,
+      "ended_at": "2026-09-16T03:08:58.063383Z",
+      "source_events": 7,
+      "stage": "plan",
+      "started_at": "2026-09-16T03:08:03.078535Z",
+      "usage": {
+        "cache_read_tokens": 99662,
+        "cache_write_tokens": 18179,
+        "cost_usd": null,
+        "input_tokens": 14,
+        "output_tokens": 2996,
+        "reasoning_tokens": 201,
+        "total_tokens": 120851
+      }
+    },
+    {
+      "duration_seconds": 74.829675,
+      "ended_at": "2026-09-16T03:10:12.893058Z",
+      "source_events": 15,
+      "stage": "implementation",
+      "started_at": "2026-09-16T03:08:58.063383Z",
+      "usage": {
+        "cache_read_tokens": 373634,
+        "cache_write_tokens": 12134,
+        "cost_usd": null,
+        "input_tokens": 30,
+        "output_tokens": 6262,
+        "reasoning_tokens": 192,
+        "total_tokens": 392060
+      }
+    }
+  ],
+  "status": "finalized",
+  "stopped_at": "2026-09-16T03:10:12.893058Z",
+  "success": true,
+  "terminal_log_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/session-logs/terminal.log",
+  "usage": {
+    "cache_read_tokens": 473296,
+    "cache_write_tokens": 30313,
+    "cost_usd": null,
+    "input_tokens": 44,
+    "output_tokens": 9258,
+    "reasoning_tokens": 393,
+    "total_tokens": 512911
+  },
+  "visible_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gate-environment",
+    "name": "visible",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--frozen",
+          "--all-groups"
+        ],
+        "duration_seconds": 0.7476612918544561,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "format",
+          "--check",
+          "."
+        ],
+        "duration_seconds": 0.29326354106888175,
+        "exit_code": 0,
+        "name": "ruff-format",
+        "output_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gates/ruff-format.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "check",
+          "--ignore-noqa",
+          "."
+        ],
+        "duration_seconds": 0.03935058391653001,
+        "exit_code": 0,
+        "name": "ruff-lint",
+        "output_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gates/ruff-lint.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ty",
+          "check"
+        ],
+        "duration_seconds": 0.2783507078420371,
+        "exit_code": 0,
+        "name": "ty",
+        "output_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gates/ty.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "pytest",
+          "-q"
+        ],
+        "duration_seconds": 0.32539079105481505,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/33-anthropic-ambiguity-heavy-change-r3-pi-anthropic/visible-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "wall_duration_seconds": 129.814523
+}

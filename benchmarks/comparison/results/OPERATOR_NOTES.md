@@ -1,0 +1,9 @@
+# Operator notes
+
+- Final result records contain one fresh measured session per matrix row. Setup/trust interactions stay outside timing.
+- Before final measured sessions, TUI automation/readiness preflights were discarded for rows 1-4, 14, 16, 18, 20, 22, and 24. Their worktrees and run artifacts were replaced from pristine seeds. They are not included in token or elapsed metrics, but may have warmed provider caches.
+- Extra environment-semantics questions occurred in discarded attempts for rows 18 and 20. The retained measured logs for those rows contain no corresponding clarification.
+- Retained rows 3, 4, 7, 15, and 28 received unapproved operator product answers despite having no predetermined clarification. Retained rows 34 and 35 received answers opposite to the fixed limit-after-filtering-and-ordering answer. Their result records are marked protocol-invalid, both provider pairs are ineligible, and the report makes no global efficiency claim.
+- Rows 9 and 11 initially failed only because planning-quality parsers misclassified the task prompt or a concise structured question. Their planning quality was recomputed from retained native logs after fixes `75792bc` and `26c7188`; gate outcomes and patches were unchanged. Each result carries an explicit parser warning.
+- Codex required a native permission profile because nesting its sandbox inside `sandbox-exec` fails. That profile is serialized in Codex session context and lists denied benchmark paths, while Pi and Claude use an outer Seatbelt profile. This asymmetric isolation overhead is included in provider-reported Codex tokens and is a token-efficiency limitation.
+- Auxiliary/classifier discovery is not equivalently complete across native schemas. Detected usage is included; no category is asymmetrically excluded.

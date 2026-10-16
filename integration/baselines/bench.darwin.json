@@ -1,0 +1,18 @@
+{
+  "_meta": {
+    "cpus": 10,
+    "wsl": false
+  },
+  "bash_50k_expanded_frame_ms": 7.1511,
+  "bash_50k_settle_s": 0.6232,
+  "fanout_8_wall_s": 2.1542,
+  "git_diff_typed_wall_s": 0.0227,
+  "git_log_typed_wall_s": 0.0131,
+  "git_status_typed_wall_s": 0.0124,
+  "ms_input_p95_n4": 8.2528,
+  "ms_loop_lag_p99_n4": 21.2158,
+  "render_2k_frame_ms": 84.2384,
+  "render_2k_heap_mb": 76.7145,
+  "startup_first_frame_s": 0.7546,
+  "ttft_s": 1.1323
+}

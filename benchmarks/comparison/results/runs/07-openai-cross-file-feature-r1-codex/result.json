@@ -1,0 +1,366 @@
+{
+  "accepted_plan": {
+    "byte_count": 1822,
+    "captured": true,
+    "path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/accepted-plan.md",
+    "sha256": "6a78a3bc3be197093b7d4f1f565779977208d3928a6edebe0f5c9f0aff6e5847"
+  },
+  "activity": {
+    "combined": {
+      "blocked_calls": 1,
+      "blocked_calls_by_name": {
+        "unknown": 1
+      },
+      "tool_calls": 19,
+      "tool_calls_by_name": {
+        "exec": 18,
+        "request_user_input": 1
+      },
+      "turns": 13
+    },
+    "implementation": {
+      "blocked_calls": 1,
+      "blocked_calls_by_name": {
+        "unknown": 1
+      },
+      "tool_calls": 15,
+      "tool_calls_by_name": {
+        "exec": 15
+      },
+      "turns": 9
+    },
+    "plan": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 4,
+      "tool_calls_by_name": {
+        "exec": 3,
+        "request_user_input": 1
+      },
+      "turns": 4
+    }
+  },
+  "actual_metadata": {
+    "model": "gpt-5.6-terra",
+    "provider": "openai",
+    "reasoning_level": "medium"
+  },
+  "agent_started_at": "2026-09-16T00:26:15.055744Z",
+  "auxiliary_usage": {
+    "categories": [
+      "subagent"
+    ],
+    "detected": true,
+    "full_accounting_established": false,
+    "included": true,
+    "limitation": "Equivalent complete auxiliary accounting cannot be established across native formats; Codex subagent usage uses native interval counts when exposed and otherwise excludes each rollout's first cumulative snapshot as a possible inherited baseline, but rollout discovery and fallback first-turn usage cannot be proven complete.",
+    "separable": true,
+    "usage": {
+      "cache_read_tokens": 64512,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 21010,
+      "output_tokens": 492,
+      "reasoning_tokens": 287,
+      "total_tokens": 86014
+    }
+  },
+  "cache_hit_ratio": 0.9196909194627392,
+  "cli_version": "0.154.0",
+  "documentation_status": "updated",
+  "failure_reason": null,
+  "finalized_at": "2026-09-16T00:29:52.177713Z",
+  "git": {
+    "added_lines": 155,
+    "changed_paths": [
+      "README.md",
+      "src/service_settings/__main__.py",
+      "src/service_settings/settings.py",
+      "tests/test_settings.py"
+    ],
+    "deleted_lines": 12,
+    "diff_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/agent.diff",
+    "diff_stat_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/agent.diffstat",
+    "dirty": true,
+    "head": "a82cf675de009bac9f7a93f8708e895166dabec9",
+    "patch_bytes": 8026,
+    "patch_lines": 237
+  },
+  "hidden_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/hidden-gate-environment",
+    "name": "hidden",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--project",
+          "<benchmark-root>",
+          "--frozen",
+          "--all-groups",
+          "--no-install-project"
+        ],
+        "duration_seconds": 0.6470326660200953,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/hidden-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/hidden-gate.sb",
+          "--",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/hidden-gate-environment/bin/python",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider",
+          "-c",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/hidden-suite/pytest.ini",
+          "--rootdir",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/hidden-suite",
+          "-q",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/hidden-suite"
+        ],
+        "duration_seconds": 0.21809683297760785,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/hidden-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "implementation_started_at": "2026-09-16T00:27:11.278366Z",
+  "launch_argv": [
+    "/opt/homebrew/Caskroom/codex/0.154.0/bin/codex",
+    "--model",
+    "gpt-5.6-terra",
+    "--config",
+    "model_reasoning_effort=\"medium\"",
+    "--config",
+    "default_permissions=\"benchmark_isolated\"",
+    "--config",
+    "permissions.benchmark_isolated=<redacted-permission-profile>",
+    "--cd",
+    "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/worktree"
+  ],
+  "parser_warnings": [
+    "Equivalent complete auxiliary accounting cannot be established across native formats; Codex subagent usage uses native interval counts when exposed and otherwise excludes each rollout's first cumulative snapshot as a possible inherited baseline, but rollout discovery and fallback first-turn usage cannot be proven complete.",
+    "Import sanitization: private absolute benchmark-root paths replaced with `<benchmark-root>`; no metrics changed.",
+    "Import sanitization: Codex `launch_argv` `permissions.benchmark_isolated` profile value redacted whole (contained private volume and username paths); flag structure preserved."
+  ],
+  "planning_quality": {
+    "asked_before_choosing": null,
+    "evidence": null,
+    "required": false
+  },
+  "prepared_at": "2026-09-16T00:25:52.412831Z",
+  "prompt_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/prompt.txt",
+  "prompt_sha256": "b8ba26516e419402109d0b2b0b1721150b6e4f65bc3feff4f1eafbc84dbf0dd4",
+  "protocol_valid": false,
+  "protocol_violations": [
+    "Operator supplied an unapproved real-environment precedence clarification in a cross-file-feature run with no predetermined answer."
+  ],
+  "result_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/result.json",
+  "schema_version": "3.0",
+  "seed_commit": "a82cf675de009bac9f7a93f8708e895166dabec9",
+  "seed_verification": {
+    "clone_head_at_prepare": "a82cf675de009bac9f7a93f8708e895166dabec9",
+    "contamination_paths": [],
+    "expected_commit": "a82cf675de009bac9f7a93f8708e895166dabec9",
+    "generated_seed_head_at_finalize": "a82cf675de009bac9f7a93f8708e895166dabec9",
+    "seed_is_final_ancestor": true,
+    "verified_at_start": "2026-09-16T00:26:15.055744Z"
+  },
+  "sessions": [
+    {
+      "byte_count": 820558,
+      "redacted_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/session-logs/terminal.log",
+      "sha256": "2e98a36047005ccc8fc08f671a9180c4e1ea65d67fe6925cafff5bd6c9c52e7e",
+      "source_kind": "terminal",
+      "source_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/session-logs/terminal.log"
+    },
+    {
+      "byte_count": 439160,
+      "redacted_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/session-logs/native-00.jsonl",
+      "sha256": "bc937a3cd728625bbf6bf262c9beab7da06665b7c03277f232211d9d78317144",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/session-logs/native-00.jsonl"
+    },
+    {
+      "byte_count": 226758,
+      "redacted_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/session-logs/native-01.jsonl",
+      "sha256": "b73ec9f21d27b5f4f7b9d18d86b06ee9fb5af18d58894551a562d9e97c2aaca8",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/session-logs/native-01.jsonl"
+    }
+  ],
+  "spec": {
+    "clarification": null,
+    "documentation_required": true,
+    "fixture": "cross-file-feature",
+    "harness": "codex",
+    "matrix_position": 7,
+    "model": "gpt-5.6-terra",
+    "pair": "openai",
+    "pair_order": 1,
+    "reasoning_level": "medium",
+    "repetition": 1,
+    "run_id": "07-openai-cross-file-feature-r1-codex"
+  },
+  "stages": [
+    {
+      "duration_seconds": 56.222622,
+      "ended_at": "2026-09-16T00:27:11.278366Z",
+      "source_events": 5,
+      "stage": "plan",
+      "started_at": "2026-09-16T00:26:15.055744Z",
+      "usage": {
+        "cache_read_tokens": 109312,
+        "cache_write_tokens": null,
+        "cost_usd": null,
+        "input_tokens": 19970,
+        "output_tokens": 1618,
+        "reasoning_tokens": 491,
+        "total_tokens": 130900
+      }
+    },
+    {
+      "duration_seconds": 157.964332,
+      "ended_at": "2026-09-16T00:29:49.242698Z",
+      "source_events": 20,
+      "stage": "implementation",
+      "started_at": "2026-09-16T00:27:11.278366Z",
+      "usage": {
+        "cache_read_tokens": 600064,
+        "cache_write_tokens": null,
+        "cost_usd": null,
+        "input_tokens": 41974,
+        "output_tokens": 6693,
+        "reasoning_tokens": 2542,
+        "total_tokens": 648731
+      }
+    }
+  ],
+  "status": "finalized",
+  "stopped_at": "2026-09-16T00:29:49.242698Z",
+  "success": true,
+  "terminal_log_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/session-logs/terminal.log",
+  "usage": {
+    "cache_read_tokens": 709376,
+    "cache_write_tokens": null,
+    "cost_usd": null,
+    "input_tokens": 61944,
+    "output_tokens": 8311,
+    "reasoning_tokens": 3033,
+    "total_tokens": 779631
+  },
+  "visible_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gate-environment",
+    "name": "visible",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--frozen",
+          "--all-groups"
+        ],
+        "duration_seconds": 0.5157339160796255,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "format",
+          "--check",
+          "."
+        ],
+        "duration_seconds": 0.4185538331512362,
+        "exit_code": 0,
+        "name": "ruff-format",
+        "output_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gates/ruff-format.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "check",
+          "--ignore-noqa",
+          "."
+        ],
+        "duration_seconds": 0.03272525011561811,
+        "exit_code": 0,
+        "name": "ruff-lint",
+        "output_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gates/ruff-lint.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ty",
+          "check"
+        ],
+        "duration_seconds": 0.3890735839959234,
+        "exit_code": 0,
+        "name": "ty",
+        "output_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gates/ty.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "pytest",
+          "-q"
+        ],
+        "duration_seconds": 0.3971828748472035,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/07-openai-cross-file-feature-r1-codex/visible-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "wall_duration_seconds": 214.186954
+}

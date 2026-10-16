@@ -1,0 +1,9 @@
+{
+  "bash_50k_expanded_frame_ms": 8.5565,
+  "bash_50k_settle_s": 0.3737,
+  "fanout_8_wall_s": 2.2361,
+  "render_2k_frame_ms": 155.1067,
+  "render_2k_heap_mb": 77.2077,
+  "startup_first_frame_s": 0.8548,
+  "ttft_s": 1.0225
+}
