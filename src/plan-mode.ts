@@ -65,6 +65,7 @@ import {
 } from "./presentation.js";
 import {
   answerPlanModeQuestions,
+  isReproposalConfirmed,
   normalizePlanModeQuestionParams,
   PLAN_MODE_QUESTION_PARAMS,
   PLAN_MODE_QUESTION_TOOL_NAME,
@@ -116,7 +117,7 @@ const RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-inpu
 const BLOCKED_MUTATING_TOOLS = new Set(["edit", "write", "update_plan"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 /** Decline-gate fields cleared whenever a planning workflow starts or ends. */
-const DECLINE_RESET = { declinedPlans: 0, declineGated: false, planDeclined: false } as const;
+const DECLINE_RESET = { declinedPlans: 0, reproposalReview: undefined, planDeclined: false } as const;
 interface ReadyPresentationIntent {
   nonce: number;
   plan: string;
@@ -260,27 +261,38 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         return planModeQuestionCancelled([], "invalid_input", `Error: ${parsed.error}`);
       }
       finalizationRequest.satisfy();
+      // A new confirmation supersedes any earlier permission. While it is
+      // pending, cancelled, or answered Not yet, completion must stay blocked.
+      if (parsed.mode) {
+        state = { ...state, reproposalReview: "required" };
+        persistState();
+      }
 
       if (!ctx.hasUI) {
         return planModeQuestionCancelled(
           parsed.questions,
           "ui_unavailable",
           "Unable to ask Plan-mode questions because interactive UI is not available.",
+          parsed.mode,
         );
       }
 
       const sessionGeneration = menuGeneration;
       const questionWorkflowGeneration = workflowGeneration;
       const questionOwner = workflowOwner;
-      const result = await answerPlanModeQuestions(parsed.questions, ctx, {
-        isCurrent: () =>
-          sessionGeneration === menuGeneration &&
-          questionWorkflowGeneration === workflowGeneration &&
-          workflowMutex.isOwner(questionOwner),
-        isEnabled: () => state.enabled,
-      });
-      // Only a real answer lifts the decline gate; cancelled or stale questions do not.
-      if (!result.details.cancelled) liftDeclineGate();
+      const result = await answerPlanModeQuestions(
+        parsed.questions,
+        ctx,
+        {
+          isCurrent: () =>
+            sessionGeneration === menuGeneration &&
+            questionWorkflowGeneration === workflowGeneration &&
+            workflowMutex.isOwner(questionOwner),
+          isEnabled: () => state.enabled,
+        },
+        parsed.mode,
+      );
+      if (isReproposalConfirmed(result)) confirmReproposal();
       return result;
     },
   });
@@ -297,7 +309,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
         throw new Error("plan_mode_complete is only available while Plan mode is active");
       }
-      if (state.declineGated) throw new Error(DECLINE_GATE_ERROR);
+      if (state.reproposalReview === "required") throw new Error(DECLINE_GATE_ERROR);
       const parsed = normalizePlanModeCompletion(params);
       if (!parsed.ok) throw new Error(parsed.error);
 
@@ -775,8 +787,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         : result.messages;
     const declined = state.enabled ? (state.declinedPlans ?? 0) : 0;
     const withDecline =
-      declined > 0
-        ? [...messages, createDeclineContractMessage(declined, state.declineGated === true, Date.now())]
+      state.enabled && state.reproposalReview === "required"
+        ? [...messages, createDeclineContractMessage(declined, Date.now())]
         : messages;
     return { messages: withDecline as typeof event.messages };
   });
@@ -859,7 +871,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       updateUi(ctx);
       return;
     }
-    if (state.declineGated) {
+    if (state.reproposalReview === "required") {
       ctx.ui.notify(`Proposed plan ignored. ${DECLINE_GATE_ERROR}`, "warning");
       persistState();
       updateUi(ctx);
@@ -1059,6 +1071,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       latestPlan: normalized.plan,
       latestPlanSource: source,
       awaitingAction: true,
+      reproposalReview: undefined,
       planDeclined: false,
     };
     readyPresentationIntent = {
@@ -1112,7 +1125,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       return;
     }
     finalizationRequest.request(workflowGeneration);
-    liftDeclineGate();
+    confirmReproposal();
     if (!sendPlanModeUserMessage(FINALIZE_PLAN_PROMPT, ctx)) finalizationRequest.reset();
   }
 
@@ -1120,18 +1133,23 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   function recordPlanDecline() {
     if (!state.enabled || !state.awaitingAction || !state.latestPlan) return;
     if (state.planDeclined) {
-      if (state.declineGated) return;
-      state = { ...state, declineGated: true };
+      if (state.reproposalReview === "required") return;
+      state = { ...state, reproposalReview: "required" };
     } else {
-      state = { ...state, declinedPlans: (state.declinedPlans ?? 0) + 1, declineGated: true, planDeclined: true };
+      state = {
+        ...state,
+        declinedPlans: (state.declinedPlans ?? 0) + 1,
+        reproposalReview: "required",
+        planDeclined: true,
+      };
     }
     persistState();
   }
 
-  /** Reopens `plan_mode_complete` after a question was answered or `/plan finalize` ran. */
-  function liftDeclineGate() {
-    if (!state.enabled || !state.declineGated) return;
-    state = { ...state, declineGated: false };
+  /** Records explicit user permission from confirmation mode or `/plan finalize`. */
+  function confirmReproposal() {
+    if (!state.enabled || state.reproposalReview !== "required") return;
+    state = { ...state, reproposalReview: "confirmed" };
     persistState();
   }
 

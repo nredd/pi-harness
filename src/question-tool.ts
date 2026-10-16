@@ -4,6 +4,15 @@ import type { QuestionnaireAnswer, QuestionnaireQuestion, RunQuestionnaireResult
 
 export const PLAN_MODE_QUESTION_TOOL_NAME = "plan_mode_question";
 export const MAX_PLAN_MODE_RESPONSE_LENGTH = 4_000;
+export const REPROPOSAL_CONFIRMATION_MODE = "reproposal_confirmation";
+export const REPROPOSAL_CONFIRMATION_OPTIONS = [
+  { label: "Re-propose now", description: "Submit the revised plan for review." },
+  { label: "Not yet", description: "Keep planning before another proposal." },
+] as const;
+export const REPROPOSAL_CONFIRMATION_QUESTION =
+  "May I submit the revised plan for your review? This does not start implementation.";
+
+export type PlanModeQuestionMode = typeof REPROPOSAL_CONFIRMATION_MODE;
 
 export type PlanModeQuestionOption = {
   label: string;
@@ -31,6 +40,7 @@ type PlanModeQuestionReason = "cancelled" | "ui_unavailable" | "plan_mode_inacti
 
 type PlanModeQuestionDetails = {
   cancelled: boolean;
+  mode?: PlanModeQuestionMode;
   reason?: PlanModeQuestionReason;
   questions: PlanModeQuestion[];
   answers?: PlanModeQuestionAnswer[];
@@ -41,6 +51,12 @@ export const PLAN_MODE_QUESTION_PARAMS = {
   additionalProperties: false,
   required: ["questions"],
   properties: {
+    mode: {
+      type: "string",
+      enum: [REPROPOSAL_CONFIRMATION_MODE],
+      description:
+        "Use reproposal_confirmation only to ask permission to submit a replacement plan after a declined proposal.",
+    },
     questions: {
       type: "array",
       minItems: 1,
@@ -85,7 +101,9 @@ export const PLAN_MODE_QUESTION_PARAMS = {
   },
 } as const;
 
-type NormalizePlanModeQuestionParamsResult = { ok: true; questions: PlanModeQuestion[] } | { ok: false; error: string };
+type NormalizePlanModeQuestionParamsResult =
+  | { ok: true; questions: PlanModeQuestion[]; mode?: PlanModeQuestionMode }
+  | { ok: false; error: string };
 
 export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanModeQuestionParamsResult {
   if (!isRecord(input) || !Array.isArray(input.questions)) {
@@ -93,6 +111,16 @@ export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanMo
   }
   if (input.questions.length < 1 || input.questions.length > 3) {
     return { ok: false, error: "questions must contain 1-3 items" };
+  }
+
+  const mode =
+    input.mode === undefined
+      ? undefined
+      : input.mode === REPROPOSAL_CONFIRMATION_MODE
+        ? REPROPOSAL_CONFIRMATION_MODE
+        : undefined;
+  if (input.mode !== undefined && !mode) {
+    return { ok: false, error: `mode must be ${REPROPOSAL_CONFIRMATION_MODE}` };
   }
 
   const questions: PlanModeQuestion[] = [];
@@ -141,13 +169,26 @@ export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanMo
     }
     questions.push({ id, header, question, options });
   }
-  return { ok: true, questions };
+  if (mode) {
+    if (questions.length !== 1) {
+      return { ok: false, error: `${REPROPOSAL_CONFIRMATION_MODE} requires exactly one question` };
+    }
+    const question = questions[0];
+    if (!question) throw new Error("Validated question unexpectedly missing");
+    questions[0] = {
+      ...question,
+      question: REPROPOSAL_CONFIRMATION_QUESTION,
+      options: [...REPROPOSAL_CONFIRMATION_OPTIONS],
+    };
+  }
+  return { ok: true, questions, ...(mode ? { mode } : {}) };
 }
 
 export async function answerPlanModeQuestions(
   questions: PlanModeQuestion[],
   ctx: ExtensionContext,
   lifecycle: { isCurrent(): boolean; isEnabled(): boolean },
+  mode?: PlanModeQuestionMode,
 ) {
   const answers = await askPlanModeQuestions(questions, ctx, () => lifecycle.isCurrent() && lifecycle.isEnabled());
   if (!lifecycle.isCurrent()) {
@@ -155,6 +196,7 @@ export async function answerPlanModeQuestions(
       questions,
       "cancelled",
       "Plan-mode question cancelled because the session changed.",
+      mode,
     );
   }
   if (!lifecycle.isEnabled()) {
@@ -162,12 +204,13 @@ export async function answerPlanModeQuestions(
       questions,
       "plan_mode_inactive",
       "Plan-mode question cancelled because Plan mode is no longer active.",
+      mode,
     );
   }
   if (!answers) {
-    return planModeQuestionCancelled(questions, "cancelled", "User cancelled the Plan-mode question prompt.");
+    return planModeQuestionCancelled(questions, "cancelled", "User cancelled the Plan-mode question prompt.", mode);
   }
-  return planModeQuestionAnswered(questions, answers);
+  return planModeQuestionAnswered(questions, answers, mode);
 }
 
 export async function askPlanModeQuestions(
@@ -260,26 +303,42 @@ function answerFor(
   return result;
 }
 
-export function planModeQuestionAnswered(questions: PlanModeQuestion[], answers: PlanModeQuestionAnswer[]) {
+export function planModeQuestionAnswered(
+  questions: PlanModeQuestion[],
+  answers: PlanModeQuestionAnswer[],
+  mode?: PlanModeQuestionMode,
+) {
   return {
-    content: [{ type: "text" as const, text: formatPlanModeQuestionPayload({ cancelled: false, answers }) }],
-    details: { cancelled: false, questions, answers } satisfies PlanModeQuestionDetails,
+    content: [{ type: "text" as const, text: formatPlanModeQuestionPayload({ cancelled: false, answers, mode }) }],
+    details: { cancelled: false, questions, answers, ...(mode ? { mode } : {}) } satisfies PlanModeQuestionDetails,
   };
+}
+
+/** Only the canonical first option in explicit confirmation mode permits a re-proposal. */
+export function isReproposalConfirmed(result: { details: PlanModeQuestionDetails }) {
+  const answer = result.details.answers?.[0];
+  return (
+    result.details.cancelled === false &&
+    result.details.mode === REPROPOSAL_CONFIRMATION_MODE &&
+    answer?.wasCustom === false &&
+    answer.optionIndex === 1
+  );
 }
 
 export function planModeQuestionCancelled(
   questions: PlanModeQuestion[],
   reason: PlanModeQuestionReason,
   message: string,
+  mode?: PlanModeQuestionMode,
 ) {
   return {
     content: [
       {
         type: "text" as const,
-        text: formatPlanModeQuestionPayload({ cancelled: true, reason, message }),
+        text: formatPlanModeQuestionPayload({ cancelled: true, reason, message, mode }),
       },
     ],
-    details: { cancelled: true, reason, questions } satisfies PlanModeQuestionDetails,
+    details: { cancelled: true, reason, questions, ...(mode ? { mode } : {}) } satisfies PlanModeQuestionDetails,
   };
 }
 
@@ -288,6 +347,7 @@ function formatPlanModeQuestionPayload(payload: {
   reason?: PlanModeQuestionReason;
   message?: string;
   answers?: PlanModeQuestionAnswer[];
+  mode?: PlanModeQuestionMode;
 }) {
   return JSON.stringify(payload, null, 2);
 }

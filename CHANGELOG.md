@@ -1,5 +1,15 @@
 # @nredd/pi-plan-mode
 
+## Unreleased
+
+### Fixed
+
+- Replace the decline clarification gate with persisted `reproposalReview`: only the
+  machine-readable `plan_mode_question` `reproposal_confirmation` mode's canonical
+  `Re-propose now` selection, or `/plan finalize`, permits a replacement proposal.
+  Ordinary answers, `Not yet`, cancellation, and custom text stay blocked. Historical
+  `declinedPlans`, Escape/Stay, restore, ready-plan review, and custom-message wakes remain intact.
+
 ## 0.59.2-nredd.3
 
 ### Fixed

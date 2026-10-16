@@ -41,6 +41,8 @@ export interface PendingImplementationRuntime extends ImplementationRuntimeSelec
   version: 1;
 }
 
+export type ReproposalReview = "required" | "confirmed";
+
 export interface PlanModeWorkflowToolPolicy {
   kind: "automatic" | "explicit";
   desiredNames?: string[];
@@ -55,8 +57,8 @@ export interface PlanModeState {
   awaitingAction: boolean;
   /** Ready plans the user declined (Esc/Stay or a reply) since this planning workflow began. */
   declinedPlans?: number;
-  /** While true, `plan_mode_complete` errors until a question is answered or `/plan finalize` runs. */
-  declineGated?: boolean;
+  /** Explicit proposal-review permission, normally requested after a decline. */
+  reproposalReview?: ReproposalReview;
   /** The current proposal already counted as declined; keeps Esc then a reply from double counting. */
   planDeclined?: boolean;
   savedPlan?: SavedPlan;
@@ -112,7 +114,14 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
       : undefined,
     awaitingAction: enabled && latestPlan !== undefined,
     declinedPlans: enabled ? nonNegativeInteger(entry.data.declinedPlans) : 0,
-    declineGated: enabled && entry.data.declineGated === true,
+    reproposalReview: enabled
+      ? restoreReproposalReview(
+          entry.data.reproposalReview,
+          entry.data.declineGated,
+          entry.data.declinedPlans,
+          latestPlan,
+        )
+      : undefined,
     planDeclined: enabled && latestPlan !== undefined && entry.data.planDeclined === true,
     savedPlan,
     activeImplementation,
@@ -124,6 +133,20 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
   };
+}
+
+function restoreReproposalReview(
+  value: unknown,
+  legacyGate: unknown,
+  declinedPlans: unknown,
+  latestPlan: string | undefined,
+): ReproposalReview | undefined {
+  if (value === "required" || value === "confirmed") return value;
+  // Old sessions only recorded a boolean clarification gate. A closed legacy gate is always
+  // conservatively restored as an explicit review requirement; an already-ready replacement
+  // remains reviewable, while an interrupted old workflow with decline history must reconfirm.
+  if (legacyGate === true || (nonNegativeInteger(declinedPlans) > 0 && latestPlan === undefined)) return "required";
+  return undefined;
 }
 
 function normalizeWorkflowToolPolicy(value: unknown): PlanModeWorkflowToolPolicy | undefined {

@@ -12,6 +12,9 @@ import {
   planModeQuestionCancelled,
   planModeQuestionCollapsedText,
   planModeQuestionExpandedText,
+  REPROPOSAL_CONFIRMATION_MODE,
+  REPROPOSAL_CONFIRMATION_OPTIONS,
+  REPROPOSAL_CONFIRMATION_QUESTION,
   renderPlanModeQuestion,
 } from "../src/question-tool.js";
 import { createMockContext, createMockPi } from "./support.js";
@@ -108,6 +111,33 @@ test("normalizePlanModeQuestionParams validates question shape without changing 
     ok: false,
     error: "questions must contain 1-3 items",
   });
+});
+
+test("re-proposal confirmation mode supplies canonical UI choices", () => {
+  const result = normalizePlanModeQuestionParams({
+    mode: REPROPOSAL_CONFIRMATION_MODE,
+    questions: [{ ...questions[0], options: questions[0]?.options.slice(0, 1) }],
+  });
+  assert.equal(result.ok, false);
+
+  const canonical = normalizePlanModeQuestionParams({
+    mode: REPROPOSAL_CONFIRMATION_MODE,
+    questions: [
+      {
+        ...questions[0],
+        options: [
+          { label: "Yes", description: "Model-supplied text is not authoritative." },
+          { label: "No", description: "The tool replaces these labels." },
+        ],
+      },
+    ],
+  });
+  assert.equal(canonical.ok, true);
+  if (canonical.ok) {
+    assert.equal(canonical.mode, REPROPOSAL_CONFIRMATION_MODE);
+    assert.equal(canonical.questions[0]?.question, REPROPOSAL_CONFIRMATION_QUESTION);
+    assert.deepEqual(canonical.questions[0]?.options, REPROPOSAL_CONFIRMATION_OPTIONS);
+  }
 });
 
 test("the Kit runner preserves domain fields, notes, raw answers, and duplicate domain ids", async () => {
