@@ -247,6 +247,9 @@ def test_audit_imports_reports_syntax_errors() -> None:
         ("src/a.ts", 'import x from "../../outside.ts";', "leaves the package"),
         ("src/a.ts", 'import x from "./missing.ts";', "leaves the package or is missing"),
         ("dist/cli.mjs", 'import x from "typebox";', "standalone artifact"),
+        ("dist/cli.mjs", 'import x from "../src/b.ts";', "standalone artifact"),
+        ("dist/cli.mjs", 'import x from "./cli.mjs";', "standalone artifact"),
+        ("dist/cli.mjs", 'export * from "../src/b.ts";', "standalone artifact"),
     ],
 )
 def test_audit_imports_rejects(path: str, source: str, needle: str) -> None:
@@ -340,6 +343,77 @@ def test_audit_manifest_rejects(mutation: dict[str, object], needle: str) -> Non
     """
     problems = pc.audit_manifest(DEV_TOOLS, good_manifest() | mutation, ["src/index.ts"])
     assert any(needle in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("mutation", "field"),
+    [
+        ({"peerDependencies": []}, "peerDependencies"),
+        ({"peerDependencies": "typebox"}, "peerDependencies"),
+        ({"peerDependencies": {"typebox": 1}}, "peerDependencies.typebox"),
+        ({"peerDependencies": None}, "peerDependencies"),
+        ({"pi": None}, "pi"),
+        ({"pi": "src/index.ts"}, "pi"),
+        ({"pi": []}, "pi"),
+        ({"pi": {"extensions": "./src/index.ts"}}, "pi.extensions"),
+        ({"pi": {"extensions": [1]}}, "pi.extensions.0"),
+        ({"pi": {"extensions": None}}, "pi.extensions"),
+        ({"dependencies": []}, "dependencies"),
+        ({"optionalDependencies": "x"}, "optionalDependencies"),
+        ({"bundledDependencies": "yes"}, "bundledDependencies.list[str]"),
+        ({"bundleDependencies": {"a": 1}}, "bundleDependencies.list[str]"),
+        ({"private": "true"}, "private"),
+        ({"license": 1}, "license"),
+        ({"name": 5}, "name"),
+    ],
+)
+def test_audit_manifest_rejects_malformed_fields(mutation: dict[str, object], field: str) -> None:
+    """A malformed audited field is a clear diagnostic, never a silent pass or a crash.
+
+    Parameters:
+        mutation (dict[str, object]): Malformed fields overriding the good manifest.
+        field (str): Dotted field path the diagnostic must name.
+    """
+    problems = pc.audit_manifest(DEV_TOOLS, good_manifest() | mutation, ["src/index.ts"])
+    assert any(f"`{field}`" in problem and "malformed" in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize("manifest", [[], "x", None, 3])
+def test_audit_manifest_rejects_non_object(manifest: object) -> None:
+    """A manifest that is not a JSON object is reported, not crashed on.
+
+    Parameters:
+        manifest (object): Non-object JSON value.
+    """
+    problems = pc.audit_manifest(DEV_TOOLS, manifest, ["src/index.ts"])
+    assert any("malformed" in problem for problem in problems), problems
+
+
+def test_audit_manifest_ignores_unaudited_npm_metadata() -> None:
+    """Unknown or unaudited npm fields of any shape are explicitly ignored."""
+    extra = {"scripts": 1, "keywords": "x", "files": {"a": 1}, "repository": [], "x-custom": None}
+    assert pc.audit_manifest(DEV_TOOLS, good_manifest() | extra, ["src/index.ts"]) == []
+    assert pc.audit_manifest(DEV_TOOLS, good_manifest() | {"bundledDependencies": []}, ["src/index.ts"]) == []
+    assert any(
+        "bundledDependencies" in p
+        for p in pc.audit_manifest(
+            DEV_TOOLS, good_manifest() | {"bundledDependencies": True}, ["src/index.ts"]
+        )
+    )
+
+
+def test_audit_tarball_reports_unparseable_manifest(tmp_path: Path) -> None:
+    """Invalid JSON in the packed manifest is a violation, not a traceback.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    tarball = make_tarball(tmp_path / "bad.tgz", {"LICENSE": ROOT_LICENSE, "package.json": b"{nope"})
+    artifact = pc.PackedArtifact(
+        DEV_TOOLS, tarball, "1.0.0", "sha512-x", "0" * 40, 1, ("LICENSE", "package.json")
+    )
+    problems = pc.audit_tarball(artifact, ROOT_LICENSE)
+    assert any("`package.json` is not valid JSON" in problem for problem in problems), problems
 
 
 @pytest.mark.parametrize("contract", pc.CONTRACTS, ids=lambda c: c.directory)
@@ -702,3 +776,370 @@ def test_npm_pack_entry_rejects_malformed_identity() -> None:
     """Malformed `npm pack --json` identity never becomes an artifact."""
     with pytest.raises(ValidationError):
         pc.NpmPackEntry.model_validate({"filename": "x.tgz", "integrity": "nope", "shasum": "a", "files": []})
+
+
+# --- stats protocol boundaries --------------------------------------------------------------------
+
+MACHINE_ID = "123e4567-e89b-42d3-a456-426614174000"
+MONTH = "2026-09"
+SHARD_HASH = "a" * 64
+
+
+def good_stats_manifest() -> dict[str, object]:
+    """A manifest matching `docs/stats-snapshots.md`.
+
+    Returns:
+        dict[str, object]: Parsed manifest.
+    """
+    return {
+        "version": 1,
+        "machineId": MACHINE_ID,
+        "label": "Pi machine",
+        "exportedAt": 1_790_000_000_000,
+        "shards": [{"month": MONTH, "file": f"{MONTH}-{SHARD_HASH}.json", "sha256": SHARD_HASH, "bytes": 10}],
+    }
+
+
+def test_stats_manifest_accepts_documented_shape() -> None:
+    """The documented manifest validates and `parse_stats_json` round-trips it."""
+    parsed = pc.parse_stats_json(pc.StatsManifest, json.dumps(good_stats_manifest()), "manifest")
+    assert parsed.machineId == MACHINE_ID
+    assert len(parsed.shards) == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"shards": MONTH},
+        {"shards": "abc"},
+        {"shards": {"a": 1}},
+        {"shards": [MONTH]},
+        {"shards": None},
+        {"version": 2},
+        {"version": True},
+        {"version": "1"},
+        {"machineId": "nope"},
+        {"machineId": MACHINE_ID.upper()},
+        {"label": ""},
+        {"label": "x" * 1025},
+        {"label": 3},
+        {"exportedAt": 0},
+        {"exportedAt": "1"},
+        {"exportedAt": 1.5},
+        {"extra": 1},
+    ],
+)
+def test_stats_manifest_rejects_malformed(mutation: dict[str, object]) -> None:
+    """Malformed manifest field types and values fail with a `ContractError`.
+
+    Parameters:
+        mutation (dict[str, object]): Fields overriding the good manifest.
+    """
+    with pytest.raises(pc.ContractError, match="Malformed stats manifest"):
+        pc.parse_stats_json(pc.StatsManifest, json.dumps(good_stats_manifest() | mutation), "manifest")
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        {"month": "2026-13", "file": f"2026-13-{SHARD_HASH}.json", "sha256": SHARD_HASH, "bytes": 1},
+        {"month": MONTH, "file": "other.json", "sha256": SHARD_HASH, "bytes": 1},
+        {"month": MONTH, "file": f"{MONTH}-{SHARD_HASH}.json", "sha256": "A" * 64, "bytes": 1},
+        {"month": MONTH, "file": f"{MONTH}-{SHARD_HASH}.json", "sha256": SHARD_HASH, "bytes": -1},
+        {"month": MONTH, "file": f"{MONTH}-{SHARD_HASH}.json", "sha256": SHARD_HASH, "bytes": "1"},
+        {
+            "month": MONTH,
+            "file": f"{MONTH}-{SHARD_HASH}.json",
+            "sha256": SHARD_HASH,
+            "bytes": 128 * 1024**2 + 1,
+        },
+        {"month": MONTH, "file": f"{MONTH}-{SHARD_HASH}.json", "sha256": SHARD_HASH},
+        {"month": MONTH, "file": f"../{MONTH}-{SHARD_HASH}.json", "sha256": SHARD_HASH, "bytes": 1},
+    ],
+)
+def test_stats_manifest_rejects_malformed_shard_reference(ref: dict[str, object]) -> None:
+    """Shard references enforce month, file/hash identity, and byte bounds.
+
+    Parameters:
+        ref (dict[str, object]): Malformed shard reference.
+    """
+    raw = json.dumps(good_stats_manifest() | {"shards": [ref]})
+    with pytest.raises(pc.ContractError, match="Malformed stats manifest"):
+        pc.parse_stats_json(pc.StatsManifest, raw, "manifest")
+
+
+def test_stats_manifest_rejects_duplicate_months() -> None:
+    """Each manifest references exactly one shard per month."""
+    ref = {"month": MONTH, "file": f"{MONTH}-{SHARD_HASH}.json", "sha256": SHARD_HASH, "bytes": 10}
+    raw = json.dumps(good_stats_manifest() | {"shards": [ref, ref]})
+    with pytest.raises(pc.ContractError, match="duplicate month"):
+        pc.parse_stats_json(pc.StatsManifest, raw, "manifest")
+
+
+@pytest.mark.parametrize("raw", ["", "not json", "[]", "null", '"x"', "1"])
+def test_stats_json_rejects_non_objects(raw: str) -> None:
+    """Non-object and unparseable stdout is a `ContractError`.
+
+    Parameters:
+        raw (str): Raw stdout text.
+    """
+    with pytest.raises(pc.ContractError, match="Malformed stats export"):
+        pc.parse_stats_json(pc.StatsExportResult, raw, "export")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"machineId": MACHINE_ID},
+        {"machineId": MACHINE_ID, "snapshotDir": ""},
+        {"machineId": MACHINE_ID, "snapshotDir": 1},
+        {"machineId": "x", "snapshotDir": "/a"},
+        {"machineId": MACHINE_ID, "snapshotDir": "/a", "extra": 1},
+    ],
+)
+def test_stats_export_result_rejects_malformed(raw: dict[str, object]) -> None:
+    """The export response keeps exactly `machineId` and `snapshotDir`.
+
+    Parameters:
+        raw (dict[str, object]): Malformed response.
+    """
+    with pytest.raises(pc.ContractError, match="Malformed stats export"):
+        pc.parse_stats_json(pc.StatsExportResult, json.dumps(raw), "export")
+
+
+GOOD_IMPORT = {"imported": 1, "retained": 0, "problems": [], "importedAt": 1_790_000_000_000}
+
+
+def test_stats_import_result_accepts_documented_shape() -> None:
+    """The documented import response validates."""
+    parsed = pc.parse_stats_json(pc.StatsImportResult, json.dumps(GOOD_IMPORT), "import")
+    assert (parsed.imported, parsed.retained, parsed.problems) == (1, 0, [])
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"imported": "1"},
+        {"imported": True},
+        {"imported": 1.5},
+        {"imported": -1},
+        {"retained": "0"},
+        {"problems": "none"},
+        {"problems": [1]},
+        {"problems": None},
+        {"importedAt": "x"},
+        {"importedAt": -1},
+        {"extra": 1},
+    ],
+)
+def test_stats_import_result_rejects_malformed(mutation: dict[str, object]) -> None:
+    """String counts, non-list problems and other type confusion are rejected.
+
+    Parameters:
+        mutation (dict[str, object]): Fields overriding the good response.
+    """
+    with pytest.raises(pc.ContractError, match="Malformed stats import"):
+        pc.parse_stats_json(pc.StatsImportResult, json.dumps(GOOD_IMPORT | mutation), "import")
+
+
+def test_stats_import_result_missing_field() -> None:
+    """A response lacking a field fails instead of defaulting."""
+    raw = {k: v for k, v in GOOD_IMPORT.items() if k != "problems"}
+    with pytest.raises(pc.ContractError, match="Malformed stats import"):
+        pc.parse_stats_json(pc.StatsImportResult, json.dumps(raw), "import")
+
+
+def write_stats_session(agent_dir: Path) -> None:
+    """Write one real-format Pi session with a single assistant usage record.
+
+    Parameters:
+        agent_dir (Path): Agent directory receiving `sessions/`.
+    """
+    path = agent_dir / "sessions" / "project" / "s.jsonl"
+    path.parent.mkdir(parents=True)
+    header = {
+        "type": "session",
+        "version": 3,
+        "id": "fixture-session",
+        "timestamp": "2026-09-30T12:00:00.000Z",
+    }
+    usage = {
+        "input": 5,
+        "output": 2,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 7,
+        "cost": {"total": 0.01},
+    }
+    assistant = {
+        "type": "message",
+        "id": "entry-1",
+        "timestamp": "2026-09-30T12:00:01.000Z",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "api": "x",
+            "provider": "local",
+            "model": "m",
+            "usage": usage,
+            "stopReason": "stop",
+            "timestamp": 1_790_000_001_000,
+        },
+    }
+    path.write_text("\n".join(json.dumps(line) for line in (header, assistant)) + "\n")
+
+
+DIST_ARTIFACT = pc.REPO_ROOT / "packages" / "session-kit" / "dist" / "pi-stats-export.mjs"
+
+
+def test_standalone_stats_artifact_over_real_fixture_session(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """The exact built bytes export and import a real-format session from an isolated directory.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    write_stats_session(sandbox.agent_dir)
+    manifest = pc.exercise_stats_artifact(
+        sandbox.tools.node, DIST_ARTIFACT.read_bytes(), sandbox.env(), sandbox.agent_dir, tmp_path / "work"
+    )
+    assert len(manifest.shards) == 1
+    copied = tmp_path / "work" / "standalone" / "pi-stats-export.mjs"
+    assert copied.read_bytes() == DIST_ARTIFACT.read_bytes()
+    assert [p.name for p in copied.parent.iterdir()] == ["pi-stats-export.mjs"]
+
+
+def test_standalone_stats_artifact_cannot_reach_package_siblings(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """A relative import into the package passes in place but fails in the isolated copy.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    package = tmp_path / "package"
+    (package / "src").mkdir(parents=True)
+    (package / "dist").mkdir()
+    (package / "src" / "index.ts").write_text("export const x = 1;\n")
+    tampered = b'import "../src/index.ts";\n' + DIST_ARTIFACT.read_bytes()
+    (package / "dist" / "pi-stats-export.mjs").write_bytes(tampered)
+    write_stats_session(sandbox.agent_dir)
+    in_place = pc.run(
+        [
+            sandbox.tools.node,
+            package / "dist" / "pi-stats-export.mjs",
+            "export",
+            "--agent-dir",
+            sandbox.agent_dir,
+            "--output",
+            tmp_path / "out",
+        ],
+        env=sandbox.env(),
+        cwd=tmp_path,
+        timeout=60,
+        check=False,
+    )
+    assert in_place.returncode == 0, in_place.stderr
+    with pytest.raises(pc.ContractError, match="exited"):
+        pc.exercise_stats_artifact(
+            sandbox.tools.node, tampered, sandbox.env(), sandbox.agent_dir, tmp_path / "work"
+        )
+
+
+def test_tool_text_rejects_malformed_result() -> None:
+    """Malformed Pi tool results are a `ContractError`, not a `KeyError`."""
+    with pytest.raises(pc.ContractError, match="Malformed tool result"):
+        pc.tool_text({"toolName": "t", "result": {"content": "oops"}})
+    with pytest.raises(pc.ContractError, match="Malformed tool result"):
+        pc.tool_text({"toolName": "t"})
+
+
+def test_read_lockfile_rejects_malformed(tmp_path: Path) -> None:
+    """A lockfile that is not the npm shape is a `ContractError`.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    path = tmp_path / "package-lock.json"
+    for text in ("{nope", "[]", '{"packages": []}', '{"packages": {"": {"version": 1}}}', "{}"):
+        path.write_text(text)
+        with pytest.raises(pc.ContractError, match="lockfile"):
+            pc.read_lockfile(path)
+    path.write_text('{"packages": {"": {}, "node_modules/x": {"version": "1.0.0", "other": []}}}')
+    assert set(pc.read_lockfile(path).packages) == {"", "node_modules/x"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not json",
+        b"[]",
+        b"null",
+        b'{"model": "m", "messages": {}}',
+        b'{"model": "m", "messages": [null]}',
+        b'{"model": "m", "messages": [{"role": 1}]}',
+        b'{"model": "m", "tools": [{}]}',
+        b'{"model": "m", "tools": [{"function": null}]}',
+        b'{"model": "m", "tools": "x"}',
+        b'{"messages": []}',
+        b'{"model": 3}',
+    ],
+)
+def test_faux_provider_answers_malformed_request_with_400(body: bytes) -> None:
+    """Malformed consumed request shapes get an HTTP diagnostic and are never recorded.
+
+    Parameters:
+        body (bytes): Raw request body.
+    """
+    with fp.FauxProvider([fp.TextStep("x")]) as provider:
+        request = urllib.request.Request(f"{provider.base_url}/chat/completions", data=body, method="POST")
+        with pytest.raises(urllib.error.HTTPError) as info:
+            urllib.request.urlopen(request, timeout=10)
+        assert info.value.code == 400
+        assert "malformed chat request" in info.value.reason
+        assert provider.requests == []
+
+
+def test_faux_provider_rejects_bad_content_length() -> None:
+    """A non-numeric `Content-Length` is a 400, not a dropped connection."""
+    with fp.FauxProvider([fp.TextStep("x")]) as provider:
+        request = urllib.request.Request(
+            f"{provider.base_url}/chat/completions", data=b"{}", headers={"content-length": "abc"}
+        )
+        with pytest.raises(urllib.error.HTTPError) as info:
+            urllib.request.urlopen(request, timeout=10)
+        assert info.value.code == 400
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "message_end", "message": None},
+        {"type": "message_end", "message": []},
+        {"type": "message_end"},
+        {"type": "message_end", "message": {"role": 1}},
+        {"type": "message_end", "message": {"role": "assistant", "provider": 3}},
+    ],
+)
+def test_assistant_messages_rejects_malformed_events(event: dict[str, object]) -> None:
+    """A `message_end` without an object message is a diagnostic, not an `AttributeError`.
+
+    Parameters:
+        event (dict[str, object]): Malformed event.
+    """
+    with pytest.raises(pc.ContractError, match="Malformed `message_end`"):
+        pc.PiRun(0, (event,), "", "").assistant_messages()
+
+
+def test_single_tool_result_and_is_error() -> None:
+    """Exactly one tool record is required and `isError` must be a real boolean."""
+    ok = {"type": "tool_execution_end", "toolName": "t", "isError": False, "result": {"content": []}}
+    run = pc.PiRun(0, (ok,), "", "")
+    assert run.single_tool_result("t") is ok
+    assert pc.tool_is_error(ok) is False
+    with pytest.raises(pc.ContractError, match="exactly one `u`"):
+        run.single_tool_result("u")
+    with pytest.raises(pc.ContractError, match="exactly one `t`"):
+        pc.PiRun(0, (ok, ok), "", "").single_tool_result("t")
+    for bad in ({"toolName": "t"}, {"toolName": "t", "isError": "false"}, {"toolName": "t", "isError": None}):
+        with pytest.raises(pc.ContractError, match="Malformed tool result"):
+            pc.tool_is_error(bad)

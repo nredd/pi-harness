@@ -87,6 +87,7 @@ DEAD_PROXY = "http://127.0.0.1:9"
 
 IMPORT_AUDIT = Path(__file__).with_name("import_audit.ts")
 IMPORT_AUDIT_TIMEOUT_S = 120
+STATS_ARTIFACT = "dist/pi-stats-export.mjs"
 IMPORT_AUDIT_DIR = "pkg"  # Sources are laid out under this directory so the tsconfig cannot collide.
 
 
@@ -178,6 +179,178 @@ class PackedManifestIdentity(BaseModel):
     model_config = IGNORE_EXTRA_MODEL
     name: NonEmptyText = Field(description="npm package name")
     version: Semver = Field(description="Package version")
+
+
+def describe_validation(error: ValidationError) -> str:
+    """Render a Pydantic failure as one line per offending field.
+
+    Parameters:
+        error (ValidationError): The validation failure.
+
+    Returns:
+        str: `; `-joined `field: message` entries.
+    """
+    return "; ".join(
+        f"`{'.'.join(str(part) for part in item['loc']) or '<root>'}`: {item['msg']}"
+        for item in error.errors()
+    )
+
+
+UuidV4 = Annotated[
+    str, StringConstraints(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$")
+]
+SnapshotMonth = Annotated[str, StringConstraints(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
+PROTOCOL_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
+LENIENT_STRICT_MODEL = ConfigDict(extra="ignore", frozen=True, strict=True)
+STATS_MAX_BYTES = 128 * 1024 * 1024  # `MAX_BYTES` in `packages/session-kit/src/stats/snapshot.ts`.
+STATS_MAX_MS = 8_640_000_000_000_000  # Largest valid JS `Date`, the `positive` bound there.
+
+
+class PackedPi(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    extensions: list[str] = Field(default_factory=list, description="Extension entry files Pi loads")
+
+
+class PackedManifest(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    name: str | None = Field(default=None, description="npm package name")
+    private: bool | None = Field(default=None, description="Publication guard")
+    license: str | None = Field(default=None, description="SPDX license identifier")
+    dependencies: dict[str, str] = Field(default_factory=dict, description="Runtime dependencies")
+    optionalDependencies: dict[str, str] = Field(default_factory=dict, description="Optional dependencies")
+    bundledDependencies: list[str] | bool = Field(default=False, description="Bundled dependency names")
+    bundleDependencies: list[str] | bool = Field(default=False, description="Alias of `bundledDependencies`")
+    peerDependencies: dict[str, str] = Field(default_factory=dict, description="Peer dependency ranges")
+    pi: PackedPi = Field(default_factory=PackedPi, description="Pi package manifest section")
+
+
+class StatsShardRef(BaseModel):
+    model_config = PROTOCOL_MODEL
+    month: SnapshotMonth = Field(description="UTC month the shard covers")
+    file: NonEmptyText = Field(description="Shard file name, exactly `<month>-<sha256>.json`")
+    sha256: Sha256Hex = Field(description="SHA-256 of the exact shard bytes")
+    bytes: int = Field(ge=0, le=STATS_MAX_BYTES, description="Shard size in bytes")
+
+    @model_validator(mode="after")
+    def _file_matches_identity(self) -> Self:
+        """Require the documented content-addressed file name.
+
+        Returns:
+            Self: The validated model.
+
+        Raises:
+            ValueError: If `file` is not `<month>-<sha256>.json`.
+        """
+        if self.file != f"{self.month}-{self.sha256}.json":
+            raise ValueError(f"shard file '{self.file}' is not '{self.month}-{self.sha256}.json'")
+        return self
+
+
+class StatsManifest(BaseModel):
+    model_config = PROTOCOL_MODEL
+    version: int = Field(ge=1, le=1, description="Snapshot schema version, exactly 1")
+    machineId: UuidV4 = Field(description="Persistent installation UUID, matching its directory")
+    label: Annotated[str, StringConstraints(min_length=1, max_length=1024)] = Field(
+        description="Installation label"
+    )
+    exportedAt: int = Field(gt=0, le=STATS_MAX_MS, description="Export time, UTC Unix milliseconds")
+    shards: list[StatsShardRef] = Field(description="One shard reference per month")
+
+    @model_validator(mode="after")
+    def _months_are_unique(self) -> Self:
+        """Require exactly one shard per month.
+
+        Returns:
+            Self: The validated model.
+
+        Raises:
+            ValueError: If a month appears twice.
+        """
+        months = [ref.month for ref in self.shards]
+        if len(set(months)) != len(months):
+            raise ValueError(f"duplicate month in shards: {months}")
+        return self
+
+
+class StatsExportResult(BaseModel):
+    model_config = PROTOCOL_MODEL
+    machineId: UuidV4 = Field(description="Installation UUID that exported")
+    snapshotDir: NonEmptyText = Field(description="`<OUT>/machines/<UUID>` directory written")
+
+
+class StatsImportResult(BaseModel):
+    model_config = PROTOCOL_MODEL
+    imported: int = Field(ge=0, description="Machines imported this run")
+    retained: int = Field(ge=0, description="Machines kept from earlier imports")
+    problems: list[str] = Field(description="Coverage problems found")
+    importedAt: int = Field(ge=0, le=STATS_MAX_MS, description="Last successful import, Unix milliseconds")
+
+
+class ToolContentBlock(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    type: str = Field(description="Content block kind")
+    text: str = Field(default="", description="Text of a `text` block")
+
+
+class ToolResult(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    content: list[ToolContentBlock] = Field(description="Result content blocks")
+    structuredContent: dict[str, object] | None = Field(
+        default=None, description="Tool-specific payload, opaque until a scenario reads it"
+    )
+
+
+class ToolRecord(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    result: ToolResult = Field(description="Tool result payload")
+
+
+class ToolOutcome(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    isError: bool = Field(description="Whether the tool reported failure")
+
+
+class MessageEnvelope(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    role: str | None = Field(default=None, description="Message author role")
+    provider: str | None = Field(default=None, description="Provider that served an assistant message")
+    model: str | None = Field(default=None, description="Model that served an assistant message")
+
+
+class MessageEndEvent(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    message: MessageEnvelope = Field(description="Finished message")
+
+
+class LockEntry(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    version: str | None = Field(default=None, description="Locked version")
+    integrity: str | None = Field(default=None, description="Locked registry integrity")
+
+
+class LockFile(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    packages: dict[str, LockEntry] = Field(description="Lock entries by `node_modules/` path")
+
+
+def parse_stats_json[M: BaseModel](model: type[M], text: str, what: str) -> M:
+    """Parse and validate one stats protocol document.
+
+    Parameters:
+        model (type[M]): Boundary model.
+        text (str): Raw JSON text.
+        what (str): Document name for diagnostics, e.g. `manifest`.
+
+    Returns:
+        M: The validated document.
+
+    Raises:
+        ContractError: If the text is not JSON or does not match the documented shape.
+    """
+    try:
+        return model.model_validate_json(text)
+    except ValidationError as e:
+        raise ContractError(f"Malformed stats {what}: {describe_validation(e)}") from e
 
 
 class DevToolsEvidence(TypedDict):
@@ -569,6 +742,24 @@ def ensure_stock_pi(prefix: Path, sandbox: Sandbox) -> Path:
     return pi_bin
 
 
+def read_lockfile(path: Path) -> LockFile:
+    """Read the consumed part of an npm `package-lock.json`.
+
+    Parameters:
+        path (Path): Lockfile path.
+
+    Returns:
+        LockFile: Entries by `node_modules/` path.
+
+    Raises:
+        ContractError: If the file is unreadable, not JSON, or lacks a well-formed `packages` map.
+    """
+    try:
+        return LockFile.model_validate_json(path.read_text())
+    except (OSError, ValidationError) as e:
+        raise ContractError(f"Malformed lockfile '{path}': {e}") from e
+
+
 def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
     """Check the installed Pi is exactly the pinned registry artifact.
 
@@ -580,11 +771,11 @@ def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
     Raises:
         ContractError: On any identity mismatch.
     """
-    lock = json.loads((prefix / "package-lock.json").read_text())
-    entry = lock["packages"].get(f"node_modules/{STOCK_PI_PACKAGE}", {})
-    if entry.get("version") != STOCK_PI_VERSION or entry.get("integrity") != STOCK_PI_INTEGRITY:
+    lock = read_lockfile(prefix / "package-lock.json")
+    entry = lock.packages.get(f"node_modules/{STOCK_PI_PACKAGE}", LockEntry())
+    if entry.version != STOCK_PI_VERSION or entry.integrity != STOCK_PI_INTEGRITY:
         raise ContractError(
-            f"Stock Pi in '{prefix}' is {entry.get('version')!r} / {entry.get('integrity')!r}, "
+            f"Stock Pi in '{prefix}' is {entry.version!r} / {entry.integrity!r}, "
             f"expected {STOCK_PI_VERSION!r} / {STOCK_PI_INTEGRITY!r}"
         )
     reported = run([pi_bin, "--version"], env=sandbox.env(), cwd=prefix, timeout=PI_TIMEOUT_S).stdout.strip()
@@ -713,35 +904,52 @@ def audit_license(tarball: Path, root_license: bytes) -> list[str]:
     return [] if packed == root_license else ["packed `LICENSE` differs from the repository root `LICENSE`"]
 
 
-def audit_manifest(
-    contract: PackageContract, manifest: dict[str, Any], expected_files: Sequence[str]
-) -> list[str]:
+def audit_manifest(contract: PackageContract, manifest: object, expected_files: Sequence[str]) -> list[str]:
     """Check the packed `package.json` for independence and publication safety.
+
+    Only the audited fields are validated (see `PackedManifest`); other npm metadata is ignored on
+    purpose. A malformed audited field is reported as a violation, never skipped.
 
     Parameters:
         contract (PackageContract): Expectations.
-        manifest (dict[str, Any]): Parsed packed manifest.
+        manifest (object): Parsed packed manifest JSON value.
         expected_files (Sequence[str]): Files that must be reachable through `pi.extensions`.
 
     Returns:
         list[str]: Violations; empty when the manifest conforms.
     """
+    try:
+        parsed = PackedManifest.model_validate(manifest)
+    except ValidationError as e:
+        return [
+            f"packed `package.json` field `{'.'.join(str(part) for part in item['loc']) or '<root>'}` "
+            f"is malformed: {item['msg']}"
+            for item in e.errors()
+        ]
     problems: list[str] = []
-    if manifest.get("name") != contract.name:
-        problems.append(f"name is '{manifest.get('name')}', expected '{contract.name}'")
-    if manifest.get("private") is not True:
+    if parsed.name != contract.name:
+        problems.append(f"name is '{parsed.name}', expected '{contract.name}'")
+    if parsed.private is not True:
         problems.append("`private` must stay `true` until the publication prerequisites exist")
-    if manifest.get("license") != "MIT":
+    if parsed.license != "MIT":
         problems.append("`license` must be 'MIT'")
-    for key in ("dependencies", "optionalDependencies", "bundledDependencies", "bundleDependencies"):
-        if manifest.get(key):
-            problems.append(f"`{key}` must be empty: host modules are peers and plugins are independent")
-    peers: dict[str, str] = manifest.get("peerDependencies", {})
+    declared = {
+        "dependencies": parsed.dependencies,
+        "optionalDependencies": parsed.optionalDependencies,
+        "bundledDependencies": parsed.bundledDependencies,
+        "bundleDependencies": parsed.bundleDependencies,
+    }
+    problems += [
+        f"`{key}` must be empty: host modules are peers and plugins are independent"
+        for key, value in declared.items()
+        if value
+    ]
+    peers = parsed.peerDependencies
     problems += [f"peer '{name}' is not a host module" for name in peers if name not in HOST_MODULES]
     problems += [
         f"peer '{name}' must use the range '*', not '{peers[name]}'" for name in peers if peers[name] != "*"
     ]
-    extensions = manifest.get("pi", {}).get("extensions", [])
+    extensions = parsed.pi.extensions
     if not extensions:
         problems.append("`pi.extensions` is empty")
     problems += [
@@ -815,8 +1023,8 @@ def classify_imports(path: str, found: FileImports, files: Sequence[str]) -> lis
 
     Allowed: Node builtins (`node:` prefix), host-provided Pi modules, and relative paths that stay
     inside the package. Everything else, including any `@nredd/` sibling and any specifier the parser
-    could not resolve to a literal, is a violation. The bundled stats artifact may import Node builtins
-    only: it must run without Pi.
+    could not resolve to a literal, is a violation. The bundled stats artifact (`dist/`) may import
+    `node:` builtins only; relative imports are forbidden too, because it is copied alone.
 
     Parameters:
         path (str): File path relative to the package root.
@@ -831,19 +1039,19 @@ def classify_imports(path: str, found: FileImports, files: Sequence[str]) -> lis
     for spec in found.specifiers:
         if spec.startswith("node:"):
             continue
-        if spec.startswith("."):
+        if spec.startswith(SIBLING_SCOPE):
+            problems.append(f"{path}: imports sibling plugin '{spec}'")
+        elif standalone:
+            problems.append(
+                f"{path}: standalone artifact imports '{spec}', only `node:` builtins are allowed"
+            )
+        elif spec.startswith("."):
             target = PurePosixPath(os.path.normpath(PurePosixPath(path).parent / spec)).as_posix()
             stem = PurePosixPath(target).with_suffix("").as_posix()
             if target.startswith("..") or not any(
                 f == target or PurePosixPath(f).with_suffix("").as_posix() == stem for f in files
             ):
                 problems.append(f"{path}: relative import '{spec}' leaves the package or is missing")
-        elif spec.startswith(SIBLING_SCOPE):
-            problems.append(f"{path}: imports sibling plugin '{spec}'")
-        elif standalone:
-            problems.append(
-                f"{path}: standalone artifact imports '{spec}', only `node:` builtins are allowed"
-            )
         elif spec not in HOST_MODULES and not any(spec.startswith(f"{host}/") for host in HOST_MODULES):
             problems.append(f"{path}: imports '{spec}', which is neither a Node builtin nor a host module")
     return problems
@@ -877,10 +1085,14 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
         list[str]: All violations found.
     """
     contract = artifact.contract
-    manifest = json.loads(read_member(artifact.path, "package.json"))
     problems = audit_files(contract, artifact.files)
     problems += audit_license(artifact.path, root_license)
-    problems += audit_manifest(contract, manifest, artifact.files)
+    try:
+        manifest = json.loads(read_member(artifact.path, "package.json"))
+    except (ContractError, ValueError) as e:
+        problems.append(f"packed `package.json` is not valid JSON: {e}")
+    else:
+        problems += audit_manifest(contract, manifest, artifact.files)
     sources = {
         name: read_member(artifact.path, name).decode()
         for name in artifact.files
@@ -940,11 +1152,11 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
     nested = [p for p in installed.rglob("node_modules") if p.is_dir()]
     if nested:
         raise ContractError(f"'{artifact.contract.name}' ships a nested `node_modules`: {nested}")
-    lock = json.loads((project / "package-lock.json").read_text())
-    if set(lock["packages"]) != {"", f"node_modules/{artifact.contract.name}"}:
+    lock = read_lockfile(project / "package-lock.json")
+    if set(lock.packages) != {"", f"node_modules/{artifact.contract.name}"}:
         raise ContractError(
             f"Unexpected lockfile entries after installing '{artifact.contract.name}': "
-            f"{sorted(lock['packages'])}"
+            f"{sorted(lock.packages)}"
         )
     return installed
 
@@ -984,12 +1196,38 @@ class PiRun:
 
         Returns:
             list[dict[str, Any]]: `message_end` payloads with role `assistant`.
+
+        Raises:
+            ContractError: If a `message_end` event has no object `message`.
         """
-        return [
-            e["message"]
-            for e in self.events
-            if e.get("type") == "message_end" and e.get("message", {}).get("role") == "assistant"
-        ]
+        found: list[dict[str, Any]] = []
+        for event in self.events:
+            if event.get("type") != "message_end":
+                continue
+            try:
+                parsed = MessageEndEvent.model_validate(event)
+            except ValidationError as e:
+                raise ContractError(f"Malformed `message_end` event: {describe_validation(e)}") from e
+            if parsed.message.role == "assistant":
+                found.append(event["message"])
+        return found
+
+    def single_tool_result(self, name: str) -> dict[str, Any]:
+        """Return the one `tool_execution_end` record for a tool.
+
+        Parameters:
+            name (str): Tool name.
+
+        Returns:
+            dict[str, Any]: The record.
+
+        Raises:
+            ContractError: If the tool did not finish exactly once.
+        """
+        records = self.tool_results(name)
+        if len(records) != 1:
+            raise ContractError(f"Expected exactly one `{name}` result, got {len(records)}")
+        return records[0]
 
 
 def tool_text(record: dict[str, Any]) -> str:
@@ -1000,10 +1238,51 @@ def tool_text(record: dict[str, Any]) -> str:
 
     Returns:
         str: Concatenated text content.
+
+    Raises:
+        ContractError: If the record has no well-formed `result.content`.
     """
-    return "".join(
-        block.get("text", "") for block in record["result"]["content"] if block.get("type") == "text"
-    )
+    return "".join(block.text for block in parse_tool_record(record).result.content if block.type == "text")
+
+
+def parse_tool_record(record: dict[str, Any]) -> ToolRecord:
+    """Validate the consumed part of a `tool_execution_end` event.
+
+    Parameters:
+        record (dict[str, Any]): A `tool_execution_end` event.
+
+    Returns:
+        ToolRecord: Its result payload.
+
+    Raises:
+        ContractError: If `result` or `result.content` is missing or mistyped.
+    """
+    try:
+        return ToolRecord.model_validate(record)
+    except ValidationError as e:
+        raise ContractError(
+            f"Malformed tool result for '{record.get('toolName')}': {describe_validation(e)}"
+        ) from e
+
+
+def tool_is_error(record: dict[str, Any]) -> bool:
+    """Read a tool record's `isError` flag, which must be a real boolean.
+
+    Parameters:
+        record (dict[str, Any]): A `tool_execution_end` event.
+
+    Returns:
+        bool: Whether the tool reported failure.
+
+    Raises:
+        ContractError: If `isError` is missing or not a boolean.
+    """
+    try:
+        return ToolOutcome.model_validate(record).isError
+    except ValidationError as e:
+        raise ContractError(
+            f"Malformed tool result for '{record.get('toolName')}': {describe_validation(e)}"
+        ) from e
 
 
 def parse_events(stdout: str) -> tuple[dict[str, Any], ...]:
@@ -1207,11 +1486,12 @@ def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
         )
     require_clean_run(ok, "dev-tools git_status")
     require_tools(ok, ctx.artifact.contract, ctx.siblings, provider.requests)
-    (record,) = ok.tool_results("git_status")
-    require(record["isError"] is False, f"git_status failed: {tool_text(record)}")
+    record = ok.single_tool_result("git_status")
+    require(not tool_is_error(record), f"git_status failed: {tool_text(record)}")
+    structured = parse_tool_record(record).result.structuredContent
     require(
-        record["result"]["structuredContent"]["untracked"] == ["untracked.txt"],
-        f"unexpected status: {record['result']}",
+        structured is not None and structured.get("untracked") == ["untracked.txt"],
+        f"unexpected status: {record.get('result')}",
     )
 
     not_repo = ctx.work / "not-a-repo"
@@ -1225,10 +1505,10 @@ def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
             ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
         )
     require_clean_run(bad, "dev-tools git_status outside a repository")
-    (failed,) = bad.tool_results("git_status")
+    failed = bad.single_tool_result("git_status")
     require(
-        failed["isError"] is True,
-        f"git_status outside a repository must be an error result: {failed['result']}",
+        tool_is_error(failed),
+        f"git_status outside a repository must be an error result: {failed.get('result')}",
     )
     return {"tool": "git_status", "untracked": ["untracked.txt"], "failure_path": tool_text(failed)[:200]}
 
@@ -1268,63 +1548,97 @@ def scenario_session_kit(ctx: Context) -> SessionKitEvidence:
         )
     require_clean_run(result, "session-kit monitor")
     require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests)
-    (started,) = result.tool_results("monitor_start")
+    started = result.single_tool_result("monitor_start")
     require(
-        started["isError"] is False and "started m1" in tool_text(started),
+        not tool_is_error(started) and "started m1" in tool_text(started),
         f"monitor_start: {tool_text(started)}",
     )
-    (read,) = result.tool_results("monitor_read")
+    read = result.single_tool_result("monitor_read")
     require(marker in tool_text(read), f"monitor_read missed '{marker}': {tool_text(read)}")
 
-    # The artifact must run with only `node`, from outside any package, over that real session.
-    artifact = ctx.installed / "dist" / "pi-stats-export.mjs"
-    outside = ctx.work / "artifact-cwd"
-    outside.mkdir()
-    snapshots = ctx.work / "snapshots"
-    exported = run(
-        [
-            ctx.sandbox.tools.node,
-            artifact,
-            "export",
-            "--agent-dir",
-            ctx.sandbox.agent_dir,
-            "--output",
-            snapshots,
-        ],
-        env=ctx.sandbox.env(),
-        cwd=outside,
-        timeout=PI_TIMEOUT_S,
+    # The exact packed bytes must run with only `node`, alone in an unrelated directory (no sibling
+    # `src/`, package or `node_modules`), over that real session.
+    manifest = exercise_stats_artifact(
+        ctx.sandbox.tools.node,
+        read_member(ctx.artifact.path, STATS_ARTIFACT),
+        ctx.sandbox.env(),
+        ctx.sandbox.agent_dir,
+        ctx.work,
     )
-    export = json.loads(exported.stdout)
-    manifest = json.loads((Path(export["snapshotDir"]) / "manifest.json").read_text())
-    require(
-        manifest["version"] == 1 and manifest["machineId"] == export["machineId"] and manifest["shards"],
-        f"export: {manifest}",
-    )
-    other = ctx.work / "other-agent"
-    other.mkdir()
-    imported = json.loads(
-        run(
-            [ctx.sandbox.tools.node, artifact, "import", "--agent-dir", other, "--input", snapshots],
-            env=ctx.sandbox.env(),
-            cwd=outside,
-            timeout=PI_TIMEOUT_S,
-        ).stdout
-    )
-    require(imported["imported"] == 1 and imported["problems"] == [], f"import: {imported}")
-    bad = run(
-        [ctx.sandbox.tools.node, artifact, "export", "--bogus", "x"],
-        env=ctx.sandbox.env(),
-        cwd=outside,
-        timeout=PI_TIMEOUT_S,
-        check=False,
-    )
-    require(bad.returncode != 0, "stats artifact accepted an unknown flag")
     return {
         "tools": ["monitor_start", "monitor_read"],
         "monitor_line": marker,
-        "stats_shards": len(manifest["shards"]),
+        "stats_shards": len(manifest.shards),
     }
+
+
+def exercise_stats_artifact(
+    node: Path, artifact: bytes, env: dict[str, str], agent_dir: Path, work: Path
+) -> StatsManifest:
+    """Export and import a real session with the stats artifact copied alone into `work`.
+
+    The artifact lives in `work/standalone` with nothing else, so a relative import into the package
+    (`../src/...`) or a bare package import cannot resolve, exactly as when the file is copied out.
+
+    Parameters:
+        node (Path): Absolute `node` path.
+        artifact (bytes): Exact bytes of the packed `dist/pi-stats-export.mjs`.
+        env (dict[str, str]): Complete child environment.
+        agent_dir (Path): Agent directory holding the real session to export.
+        work (Path): Scratch directory; created if absent and used only for this run.
+
+    Returns:
+        StatsManifest: The validated exported manifest.
+
+    Raises:
+        ContractError: If any command fails or any consumed document is malformed.
+    """
+    standalone = work / "standalone"
+    standalone.mkdir(parents=True)
+    script = standalone / "pi-stats-export.mjs"
+    script.write_bytes(artifact)
+    outside = work / "artifact-cwd"
+    outside.mkdir()
+    snapshots = work / "snapshots"
+    exported = run(
+        [node, script, "export", "--agent-dir", agent_dir, "--output", snapshots],
+        env=env,
+        cwd=outside,
+        timeout=PI_TIMEOUT_S,
+    )
+    export = parse_stats_json(StatsExportResult, exported.stdout, "export")
+    expected_dir = snapshots / "machines" / export.machineId
+    require(
+        Path(export.snapshotDir) == expected_dir, f"export wrote '{export.snapshotDir}', not '{expected_dir}'"
+    )
+    try:
+        manifest_text = (expected_dir / "manifest.json").read_text()
+    except OSError as e:
+        raise ContractError(f"export left no readable manifest in '{expected_dir}': {e}") from e
+    manifest = parse_stats_json(StatsManifest, manifest_text, "manifest")
+    require(manifest.machineId == export.machineId, f"export: manifest is for '{manifest.machineId}'")
+    require(bool(manifest.shards), "export: the manifest references no shards")
+    other = work / "other-agent"
+    other.mkdir()
+    imported = parse_stats_json(
+        StatsImportResult,
+        run(
+            [node, script, "import", "--agent-dir", other, "--input", snapshots],
+            env=env,
+            cwd=outside,
+            timeout=PI_TIMEOUT_S,
+        ).stdout,
+        "import",
+    )
+    require(
+        (imported.imported, imported.retained, imported.problems) == (1, 0, []),
+        f"import: {imported}",
+    )
+    bad = run(
+        [node, script, "export", "--bogus", "x"], env=env, cwd=outside, timeout=PI_TIMEOUT_S, check=False
+    )
+    require(bad.returncode != 0, "stats artifact accepted an unknown flag")
+    return manifest
 
 
 def scenario_router(ctx: Context) -> RouterEvidence:
@@ -1364,10 +1678,12 @@ def scenario_router(ctx: Context) -> RouterEvidence:
     require(
         [r.model for r in provider.requests] == [PHYSICAL_MODEL], f"physical requests: {provider.requests}"
     )
-    (answer,) = routed.assistant_messages()
+    answers = routed.assistant_messages()
+    require(len(answers) == 1, f"expected one assistant message, got {len(answers)}")
+    answer = MessageEnvelope.model_validate(answers[0])
     require(
-        (answer["provider"], answer["model"]) == (PROVIDER, PHYSICAL_MODEL),
-        f"dispatched to {answer['provider']}/{answer['model']}",
+        (answer.provider, answer.model) == (PROVIDER, PHYSICAL_MODEL),
+        f"dispatched to {answer.provider}/{answer.model}",
     )
 
     config.write_text(json.dumps({"profiles": {"Bad Id": {"chain": []}}}))

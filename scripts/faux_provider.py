@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import TracebackType
 from typing import Any, Self
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 LOGGER = logging.getLogger(__name__)
 
 LOOPBACK = "127.0.0.1"
@@ -67,6 +69,31 @@ class RecordedRequest:
     model: str
     roles: tuple[str, ...]
     tools: tuple[str, ...]
+
+
+REQUEST_MODEL = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+
+class ChatMessage(BaseModel):
+    model_config = REQUEST_MODEL
+    role: str = Field(description="Message author role")
+
+
+class ChatToolFunction(BaseModel):
+    model_config = REQUEST_MODEL
+    name: str = Field(description="Declared tool name")
+
+
+class ChatTool(BaseModel):
+    model_config = REQUEST_MODEL
+    function: ChatToolFunction = Field(description="Function declaration")
+
+
+class ChatRequest(BaseModel):
+    model_config = REQUEST_MODEL
+    model: str = Field(description="Physical model id the request names")
+    messages: list[ChatMessage] = Field(default_factory=list, description="Conversation so far")
+    tools: list[ChatTool] = Field(default_factory=list, description="Declared tools")
 
 
 def _chunk(delta: dict[str, Any], finish_reason: str | None) -> bytes:
@@ -146,9 +173,16 @@ class FauxProvider:
                 if self.path != CHAT_PATH:
                     self.send_error(404)
                     return
-                length = int(self.headers.get("content-length", "0"))
-                body = json.loads(self.rfile.read(length))
-                payload = provider.respond(body)
+                try:
+                    length = int(self.headers.get("content-length", "0"))
+                    body = json.loads(self.rfile.read(length))
+                    payload = provider.respond(body)
+                except ValueError as e:
+                    # `ValidationError`, `JSONDecodeError` and a bad length are all `ValueError`s.
+                    reason = " ".join(str(e).split())[:200]
+                    LOGGER.warning(f"Rejected malformed chat request: {reason}")
+                    self.send_error(400, f"malformed chat request: {reason}")
+                    return
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream")
                 self.send_header("content-length", str(len(payload)))
@@ -175,20 +209,29 @@ class FauxProvider:
         """
         return f"http://{LOOPBACK}:{self._server.server_address[1]}/v1"
 
-    def respond(self, body: dict[str, Any]) -> bytes:
+    def respond(self, body: object) -> bytes:
         """Record the request and encode the scripted answer.
 
         Parameters:
-            body (dict[str, Any]): Parsed chat-completions request.
+            body (object): Parsed chat-completions request JSON.
 
         Returns:
             bytes: SSE response body.
+
+        Raises:
+            ValueError: If `body` lacks the consumed fields (`model`, `messages[].role`,
+                `tools[].function.name`) or they have the wrong type.
         """
-        messages: list[dict[str, Any]] = body.get("messages", [])
-        roles = tuple(str(message.get("role")) for message in messages)
-        tools = tuple(str(tool["function"]["name"]) for tool in body.get("tools", []))
+        try:
+            request = ChatRequest.model_validate(body)
+        except ValidationError as e:
+            raise ValueError(
+                "; ".join(f"`{'.'.join(str(p) for p in i['loc'])}`: {i['msg']}" for i in e.errors())
+            ) from e
+        roles = tuple(message.role for message in request.messages)
+        tools = tuple(tool.function.name for tool in request.tools)
         with self._lock:
-            self.requests.append(RecordedRequest(str(body.get("model")), roles, tools))
+            self.requests.append(RecordedRequest(request.model, roles, tools))
         index = min(roles.count("assistant"), len(self.script) - 1)
         return encode_step(self.script[index], index)
 
