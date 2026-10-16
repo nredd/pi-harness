@@ -20,6 +20,12 @@ Layout:
 - `scripts/`: build, release, and chezmoi integration implementation.
 - `docs/`: development, source provenance, release, and recovery documentation.
 
+`packages/preset` (`@nredd/pi-preset`, `private: true`, unpublished) is the optional opinionated
+preset: agents, skills, footer, themes, and public-safe defaults. It is a resource snapshot only: no
+installer or activation, model roles and enterprise acceptance are pending, and its themes carry
+their own licenses. See [its README](packages/preset/README.md) and
+[NOTICE](packages/preset/NOTICE.md).
+
 Imported sources and every deliberate sanitization: [source provenance](docs/source-provenance.md).
 Standalone Bun evidence and limits: [Bun prerequisite](docs/bun-prerequisite.md).
 
