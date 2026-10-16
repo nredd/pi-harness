@@ -14,6 +14,7 @@ Accepted `ms_input_p95_n4` exception for the coordinated Plan/todo/subagents rel
 The offline `probes/anthropic-block-types.mjs` checks wire-to-normalized block types against built pi-ai packages without credentials or network.
 
 Targets:
+- `make test` delegates its probe step to the root `make check-probes` (lifecycle conformance for both process runners plus the capture probe test)
 - `make verify-fast` -- format, lint, type, unit tests, then static + integration scenarios (under 2 min)
 - `make verify` -- fast + real-tmux TUI + benchmarks. Includes the `slow` marker (see below)
 - `make verify-live` -- opt-in real providers, cost-capped
