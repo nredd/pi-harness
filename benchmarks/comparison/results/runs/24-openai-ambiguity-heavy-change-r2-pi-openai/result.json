@@ -1,0 +1,366 @@
+{
+  "accepted_plan": {
+    "byte_count": 1249,
+    "captured": true,
+    "path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/accepted-plan.md",
+    "sha256": "badf86319d08d249a8bee85fe0f3795aa2c5796249225f1661196bbaf1aae5b0"
+  },
+  "activity": {
+    "combined": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 32,
+      "tool_calls_by_name": {
+        "bash": 6,
+        "edit": 5,
+        "find": 1,
+        "grep": 1,
+        "ls": 1,
+        "plan_mode_complete": 1,
+        "plan_mode_question": 1,
+        "read": 7,
+        "todo": 9
+      },
+      "turns": 26
+    },
+    "implementation": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 21,
+      "tool_calls_by_name": {
+        "bash": 6,
+        "edit": 5,
+        "read": 1,
+        "todo": 9
+      },
+      "turns": 22
+    },
+    "plan": {
+      "blocked_calls": 0,
+      "blocked_calls_by_name": {},
+      "tool_calls": 11,
+      "tool_calls_by_name": {
+        "find": 1,
+        "grep": 1,
+        "ls": 1,
+        "plan_mode_complete": 1,
+        "plan_mode_question": 1,
+        "read": 6
+      },
+      "turns": 4
+    }
+  },
+  "actual_metadata": {
+    "model": "gpt-5.6-terra",
+    "provider": "openai-codex",
+    "reasoning_level": "medium"
+  },
+  "agent_started_at": "2026-09-16T02:45:29.966105Z",
+  "auxiliary_usage": {
+    "categories": [],
+    "detected": false,
+    "full_accounting_established": false,
+    "included": false,
+    "limitation": "Equivalent complete auxiliary accounting cannot be established across native formats; Pi tool-result auxiliary usage is included only when optional native usage fields are present.",
+    "separable": false,
+    "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "reasoning_tokens": null,
+      "total_tokens": null
+    }
+  },
+  "cache_hit_ratio": 0.8715328649336711,
+  "cli_version": "0.85.1",
+  "documentation_status": "updated",
+  "failure_reason": null,
+  "finalized_at": "2026-09-16T02:47:47.661373Z",
+  "git": {
+    "added_lines": 72,
+    "changed_paths": [
+      "README.md",
+      "src/record_summary/summary.py",
+      "tests/test_summary.py"
+    ],
+    "deleted_lines": 11,
+    "diff_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/agent.diff",
+    "diff_stat_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/agent.diffstat",
+    "dirty": true,
+    "head": "1ee5c6cd3f14577be1e41ecea0eebb633719fe8f",
+    "patch_bytes": 4706,
+    "patch_lines": 122
+  },
+  "hidden_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/hidden-gate-environment",
+    "name": "hidden",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--project",
+          "<benchmark-root>",
+          "--frozen",
+          "--all-groups",
+          "--no-install-project"
+        ],
+        "duration_seconds": 0.6774007498752326,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/hidden-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/hidden-gate.sb",
+          "--",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/hidden-gate-environment/bin/python",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider",
+          "-c",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/hidden-suite/pytest.ini",
+          "--rootdir",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/hidden-suite",
+          "-q",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/hidden-suite"
+        ],
+        "duration_seconds": 0.19878350012004375,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/hidden-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "implementation_started_at": "2026-09-16T02:46:07.534824Z",
+  "launch_argv": [
+    "/opt/homebrew/Cellar/pi-coding-agent/0.85.1/bin/pi",
+    "--provider",
+    "openai-codex",
+    "--model",
+    "gpt-5.6-terra",
+    "--thinking",
+    "medium",
+    "--session-dir",
+    "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/native-sessions/pi",
+    "--name",
+    "24-openai-ambiguity-heavy-change-r2-pi-openai"
+  ],
+  "parser_warnings": [
+    "Equivalent complete auxiliary accounting cannot be established across native formats; Pi tool-result auxiliary usage is included only when optional native usage fields are present.",
+    "Import sanitization: private absolute benchmark-root paths replaced with `<benchmark-root>`; no metrics changed."
+  ],
+  "planning_quality": {
+    "asked_before_choosing": true,
+    "evidence": "structured-question: At which stage should `summarize` apply a positive `limit`?",
+    "required": true
+  },
+  "prepared_at": "2026-09-16T02:45:29.889175Z",
+  "prompt_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/prompt.txt",
+  "prompt_sha256": "4edc7b75792ecea1e16b30ac28e609833f3922aa8b035b1cbc3c7180dfb58a37",
+  "protocol_valid": true,
+  "protocol_violations": [],
+  "result_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/result.json",
+  "schema_version": "3.0",
+  "seed_commit": "4be6c2caa58c0640e58cb3dd4d86e50e25a8746c",
+  "seed_verification": {
+    "clone_head_at_prepare": "4be6c2caa58c0640e58cb3dd4d86e50e25a8746c",
+    "contamination_paths": [],
+    "expected_commit": "4be6c2caa58c0640e58cb3dd4d86e50e25a8746c",
+    "generated_seed_head_at_finalize": "4be6c2caa58c0640e58cb3dd4d86e50e25a8746c",
+    "seed_is_final_ancestor": true,
+    "verified_at_start": "2026-09-16T02:45:29.966105Z"
+  },
+  "sessions": [
+    {
+      "byte_count": 1280355,
+      "redacted_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/session-logs/terminal.log",
+      "sha256": "cb2c6fe8fa691439e5f54136f2c767b0d26af5b09ceeb733c781e0125fd93707",
+      "source_kind": "terminal",
+      "source_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/session-logs/terminal.log"
+    },
+    {
+      "byte_count": 152487,
+      "redacted_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/session-logs/native-00.jsonl",
+      "sha256": "793253604b4d3aba5248b626d5ba1a710d579a141ebd80977e56e527b4644784",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/session-logs/native-00.jsonl"
+    }
+  ],
+  "spec": {
+    "clarification": {
+      "answer": "`limit` counts emitted active records after filtering and deterministic ordering, not input rows.",
+      "question": "Should `limit` apply to raw input rows before filtering and deterministic ordering, or to emitted active records after filtering and deterministic ordering?"
+    },
+    "documentation_required": false,
+    "fixture": "ambiguity-heavy-change",
+    "harness": "pi-openai",
+    "matrix_position": 24,
+    "model": "gpt-5.6-terra",
+    "pair": "openai",
+    "pair_order": 2,
+    "reasoning_level": "medium",
+    "repetition": 2,
+    "run_id": "24-openai-ambiguity-heavy-change-r2-pi-openai"
+  },
+  "stages": [
+    {
+      "duration_seconds": 37.568719,
+      "ended_at": "2026-09-16T02:46:07.534824Z",
+      "source_events": 4,
+      "stage": "plan",
+      "started_at": "2026-09-16T02:45:29.966105Z",
+      "usage": {
+        "cache_read_tokens": 29184,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 12845,
+        "output_tokens": 694,
+        "reasoning_tokens": 103,
+        "total_tokens": 42723
+      }
+    },
+    {
+      "duration_seconds": 97.289398,
+      "ended_at": "2026-09-16T02:47:44.824222Z",
+      "source_events": 22,
+      "stage": "implementation",
+      "started_at": "2026-09-16T02:46:07.534824Z",
+      "usage": {
+        "cache_read_tokens": 320000,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 38626,
+        "output_tokens": 3635,
+        "reasoning_tokens": 1086,
+        "total_tokens": 362261
+      }
+    }
+  ],
+  "status": "finalized",
+  "stopped_at": "2026-09-16T02:47:44.824222Z",
+  "success": true,
+  "terminal_log_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/session-logs/terminal.log",
+  "usage": {
+    "cache_read_tokens": 349184,
+    "cache_write_tokens": 0,
+    "cost_usd": null,
+    "input_tokens": 51471,
+    "output_tokens": 4329,
+    "reasoning_tokens": 1189,
+    "total_tokens": 404984
+  },
+  "visible_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gate-environment",
+    "name": "visible",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--frozen",
+          "--all-groups"
+        ],
+        "duration_seconds": 0.7687282080296427,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "format",
+          "--check",
+          "."
+        ],
+        "duration_seconds": 0.27213445911183953,
+        "exit_code": 0,
+        "name": "ruff-format",
+        "output_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gates/ruff-format.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "check",
+          "--ignore-noqa",
+          "."
+        ],
+        "duration_seconds": 0.03954745805822313,
+        "exit_code": 0,
+        "name": "ruff-lint",
+        "output_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gates/ruff-lint.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ty",
+          "check"
+        ],
+        "duration_seconds": 0.27667483291588724,
+        "exit_code": 0,
+        "name": "ty",
+        "output_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gates/ty.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "pytest",
+          "-q"
+        ],
+        "duration_seconds": 0.3250093332026154,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/24-openai-ambiguity-heavy-change-r2-pi-openai/visible-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "wall_duration_seconds": 134.858117
+}

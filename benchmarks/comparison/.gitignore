@@ -1,0 +1,12 @@
+.coverage
+.pytest_cache/
+.ruff_cache/
+.tox/
+.ty_cache/
+.venv/
+__pycache__/
+build/
+dist/
+*.egg-info/
+artifacts/
+workspace/

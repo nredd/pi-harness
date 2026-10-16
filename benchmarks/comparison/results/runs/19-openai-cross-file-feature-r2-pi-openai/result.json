@@ -1,0 +1,371 @@
+{
+  "accepted_plan": {
+    "byte_count": 2090,
+    "captured": true,
+    "path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/accepted-plan.md",
+    "sha256": "eaf4db9928a641fc32f2a39ef1f565f5fc7db983a500ff32f7fca7cf8c65a3d1"
+  },
+  "activity": {
+    "combined": {
+      "blocked_calls": 2,
+      "blocked_calls_by_name": {
+        "bash": 1,
+        "todo": 1
+      },
+      "tool_calls": 39,
+      "tool_calls_by_name": {
+        "bash": 11,
+        "edit": 5,
+        "find": 2,
+        "grep": 1,
+        "ls": 1,
+        "plan_mode_complete": 1,
+        "read": 9,
+        "todo": 7,
+        "write": 2
+      },
+      "turns": 28
+    },
+    "implementation": {
+      "blocked_calls": 1,
+      "blocked_calls_by_name": {
+        "todo": 1
+      },
+      "tool_calls": 22,
+      "tool_calls_by_name": {
+        "bash": 8,
+        "edit": 5,
+        "todo": 7,
+        "write": 2
+      },
+      "turns": 23
+    },
+    "plan": {
+      "blocked_calls": 1,
+      "blocked_calls_by_name": {
+        "bash": 1
+      },
+      "tool_calls": 17,
+      "tool_calls_by_name": {
+        "bash": 3,
+        "find": 2,
+        "grep": 1,
+        "ls": 1,
+        "plan_mode_complete": 1,
+        "read": 9
+      },
+      "turns": 5
+    }
+  },
+  "actual_metadata": {
+    "model": "gpt-5.6-terra",
+    "provider": "openai-codex",
+    "reasoning_level": "medium"
+  },
+  "agent_started_at": "2026-09-16T01:39:06.387423Z",
+  "auxiliary_usage": {
+    "categories": [],
+    "detected": false,
+    "full_accounting_established": false,
+    "included": false,
+    "limitation": "Equivalent complete auxiliary accounting cannot be established across native formats; Pi tool-result auxiliary usage is included only when optional native usage fields are present.",
+    "separable": false,
+    "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "reasoning_tokens": null,
+      "total_tokens": null
+    }
+  },
+  "cache_hit_ratio": 0.9225642097414665,
+  "cli_version": "0.85.1",
+  "documentation_status": "updated",
+  "failure_reason": null,
+  "finalized_at": "2026-09-16T01:41:57.997511Z",
+  "git": {
+    "added_lines": 131,
+    "changed_paths": [
+      "README.md",
+      "src/service_settings/__main__.py",
+      "src/service_settings/settings.py",
+      "tests/test_settings.py"
+    ],
+    "deleted_lines": 11,
+    "diff_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/agent.diff",
+    "diff_stat_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/agent.diffstat",
+    "dirty": true,
+    "head": "c2da468372af6a1b38efb2d642e778f77f34bba4",
+    "patch_bytes": 6972,
+    "patch_lines": 197
+  },
+  "hidden_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/hidden-gate-environment",
+    "name": "hidden",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--project",
+          "<benchmark-root>",
+          "--frozen",
+          "--all-groups",
+          "--no-install-project"
+        ],
+        "duration_seconds": 1.0604011670220643,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/hidden-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/hidden-gate.sb",
+          "--",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/hidden-gate-environment/bin/python",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider",
+          "-c",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/hidden-suite/pytest.ini",
+          "--rootdir",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/hidden-suite",
+          "-q",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/hidden-suite"
+        ],
+        "duration_seconds": 0.2232789578847587,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/hidden-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "implementation_started_at": "2026-09-16T01:39:52.104994Z",
+  "launch_argv": [
+    "/opt/homebrew/Cellar/pi-coding-agent/0.85.1/bin/pi",
+    "--provider",
+    "openai-codex",
+    "--model",
+    "gpt-5.6-terra",
+    "--thinking",
+    "medium",
+    "--session-dir",
+    "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/native-sessions/pi",
+    "--name",
+    "19-openai-cross-file-feature-r2-pi-openai"
+  ],
+  "parser_warnings": [
+    "Equivalent complete auxiliary accounting cannot be established across native formats; Pi tool-result auxiliary usage is included only when optional native usage fields are present.",
+    "Import sanitization: private absolute benchmark-root paths replaced with `<benchmark-root>`; no metrics changed."
+  ],
+  "planning_quality": {
+    "asked_before_choosing": null,
+    "evidence": null,
+    "required": false
+  },
+  "prepared_at": "2026-09-16T01:39:06.311058Z",
+  "prompt_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/prompt.txt",
+  "prompt_sha256": "b8ba26516e419402109d0b2b0b1721150b6e4f65bc3feff4f1eafbc84dbf0dd4",
+  "protocol_valid": true,
+  "protocol_violations": [],
+  "result_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/result.json",
+  "schema_version": "3.0",
+  "seed_commit": "a82cf675de009bac9f7a93f8708e895166dabec9",
+  "seed_verification": {
+    "clone_head_at_prepare": "a82cf675de009bac9f7a93f8708e895166dabec9",
+    "contamination_paths": [],
+    "expected_commit": "a82cf675de009bac9f7a93f8708e895166dabec9",
+    "generated_seed_head_at_finalize": "a82cf675de009bac9f7a93f8708e895166dabec9",
+    "seed_is_final_ancestor": true,
+    "verified_at_start": "2026-09-16T01:39:06.387423Z"
+  },
+  "sessions": [
+    {
+      "byte_count": 1612157,
+      "redacted_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/session-logs/terminal.log",
+      "sha256": "11c711b0970fcac6ffab1410b91da30aa1376fdb881acdb9a7419721e609470a",
+      "source_kind": "terminal",
+      "source_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/session-logs/terminal.log"
+    },
+    {
+      "byte_count": 194555,
+      "redacted_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/session-logs/native-00.jsonl",
+      "sha256": "17bd5aad74fd43ef4f837e2ddb6fbf013e64a0d8a3b4062e7bde85297ea8df5a",
+      "source_kind": "native-session",
+      "source_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/session-logs/native-00.jsonl"
+    }
+  ],
+  "spec": {
+    "clarification": null,
+    "documentation_required": true,
+    "fixture": "cross-file-feature",
+    "harness": "pi-openai",
+    "matrix_position": 19,
+    "model": "gpt-5.6-terra",
+    "pair": "openai",
+    "pair_order": 1,
+    "reasoning_level": "medium",
+    "repetition": 2,
+    "run_id": "19-openai-cross-file-feature-r2-pi-openai"
+  },
+  "stages": [
+    {
+      "duration_seconds": 45.717571,
+      "ended_at": "2026-09-16T01:39:52.104994Z",
+      "source_events": 5,
+      "stage": "plan",
+      "started_at": "2026-09-16T01:39:06.387423Z",
+      "usage": {
+        "cache_read_tokens": 41984,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 17628,
+        "output_tokens": 1324,
+        "reasoning_tokens": 408,
+        "total_tokens": 60936
+      }
+    },
+    {
+      "duration_seconds": 122.713304,
+      "ended_at": "2026-09-16T01:41:54.818298Z",
+      "source_events": 23,
+      "stage": "implementation",
+      "started_at": "2026-09-16T01:39:52.104994Z",
+      "usage": {
+        "cache_read_tokens": 448000,
+        "cache_write_tokens": 0,
+        "cost_usd": null,
+        "input_tokens": 23499,
+        "output_tokens": 4427,
+        "reasoning_tokens": 1812,
+        "total_tokens": 475926
+      }
+    }
+  ],
+  "status": "finalized",
+  "stopped_at": "2026-09-16T01:41:54.818298Z",
+  "success": true,
+  "terminal_log_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/session-logs/terminal.log",
+  "usage": {
+    "cache_read_tokens": 489984,
+    "cache_write_tokens": 0,
+    "cost_usd": null,
+    "input_tokens": 41127,
+    "output_tokens": 5751,
+    "reasoning_tokens": 2220,
+    "total_tokens": 536862
+  },
+  "visible_gate": {
+    "environment_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gate-environment",
+    "name": "visible",
+    "passed": true,
+    "subgates": [
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "sync",
+          "--frozen",
+          "--all-groups"
+        ],
+        "duration_seconds": 0.5953413329552859,
+        "exit_code": 0,
+        "name": "uv-sync",
+        "output_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gates/uv-sync.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "format",
+          "--check",
+          "."
+        ],
+        "duration_seconds": 0.3036991658154875,
+        "exit_code": 0,
+        "name": "ruff-format",
+        "output_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gates/ruff-format.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ruff",
+          "check",
+          "--ignore-noqa",
+          "."
+        ],
+        "duration_seconds": 0.036613292060792446,
+        "exit_code": 0,
+        "name": "ruff-lint",
+        "output_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gates/ruff-lint.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "ty",
+          "check"
+        ],
+        "duration_seconds": 0.28728254209272563,
+        "exit_code": 0,
+        "name": "ty",
+        "output_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gates/ty.log",
+        "passed": true
+      },
+      {
+        "command": [
+          "/usr/bin/sandbox-exec",
+          "-f",
+          "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gate.sb",
+          "--",
+          "/opt/homebrew/Cellar/uv/0.12.13/bin/uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "pytest",
+          "-q"
+        ],
+        "duration_seconds": 0.3792260841000825,
+        "exit_code": 0,
+        "name": "pytest",
+        "output_path": "<benchmark-root>/artifacts/runs/19-openai-cross-file-feature-r2-pi-openai/visible-gates/pytest.log",
+        "passed": true
+      }
+    ]
+  },
+  "wall_duration_seconds": 168.430875
+}

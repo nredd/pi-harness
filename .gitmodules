@@ -1,0 +1,18 @@
+[submodule "forks/pi"]
+	path = forks/pi
+	url = https://github.com/nredd/pi.git
+[submodule "forks/pi-subagents"]
+	path = forks/pi-subagents
+	url = https://github.com/nredd/pi-subagents.git
+[submodule "forks/pi-plan-mode"]
+	path = forks/pi-plan-mode
+	url = https://github.com/nredd/pi-plan-mode.git
+[submodule "forks/rpiv-todo"]
+	path = forks/rpiv-todo
+	url = https://github.com/nredd/rpiv-todo.git
+[submodule "forks/pi-claude-auth"]
+	path = forks/pi-claude-auth
+	url = https://github.com/nredd/pi-claude-auth.git
+[submodule "forks/pi-computer-use"]
+	path = forks/pi-computer-use
+	url = https://github.com/nredd/pi-computer-use.git

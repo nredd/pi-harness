@@ -1,0 +1,39 @@
+{
+  "name": "@nredd/pi-subscription-router",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Pi virtual models that route across included subscription quota: Anthropic and ChatGPT Codex usage collectors, confirmed per-family exhaustion, and mid-run quota recovery.",
+  "author": "nredd",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nredd/pi-harness.git",
+    "directory": "packages/subscription-router"
+  },
+  "keywords": ["pi-package", "pi-extension"],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "lint": "biome check src/ test/ e2e/",
+    "format": "biome check --write src/ test/ e2e/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@earendil-works/pi-ai": "0.99.1",
+    "@earendil-works/pi-coding-agent": "0.99.1",
+    "@types/node": "26.6.3",
+    "typebox": "1.3.27",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  }
+}
