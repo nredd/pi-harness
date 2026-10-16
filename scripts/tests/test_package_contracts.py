@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -129,17 +130,112 @@ def test_run_reports_nonzero_exit(tmp_path: Path) -> None:
         ('import "side-effect";', ["side-effect"]),
         ('const m = await import("lazy");', ["lazy"]),
         ('const r = require("cjs");', ["cjs"]),
+        ("const m = await import(`@nredd/pi-session-kit`);", ["@nredd/pi-session-kit"]),
+        ('import fs = require("fs-eq");', ["fs-eq"]),
+        ('type T = import("typed").T;', ["typed"]),
         ('// "ssh itself failed", which also exits 255.\nconst s = "from \\"x\\"";', []),
+        ('// import x from "@nredd/pi-session-kit";\nconst s = \'require("@nredd/x")\';', []),
     ],
 )
-def test_import_specifiers(source: str, expected: list[str]) -> None:
+def test_scan_imports(source: str, expected: list[str]) -> None:
     """Static, dynamic, and CommonJS imports are found; comments and strings are not.
 
     Parameters:
         source (str): JS or TS text.
         expected (list[str]): Specifiers that must be found.
     """
-    assert list(pc.import_specifiers(source)) == expected
+    found = pc.scan_imports({"src/a.ts": source}, pc.locate_executable("node"))["src/a.ts"]
+    assert found.specifiers == expected
+    assert found.diagnostics == []
+
+
+def test_scan_imports_batches_files() -> None:
+    """One helper run answers for every file, keyed by the original path."""
+    found = pc.scan_imports(
+        {"src/a.ts": 'import "a";', "dist/b.mjs": 'import("b");'}, pc.locate_executable("node")
+    )
+    assert {name: imports.specifiers for name, imports in found.items()} == {
+        "src/a.ts": ["a"],
+        "dist/b.mjs": ["b"],
+    }
+
+
+@pytest.mark.parametrize("name", ["../escape.ts", "/abs.ts", ""])
+def test_scan_imports_rejects_unsafe_paths(name: str) -> None:
+    """Tarball paths that could leave the scratch directory never reach the helper.
+
+    Parameters:
+        name (str): Hostile path.
+    """
+    with pytest.raises(pc.ContractError, match="Unsafe source path"):
+        pc.scan_imports({name: ""}, pc.locate_executable("node"))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "const m = import(`@nredd/${name}`);",
+        'const m = import("@nredd/" + name);',
+        "const m = import(name);",
+        "const m = require(name);",
+        "const m = require(`@nredd/${name}`);",
+        "const m = cond ? import(a) : import(b);",
+        "type T = import(`@nredd/${name}`).T;",
+    ],
+)
+def test_audit_imports_rejects_computed_specifiers(source: str) -> None:
+    """A specifier the gate cannot read is a violation with a file:line:col location, never skipped.
+
+    Parameters:
+        source (str): JS or TS text with a non-literal specifier.
+    """
+    problems = pc.audit_imports("src/a.ts", source, ["src/a.ts"])
+    assert problems
+    assert all(p.startswith("src/a.ts:") and "not a string literal" in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "const m = await import(`@nredd/pi-session-kit`);",
+        'const m = await import("@nredd/pi-session-kit");',
+        'const m = require("@nredd/pi-session-kit");',
+        'export * from "@nredd/pi-session-kit";',
+        'type T = import("@nredd/pi-session-kit").T;',
+    ],
+)
+def test_audit_imports_rejects_sibling_in_every_form(source: str) -> None:
+    """Sibling plugin imports are caught in unexercised, non-static branches too.
+
+    Parameters:
+        source (str): JS or TS text importing the sibling.
+    """
+    problems = pc.audit_imports("src/a.ts", source, ["src/a.ts"])
+    assert len(problems) == 1
+    assert "sibling plugin" in problems[0]
+
+
+def test_audit_imports_ignores_import_text_in_comments_and_strings() -> None:
+    """Text that merely looks like an import is not one."""
+    source = (
+        '// import x from "@nredd/pi-session-kit";\n'
+        '/* require("@nredd/pi-session-kit") */\n'
+        "const s = `import('@nredd/pi-session-kit')`;\n"
+        'import { ok } from "node:fs";\n'
+    )
+    assert pc.audit_imports("src/a.ts", source, ["src/a.ts"]) == []
+
+
+def test_audit_imports_rejects_computed_import_equals() -> None:
+    """`import x = require(<expression>)` is not valid syntax, so it is rejected as a syntax error."""
+    problems = pc.audit_imports("src/a.ts", 'import x = require("a" + b);', ["src/a.ts"])
+    assert any("syntax error" in p for p in problems), problems
+
+
+def test_audit_imports_reports_syntax_errors() -> None:
+    """A file that does not parse cannot be trusted to list every import."""
+    problems = pc.audit_imports("src/a.ts", 'import "node:fs";\nconst = ;\n', ["src/a.ts"])
+    assert any(p.startswith("src/a.ts:2:") and "syntax error" in p for p in problems), problems
 
 
 @pytest.mark.parametrize(
@@ -424,3 +520,185 @@ def test_main_refuses_nonempty_work_dir(tmp_path: Path) -> None:
     """
     (tmp_path / "stale").write_text("x")
     assert pc.main(["--work-dir", str(tmp_path)]) == 2
+
+
+INTEGRITY = "sha512-" + "A" * 86 + "=="
+
+
+PINNED = {
+    "package": pc.STOCK_PI_PACKAGE,
+    "version": pc.STOCK_PI_VERSION,
+    "integrity": pc.STOCK_PI_INTEGRITY,
+}
+GOOD_ENTRY: dict[str, object] = {
+    "version": "0.3.0",
+    "tarball": "nredd-pi-dev-tools-0.3.0.tgz",
+    "integrity": INTEGRITY,
+    "shasum": "a" * 40,
+    "size": 1234,
+    "files": ["LICENSE", "package.json"],
+    "evidence": {"tool": "git_status", "untracked": ["untracked.txt"], "failure_path": "not a repo"},
+}
+
+
+def good_report(packages: dict[str, object] | None = None) -> dict[str, object]:
+    """Build a report that satisfies every schema rule.
+
+    Parameters:
+        packages (dict[str, object] | None): Package entries; defaults to the dev-tools entry.
+
+    Returns:
+        dict[str, object]: Raw report as `run_gate` assembles it.
+    """
+    return {
+        "stock_pi": PINNED,
+        "node": "v26.12.0",
+        "npm": "11.20.0",
+        "license_sha256": "b" * 64,
+        "packages": packages or {"@nredd/pi-dev-tools": GOOD_ENTRY},
+    }
+
+
+def with_entry(**changes: object) -> dict[str, object]:
+    """Return `good_report()` with fields of the dev-tools package entry replaced.
+
+    Parameters:
+        **changes (object): Entry fields to replace.
+
+    Returns:
+        dict[str, object]: Raw report.
+    """
+    return good_report({"@nredd/pi-dev-tools": GOOD_ENTRY | changes})
+
+
+def test_validate_report_accepts_good_and_round_trips() -> None:
+    """A well-formed report keeps its meaning and key order through serialization."""
+    report = pc.validate_report(good_report())
+    assert json.loads(pc.serialize_report(report)) == good_report()
+    assert list(json.loads(pc.serialize_report(report))) == list(good_report())
+
+
+def test_validate_report_accepts_every_scenario_evidence() -> None:
+    """Each package takes only its own evidence shape."""
+    packages: dict[str, object] = {
+        "@nredd/pi-dev-tools": GOOD_ENTRY,
+        "@nredd/pi-session-kit": GOOD_ENTRY
+        | {
+            "tarball": "nredd-pi-session-kit-0.3.0.tgz",
+            "evidence": {"tools": ["monitor_start", "monitor_read"], "monitor_line": "x", "stats_shards": 1},
+        },
+        "@nredd/pi-subscription-router": GOOD_ENTRY
+        | {
+            "tarball": "nredd-pi-subscription-router-0.3.0.tgz",
+            "evidence": {"virtual_model": "router/default", "dispatched": "local/m"},
+        },
+    }
+    assert len(pc.validate_report(good_report(packages)).packages) == 3
+
+
+@pytest.mark.parametrize(
+    ("raw", "needle"),
+    [
+        (with_entry(integrity="sha512-short"), "integrity"),
+        (with_entry(integrity="sha1-" + "A" * 27), "integrity"),
+        (with_entry(shasum="XYZ"), "shasum"),
+        (with_entry(size=0), "size"),
+        (with_entry(version="latest"), "version"),
+        (with_entry(tarball="../evil.tgz"), "tarball"),
+        (with_entry(tarball="nredd-pi-dev-tools-9.9.9.tgz"), "is not"),
+        (with_entry(files=[]), "files"),
+        (with_entry(files=["a", "a"]), "duplicate files"),
+        (with_entry(evidence={"tool": "git_status", "untracked": [], "failure_path": "x"}), "untracked"),
+        (with_entry(evidence={"tool": "git_status", "untracked": ["a"], "failure_path": ""}), "failure_path"),
+        (
+            with_entry(evidence={"tool": "git_status", "untracked": ["a"], "failure_path": "x", "extra": 1}),
+            "extra",
+        ),
+        (with_entry(evidence={"tool": "monitor_start"}), "evidence"),
+        (
+            with_entry(evidence={"virtual_model": "router/default", "dispatched": "local/m"}),
+            "evidence",
+        ),
+    ],
+)
+def test_validate_report_rejects_malformed_identity_and_evidence(raw: dict[str, object], needle: str) -> None:
+    """Bad artifact identity or evidence shapes fail at the serialization boundary.
+
+    Parameters:
+        raw (dict[str, object]): Report with one malformed field.
+        needle (str): Substring the error must contain.
+    """
+    with pytest.raises(pc.ContractError, match="Report failed validation") as excinfo:
+        pc.validate_report(raw)
+    assert needle in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"node": "latest"},
+        {"license_sha256": "abc"},
+        {"packages": {}},
+        {"unexpected": 1},
+        {"stock_pi": PINNED | {"version": "1.3.1"}},
+        {"stock_pi": PINNED | {"integrity": INTEGRITY}},
+        {"packages": {"@nredd/pi-unknown": GOOD_ENTRY}},
+    ],
+)
+def test_validate_report_rejects_malformed_top_level(changes: dict[str, object]) -> None:
+    """Top-level identity, pins and package names are enforced.
+
+    Parameters:
+        changes (dict[str, object]): Top-level fields to corrupt.
+    """
+    with pytest.raises(pc.ContractError, match="Report failed validation"):
+        pc.validate_report(good_report() | changes)
+
+
+def test_evidence_typed_dicts_match_models() -> None:
+    """The scenario return shapes and the validated models describe the same fields."""
+    pairs = {
+        pc.DevToolsEvidence: pc.DevToolsEvidenceModel,
+        pc.SessionKitEvidence: pc.SessionKitEvidenceModel,
+        pc.RouterEvidence: pc.RouterEvidenceModel,
+    }
+    for shape, model in pairs.items():
+        assert set(shape.__annotations__) == set(model.model_fields)
+
+
+def test_pack_rejects_digest_mismatch(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """`npm pack` identity that disagrees with the tarball bytes is rejected.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    tarball = make_tarball(
+        tmp_path / "fixture.tgz", {"package.json": json.dumps({"name": "x", "version": "1.0.0"}).encode()}
+    )
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "x-1.0.0.tgz",
+                    "integrity": INTEGRITY,
+                    "shasum": "a" * 40,
+                    "files": [{"path": "package.json"}],
+                }
+            ]
+        )
+    )
+    fake_npm = tmp_path / "npm"
+    fake_npm.write_text(f'#!/bin/sh\ncp "{tarball}" "$5/x-1.0.0.tgz"\ncat "{payload}"\n')
+    fake_npm.chmod(0o755)
+    liar = pc.Sandbox(tmp_path / "liar", pc.Tools(sandbox.tools.node, fake_npm, sandbox.tools.git))
+    (tmp_path / "out").mkdir()
+    with pytest.raises(pc.ContractError, match="disagrees with the tarball bytes"):
+        pc.pack(DEV_TOOLS, tmp_path / "out", liar, tmp_path)
+
+
+def test_npm_pack_entry_rejects_malformed_identity() -> None:
+    """Malformed `npm pack --json` identity never becomes an artifact."""
+    with pytest.raises(ValidationError):
+        pc.NpmPackEntry.model_validate({"filename": "x.tgz", "integrity": "nope", "shasum": "a", "files": []})

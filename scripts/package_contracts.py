@@ -6,7 +6,9 @@ fresh project, and drives it through a real, exact-version stock Pi install:
 1. `npm pack`: file list must match a narrow allowlist; `LICENSE` must be byte-identical to the
    repository root; the packed manifest must keep host modules as `*` peers with no dependencies.
 2. Source audit: every import in the tarball is relative (inside the package), a Node builtin, or a
-   host-provided Pi module. No sibling plugin, no bundled host copy.
+   host-provided Pi module. No sibling plugin, no bundled host copy. Imports come from the installed
+   TypeScript parser (`import_audit.ts`, one batched `node` run per package) rather than a regex;
+   computed specifiers are rejected, not skipped. It is a syntactic audit, not a proof about `eval`.
 3. Fresh install (`--ignore-scripts --legacy-peer-deps --offline`, like Pi's managed installs that
    suppress peer installation): `node_modules` holds only the package, never a host duplicate.
 4. Stock Pi `--mode json` with only that package loaded (`--no-extensions --extension DIR`), a
@@ -15,7 +17,8 @@ fresh project, and drives it through a real, exact-version stock Pi install:
    its stats artifact over a real session, and a router virtual model dispatching to a physical one.
 
 Nothing here publishes anything or touches real Pi state. The stock Pi version and tarball
-identities are recorded in the JSON report; nothing resolves "latest" at run time.
+identities are recorded in the JSON report, which is a validated Pydantic model (`ContractReport`)
+before it is serialized; nothing resolves "latest" at run time.
 
 References:
     https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
@@ -25,6 +28,7 @@ References:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
@@ -35,12 +39,22 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Annotated, Any, Literal, Self, TypedDict
 
-from faux_provider import FauxProvider, Step, TextStep, ToolStep, models_json
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
+
+from faux_provider import FauxProvider, RecordedRequest, Step, TextStep, ToolStep, models_json
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,12 +85,9 @@ NO_PROXY_VALUE = "127.0.0.1,localhost"
 # Defense in depth for clients honoring proxy variables; this is not a network sandbox.
 DEAD_PROXY = "http://127.0.0.1:9"
 
-IMPORT_SPEC = re.compile(
-    r"""(?:^|\n)[ \t]*(?:import|export)\b[^;'"`]*?\bfrom\s*["']([^"']+)["']"""
-    r"""|(?:^|\n)[ \t]*import\s*["']([^"']+)["']"""
-    r"""|\bimport\s*\(\s*["']([^"']+)["']\s*\)"""
-    r"""|\brequire\s*\(\s*["']([^"']+)["']\s*\)"""
-)
+IMPORT_AUDIT = Path(__file__).with_name("import_audit.ts")
+IMPORT_AUDIT_TIMEOUT_S = 120
+IMPORT_AUDIT_DIR = "pkg"  # Sources are laid out under this directory so the tsconfig cannot collide.
 
 
 class ContractError(RuntimeError):
@@ -133,6 +144,199 @@ CONTRACTS = (
         exposes_tools=frozenset({"subscription_usage"}),
     ),
 )
+
+
+# --- schemas --------------------------------------------------------------------------------------
+
+STRICT_MODEL = ConfigDict(extra="forbid", frozen=True)
+IGNORE_EXTRA_MODEL = ConfigDict(extra="ignore", frozen=True)
+
+Sha512Integrity = Annotated[str, StringConstraints(pattern=r"^sha512-[A-Za-z0-9+/]{86}==$")]
+Sha1Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
+Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+Semver = Annotated[
+    str, StringConstraints(pattern=r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+]
+NonEmptyText = Annotated[str, StringConstraints(min_length=1)]
+TarballName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$")]
+
+
+class NpmPackFile(BaseModel):
+    model_config = IGNORE_EXTRA_MODEL
+    path: NonEmptyText = Field(description="Path relative to the package root")
+
+
+class NpmPackEntry(BaseModel):
+    model_config = IGNORE_EXTRA_MODEL
+    filename: TarballName = Field(description="Tarball file name inside the pack destination")
+    integrity: Sha512Integrity = Field(description="npm `sha512-` integrity of the tarball")
+    shasum: Sha1Hex = Field(description="SHA-1 of the tarball")
+    files: list[NpmPackFile] = Field(min_length=1, description="Files npm says it packed")
+
+
+class PackedManifestIdentity(BaseModel):
+    model_config = IGNORE_EXTRA_MODEL
+    name: NonEmptyText = Field(description="npm package name")
+    version: Semver = Field(description="Package version")
+
+
+class DevToolsEvidence(TypedDict):
+    """Return shape of `scenario_dev_tools`."""
+
+    tool: str
+    untracked: list[str]
+    failure_path: str
+
+
+class SessionKitEvidence(TypedDict):
+    """Return shape of `scenario_session_kit`."""
+
+    tools: list[str]
+    monitor_line: str
+    stats_shards: int
+
+
+class RouterEvidence(TypedDict):
+    """Return shape of `scenario_router`."""
+
+    virtual_model: str
+    dispatched: str
+
+
+ScenarioEvidence = DevToolsEvidence | SessionKitEvidence | RouterEvidence
+
+
+class DevToolsEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    tool: Literal["git_status"] = Field(description="Tool the scenario ran")
+    untracked: list[str] = Field(min_length=1, description="Untracked paths the real tool reported")
+    failure_path: NonEmptyText = Field(description="Error text from the outside-a-repository run")
+
+
+class SessionKitEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    tools: list[Literal["monitor_start", "monitor_read"]] = Field(
+        min_length=1, description="Monitor tools the scenario exercised"
+    )
+    monitor_line: NonEmptyText = Field(description="Marker line the monitor captured")
+    stats_shards: int = Field(ge=1, description="Shards in the exported stats manifest")
+
+
+class RouterEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    virtual_model: Literal["router/default"] = Field(description="Virtual model that was requested")
+    dispatched: Annotated[str, StringConstraints(pattern=r"^[^/\s]+/[^/\s]+$")] = Field(
+        description="`provider/model` the virtual model dispatched to"
+    )
+
+
+EVIDENCE_MODELS: dict[str, type[BaseModel]] = {
+    "@nredd/pi-dev-tools": DevToolsEvidenceModel,
+    "@nredd/pi-session-kit": SessionKitEvidenceModel,
+    "@nredd/pi-subscription-router": RouterEvidenceModel,
+}
+
+
+class StockPiIdentity(BaseModel):
+    model_config = STRICT_MODEL
+    package: str = Field(description="Stock Pi npm package name")
+    version: Semver = Field(description="Stock Pi version")
+    integrity: Sha512Integrity = Field(description="Stock Pi tarball integrity")
+
+    @model_validator(mode="after")
+    def _is_pinned(self) -> Self:
+        """Reject any identity that is not the pinned one.
+
+        Returns:
+            Self: The validated model.
+
+        Raises:
+            ValueError: If the package, version or integrity differs from the pins.
+        """
+        pinned = (STOCK_PI_PACKAGE, STOCK_PI_VERSION, STOCK_PI_INTEGRITY)
+        if (self.package, self.version, self.integrity) != pinned:
+            raise ValueError(f"stock Pi identity is not the pinned {pinned!r}")
+        return self
+
+
+class PackageReport(BaseModel):
+    model_config = STRICT_MODEL
+    version: Semver = Field(description="Packed package version")
+    tarball: TarballName = Field(description="Tarball file name")
+    integrity: Sha512Integrity = Field(description="npm `sha512-` integrity of the tarball")
+    shasum: Sha1Hex = Field(description="SHA-1 of the tarball")
+    size: int = Field(gt=0, description="Tarball size in bytes")
+    files: list[NonEmptyText] = Field(min_length=1, description="Files in the packed tarball")
+    evidence: DevToolsEvidenceModel | SessionKitEvidenceModel | RouterEvidenceModel = Field(
+        description="Scenario evidence for this package"
+    )
+
+
+class ContractReport(BaseModel):
+    model_config = STRICT_MODEL
+    stock_pi: StockPiIdentity = Field(description="Pinned stock Pi identity")
+    node: Annotated[str, StringConstraints(pattern=r"^v\d+\.\d+\.\d+")] = Field(
+        description="Node version that ran the contracts"
+    )
+    npm: Semver = Field(description="npm version that ran the contracts")
+    license_sha256: Sha256Hex = Field(description="SHA-256 of the shared license text")
+    packages: dict[str, PackageReport] = Field(
+        min_length=1, description="Report entry per packed package name"
+    )
+
+    @model_validator(mode="after")
+    def _packages_match_contracts(self) -> Self:
+        """Cross-check each package entry against its contract.
+
+        Returns:
+            Self: The validated model.
+
+        Raises:
+            ValueError: If a package is unknown, its tarball name or file list is inconsistent, or its
+                evidence belongs to another package.
+        """
+        for name, entry in self.packages.items():
+            expected_model = EVIDENCE_MODELS.get(name)
+            if expected_model is None:
+                raise ValueError(f"unknown package '{name}'")
+            if not isinstance(entry.evidence, expected_model):
+                raise ValueError(f"evidence for '{name}' is a `{type(entry.evidence).__name__}`")
+            expected_tarball = f"{name.removeprefix('@').replace('/', '-')}-{entry.version}.tgz"
+            if entry.tarball != expected_tarball:
+                raise ValueError(f"tarball '{entry.tarball}' is not '{expected_tarball}'")
+            if len(set(entry.files)) != len(entry.files):
+                raise ValueError(f"duplicate files for '{name}'")
+        return self
+
+
+def validate_report(raw: Mapping[str, object]) -> ContractReport:
+    """Validate a report at the serialization boundary.
+
+    Parameters:
+        raw (Mapping[str, object]): Report assembled from artifacts and scenario evidence.
+
+    Returns:
+        ContractReport: The validated report.
+
+    Raises:
+        ContractError: If any identity or evidence field is malformed.
+    """
+    try:
+        return ContractReport.model_validate(raw)
+    except ValidationError as e:
+        raise ContractError(f"Report failed validation:\n{e}") from e
+
+
+def serialize_report(report: ContractReport) -> str:
+    """Serialize a validated report as indented JSON.
+
+    Parameters:
+        report (ContractReport): Validated report.
+
+    Returns:
+        str: JSON text ending in a newline.
+    """
+    return report.model_dump_json(indent=2) + "\n"
 
 
 @dataclass(frozen=True)
@@ -305,13 +509,25 @@ def locate_tools() -> Tools:
     Raises:
         ContractError: If any executable is missing.
     """
-    found: dict[str, Path] = {}
-    for name in ("node", "npm", "git"):
-        located = shutil.which(name)
-        if located is None:
-            raise ContractError(f"`{name}` not found on PATH")
-        found[name] = Path(located).resolve()
-    return Tools(node=found["node"], npm=found["npm"], git=found["git"])
+    return Tools(node=locate_executable("node"), npm=locate_executable("npm"), git=locate_executable("git"))
+
+
+def locate_executable(name: str) -> Path:
+    """Resolve one executable on `PATH` to an absolute, symlink-free path.
+
+    Parameters:
+        name (str): Executable name.
+
+    Returns:
+        Path: Absolute path.
+
+    Raises:
+        ContractError: If the executable is missing.
+    """
+    located = shutil.which(name)
+    if located is None:
+        raise ContractError(f"`{name}` not found on PATH")
+    return Path(located).resolve()
 
 
 # --- stock Pi -------------------------------------------------------------------------------------
@@ -404,20 +620,25 @@ def pack(
         timeout=NPM_TIMEOUT_S,
     )
     try:
-        report = json.loads(done.stdout)[0]
-    except (json.JSONDecodeError, IndexError, KeyError) as e:
+        (report,) = TypeAdapter(list[NpmPackEntry]).validate_json(done.stdout)
+    except (ValidationError, ValueError) as e:
         raise ContractError(
             f"Unparseable `npm pack --json` output for '{contract.name}': {done.stdout[:500]}"
         ) from e
-    path = dest / report["filename"]
+    path = dest / report.filename
+    data = path.read_bytes()
+    digest = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+    if digest != report.integrity or hashlib.sha1(data, usedforsecurity=False).hexdigest() != report.shasum:
+        raise ContractError(f"`npm pack` identity for '{contract.name}' disagrees with the tarball bytes")
     with tarfile.open(path) as tar:
         files = tuple(sorted(strip_prefix(member.name) for member in tar.getmembers() if member.isfile()))
-    if files != tuple(sorted(entry["path"] for entry in report["files"])):
+    if files != tuple(sorted(entry.path for entry in report.files)):
         raise ContractError(f"`npm pack` file list for '{contract.name}' disagrees with its tarball")
-    manifest = json.loads(read_member(path, "package.json"))
-    return PackedArtifact(
-        contract, path, manifest["version"], report["integrity"], report["shasum"], path.stat().st_size, files
-    )
+    try:
+        manifest = PackedManifestIdentity.model_validate_json(read_member(path, "package.json"))
+    except ValidationError as e:
+        raise ContractError(f"Packed `package.json` of '{contract.name}' has no usable identity: {e}") from e
+    return PackedArtifact(contract, path, manifest.version, report.integrity, report.shasum, len(data), files)
 
 
 def strip_prefix(name: str) -> str:
@@ -531,37 +752,83 @@ def audit_manifest(
     return problems
 
 
-def import_specifiers(source: str) -> Iterator[str]:
-    """Yield every module specifier a JS or TS source imports.
+class FileImports(BaseModel):
+    model_config = STRICT_MODEL
+    specifiers: list[str] = Field(description="Every literal module specifier, in source order")
+    diagnostics: list[str] = Field(
+        description="`file:line:col: message` for syntax errors and computed specifiers"
+    )
+
+
+class ImportScan(BaseModel):
+    model_config = STRICT_MODEL
+    files: dict[str, FileImports] = Field(description="Parse results by path relative to the package root")
+
+
+def scan_imports(sources: Mapping[str, str], node: Path) -> dict[str, FileImports]:
+    """Parse JS/TS sources with the installed TypeScript parser in one batched `node` run.
 
     Parameters:
-        source (str): File text.
+        sources (Mapping[str, str]): File text by path relative to the package root.
+        node (Path): Absolute `node` path.
 
-    Yields:
-        str: Each static import/export-from, dynamic `import()` or `require()` specifier.
+    Returns:
+        dict[str, FileImports]: Specifiers and diagnostics for every input path.
+
+    Raises:
+        ContractError: If a path is unsafe, the helper fails, or its output is malformed.
     """
-    for match in IMPORT_SPEC.finditer(source):
-        yield next(group for group in match.groups() if group)
+    if not sources:
+        return {}
+    for name in sources:
+        pure = PurePosixPath(name)
+        if pure.is_absolute() or ".." in pure.parts or not pure.parts:
+            raise ContractError(f"Unsafe source path for the import audit: '{name}'")
+    with tempfile.TemporaryDirectory(prefix="import-audit-") as scratch:
+        root = Path(scratch)
+        for name, text in sources.items():
+            target = root / IMPORT_AUDIT_DIR / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        argv = [node, IMPORT_AUDIT, root, *(f"{IMPORT_AUDIT_DIR}/{name}" for name in sources)]
+        env = {"PATH": os.pathsep.join([str(node.parent), "/usr/bin", "/bin"]), "HOME": str(root)}
+        done = run(argv, env=env, cwd=root, timeout=IMPORT_AUDIT_TIMEOUT_S)
+    try:
+        scan = ImportScan.model_validate_json(done.stdout)
+    except ValidationError as e:
+        raise ContractError(f"Malformed `import_audit.ts` output: {e}") from e
+    prefix = f"{IMPORT_AUDIT_DIR}/"
+    found = {
+        name.removeprefix(prefix): FileImports(
+            specifiers=imports.specifiers,
+            diagnostics=[problem.removeprefix(prefix) for problem in imports.diagnostics],
+        )
+        for name, imports in scan.files.items()
+    }
+    if found.keys() != sources.keys():
+        raise ContractError(f"`import_audit.ts` returned {sorted(found)} for {sorted(sources)}")
+    return found
 
 
-def audit_imports(path: str, source: str, files: Sequence[str]) -> list[str]:
-    """Classify the imports of one packed source file.
+def classify_imports(path: str, found: FileImports, files: Sequence[str]) -> list[str]:
+    """Classify the parsed imports of one packed source file.
 
     Allowed: Node builtins (`node:` prefix), host-provided Pi modules, and relative paths that stay
-    inside the package. Everything else, including any `@nredd/` sibling, is a violation. The
-    bundled stats artifact may import Node builtins only: it must run without Pi.
+    inside the package. Everything else, including any `@nredd/` sibling and any specifier the parser
+    could not resolve to a literal, is a violation. The bundled stats artifact may import Node builtins
+    only: it must run without Pi.
 
     Parameters:
         path (str): File path relative to the package root.
-        source (str): File text.
+        found (FileImports): Parser output for the file.
         files (Sequence[str]): All tarball paths, to resolve relative imports.
 
     Returns:
         list[str]: Violations; empty when every import is acceptable.
     """
-    problems: list[str] = []
+    problems = list(found.diagnostics)
     standalone = path.startswith("dist/")
-    for spec in import_specifiers(source):
+    for spec in found.specifiers:
         if spec.startswith("node:"):
             continue
         if spec.startswith("."):
@@ -582,12 +849,29 @@ def audit_imports(path: str, source: str, files: Sequence[str]) -> list[str]:
     return problems
 
 
-def audit_tarball(artifact: PackedArtifact, root_license: bytes) -> list[str]:
+def audit_imports(path: str, source: str, files: Sequence[str], node: Path | None = None) -> list[str]:
+    """Parse and classify the imports of one source text.
+
+    Parameters:
+        path (str): File path relative to the package root.
+        source (str): File text.
+        files (Sequence[str]): All tarball paths, to resolve relative imports.
+        node (Path | None): Absolute `node` path; resolved from `PATH` when `None`.
+
+    Returns:
+        list[str]: Violations; empty when every import is acceptable.
+    """
+    found = scan_imports({path: source}, node or locate_executable("node"))[path]
+    return classify_imports(path, found, files)
+
+
+def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | None = None) -> list[str]:
     """Run every static tarball audit.
 
     Parameters:
         artifact (PackedArtifact): Tarball to audit.
         root_license (bytes): Content of the repository `LICENSE`.
+        node (Path | None): Absolute `node` path for the import audit; resolved from `PATH` when `None`.
 
     Returns:
         list[str]: All violations found.
@@ -597,9 +881,14 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes) -> list[str]:
     problems = audit_files(contract, artifact.files)
     problems += audit_license(artifact.path, root_license)
     problems += audit_manifest(contract, manifest, artifact.files)
-    for name in artifact.files:
-        if name.endswith(CODE_SUFFIXES):
-            problems += audit_imports(name, read_member(artifact.path, name).decode(), artifact.files)
+    sources = {
+        name: read_member(artifact.path, name).decode()
+        for name in artifact.files
+        if name.endswith(CODE_SUFFIXES)
+    }
+    scanned = scan_imports(sources, node or locate_executable("node"))
+    for name, found in scanned.items():
+        problems += classify_imports(name, found, artifact.files)
     return problems
 
 
@@ -819,7 +1108,10 @@ def require_clean_run(result: PiRun, what: str) -> None:
 
 
 def require_tools(
-    result: PiRun, contract: PackageContract, siblings: Sequence[PackageContract], requests: Sequence[Any]
+    result: PiRun,
+    contract: PackageContract,
+    siblings: Sequence[PackageContract],
+    requests: Sequence[RecordedRequest],
 ) -> None:
     """Require the package's tools declared to the model and no sibling's.
 
@@ -827,7 +1119,7 @@ def require_tools(
         result (PiRun): The run, for context in messages.
         contract (PackageContract): Package under test.
         siblings (Sequence[PackageContract]): Every other package.
-        requests (Sequence[Any]): `RecordedRequest`s seen by the provider.
+        requests (Sequence[RecordedRequest]): Requests seen by the provider.
 
     Raises:
         ContractError: If an expected tool is missing or a sibling's tool is present.
@@ -888,14 +1180,14 @@ class Context:
         run([self.sandbox.tools.git, "-C", repo, *args], env=self.sandbox.env(), cwd=repo, timeout=60)
 
 
-def scenario_dev_tools(ctx: Context) -> dict[str, Any]:
+def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
     """Real `git_status` result, and its failure path, through stock Pi.
 
     Parameters:
         ctx (Context): Scenario context.
 
     Returns:
-        dict[str, Any]: Evidence recorded in the report.
+        DevToolsEvidence: Evidence recorded in the report.
 
     Raises:
         ContractError: If the tool misbehaves.
@@ -941,14 +1233,14 @@ def scenario_dev_tools(ctx: Context) -> dict[str, Any]:
     return {"tool": "git_status", "untracked": ["untracked.txt"], "failure_path": tool_text(failed)[:200]}
 
 
-def scenario_session_kit(ctx: Context) -> dict[str, Any]:
+def scenario_session_kit(ctx: Context) -> SessionKitEvidence:
     """Real monitor tools, then the standalone stats artifact over the resulting real session.
 
     Parameters:
         ctx (Context): Scenario context.
 
     Returns:
-        dict[str, Any]: Evidence recorded in the report.
+        SessionKitEvidence: Evidence recorded in the report.
 
     Raises:
         ContractError: If the monitor or the artifact misbehaves.
@@ -1035,14 +1327,14 @@ def scenario_session_kit(ctx: Context) -> dict[str, Any]:
     }
 
 
-def scenario_router(ctx: Context) -> dict[str, Any]:
+def scenario_router(ctx: Context) -> RouterEvidence:
     """Virtual `router/default` registration and dispatch to a physical model, plus a rejected config.
 
     Parameters:
         ctx (Context): Scenario context.
 
     Returns:
-        dict[str, Any]: Evidence recorded in the report.
+        RouterEvidence: Evidence recorded in the report.
 
     Raises:
         ContractError: If routing misbehaves.
@@ -1089,7 +1381,7 @@ def scenario_router(ctx: Context) -> dict[str, Any]:
     return {"virtual_model": "router/default", "dispatched": f"{PROVIDER}/{PHYSICAL_MODEL}"}
 
 
-SCENARIOS: dict[str, Callable[[Context], dict[str, Any]]] = {
+SCENARIOS: dict[str, Callable[[Context], ScenarioEvidence]] = {
     "dev-tools": scenario_dev_tools,
     "session-kit": scenario_session_kit,
     "subscription-router": scenario_router,
@@ -1099,7 +1391,7 @@ SCENARIOS: dict[str, Callable[[Context], dict[str, Any]]] = {
 # --- orchestration --------------------------------------------------------------------------------
 
 
-def run_gate(work: Path, stock_prefix: Path, only: Sequence[str] | None) -> dict[str, Any]:
+def run_gate(work: Path, stock_prefix: Path, only: Sequence[str] | None) -> ContractReport:
     """Run the whole contract gate and build the identity/evidence report.
 
     Parameters:
@@ -1108,10 +1400,10 @@ def run_gate(work: Path, stock_prefix: Path, only: Sequence[str] | None) -> dict
         only (Sequence[str] | None): Package directories to restrict to; `None` runs all.
 
     Returns:
-        dict[str, Any]: JSON-serializable report.
+        ContractReport: Validated report.
 
     Raises:
-        ContractError: On the first violated contract, after all static audits ran.
+        ContractError: On the first violated contract or a malformed report, after all static audits ran.
     """
     tools = locate_tools()
     root_license = (REPO_ROOT / "LICENSE").read_bytes()
@@ -1122,21 +1414,13 @@ def run_gate(work: Path, stock_prefix: Path, only: Sequence[str] | None) -> dict
     tarballs.mkdir()
     artifacts = [pack(contract, tarballs, base) for contract in selected]
 
-    problems = [f"{a.contract.name}: {p}" for a in artifacts for p in audit_tarball(a, root_license)]
+    problems = [
+        f"{a.contract.name}: {p}" for a in artifacts for p in audit_tarball(a, root_license, tools.node)
+    ]
     if problems:
         raise ContractError("Tarball audit failed:\n" + "\n".join(f"  - {p}" for p in problems))
 
-    report: dict[str, Any] = {
-        "stock_pi": {
-            "package": STOCK_PI_PACKAGE,
-            "version": STOCK_PI_VERSION,
-            "integrity": STOCK_PI_INTEGRITY,
-        },
-        "node": run([tools.node, "--version"], env=base.env(), cwd=work, timeout=30).stdout.strip(),
-        "npm": run([tools.npm, "--version"], env=base.env(), cwd=work, timeout=30).stdout.strip(),
-        "license_sha256": hashlib.sha256(root_license).hexdigest(),
-        "packages": {},
-    }
+    packages: dict[str, object] = {}
     for artifact in artifacts:
         contract = artifact.contract
         sandbox = Sandbox(work / f"sandbox-{contract.directory}", tools)
@@ -1148,7 +1432,7 @@ def run_gate(work: Path, stock_prefix: Path, only: Sequence[str] | None) -> dict
         evidence = SCENARIOS[contract.directory](
             Context(pi_bin, sandbox, installed, artifact, scratch, siblings)
         )
-        report["packages"][contract.name] = {
+        packages[contract.name] = {
             "version": artifact.version,
             "tarball": artifact.path.name,
             "integrity": artifact.integrity,
@@ -1157,7 +1441,19 @@ def run_gate(work: Path, stock_prefix: Path, only: Sequence[str] | None) -> dict
             "files": list(artifact.files),
             "evidence": evidence,
         }
-    return report
+    return validate_report(
+        {
+            "stock_pi": {
+                "package": STOCK_PI_PACKAGE,
+                "version": STOCK_PI_VERSION,
+                "integrity": STOCK_PI_INTEGRITY,
+            },
+            "node": run([tools.node, "--version"], env=base.env(), cwd=work, timeout=30).stdout.strip(),
+            "npm": run([tools.npm, "--version"], env=base.env(), cwd=work, timeout=30).stdout.strip(),
+            "license_sha256": hashlib.sha256(root_license).hexdigest(),
+            "packages": packages,
+        }
+    )
 
 
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -1208,7 +1504,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
-    text = json.dumps(report, indent=2) + "\n"
+    text = serialize_report(report)
     if args.report:
         args.report.write_text(text)
     sys.stdout.write(text)
