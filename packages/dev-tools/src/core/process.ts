@@ -6,6 +6,7 @@
  * - the child runs in its own process group so a timeout or abort kills the whole tree
  * - SIGTERM first, SIGKILL after a grace period, then a hard resolve so a grandchild that
  *   keeps the pipes open cannot hang the caller
+ * - remaining group members are killed when the command settles, including normal leader exit
  * - stdout and stderr are kept separate, each capped in memory with a dropped-byte count
  *
  * macOS and Linux only: process-group kill relies on `detached` + `kill(-pid)`.
@@ -121,16 +122,12 @@ class StreamBuffer {
 	}
 }
 
-/** Signal the child's whole process group, falling back to the pid when no group exists. */
+/** Signal only the owned process group; a reaped leader's bare pid may already have been reused. */
 function killTree(pid: number, sig: NodeJS.Signals): void {
 	try {
 		process.kill(-pid, sig);
 	} catch {
-		try {
-			process.kill(pid, sig);
-		} catch {
-			// already gone
-		}
+		// The group is already gone; never fall back to an unrelated process with the old leader pid.
 	}
 }
 
@@ -144,12 +141,14 @@ export function run(opts: RunOptions): Promise<RunResult> {
 		let settled = false;
 		let timedOut = false;
 		let aborted = false;
+		let groupId: number | undefined;
 		const timers: NodeJS.Timeout[] = [];
 
 		const finish = (exitCode: number | null, termSignal: NodeJS.Signals | null, spawnError?: string) => {
 			if (settled) return;
 			settled = true;
 			for (const t of timers) clearTimeout(t);
+			if (groupId !== undefined) killTree(groupId, "SIGKILL");
 			opts.signal?.removeEventListener("abort", onAbort);
 			resolve({
 				exitCode,
@@ -177,6 +176,7 @@ export function run(opts: RunOptions): Promise<RunResult> {
 			stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 			detached: true,
 		});
+		groupId = child.pid;
 
 		const alive = () => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
 
