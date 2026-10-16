@@ -42,7 +42,9 @@ make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, s
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*` (`@nredd/pi-*`, all `private: true`
   until a publication pipeline exists)
-- `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories)
+- `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
+- `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
+  import parser (installed TypeScript 7 `unstable/sync` API; real parses, no mocks)
 - `check-integration`: ruff, ty, unit tests for `integration/`, then `check-probes`
 - `check-probes`: Biome and strict `tsc` for `integration/probes/process-lifecycle.test.ts` (real
   `dev-tools` and `session-kit` runner sources), then `node --test` on the explicit

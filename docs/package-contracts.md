@@ -14,7 +14,14 @@ Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
   integrity or `pi --version` fails the gate
 - `--report FILE` (`make check-package-contracts REPORT=/abs/file.json`) records Pi, Node, npm, the
   `LICENSE` digest, and per package the version, tarball name, `sha512` integrity, `sha1`, size,
-  file list and scenario evidence
+  file list and scenario evidence. The output meaning and key order are unchanged
+- The report is a validated Pydantic model (`ContractReport`, `pydantic` added to the `integration` uv
+  environment, which runs `scripts/`) built at the serialization boundary; scenarios return
+  `TypedDict` evidence shapes. Malformed digests, versions, tarball names, duplicate files, evidence
+  of the wrong package or with extra/missing fields, and a stock Pi identity other than the pins
+  fail the gate instead of being written. `npm pack --json` output is validated the same way and its
+  `sha512`/`sha1` are recomputed from the tarball bytes. Not modelled: Pi's JSONL events and the
+  packed `package.json` beyond its name/version stay loosely typed `dict[str, Any]`
 
 What each package must satisfy:
 
@@ -28,6 +35,16 @@ What each package must satisfy:
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
 - Every import is a `node:` builtin, a host module, or a relative path inside the package. No
   `@nredd/*` sibling. The stats artifact may import only `node:` builtins
+- Imports are read with the repository's installed TypeScript 7.0.2 parser (`scripts/import_audit.ts`
+  via `typescript/unstable/sync`, which drives the bundled `tsgo`; no new dependency, one batched
+  `node` run per package). It sees static imports and re-exports (including `import type`),
+  `import x = require()`, `import("x")` types, dynamic `import()` and `require()` calls, with plain
+  string and no-substitution template specifiers resolved. A computed specifier (template with
+  `${}`, concatenation, a variable, a missing argument) is a violation reported as `file:line:col`,
+  not skipped, and so is a file with syntax errors. Comments and string literals are ignored because
+  they are not syntax. Limits: this is a syntactic audit, not a security proof. It does not see
+  `eval`, `new Function`, `createRequire()(...)` results, `import.meta.resolve` or JSDoc `@import`
+  tags, and a local `require` shadow is still treated as `require`
 - Fresh install (`--ignore-scripts --legacy-peer-deps --offline`, mirroring Pi's suppressed peer
   installs): `node_modules` and the lockfile contain only the package, so no duplicate host copy
 - Stock Pi, `--mode json` with `--no-extensions --extension <installed dir>` (only that package),
@@ -54,3 +71,14 @@ Scratch is deleted unless `--keep`.
 Limits: this is stock Pi only. It does not exercise `pi install npm:...` (nothing is published),
 the forked subagents/Plan-mode integrations, the Bun-compiled candidate, or the full stack. Do not
 read a pass as candidate or fullstack acceptance.
+
+Review dispositions (PR3, HEAD `4af6e2c`), both fixed:
+
+- Spec, `import(\`@nredd/...\`)` and other computed imports passing silently: the regex scanner is
+  replaced by the TypeScript parser above. Template, sibling-template and computed specifiers are
+  rejected with `file:line:col` diagnostics; literal templates are classified like strings. Covered
+  by `scripts/import_audit.test.ts` and the `audit_imports` cases in `scripts/tests/test_package_contracts.py`
+- Standards, untyped report/evidence: `ContractReport` and per-package evidence models validate at
+  the JSON boundary, scenario functions return `TypedDict`s, and artifact identity is checked
+  against the tarball bytes. Residual `dict[str, Any]` is limited to Pi's JSONL events and the packed
+  manifest (see above)

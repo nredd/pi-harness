@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap-forks bootstrap-forks-check check check-ts check-scripts check-integration check-probes check-benchmark check-package-contracts clean
+.PHONY: help install bootstrap-forks bootstrap-forks-check check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
@@ -24,6 +24,7 @@ check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace
 check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos)
 	cd scripts && uv run --locked --project ../integration ruff format --check . && uv run --locked --project ../integration ruff check --no-fix --ignore-noqa . && uv run --locked --project ../integration ty check
 	uv run --locked --project integration pytest scripts -c scripts/pyproject.toml -p no:cacheprovider
+	$(MAKE) check-import-audit
 
 check-integration:  ## integration/ unit gate (no pi, tmux, or scenarios)
 	cd integration && $(PY_CHECK)
@@ -34,6 +35,11 @@ check-probes:  ## Lifecycle probe Biome + strict tsc against real sources, then 
 	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/process-lifecycle.test.ts
 	node_modules/.bin/tsc -p integration/probes/tsconfig.process-lifecycle.json
 	node --test integration/probes/transcript-types.test.ts integration/probes/process-lifecycle.test.ts
+
+check-import-audit:  ## Import-audit helper Biome + strict tsc, then node --test against the real TypeScript parser
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/import_audit.ts scripts/import_audit.test.ts
+	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
+	node --test scripts/import_audit.test.ts
 
 check-benchmark:  ## benchmarks/comparison unit gate with coverage threshold
 	cd benchmarks/comparison && $(PY_CHECK)
