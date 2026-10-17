@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap-forks bootstrap-forks-check check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts clean
+.PHONY: help install bootstrap-forks bootstrap-forks-check check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts check-fork-package-contracts clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
@@ -47,6 +47,9 @@ check-benchmark:  ## benchmarks/comparison unit gate with coverage threshold
 
 check-package-contracts:  ## Pack, audit, install and exercise each @nredd/pi-* tarball alone through exact stock Pi 1.3.0 (npm registry on first run)
 	cd scripts && uv run --locked --project ../integration python package_contracts.py $(if $(REPORT),--report $(REPORT))
+
+check-fork-package-contracts:  ## REAL packed preset + dev-tools through the Gitlink-selected pi-subagents fork on stock Pi 1.3.0 (initialized, clean fork; npm registry)
+	cd scripts && uv run --locked --project ../integration python fork_package_contracts.py $(if $(REPORT),--report $(REPORT))
 
 clean:  ## Remove caches and build output (never touches forks/)
 	rm -rf node_modules integration/.venv benchmarks/comparison/.venv
