@@ -5,6 +5,10 @@ Stock Pi talks to it through a `models.json` provider on a loopback port, so rea
 Each chat-completions request is answered from a script, indexed by the number of assistant
 messages already in the request. Requests are recorded so tests can assert what Pi sent.
 
+A second conversation in the same process (e.g. a subagent child session sharing the provider)
+would otherwise replay the parent's script. Optional `Route`s select a different script when a
+user message contains a marker, so each conversation keeps its own turn indexing.
+
 References:
     https://platform.openai.com/docs/api-reference/chat/streaming
 """
@@ -57,6 +61,30 @@ Step = ToolStep | TextStep
 
 
 @dataclass(frozen=True)
+class Route:
+    """An alternative script for requests whose user messages contain `marker`.
+
+    Parameters:
+        marker (str): Non-empty text searched for in the text of every `user` message.
+        script (Sequence[Step]): Turns for matching conversations, indexed like the default script.
+    """
+
+    marker: str
+    script: Sequence[Step]
+
+    def __post_init__(self) -> None:
+        """Reject a route that could never be selected or answered.
+
+        Raises:
+            ValueError: If `marker` is empty or `script` has no steps.
+        """
+        if not self.marker:
+            raise ValueError("`marker` must not be empty")
+        if not self.script:
+            raise ValueError(f"route '{self.marker}' needs at least one step")
+
+
+@dataclass(frozen=True)
 class RecordedRequest:
     """What Pi sent for one model call.
 
@@ -64,19 +92,46 @@ class RecordedRequest:
         model (str): Physical model id the request named.
         roles (tuple[str, ...]): Message roles in order.
         tools (tuple[str, ...]): Names of the declared tools.
+        system (str): Text of the `system` and `developer` messages, joined by newlines.
+        route (str | None): Marker of the `Route` that answered, `None` for the default script.
+        tool_results (tuple[str, ...]): Text of the `tool` messages in order, i.e. what Pi returned for
+            the calls already made in this conversation.
     """
 
     model: str
     roles: tuple[str, ...]
     tools: tuple[str, ...]
+    system: str = ""
+    route: str | None = None
+    tool_results: tuple[str, ...] = ()
 
 
 REQUEST_MODEL = ConfigDict(extra="ignore", frozen=True, strict=True)
 
 
+class ChatPart(BaseModel):
+    model_config = REQUEST_MODEL
+    text: str | None = Field(default=None, description="Text of a text part; absent for other part kinds")
+
+
 class ChatMessage(BaseModel):
     model_config = REQUEST_MODEL
     role: str = Field(description="Message author role")
+    content: str | list[ChatPart] | None = Field(
+        default=None, description="Message content: a string, a list of parts, or null for tool calls"
+    )
+
+    def text(self) -> str:
+        """Join the message's text.
+
+        Returns:
+            str: The string content, or the text parts joined without a separator; empty for null.
+        """
+        if self.content is None:
+            return ""
+        if isinstance(self.content, str):
+            return self.content
+        return "".join(part.text or "" for part in self.content)
 
 
 class ChatToolFunction(BaseModel):
@@ -149,18 +204,23 @@ class FauxProvider:
             the final turn, so a script ending in `TextStep` is stable under retries.
     """
 
-    def __init__(self, script: Sequence[Step]) -> None:
+    def __init__(self, script: Sequence[Step], routes: Sequence[Route] = ()) -> None:
         """Bind an ephemeral loopback port; serving starts on `__enter__`.
 
         Parameters:
             script (Sequence[Step]): Non-empty scripted turns.
+            routes (Sequence[Route]): Optional alternative scripts, tried in order.
 
         Raises:
-            ValueError: If `script` is empty.
+            ValueError: If `script` is empty or two routes share a marker.
         """
         if not script:
             raise ValueError("`script` must contain at least one step")
+        markers = [route.marker for route in routes]
+        if len(set(markers)) != len(markers):
+            raise ValueError(f"duplicate route markers: {markers}")
         self.script = tuple(script)
+        self.routes = tuple(routes)
         self.requests: list[RecordedRequest] = []
         self._lock = threading.Lock()
         provider = self
@@ -220,7 +280,7 @@ class FauxProvider:
 
         Raises:
             ValueError: If `body` lacks the consumed fields (`model`, `messages[].role`,
-                `tools[].function.name`) or they have the wrong type.
+                `messages[].content`, `tools[].function.name`) or they have the wrong type.
         """
         try:
             request = ChatRequest.model_validate(body)
@@ -230,10 +290,19 @@ class FauxProvider:
             ) from e
         roles = tuple(message.role for message in request.messages)
         tools = tuple(tool.function.name for tool in request.tools)
+        system = "\n".join(m.text() for m in request.messages if m.role in {"system", "developer"})
+        user_text = [m.text() for m in request.messages if m.role == "user"]
+        tool_results = tuple(m.text() for m in request.messages if m.role == "tool")
+        route = next((r for r in self.routes if any(r.marker in text for text in user_text)), None)
+        script = route.script if route else self.script
         with self._lock:
-            self.requests.append(RecordedRequest(request.model, roles, tools))
-        index = min(roles.count("assistant"), len(self.script) - 1)
-        return encode_step(self.script[index], index)
+            self.requests.append(
+                RecordedRequest(
+                    request.model, roles, tools, system, route.marker if route else None, tool_results
+                )
+            )
+        index = min(roles.count("assistant"), len(script) - 1)
+        return encode_step(script[index], index)
 
     def __enter__(self) -> Self:
         """Start serving.
