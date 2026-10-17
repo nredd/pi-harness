@@ -109,7 +109,9 @@ Fork selection (nothing is bootstrapped, updated, installed into, cleaned or wri
   submodule is detected explicitly (`git -C` would silently inspect the parent)
 - The exact commit is exported with `git archive` into the scratch directory. Its own
   `package-lock.json` is kept and `npm ci --ignore-scripts --omit=dev --omit=peer` installs only the
-  locked runtime dependencies there (verified: exactly `croner` and `nanoid`, nothing else). No
+  locked runtime dependencies there (verified: exactly `croner` and `nanoid`, nothing else). Both
+  runtime versions and SHA-512 integrities are validated before npm starts; missing/malformed entries
+  and unsupported optional/transitive dependencies refuse without registry access. No
   floating `npm install`. The tree must contain no `@earendil-works/*` or `typebox` anywhere, installed
   versions must equal the lockfile's, and `npm ci` must not rewrite the lockfile. Nested dependency
   trees are refused rather than omitted from the report. Dependency drift requires a deliberate
