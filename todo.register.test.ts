@@ -2,8 +2,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { __resetState, registerTodoTool, setActiveRenderSession, type TaskDetails, TOOL_NAME } from "./todo.js";
-import { STATE_ENTRY_TYPE } from "./tool/types.js";
+import { __resetState, registerTodoTool, setActiveRenderSession, type TaskDetails, TOOL_NAME } from "./todo.ts";
+import { STATE_ENTRY_TYPE } from "./tool/types.ts";
 
 const theme = makeTheme() as unknown as Theme;
 

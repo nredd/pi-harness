@@ -7,8 +7,8 @@ import {
 	makeUserMessage,
 } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
-import { STATE_ENTRY_TYPE, type Task, type TaskDetails } from "../tool/types.js";
-import { isTaskDetails, replayFromBranch } from "./replay.js";
+import { STATE_ENTRY_TYPE, type Task, type TaskDetails } from "../tool/types.ts";
+import { isTaskDetails, replayFromBranch } from "./replay.ts";
 
 function buildBranch(snapshots: TaskDetails[]) {
 	const messages = snapshots.map((s) => makeTodoToolResult(s));
