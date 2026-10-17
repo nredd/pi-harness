@@ -1189,6 +1189,7 @@ export async function runAgent(
         maxSubagentDepth: effectiveMaxDepth,
         allowedSubagents: agentConfig.allowedSubagents,
         configCwd,
+        projectTrusted,
       })
     : [];
   const nestedToolNames = new Set(nestedTools.map(tool => tool.name));
