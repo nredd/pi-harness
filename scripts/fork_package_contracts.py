@@ -303,6 +303,9 @@ class ForkLockPackage(BaseModel):
     version: str | None = Field(default=None, description="Locked version")
     integrity: str | None = Field(default=None, description="Locked registry integrity")
     dependencies: dict[str, str] = Field(default_factory=dict, description="Declared runtime dependencies")
+    optionalDependencies: dict[str, str] = Field(
+        default_factory=dict, description="Optional runtime dependencies"
+    )
 
 
 class ForkLockfile(BaseModel):
@@ -321,6 +324,9 @@ class ForkManifest(BaseModel):
     name: str = Field(description="npm package name")
     version: Semver = Field(description="Fork package version")
     dependencies: dict[str, str] = Field(default_factory=dict, description="Runtime dependencies")
+    optionalDependencies: dict[str, str] = Field(
+        default_factory=dict, description="Optional runtime dependencies"
+    )
     pi: ForkPi = Field(default_factory=ForkPi, description="Pi package manifest section")
 
 
@@ -425,14 +431,18 @@ def install_fork_dependencies(fork_dir: Path, sandbox: Sandbox) -> ForkInstall:
         sorted(manifest.dependencies) == sorted(FORK_RUNTIME_DEPENDENCIES),
         f"fork dependencies {sorted(manifest.dependencies)} differ from {sorted(FORK_RUNTIME_DEPENDENCIES)}",
     )
+    require(not manifest.optionalDependencies, "the fork manifest declares unsupported optional dependencies")
     lock_path = fork_dir / "package-lock.json"
     lock_before = lock_path.read_bytes()
     lock = read_validated(ForkLockfile, lock_path, "fork lockfile")
     root = lock.packages.get("")
     require(
-        root is not None and sorted(root.dependencies) == sorted(FORK_RUNTIME_DEPENDENCIES),
+        root is not None
+        and sorted(root.dependencies) == sorted(FORK_RUNTIME_DEPENDENCIES)
+        and not root.optionalDependencies,
         "the fork lockfile's root dependencies differ from the fork `package.json`",
     )
+    locked_runtime_dependencies(lock)
     run(
         [
             sandbox.tools.npm,
@@ -450,6 +460,35 @@ def install_fork_dependencies(fork_dir: Path, sandbox: Sandbox) -> ForkInstall:
     require(lock_path.read_bytes() == lock_before, "`npm ci` modified the fork lockfile")
     dependencies = audit_fork_install(fork_dir, lock)
     return ForkInstall(manifest.version, hashlib.sha256(lock_before).hexdigest(), dependencies)
+
+
+def locked_runtime_dependencies(lock: ForkLockfile) -> list[LockedDependency]:
+    """Validate every supported runtime identity before any registry access.
+
+    Parameters:
+        lock (ForkLockfile): Parsed native fork lockfile.
+
+    Returns:
+        list[LockedDependency]: Complete validated runtime identities, sorted by name.
+
+    Raises:
+        ContractError: If a required identity is absent, malformed, or introduces an unsupported
+            transitive dependency graph.
+    """
+    dependencies: list[LockedDependency] = []
+    for name in sorted(FORK_RUNTIME_DEPENDENCIES):
+        entry = lock.packages.get(f"node_modules/{name}")
+        if entry is None or entry.version is None or entry.integrity is None:
+            raise ContractError(f"the fork lockfile has no versioned, integrity-checked '{name}'")
+        require(
+            not entry.dependencies and not entry.optionalDependencies,
+            f"unsupported runtime dependencies of '{name}' in the fork lockfile",
+        )
+        try:
+            dependencies.append(LockedDependency(name=name, version=entry.version, integrity=entry.integrity))
+        except ValidationError as e:
+            raise ContractError(f"lock entry for '{name}' is malformed: {describe_validation(e)}") from e
+    return dependencies
 
 
 def audit_fork_install(fork_dir: Path, lock: ForkLockfile) -> list[LockedDependency]:
@@ -480,23 +519,16 @@ def audit_fork_install(fork_dir: Path, lock: ForkLockfile) -> list[LockedDepende
     require(not duplicates, f"host packages installed into the fork copy: {duplicates}")
     nested = sorted(p.relative_to(fork_dir).as_posix() for p in modules.rglob("node_modules") if p.is_dir())
     require(not nested, f"unrecorded nested dependency trees in the fork copy: {nested}")
-    found: list[LockedDependency] = []
-    for name in sorted(FORK_RUNTIME_DEPENDENCIES):
-        locked = lock.packages.get(f"node_modules/{name}")
-        if locked is None or locked.version is None or locked.integrity is None:
-            raise ContractError(f"the fork lockfile has no versioned, integrity-checked '{name}'")
+    dependencies = locked_runtime_dependencies(lock)
+    for locked in dependencies:
         installed = read_validated(
-            InstalledManifest, modules / name / "package.json", f"installed '{name}' manifest"
+            InstalledManifest, modules / locked.name / "package.json", f"installed '{locked.name}' manifest"
         )
         require(
             installed.version == locked.version,
-            f"installed '{name}' is {installed.version}, the lockfile says {locked.version}",
+            f"installed '{locked.name}' is {installed.version}, the lockfile says {locked.version}",
         )
-        try:
-            found.append(LockedDependency(name=name, version=locked.version, integrity=locked.integrity))
-        except ValidationError as e:
-            raise ContractError(f"lock entry for '{name}' is malformed: {describe_validation(e)}") from e
-    return found
+    return dependencies
 
 
 # --- agent files ----------------------------------------------------------------------------------

@@ -542,6 +542,7 @@ def test_install_rejects_deviations(tmp_path: Path, fork_copy: Path, mode: str, 
         ({"dependencies": {"croner": "^10.0.1", "nanoid": "^5", "x": "1"}}, None, "differ"),
         (None, {"packages": {"": {"dependencies": {"croner": "^10"}}}}, "root dependencies differ"),
         ({"version": 3}, None, "Malformed fork `package.json`"),
+        ({"optionalDependencies": {"extra": "1.0.0"}}, None, "unsupported optional dependencies"),
         (None, {"packages": []}, "Malformed fork lockfile"),
     ],
 )
@@ -567,6 +568,62 @@ def test_install_validates_manifest_and_lock_before_running_npm(
         (fork_copy / "package-lock.json").write_text(json.dumps(LOCK | lock_change))
     sandbox, log = fake_npm_sandbox(tmp_path, "ok")
     with pytest.raises(pc.ContractError, match=needle):
+        fpc.install_fork_dependencies(fork_copy, sandbox)
+    assert not log.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("integrity", None), ("integrity", "sha512-invalid"), ("version", "not-a-version")],
+)
+def test_invalid_runtime_identity_never_invokes_npm(
+    tmp_path: Path, fork_copy: Path, field: str, value: str | None
+) -> None:
+    """Invalid runtime identities must fail before any registry-capable process starts.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        fork_copy (Path): Fork-shaped directory.
+        field (str): Identity field to corrupt.
+        value (str | None): Malformed value, or `None` to remove the field.
+    """
+    lock = copy.deepcopy(LOCK)
+    entry = lock["packages"]["node_modules/nanoid"]
+    if value is None:
+        del entry[field]
+    else:
+        entry[field] = value
+    (fork_copy / "package-lock.json").write_text(json.dumps(lock))
+    sandbox, log = fake_npm_sandbox(tmp_path, "ok")
+    with pytest.raises(pc.ContractError):
+        fpc.install_fork_dependencies(fork_copy, sandbox)
+    assert not log.exists(), "npm ran before the lock identity was validated"
+
+
+@pytest.mark.parametrize(
+    ("path", "field"),
+    [
+        ("", "optionalDependencies"),
+        ("node_modules/nanoid", "optionalDependencies"),
+        ("node_modules/nanoid", "dependencies"),
+    ],
+)
+def test_unsupported_runtime_edges_never_invoke_npm(
+    tmp_path: Path, fork_copy: Path, path: str, field: str
+) -> None:
+    """An unmodeled dependency must not be downloaded before the installed-tree audit.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        fork_copy (Path): Fork-shaped directory.
+        path (str): Lock package entry to change.
+        field (str): Dependency category to populate.
+    """
+    lock = copy.deepcopy(LOCK)
+    lock["packages"][path][field] = {"unrecorded": "1.0.0"}
+    (fork_copy / "package-lock.json").write_text(json.dumps(lock))
+    sandbox, log = fake_npm_sandbox(tmp_path, "ok")
+    with pytest.raises(pc.ContractError):
         fpc.install_fork_dependencies(fork_copy, sandbox)
     assert not log.exists()
 
