@@ -416,7 +416,7 @@ def test_audit_tarball_reports_unparseable_manifest(tmp_path: Path) -> None:
     assert any("`package.json` is not valid JSON" in problem for problem in problems), problems
 
 
-@pytest.mark.parametrize("contract", pc.CONTRACTS, ids=lambda c: c.directory)
+@pytest.mark.parametrize("contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT], ids=lambda c: c.directory)
 def test_real_workspace_tarballs_pass_audit(
     contract: pc.PackageContract, tmp_path: Path, sandbox: pc.Sandbox
 ) -> None:
@@ -1143,3 +1143,194 @@ def test_single_tool_result_and_is_error() -> None:
     for bad in ({"toolName": "t"}, {"toolName": "t", "isError": "false"}, {"toolName": "t", "isError": None}):
         with pytest.raises(pc.ContractError, match="Malformed tool result"):
             pc.tool_is_error(bad)
+
+
+def preset_manifest() -> dict[str, object]:
+    """A manifest satisfying the preset contract, including its multi-license expression.
+
+    Returns:
+        dict[str, object]: Parsed manifest.
+    """
+    return good_manifest() | {
+        "name": "@nredd/pi-preset",
+        "license": "MIT AND Apache-2.0 AND CC-BY-SA-4.0",
+        "peerDependencies": {"@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*"},
+        "pi": {"extensions": ["./extensions/expanded-footer.ts"]},
+    }
+
+
+def test_preset_contract_accounts_for_separately_licensed_assets() -> None:
+    """The preset must declare the full license expression; plugins stay MIT-only."""
+    files = ["extensions/expanded-footer.ts"]
+    assert pc.audit_manifest(pc.PRESET_CONTRACT, preset_manifest(), files) == []
+    mit_only = pc.audit_manifest(pc.PRESET_CONTRACT, preset_manifest() | {"license": "MIT"}, files)
+    assert any("MIT AND Apache-2.0 AND CC-BY-SA-4.0" in problem for problem in mit_only), mit_only
+    leaked = pc.audit_manifest(DEV_TOOLS, good_manifest() | {"license": preset_manifest()["license"]}, files)
+    assert any("`license` must be 'MIT'" in problem for problem in leaked), leaked
+
+
+def test_preset_is_not_a_standalone_plugin_contract() -> None:
+    """The standalone gate keeps exactly its three plugins; the preset is consumed by the fork gate."""
+    assert [c.directory for c in pc.CONTRACTS] == ["dev-tools", "session-kit", "subscription-router"]
+    assert pc.PRESET_CONTRACT not in pc.CONTRACTS
+    assert set(pc.SCENARIOS) == {c.directory for c in pc.CONTRACTS}
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        ["LICENSE", "package.json", "README.md"],
+        list(pc.PRESET_CONTRACT.required[:-1]),
+    ],
+)
+def test_preset_audit_requires_notice_and_license_texts(files: list[str]) -> None:
+    """Dropping `NOTICE.md`, a license text or a theme is a missing-file violation.
+
+    Parameters:
+        files (list[str]): File list lacking required content.
+    """
+    problems = pc.audit_files(pc.PRESET_CONTRACT, files)
+    assert any("missing required file" in problem for problem in problems), problems
+
+
+def test_preset_audit_rejects_unlisted_files() -> None:
+    """Tests, fixtures and config do not ship in the preset tarball."""
+    problems = pc.audit_files(pc.PRESET_CONTRACT, [*pc.PRESET_CONTRACT.required, "test/x.ts", "biome.json"])
+    assert "unexpected file 'test/x.ts'" in problems
+    assert "unexpected file 'biome.json'" in problems
+
+
+def chat(role: str, text: str | list[dict[str, object]] | None) -> dict[str, object]:
+    """Build one chat message.
+
+    Parameters:
+        role (str): Message role.
+        text (str | list[dict[str, object]] | None): Content, a list of parts, or `None`.
+
+    Returns:
+        dict[str, object]: Message.
+    """
+    return {"role": role, "content": text}
+
+
+def test_faux_routes_pick_a_script_by_user_marker_and_index_it_independently() -> None:
+    """A marked conversation gets its own script and turn indexing; others keep the default."""
+    routes = [fp.Route("MARK-A", [fp.TextStep("route a")]), fp.Route("MARK-B", [fp.TextStep("route b")])]
+    tool = {"type": "function", "function": {"name": "git_log"}}
+    with fp.FauxProvider([fp.ToolStep("Agent"), fp.TextStep("parent done")], routes) as provider:
+        parent_first = post(
+            provider.base_url,
+            {"model": "m", "messages": [chat("system", "S"), chat("user", "go")], "tools": []},
+        )
+        child = post(
+            provider.base_url,
+            {
+                "model": "m",
+                "messages": [
+                    chat("system", "child system"),
+                    chat("user", [{"type": "text", "text": "MARK-B x"}]),
+                ],
+                "tools": [tool],
+            },
+        )
+        parent_second = post(
+            provider.base_url,
+            {
+                "model": "m",
+                "messages": [
+                    chat("system", "S"),
+                    chat("user", "go"),
+                    chat("assistant", None),
+                    chat("tool", "tool output that says MARK-A"),
+                ],
+            },
+        )
+    assert '"name": "Agent"' in parent_first
+    assert '"content": "route b"' in child
+    assert '"content": "parent done"' in parent_second
+    first, second, third = provider.requests
+    assert (first.route, second.route, third.route) == (None, "MARK-B", None)
+    assert second.tools == ("git_log",)
+    assert second.system == "child system"
+    assert third.roles == ("system", "user", "assistant", "tool")
+
+
+def test_faux_records_tool_results_in_order() -> None:
+    """`tool` messages (string or parts) are recorded as text, in order, for later assertions."""
+    with fp.FauxProvider([fp.TextStep("x")]) as provider:
+        post(
+            provider.base_url,
+            {
+                "model": "m",
+                "messages": [
+                    chat("user", "hi"),
+                    chat("tool", "first"),
+                    chat("tool", [{"type": "text", "text": "sec"}, {"type": "text", "text": "ond"}]),
+                    chat("assistant", None),
+                ],
+            },
+        )
+    assert provider.requests[0].tool_results == ("first", "second")
+
+
+def test_faux_routes_ignore_markers_outside_user_messages() -> None:
+    """Only user text selects a route: tool output and assistant text echoing it must not."""
+    with fp.FauxProvider([fp.TextStep("default")], [fp.Route("MARK", [fp.TextStep("routed")])]) as provider:
+        body = post(
+            provider.base_url,
+            {"model": "m", "messages": [chat("user", "hi"), chat("assistant", "MARK"), chat("tool", "MARK")]},
+        )
+    assert '"content": "default"' in body
+    assert provider.requests[0].route is None
+
+
+def test_faux_routes_first_matching_route_wins() -> None:
+    """With two markers present, routes are tried in the order given."""
+    routes = [fp.Route("ONE", [fp.TextStep("one")]), fp.Route("TWO", [fp.TextStep("two")])]
+    with fp.FauxProvider([fp.TextStep("default")], routes) as provider:
+        body = post(provider.base_url, {"model": "m", "messages": [chat("user", "TWO then ONE")]})
+    assert '"content": "one"' in body
+
+
+def test_faux_routes_reject_bad_definitions() -> None:
+    """Empty markers, empty scripts and duplicate markers are caller bugs."""
+    with pytest.raises(ValueError, match="marker"):
+        fp.Route("", [fp.TextStep("x")])
+    with pytest.raises(ValueError, match="at least one step"):
+        fp.Route("M", [])
+    with pytest.raises(ValueError, match="duplicate route markers"):
+        fp.FauxProvider(
+            [fp.TextStep("x")], [fp.Route("M", [fp.TextStep("a")]), fp.Route("M", [fp.TextStep("b")])]
+        )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [5, {"text": "x"}, [5], [{"text": 3}], [None]],
+)
+def test_faux_provider_rejects_malformed_message_content(content: object) -> None:
+    """Newly consumed `messages[].content` is validated: a mistyped value is a 400, never recorded.
+
+    Parameters:
+        content (object): Malformed content value.
+    """
+    body = json.dumps({"model": "m", "messages": [{"role": "user", "content": content}]}).encode()
+    with fp.FauxProvider([fp.TextStep("x")]) as provider:
+        request = urllib.request.Request(f"{provider.base_url}/chat/completions", data=body, method="POST")
+        with pytest.raises(urllib.error.HTTPError) as info:
+            urllib.request.urlopen(request, timeout=10)
+        assert info.value.code == 400
+        assert provider.requests == []
+
+
+def test_faux_provider_records_system_and_developer_text() -> None:
+    """The recorded `system` text joins `system` and `developer` messages in order."""
+    with fp.FauxProvider([fp.TextStep("x")]) as provider:
+        post(
+            provider.base_url,
+            {
+                "model": "m",
+                "messages": [chat("developer", "D"), chat("system", [{"type": "text", "text": "S"}])],
+            },
+        )
+    assert provider.requests[0].system == "D\nS"

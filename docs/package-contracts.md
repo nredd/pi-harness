@@ -88,8 +88,126 @@ registered through `models.json` with a dummy key.
 Scratch is deleted unless `--keep`.
 
 Limits: this is stock Pi only. It does not exercise `pi install npm:...` (nothing is published),
-the forked subagents/Plan-mode integrations, the Bun-compiled candidate, or the full stack. Do not
-read a pass as candidate or fullstack acceptance.
+the forked subagents/Plan-mode integrations (the subagents one is covered by the next section), the
+Bun-compiled candidate, or the full stack. Do not read a pass as candidate or fullstack acceptance.
+
+## Optional integration: real packed preset and dev-tools through the selected pi-subagents fork
+
+`make check-fork-package-contracts` (`scripts/fork_package_contracts.py`, `REPORT=/abs/file.json`
+for a JSON report) is separate from both `make check` and `make check-package-contracts`. It proves a
+REAL packed `@nredd/pi-preset` `code-reviewer` agent and the REAL packed `@nredd/pi-dev-tools` work
+through the pi-subagents commit the parent Gitlink selects, on exact stock Pi 1.3.0 only. Not a
+mocked resolver, not frontmatter parsing alone. The tooling is unit tested by `make check-scripts`
+with disposable fake repositories and runs there without any initialized fork.
+
+Fork selection (nothing is bootstrapped, updated, installed into, cleaned or written in `forks/`):
+
+- Preflight runs before anything is built. `forks/pi-subagents` must have its own `.git`, a clean
+  tree (tracked, staged and untracked), and `HEAD` equal to BOTH the Gitlink in the parent index and
+  in the parent `HEAD`. A missing, uninitialized, dirty or mismatched fork is a clear refusal that
+  points at `make bootstrap-forks`; the gate never runs it. An empty directory from an uninitialized
+  submodule is detected explicitly (`git -C` would silently inspect the parent)
+- The exact commit is exported with `git archive` into the scratch directory. Its own
+  `package-lock.json` is kept and `npm ci --ignore-scripts --omit=dev --omit=peer` installs only the
+  locked runtime dependencies there (verified: exactly `croner` and `nanoid`, nothing else). Both
+  runtime versions and SHA-512 integrities are validated before npm starts; missing/malformed entries
+  and unsupported optional/transitive dependencies refuse without registry access. No
+  floating `npm install`. The tree must contain no `@earendil-works/*` or `typebox` anywhere, installed
+  versions must equal the lockfile's, and `npm ci` must not rewrite the lockfile. Nested dependency
+  trees are refused rather than omitted from the report. Dependency drift requires a deliberate
+  update to the gate's supported dependency graph
+- The report records the fork commit, its `package.json` version, the lockfile SHA-256, and each
+  installed dependency's version and lock integrity, plus the preset and dev-tools tarball identities
+  and the stock Pi pin. The registry is reached only for this `npm ci` and the stock Pi install
+  (empty npm config, no credentials, a per-run cache, so every run needs the registry). Pi runs
+  are offline against the loopback provider
+
+Owned code comes only from packed tarballs. Preset and dev-tools are packed with `npm pack`, audited,
+and installed into separate fresh projects (`install_alone`); Pi sees them only as local-path
+`packages` in the sandbox `settings.json`, never the workspace sources. The preset has its own
+`PRESET_CONTRACT` (not part of the standalone three, whose audit is unchanged): its manifest must
+declare `MIT AND Apache-2.0 AND CC-BY-SA-4.0`, and `NOTICE.md`, the three license texts and both
+themes are required content. `PackageContract.license` defaults to `MIT`, so a plugin declaring the
+preset expression still fails.
+
+The run: stock Pi `--no-extensions --extension <archived fork>` (so installed packages stay out of
+the parent, which the gate asserts: no `git_*` tool in the parent request; the child's own loader
+still resolves settings packages), the faux parent calls `Agent` with
+`subagent_type: "code-reviewer"`, `run_in_background: false`; the child is answered from a separate
+script selected by a marker in its task (`faux_provider.Route`, because step indexing counts
+assistant messages and would otherwise replay the parent's `Agent` call). The child's request is
+recorded with its declared tool names and its system prompt. The route matches the marker in the
+child's `user` messages only (the parent's own `Agent` arguments sit in an assistant message), not
+in all message text and not by the absence of `Agent` (nested helpers also lack it).
+
+The child does not merely advertise tools, it calls them. Its script makes one allowed call against a
+disposable seeded git repository (`git_status` sees the untracked file, `git_log` the seed commit
+subject, `read` the tracked note) and then, for every tool of `write`, `bash`, `git_status`,
+`git_commit` that its allowlist lacks, a call Pi must refuse with `Tool <name> not found`. The calls are
+harmless by construction: `write` and `bash touch` aim at sentinel paths that must still not exist
+afterwards, `git_commit` has `push: false` and the repository's `HEAD` must not move. The tool results
+come back in the child's next request (`RecordedRequest.tool_results`) and are matched call by call.
+Nothing touches a live repository, a remote or signing.
+
+Cases (each its own Pi run in a fresh sandbox; `assess_case` is pure and unit tested):
+
+- `package-default`: child tools are exactly `read`, `grep`, `find`, `git_diff`, `git_show`,
+  `git_log`, `git_status` plus `SubagentWorkflow`. The expectation is derived from the packed
+  `agents/code-reviewer.md` `tools:` line and checked equal to that set. `SubagentWorkflow` is the one
+  always-injected fork helper: `createWorkflowRefusalTool` in the fork's `src/agent-runner.ts`, injected
+  into every child with extensions loaded, and its only behavior is to refuse. Nested-delegation tools
+  need `allowed_subagents` and `StructuredOutput` needs a requested schema, so neither is present.
+  `edit`, `write`, `bash`, `ssh_exec`, `Agent`, `get_subagent_result`, `steer_subagent`, `git_commit`
+  and every other dev-tools tool are absent. The packed prompt body is in the child's system prompt
+  and `<active_agent name="code-reviewer"/>` names it; `max_turns: 40` reaches the run metadata
+  (`details.maxTurns`, the `max turns: 40` tag); the `Agent` result is a non-error `completed`
+  `code-reviewer` whose text ends with the child's answer; the parent finishes with its scripted
+  answer. Stderr is empty. The child really runs `git_status` and Pi refuses its `write`, `bash` and
+  `git_commit` calls. `toolUses` is the number of child calls (refused ones end like any other, so 4)
+  plus the fork's `extension-error:` diagnostics (0 here)
+- `global-override`: `<agent dir>/agents/code-reviewer.md` (`tools: read, find`, `extensions: false`)
+  beats the package: only its body, tools `read`, `find`
+- `project-override`: `<cwd>/.pi/agents/code-reviewer.md` (`tools: read, ext:pi-dev-tools/git_log`,
+  `extensions: [pi-dev-tools]`) beats both the global and the package agent while still loading the
+  real packed dev-tools: tools `read`, `git_log`, `SubagentWorkflow`; neither other body is in the
+  prompt. Runs under `--approve`; the child really calls `git_log`, and `git_status`, `write`, `bash`,
+  `git_commit` are refused
+- `project-override-untrusted`: the same files under `--no-approve`. Pinned as OBSERVED behavior of the
+  selected fork: it reads `<cwd>/.pi/agents` without consulting project trust (only project-scoped
+  `packages` are gated), so the project agent still wins. This is not an endorsement; a fork change
+  that gates it will fail this case on purpose
+- `project-package-trusted` / `project-package-untrusted`: preset and dev-tools are installed through
+  `<cwd>/.pi/settings.json`, which Pi reads only for a trusted project, with no agent-dir packages.
+  The decision is Pi's real one-time flag (`--approve` / `--no-approve`, no saved `trust.json`, no
+  faked policy). Trusted behaves exactly like `package-default`. Untrusted, `code-reviewer` is not
+  discoverable: the fork resolves the type to its documented `general-purpose` fallback, and the child
+  gets the built-ins (`read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`) and none of dev-tools
+  (`git_status`, `git_commit` refused as unknown). Note this means an untrusted install silently
+  degrades to a write-capable agent; the case pins that so a change either way is visible
+- `missing-dev-tools`: only the preset is installed. The documented contract is a warning, not a
+  refusal: the fork reports `extension-error:extension "pi-dev-tools" requested by agent
+  "code-reviewer" was not loaded` and `extension-error:ext:pi-dev-tools referenced by ...` through its
+  tool-activity channel, and the agent still runs with its built-ins. Observed: the child declares
+  `read`, `grep`, `find`, `SubagentWorkflow` (no `git_*`), the `Agent` result succeeds and its
+  `toolUses` is exactly 2, one per diagnostic. The diagnostic text itself is not surfaced to the
+  parent in this Pi/fork combination (it feeds the widget's tool-use counter), so the counter is the
+  only machine-visible trace: `toolUses` is 7 (5 child calls, `git_status` among the refused ones, plus
+  the 2 diagnostics); it is asserted rather than invented as stderr or text
+
+Observed `toolUses` per case: `package-default` 4, `global-override` 5, `project-override` 5,
+`project-override-untrusted` 5, `missing-dev-tools` 7, `project-package-trusted` 4,
+`project-package-untrusted` 3.
+
+Validated JSON (new consumed fields, strict types): the fork `package.json` and lockfile, installed
+dependency manifests, the `Agent` result (`details.subagentType`/`status`/`toolUses`/`tags`/`maxTurns`,
+`isError`), the final assistant message, and the faux request's `messages[].content` (string, part
+list or null; a mistyped value is an HTTP 400, tool messages are recorded as text). Evidence and report models are strict Pydantic
+(`ForkContractReport`); cases must be complete and in order.
+
+Limits: stock Pi 1.3.0 and exactly the selected fork commit only. Packages are local-path
+`packages`, not `pi install`/npm-managed (nothing is published). Not Bun, not the full assembled
+stack, not authenticated providers, and no profile, role or activation behavior. A pass is not
+candidate or fullstack acceptance.
 
 Review dispositions (PR3, HEAD `4af6e2c`), both fixed:
 

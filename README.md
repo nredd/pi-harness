@@ -42,6 +42,7 @@ make check                 # owned-code gates, see below
 make bootstrap-forks       # init/update fork submodules; refuses if any initialized fork is dirty
 make bootstrap-forks-check # preflight only
 make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, see docs/package-contracts.md
+make check-fork-package-contracts # explicit: real packed preset/dev-tools via the selected pi-subagents fork, same doc
 ```
 
 `make check` runs, without rewriting files:
@@ -75,6 +76,12 @@ optional dependency. No credentials or model calls are used: only `codex sandbox
 `make check-package-contracts` is deliberately not part of `make check`: it installs exact stock Pi
 from the npm registry on first use and runs real Pi processes. Its tooling is unit tested in
 `check-scripts`. A pass says nothing about the Bun candidate or the full stack.
+
+`make check-fork-package-contracts` is the optional-integration counterpart, also outside `make check`.
+It needs an initialized, clean `forks/pi-subagents` at exactly its Gitlink (it refuses, changing
+nothing, otherwise; run `make bootstrap-forks` yourself) and the npm registry for the stock Pi and the
+fork's two locked runtime dependencies, which are installed into a disposable archive of the fork
+commit, never into `forks/`. See [package contracts](docs/package-contracts.md).
 
 `make check` is the owned-code unit gate *only*. It does not run fork gates (use each fork's native
 tooling, see [forks.md](docs/forks.md)), the integration scenarios (`make verify-fast`/`verify` in
