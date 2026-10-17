@@ -105,6 +105,7 @@ class PackageContract:
         required (tuple[str, ...]): Files that must be in the tarball.
         allowed (tuple[re.Pattern[str], ...]): Every tarball path must match one of these.
         exposes_tools (frozenset[str]): Tool names unique to this package.
+        license (str): Exact SPDX expression the packed manifest must declare.
     """
 
     name: str
@@ -112,6 +113,7 @@ class PackageContract:
     required: tuple[str, ...]
     allowed: tuple[re.Pattern[str], ...]
     exposes_tools: frozenset[str]
+    license: str = "MIT"
 
 
 CONTRACTS = (
@@ -144,6 +146,41 @@ CONTRACTS = (
         ),
         exposes_tools=frozenset({"subscription_usage"}),
     ),
+)
+
+# The preset is audited and packed like the plugins but is deliberately NOT in `CONTRACTS`: it is not
+# a standalone plugin (it relies on the forked pi-subagents and `@nredd/pi-dev-tools` for its agents),
+# so `make check-package-contracts` does not run it. `fork_package_contracts.py` consumes it. Its
+# themes are separately licensed, so the manifest must declare the full expression, and the license
+# texts plus `NOTICE.md` are required content rather than optional extras.
+PRESET_CONTRACT = PackageContract(
+    name="@nredd/pi-preset",
+    directory="preset",
+    required=(
+        "LICENSE",
+        "NOTICE.md",
+        "README.md",
+        "package.json",
+        "agents/code-reviewer.md",
+        "extensions/expanded-footer.ts",
+        "licenses/Apache-2.0-tokyonight.nvim.txt",
+        "licenses/CC-BY-SA-4.0.txt",
+        "licenses/MIT-enkia-tokyo-night-vscode-theme.txt",
+        "themes/belafonte-day.json",
+        "themes/tokyonight-storm.json",
+    ),
+    allowed=(
+        re.compile(r"^(LICENSE|NOTICE\.md|README\.md|package\.json)$"),
+        re.compile(r"^agents/[a-z-]+\.md$"),
+        re.compile(r"^extensions/[a-z-]+\.ts$"),
+        re.compile(r"^lib/[a-z-]+\.ts$"),
+        re.compile(r"^licenses/[A-Za-z0-9.-]+\.txt$"),
+        re.compile(r"^settings/[a-z-]+\.json$"),
+        re.compile(r"^skills/[a-z-]+/SKILL\.md$"),
+        re.compile(r"^themes/[a-z-]+\.json$"),
+    ),
+    exposes_tools=frozenset(),
+    license="MIT AND Apache-2.0 AND CC-BY-SA-4.0",
 )
 
 
@@ -931,8 +968,8 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
         problems.append(f"name is '{parsed.name}', expected '{contract.name}'")
     if parsed.private is not True:
         problems.append("`private` must stay `true` until the publication prerequisites exist")
-    if parsed.license != "MIT":
-        problems.append("`license` must be 'MIT'")
+    if parsed.license != contract.license:
+        problems.append(f"`license` must be '{contract.license}'")
     declared = {
         "dependencies": parsed.dependencies,
         "optionalDependencies": parsed.optionalDependencies,
@@ -1319,11 +1356,13 @@ def run_pi(
     extra: Sequence[str],
     *,
     session_dir: Path | None = None,
+    trust: Literal["approve", "no-approve"] = "no-approve",
 ) -> PiRun:
     """Run stock Pi non-interactively with exactly one package loaded.
 
     Only safe, documented flags: `--offline`, `--no-mcp`, `--no-extensions` (with an explicit `--extension`),
-    `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`, `--no-approve`.
+    `--no-skills`, `--no-prompt-templates`, `--no-themes`, `--no-context-files`, and one explicit
+    project-trust decision (`--no-approve` unless `trust` says otherwise).
 
     Parameters:
         pi_bin (Path): Stock `pi`.
@@ -1332,6 +1371,8 @@ def run_pi(
         cwd (Path): Working directory for the run.
         extra (Sequence[str]): Remaining arguments (model, mode, prompt).
         session_dir (Path | None): Persist the session here; `None` keeps it in memory.
+        trust (Literal["approve", "no-approve"]): One-time project-trust decision (`--approve` or
+            `--no-approve`); Pi then never consults or writes a saved decision.
 
     Returns:
         PiRun: Exit code, parsed events and raw streams.
@@ -1340,7 +1381,7 @@ def run_pi(
     argv = [
         pi_bin,
         "--offline",
-        "--no-approve",
+        f"--{trust}",
         "--no-mcp",
         "--no-extensions",
         "--extension",

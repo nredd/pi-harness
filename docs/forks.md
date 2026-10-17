@@ -16,6 +16,9 @@ second list of release pins here.
 The initial Gitlinks select published fork tags already used by the existing installation. Adding
 those Gitlinks does not establish Bun compatibility or rerun the fork gates. Native lockfiles,
 licenses, source histories, and build procedures remain owned by their respective repositories.
+The selected `forks/pi-subagents` commit is additionally exercised with the real packed preset and
+dev-tools by `make check-fork-package-contracts` ([details](package-contracts.md)); it refuses a missing,
+dirty or Gitlink-mismatched fork and never bootstraps or installs into it.
 A normal clone has the fork as `origin`; add the upstream remote explicitly when maintaining a patch
 queue. Follow each fork's contributor instructions before making changes.
 

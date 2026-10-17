@@ -95,14 +95,23 @@ one import path each, no assertion changes), static resource/schema/privacy/depe
 tests, and real Pi 1.3.0 resource discovery (extensions, skills, themes, collisions, package
 manager resolution) in a temporary `HOME`/agent dir with no model calls or auth.
 
-One-off, not a committed test: the pinned `pi-subagents` `v0.22.0-nredd.1`
-(`8ed6404c082431b324f711c5b7b69248faad4c8a`) `loadCustomAgents(cwd, strict=true)`, run from an
-extracted source archive against this package in a temp agent dir, returned all seven agents with
-`source: "package"` and the expected `ext:pi-dev-tools/...` selectors.
+Real packed-tarball, real-fork evidence (committed, `make check-fork-package-contracts`, see
+[package contracts](../../docs/package-contracts.md)): the packed preset and packed
+`@nredd/pi-dev-tools` are installed as Pi `packages`, and exact stock Pi 1.3.0 runs the Gitlink-selected
+`pi-subagents` (`v0.22.0-nredd.1`, `8ed6404c082431b324f711c5b7b69248faad4c8a`) with a loopback faux
+provider calling `Agent` with `subagent_type: code-reviewer` in the foreground. Observed through the
+child's real request: tools exactly `read`, `grep`, `find`, `git_diff`, `git_show`, `git_log`,
+`git_status` plus the fork's always-injected `SubagentWorkflow` refusal stub; no `edit`, `write`,
+`bash`, `ssh_exec`, other dev-tools or delegation tools. The packaged prompt body and `max_turns`
+reach the child; the child really runs `git_status` against a disposable repository, and Pi refuses
+its `write`, `bash` and `git_commit` calls as unknown tools. A global and a project `code-reviewer.md`
+each override the package. With dev-tools not installed the fork warns (`extension-error:`) and the
+child runs with only its built-ins, no `git_*` tools. Project `.pi/agents` overrides are not
+trust-gated by the fork; a project-scoped install of the preset is (untrusted, the reviewer is not
+found and the fork falls back to `general-purpose`, see the contracts doc).
 
-Pending, not claimed: a committed real-fork package-agent test, packed-tarball selector tests
-(owned by the plugin package-contract work), profile resolution, model roles, activation, the
-full assembled-stack check, Bun compiled-artifact behavior, and any publish.
+Pending, not claimed: profile resolution, model roles, activation, the full assembled-stack check,
+Bun compiled-artifact behavior, any other fork commit or Pi version, and any publish.
 
 ## Development
 
