@@ -1,8 +1,8 @@
 {
   "name": "@nredd/pi-preset",
   "version": "0.1.0",
-  "private": true,
-  "description": "Optional, opinionated Pi preset: specialist agents, reusable workflow skills, expanded footer, themes, and public-safe settings defaults. Private and unpublished.",
+  "publishConfig": {"access": "public"},
+  "description": "Optional, opinionated Pi preset: specialist agents, reusable workflow skills, expanded footer, themes, and public-safe settings defaults.",
   "author": "nredd",
   "license": "MIT AND Apache-2.0 AND CC-BY-SA-4.0",
   "type": "module",

@@ -1,8 +1,8 @@
 # pi-subscription-router
 
-Migration snapshot: this workspace is named `@nredd/pi-subscription-router` but is not published yet.
+Published to npm as `@nredd/pi-subscription-router` (public), version `0.3.0`.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and installed-Pi scenarios
-below describe the legacy deployment, not installation or candidate verification of this workspace.
+below describe the legacy deployment, not installation or candidate verification of this package.
 
 ## Standalone use
 

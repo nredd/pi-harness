@@ -20,8 +20,8 @@ Layout:
 - `scripts/`: build, release, and chezmoi integration implementation.
 - `docs/`: development, source provenance, release, and recovery documentation.
 
-`packages/preset` (`@nredd/pi-preset`, `private: true`, unpublished) is the optional opinionated
-preset: agents, skills, footer, themes, and public-safe defaults. It is a resource snapshot only: no
+`packages/preset` is published to npm as `@nredd/pi-preset@0.1.0` (public): the optional opinionated
+preset with agents, skills, footer, themes, and public-safe defaults. It is a resource snapshot only: no
 installer or activation, model roles and enterprise acceptance are pending, and its themes carry
 their own licenses. See [its README](packages/preset/README.md) and
 [NOTICE](packages/preset/NOTICE.md).
@@ -47,8 +47,9 @@ make check-fork-package-contracts # explicit: real packed preset/dev-tools via t
 
 `make check` runs, without rewriting files:
 
-- `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*` (`@nredd/pi-*`, all `private: true`
-  until a publication pipeline exists)
+- `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*` (published public packages:
+  `@nredd/pi-dev-tools@0.4.0`, `@nredd/pi-session-kit@0.3.0`,
+  `@nredd/pi-subscription-router@0.3.0`, `@nredd/pi-preset@0.1.0`)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, no mocks)

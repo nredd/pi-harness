@@ -1,9 +1,9 @@
 # pi-session-kit
 
-Migration snapshot: this workspace is named `@nredd/pi-session-kit` but is not published yet.
+Published to npm as `@nredd/pi-session-kit` (public), version `0.3.0`.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and standalone harness
 references below describe the legacy deployment, not installation or candidate verification of
-this unpublished workspace.
+this package.
 
 ## Standalone use
 
