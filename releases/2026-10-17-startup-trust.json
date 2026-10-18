@@ -2,9 +2,9 @@
   "schema_version": 1,
   "release": {
     "id": "2026-10-17-startup-trust",
-    "created_at": "2026-10-18T03:23:45.335119Z",
-    "commit": "4c962e2a0dddda2a53e185459ef6b465f70b8446",
-    "dirty": true
+    "created_at": "2026-10-18T03:27:43.013012Z",
+    "commit": "7fa26cd395d317a20d6873fa06e66604b7474deb",
+    "dirty": false
   },
   "forks": [
     {
