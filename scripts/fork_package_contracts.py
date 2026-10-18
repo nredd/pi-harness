@@ -1103,19 +1103,19 @@ def build_cases(packed_agent: str) -> list[CaseSpec]:
             allowed="git_log",
             trust="approve",
         ),
-        # The fork reads `<cwd>/.pi/agents` WITHOUT consulting project trust (only project-scoped
-        # `packages` are trust-gated), so the project agent wins here too. Pinned as observed
-        # behavior of the selected fork, not as an endorsement.
+        # The fork consults Pi's canonical project-trust decision before reading `<cwd>/.pi/agents`:
+        # the untrusted project agent is ignored and the global override wins, exactly as if the
+        # project file did not exist.
         CaseSpec(
             "project-override-untrusted",
             True,
             global_agent,
             project_agent,
-            frozenset({"read", "git_log"}) | FORK_HELPER_TOOLS,
-            PROJECT_MARKER,
-            (body, GLOBAL_MARKER),
+            frozenset({"read", "find"}),
+            GLOBAL_MARKER,
+            (body, PROJECT_MARKER),
             0,
-            allowed="git_log",
+            allowed="read",
             trust="no-approve",
         ),
         # `extensions: [pi-dev-tools]` and `ext:pi-dev-tools/...` both name a package that is not
