@@ -172,10 +172,11 @@ Cases (each its own Pi run in a fresh sandbox; `assess_case` is pure and unit te
   real packed dev-tools: tools `read`, `git_log`, `SubagentWorkflow`; neither other body is in the
   prompt. Runs under `--approve`; the child really calls `git_log`, and `git_status`, `write`, `bash`,
   `git_commit` are refused
-- `project-override-untrusted`: the same files under `--no-approve`. Pinned as OBSERVED behavior of the
-  selected fork: it reads `<cwd>/.pi/agents` without consulting project trust (only project-scoped
-  `packages` are gated), so the project agent still wins. This is not an endorsement; a fork change
-  that gates it will fail this case on purpose
+- `project-override-untrusted`: the same files under `--no-approve`. The selected fork consults Pi's
+  canonical project-trust decision before reading `<cwd>/.pi/agents`, so the project agent is ignored
+  and the global override wins: the child declares exactly `read` and `find`, carries the global
+  prompt marker, and the project marker never reaches it. A fork that reads untrusted project agents
+  fails this case on purpose
 - `project-package-trusted` / `project-package-untrusted`: preset and dev-tools are installed through
   `<cwd>/.pi/settings.json`, which Pi reads only for a trusted project, with no agent-dir packages.
   The decision is Pi's real one-time flag (`--approve` / `--no-approve`, no saved `trust.json`, no
