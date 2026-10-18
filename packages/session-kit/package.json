@@ -1,7 +1,7 @@
 {
   "name": "@nredd/pi-session-kit",
   "version": "0.3.0",
-  "private": true,
+  "publishConfig": {"access": "public"},
   "description": "Session-scoped pi tools and commands, offline cross-machine usage stats and a portable privacy-only stats CLI. No daemon.",
   "author": "nredd",
   "license": "MIT",

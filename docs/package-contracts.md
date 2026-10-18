@@ -25,8 +25,8 @@ Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
   one is a `ContractError` (or an HTTP 400 from the faux provider), never a traceback or an
   apparently valid result. Only consumed fields are modelled, with strict types (no `"1"` -> `1`,
   no `true` -> `1`):
-  - packed `package.json`: `name`, `private`, `license`, the four dependency fields,
-    `peerDependencies`, `pi.extensions` (`PackedManifest`). A wrong type (`peerDependencies: []`,
+  - packed `package.json`: `name`, `private`, `publishConfig.access`, `license`, the four dependency
+    fields, `peerDependencies`, `pi.extensions` (`PackedManifest`). A wrong type (`peerDependencies: []`,
     `pi: null`, `extensions: "x"`) is reported as `field ... is malformed`. Any other npm metadata is
     ignored on purpose, whatever its shape; invalid JSON or a non-object manifest is a violation
   - stats export/import stdout and `manifest.json`, per `docs/stats-snapshots.md` in session-kit
@@ -46,7 +46,7 @@ What each package must satisfy:
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
   none of the tarballs had a `LICENSE` and all shipped `test/` plus dev config
 - Packed `LICENSE` is byte-identical to the root `LICENSE`
-- Manifest: `private: true` (kept until the namespace/OIDC prerequisites exist), `MIT`, no
+- Manifest: `private` absent or `false`, `publishConfig.access: public`, `MIT`, no
   `dependencies`/optional/bundled, peers only from the Pi host set (`@earendil-works/pi-ai`,
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
 - Every import is a `node:` builtin, a host module, or a relative path inside the package. No
@@ -87,8 +87,8 @@ not intercepted. The only configured model is a loopback scripted provider (`fau
 registered through `models.json` with a dummy key.
 Scratch is deleted unless `--keep`.
 
-Limits: this is stock Pi only. It does not exercise `pi install npm:...` (nothing is published),
-the forked subagents/Plan-mode integrations (the subagents one is covered by the next section), the
+Limits: this is stock Pi only. It does not exercise `pi install npm:...`, the forked
+subagents/Plan-mode integrations (the subagents one is covered by the next section), the
 Bun-compiled candidate, or the full stack. Do not read a pass as candidate or fullstack acceptance.
 
 ## Optional integration: real packed preset and dev-tools through the selected pi-subagents fork
@@ -206,7 +206,7 @@ list or null; a mistyped value is an HTTP 400, tool messages are recorded as tex
 (`ForkContractReport`); cases must be complete and in order.
 
 Limits: stock Pi 1.3.0 and exactly the selected fork commit only. Packages are local-path
-`packages`, not `pi install`/npm-managed (nothing is published). Not Bun, not the full assembled
+`packages`, not `pi install`/npm-managed (the gate never publishes). Not Bun, not the full assembled
 stack, not authenticated providers, and no profile, role or activation behavior. A pass is not
 candidate or fullstack acceptance.
 
