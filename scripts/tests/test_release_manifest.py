@@ -143,7 +143,78 @@ def test_artifact_hash_and_evidence(tmp_path: Path) -> None:
     assert manifest.evidence == {"gate": "logs/gate.log", "review": "https://example.invalid/review"}
 
 
-def test_schema_rejects_bad_input() -> None:
-    """Strict output schema rejects an invalid schema version and unknown field."""
+def test_moved_submodule_records_the_indexed_gitlink(tmp_path: Path) -> None:
+    """A fork checked out past its Gitlink (`+` status) is identified by the INDEXED commit."""
+    repo = make_repo(tmp_path)
+    fork = repo / "forks" / "fake"
+    for key, value in (
+        ("user.email", "x@example.invalid"),
+        ("user.name", "X"),
+        ("commit.gpgsign", "false"),
+        ("tag.gpgSign", "false"),
+    ):
+        git(fork, "config", key, value)
+    pinned = git(fork, "rev-parse", "HEAD")
+    (fork / "later.txt").write_text("later\n", encoding="utf-8")
+    git(fork, "add", "later.txt")
+    git(fork, "commit", "-q", "-m", "later")
+    git(fork, "tag", "v0.2.0")
+    assert git(repo, "submodule", "status").startswith("+")
+
+    manifest = rm.build_manifest(repo, "moved", {}, {}, {}, allow_dirty=True)
+    assert manifest.forks[0].commit == pinned
+    assert manifest.forks[0].tag == "v0.1.0"
+
+
+def test_invalid_package_manifest_is_a_manifest_error(tmp_path: Path) -> None:
+    """An empty owned package version surfaces as `ManifestError`, not a raw `ValidationError`."""
+    repo = make_repo(tmp_path)
+    broken = repo / "packages" / rm.OWNED_PACKAGE_DIRECTORIES[0] / "package.json"
+    broken.write_text('{"name":"@nredd/pi-broken","version":"","private":true}\n', encoding="utf-8")
+    git(repo, "commit", "-q", "-am", "break")
+    with pytest.raises(rm.ManifestError, match="failed validation"):
+        rm.build_manifest(repo, "broken", {}, {}, {})
+
+
+def test_malformed_pairs_missing_artifact_and_git_failure(tmp_path: Path) -> None:
+    """Bad `NAME=VALUE` input, a missing artifact file and a non-repository all fail loudly."""
+    with pytest.raises(rm.ManifestError, match="must be NAME=VALUE"):
+        rm.parse_pairs(["novalue"], "--evidence")
+    with pytest.raises(rm.ManifestError, match="repeats name"):
+        rm.parse_pairs(["a=1", "a=2"], "--evidence")
+    repo = make_repo(tmp_path)
+    with pytest.raises(rm.ManifestError, match="not a regular file"):
+        rm.build_manifest(repo, "missing", {"gone": str(tmp_path / "gone.bin")}, {}, {})
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    with pytest.raises(rm.ManifestError, match="failed"):
+        rm.build_manifest(not_a_repo, "plain", {}, {}, {})
+
+
+def valid_manifest(tmp_path: Path) -> dict[str, object]:
+    """Produce a valid manifest document to mutate in schema tests.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        dict[str, object]: JSON-compatible manifest that validates as-is.
+    """
+    return rm.build_manifest(make_repo(tmp_path), "valid", {}, {}, {}).model_dump()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"schema_version": 2},
+        {"unexpected": True},
+        {"release": {"id": "", "created_at": "2026-10-17T00:00:00Z", "commit": "0" * 40, "dirty": False}},
+        {"forks": [{"path": "forks/x", "commit": "nothex", "remote_url": "u", "initialized": False}]},
+    ],
+)
+def test_schema_rejects_each_constraint(tmp_path: Path, mutation: dict[str, object]) -> None:
+    """Starting from a valid document, each constraint rejects on its own."""
+    document = valid_manifest(tmp_path)
+    rm.ReleaseManifest.model_validate(document)
     with pytest.raises(ValidationError):
-        rm.ReleaseManifest.model_validate({"schema_version": 2, "unexpected": True})
+        rm.ReleaseManifest.model_validate({**document, **mutation})

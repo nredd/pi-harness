@@ -17,9 +17,11 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 from typing import Annotated
 
@@ -120,6 +122,22 @@ class ReleaseManifest(BaseModel):
     evidence: dict[str, str] = Field(description="Free-form release verification evidence")
 
 
+@cache
+def locate_git() -> Path:
+    """Resolve the Git executable once per process to an absolute, symlink-free path.
+
+    Returns:
+        Path: Absolute path of `git`.
+
+    Raises:
+        ManifestError: If Git is not on `PATH`.
+    """
+    located = shutil.which("git")
+    if located is None:
+        raise ManifestError("`git` not found on PATH")
+    return Path(located).resolve()
+
+
 def run_git(repo_root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Run one Git command against a repository without a shell.
 
@@ -132,13 +150,15 @@ def run_git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Compl
         subprocess.CompletedProcess[str]: Captured Git output.
 
     Raises:
-        ManifestError: If Git cannot execute successfully when `check` is set.
+        ManifestError: If Git is missing or cannot execute successfully when `check` is set.
     """
-    argv = ["git", "-C", str(repo_root), *args]
+    argv = [str(locate_git()), "-C", str(repo_root), *args]
     try:
         return subprocess.run(argv, capture_output=True, text=True, check=check)
     except subprocess.CalledProcessError as e:
         raise ManifestError(f"`{' '.join(argv)}` failed: {e.stderr.strip()}") from e
+    except OSError as e:
+        raise ManifestError(f"`{' '.join(argv)}` could not start: {e}") from e
 
 
 def sha256_file(path: Path) -> str:
@@ -236,6 +256,7 @@ def gitlinks(repo_root: Path) -> list[ForkIdentity]:
         ManifestError: If Git status or `.gitmodules` data is malformed.
     """
     urls = submodule_urls(repo_root)
+    indexed = indexed_gitlinks(repo_root)
     done = run_git(repo_root, "submodule", "status")
     forks: list[ForkIdentity] = []
     for line in done.stdout.splitlines():
@@ -245,13 +266,20 @@ def gitlinks(repo_root: Path) -> list[ForkIdentity]:
         if match is None:
             raise ManifestError(f"Malformed `git submodule status` entry: '{line}'")
         state = match.group("state")
-        commit = match.group("commit")
         path = match.group("path")
         if path not in urls:
             raise ManifestError(f"Gitlink '{path}' has no URL in `.gitmodules`")
+        if path not in indexed:
+            raise ManifestError(
+                f"`git submodule status` reports '{path}' but the index has no Gitlink for it"
+            )
+        # The identity is the INDEXED Gitlink. A `+` entry carries the checkout's HEAD instead,
+        # which is a different commit when the fork was moved by hand (allowed only with
+        # `--allow-dirty`); recording that would misidentify the selected source.
+        commit = indexed[path]
         checkout = repo_root / path
         initialized = state[0] != "-" and (checkout / ".git").exists()
-        tag = exact_tag(checkout) if initialized else None
+        tag = exact_tag(checkout, commit) if initialized else None
         forks.append(
             ForkIdentity(
                 path=path,
@@ -265,17 +293,42 @@ def gitlinks(repo_root: Path) -> list[ForkIdentity]:
     return forks
 
 
-def exact_tag(checkout: Path) -> str | None:
-    """Return an exact local tag for a submodule checkout, if Git has one.
+def indexed_gitlinks(repo_root: Path) -> dict[str, str]:
+    """Read every Gitlink (mode 160000) from the monorepo index.
+
+    Parameters:
+        repo_root (Path): Monorepo root.
+
+    Returns:
+        dict[str, str]: Gitlink path -> commit, from `git ls-files -s`.
+
+    Raises:
+        ManifestError: If an index line cannot be parsed.
+    """
+    done = run_git(repo_root, "ls-files", "-s")
+    links: dict[str, str] = {}
+    for line in done.stdout.splitlines():
+        if not line.startswith("160000 "):
+            continue
+        match = re.fullmatch(r"160000 (?P<commit>[0-9a-f]{40}) \d+\t(?P<path>.+)", line)
+        if match is None:
+            raise ManifestError(f"Malformed index Gitlink entry: '{line}'")
+        links[match.group("path")] = match.group("commit")
+    return links
+
+
+def exact_tag(checkout: Path, commit: str) -> str | None:
+    """Return an exact local tag for one commit of a submodule checkout, if Git has one.
 
     Parameters:
         checkout (Path): Initialized submodule checkout.
+        commit (str): The indexed Gitlink commit to describe (not the checkout's HEAD).
 
     Returns:
-        str | None: Exact tag name, or `None` when no local exact tag exists.
+        str | None: Exact tag name, or `None` when no local exact tag points at `commit`.
     """
     try:
-        done = run_git(checkout, "describe", "--tags", "--exact-match")
+        done = run_git(checkout, "describe", "--tags", "--exact-match", commit)
     except ManifestError:
         return None
     return done.stdout.strip() or None
@@ -414,18 +467,20 @@ def build_manifest(
         raise ManifestError("Monorepo worktree is dirty; commit changes or pass `--allow-dirty`")
     commit = run_git(repo_root, "rev-parse", "HEAD").stdout.strip()
     timestamp = created_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    raw = {
-        "schema_version": 1,
-        "release": {"id": release_id, "created_at": timestamp, "commit": commit, "dirty": dirty},
-        "forks": [fork.model_dump() for fork in gitlinks(repo_root)],
-        "owned_packages": [package.model_dump() for package in owned_packages(repo_root)],
-        "third_party": third_party_identity(repo_root).model_dump(),
-        "artifacts": [artifact.model_dump() for artifact in artifacts(artifact_specs, artifact_urls)],
-        "evidence": dict(evidence),
-    }
     try:
+        raw = {
+            "schema_version": 1,
+            "release": {"id": release_id, "created_at": timestamp, "commit": commit, "dirty": dirty},
+            "forks": [fork.model_dump() for fork in gitlinks(repo_root)],
+            "owned_packages": [package.model_dump() for package in owned_packages(repo_root)],
+            "third_party": third_party_identity(repo_root).model_dump(),
+            "artifacts": [artifact.model_dump() for artifact in artifacts(artifact_specs, artifact_urls)],
+            "evidence": dict(evidence),
+        }
         return ReleaseManifest.model_validate(raw)
     except ValidationError as e:
+        # Nested models validate while `raw` is built; an empty package version is a manifest
+        # failure too, not a stack trace.
         raise ManifestError(f"Release manifest failed validation: {e}") from e
 
 
