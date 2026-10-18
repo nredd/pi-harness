@@ -37,3 +37,11 @@ Do not use `--force`, discard changes, or clean a fork to make bootstrap succeed
 
 The top-level owned-code check is not a substitute for these fork gates or the full assembled-stack
 verification. Authenticated-provider and physical-desktop checks are separate manual evidence.
+
+Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
+findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
+through `@earendil-works/gondolin` 0.12.0, which is a dependency of the private example workspace
+`packages/coding-agent/examples/extensions/gondolin` only. Neither `gondolin` nor `node-forge` is in
+the coding-agent or tui tarballs' dependency trees, the shipped bundle, or the Homebrew install's
+`node_modules`; the example sources ship as docs. Nothing to patch in the fork; re-check when
+upstream bumps `gondolin` or `node-forge` publishes a fix.
