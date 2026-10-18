@@ -98,7 +98,7 @@ manager resolution) in a temporary `HOME`/agent dir with no model calls or auth.
 Real packed-tarball, real-fork evidence (committed, `make check-fork-package-contracts`, see
 [package contracts](../../docs/package-contracts.md)): the packed preset and packed
 `@nredd/pi-dev-tools` are installed as Pi `packages`, and exact stock Pi 1.3.0 runs the Gitlink-selected
-`pi-subagents` (`v0.22.0-nredd.1`, `8ed6404c082431b324f711c5b7b69248faad4c8a`) with a loopback faux
+`pi-subagents` (nredd/v0.22.0 `2fc9632198745527b0478b6e79b130eed75d284a`, canonical project trust) with a loopback faux
 provider calling `Agent` with `subagent_type: code-reviewer` in the foreground. Observed through the
 child's real request: tools exactly `read`, `grep`, `find`, `git_diff`, `git_show`, `git_log`,
 `git_status` plus the fork's always-injected `SubagentWorkflow` refusal stub; no `edit`, `write`,

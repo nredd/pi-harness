@@ -740,6 +740,14 @@ def test_build_cases_derives_expectations_from_the_packed_file() -> None:
     # Precedence: each case must exclude every lower tier's marker.
     assert package.prompt_marker in global_case.absent_markers
     assert {package.prompt_marker, fpc.GLOBAL_MARKER} == set(project.absent_markers)
+    # An untrusted project agent is ignored: the case is the global override with the project
+    # marker excluded, not the project case under a different trust flag.
+    untrusted = case_named("project-override-untrusted")
+    assert untrusted.project_agent is not None
+    assert untrusted.expected_tools == global_case.expected_tools
+    assert untrusted.prompt_marker == fpc.GLOBAL_MARKER
+    assert untrusted.allowed == "read"
+    assert {package.prompt_marker, fpc.PROJECT_MARKER} == set(untrusted.absent_markers)
 
 
 def test_build_cases_pins_trust_and_scope() -> None:
