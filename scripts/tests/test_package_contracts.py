@@ -315,6 +315,14 @@ def good_manifest() -> dict[str, object]:
     }
 
 
+def test_audit_manifest_rejects_missing_publish_config() -> None:
+    """A manifest with no `publishConfig` at all is not publishable."""
+    manifest = good_manifest()
+    del manifest["publishConfig"]
+    problems = pc.audit_manifest(DEV_TOOLS, manifest, ["src/index.ts"])
+    assert any("`publishConfig.access` must be `public`" in problem for problem in problems), problems
+
+
 def test_audit_manifest_accepts_good() -> None:
     """The reference manifest has no findings."""
     assert pc.audit_manifest(DEV_TOOLS, good_manifest(), ["src/index.ts"]) == []
@@ -325,6 +333,7 @@ def test_audit_manifest_accepts_good() -> None:
     [
         ({"private": True}, "`private` must be absent or `false`"),
         ({"publishConfig": {"access": "restricted"}}, "`publishConfig.access` must be `public`"),
+        ({"publishConfig": {}}, "`publishConfig.access` must be `public`"),
         ({"license": "ISC"}, "`license`"),
         ({"dependencies": {"typebox": "1.0.0"}}, "`dependencies` must be empty"),
         ({"optionalDependencies": {"@nredd/pi-session-kit": "*"}}, "`optionalDependencies`"),

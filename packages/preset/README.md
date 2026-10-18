@@ -1,6 +1,6 @@
 # @nredd/pi-preset
 
-Published to npm as `@nredd/pi-preset` (public), version `0.1.0`.
+Publishable to npm as `@nredd/pi-preset` (`publishConfig.access: public`), version `0.1.0`; each publication is recorded in `releases/`.
 Not a supported release: no installer, no profile resolver, no activation path exists yet.
 Nothing in this repository installs it, and nothing here changes a live Pi installation.
 
