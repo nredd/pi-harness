@@ -20,7 +20,7 @@ Layout:
 - `scripts/`: build, release, and chezmoi integration implementation.
 - `docs/`: development, source provenance, release, and recovery documentation.
 
-`packages/preset` (`@nredd/pi-preset` `0.1.0`, public-publishable) is the optional opinionated
+`packages/preset` (`@nredd/pi-preset` `0.1.0`, published) is the optional opinionated
 preset with agents, skills, footer, themes, and public-safe defaults. It is a resource snapshot only: no
 installer or activation, model roles and enterprise acceptance are pending, and its themes carry
 their own licenses. See [its README](packages/preset/README.md) and
@@ -47,7 +47,7 @@ make check-fork-package-contracts # explicit: real packed preset/dev-tools via t
 
 `make check` runs, without rewriting files:
 
-- `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*` (public-publishable packages:
+- `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*` (published packages:
   `@nredd/pi-dev-tools@0.4.0`, `@nredd/pi-session-kit@0.3.0`,
   `@nredd/pi-subscription-router@0.3.0`, `@nredd/pi-preset@0.1.0`)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
