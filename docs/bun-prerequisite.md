@@ -70,9 +70,11 @@ Dependency audit:
   unresolved; successful smoke tests do not clear this audit finding.
 
 2026-10-18, first full `pi-harness-e2e` gate against the darwin-arm64 Bun 1.3.14 standalone built from the
-`v1.3.0-nredd.3` tree (binary `370dc52c…`, logs `pi-harness-builds/bun-checklist-20261018/`):
+`v1.3.0-nredd.3` tree (binary SHA256
+`370dc52cd4c76cd13f82ab0f05c2956c5ed6473dfaeb1df8d3f505f4a5f3da7d`, logs `pi-harness-builds/bun-checklist-20261018/`):
 
-- unit 93 passed; fast 140 passed, 10 failed (all the documented Anthropic auth refusals: Bun ignores the
+- unit 93 passed; fast 140 passed, 10 failed, 1 skipped (no enterprise manifest on this machine; the
+  failures are all the documented Anthropic auth refusals: Bun ignores the
   `NODE_OPTIONS` preload, so the harness refuses before any request); tui+bench 105 passed, 18 failed
 - 13 TUI failures are deterministic under Bun and pass on Node in the same session, all `pi-session-kit`
   timer behavior (quota footer never polls, `/loop` never ticks): nredd/pi-harness#14
