@@ -28,7 +28,7 @@ Fork changes:
 2. Run the native gate and the applicable candidate integration tests.
 3. Open a fork PR and obtain both mandatory reviewer-subagent reports on its final HEAD.
 4. Publish the reviewed fork commit before opening the parent Gitlink update PR.
-5. Gate and review the parent PR independently. No tag or pin promotion from unreviewed commits.
+5. Gate and review the parent PR independently, then record the [release manifest](releases.md). No tag or pin promotion from unreviewed commits.
 
 Parent Git worktrees isolate owned files, but do **not** automatically isolate submodule work. Do not
 assume a clean parent checkout proves every fork is clean. Initialization/update must preflight all
