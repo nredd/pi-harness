@@ -4,7 +4,8 @@ For each package this builds the real npm tarball, audits its contents, installs
 fresh project, and drives it through a real, exact-version stock Pi install:
 
 1. `npm pack`: file list must match a narrow allowlist; `LICENSE` must be byte-identical to the
-   repository root; the packed manifest must keep host modules as `*` peers with no dependencies.
+   repository root; the packed manifest must be public-publishable, keep host modules as `*` peers,
+   and have no dependencies.
 2. Source audit: every import in the tarball is relative (inside the package), a Node builtin, or a
    host-provided Pi module. No sibling plugin, no bundled host copy. Imports come from the installed
    TypeScript parser (`import_audit.ts`, one batched `node` run per package) rather than a regex;
@@ -248,10 +249,18 @@ class PackedPi(BaseModel):
     extensions: list[str] = Field(default_factory=list, description="Extension entry files Pi loads")
 
 
+class PackedPublishConfig(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    access: str | None = Field(default=None, description="npm package access level")
+
+
 class PackedManifest(BaseModel):
     model_config = LENIENT_STRICT_MODEL
     name: str | None = Field(default=None, description="npm package name")
-    private: bool | None = Field(default=None, description="Publication guard")
+    private: bool = Field(default=False, description="Must be absent or `false` for publication")
+    publishConfig: PackedPublishConfig = Field(
+        default_factory=PackedPublishConfig, description="npm public publication configuration"
+    )
     license: str | None = Field(default=None, description="SPDX license identifier")
     dependencies: dict[str, str] = Field(default_factory=dict, description="Runtime dependencies")
     optionalDependencies: dict[str, str] = Field(default_factory=dict, description="Optional dependencies")
@@ -966,8 +975,10 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
     problems: list[str] = []
     if parsed.name != contract.name:
         problems.append(f"name is '{parsed.name}', expected '{contract.name}'")
-    if parsed.private is not True:
-        problems.append("`private` must stay `true` until the publication prerequisites exist")
+    if parsed.private is True:
+        problems.append("`private` must be absent or `false` for publication")
+    if parsed.publishConfig.access != "public":
+        problems.append("`publishConfig.access` must be `public`")
     if parsed.license != contract.license:
         problems.append(f"`license` must be '{contract.license}'")
     declared = {

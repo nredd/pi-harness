@@ -1,6 +1,6 @@
 # @nredd/pi-preset
 
-Optional, opinionated Pi preset. **Private (`private: true`) and unpublished**, version `0.1.0`.
+Published to npm as `@nredd/pi-preset` (public), version `0.1.0`.
 Not a supported release: no installer, no profile resolver, no activation path exists yet.
 Nothing in this repository installs it, and nothing here changes a live Pi installation.
 

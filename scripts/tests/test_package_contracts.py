@@ -308,7 +308,7 @@ def good_manifest() -> dict[str, object]:
     """
     return {
         "name": "@nredd/pi-dev-tools",
-        "private": True,
+        "publishConfig": {"access": "public"},
         "license": "MIT",
         "peerDependencies": {"@earendil-works/pi-coding-agent": "*", "typebox": "*"},
         "pi": {"extensions": ["./src/index.ts"]},
@@ -323,7 +323,8 @@ def test_audit_manifest_accepts_good() -> None:
 @pytest.mark.parametrize(
     ("mutation", "needle"),
     [
-        ({"private": False}, "`private`"),
+        ({"private": True}, "`private` must be absent or `false`"),
+        ({"publishConfig": {"access": "restricted"}}, "`publishConfig.access` must be `public`"),
         ({"license": "ISC"}, "`license`"),
         ({"dependencies": {"typebox": "1.0.0"}}, "`dependencies` must be empty"),
         ({"optionalDependencies": {"@nredd/pi-session-kit": "*"}}, "`optionalDependencies`"),
@@ -345,6 +346,11 @@ def test_audit_manifest_rejects(mutation: dict[str, object], needle: str) -> Non
     assert any(needle in problem for problem in problems), problems
 
 
+def test_audit_manifest_accepts_false_private() -> None:
+    """An explicit false `private` value remains publishable."""
+    assert pc.audit_manifest(DEV_TOOLS, good_manifest() | {"private": False}, ["src/index.ts"]) == []
+
+
 @pytest.mark.parametrize(
     ("mutation", "field"),
     [
@@ -363,6 +369,9 @@ def test_audit_manifest_rejects(mutation: dict[str, object], needle: str) -> Non
         ({"bundledDependencies": "yes"}, "bundledDependencies.list[str]"),
         ({"bundleDependencies": {"a": 1}}, "bundleDependencies.list[str]"),
         ({"private": "true"}, "private"),
+        ({"private": None}, "private"),
+        ({"publishConfig": "public"}, "publishConfig"),
+        ({"publishConfig": {"access": True}}, "publishConfig.access"),
         ({"license": 1}, "license"),
         ({"name": 5}, "name"),
     ],

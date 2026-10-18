@@ -1,4 +1,4 @@
-// Package contract: private/unpublished metadata, exact content allowlist from `npm pack`, host
+// Package contract: public-publishable metadata, exact content allowlist from `npm pack`, host
 // peers vs devDependencies, privacy scan of every shipped byte, and README honesty.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -35,12 +35,12 @@ const EXPECTED_FILES = [
 const HOST_PEERS = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"];
 const HOST_PACKAGES = ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core", ...HOST_PEERS, "typebox"];
 
-test("metadata: private, unpublished, versioned, correctly attributed", () => {
+test("metadata: public, versioned, correctly attributed", () => {
 	const pkg = manifest();
 	assert.equal(pkg.name, "@nredd/pi-preset");
 	assert.equal(pkg.version, "0.1.0");
-	assert.equal(pkg.private, true);
-	assert.ok(!("publishConfig" in pkg));
+	assert.ok(!("private" in pkg));
+	assert.deepEqual(pkg.publishConfig, { access: "public" });
 	assert.deepEqual(pkg.repository, {
 		type: "git",
 		url: "git+https://github.com/nredd/pi-harness.git",
@@ -147,10 +147,10 @@ test("nothing from global, machine, or private configuration ships", () => {
 	}
 });
 
-test("README states private/unpublished status and keeps the pending work explicit", () => {
+test("README states public publication and keeps the pending work explicit", () => {
 	const readme = readText("README.md");
 	for (const needle of [
-		"**Private (`private: true`) and unpublished**",
+		"Published to npm as `@nredd/pi-preset` (public), version `0.1.0`.",
 		"Not a supported release",
 		"no installer, no profile resolver, no activation path",
 		"No `role:` references are introduced",
