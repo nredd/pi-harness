@@ -68,3 +68,16 @@ Dependency audit:
   narrower runtime-workspace result does not clear the full workspace's example dependency finding.
 - No dependency was changed and no security waiver was applied. Release impact/remediation remains
   unresolved; successful smoke tests do not clear this audit finding.
+
+2026-10-18, first full `pi-harness-e2e` gate against the darwin-arm64 Bun 1.3.14 standalone built from the
+`v1.3.0-nredd.3` tree (binary `370dc52c…`, logs `pi-harness-builds/bun-checklist-20261018/`):
+
+- unit 93 passed; fast 140 passed, 10 failed (all the documented Anthropic auth refusals: Bun ignores the
+  `NODE_OPTIONS` preload, so the harness refuses before any request); tui+bench 105 passed, 18 failed
+- 13 TUI failures are deterministic under Bun and pass on Node in the same session, all `pi-session-kit`
+  timer behavior (quota footer never polls, `/loop` never ticks): nredd/pi-harness#14
+- `bench/test_render_2k_message_transcript`: the probe needs `--expose-gc`, which Bun lacks (same issue)
+- `bench/test_multi_session_responsiveness` `ms_input_p95_n4` 11.4-12.5ms vs the 9.9ms limit under Bun;
+  three `typed_vs_bash` cases failed in the suite and passed alone (order-dependent, not re-run further)
+- Checklist items 5.x remain open; the Node/Homebrew tree is the only shipped runtime. Trust cases A-F and the
+  fatal-startup matrix stay identical across runtimes (`verify-8754b00/`)
