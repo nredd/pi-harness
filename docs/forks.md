@@ -41,7 +41,16 @@ verification. Authenticated-provider and physical-desktop checks are separate ma
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
 through `@earendil-works/gondolin` 0.12.0, which is a dependency of the private example workspace
-`packages/coding-agent/examples/extensions/gondolin` only. Neither `gondolin` nor `node-forge` is in
-the coding-agent or tui tarballs' dependency trees, the shipped bundle, or the Homebrew install's
-`node_modules`; the example sources ship as docs. Nothing to patch in the fork; re-check when
-upstream bumps `gondolin` or `node-forge` publishes a fix.
+`packages/coding-agent/examples/extensions/gondolin` only. Checked on the released artifacts:
+
+- `tar xzf <tgz> -O package/package.json`: neither `gondolin` nor `node-forge` in `dependencies`
+  or `peerDependencies` of `earendil-works-pi-coding-agent-1.3.0.tgz` (`753efe6f…`) or
+  `earendil-works-pi-tui-1.3.0.tgz` (`ccd8f2d2…`)
+- `grep -rl 'node-forge\|gondolin' packages/coding-agent/dist/bundle`: no file
+- `find /opt/homebrew/Cellar/pi-coding-agent/1.3.0-nredd.3 -type d -name node-forge -o -name gondolin`:
+  only `.../pi-coding-agent/examples/extensions/gondolin`, the example's sources with no `node_modules`
+- `strings fatal-startup-out8/darwin-arm64/pi | grep -c 'node-forge/lib\|@earendil-works/gondolin'`: 0
+  (the Bun standalone, `370dc52c…`)
+
+The example ships as docs only. Nothing to patch in the fork; re-check when upstream bumps
+`gondolin` or `node-forge` publishes a fix.
