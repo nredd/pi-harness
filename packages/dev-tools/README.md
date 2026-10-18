@@ -1,6 +1,6 @@
 # pi-dev-tools
 
-Published to npm as `@nredd/pi-dev-tools` (public), version `0.4.0`.
+Publishable to npm as `@nredd/pi-dev-tools` (`publishConfig.access: public`), version `0.4.0`; each publication is recorded in `releases/`.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). References below to standalone repositories,
 chezmoi pins, and installed-runtime harness gates describe the legacy deployment, not verification
 of this package.

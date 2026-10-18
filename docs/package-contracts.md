@@ -206,7 +206,7 @@ list or null; a mistyped value is an HTTP 400, tool messages are recorded as tex
 (`ForkContractReport`); cases must be complete and in order.
 
 Limits: stock Pi 1.3.0 and exactly the selected fork commit only. Packages are local-path
-`packages`, not `pi install`/npm-managed (nothing is published). Not Bun, not the full assembled
+`packages`, not `pi install`/npm-managed (the gate never publishes). Not Bun, not the full assembled
 stack, not authenticated providers, and no profile, role or activation behavior. A pass is not
 candidate or fullstack acceptance.
 
