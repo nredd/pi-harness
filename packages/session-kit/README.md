@@ -1,6 +1,6 @@
 # pi-session-kit
 
-Publishable to npm as `@nredd/pi-session-kit` (`publishConfig.access: public`), version `0.3.0`; each publication is recorded in `releases/`.
+Published to npm as `@nredd/pi-session-kit` (public), version `0.3.0`; see `releases/2026-10-18-npm-publication.json` for the tarball digest.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and standalone harness
 references below describe the legacy deployment, not installation or candidate verification of
 this package.

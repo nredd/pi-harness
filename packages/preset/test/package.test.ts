@@ -150,7 +150,7 @@ test("nothing from global, machine, or private configuration ships", () => {
 test("README states public publication and keeps the pending work explicit", () => {
 	const readme = readText("README.md");
 	for (const needle of [
-		"Publishable to npm as `@nredd/pi-preset` (`publishConfig.access: public`), version `0.1.0`; each publication is recorded in `releases/`.",
+		"Published to npm as `@nredd/pi-preset` (public), version `0.1.0`; see `releases/2026-10-18-npm-publication.json` for the tarball digest.",
 		"Not a supported release",
 		"no installer, no profile resolver, no activation path",
 		"No `role:` references are introduced",

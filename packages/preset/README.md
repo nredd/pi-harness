@@ -1,6 +1,6 @@
 # @nredd/pi-preset
 
-Publishable to npm as `@nredd/pi-preset` (`publishConfig.access: public`), version `0.1.0`; each publication is recorded in `releases/`.
+Published to npm as `@nredd/pi-preset` (public), version `0.1.0`; see `releases/2026-10-18-npm-publication.json` for the tarball digest.
 Not a supported release: no installer, no profile resolver, no activation path exists yet.
 Nothing in this repository installs it, and nothing here changes a live Pi installation.
 
@@ -112,7 +112,7 @@ wins. A project-scoped install of the preset is gated the same way (untrusted, t
 found and the fork falls back to `general-purpose`, see the contracts doc).
 
 Pending, not claimed: profile resolution, model roles, activation, the full assembled-stack check,
-Bun compiled-artifact behavior, any other fork commit or Pi version, and any publish.
+Bun compiled-artifact behavior, any other fork commit or Pi version, `pi install npm:@nredd/pi-preset` through a live Pi, and npm provenance attestation.
 
 ## Development
 

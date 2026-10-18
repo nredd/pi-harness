@@ -166,6 +166,20 @@ def test_moved_submodule_records_the_indexed_gitlink(tmp_path: Path) -> None:
     assert manifest.forks[0].tag == "v0.1.0"
 
 
+def test_absent_private_is_publishable_and_non_boolean_is_rejected(tmp_path: Path) -> None:
+    """A manifest without `private` records `false`; a string `private` is malformed."""
+    repo = make_repo(tmp_path)
+    manifest_path = repo / "packages" / rm.OWNED_PACKAGE_DIRECTORIES[0] / "package.json"
+    manifest_path.write_text('{"name":"@nredd/pi-x","version":"1.0.0"}\n', encoding="utf-8")
+    git(repo, "commit", "-q", "-am", "publishable")
+    manifest = rm.build_manifest(repo, "publishable", {}, {}, {})
+    assert manifest.owned_packages[0].private is False
+    manifest_path.write_text('{"name":"@nredd/pi-x","version":"1.0.0","private":"yes"}\n', encoding="utf-8")
+    git(repo, "commit", "-q", "-am", "malformed")
+    with pytest.raises(rm.ManifestError, match="non-boolean `private`"):
+        rm.build_manifest(repo, "malformed", {}, {}, {})
+
+
 def test_invalid_package_manifest_is_a_manifest_error(tmp_path: Path) -> None:
     """An empty owned package version surfaces as `ManifestError`, not a raw `ValidationError`."""
     repo = make_repo(tmp_path)
