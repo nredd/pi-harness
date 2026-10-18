@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "release": {
+    "id": "2026-10-17-startup-trust",
+    "created_at": "2026-10-18T03:23:45.335119Z",
+    "commit": "4c962e2a0dddda2a53e185459ef6b465f70b8446",
+    "dirty": true
+  },
+  "forks": [
+    {
+      "path": "forks/pi",
+      "commit": "47293307d16be2c5f18c28254d230f52134036d6",
+      "remote_url": "https://github.com/nredd/pi.git",
+      "initialized": true,
+      "tag": "v1.3.0-nredd.3",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-claude-auth",
+      "commit": "f78a407c72f0c384e3ac5fc4e171d61975e89767",
+      "remote_url": "https://github.com/nredd/pi-claude-auth.git",
+      "initialized": true,
+      "tag": "v0.1.3-nredd.1",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-computer-use",
+      "commit": "3fd2fe39b702558c86491e488019ac9c80f7583e",
+      "remote_url": "https://github.com/nredd/pi-computer-use.git",
+      "initialized": true,
+      "tag": "v0.5.1-nredd.2",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-plan-mode",
+      "commit": "d91bb2b7f8e7aab532400e472cb72a41214e5fb3",
+      "remote_url": "https://github.com/nredd/pi-plan-mode.git",
+      "initialized": true,
+      "tag": "v0.59.2-nredd.4",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-subagents",
+      "commit": "2fc9632198745527b0478b6e79b130eed75d284a",
+      "remote_url": "https://github.com/nredd/pi-subagents.git",
+      "initialized": true,
+      "tag": "v0.22.0-nredd.2",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/rpiv-todo",
+      "commit": "3403b659748fa870d8309ae7d3da88bdb8aa1b1d",
+      "remote_url": "https://github.com/nredd/rpiv-todo.git",
+      "initialized": true,
+      "tag": "v2.12.0-nredd.6",
+      "fetched_tag_object": null
+    }
+  ],
+  "owned_packages": [
+    {
+      "name": "@nredd/pi-dev-tools",
+      "version": "0.4.0",
+      "private": true,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-session-kit",
+      "version": "0.3.0",
+      "private": true,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-subscription-router",
+      "version": "0.3.0",
+      "private": true,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-preset",
+      "version": "0.1.0",
+      "private": true,
+      "tarball_sha256": null
+    }
+  ],
+  "third_party": {
+    "package_lock_lockfile_version": 3,
+    "files": [
+      {
+        "path": "package-lock.json",
+        "sha256": "129a0ec3a5dc2bbe2a43acfed50ab855aae63926135f879948fc39304116da0d"
+      },
+      {
+        "path": "integration/uv.lock",
+        "sha256": "20bacc9c89f1b56c4b54baa4a8ad426cb9797d6b34720135537e837d0f1da17b"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "pi-coding-agent-tgz",
+      "basename": "earendil-works-pi-coding-agent-1.3.0.tgz",
+      "size": 7601431,
+      "sha256": "753efe6fcb54da651e1dc02f6cc56dda029d55e5a40f833bdf9308dae88babd5",
+      "url": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.3/earendil-works-pi-coding-agent-1.3.0.tgz"
+    },
+    {
+      "name": "pi-tui-tgz",
+      "basename": "earendil-works-pi-tui-1.3.0.tgz",
+      "size": 529750,
+      "sha256": "ccd8f2d2aa8e99fed96394cc5ade43c13597bcdd2472552dab5957d038a5afbd",
+      "url": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.3/earendil-works-pi-tui-1.3.0.tgz"
+    },
+    {
+      "name": "pi-darwin-arm64-bun",
+      "basename": "pi",
+      "size": 77118050,
+      "sha256": "370dc52cd4c76cd13f82ab0f05c2956c5ed6473dfaeb1df8d3f505f4a5f3da7d",
+      "url": null
+    },
+    {
+      "name": "pi-linux-x64-bun",
+      "basename": "pi",
+      "size": 107202688,
+      "sha256": "b80fd1603bce8facffc4bb9ef4e31f58dd90d7ea97312cfe5cf8fd6a479bb783",
+      "url": null
+    }
+  ],
+  "evidence": {
+    "core_pr": "https://github.com/nredd/pi/pull/1",
+    "core_pr_receipt": "https://github.com/nredd/pi/pull/1#issuecomment-6243491406",
+    "core_pr3_receipt": "https://github.com/nredd/pi/pull/3#issuecomment-6244480714",
+    "subagents_pr_receipt": "https://github.com/nredd/pi-subagents/pull/3#issuecomment-6237019898",
+    "parent_pr6_receipt": "https://github.com/nredd/pi-harness/pull/6#issuecomment-6243685174",
+    "staged_make_verify": "pi-harness-builds/release-20261017/verify-staged3.log",
+    "live_make_verify": "pi-harness-builds/release-20261017/verify-live.log",
+    "core_full_gate": "pi-harness-builds/release-20261017/core-gate-8754b00-c.log",
+    "core_tag": "v1.3.0-nredd.3",
+    "subagents_tag": "v0.22.0-nredd.2",
+    "tap_commit": "ace6961",
+    "chezmoi_commit": "7236703"
+  }
+}
