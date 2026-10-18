@@ -37,3 +37,22 @@ Do not use `--force`, discard changes, or clean a fork to make bootstrap succeed
 
 The top-level owned-code check is not a substitute for these fork gates or the full assembled-stack
 verification. Authenticated-provider and physical-desktop checks are separate manual evidence.
+
+Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
+findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
+through `@earendil-works/gondolin` 0.12.0, which is a dependency of the private example workspace
+`packages/coding-agent/examples/extensions/gondolin` only. Checked on the released artifacts:
+
+- `tar tzf earendil-works-pi-coding-agent-1.3.0.tgz | grep 'node-forge\|gondolin'` (`753efe6f…`): only
+  `package/examples/extensions/gondolin/{package.json,package-lock.json,index.ts}`, the example's
+  sources; no `node_modules` entry. Same grep on `earendil-works-pi-tui-1.3.0.tgz` (`ccd8f2d2…`): nothing
+- `grep -rl 'node-forge\|gondolin' packages/coding-agent/dist/bundle`: no file
+- Installed dependency closure: `npm ls --all | grep -c 'node-forge\|gondolin'` in the Homebrew
+  install's `libexec/lib/node_modules/@earendil-works/pi-coding-agent` prints 0, and
+  `find /opt/homebrew/Cellar/pi-coding-agent/1.3.0-nredd.3 -path '*node_modules/node-forge*' -o -path '*node_modules/@earendil-works/gondolin*'`
+  finds nothing
+- `strings fatal-startup-out8/darwin-arm64/pi | grep -c 'node-forge/lib\|@earendil-works/gondolin'`: 0
+  (the Bun standalone, `370dc52c…`)
+
+The example ships as docs only. Nothing to patch in the fork; re-check when upstream bumps
+`gondolin` or `node-forge` publishes a fix.
