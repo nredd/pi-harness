@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import release_manifest as rm
 
-GIT = "git"
+GIT = str(rm.locate_git())
 
 
 def git(repo: Path, *args: str) -> str:
