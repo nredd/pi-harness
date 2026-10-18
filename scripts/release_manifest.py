@@ -74,7 +74,7 @@ class OwnedPackage(BaseModel):
     model_config = STRICT_MODEL
     name: str = Field(min_length=1, description="npm package name")
     version: str = Field(min_length=1, description="Package version from `package.json`")
-    private: bool = Field(description="Publication guard from `package.json`")
+    private: bool = Field(description="`private` from `package.json`; `false` when absent, as npm reads it")
     tarball_sha256: str | None = Field(default=None, description="Packed tarball digest; not computed here")
 
 
@@ -349,12 +349,12 @@ def owned_packages(repo_root: Path) -> list[OwnedPackage]:
             or type(raw.get("version")) is not str
         ):
             raise ManifestError(f"Package manifest '{path}' needs string `name` and `version`")
-        if type(raw.get("private")) is not bool:
-            raise ManifestError(f"Package manifest '{path}' needs boolean `private`")
+        # npm treats a missing `private` as publishable; only an explicit non-boolean is malformed.
+        private = raw.get("private", False)
+        if type(private) is not bool:
+            raise ManifestError(f"Package manifest '{path}' has a non-boolean `private`")
         packages.append(
-            OwnedPackage(
-                name=raw["name"], version=raw["version"], private=raw["private"], tarball_sha256=None
-            )
+            OwnedPackage(name=raw["name"], version=raw["version"], private=private, tarball_sha256=None)
         )
     return packages
 
