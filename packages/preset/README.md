@@ -106,8 +106,9 @@ child's real request: tools exactly `read`, `grep`, `find`, `git_diff`, `git_sho
 reach the child; the child really runs `git_status` against a disposable repository, and Pi refuses
 its `write`, `bash` and `git_commit` calls as unknown tools. A global and a project `code-reviewer.md`
 each override the package. With dev-tools not installed the fork warns (`extension-error:`) and the
-child runs with only its built-ins, no `git_*` tools. Project `.pi/agents` overrides are not
-trust-gated by the fork; a project-scoped install of the preset is (untrusted, the reviewer is not
+child runs with only its built-ins, no `git_*` tools. Project `.pi/agents` overrides follow Pi's
+canonical project-trust decision: untrusted, the project file is ignored and the global override
+wins. A project-scoped install of the preset is gated the same way (untrusted, the reviewer is not
 found and the fork falls back to `general-purpose`, see the contracts doc).
 
 Pending, not claimed: profile resolution, model roles, activation, the full assembled-stack check,
