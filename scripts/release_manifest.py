@@ -46,9 +46,11 @@ class ManifestError(RuntimeError):
     """The release manifest could not be generated from the repository state."""
 
 
-class ReleaseInfo(BaseModel):
-    """Identity of the harness source selected for a release."""
+SUBMODULE_STATUS = re.compile(r"(?P<state>[- +U])(?P<commit>[0-9a-f]{40}) (?P<path>[^ ]+)(?: .*)?")
+INDEX_GITLINK = re.compile(r"160000 (?P<commit>[0-9a-f]{40}) \d+\t(?P<path>.+)")
 
+
+class ReleaseInfo(BaseModel):
     model_config = STRICT_MODEL
     id: ReleaseId = Field(description="Immutable release identity supplied by the caller")
     created_at: str = Field(description="UTC ISO-8601 creation time")
@@ -57,8 +59,6 @@ class ReleaseInfo(BaseModel):
 
 
 class ForkIdentity(BaseModel):
-    """One Gitlink and its locally available provenance."""
-
     model_config = STRICT_MODEL
     path: str = Field(min_length=1, description="Gitlink path relative to the monorepo root")
     commit: GitCommit = Field(description="Gitlink commit")
@@ -71,8 +71,6 @@ class ForkIdentity(BaseModel):
 
 
 class OwnedPackage(BaseModel):
-    """Package manifest identity selected by the release."""
-
     model_config = STRICT_MODEL
     name: str = Field(min_length=1, description="npm package name")
     version: str = Field(min_length=1, description="Package version from `package.json`")
@@ -81,16 +79,12 @@ class OwnedPackage(BaseModel):
 
 
 class LockedFile(BaseModel):
-    """Digest of a resolution input that exists in this repository."""
-
     model_config = STRICT_MODEL
     path: str = Field(min_length=1, description="Path relative to the monorepo root")
     sha256: Sha256Hex = Field(description="SHA-256 of the exact file bytes")
 
 
 class ThirdPartyIdentity(BaseModel):
-    """Locally locked third-party inputs available to this release slice."""
-
     model_config = STRICT_MODEL
     package_lock_lockfile_version: int | None = Field(
         default=None, description="Root `package-lock.json` lockfileVersion, if the file exists"
@@ -99,8 +93,6 @@ class ThirdPartyIdentity(BaseModel):
 
 
 class Artifact(BaseModel):
-    """An immutable release artifact supplied on the command line."""
-
     model_config = STRICT_MODEL
     name: str = Field(min_length=1, description="Caller-defined artifact name")
     basename: str = Field(min_length=1, description="Artifact file name without its source directory")
@@ -110,8 +102,6 @@ class Artifact(BaseModel):
 
 
 class ReleaseManifest(BaseModel):
-    """Schema version 1 release identity and evidence."""
-
     model_config = STRICT_MODEL
     schema_version: int = Field(ge=1, le=1, description="Manifest schema version, exactly 1")
     release: ReleaseInfo = Field(description="Release source identity")
@@ -262,7 +252,7 @@ def gitlinks(repo_root: Path) -> list[ForkIdentity]:
     for line in done.stdout.splitlines():
         if not line:
             continue
-        match = re.fullmatch(r"(?P<state>[- +U])(?P<commit>[0-9a-f]{40}) (?P<path>[^ ]+)(?: .*)?", line)
+        match = SUBMODULE_STATUS.fullmatch(line)
         if match is None:
             raise ManifestError(f"Malformed `git submodule status` entry: '{line}'")
         state = match.group("state")
@@ -310,7 +300,7 @@ def indexed_gitlinks(repo_root: Path) -> dict[str, str]:
     for line in done.stdout.splitlines():
         if not line.startswith("160000 "):
             continue
-        match = re.fullmatch(r"160000 (?P<commit>[0-9a-f]{40}) \d+\t(?P<path>.+)", line)
+        match = INDEX_GITLINK.fullmatch(line)
         if match is None:
             raise ManifestError(f"Malformed index Gitlink entry: '{line}'")
         links[match.group("path")] = match.group("commit")
