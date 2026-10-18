@@ -98,7 +98,7 @@ manager resolution) in a temporary `HOME`/agent dir with no model calls or auth.
 Real packed-tarball, real-fork evidence (committed, `make check-fork-package-contracts`, see
 [package contracts](../../docs/package-contracts.md)): the packed preset and packed
 `@nredd/pi-dev-tools` are installed as Pi `packages`, and exact stock Pi 1.3.0 runs the Gitlink-selected
-`pi-subagents` (`v0.22.0-nredd.1`, `8ed6404c082431b324f711c5b7b69248faad4c8a`) with a loopback faux
+`pi-subagents` (nredd/v0.22.0 `2fc9632198745527b0478b6e79b130eed75d284a`, canonical project trust) with a loopback faux
 provider calling `Agent` with `subagent_type: code-reviewer` in the foreground. Observed through the
 child's real request: tools exactly `read`, `grep`, `find`, `git_diff`, `git_show`, `git_log`,
 `git_status` plus the fork's always-injected `SubagentWorkflow` refusal stub; no `edit`, `write`,
@@ -106,8 +106,9 @@ child's real request: tools exactly `read`, `grep`, `find`, `git_diff`, `git_sho
 reach the child; the child really runs `git_status` against a disposable repository, and Pi refuses
 its `write`, `bash` and `git_commit` calls as unknown tools. A global and a project `code-reviewer.md`
 each override the package. With dev-tools not installed the fork warns (`extension-error:`) and the
-child runs with only its built-ins, no `git_*` tools. Project `.pi/agents` overrides are not
-trust-gated by the fork; a project-scoped install of the preset is (untrusted, the reviewer is not
+child runs with only its built-ins, no `git_*` tools. Project `.pi/agents` overrides follow Pi's
+canonical project-trust decision: untrusted, the project file is ignored and the global override
+wins. A project-scoped install of the preset is gated the same way (untrusted, the reviewer is not
 found and the fork falls back to `general-purpose`, see the contracts doc).
 
 Pending, not claimed: profile resolution, model roles, activation, the full assembled-stack check,
