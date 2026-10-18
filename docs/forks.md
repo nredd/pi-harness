@@ -38,6 +38,12 @@ Do not use `--force`, discard changes, or clean a fork to make bootstrap succeed
 The top-level owned-code check is not a substitute for these fork gates or the full assembled-stack
 verification. Authenticated-provider and physical-desktop checks are separate manual evidence.
 
+Upstream candidates in the core patch queue:
+
+- `@earendil-works/pi-coding-agent/testing` (nredd/pi#4): exports the suite harness (`createHarness`, a real
+  `AgentSession` around a scripted faux provider) so extension packages test in-process instead of launching
+  pi. Only `dist/testing/` is added to the package; `dist/bundle` is byte-identical to `v1.3.0-nredd.3`
+
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
 through `@earendil-works/gondolin` 0.12.0, which is a dependency of the private example workspace
