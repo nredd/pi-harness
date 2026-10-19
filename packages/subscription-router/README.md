@@ -1,8 +1,8 @@
 # pi-subscription-router
 
 Published to npm as `@nredd/pi-subscription-router` (public), version `0.3.0`; see `releases/2026-10-18-npm-publication.json` for the tarball digest.
-Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and installed-Pi scenarios
-below describe the legacy deployment, not installation or candidate verification of this package.
+Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install
+below describes legacy deployment, not installation or candidate verification of this package.
 
 ## Standalone use
 
@@ -99,13 +99,10 @@ Development:
 # From the monorepo root:
 make install
 npm run check --workspace @nredd/pi-subscription-router  # biome, tsc, vitest, bun scenarios
-cd packages/subscription-router
-e2e/run.sh             # remaining optional-RPC case, owned by the pi-subagents fork
-e2e/run.sh no-router   # no router loaded -> admitted, physical child runs
 ```
 
 `test/scenarios/` covers terminal/retry/unconfirmed recovery and all six balanced cases through the real router factory and core session harness, under Vitest and Bun.
 
 `createSubscriptionRouter({ config, usage, tracker?, now? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.
 
-`integration/inprocess/router-admission.test.ts` covers `wait`, `fail` and `capped` with the real router/subagents factories on one fake clock under Vitest and Bun. The one remaining shell case, `no-router`, loads pi-subagents from `$PI_SUBAGENTS_DIR` (default `~/code/pi-subagents`). `e2e/faux-quota.ext.ts` and `e2e/faux.ts` remain for cross-extension quota/admission scenarios.
+`integration/inprocess/router-admission.test.ts` covers `wait`, `fail` and `capped` with the real router/subagents factories on one fake clock under Vitest and Bun. The optional-router absence case is now `forks/pi-subagents/test/session-scenarios.test.ts` / `absent admission RPC admits physical child`, selected by `v0.22.0-nredd.4`. All 13 former shell cases have native receipts in `docs/verification-rebuild.md`; the shell runner and its unused faux helpers are deleted. No installed Pi, owner checkout or `PI_SUBAGENTS_DIR` is needed.
