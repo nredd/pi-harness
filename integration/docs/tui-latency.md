@@ -13,7 +13,7 @@ GPU and RAM stay low. Terminals: Ghostty (macOS), Windows Terminal (WSL2).
 - `fs` -- type, `stat` and `fsync` latency of the agent dir (`/mnt/c` vs ext4 is a suspect on WSL2)
 - `start` line -- platform, `wsl`, node, cpus
 
-Self-tests: `scenarios/tui/test_latency_probe.py` (a forced 400 ms block is reported, idle writes nothing).
+Calibration lives in `scenarios/bench/test_multisession.py`: a separate premeasurement process must capture the TUI and report a forced 400 ms block (320..1200 ms). Every measured pane needs a start/TUI record and summary windows; typing needs >=4 input-to-paint samples with p95 <500 ms, idle panes stay <200 B/s individually and <100 B/s combined. The calibration process cannot contaminate fleet windows. This merge is implemented but unexecuted: no quiet runner exists, and bench runs neither locally on the owner's Mac nor in hosted CI.
 
 ## Run it in your real sessions (manual)
 

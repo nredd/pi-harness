@@ -45,17 +45,15 @@ Excluded scenario files (paths below are relative to `scenarios/`; the six `stac
 | Files | Reason excluded from `stack` |
 | --- | --- |
 | `integration/test_plan_mode_gate.py` | Only `test_gate_error_forbids_plain_text_and_points_to_finalize` remains: its five strings are preserved in the fork's main gate replacement, but the separate function has no ledger destination. Do not silently delete it |
-| `integration/test_stats_portable.py` | Portable artifact contract belongs in `C`, not the D/E gate |
-| `tui/test_fleet.py`, `tui/test_one_line_rows.py`, `tui/test_transcript_rows.py` | Remaining composed `A-stack` Plan/fleet and transcript rows; all 16 subagents and 7 Plan `B` rows are fork-native and their old functions are deleted |
-| `tui/test_session_kit_monitor_diff.py`, `tui/test_session_kit_stats.py` | Remaining `A-stack` command/Plan/shared-state interactions; package-native terminal ports already landed and their old rows stay removed |
-| `tui/test_latency_probe.py`, `bench/test_compaction.py`, `bench/test_fanout.py`, `bench/test_multisession.py`, `bench/test_render.py`, `bench/test_startup.py`, `bench/test_typed_vs_bash.py` | `F` measurements/instrumentation require a quiet runner and explicit baseline; hosted CI reports NOT RUN |
+| `tui/test_fleet.py` | Remaining composed `A-stack` fleet/Plan round-trip row; all 16 subagents and 7 Plan `B` rows are fork-native and their old functions are deleted |
+| `bench/test_compaction.py`, `bench/test_fanout.py`, `bench/test_multisession.py`, `bench/test_render.py`, `bench/test_startup.py`, `bench/test_typed_vs_bash.py` | `F` measurements/instrumentation require a quiet runner and explicit baseline; hosted CI reports bench as not run. `test_multisession.py` carries the merged latency-probe calibration and readiness assertions, unexecuted |
 | `live/test_live.py` | `G` requires explicit credentials and opt-in; never CI |
 
 The goal/quota/loop ports in #33 remain native; their three deleted Python files are not restored or listed as exclusions. The rebased subagents/Plan ports remove 23 more functions; the final `no-router` fork receipt also removes the router wrapper, shell runner and unused faux helpers. See the exact fork test names and review/CI provenance in `docs/verification-rebuild.md`. Main's Progress lines and per-row receipts remain in `docs/verification-rebuild.md`.
 
 Native preset footer receipts are in `packages/preset/test/scenarios/footer-{quota,cache,headless}.test.ts` (Vitest + Bun); the three legacy Python files are deleted. The live footer is still the separately tested dotfiles copy; adopting the preset footer remains profile split #21.
 
-Native stats receipts from main remain in `packages/session-kit/test/scenarios/{stats-view,stats-data}.test.ts`. The surviving shared-machines scenario covers CLI exports/imports, three installs, dedup, freshness labels and Plan mode. The standalone portable artifact contract must not be silently replaced by kit source.
+Native stats receipts remain in `packages/session-kit/test/scenarios/{stats-view,stats-data}.test.ts`; `inprocess/stats-plan.test.ts` adds three-machine dedup/freshness and Plan mode on native export/import. Packed standalone privacy, stable UUID and repeated import stay in `scripts/package_contracts.py::exercise_stats_artifact`, CI `contracts` only. `inprocess/diff-plan.test.ts` and `transcript.test.ts` replace the remaining command/Plan and composed-row processes. The two latency-probe functions moved into multisession calibration/readiness/sample assertions; bench remains NOT RUN.
 
 Infrastructure:
 

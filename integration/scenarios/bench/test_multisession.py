@@ -20,6 +20,8 @@ import pytest
 
 from harness.bench import check_against_baseline, check_ceiling, measure_many
 from harness.fleet_load import IDLE_SCRIPT, launch_fleet, make_sandboxes, streaming_script
+from harness.interactive import launch_tui
+from harness.latency import latency_args, read_records, summarize
 from harness.sessions import write_session
 
 if TYPE_CHECKING:
@@ -39,6 +41,34 @@ SETTLE_S = 2.0
 IDLE_WINDOW_S = 5.0
 RATIO_CEILINGS = {"ratio_input_p95_n8_n1": 5.0, "ratio_loop_lag_p99_n8_n1": 4.0}
 IDLE_BYTES_PER_S_CEILING = 100.0
+BLOCK_MS = 400
+
+
+def calibrate_probe(sandbox: Sandbox) -> None:
+    """Validate the deliberate stall in a separate process, outside every measured window.
+
+    Parameters:
+        sandbox (Sandbox): Explicit installed stack and scratch root.
+    """
+    out = sandbox.root / "calibration.jsonl"
+    args, env = latency_args(out, 500)
+    pane = launch_tui(
+        sandbox, IDLE_SCRIPT, extra_args=args, env=env | {"PI_LATENCY_STALL_BLOCK_MS": str(BLOCK_MS)}
+    )
+    try:
+        deadline = time.monotonic() + 15
+        reading = summarize([])
+        while time.monotonic() < deadline and reading.stalls == 0:
+            time.sleep(0.3)
+            reading = summarize(read_records(out))
+        records = read_records(out)
+        assert records, records
+        assert records[0]["kind"] == "start", records
+        assert records[0]["tui"] is True, records
+        assert reading.stalls >= 1, records
+        assert BLOCK_MS * 0.8 <= reading.loop_lag_max_ms <= BLOCK_MS * 3, reading
+    finally:
+        pane.kill()
 
 
 def run_cell(sandbox: Sandbox, template_home: Path, count: int, *, stream: bool) -> dict[str, float]:
@@ -46,7 +76,7 @@ def run_cell(sandbox: Sandbox, template_home: Path, count: int, *, stream: bool)
 
     Parameters:
         sandbox (Sandbox): supplies the scratch root and workdir.
-        template_home (Path): session chezmoi render.
+        template_home (Path): explicit installed stack fixture.
         count (int): panes.
         stream (bool): stream a reply in every pane and type into pane 0; else stay idle.
 
@@ -67,6 +97,11 @@ def run_cell(sandbox: Sandbox, template_home: Path, count: int, *, stream: bool)
     )
     try:
         time.sleep(SETTLE_S)
+        for out in fleet.outs:
+            records = read_records(out)
+            assert records, records
+            assert records[0]["kind"] == "start", records
+            assert records[0]["tui"] is True, records
         fleet.mark()
         if stream:
             fleet.submit_all("go")
@@ -74,6 +109,17 @@ def run_cell(sandbox: Sandbox, template_home: Path, count: int, *, stream: bool)
             time.sleep(1.5)
         else:
             time.sleep(IDLE_WINDOW_S)
+        readings = fleet.readings()
+        for out in fleet.outs:
+            assert any(
+                record.get("kind") == "summary" and record["t"] >= fleet.started_ms
+                for record in read_records(out)
+            ), f"No measured probe window in '{out}'"
+        if stream:
+            assert len(readings[0].input_to_paint_ms) >= 4, readings[0]
+            assert readings[0].input_p95_ms < 500, readings[0]
+        else:
+            assert all(reading.bytes_per_s < 200 for reading in readings), readings
         return fleet.metrics()
     finally:
         fleet.kill()
@@ -81,6 +127,7 @@ def run_cell(sandbox: Sandbox, template_home: Path, count: int, *, stream: bool)
 
 def test_multi_session_responsiveness(sandbox: Sandbox, template_home: Path) -> None:
     """Latency scales gracefully from 1 to 8 panes, holds its baselines, and idle panes stay silent."""
+    calibrate_probe(sandbox)
 
     def sample() -> dict[str, float]:
         metrics: dict[str, float] = {}
