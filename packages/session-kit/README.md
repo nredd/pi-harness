@@ -36,7 +36,10 @@ Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
 Every module defaults on. Malformed config reports a diagnostic and uses defaults. SDK hosts can use
 `createSessionKit({ config, agentDir, monitorRoot })` from `src/index.ts`: explicit `config` avoids
 loading the config file, `agentDir` scopes config/rules/title aliases, and `monitorRoot` isolates
-monitor pidfiles and orphan sweeps. Omitted options keep the CLI defaults. No daemon or
+monitor pidfiles and orphan sweeps. Optional `clock` (`now`, cancellable `setTimeout`/`setInterval`)
+and `spawnMonitor` seams control scheduling and child lifetime in SDK tests; the real manager,
+ring, coalescer, regex worker and host follow-up queue still run. Controlled stdout callbacks resolve
+after matching/ingestion; native pipe events need not await them. Omitted options keep the CLI defaults. No daemon or
 persistent cron is installed. Deferred-tool configurations need `goal_update` in `neverDefer`
 (without forcing it active), and `monitor_read` in `alwaysActive` and `neverDefer` for Plan mode.
 
@@ -172,7 +175,10 @@ A prior settle handler's continuation (including a todo reminder) suppresses the
 the kit does not append a second reminder or request another continuation.
 
 `test/scenarios/` drives the real kit through core's in-process session harness under Vitest and Bun,
-covering goals, file-backed restore, child rename/reload, read-rule injection and print-mode titles.
+covering goals, file-backed restore, child rename/reload, read-rule injection, print-mode titles,
+monitor output/wakes/cursors/caps/timeouts and loop scheduling with same-cwd session isolation.
+Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
+workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
 Cross-extension Plan/subagent/todo interactions and terminal rendering remain in the integration tier;
 `docs/verification-rebuild.md` at the monorepo root tracks their destinations.

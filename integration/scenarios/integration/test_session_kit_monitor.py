@@ -225,85 +225,6 @@ def test_tools_are_deferred_then_promoted_by_search_tools(sandbox: Sandbox) -> N
     assert all(name in found.text for name in ("monitor_start", "monitor_stop")), found.text
 
 
-def test_passive_output_is_coalesced_and_never_wakes(sandbox: Sandbox, tag: int) -> None:
-    """Three lines inside the 2s window are ONE message; nothing matches, so no extra turn runs."""
-    script = f"echo one; echo two; echo three; sleep {tag}"
-    steps = [start("quiet", script), wait(5), {"text": "waiting"}, {"text": "SHOULD NOT RUN"}]
-    result = run(sandbox, steps, ["go"])
-    assert spoken(result) == ["waiting"], result.transcript()
-    (message,) = monitor_messages(sandbox)
-    body = message["content"]
-    assert all(f"{n}: " in body for n in ("1", "2", "3")), body
-    for word in ("one", "two", "three"):
-        assert word in body, body
-    assert message["display"] is True
-    assert alive(tag) == [], alive(tag)
-    assert pidfiles(sandbox) == []
-
-
-def test_match_wakes_the_agent(sandbox: Sandbox, tag: int) -> None:
-    """A line matching `match` wakes the agent: the follow-up turn runs after the first settles."""
-    script = f"echo boot; sleep 1; echo READY now; sleep {tag}"
-    steps = [
-        start("srv", script, match="READY"),
-        wait(5),
-        {"text": "waiting"},
-        tool("monitor_read", id="srv"),
-        {"text": "woken and read"},
-    ]
-    result = run(sandbox, steps, ["go"])
-    assert "woken and read" in spoken(result), result.transcript()
-    bodies = [m["content"] for m in monitor_messages(sandbox)]
-    assert any("READY now" in b and "match on" in b for b in bodies), bodies
-    (read,) = outcomes(result, "monitor_read")
-    assert not read.is_error, read
-    assert "READY now" in read.text, read
-    assert alive(tag) == []
-
-
-def test_wake_true_wakes_on_every_batch(sandbox: Sandbox, tag: int) -> None:
-    """`wake: true` without `match` still wakes."""
-    steps = [
-        start("loud", f"echo ping; sleep {tag}", wake=True),
-        wait(5),
-        {"text": "waiting"},
-        {"text": "woken"},
-    ]
-    result = run(sandbox, steps, ["go"])
-    assert "woken" in spoken(result), result.transcript()
-
-
-def test_exit_wakes_and_reports_the_code(sandbox: Sandbox) -> None:
-    """A process that exits wakes the agent with its exit code, even with no output pending."""
-    steps = [start("short", "echo bye; exit 3"), wait(4), {"text": "waiting"}, {"text": "woken by exit"}]
-    result = run(sandbox, steps, ["go"])
-    assert "woken by exit" in spoken(result), result.transcript()
-    bodies = "\n".join(m["content"] for m in monitor_messages(sandbox))
-    assert "exited with code 3" in bodies, bodies
-
-
-def test_read_since_returns_only_later_lines(sandbox: Sandbox, tag: int) -> None:
-    """`monitor_read since=N` skips lines up to N; the result names the next cursor."""
-    steps = [
-        start("lines", f"echo a; echo b; echo c; sleep {tag}"),
-        wait(1),
-        tool("monitor_read", id="lines"),
-        tool("monitor_read", id="m1", since=2),
-        tool("monitor_read", id="lines", since=3),
-        {"text": "end"},
-    ]
-    result = run(sandbox, steps, ["go"])
-    full, later, none = outcomes(result, "monitor_read")
-    assert "1: a" in full.text, full.text
-    assert "3: c" in full.text, full.text
-    assert "next since: 3" in full.text, full.text
-    assert "1: a" not in later.text, later.text
-    assert "2: b" not in later.text, later.text
-    assert "3: c" in later.text, later.text
-    assert "(no new output)" in none.text, none.text
-    assert "next since: 3" in none.text, none.text
-
-
 def test_stop_kills_the_process_group_and_stays_quiet(sandbox: Sandbox, tag: int) -> None:
     """`monitor_stop` ends the child and its descendants; a requested stop never wakes the agent."""
     steps = [
@@ -325,33 +246,6 @@ def test_stop_kills_the_process_group_and_stays_quiet(sandbox: Sandbox, tag: int
     assert outcomes(again, "monitor_stop")[0].is_error
 
 
-def test_five_monitors_at_most(sandbox: Sandbox, tag: int) -> None:
-    """The sixth concurrent monitor is refused with a clear error; a duplicate name is refused too."""
-    steps = [start(f"w{i}", f"sleep {tag}") for i in range(5)]
-    steps += [start("w6", f"sleep {tag}"), tool("monitor_stop", id="w0"), start("w7", f"sleep {tag}")]
-    steps += [start("w1", f"sleep {tag}"), {"text": "end"}]
-    result = run(sandbox, steps, ["go"])
-    started = outcomes(result, "monitor_start")
-    assert [o.is_error for o in started] == [False] * 5 + [True, False, True], [o.text for o in started]
-    assert "at most 5" in started[5].text, started[5].text
-    assert "already named" in started[7].text, started[7].text
-    assert alive(tag) == [], "every child dies when the session ends"
-
-
-def test_timeout_kills_and_wakes(sandbox: Sandbox, tag: int) -> None:
-    """`timeout_s` kills the process and wakes the agent with a timeout notice."""
-    steps = [
-        start("slow", f"echo up; sleep {tag}", timeout_s=2),
-        wait(6),
-        {"text": "waiting"},
-        {"text": "woken by timeout"},
-    ]
-    result = run(sandbox, steps, ["go"])
-    assert "woken by timeout" in spoken(result), result.transcript()
-    assert any("timed out after" in m["content"] for m in monitor_messages(sandbox))
-    assert alive(tag) == []
-
-
 def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tag: int) -> None:
     """Quitting with monitors running leaves no process and no pidfile (`ps` and the pidfile root)."""
     steps = [start("a", f"sleep {tag}"), start("b", f"sleep {tag}"), {"text": "started both"}]
@@ -359,24 +253,6 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tag: int) -> N
     assert "started both" in spoken(result)
     assert alive(tag) == [], alive(tag)
     assert pidfiles(sandbox) == []
-
-
-def test_bad_arguments_are_errors_not_crashes(sandbox: Sandbox) -> None:
-    """No shell: a missing binary, a bad regex and a bad name each fail the call with a message."""
-    steps = [
-        tool("monitor_start", argv=["/nonexistent/binary"], name="x"),
-        tool("monitor_start", argv=["/bin/sleep", "1"], name="y", match="("),
-        tool("monitor_start", argv=["/bin/sleep", "1"], name="bad name!"),
-        tool("monitor_read", id="nope"),
-        {"text": "end"},
-    ]
-    result = run(sandbox, steps, ["go"])
-    errors = [o for o in result.tool_outcomes() if o.name.startswith("monitor_")]
-    assert [o.is_error for o in errors] == [True] * 4, [o.text for o in errors]
-    assert "cannot start" in errors[0].text
-    assert "regex" in errors[1].text
-    assert "name must match" in errors[2].text
-    assert "no monitor" in errors[3].text
 
 
 def test_plan_mode_admits_only_monitor_read(sandbox: Sandbox, tag: int) -> None:
