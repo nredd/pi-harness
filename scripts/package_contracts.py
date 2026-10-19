@@ -878,6 +878,94 @@ def pack(
     return PackedArtifact(contract, path, manifest.version, report.integrity, report.shasum, len(data), files)
 
 
+def load_tarball(contract: PackageContract, path: Path) -> PackedArtifact:
+    """Read an existing tarball without packing or changing its bytes.
+
+    Parameters:
+        contract (PackageContract): Expected package.
+        path (Path): Existing npm tarball.
+
+    Returns:
+        PackedArtifact: Identity computed directly from the supplied bytes.
+
+    Raises:
+        ContractError: If the path, archive, or package identity is invalid.
+    """
+    path = path.resolve()
+    if not path.is_file():
+        raise ContractError(f"Tarball is not a regular file: '{path}'")
+    try:
+        data = path.read_bytes()
+        manifest = PackedManifestIdentity.model_validate_json(read_member(path, "package.json"))
+        with tarfile.open(path) as tar:
+            files = tuple(sorted(strip_prefix(m.name) for m in tar.getmembers() if m.isfile()))
+    except (OSError, ValueError, tarfile.TarError) as e:
+        raise ContractError(f"Cannot read tarball '{path}': {e}") from e
+    if manifest.name != contract.name:
+        raise ContractError(f"Tarball names '{manifest.name}', expected '{contract.name}'")
+    expected = f"{contract.name.removeprefix('@').replace('/', '-')}-{manifest.version}.tgz"
+    if path.name != expected:
+        raise ContractError(f"Tarball name '{path.name}' must be '{expected}'")
+    return PackedArtifact(
+        contract,
+        path,
+        manifest.version,
+        "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode(),
+        hashlib.sha1(data, usedforsecurity=False).hexdigest(),
+        len(data),
+        files,
+    )
+
+
+def parse_tarballs(values: Sequence[str], contracts: Sequence[PackageContract]) -> dict[str, Path]:
+    """Validate explicit `DIRECTORY=PATH` inputs before any install or Pi run.
+
+    Parameters:
+        values (Sequence[str]): CLI input pairs.
+        contracts (Sequence[PackageContract]): Packages this gate supports.
+
+    Returns:
+        dict[str, Path]: Existing tarball paths keyed by package directory.
+
+    Raises:
+        ContractError: If a pair is unknown, duplicated, missing or invalid.
+    """
+    allowed = {c.directory: c for c in contracts}
+    result: dict[str, Path] = {}
+    for value in values:
+        directory, separator, raw_path = value.partition("=")
+        if not separator or not raw_path or directory not in allowed or directory in result:
+            raise ContractError(f"Invalid or duplicate `--tarball DIRECTORY=PATH`: '{value}'")
+        path = Path(raw_path).resolve()
+        load_tarball(allowed[directory], path)
+        result[directory] = path
+    return result
+
+
+def select_artifact(
+    contract: PackageContract,
+    dest: Path,
+    sandbox: Sandbox,
+    tarballs: Mapping[str, Path],
+    package_dir: Path | None = None,
+) -> PackedArtifact:
+    """Use supplied bytes in preference to packing a companion package.
+
+    Parameters:
+        contract (PackageContract): Package to load or pack.
+        dest (Path): Destination for newly packed companions.
+        sandbox (Sandbox): npm environment.
+        tarballs (Mapping[str, Path]): Explicit paths by package directory.
+        package_dir (Path | None): Optional companion source path.
+
+    Returns:
+        PackedArtifact: The supplied artifact, or a freshly packed companion.
+    """
+    if contract.directory in tarballs:
+        return load_tarball(contract, tarballs[contract.directory])
+    return pack(contract, dest, sandbox, package_dir)
+
+
 def strip_prefix(name: str) -> str:
     """Drop npm's leading `package/` directory.
 
@@ -1759,13 +1847,19 @@ SCENARIOS: dict[str, Callable[[Context], ScenarioEvidence]] = {
 # --- orchestration --------------------------------------------------------------------------------
 
 
-def run_gate(work: Path, stock_prefix: Path, only: Sequence[str] | None) -> ContractReport:
+def run_gate(
+    work: Path,
+    stock_prefix: Path,
+    only: Sequence[str] | None,
+    supplied: Mapping[str, Path] | None = None,
+) -> ContractReport:
     """Run the whole contract gate and build the identity/evidence report.
 
     Parameters:
         work (Path): Empty scratch directory for tarballs, installs and sandboxes.
         stock_prefix (Path): Reusable stock Pi install directory.
         only (Sequence[str] | None): Package directories to restrict to; `None` runs all.
+        supplied (Mapping[str, Path] | None): Existing tarballs by package directory; never repacked.
 
     Returns:
         ContractReport: Validated report.
@@ -1780,7 +1874,7 @@ def run_gate(work: Path, stock_prefix: Path, only: Sequence[str] | None) -> Cont
     selected = [c for c in CONTRACTS if only is None or c.directory in only]
     tarballs = work / "tarballs"
     tarballs.mkdir()
-    artifacts = [pack(contract, tarballs, base) for contract in selected]
+    artifacts = [select_artifact(contract, tarballs, base, supplied or {}) for contract in selected]
 
     problems = [
         f"{a.contract.name}: {p}" for a in artifacts for p in audit_tarball(a, root_license, tools.node)
@@ -1841,6 +1935,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--work-dir", type=Path, help="Scratch directory (must be empty or absent); default: a temporary one"
     )
     parser.add_argument("--keep", action="store_true", help="Keep the scratch directory after the run")
+    parser.add_argument("--tarball", action="append", default=[], metavar="DIRECTORY=PATH")
     parser.add_argument("--report", type=Path, help="Write the JSON identity/evidence report here")
     parser.add_argument(
         "--package", action="append", choices=[c.directory for c in CONTRACTS], help="Restrict to one package"
@@ -1865,7 +1960,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     work = args.work_dir or Path(tempfile.mkdtemp(prefix="pi-package-contracts-"))
     work.mkdir(parents=True, exist_ok=True)
     try:
-        report = run_gate(work.resolve(), args.stock_prefix.resolve(), args.package)
+        supplied = parse_tarballs(args.tarball, CONTRACTS)
+        only = args.package or (list(supplied) if supplied else None)
+        if supplied and only is not None and set(supplied) - set(only):
+            raise ContractError("Every `--tarball` must be selected by `--package`")
+        report = run_gate(work.resolve(), args.stock_prefix.resolve(), only, supplied)
     except ContractError as e:
         LOGGER.error(f"FAILED: {e}")
         return 1

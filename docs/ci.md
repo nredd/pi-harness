@@ -1,6 +1,7 @@
 # CI
 
-CI is the gate. Local runs are for development. Hosted runners only, no credentials, no secrets.
+CI is the gate. Local runs are for development. Hosted runners only, no stored credentials or secrets.
+The publish job alone requests a short-lived npm OIDC identity.
 
 `.github/workflows/ci.yml`, every PR and `main`:
 
@@ -84,4 +85,17 @@ the job refuse unsupported coverage rather than silently ignoring it. No Bun bin
 Bun standalone validation is deferred with the Bun checklist (#26-31), blocked on runtime adapter
 #58 (Bun ignores `NODE_OPTIONS --import`). This is NOT RUN, never a Bun pass.
 
-Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI), npm trusted publishing.
+`.github/workflows/publish.yml`, pushes of tags matching `@nredd/*@*`:
+
+| Job | Runs | Permissions |
+| --- | --- | --- |
+| `verify (ubuntu-24.04)` | `scripts/npm_release.py` validates package/version, tag commit ancestry on freshly fetched `origin/main`, and npm absence; installs, checks the selected package with pinned Bun, packs once, runs applicable contracts on those exact bytes, generates SHA-256/SHA-512 identity and release manifest, uploads the artifact | `contents: read` |
+| `publish (ubuntu-24.04)` | Environment `npm`; downloads and validates the artifact, asserts/prints Node >=22.14.0 and npm >=11.5.1, publishes the verified tarball via trusted publishing; checks npm integrity, runs `npm audit signatures` in a one-package throwaway install, and binds the fetched DSSE provenance to the tarball, workflow, tag and commit. Matching existing bytes skip publication; different bytes fail | `contents: read`, `id-token: write` |
+| `release (ubuntu-24.04)` | Creates a verified-tag GitHub release with the original tarball, checksum, identity and manifest attached | `contents: write` |
+
+The jobs have bounded timeouts and per-tag concurrency without cancellation. No npm tokens, no rebuild
+in publish, no manual dispatch. External trusted-publisher/environment/tag protections and failed-job
+recovery are documented [here](releases.md#owned-npm-packages). Only a real tag-triggered publication
+can prove the external OIDC binding, automatic provenance and registry acceptance end to end.
+
+Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI).
