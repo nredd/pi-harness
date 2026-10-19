@@ -45,6 +45,9 @@ PROVENANCE_TYPE = "https://slsa.dev/provenance/v1"
 WORKFLOW_REPOSITORY = "https://github.com/nredd/pi-harness"
 WORKFLOW_PATH = ".github/workflows/publish.yml"
 MAX_ATTESTATION_BYTES = 2 * 1024 * 1024
+# npm says a new version "may take a few minutes" to appear; the first OIDC release took ~4.
+REGISTRY_POLL_INTERVAL_S = 15
+REGISTRY_POLL_ATTEMPTS = 41  # 40 waits x 15 s = 10 minutes
 STRICT = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
@@ -445,9 +448,9 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
         None: Registry metadata is visible and ready for attestation verification.
 
     Raises:
-        ReleaseError: If bytes differ immediately, or metadata is still absent after one minute.
+        ReleaseError: If bytes differ immediately, or metadata is still absent after ten minutes.
     """
-    for attempt in range(7):
+    for attempt in range(REGISTRY_POLL_ATTEMPTS):
         dist = registry_dist(repo, identity.target)
         if dist is not None and dist.integrity != identity.integrity:
             raise ReleaseError("Registry integrity differs from verified tarball; refusing recovery")
@@ -455,9 +458,9 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
             confirm_registry_metadata(identity, dist)
             return
         except ReleaseError:
-            if attempt == 6:
+            if attempt == REGISTRY_POLL_ATTEMPTS - 1:
                 raise
-            time.sleep(10)
+            time.sleep(REGISTRY_POLL_INTERVAL_S)
 
 
 def verify_signatures(identity: Identity) -> None:
