@@ -100,16 +100,16 @@ describe("approved plan todos in one real session", () => {
 	let work: string;
 	let factories: ExtensionFactory[];
 	const live = new Set<Harness>();
-	let home: ReturnType<typeof isolateStackHome>;
+	let home: Awaited<ReturnType<typeof isolateStackHome>>;
 	let serial = 0;
 
 	beforeAll(async () => {
-		home = isolateStackHome();
+		home = await isolateStackHome();
 		root = home.root;
 		factories = [await loadFork("pi-plan-mode"), await loadFork("rpiv-todo")];
 	});
-	afterAll(() => {
-		home.cleanup();
+	afterAll(async () => {
+		await home.cleanup();
 	});
 	afterEach(async () => {
 		for (const h of live) await close(h);

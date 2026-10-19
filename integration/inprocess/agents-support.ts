@@ -119,8 +119,12 @@ export async function ask(
 	return text.slice(separator + 2);
 }
 
-/** End manager/scheduler resources before host disposal. */
+/** Abort and drain unfinished turns before shutting down child resources and disposing the host. */
 export async function closeAgentStack(h: Harness): Promise<void> {
-	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-	h.cleanup();
+	try {
+		await h.session.abort();
+		await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	} finally {
+		h.cleanup();
+	}
 }

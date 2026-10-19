@@ -1,4 +1,6 @@
 /** Real multi-extension sessions, with one host identity shared by every fork. */
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -28,9 +30,25 @@ const HOSTS = [
 export type ForkName = keyof typeof FORK_ENTRIES;
 export type OwnedName = keyof typeof OWNED_ENTRIES;
 
-/** Isolate Pi, rpiv's XDG/legacy config and optional peers before importing any entries. */
-export function isolateStackHome(): { root: string; cleanup(): void } {
+/**
+ * Isolate Pi and peers before imports. macOS holds the same process-scoped wake
+ * assertions as harness/power.py: idle-only `-i` cannot prevent maintenance sleep.
+ * `-w` releases assertions if the runner is killed before cleanup.
+ */
+export async function isolateStackHome(): Promise<{ root: string; cleanup(): Promise<void> }> {
 	const root = mkdtempSync(join(tmpdir(), "pi-stack-"));
+	const wake =
+		process.platform === "darwin"
+			? spawn("/usr/bin/caffeinate", ["-disu", "-w", String(process.pid)], { stdio: "ignore" })
+			: undefined;
+	if (wake) {
+		try {
+			await once(wake, "spawn");
+		} catch (error) {
+			rmSync(root, { recursive: true, force: true });
+			throw new Error("Cannot hold macOS wake assertions for stack tests", { cause: error });
+		}
+	}
 	const previous = new Map<string, string | undefined>();
 	for (const [key, value] of Object.entries({
 		HOME: root,
@@ -42,12 +60,20 @@ export function isolateStackHome(): { root: string; cleanup(): void } {
 	}
 	return {
 		root,
-		cleanup() {
-			for (const [key, value] of previous) {
-				if (value === undefined) delete process.env[key];
-				else process.env[key] = value;
+		async cleanup() {
+			try {
+				for (const [key, value] of previous) {
+					if (value === undefined) delete process.env[key];
+					else process.env[key] = value;
+				}
+				rmSync(root, { recursive: true, force: true });
+			} finally {
+				if (wake && wake.exitCode === null && wake.signalCode === null) {
+					const exited = once(wake, "exit");
+					wake.kill("SIGTERM");
+					await exited;
+				}
 			}
-			rmSync(root, { recursive: true, force: true });
 		},
 	};
 }
