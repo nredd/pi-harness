@@ -13,7 +13,7 @@ describe("goal and approved todos", () => {
 	});
 
 	it("todo reminder and goal share one continuation", async () => {
-		stack = new GoalStack();
+		stack = await GoalStack.create();
 		const h = await stack.start([await loadFork("pi-plan-mode"), await loadFork("rpiv-todo"), stack.kit()]);
 		h.setResponses([tool("plan_mode_complete", { plan: PLAN })]);
 		await h.session.prompt("/plan start");
