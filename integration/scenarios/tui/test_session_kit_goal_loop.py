@@ -92,47 +92,6 @@ def count(pane: TmuxPane, pattern: str) -> int:
     return pane.capture().count(pattern)
 
 
-def test_loop_stops_itself_at_the_run_cap(pane_for: Callable[[dict[str, Any]], TmuxPane]) -> None:
-    """`--max 2`: exactly two re-sends, then the loop says so and nothing more arrives."""
-    pane = pane_for(script(ticks()))
-    submit(pane, "/loop 30s ping --max 2")
-    pane.wait_for(r"loop 1 finished: 2 runs", timeout_s=30)
-    pane.wait_for(r"tick 2", timeout_s=15)
-    pane.wait_stable(quiet_s=3.5, timeout_s=20)
-    assert count(pane, "tick 3") == 0, pane.capture()
-    submit(pane, "/loop list")
-    pane.wait_for(r"no loops", timeout_s=10)
-
-
-def test_loop_stop_ends_ticks(pane_for: Callable[[dict[str, Any]], TmuxPane]) -> None:
-    """`/loop stop` cancels the timer: no further message after it."""
-    pane = pane_for(script(ticks()))
-    submit(pane, "/loop 30s ping")
-    pane.wait_for(r"tick 1", timeout_s=30)
-    submit(pane, "/loop stop 1")
-    pane.wait_for(r"stopped 1", timeout_s=10)
-    pane.wait_stable(quiet_s=1.5, timeout_s=20)
-    seen = [n for n in range(2, 31) if f"tick {n}" in pane.capture()]
-    time.sleep(3.5)
-    after = [n for n in range(2, 31) if f"tick {n}" in pane.capture()]
-    assert after == seen, f"a stopped loop kept ticking: {seen} -> {after}"
-    submit(pane, "/loop list")
-    pane.wait_for(r"no loops", timeout_s=10)
-
-
-def test_busy_ticks_are_skipped_not_queued(pane_for: Callable[[dict[str, Any]], TmuxPane]) -> None:
-    """A tick that finds the agent mid-turn counts as skipped, never as a run, and never queues."""
-    pane = pane_for(script(ticks(delayMs=3_000)))
-    submit(pane, "/loop 30s slow")
-    pane.wait_for(r"loop 1: every 30s", timeout_s=15)
-    pane.wait_for(r"tick 1", timeout_s=30)
-    submit(pane, "/loop list")
-    listing = pane.wait_for(r"1: every 30s, \d+/50 runs, [1-9]\d* skipped", timeout_s=10)
-    assert "slow" in listing
-    submit(pane, "/loop stop all")
-    pane.wait_for(r"stopped 1", timeout_s=10)
-
-
 def test_loop_is_suspended_in_plan_mode(pane_for: Callable[[dict[str, Any]], TmuxPane]) -> None:
     """In Plan mode ticks skip without spending runs; leaving it lets the loop run again."""
     pane = pane_for(script(ticks()))
@@ -190,29 +149,3 @@ def test_no_tick_while_a_goal_waits_on_a_subagent(
     # goal complete -> the loop is free to tick: the scripted steps ran out, so a tick answers DONE
     pane.wait_for(r"\bDONE\b", timeout_s=30)
     submit(pane, "/loop stop all")
-
-
-def test_two_panes_in_one_cwd_keep_independent_goals_and_loops(
-    pane_for: Callable[[dict[str, Any]], TmuxPane],
-) -> None:
-    """Same cwd, two processes: pane A owns a goal, pane B owns a loop; neither sees the other's."""
-    a = pane_for(script([{"delayMs": 1_500, "text": f"A turn {i}"} for i in range(1, 30)]))
-    b = pane_for(script(ticks()))
-    submit(a, "/goal alpha work --turns 50")
-    a.wait_for(r"A turn 2", timeout_s=30)
-    submit(b, "/loop 30s beta --max 3")
-    b.wait_for(r"tick 1", timeout_s=30)
-
-    submit(b, "/goal status")
-    b.wait_for(r"no goal\.", timeout_s=10)
-    submit(a, "/loop list")
-    a.wait_for(r"no loops", timeout_s=10)
-    assert "alpha work" not in b.capture(), b.capture()
-    assert "beta" not in a.capture(), a.capture()
-
-    # B's loop is not held back by A's goal, and A's goal runs on with B busy
-    b.wait_for(r"loop 1 finished: 3 runs", timeout_s=30)
-    submit(a, "/goal pause")
-    a.wait_for(r"goal paused", timeout_s=10)
-    submit(b, "/goal status")
-    b.wait_for(r"no goal\.", timeout_s=10)

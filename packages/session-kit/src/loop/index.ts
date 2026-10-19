@@ -8,20 +8,21 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isChildSession } from "../child.ts";
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
 import type { KitConfig } from "../config.ts";
 import { coordination, planModeActive, watchQuota, watchStops } from "../shared.ts";
 import { CACHE_WARM_MS, decideTick, describeLoop, formatInterval, type LoopEntry, parseLoopArgs } from "./state.ts";
 
-export function register(pi: ExtensionAPI, _config: KitConfig): void {
+export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = realClock): void {
 	const shared = coordination(pi);
-	const loops = new Map<string, { entry: LoopEntry; timer: ReturnType<typeof setInterval> }>();
+	const loops = new Map<string, { entry: LoopEntry; timer: TimerHandle }>();
 	let lastCtx: ExtensionContext | undefined;
 	let nextId = 1;
 
 	const stop = (id: string): void => {
 		const loop = loops.get(id);
 		if (!loop) return;
-		clearInterval(loop.timer);
+		loop.timer.cancel();
 		loops.delete(id);
 	};
 	const stopAll = (): void => {
@@ -131,8 +132,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig): void {
 					runs: 0,
 					skipped: 0,
 				};
-				const timer = setInterval(() => tick(id), command.intervalMs);
-				timer.unref();
+				const timer = clock.setInterval(() => tick(id), command.intervalMs);
 				loops.set(id, { entry, timer });
 				ctx.ui.notify(`loop ${id}: every ${formatInterval(command.intervalMs)}, max ${command.maxRuns} runs`, "info");
 				if (command.intervalMs > CACHE_WARM_MS) {

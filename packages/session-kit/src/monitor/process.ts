@@ -31,8 +31,9 @@ export interface MonitorProcess {
 
 export interface SpawnOptions {
 	cwd: string;
-	onStdout: (chunk: Buffer) => void;
-	onStderr: (chunk: Buffer) => void;
+	/** Resolves when complete lines have been ingested, including matching. Real pipes need not await it. */
+	onStdout: (chunk: Buffer) => void | Promise<void>;
+	onStderr: (chunk: Buffer) => void | Promise<void>;
 }
 
 /**

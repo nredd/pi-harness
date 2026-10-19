@@ -15,7 +15,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { isChildSession, registerChildIdentity, registerParentTool } from "../child.ts";
 import type { KitConfig } from "../config.ts";
-import { MonitorError, MonitorManager } from "./manager.ts";
+import { type ManagerOptions, MonitorError, MonitorManager } from "./manager.ts";
 import { formatDuration } from "./messages.ts";
 import { boundTail } from "./output.ts";
 import { ensureRoot, rootDir, sessionDirName, sweepOrphans } from "./pidfiles.ts";
@@ -28,8 +28,8 @@ export const TOOL_NAMES = ["monitor_start", "monitor_read", "monitor_stop"] as c
 
 const NOT_AVAILABLE = "monitors are not available in this session";
 
-function describe(info: MonitorInfo): string {
-	const age = formatDuration((info.endedAt ?? Date.now()) - info.startedAt);
+function describeAt(info: MonitorInfo, now: number): string {
+	const age = formatDuration((info.endedAt ?? now) - info.startedAt);
 	const state =
 		info.status === "running"
 			? `running ${age}`
@@ -44,8 +44,14 @@ function text(out: string, details?: unknown, isError = false) {
 	return { content: [{ type: "text" as const, text: out }], details, isError };
 }
 
-export function register(pi: ExtensionAPI, _config: KitConfig, monitorRoot?: string): void {
+export function register(
+	pi: ExtensionAPI,
+	_config: KitConfig,
+	monitorRoot?: string,
+	runtime: Pick<ManagerOptions, "clock" | "spawnMonitor"> = {},
+): void {
 	registerChildIdentity(pi);
+	const describe = (info: MonitorInfo): string => describeAt(info, runtime.clock?.now() ?? Date.now());
 	let manager: MonitorManager | undefined;
 	let widget: MonitorWidget | undefined;
 
@@ -73,6 +79,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, monitorRoot?: str
 		w.attach(ctx);
 		widget = w;
 		manager = new MonitorManager({
+			...runtime,
 			sessionId,
 			root,
 			send: (message) => {
