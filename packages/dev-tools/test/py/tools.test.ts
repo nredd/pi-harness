@@ -131,6 +131,7 @@ describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 		expect(s.state).toBe("failed");
 		expect(s.counts).toEqual({ failed: 1, passed: 1 });
 		expect(s.failures.map((f) => f.nodeid)).toEqual(["tests/test_a.py::test_fail"]);
+		expect(mock.text(failed)).toContain("math is hard");
 		expect(mock.text(failed)).toContain("hello stdout");
 		expect(mock.text(failed)).not.toMatch(/test_ok.*PASSED/);
 

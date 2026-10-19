@@ -2,7 +2,7 @@
 
 | Destination | Scenario functions |
 | --- | ---: |
-| `A:dev-tools` | 6 |
+| `A:dev-tools` | 4 |
 | `A:session-kit` | 44 |
 | `A:subscription-router` | 1 |
 | `A:preset` | 21 |
@@ -19,7 +19,7 @@
 | `G` | 4 |
 | `DOTFILES` | 13 |
 | `MERGE:<test>` | 14 |
-| `DROP` | 1 |
+| `DROP` | 3 |
 | Total | 190 |
 | Real-process scenarios before -> after (`D` + `E` + `F` + `G`) | 190 -> 20 (89.5% fewer) |
 
@@ -32,12 +32,16 @@
 - Existing `scripts/package_contracts.py::install_alone` uses npm installation followed by explicit `--extension`; `scripts/fork_package_contracts.py` also explicitly loads the archived fork. Neither currently proves `pi install`. Upgrade `C` to install the exact tarballs through `pi install`, then load through declared package discovery. Keep its stock-host identity/import/peer/license checks. Do not claim that improvement exists today.
 - Add `integration/scenarios/test_startup.py::test_fatal_startup_modes` to `D`: ordinary/fatal factory and `session_start` failures across print text/JSON, RPC and TUI; nonzero fatal exit, no provider call, no held-message leak. This is a new boundary test, not a 191st migrated function. The rebuilt boundary inventory is therefore 21 functions including this addition, versus 20 surviving migration rows; parameterized modes still cause multiple launches. Core's startup race permutations stay in `B:core`, not this matrix. `D` runs Node and Bun; `E` runs once per OS terminal job, not twice to retest runtime logic.
 
+Progress (a row is DONE when its native test is green under Vitest and `bun test` and the scenario is deleted from `integration/scenarios/`; `pi-harness-e2e` stays frozen until it is archived):
+
+- dev-tools: 4 DONE in `packages/dev-tools/test/scenarios/`, `test_py_tools`/`test_cargo_tools` dropped as duplicates, `test_git_commit_relays_hook_failure` dropped as `D1`. `integration/scenarios/integration/test_dev_tools.py` deleted; its git fixture moved to `integration/harness/git_fixture.py` for `test_code_reviewer.py`
+
 Orchestrator adjudication, 2026-10-18 (verdicts reviewed row by row against `PLAN.md` "The rebuild"; changes from the drafting pass):
 
 - Six specialist/reviewer rows (`test_agent_types.py`, `test_code_reviewer.py`) moved `A:preset` -> `A-stack`. The invariant is `pi-subagents` enforcing the preset's frontmatter on a child; a stub runner in the preset package would only test the stub. Real `pi-subagents` + preset agents + dev-tools factories in one harness session.
 - Footer rows (`test_footer_cache.py`, `test_quota_footer.py`, `test_quota_footer_headless.py`, `tests/test_quota.py`): the LIVE footer is still the dotfiles copy (`private_dot_pi/agent/extensions/expanded-footer.ts`, `lib/footer-{cache,quota}.ts`), which today differs from `packages/preset` only by formatting. Deleting those scenarios is gated on the profile loading the preset's footer (item 7), not only on the native tests going green.
 - `static/` split: the chezmoi-free half of `test_settings_keys_are_known_to_pi` is a package invariant and is ALREADY native: `packages/preset/test/resources.test.ts` / `settings defaults are a public-safe subset of keys Pi knows` validates `settings/personal-defaults.json` against the host's `schemas/settings.schema.json`. The owner-render half stays `DOTFILES`.
-- Interactive export: 41 rows replace tmux with `VirtualTerminal` + an interactive host bound to a harness session (13 `A:preset`, 10 `A:session-kit`, 4 `A-stack`, 4 `B:core`, 5 `B:pi-subagents`, 4 `B:rpiv-todo`, 1 `B:pi-plan-mode`). Core `v1.3.0-nredd.4` (nredd/pi#4) exports only the session harness + caller-owned `cwd`. A follow-up core PR exports `VirtualTerminal`, the interactive binder and a clock-aware render flush before any of those 41 ports start. The other 100 native rows (`A`, `A-stack`, `B`: 141 total) need nothing beyond nredd/pi#4.
+- Interactive export: 41 rows replace tmux with `VirtualTerminal` + an interactive host bound to a harness session (13 `A:preset`, 10 `A:session-kit`, 4 `A-stack`, 4 `B:core`, 5 `B:pi-subagents`, 4 `B:rpiv-todo`, 1 `B:pi-plan-mode`). Core `v1.3.0-nredd.4` (nredd/pi#4) exports only the session harness + caller-owned `cwd`. A follow-up core PR exports `VirtualTerminal`, the interactive binder and a clock-aware render flush before any of those 41 ports start. The other 98 native rows (`A`, `A-stack`, `B`: 139 total) need nothing beyond nredd/pi#4.
 - Rejected: a "mode-correct binding adapter" export. `session.bindExtensions({ mode, uiContext })` already is that API (`mode` is `tui | rpc | json | print`).
 - Accepted as drafted: the eight `D` rows (auth transport, loader warnings, tool-set golden, process lifetime, print output routing, orphan sweep), the single `E` resize seam, `F`/`G` unchanged, compaction to `B:core`.
 
@@ -121,13 +125,13 @@ Orchestrator adjudication, 2026-10-18 (verdicts reviewed row by row against `PLA
 
 | Test | Invariant | Dest | Replacement / doubles |
 | --- | --- | --- | --- |
-| `test_git_reads` | Git reads preserve rename/space/staging facts and named structured failures. | `A:dev-tools` | Write `packages/dev-tools/test/scenarios/git.test.ts` / `git reads serialize parsed states through AgentSession`; real factory, temp git/bare remote, faux read calls, assert transcript `structuredContent` and `isError`. |
-| `test_git_commit_and_guard` | Named paths alone commit/push in house style; Bash bypasses are blocked. | `A:dev-tools` | Write `packages/dev-tools/test/scenarios/git.test.ts` / `commit and bash guard share the real tool pipeline`; temp remote and prestaged rename, real git, faux invalid/valid/guard calls. No shell shim deciding policy. |
-| `test_git_worktrees` | Worktree tools add/list/refuse/remove/prune after deferred promotion. | `A:dev-tools` | Write `packages/dev-tools/test/scenarios/worktree.test.ts` / `worktree results survive activation and refusal`; real factory/git, explicit active-tool transitions, faux calls. Generic third-party `search_tools` discovery is a single `D` tool-set smoke, not repeated in every tool group. |
+| `test_git_reads` | Git reads preserve rename/space/staging facts and named structured failures. | `A:dev-tools` | DONE: `packages/dev-tools/test/scenarios/git.test.ts` / `reads return parsed state and compact text, and failures carry a named state`; real factory, temp git/bare remote, faux read calls, `structuredContent`/`isError` from `tool_execution_end`. |
+| `test_git_commit_and_guard` | Named paths alone commit/push in house style; Bash bypasses are blocked. | `A:dev-tools` | DONE: `packages/dev-tools/test/scenarios/git.test.ts` / `commits only the named paths in house style and pushes; the guard blocks bash bypasses`; real `tool_call` hook in front of pi's real `bash` tool (red when the guard rules are emptied). |
+| `test_git_worktrees` | Worktree tools add/list/refuse/remove/prune. | `A:dev-tools` | DONE: `packages/dev-tools/test/scenarios/git.test.ts` / `worktree tools add, list, refuse and remove`. The package registers every tool `direct`; deferral comes from the owner's `deferred-tools.json` + the third-party context engine, so `search_tools` promotion belongs to `D`'s `test_tool_set` golden, not here. |
 | `test_git_commit_relays_hook_failure` | Failed hook reports modification/re-stage advice without a commit. | `DROP` | Existing `packages/dev-tools/test/git/tools.test.ts` / `git_commit` / `relays a failing hook and flags hook-modified files` already uses real git, executable failing hook, unchanged HEAD and exact result fields. No distinct process invariant. |
-| `test_ssh_exec` | Host validation distinguishes remote exit, SSH failure and injection. | `A:dev-tools` | Write `packages/dev-tools/test/scenarios/ssh.test.ts` / `ssh results retain remote and transport states`; explicit SSH config, installed test fake-ssh fixture, faux calls through real tool; no network. |
-| `test_py_tools` | Python diagnostics/format/test exits retain named states in tool results. | `A:dev-tools` | Write `packages/dev-tools/test/scenarios/python.test.ts` / `python tools serialize findings and filtered test outcomes`; recorded executable outputs from `test/fixtures/py/`, injected argv runner, faux calls. Keep actual toolchain conformance in existing package tool tests, not another uv install in a host smoke. |
-| `test_cargo_tools` | Cargo check/clippy/tests deduplicate diagnostics and preserve doctest/no-tests states. | `A:dev-tools` | Write `packages/dev-tools/test/scenarios/cargo.test.ts` / `cargo tools serialize diagnostics and test states`; fixture JSONL/JUnit/doctest outputs, injected argv runner, real result parser/tool session. Existing native toolchain tests remain the executable conformance owner. |
+| `test_ssh_exec` | Host validation distinguishes remote exit, SSH failure and injection. | `A:dev-tools` | DONE: `packages/dev-tools/test/scenarios/ssh.test.ts` / `validates the host, runs the script, and separates remote from ssh failures`; `createDevTools({ ssh: { knownHosts, sshBin } })` with `test/fixtures/ssh/fake-ssh`, no network. |
+| `test_py_tools` | Python diagnostics/format/test exits retain named states in tool results. | `DROP` | Existing `packages/dev-tools/test/py/tools.test.ts` / `py tools against a real uv project` runs real uv/ruff/ty/pytest on the same project and asserts every e2e fact (F401/I001, `would-reformat`, `invalid-return-type`, counts, failing nodeid, `math is hard`, `-k`). The AgentSession serialization is the generic path `git.test.ts` already proves. |
+| `test_cargo_tools` | Cargo check/clippy/tests deduplicate diagnostics and preserve doctest/no-tests states. | `DROP` | Existing `packages/dev-tools/test/cargo/tools.test.ts` / `cargo tools against a real workspace` runs real cargo/nextest on the same workspace and asserts E0308 x1, `cast_possible_truncation`, `tests: 2`, `good tests::fails`, doctests, `no-tests`. Same serialization argument as `test_py_tools`. |
 
 - File: `scenarios/integration/test_extensions.py`
 
@@ -527,7 +531,7 @@ Orchestrator adjudication, 2026-10-18 (verdicts reviewed row by row against `PLA
 | Order / owner | Port / rows deleted |
 | --- | --- |
 | 1. Core testing entry | Session harness exported and proven from packed bytes in nredd/pi#4 (`v1.3.0-nredd.4`); terminal/interactive adapters follow in a second core PR before the 41 interactive rows. Port `test_compaction_triggers_one_token_past_the_threshold`, core framing/disclosure rows `test_click_toggles_a_row`, `test_running_row_toggles_before_it_settles`, `test_thinking_summary_renders_bold_markdown`, `test_roles_are_framed`. No change to installed pins in this documentation task. |
-| 2. `dev-tools` | Port all seven `integration/test_dev_tools.py` rows (six native scenarios, one existing duplicate dropped). Keep only fact/time comparison in `F`; move generic deferred discovery to the one `D` golden. |
+| 2. `dev-tools` | DONE. Port all seven `integration/test_dev_tools.py` rows (four native scenarios, three existing duplicates dropped). Keep only fact/time comparison in `F`; move generic deferred discovery to the one `D` golden. |
 | 3. `session-kit` | Port all 17 `integration/test_session_kit_goal.py` rows, allocating its seven cross-extension rows to `A-stack`; all title/rule/child-identity rows; monitor logic/annotations/child-scoping rows, reserving the one cleanup and one print-output survivor. Port all six goal/loop TUI rows, nine diff rows excluding orphan sweep, all ten stats rows and the two-case title row. Cross-extension rows land in `integration/inprocess/` in the same port series, not an excuse to defer deletion. |
 | 4. `subscription-router` | Port the nine router-only `run.sh` cases to package scenarios and four admission/no-router cases to stack/fork owners. Delete `test_router_e2e_all` and shell/RPC driver after all 13 receipts pass. Port all four `integration/test_session_kit_quota.py` rows into the real factory stack. |
 | 5. `preset` | Port all three headless quota rows, all eleven quota TUI rows and seven cache TUI rows excluding real SIGWINCH. Extend packed standalone stats contract and delete `test_work_producer_needs_no_pi_packages_or_credentials`. Retire Python quota wrapper/preload fixtures only after native factory lifecycle tests pass. |

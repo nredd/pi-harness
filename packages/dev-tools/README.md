@@ -265,7 +265,7 @@ network; the rest write the tree or `target/`. All nine are deferred (found via 
 ```
 # From the monorepo root:
 make install
-npm run check --workspace @nredd/pi-dev-tools  # biome, tsc --noEmit, vitest
+npm run check --workspace @nredd/pi-dev-tools  # biome, tsc --noEmit, vitest, bun test test/scenarios
 ```
 
 Harness gate before any tag: `HARNESS_LOCAL=pi-dev-tools make verify` in `~/code/pi-harness-e2e`.
@@ -276,3 +276,6 @@ Pin lives in chezmoi `third_party/pi-agent-settings.base.json`; see `~/.pi/agent
 - `src/core/` shared runner, output bounding, lock, result shaping
 - `src/<group>/` one module per tool group, registered from `src/index.ts`
 - `test/<group>/` vitest, `test/fixtures/<group>/` recorded real tool output
+- `test/scenarios/` the extension inside a real `AgentSession` (`@earendil-works/pi-coding-agent/testing`):
+  faux model tool calls, pi's validation, `tool_call` hooks, the real `bash` tool and result
+  serialization. Run under Vitest and `bun test`, so they use no runner-specific API
