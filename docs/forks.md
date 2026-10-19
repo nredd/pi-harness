@@ -45,7 +45,15 @@ Upstream candidates in the core patch queue:
   pi. Only `dist/testing/` is added to the package; `dist/bundle` is byte-identical to `v1.3.0-nredd.3`
 - In-process TUI testing (nredd/pi#5): `@earendil-works/pi-tui/testing` (`VirtualTerminal`), `TUI.flushRender()`,
   `@earendil-works/pi-coding-agent/testing/interactive` (`createInteractiveHarness` on the real `InteractiveMode`).
-  Optional `InteractiveMode` seams change `dist/bundle`; pi-tui gains an `exports` map (Breaking Changes)
+  Optional `InteractiveMode` seams change `dist/bundle`; pi-tui gains an `exports` map (Breaking Changes).
+  nredd/pi#6 (`v1.3.0-nredd.6`) fixes what #5 broke in the full fork suite: harness auth identity, faux
+  re-registration on reload, a `settle()` that awaits submitted editor work (`onEditorSubmit`), the pi-tui runner
+
+pi-subagents patch queue:
+
+- Injectable clock (nredd/pi-subagents#4, `v0.22.0-nredd.3`): `createSubagentsExtension({ clock })` drives the
+  scheduler and the completion outbox idle hold, so in-process stack tests share one fake clock with session-kit
+  and the router. The default export keeps real time
 
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
