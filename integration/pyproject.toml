@@ -44,8 +44,9 @@ respect-type-ignore-comments = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "scenarios"]
+pythonpath = ["."]
 python_files = ["test_*.py"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --import-mode=importlib"
 markers = [
     "stack: declared assembled-stack D/E process gate",
     "integration: headless pi with faux providers",

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from harness.git_fixture import git
-from harness.headless import run_headless
+from harness.headless import content_text, run_headless
 from harness.paths import FAUX_EXTENSION, pi_command
 from harness.session_kit import STATS_MODELS, seed_stats_sessions
 
@@ -43,7 +43,14 @@ def test_diff_prints_the_stat_outside_the_tui(sandbox: Sandbox, mode: str) -> No
             result = run_headless(sandbox, payload, [command])
             assert result.returncode == 0, result.transcript()
             assert not result.stdout_noise
-            outputs.append(json.dumps(result.events) + result.stderr)
+            visible = [
+                event["message"]
+                for event in result.of_type("message_end")
+                if event.get("message", {}).get("customType") in {"session-kit:diff", "session-kit:stats"}
+            ]
+            outputs.append(
+                "\n".join(content_text(message.get("content")) for message in visible) + result.stderr
+            )
         else:
             done = subprocess.run(
                 [*pi_command(), "-e", str(FAUX_EXTENSION), "--model", "faux/main", "-p", command],
@@ -64,5 +71,7 @@ def test_diff_prints_the_stat_outside_the_tui(sandbox: Sandbox, mode: str) -> No
     assert "tokens (in + out + cache), all time" in stats, stats
     for _, model, _ in STATS_MODELS:
         assert model in stats, stats
+    assert "faux" not in stats.split("all time", 1)[1], stats
+    assert "router" not in stats, stats
     # Accounting is native; this only proves the real table went to a visible CLI channel.
     assert (sandbox.agent_dir / "pi-session-kit/stats-cache.json").is_file()

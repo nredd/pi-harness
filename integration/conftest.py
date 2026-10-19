@@ -68,6 +68,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if any(item.get_closest_marker(tier) for item in items):
             try:
                 check_tier(tier, getattr(config.option, "numprocesses", None))
+                if tier == "bench":
+                    for item in items:
+                        item.add_marker(pytest.mark.usefixtures("awake_host"))
             except ValueError as error:
                 raise pytest.UsageError(str(error)) from error
 
@@ -237,6 +240,9 @@ def save_sandbox_artifacts(box: Sandbox, nodeid: str) -> None:
     ]
     for leftover in leftovers:
         shutil.copy2(leftover, destination / leftover.name)
+    for nested in box.root.glob("*/rpc-*"):
+        if nested.suffix in {".jsonl", ".stderr"}:
+            shutil.copy2(nested, destination / f"{nested.parent.name}-{nested.name}")
     LOGGER.warning(f"Saved artifacts for '{nodeid}' to '{destination}'")
 
 

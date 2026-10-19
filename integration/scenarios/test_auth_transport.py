@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness.anthropic_mock import (
+    AUTH_GUARD_EXTENSION,
     REPLY_TEXT,
     AnthropicMock,
     anthropic_env,
@@ -96,7 +97,9 @@ def mock(sandbox: Sandbox) -> Iterator[AnthropicMock]:
     assert PLANTED not in json.dumps(read_auth(sandbox.agent_dir))
 
 
-def run(box: Sandbox, mock: AnthropicMock, model: str = MODEL, agent: Path | None = None) -> RunResult:
+def run(
+    box: Sandbox, mock: AnthropicMock, model: str = MODEL, agent: Path | None = None, *, preload: bool = True
+) -> RunResult:
     """Exercise the real native provider behind the redirect/egress guard.
 
     Parameters:
@@ -104,6 +107,7 @@ def run(box: Sandbox, mock: AnthropicMock, model: str = MODEL, agent: Path | Non
         mock (AnthropicMock): recording server.
         model (str): selected physical, router or custom model.
         agent (Path | None): nondefault auth persistence directory.
+        preload (bool): false only for the fail-closed runtime-capability branch.
 
     Returns:
         RunResult: CLI events and streams.
@@ -114,8 +118,10 @@ def run(box: Sandbox, mock: AnthropicMock, model: str = MODEL, agent: Path | Non
         ["hi"],
         model=model,
         load_faux=False,
-        extra_args=["--thinking", "off", "--no-approve"],
-        env=anthropic_env(mock, box) | ({"PI_CODING_AGENT_DIR": str(agent)} if agent else {}),
+        extra_args=["-e", str(AUTH_GUARD_EXTENSION), "--thinking", "off", "--no-approve"],
+        env=anthropic_env(mock, box)
+        | ({"PI_CODING_AGENT_DIR": str(agent)} if agent else {})
+        | ({} if preload else {"NODE_OPTIONS": ""}),
         timeout_s=90,
     )
 
@@ -133,12 +139,19 @@ def answered(result: RunResult, mock: AnthropicMock) -> None:
     assert not result.stderr.strip(), result.stderr
 
 
-@pytest.mark.parametrize("kind", ["direct", "router", "api-key", "custom"])
+@pytest.mark.parametrize("kind", ["direct", "router", "api-key", "custom", "missing-preload"])
 def test_request_uses_auth_json_token_with_claude_code_headers(
     sandbox: Sandbox, mock: AnthropicMock, kind: str
 ) -> None:
     """OAuth mutates direct/routed transport, never API-key or custom providers; Claude auth is ignored."""
     write_auth(sandbox.agent_dir, {"anthropic": oauth()})
+    if kind == "missing-preload":
+        refused = run(sandbox, mock, preload=False)
+        assert refused.returncode != 0, refused.transcript()
+        assert "redirect preload is missing" in refused.stderr, refused.transcript()
+        assert mock.messages == []
+        assert mock.tokens == []
+        return
     model = "router/default" if kind == "router" else MODEL
     if kind == "api-key":
         write_auth(sandbox.agent_dir, {"anthropic": {"type": "api_key", "key": "fake-api-key"}})

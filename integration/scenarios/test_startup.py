@@ -46,6 +46,9 @@ def test_fatal_startup_modes(sandbox: Sandbox, mode: str, phase: str, fatal: boo
     )
     env = {"HARNESS_SCRIPT": str(script), "HARNESS_REQUEST_LOG": str(requests)}
     extra = ["-e", str(extension), "--no-approve"]
+    # Factory failures abort CLI resource loading regardless of error class; only ordinary
+    # session_start errors are warning-only. Core's CLI, not the factory loader alone, owns this.
+    fail_closed = fatal or phase == "factory"
     if mode == "tui":
         pane = launch_tui(
             sandbox,
@@ -55,8 +58,8 @@ def test_fatal_startup_modes(sandbox: Sandbox, mode: str, phase: str, fatal: boo
             wait_pattern=None,
         )
         try:
-            if not fatal:
-                pane.wait_for(MESSAGE)
+            if not fail_closed:
+                pane.wait_for("STARTUP-OK")
                 pane.send_keys("C-d")
             code = wait_dead(pane)
             output = pane.capture() + (sandbox.root / "pi.stderr").read_text()
@@ -83,8 +86,9 @@ def test_fatal_startup_modes(sandbox: Sandbox, mode: str, phase: str, fatal: boo
             check=False,
         )
         code, output = result.returncode, result.stdout + result.stderr
-    assert MESSAGE in output, output
-    if fatal:
+    if mode != "tui" or fail_closed:
+        assert MESSAGE in output, output
+    if fail_closed:
         assert code != 0, f"Fatal {phase} was swallowed in {mode}: {output}"
         assert not requests.exists(), requests.read_text() if requests.exists() else ""
         assert HELD not in output

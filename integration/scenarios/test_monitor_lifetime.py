@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness.headless import run_headless
+from harness.isolation import process_tag
 from harness.rpc import RpcProcess
 from harness.sandbox import build_sandbox
 
@@ -59,7 +60,7 @@ def script(tag: int, *, stop: bool = False) -> dict[str, Any]:
         ),
     ]
     if stop:
-        steps += [tool("monitor_stop", id="lifetime"), tool("monitor_stop", id="lifetime")]
+        steps += [tool("monitor_stop", id="lifetime")]
     return {"providers": {"faux": {"models": ["main"], "steps": [*steps, {"text": "STARTED"}]}}}
 
 
@@ -98,8 +99,11 @@ def tags() -> Iterator[tuple[int, int]]:
     Yields:
         tuple[int, int]: independent owner tags.
     """
-    base = 900_000_000 + (os.getpid() % 10_000) * 1000
-    values = (base + secrets.randbelow(500), base + 500 + secrets.randbelow(500))
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    values = (
+        process_tag(worker, secrets.randbelow(50_000)),
+        process_tag(worker, 50_000 + secrets.randbelow(50_000)),
+    )
     yield values
     for tag in values:
         subprocess.run(["/usr/bin/pkill", "-f", f"^/bin/sleep {tag}$"], check=False)
@@ -125,7 +129,7 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[in
                     for event in rpc.events
                     if event.get("type") == "tool_execution_end" and event.get("toolName") == "monitor_stop"
                 ]
-                assert [event["isError"] for event in stopped] == [False, True], stopped
+                assert [event["isError"] for event in stopped] == [False], stopped
                 wait_until(lambda: not alive(tag), "explicit stop to reap descendants")
                 assert not list((sandbox.root / "tmp").glob("pi-monitors-*/*/*.json"))
             else:
@@ -133,7 +137,26 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[in
         assert rpc.process.returncode == 0, "".join(rpc.stderr)
     wait_until(lambda: not alive(tag), "shutdown to reap monitor group")
     assert not list((sandbox.root / "tmp").glob("pi-monitors-*/*/*.json"))
-    assert len(requests.read_text().splitlines()) == (5 if mode == "stop" else 3), "unexpected monitor wake"
+    assert len(requests.read_text().splitlines()) == (4 if mode == "stop" else 3), "unexpected monitor wake"
+    if mode == "stop":
+        # Same-session stop is deliberately idempotent. A fresh owner must not inherit the old ID.
+        fresh = {
+            "providers": {
+                "faux": {
+                    "models": ["main"],
+                    "steps": [
+                        tool("search_tools", query="monitor_start monitor_stop", kind="tool"),
+                        tool("monitor_stop", id="lifetime"),
+                        {"text": "DONE"},
+                    ],
+                }
+            }
+        }
+        again = run_headless(sandbox, fresh, ["stop"])
+        assert again.returncode == 0, again.transcript()
+        stopped = [outcome for outcome in again.tool_outcomes() if outcome.name == "monitor_stop"]
+        assert len(stopped) == 1
+        assert stopped[0].is_error, stopped[0]
 
 
 def test_next_session_sweeps_only_dead_owners(
@@ -154,7 +177,19 @@ def test_next_session_sweeps_only_dead_owners(
         owner_a.prompt()
         owner_b = lifetime.enter_context(RpcProcess(boxes[1], script(tag_b)))
         owner_b.prompt()
-        wait_until(lambda: len(list(shared_tmp.glob("pi-monitors-*/*/*.json"))) == 2, "two owner pidfiles")
+        for owner, tag in ((owner_a, tag_a), (owner_b, tag_b)):
+            started = [
+                event
+                for event in owner.events
+                if event.get("type") == "tool_execution_end" and event.get("toolName") == "monitor_start"
+            ]
+            assert len(started) == 1, owner.events
+            assert not started[0]["isError"], started
+            assert alive(tag), started
+        wait_until(
+            lambda: len(list(shared_tmp.glob("pi-monitors-*/*/*.json"))) == 2,
+            f"two owner pidfiles under '{shared_tmp}', current files: {list(shared_tmp.rglob('*.json'))}",
+        )
         files = list(shared_tmp.glob("pi-monitors-*/*/*.json"))
         records = {json.loads(path.read_text())["ownerPid"]: path for path in files}
         assert set(records) == {owner_a.process.pid, owner_b.process.pid}
