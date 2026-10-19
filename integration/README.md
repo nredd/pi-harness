@@ -21,7 +21,7 @@ uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
 - The exact Gitlink must have a release tag (`git describe --tags --exact-match`), not a nearest ancestor. When `releases/*.json` records that tag, both downloaded assets must match its SHA-256s; missing/conflicting recorded identities fail closed. An unrecorded tag logs `manifest=not recorded`, not checksum verification
 - CI reports the binary's `--version` and exact tag; installation logs the stack document SHA-256 and each installed manifest name/version/source. Per-OS, per-stack artifacts retain failures and JUnit results
 - `Stack` is a strict Pydantic schema: `name`, nonempty unique `sources`, optional `settings`, optional reasoned `disabled_extensions`. npm versions and git refs are explicit; local paths resolve relative to the stack file. Unknown fields, implicit-home paths and a `settings.packages` override are refused
-- `personal.json` contains the twelve personal sources with exact third-party npm versions, plus `npm:@nredd/pi-preset@0.1.0` for the expanded footer. `local.json` replaces owned packages and Gitlinked forks with repository-relative paths, keeping the same pinned third parties
+- `personal.json` is exactly the twelve sources dotfiles will pin this cycle: subagents `v0.22.0-nredd.3` and the four exact third-party npm pins, with NO preset. `local.json` replaces owned packages and Gitlinked forks with repository-relative paths, keeps the same pinned third parties, and includes the local preset. Preset adoption is deferred to profiles (#21) to avoid duplicating dotfiles-managed agents, skills and themes
 - Both stacks install `pi-computer-use` through Pi but explicitly disable its npm lifecycle scripts and extension discovery on both platforms. Its postinstall otherwise creates a GUI app even before extension loading, so the declared headless exclusion must cover that side effect too. macOS needs GUI/TCC and Linux has no CI desktop session. This is a declared headless exclusion, not coverage of its helper. Fork-owned desktop suites remain opt-in
 - npm user/global configs are separate empty private files, never the owner's npm config or the same `/dev/null` loaded twice. Installer failures include captured command diagnostics
 - Pi performs every package install into a new `PI_CODING_AGENT_DIR` and HOME. No package directory is linked from the owner's install. Per-test homes copy only that installed fixture; writable auth/session/cache/tmp/XDG state is private. Local package sources are deliberately the caller's supplied workspace
@@ -31,13 +31,27 @@ uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
 Boundary inventory:
 
 - `D`: `scenarios/test_stack.py` (quiet text/JSON/RPC/TUI discovery and exact stack-keyed tool goldens plus deferred promotion), `test_auth_transport.py` (native direct/routed OAuth, exclusions, refresh persistence/refusal/logout), `test_monitor_lifetime.py` (process groups, EOF/stop, SIGKILL orphan ownership), `test_print_output.py` (`/diff`, bad refs, `/stats` CLI channels), `test_startup.py` (ordinary/fatal factory and startup errors across CLI modes, fatal nonzero exit/no provider/no held-message leak)
-- `E`: `scenarios/tui/test_footer_resize.py`, real tmux/SIGWINCH 120 -> 60 -> 320 -> 120 on the preset footer. No scaled timers. Native renderer suites own width arithmetic
+- `E`: `scenarios/tui/test_footer_resize.py`, real tmux/SIGWINCH 120 -> 60 -> 320 -> 120. This test explicitly `pi install`s `packages/preset` as a test-scoped extra source into its private writable copy of either stack, retaining only one preset entry when local already includes it. The live footer remains the dotfiles copy, recorded in the ledger as formatting-identical to `packages/preset`; this test does not adopt the preset into the personal profile. No scaled timers. Native renderer suites own width arithmetic
 - Role framing and disclosure clicks are core-native since `v1.3.0-nredd.6`: `forks/pi/packages/coding-agent/test/interactive-{framing,disclosure}.test.ts`, not another process gate
 - Landed A-stack ports run in `integration/inprocess/`, documented [here](inprocess/README.md); their old Python rows are removed, not resurrected by this gate
 - `F`: `scenarios/bench/`, serial and quiet-runner only. Existing baselines are historical, not re-recorded on hosted runners. CI visibly reports NOT RUN until a quiet runner and one evidenced rebaseline exist
 - `G`: `scenarios/live/`, never CI, opt-in with `HARNESS_LIVE=1` and explicit `HARNESS_AUTH_FILE=/absolute/auth.json`. Credentials are linked only from that supplied path; refresh writes through. The shared cost cap remains $0.50
 - Unported `A`/`A-stack`/`B` rows remain in `scenarios/integration/` and other `scenarios/tui/` files for their owning port branches. CI selects only the five root `test_*.py` files and `tui/test_footer_resize.py`, all marked `stack`; it never runs the legacy directories wholesale
 - Thirteen machine-specific static rows and their schema/pin/Brew parser/discovery units are removed. The ledger assigns them to the dotfiles doctor; that doctor is a separate item, not implemented here
+
+Excluded scenario files (paths below are relative to `scenarios/`; the six `stack` files above are the only CI-selected Python scenarios):
+
+| Files | Reason excluded from `stack` |
+| --- | --- |
+| `integration/test_agent_worktree.py`, `integration/test_plan_mode_confirmation.py`, `integration/test_plan_mode_gate.py`, `integration/test_plan_mode_policy.py`, `integration/test_subagents.py` | Unported fork-owned `B` rows, not D process boundaries |
+| `integration/test_router_e2e.py`, `integration/test_session_kit_goal.py`, `integration/test_session_kit_quota.py`, `integration/test_stats_portable.py` | Remaining native/`A-stack` ports; portable artifact contract belongs in `C`, not the D/E gate |
+| `integration/test_quota_footer_headless.py`, `tui/test_footer_cache.py`, `tui/test_quota_footer.py` | Preset-native `A` ports; live dotfiles footer adoption remains deferred, so retain these legacy receipts |
+| `tui/test_conversation_viewer.py`, `tui/test_fleet.py`, `tui/test_fleet_stall.py`, `tui/test_one_line_rows.py`, `tui/test_todo_heading.py`, `tui/test_todo_history.py`, `tui/test_todo_scroll.py`, `tui/test_transcript_rows.py`, `tui/test_virtual_model_row.py` | Unported fork-owned `B` or composed `A-stack` terminal rows; native virtual-terminal suites own these |
+| `tui/test_session_kit_goal_loop.py`, `tui/test_session_kit_monitor_diff.py`, `tui/test_session_kit_stats.py` | Remaining `A-stack` command/Plan/shared-state interactions; package-native terminal ports already landed and their old rows stay removed |
+| `tui/test_latency_probe.py`, `bench/test_compaction.py`, `bench/test_fanout.py`, `bench/test_multisession.py`, `bench/test_render.py`, `bench/test_startup.py`, `bench/test_typed_vs_bash.py` | `F` measurements/instrumentation require a quiet runner and explicit baseline; hosted CI reports NOT RUN |
+| `live/test_live.py` | `G` requires explicit credentials and opt-in; never CI |
+
+Native stats receipts from main remain in `packages/session-kit/test/scenarios/{stats-view,stats-data}.test.ts`. The surviving shared-machines scenario covers CLI exports/imports, three installs, dedup, freshness labels and Plan mode. The standalone portable artifact contract must not be silently replaced by kit source.
 
 Infrastructure:
 
