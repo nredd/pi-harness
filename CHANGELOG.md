@@ -7,9 +7,14 @@
 - Rebase the released `v0.59.2-nredd.4` queue onto upstream 0.59.3, not unreleased main.
   Drop the absorbed custom-start patch and its duplicate regression in favor of upstream's
   ready-plan test; preserve fork approval ordering with a focused regression.
-- Keep upstream's Pi 1.2.0 development pins, regenerate the standalone lockfile, and refresh
-  the vendored mock UI's `onTerminalInput`. Install examples retain the latest released fork
-  tag until this maintenance branch is reviewed and released.
+- Use core fork `v1.3.0-nredd.6` release tarballs for the development host, including the
+  transitive agent-core/AI overrides, and add `@xterm/headless@5.5.0`. The full fork suite
+  passes without production compatibility changes. Install examples retain the latest
+  released fork tag until this maintenance branch is reviewed and released.
+- Port seven retired process scenarios into eight real-session tests: file-backed decline
+  restore and canonical confirmation choices, headless gate guidance and finalize settlement,
+  all seven allowed/eleven blocked shell rows, and real terminal disclosure clicks/Escape.
+  Run the new scenarios on Bun as part of `check`; retain the full Vitest gate.
 
 ### Fixed
 
