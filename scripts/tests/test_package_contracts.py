@@ -61,6 +61,116 @@ def sandbox(tmp_path: Path) -> pc.Sandbox:
     return pc.Sandbox(tmp_path / "sandbox", pc.locate_tools())
 
 
+@pytest.mark.parametrize("contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT], ids=lambda c: c.directory)
+def test_supplied_tarball_is_never_repacked(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    contract: pc.PackageContract,
+) -> None:
+    """Existing tarballs retain exactly the npm-reported identity without consulting workspace sources.
+
+    Parameters:
+        tmp_path (Path): Artifact destination.
+        sandbox (Sandbox): Scrubbed real tools.
+        monkeypatch (pytest.MonkeyPatch): Forbids any second pack invocation.
+        contract (PackageContract): Selected package.
+    """
+    artifact = pc.pack(contract, tmp_path, sandbox)
+    before = artifact.path.read_bytes()
+
+    def forbid_pack(*_args: object) -> pc.PackedArtifact:
+        """Refuse a rebuild of bytes that already passed verification."""
+        pytest.fail("Supplied candidate was repacked")
+
+    monkeypatch.setattr(pc, "pack", forbid_pack)
+    supplied = pc.parse_tarballs([f"{contract.directory}={artifact.path}"], [contract])
+    selected = pc.select_artifact(contract, tmp_path / "unused", sandbox, supplied)
+    assert selected == artifact
+    assert artifact.path.read_bytes() == before
+
+
+def test_stock_gate_audits_and_installs_supplied_bytes(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise real stock-gate audit/install/report plumbing, replacing only the Pi boundary.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        sandbox (Sandbox): Real packing tools.
+        monkeypatch (pytest.MonkeyPatch): Forbids repacking and substitutes stock Pi setup/scenario.
+    """
+    artifact = pc.pack(DEV_TOOLS, tmp_path, sandbox)
+
+    def forbid(*_args: object) -> pc.PackedArtifact:
+        """The stock gate must not rebuild the candidate."""
+        pytest.fail("Candidate was repacked")
+
+    def exercise(ctx: pc.Context) -> pc.DevToolsEvidence:
+        """Check the installed artifact instead of starting Pi."""
+        assert ctx.artifact == artifact
+        assert (ctx.installed / "src/index.ts").read_bytes() == pc.read_member(artifact.path, "src/index.ts")
+        return {"tool": "git_status", "untracked": ["fixture"], "failure_path": "Pi boundary substituted"}
+
+    monkeypatch.setattr(pc, "pack", forbid)
+    monkeypatch.setattr(pc, "ensure_stock_pi", lambda *_: tmp_path / "never-run-pi")
+    monkeypatch.setitem(pc.SCENARIOS, "dev-tools", exercise)
+    work = tmp_path / "gate"
+    work.mkdir()
+    report = pc.run_gate(work, tmp_path / "stock", ["dev-tools"], {"dev-tools": artifact.path})
+    assert report.packages[DEV_TOOLS.name].integrity == artifact.integrity
+    assert not list((work / "tarballs").iterdir())
+
+
+@pytest.mark.parametrize("case", ["missing", "broken", "identity", "filename", "manifest"])
+def test_load_tarball_refuses_invalid_candidate(tmp_path: Path, case: str) -> None:
+    """Missing, corrupt and misidentified archives fail before installation or Pi invocation.
+
+    Parameters:
+        tmp_path (Path): Disposable destination.
+        case (str): Invalid input shape.
+    """
+    path = tmp_path / "nredd-pi-dev-tools-1.0.0.tgz"
+    if case == "broken":
+        path.write_bytes(b"not a tarball")
+    elif case != "missing":
+        name = "other" if case == "identity" else DEV_TOOLS.name
+        files = {"package.json": json.dumps({"name": name, "version": "1.0.0"}).encode()}
+        make_tarball(path, {} if case == "manifest" else files)
+        if case == "filename":
+            path = path.rename(tmp_path / "wrong.tgz")
+    with pytest.raises(pc.ContractError):
+        pc.load_tarball(DEV_TOOLS, path)
+
+
+@pytest.mark.parametrize(
+    "pairs",
+    [
+        ["no-equals"],
+        ["unknown=/tmp/no"],
+        ["dev-tools="],
+        ["dev-tools=FILE", "dev-tools=FILE"],
+    ],
+)
+def test_tarball_pairs_refuse_bad_selection(tmp_path: Path, pairs: list[str]) -> None:
+    """Malformed, unknown and duplicate selections fail closed.
+
+    Parameters:
+        tmp_path (Path): Fixture directory.
+        pairs (list[str]): Invalid option list.
+    """
+    path = make_tarball(
+        tmp_path / "nredd-pi-dev-tools-1.0.0.tgz",
+        {
+            "package.json": json.dumps({"name": DEV_TOOLS.name, "version": "1.0.0"}).encode(),
+        },
+    )
+    with pytest.raises(pc.ContractError):
+        pc.parse_tarballs([value.replace("FILE", str(path)) for value in pairs], pc.CONTRACTS)
+
+
 def test_sandbox_env_is_scrubbed(sandbox: pc.Sandbox, monkeypatch: pytest.MonkeyPatch) -> None:
     """No ambient credential or config location may leak into child processes.
 
