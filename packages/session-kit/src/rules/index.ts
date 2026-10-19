@@ -49,7 +49,7 @@ export function loadRuleDir(dir: string, source: "project" | "user"): Rule[] {
 	return rules;
 }
 
-export function register(pi: ExtensionAPI, _config: KitConfig): void {
+export function register(pi: ExtensionAPI, _config: KitConfig, userAgentDir = agentDir()): void {
 	let injected = new Set<string>();
 	let turnCount = 0;
 
@@ -75,7 +75,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig): void {
 
 		const rules = [
 			...loadRuleDir(path.join(ctx.cwd, ".pi", "rules"), "project"),
-			...loadRuleDir(path.join(agentDir(), "rules"), "user"),
+			...loadRuleDir(path.join(userAgentDir, "rules"), "user"),
 		];
 		const fresh: Rule[] = [];
 		for (const rule of rules) {
