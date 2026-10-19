@@ -1,0 +1,154 @@
+# Each Gitlinked fork's own gate at exactly its Gitlink, when a Gitlink (or this workflow) changes. See docs/ci.md.
+name: Forks
+
+on:
+  pull_request:
+    paths: [forks/**, .gitmodules, .github/workflows/forks.yml]
+  push:
+    branches: [main]
+    paths: [forks/**, .gitmodules, .github/workflows/forks.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: forks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: core (forks/pi)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: forks/pi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize the fork at its Gitlink
+        working-directory: .
+        run: git submodule update --init forks/pi
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: System dependencies (upstream CI's list)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: Restore the release's model data
+        run: |
+          # `npm run build` would fetch LIVE model data, which drifts from the release (fork runbook).
+          version=$(node -p 'require("./packages/ai/package.json").version')
+          npm pack "@earendil-works/pi-ai@$version" --pack-destination "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP/earendil-works-pi-ai-$version.tgz" -C "$RUNNER_TEMP"
+          rm -rf packages/ai/src/providers/data
+          cp -R "$RUNNER_TEMP/package/dist/providers/data" packages/ai/src/providers/data
+      - name: Build
+        run: npm run build:offline
+      - name: Check without rewriting
+        run: |
+          # The fork's `check` runs Biome with --write; CI runs the same steps with Biome check-only.
+          # Fail loudly if the fork changes its check list instead of silently drifting from it.
+          expected='node scripts/biome-check.mjs --write && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke'
+          actual=$(node -p 'require("./package.json").scripts.check')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::forks/pi changed its check script; update this step: $actual"
+            exit 1
+          fi
+          node scripts/biome-check.mjs
+          npm run check:pinned-deps
+          npm run check:runtime-deps
+          npm run check:ts-imports
+          npm run check:entry-graphs
+          npm run check:install-lock:coding-agent
+          npx tsc --noEmit
+          npm run check:browser-smoke
+      - name: Build the pi-env daemon
+        run: npm run build:daemon --workspace packages/env
+      - name: Test (isolated HOME, no credentials)
+        run: ./test.sh
+
+  subagents:
+    name: pi-subagents
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: forks/pi-subagents
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize the fork at its Gitlink
+        working-directory: .
+        run: git submodule update --init forks/pi-subagents
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+
+  plan-mode:
+    name: pi-plan-mode
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: forks/pi-plan-mode
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize the fork at its Gitlink
+        working-directory: .
+        run: git submodule update --init forks/pi-plan-mode
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+
+  claude-auth:
+    name: pi-claude-auth
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: forks/pi-claude-auth
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize the fork at its Gitlink
+        working-directory: .
+        run: git submodule update --init forks/pi-claude-auth
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: Pin pnpm to the fork's packageManager
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build
+      - run: pnpm test
+
+  not-run:
+    name: rpiv-todo, pi-computer-use (not run)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Report
+        run: |
+          echo "::notice title=rpiv-todo not run::its gate needs the upstream rpiv-mono checkout at the release commit (fork runbook)"
+          echo "::notice title=pi-computer-use not run::its native helper and desktop suites need macOS TCC grants"
+          {
+            echo "### rpiv-todo, pi-computer-use: NOT RUN"
+            echo "rpiv-todo gates inside an upstream rpiv-mono clone; pi-computer-use needs macOS TCC. This is not a pass."
+          } >>"$GITHUB_STEP_SUMMARY"

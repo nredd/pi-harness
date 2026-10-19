@@ -30,6 +30,7 @@ def test_failed_launch_kills_private_server(
     pane = MagicMock()
     error = RuntimeError("launch failed")
     getattr(pane, operation).side_effect = error
+    monkeypatch.setattr(interactive, "pi_command", MagicMock(return_value=["pi"]))
     monkeypatch.setattr(interactive, "TmuxPane", MagicMock(return_value=pane))
     monkeypatch.setattr(interactive.tempfile, "mkdtemp", MagicMock(return_value=str(tmp_path)))
     with pytest.raises(RuntimeError, match="launch failed") as caught:
