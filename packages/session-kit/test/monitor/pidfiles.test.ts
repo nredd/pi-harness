@@ -231,6 +231,31 @@ describe("sweepOrphans", () => {
 		expect(signals).toEqual([]);
 	});
 
+	it("reaps a leaderless group whose at-spawn member reads as the next whole second", async () => {
+		// `ps lstart` is a whole-second floor, so a member started milliseconds after the recorded spawn
+		// reads as the next second when its start crosses a second boundary.
+		const startedAt = 1_792_383_691_950;
+		const path = writePidfile(
+			join(tmp.dir, "boundary"),
+			"m1",
+			record({ ownerPid: 999, childPid: 123, pgid: 123, startedAt }),
+		);
+		const killed: number[] = [];
+		const res = await sweepOrphans(tmp.dir, "me", {
+			isAlive: () => false,
+			procInfo: async () => undefined,
+			groupMembers: async () => [
+				{ pid: 124, pgid: 123, startedAt: 1_792_383_692_000, sessionId: 123, command: "member" },
+			],
+			killGroup: async (dead) => {
+				killed.push(dead.pgid);
+				return true;
+			},
+		});
+		expect(res.killed).toEqual([path]);
+		expect(killed).toEqual([123]);
+	});
+
 	it("never touches a live owner's files or processes", async () => {
 		const child = await spawnSleeper();
 		const file = join(tmp.dir, "live-session");
