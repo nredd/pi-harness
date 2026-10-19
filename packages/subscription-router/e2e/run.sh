@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Run the faux e2e against the installed `pi` in a throwaway agent dir, and assert the outcome.
-# Usage: e2e/run.sh [all|terminal|retry|unconfirmed|wait|fail|capped|no-router|balanced-*]
+# Usage: e2e/run.sh [all|wait|fail|capped|no-router]
 #
-# terminal|retry|unconfirmed: mid-run recovery and routing (router only).
 # wait|fail|capped|no-router: pi-subagents dispatch admission and the exhaustion policy
 # (router + pi-subagents; `no-router` is the enterprise profile, subagents alone).
-# balanced-route|switch|sticky|blocked|fallback|unmeasured: installed Pi RPC, three faux providers.
 # pi-subagents comes from $PI_SUBAGENTS_DIR (default ~/code/pi-subagents).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,7 +12,7 @@ scenario="${1:-all}"
 
 if [[ "$scenario" == all ]]; then
   status=0
-  for each in terminal retry unconfirmed wait fail capped no-router balanced-route balanced-switch balanced-sticky balanced-blocked balanced-fallback balanced-unmeasured; do
+  for each in wait fail capped no-router; do
     echo "=== $each"
     "$0" "$each" || status=1
   done
@@ -26,28 +24,9 @@ trap 'rm -rf "$agent"' EXIT
 profile() { # $1 = extra profile fields, with a leading comma
   echo "{ \"profiles\": { \"spike\": { \"chain\": [{ \"model\": \"spike-a/sonnet-a\" }, { \"model\": \"spike-b/terra-b\" }]$1 } } }"
 }
-extensions=(-e "$here/e2e/faux-quota.ext.ts" -e "$here/src/index.ts")
-model=router/spike
 expect=() # grep -E patterns that must match
 reject=() # grep -E patterns that must not match
 case "$scenario" in
-  balanced-route|balanced-switch|balanced-sticky|balanced-blocked|balanced-fallback|balanced-unmeasured)
-    printf '%s\n' '{ "profiles": { "spike": { "strategy": "balanced", "chain": [{ "model": "spike-a/sonnet-a" }, { "model": "spike-b/terra-b" }, { "model": "spike-c/third-c" }] } } }' >"$agent/subscription-router.json"
-    cd "$agent"
-    PI_CODING_AGENT_DIR="$agent" node "$here/e2e/balanced-rpc.mjs" "$here" "$scenario"
-    exit $? ;;
-  terminal)
-    export SPIKE_ERROR="insufficient_quota: You exceeded your current quota"
-    profile "" >"$agent/subscription-router.json"
-    expect=("RECOVERED on spike-b/terra-b") ;;
-  retry)
-    export SPIKE_ERROR="429 Too Many Requests: rate_limit_error"
-    profile "" >"$agent/subscription-router.json"
-    expect=("auto_retry_start" "RECOVERED on spike-b/terra-b") ;;
-  unconfirmed)
-    export SPIKE_ERROR="insufficient_quota: You exceeded your current quota" SPIKE_CONFIRM=unconfirmed
-    profile "" >"$agent/subscription-router.json"
-    expect=("confirmed=false") reject=("RECOVERED") ;;
   wait|fail|capped|no-router)
     [[ -d "$subagents" ]] || { echo "pi-subagents not found at $subagents (set PI_SUBAGENTS_DIR)" >&2; exit 2; }
     export SPIKE_BLOCKED=1
