@@ -27,7 +27,12 @@ let innerFetch = globalThis.fetch;
 const redirecting = (input, init) => {
 	const raw = input instanceof Request ? input.url : String(input);
 	const url = new URL(raw);
-	if (!REDIRECTED_HOSTS.has(url.hostname)) return innerFetch(input, init);
+	if (!REDIRECTED_HOSTS.has(url.hostname)) {
+		if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost" && url.hostname !== "[::1]") {
+			throw new Error(`harness refused non-loopback fetch: ${url.origin}`);
+		}
+		return innerFetch(input, init);
+	}
 	const target = new URL(`${url.pathname}${url.search}`, mock);
 	return innerFetch(input instanceof Request ? new Request(target, input) : target, init);
 };

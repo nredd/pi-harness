@@ -1,4 +1,4 @@
-"""Select session-kit once, using sandbox packages rather than an unpinned checkout.
+"""History fixtures and explicit installed session-kit resource selection.
 
 References:
 - https://github.com/nredd/pi-session-kit
@@ -11,9 +11,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from harness.paths import CODE_DIR
-from harness.pinned import pinned_checkout
-from harness.sandbox import local_overrides_from_env, package_name
+from harness.stack import find_package
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -43,58 +41,20 @@ STATS_MODELS = [
 
 
 def kit_args(box: Sandbox, *, explicit: bool = False) -> list[str]:
-    """Load the configured kit, an explicit local override, or a pre-pin checkout.
-
-    Normal runs let pi load its configured package and return no `-e` flags. A
-    `HARNESS_LOCAL` override replaces that package source in sandbox settings only,
-    retaining object-form filters. Quota fixtures use `explicit=True` alongside
-    `--no-extensions` to control hook order; their `-e` targets the same pin.
-    Only a sandbox with no kit package falls back to `~/code/pi-session-kit`.
+    """Use package discovery, or explicitly load the declared package's entry.
 
     Parameters:
-        box (Sandbox): isolated settings to inspect and optionally patch.
-        explicit (bool): caller disables package discovery with `--no-extensions`.
+        box (Sandbox): installed sandbox.
+        explicit (bool): caller disabled extension discovery.
 
     Returns:
-        list[str]: empty for package discovery, otherwise one `-e` entry.
-
-    Raises:
-        FileNotFoundError: the selected checkout entry point does not exist.
-        LookupError: an explicit configured source is not a pinned git package.
-        RuntimeError: resolving a configured pin failed.
+        list[str]: no flags for discovery, one explicit entry otherwise.
     """
-    packages = box.settings().get("packages", [])
-    overrides = local_overrides_from_env()
-    checkout = overrides.get(KIT)
-    configured = [
-        p
-        for p in packages
-        if package_name(source := str(p.get("source", "")) if isinstance(p, dict) else str(p)) == KIT
-        or (checkout is not None and source == str(checkout))
-    ]
-    if checkout is not None or not configured:
-        checkout = checkout or CODE_DIR / KIT
-    elif explicit:
-        checkout = pinned_checkout(KIT, packages)
-    else:
+    if not explicit:
         return []
-
-    entry = checkout / "src" / "index.ts"
-    if not entry.is_file():
-        raise FileNotFoundError(f"Session-kit entry point does not exist: '{entry}'")
-    if configured and KIT in overrides:
-        box.patch_json(
-            "settings.json",
-            {
-                "packages": [
-                    (p | {"source": str(checkout)} if isinstance(p, dict) else str(checkout))
-                    if p in configured
-                    else p
-                    for p in packages
-                ]
-            },
-        )
-    return ["-e", str(entry)] if explicit or not configured else []
+    directory = find_package(KIT, box.settings().get("packages", []), box.agent_dir)
+    manifest = json.loads((directory / "package.json").read_text())
+    return ["-e", str(directory / manifest["pi"]["extensions"][0])]
 
 
 def compact(value: Any) -> str:

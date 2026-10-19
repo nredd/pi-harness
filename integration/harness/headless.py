@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import signal
 import subprocess
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
+from threading import Thread
 from typing import TYPE_CHECKING, Any
 
 from harness.paths import FAUX_EXTENSION, pi_command
@@ -25,6 +29,7 @@ LOGGER = logging.getLogger(__name__)
 SEEN_AT = "_harness_seen_s"
 
 DEFAULT_TIMEOUT_S = 180
+MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -215,33 +220,83 @@ def run_headless(
         stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL,
         text=True,
+        start_new_session=True,
     )
+    return collect_json_process(process, argv, started, timeout_s)
+
+
+def collect_json_process(
+    process: subprocess.Popen[str], argv: list[str], started: float, timeout_s: float
+) -> RunResult:
+    """Drain both output pipes with limits and enforce a deadline even on silent stdout.
+
+    Parameters:
+        process (subprocess.Popen[str]): running session leader with captured pipes.
+        argv (list[str]): command for diagnostics.
+        started (float): monotonic launch time.
+        timeout_s (float): wall deadline.
+
+    Returns:
+        RunResult: captured output and event timestamps.
+
+    Raises:
+        TimeoutError: the process never settled before its deadline.
+        RuntimeError: an output cap was exceeded.
+    """
     events: list[dict[str, Any]] = []
     noise: list[str] = []
     first_event_s: dict[str, float] = {}
     assert process.stdout is not None
-    deadline = started + timeout_s
-    for line in process.stdout:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            event = json.loads(stripped)
-        except json.JSONDecodeError:
-            noise.append(stripped)
-            continue
-        if isinstance(event, dict):
-            event[SEEN_AT] = time.monotonic() - started
-            events.append(event)
-            first_event_s.setdefault(str(event.get("type")), event[SEEN_AT])
-        if time.monotonic() > deadline:
-            process.kill()
-            break
-    try:
-        _, stderr = process.communicate(timeout=max(1.0, deadline - time.monotonic()))
-    except subprocess.TimeoutExpired:
-        process.kill()
-        _, stderr = process.communicate()
+    assert process.stderr is not None
+    errors: list[str] = []
+    overflow: list[bool] = []
+
+    def drain_stdout() -> None:
+        """Bound stdout while preserving event-read timestamps for benchmarks."""
+        total = 0
+        stdout = process.stdout
+        assert stdout is not None
+        for line in iter(lambda: stdout.readline(MAX_OUTPUT_BYTES + 1), ""):
+            total += len(line.encode())
+            if total > MAX_OUTPUT_BYTES:
+                overflow.append(True)
+                kill_process_group(process.pid)
+                return
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                event = json.loads(stripped)
+            except json.JSONDecodeError:
+                noise.append(stripped)
+                continue
+            if isinstance(event, dict):
+                event[SEEN_AT] = time.monotonic() - started
+                events.append(event)
+                first_event_s.setdefault(str(event.get("type")), event[SEEN_AT])
+
+    def drain_stderr() -> None:
+        """Drain stderr concurrently so loader diagnostics cannot deadlock stdout."""
+        total = 0
+        stderr = process.stderr
+        assert stderr is not None
+        for chunk in iter(lambda: stderr.read(4096), ""):
+            total += len(chunk.encode())
+            if total > MAX_OUTPUT_BYTES:
+                overflow.append(True)
+                kill_process_group(process.pid)
+                return
+            errors.append(chunk)
+
+    readers = [Thread(target=drain_stdout, daemon=True), Thread(target=drain_stderr, daemon=True)]
+    for reader in readers:
+        reader.start()
+    timed_out = finish_process(process, readers, timeout_s)
+    stderr = "".join(errors)
+    if timed_out:
+        raise TimeoutError(f"Pi exceeded {timeout_s}s deadline: {argv}; stderr={stderr[-2000:]}")
+    if overflow:
+        raise RuntimeError(f"Pi exceeded {MAX_OUTPUT_BYTES} output bytes: {argv}")
     return RunResult(
         argv=argv,
         returncode=process.returncode,
@@ -251,3 +306,40 @@ def run_headless(
         duration_s=time.monotonic() - started,
         first_event_s=first_event_s,
     )
+
+
+def kill_process_group(pid: int) -> None:
+    """Kill the owned session group, tolerating an already-exited leader.
+
+    Parameters:
+        pid (int): owned process group leader.
+    """
+    with suppress(ProcessLookupError):
+        os.killpg(pid, signal.SIGKILL)
+
+
+def finish_process(process: subprocess.Popen[str], readers: list[Thread], timeout_s: float) -> bool:
+    """Wait with a deadline, then join concurrent pipe readers and close their descriptors.
+
+    Parameters:
+        process (subprocess.Popen[str]): real process session leader.
+        readers (list[Thread]): concurrent pipe drainers.
+        timeout_s (float): maximum process lifetime.
+
+    Returns:
+        bool: whether the process exceeded its deadline.
+    """
+    timed_out = False
+    try:
+        process.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill_process_group(process.pid)
+        process.wait(timeout=10)
+    for reader in readers:
+        reader.join(timeout=10)
+    assert process.stdout is not None
+    assert process.stderr is not None
+    process.stdout.close()
+    process.stderr.close()
+    return timed_out

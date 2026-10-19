@@ -1,40 +1,43 @@
-.PHONY: help install format lint type test verify-fast verify verify-live baselines goldens clean
+.PHONY: help install format lint type test stack bench live baselines clean
 
-PYTEST := uv run pytest
+PYTEST := uv run --locked pytest
+STACK_ARGS = --stack "$(STACK)"
+STACK_FILES = scenarios/test_*.py scenarios/tui/test_footer_resize.py
 
 help:  ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-install:  ## Install dependencies with uv
-	uv sync
+install:  ## Install locked harness dependencies
+	uv sync --locked
 
 format:  ## Format with ruff
-	uv run ruff format .
+	uv run --locked ruff format .
 
 lint:  ## Lint with ruff
-	uv run ruff check . --fix --ignore-noqa
+	uv run --locked ruff check . --fix --ignore-noqa
 
 type:  ## Type check with ty
-	uv run ty check
+	uv run --locked ty check
 
-test:  ## Unit tests for the harness library plus the root-owned probe gate (check-probes)
+test:  ## Infrastructure units only, no Pi or tmux
 	$(PYTEST) tests -v
 	$(MAKE) -C .. check-probes
 
-verify-fast: format lint type test  ## Static + integration scenarios, under 2 min
-	$(PYTEST) scenarios -m "static or integration"
+stack:  ## Real D/E boundaries; explicit PI_BIN and STACK, CI/runner only
+	@test -n "$(STACK)" || (printf 'Set STACK=stacks/personal.json or stacks/local.json\n'; exit 2)
+	$(PYTEST) $(STACK_FILES) $(STACK_ARGS) -m stack -n 2 --dist loadfile --log-cli-level=INFO
 
-verify: verify-fast  ## Fast + TUI + bench; required before any fork tag, tap bump, or pin bump
-	$(PYTEST) scenarios -m "tui or bench"
+bench:  ## Serial quiet-runner F only, explicit PI_BIN and STACK
+	@test -n "$(STACK)"
+	$(PYTEST) scenarios/bench $(STACK_ARGS) -m bench --log-cli-level=INFO
 
-verify-live:  ## Real providers, opt-in, cost-capped
-	HARNESS_LIVE=1 $(PYTEST) scenarios -m live
+live:  ## Opt-in G only, explicit HARNESS_AUTH_FILE, PI_BIN and STACK; never CI
+	@test -n "$(STACK)"
+	HARNESS_LIVE=1 $(PYTEST) scenarios/live $(STACK_ARGS) -m live
 
-baselines:  ## Re-record bench baselines
-	UPDATE_BASELINES=1 $(PYTEST) scenarios -m bench
-
-goldens:  ## Re-record golden files
-	UPDATE_GOLDEN=1 $(PYTEST) scenarios -m "integration or tui"
+baselines:  ## Quiet-runner rebaseline only, never hosted CI
+	@test -n "$(STACK)"
+	UPDATE_BASELINES=1 $(PYTEST) scenarios/bench $(STACK_ARGS) -m bench --log-cli-level=INFO
 
 clean:  ## Remove artifacts and caches
 	rm -rf artifacts .pytest_cache .ruff_cache

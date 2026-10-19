@@ -10,11 +10,12 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness.paths import pi_command
-from harness.pinned import pinned_checkout
-from harness.sandbox import local_overrides_from_env
+from harness.stack import find_package
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from harness.sandbox import Sandbox
 
 pytestmark = pytest.mark.integration
 
@@ -34,12 +35,17 @@ def pi_shim(directory: Path) -> Path:
     return directory
 
 
-def test_router_e2e_all(tmp_path: Path, rendered_settings: dict[str, Any]) -> None:
-    """The remaining `no-router` shell case passes on the pinned repos."""
+def test_router_e2e_all(tmp_path: Path, rendered_settings: dict[str, Any], sandbox: Sandbox) -> None:
+    """The remaining `no-router` shell case passes on explicitly installed packages.
+
+    Parameters:
+        tmp_path (Path): private executable shim directory.
+        rendered_settings (dict[str, Any]): settings from the explicit installed stack fixture.
+        sandbox (Sandbox): private stack resolving package locations.
+    """
     packages = rendered_settings.get("packages", [])
-    overrides = local_overrides_from_env()
-    router_dir = pinned_checkout("pi-subscription-router", packages, overrides)
-    subagents_dir = pinned_checkout("pi-subagents", packages, overrides)
+    router_dir = find_package("pi-subscription-router", packages, sandbox.agent_dir)
+    subagents_dir = find_package("pi-subagents", packages, sandbox.agent_dir)
     env = os.environ | {
         "PATH": os.pathsep.join([str(pi_shim(tmp_path)), os.environ.get("PATH", "")]),
         "PI_SUBAGENTS_DIR": str(subagents_dir),
