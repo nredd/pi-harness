@@ -7,16 +7,15 @@ const PLAN_WIDGET_KEY = "plan-mode-plan";
 const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 
 export function updatePlanModeUi(ctx: ExtensionContext, state: PlanModeState, toolSummary: () => string) {
-  ctx.ui.setStatus(STATUS_KEY, formatStatus(state));
-  // Kept deliberately to one line: the full tool policy and next-step
-  // guidance are still one `/plan` away, so the always-visible widget stays
-  // Claude/Codex-terse instead of dumping the policy line on every turn.
+  ctx.ui.setStatus(STATUS_KEY, formatStatus(state, ctx));
+  // Kept deliberately minimal: the full tool policy and next-step guidance
+  // are still one `/plan` away. Plain "planning" has no widget at all (the
+  // footer status chip carries it, Codex-style); only states with a
+  // concrete pending action get an above-editor line.
   void toolSummary;
   let lines: string[] | undefined;
   if (state.enabled && state.latestPlan) {
     lines = ["Plan ready — /plan to implement, save, revise, or exit"];
-  } else if (state.enabled) {
-    lines = ["Plan mode — /plan for tools and options"];
   } else if (state.savedPlan) {
     lines = ["Plan saved — /plan to show, implement, or clear"];
   } else if (state.activeImplementation) {
@@ -110,12 +109,17 @@ function publishPlanModeWidget(ctx: ExtensionContext, lines: readonly string[] |
   }));
 }
 
-function formatStatus(state: PlanModeState) {
+function formatStatus(state: PlanModeState, ctx: ExtensionContext) {
+  let text: string | undefined;
   if (state.enabled) {
-    if (state.awaitingAction || state.latestPlan) return "plan ready";
-    return "plan active";
+    text = state.awaitingAction || state.latestPlan ? "plan ready" : "plan active";
+  } else if (state.savedPlan) {
+    text = "plan saved";
+  } else if (state.activeImplementation) {
+    text = "plan implementing";
   }
-  if (state.savedPlan) return "plan saved";
-  if (state.activeImplementation) return "plan implementing";
-  return undefined;
+  if (!text) return undefined;
+  // Codex-style: accent-colored so the footer chip reads as a mode indicator
+  // rather than blending into the rest of the status line.
+  return ctx.ui.theme.fg("accent", text);
 }

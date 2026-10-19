@@ -17,7 +17,6 @@ import planMode, {
 } from "../src/plan-mode.js";
 import { planModeQuestionAnswered } from "../src/question-tool.js";
 import { createMockContext, createMockPi } from "./support.js";
-import { renderMockWidget } from "./widget-support.js";
 
 test("plan-mode registers question tools, command, and safety hooks without a CLI flag", () => {
   const mock = createMockPi({ activeTools: ["read", "bash"] });
@@ -1345,13 +1344,10 @@ test("active Plan UI advertises the completion tool rather than legacy XML", asy
     },
   });
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  // The always-visible widget is intentionally kept to one short line (see
-  // presentation.ts); it points at `/plan` rather than naming the tool
-  // directly. The completion-tool-over-legacy-XML guarantee is exercised via
-  // the `/plan` launch menu below instead.
-  const widget = renderMockWidget(context.widgets.get("plan-mode-plan"));
-  assert.equal(widget[0], "─".repeat(80));
-  assert.doesNotMatch(widget.join("\n"), /proposed_plan/);
+  // Plain "planning" has no above-editor widget at all (see presentation.ts);
+  // the footer status chip carries it instead. The completion-tool-over-
+  // legacy-XML guarantee is exercised via the `/plan` launch menu below.
+  assert.equal(context.widgets.get("plan-mode-plan"), undefined);
   await mock.commands.get("plan")?.handler("", context.ctx);
   assert.match(activeMenu, /plan_mode_complete/);
   assert.doesNotMatch(activeMenu, /proposed_plan/);

@@ -4,9 +4,10 @@
 
 Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), extracted from its monorepo into a standalone repo so it can be installed with `pi install git:github.com/nredd/pi-plan-mode`.
 
-Differences from upstream (both purely presentational, no tool-policy or contract changes):
+Differences from upstream (all purely presentational, no tool-policy or contract changes):
 
-- The always-visible Plan-mode widget is one short line (`Plan mode — /plan for tools and options`) instead of a three-line block that spells out the full tool policy on every turn. The tool policy is still reachable via `/plan` and `/plan settings`; only the always-on widget dump was removed.
+- Plain "planning" (Plan mode on, no plan ready yet) has no above-editor widget at all — no `Plan mode — ...` line, no divider. The only indicator is the footer status chip, now colored with the theme's `accent` role like Codex's `Plan mode` footer badge, instead of upstream's plain unstyled `plan active`/`plan ready` text. The tool policy is still reachable via `/plan` and `/plan settings`.
+- States with a concrete pending action (`plan ready`, `plan saved`, `plan implementing`) keep their existing one-line above-editor widget, unchanged from the previous compact-widget pass.
 - `plan_mode_question` now has a `renderResult`, so the transcript shows a short Markdown summary of the questions and answers instead of the raw JSON payload. `plan_mode_complete` already had this upstream; this fork brings the question tool in line with it.
 
 Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.0.

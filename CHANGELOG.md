@@ -1,5 +1,16 @@
 # @nredd/pi-plan-mode
 
+## 0.58.0-nredd.2
+
+### Changed
+
+- Removed the above-editor widget entirely for plain "planning" state (Plan
+  mode on, no plan ready yet). The footer status chip (`plan active`) is now
+  colored with the theme's `accent` role, Codex-style, instead of plain text
+  (`presentation.ts`).
+- States with a concrete pending action (`plan ready`, `plan saved`,
+  `plan implementing`) are unaffected and keep their one-line widget.
+
 ## 0.58.0-nredd.1
 
 Fork of `@narumitw/pi-plan-mode` 0.58.0, extracted to a standalone repo.
