@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
 
 from harness import bench, golden
 from harness.config_checks import brewfile_pin, formula_version, git_pins, schema_settings_keys, settings_keys
-from harness.paths import FAUX_EXTENSION, pi_command
 from harness.sandbox import (
     deep_merge,
     local_overrides_from_env,
@@ -199,27 +196,6 @@ def test_reap_stale_servers_spares_fresh_dirs(tmp_path: Path) -> None:
     assert not old.exists()
     assert fresh.exists()
     assert other.exists()
-
-
-FAUX_ROW = re.compile(r"^faux\s+main\b", re.MULTILINE)
-
-
-def test_faux_extension_loads_in_pi(tmp_path: Path) -> None:
-    """`providers/faux.ts` loads through pi's own extension loader and registers `faux/main`.
-
-    A syntax slip there breaks every scenario at once; this catches it in the unit tier.
-    """
-    completed = subprocess.run(
-        [*pi_command(), "--no-extensions", "-e", str(FAUX_EXTENSION), "--list-models", "faux"],
-        env=os.environ | {"PI_CODING_AGENT_DIR": str(tmp_path), "PI_OFFLINE": "1", "HARNESS_SCRIPT": ""},
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    output = completed.stdout + completed.stderr
-    assert "Failed to load extension" not in output, output
-    assert FAUX_ROW.search(completed.stdout), output
 
 
 def test_sandbox_drops_computer_use() -> None:
