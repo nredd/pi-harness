@@ -175,10 +175,18 @@ A prior settle handler's continuation (including a todo reminder) suppresses the
 the kit does not append a second reminder or request another continuation.
 
 `test/scenarios/` drives the real kit through core's in-process session harness under Vitest and Bun,
-covering goals, file-backed restore, child rename/reload, read-rule injection, print-mode titles,
+covering goals, file-backed restore, child rename/reload, read-rule injection, titles,
 monitor output/wakes/cursors/caps/timeouts and loop scheduling with same-cwd session isolation.
+The interactive host/VirtualTerminal covers `/diff`, `/stats` and real `/name`, including width/resize
+matrices, chart glyph ports/colours and file-backed titles. Stats histories use a fixed clock;
+`createSessionKit({ agentDir, clock })` scopes both offline loading and displayed time ranges.
+Terminal fixtures route input chunks through pi-tui's real `StdinBuffer`, matching ProcessTerminal's
+keypress splitting (complete keys only; lone Escape is flushed immediately). Stats scroll-to-clamp
+checks batch input and settle once; intermediate-frame checks still settle per step. Both hourly
+tabs and exact provider totals remain covered at every width. Each stats-view body owns its fixture
+and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
-Cross-extension Plan/subagent/todo interactions and terminal rendering remain in the integration tier;
+Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
 `docs/verification-rebuild.md` at the monorepo root tracks their destinations.

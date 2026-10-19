@@ -20,7 +20,7 @@ export interface SessionKitOptions {
 	config?: KitConfig;
 	agentDir?: string;
 	monitorRoot?: string;
-	/** Scheduling for loops, goal wakes and monitor batching/timeouts. Defaults to unreferenced real timers. */
+	/** Time for stats ranges, loops, goal wakes and monitor batching/timeouts. Defaults to real time. */
 	clock?: Clock;
 	/** Child boundary only; validation, matching, ring buffering and message delivery stay in the manager. */
 	spawnMonitor?: (argv: readonly string[], options: SpawnOptions) => Promise<MonitorProcess>;
@@ -36,7 +36,7 @@ const MODULES: Record<Feature, Register> = {
 	monitor: (pi, config, options) =>
 		registerMonitor(pi, config, options.monitorRoot, { clock: options.clock, spawnMonitor: options.spawnMonitor }),
 	diff: registerDiff,
-	stats: registerStats,
+	stats: (pi, config, options) => registerStats(pi, config, options),
 };
 
 /** Create the real kit without requiring a machine-local agent configuration. */
