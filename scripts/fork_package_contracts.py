@@ -91,12 +91,13 @@ from package_contracts import (
     ensure_stock_pi,
     install_alone,
     locate_tools,
-    pack,
+    parse_tarballs,
     read_member,
     require,
     require_clean_run,
     run,
     run_pi,
+    select_artifact,
     tool_is_error,
 )
 
@@ -1262,7 +1263,11 @@ def validate_fork_report(raw: Mapping[str, object]) -> ForkContractReport:
 
 
 def pack_and_audit(
-    repo_root: Path, contracts: Sequence[PackageContract], dest: Path, sandbox: Sandbox
+    repo_root: Path,
+    contracts: Sequence[PackageContract],
+    dest: Path,
+    sandbox: Sandbox,
+    supplied: Mapping[str, Path] | None = None,
 ) -> list[PackedArtifact]:
     """Pack the packages and fail on any tarball audit violation.
 
@@ -1271,6 +1276,7 @@ def pack_and_audit(
         contracts (Sequence[PackageContract]): Packages to pack.
         dest (Path): Directory receiving the tarballs.
         sandbox (Sandbox): Environment for `npm`.
+        supplied (Mapping[str, Path] | None): Existing tarballs, never repacked.
 
     Returns:
         list[PackedArtifact]: Audited artifacts, in order.
@@ -1280,7 +1286,10 @@ def pack_and_audit(
     """
     dest.mkdir(parents=True)
     root_license = (repo_root / "LICENSE").read_bytes()
-    artifacts = [pack(c, dest, sandbox, repo_root / "packages" / c.directory) for c in contracts]
+    artifacts = [
+        select_artifact(c, dest, sandbox, supplied or {}, repo_root / "packages" / c.directory)
+        for c in contracts
+    ]
     problems = [
         f"{a.contract.name}: {p}"
         for a in artifacts
@@ -1291,13 +1300,19 @@ def pack_and_audit(
     return artifacts
 
 
-def run_fork_gate(work: Path, stock_prefix: Path, repo_root: Path = REPO_ROOT) -> ForkContractReport:
+def run_fork_gate(
+    work: Path,
+    stock_prefix: Path,
+    repo_root: Path = REPO_ROOT,
+    supplied: Mapping[str, Path] | None = None,
+) -> ForkContractReport:
     """Run the whole real-fork gate.
 
     Parameters:
         work (Path): Empty scratch directory.
         stock_prefix (Path): Reusable stock Pi install directory.
         repo_root (Path): Parent repository root.
+        supplied (Mapping[str, Path] | None): Existing tarballs, never repacked.
 
     Returns:
         ForkContractReport: Validated identity and evidence report.
@@ -1311,7 +1326,7 @@ def run_fork_gate(work: Path, stock_prefix: Path, repo_root: Path = REPO_ROOT) -
     LOGGER.info(f"Selected fork '{source.path}' at {source.sha}")
     pi_bin = ensure_stock_pi(stock_prefix, base)
     preset, dev_tools = pack_and_audit(
-        repo_root, [PRESET_CONTRACT, DEV_TOOLS_CONTRACT], work / "tarballs", base
+        repo_root, [PRESET_CONTRACT, DEV_TOOLS_CONTRACT], work / "tarballs", base, supplied
     )
     installed = {
         artifact.contract.name: install_alone(artifact, base, work / f"install-{artifact.contract.directory}")
@@ -1376,6 +1391,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--work-dir", type=Path, help="Scratch directory (must be empty or absent); default: a temporary one"
     )
     parser.add_argument("--keep", action="store_true", help="Keep the scratch directory after the run")
+    parser.add_argument("--tarball", action="append", default=[], metavar="DIRECTORY=PATH")
     parser.add_argument("--report", type=Path, help="Write the JSON identity/evidence report here")
     parser.add_argument(
         "--repo-root", type=Path, default=REPO_ROOT, help="Parent repository holding the fork Gitlink"
@@ -1400,7 +1416,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     work = args.work_dir or Path(tempfile.mkdtemp(prefix="pi-fork-contracts-"))
     work.mkdir(parents=True, exist_ok=True)
     try:
-        report = run_fork_gate(work.resolve(), args.stock_prefix.resolve(), args.repo_root.resolve())
+        supplied = parse_tarballs(args.tarball, [PRESET_CONTRACT, DEV_TOOLS_CONTRACT])
+        report = run_fork_gate(
+            work.resolve(), args.stock_prefix.resolve(), args.repo_root.resolve(), supplied
+        )
     except ContractError as e:
         LOGGER.error(f"FAILED: {e}")
         return 1
