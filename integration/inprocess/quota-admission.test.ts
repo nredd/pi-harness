@@ -16,7 +16,7 @@ describe("quota admission and kit coordination", () => {
 
 	for (const policy of ["wait", "fail"] as const) {
 		it(`router admission owns parked and refused work (${policy})`, async () => {
-			stack = new GoalStack();
+			stack = await GoalStack.create();
 			const physical = stack.registerPhysical(CHAIN, 100);
 			const resetAt = stack.clock.now() + 3_600_000;
 			const scheduled: unknown[] = [];

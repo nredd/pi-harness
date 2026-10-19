@@ -19,7 +19,7 @@ describe("router quota and goal settlement", () => {
 
 	/** Register physical scripted providers in the real runtime, preserving router dispatch. */
 	async function start(kitFirst = false, exhausted = false) {
-		stack = new GoalStack();
+		stack = await GoalStack.create();
 		const providers = stack.registerPhysical(CHAIN);
 		stack.usage.onRefresh = (provider) => {
 			if (provider === "spike-a") stack.usage.set(provider, 100);
