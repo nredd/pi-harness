@@ -74,7 +74,7 @@ How it works:
 - `harness/session_kit.py` selects the kit from sandbox package settings: installed gates use the configured pin with no duplicate `-e`; `HARNESS_LOCAL=pi-session-kit` replaces the sandbox package source while preserving filters. Only pre-pin sandboxes without a kit package use `-e ~/code/pi-session-kit/src/index.ts`. Quota fixtures disable discovery to control hook order and explicitly load the same selected pin
 - `build_sandbox` disables `pi-session-kit.json` auto-titles by default, preserving other module settings (and creating the cfg when absent), so generic faux TUI runs cannot dispatch a title request to the default real provider. Explicit title scenarios enable titles with a faux model
 - pi-subagents v0.22 contract: `test_notices_wait_for_the_turn_and_coalesce` expects one coalesced notice headed `N background tasks finished.` (was `N agent(s) finished`) with every child result, delivered at the `turn_end` after the parent's tool batch (never mid-batch) and before its next model call, proven by a context-echoing faux reply (`echoLast`) whose request carries both results, so no extra turn is needed. `test_conversation_viewer.py` targets the fullscreen observer: no backdrop margin, footer `↑↓ scroll · PgUp/PgDn or Shift+↑↓ · Esc close`, wheel/Alt+wheel scroll, and a click on the footer `Esc close` label closes it
-- `test_code_reviewer.py` checks the configured reviewer's read-only capabilities and rejected writes; `test_session_kit_titles.py` checks real-TUI auto-titles with a faux preferred title model and preserves manually set names
+- `inprocess/{specialists,reviewer}.test.ts` checks real package-discovered preset agents through pi-subagents' child pipeline; `test_session_kit_titles.py` checks real-TUI auto-titles with a faux preferred title model and preserves manually set names
 - `ssh`, `curl`, `gh`, `sudo`, `brew`, `chezmoi`, `npm` and friends are shimmed on `PATH`, so a policy regression in a "must block" row can't do real damage
 - TUI scenarios run pi in a private tmux server (`xterm-256color`, fixed size, `TZ=UTC`) and drive it with `send-keys` plus raw SGR mouse reports. Failed launches clean up their private server before raising, even when no pane was returned to the caller
 - `scenarios/tui/test_transcript_rows.py` is the catch-all: every entry settles as one row. Rows with hidden detail carry `▸` and toggle on click; no-detail settled tools have a blank gutter and ignore click/`Ctrl+O`. The batch-todo regression prevents expansion that only moves the success checkmark onto a second line. New tools and renderers share this invariant
@@ -91,6 +91,7 @@ Knobs:
 - `UPDATE_GOLDEN=1`, `UPDATE_BASELINES=1`
 
 Layout:
+- `inprocess/` -- real-session stack scenarios under Vitest and pinned Bun, including Plan annotations, child scoping, nesting, turn caps and workflow triggering; inputs and doubles documented in `inprocess/README.md`
 - `harness/` -- `quota.py` (usage fixture helpers), sandbox, headless runner, tmux driver, config checks, goldens, bench, session generator, render probe driver, live ledger
 - `providers/faux.ts`, `providers/usage_fixture.ts`, `probes/render.ts` -- extensions loaded with `-e`, never installed
 - `scenarios/{static,integration,tui,bench,live}/` -- the scenarios, pytest markers match the dirs

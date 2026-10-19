@@ -492,51 +492,9 @@ def nested_run(sandbox: Sandbox, child_calls: list[dict[str, Any]]) -> str:
     return agent.text
 
 
-def test_subagent_workflow_and_background_agent_are_denied(sandbox: Sandbox) -> None:
-    """Inside a subagent, `workflow` and a background `Agent` fail with the reason, not silently."""
-    report = nested_run(
-        sandbox,
-        [
-            call("workflow", script="export const meta = { name: 'x', description: 'x' }"),
-            call(
-                "Agent",
-                subagent_type="general-purpose",
-                description="inner",
-                prompt="x",
-                run_in_background=True,
-            ),
-        ],
-    )
-    assert "Workflows are not available inside a subagent" in report, report
-    assert "Background agents are not available inside a subagent" in report, report
-
-
 def test_subagent_workflow_tool_is_denied_with_reason(sandbox: Sandbox) -> None:
     """Inside a subagent, `SubagentWorkflow` fails with the 'not available inside a subagent' reason."""
     report = nested_run(
         sandbox, [call("SubagentWorkflow", script="export const meta = { name: 'x', description: 'x' }")]
     )
     assert "Workflows are not available inside a subagent" in report, report
-
-
-def test_turn_cap_ends_with_full_report(sandbox: Sandbox) -> None:
-    """A child looping on tools past `max_turns` is forced into a tool-less report turn."""
-    result = run_ok(
-        sandbox,
-        script(
-            [{"tools": [spawn("looper", background=False, max_turns=2)]}, {"text": "PARENT DONE"}],
-            kid=[
-                {
-                    "whileTools": True,
-                    "text": "Now let me check one more thing",
-                    "tools": [call("bash", command="echo loop")],
-                },
-                {"text": "FINAL REPORT 11: every finding, with paths"},
-            ],
-        ),
-        [CHILD],
-    )
-    (agent,) = outcomes(result, "Agent")
-    assert "FINAL REPORT 11" in agent.text, result.transcript()
-    assert "Now let me check" not in agent.text, agent.text
-    assert "aborted" not in agent.text, agent.text
