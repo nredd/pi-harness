@@ -116,6 +116,12 @@ export class GoalStack {
 	 *   It is unref'd. Children never start a monitor manager (`isChildSession`), so the kit's child
 	 *   shutdown handlers resolve without timers, the emit wins the race and dispose() follows;
 	 *   teardown never waits for the watchdog to fire.
+	 * - index.ts's 80 ms foreground spinner interval only repaints the running Agent row through
+	 *   `streamUpdate()`; it is cleared in the foreground run's `finally`. No assertion reads a
+	 *   spinner frame or counts row updates, so its ticks cannot change an outcome.
+	 * Core: quota-goal.test.ts retries with `baseDelayMs: 0`, so AgentSession's retry sleep is a
+	 * zero-delay macrotask. It always fires and no assertion depends on elapsed time; a core
+	 * retry clock seam would buy nothing here (orchestrator adjudication on #33).
 	 * Follow-up fork seams: pass Clock to checkAdmission, the child-shutdown watchdog and
 	 * AgentManager retention/cleanup (including retention timestamps). No asserted path here needs either native timer to fire.
 	 */
