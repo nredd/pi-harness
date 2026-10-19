@@ -37,17 +37,17 @@ Boundary inventory:
 - Landed A-stack ports and the four single-fork `B:rpiv-todo` interactive rows run in `integration/inprocess/`, documented [here](inprocess/README.md); their old Python rows are removed, not resurrected by this gate
 - `F`: `scenarios/bench/`, serial and quiet-runner only. Existing baselines are historical, not re-recorded on hosted runners. CI visibly reports NOT RUN until a quiet runner and one evidenced rebaseline exist
 - `G`: `scenarios/live/`, never CI, opt-in with `HARNESS_LIVE=1` and explicit `HARNESS_AUTH_FILE=/absolute/auth.json`. Credentials are linked only from that supplied path; refresh writes through. The shared cost cap remains $0.50
-- Unported `A`/`A-stack`/`B` rows remain in `scenarios/integration/` and other `scenarios/tui/` files for their owning port branches. CI selects only the five root `test_*.py` files and `tui/test_footer_resize.py`, all marked `stack`; it never runs the legacy directories wholesale
+- No unported non-boundary functions remain in the Python scenarios. CI selects only the five root `test_*.py` files and `tui/test_footer_resize.py`, all marked `stack`; bench/live remain explicitly excluded
 - Thirteen machine-specific static rows and their schema/pin/Brew parser/discovery units are removed. The ledger assigns them to the dotfiles doctor; that doctor is a separate item, not implemented here
 
 Excluded scenario files (paths below are relative to `scenarios/`; the six `stack` files above are the only CI-selected Python scenarios):
 
 | Files | Reason excluded from `stack` |
 | --- | --- |
-| `integration/test_plan_mode_gate.py` | Only `test_gate_error_forbids_plain_text_and_points_to_finalize` remains: its five strings are preserved in the fork's main gate replacement, but the separate function has no ledger destination. Do not silently delete it |
-| `tui/test_fleet.py` | Remaining composed `A-stack` fleet/Plan round-trip row; all 16 subagents and 7 Plan `B` rows are fork-native and their old functions are deleted |
 | `bench/test_compaction.py`, `bench/test_fanout.py`, `bench/test_multisession.py`, `bench/test_render.py`, `bench/test_startup.py`, `bench/test_typed_vs_bash.py` | `F` measurements/instrumentation require a quiet runner and explicit baseline; hosted CI reports bench as not run. `test_multisession.py` carries the merged latency-probe calibration and readiness assertions, unexecuted |
 | `live/test_live.py` | `G` requires explicit credentials and opt-in; never CI |
+
+The last two non-boundary Python functions are removed: `test_gate_error_forbids_plain_text_and_points_to_finalize` merges into `forks/pi-plan-mode/test/decline-session.test.ts` / `ready-plan reply blocks completion with actionable headless guidance` at `v0.59.3-nredd.1`, which asserts the blocked second completion and all five exact strings; the fleet/Plan round-trip runs in `inprocess/fleet-plan.test.ts` on real factories, raw input, VirtualTerminal and one injected clock. The ledger now includes the previously omitted gate-guidance function.
 
 The goal/quota/loop ports in #33 remain native; their three deleted Python files are not restored or listed as exclusions. The rebased subagents/Plan ports remove 23 more functions; the final `no-router` fork receipt also removes the router wrapper, shell runner and unused faux helpers. See the exact fork test names and review/CI provenance in `docs/verification-rebuild.md`. Main's Progress lines and per-row receipts remain in `docs/verification-rebuild.md`.
 
