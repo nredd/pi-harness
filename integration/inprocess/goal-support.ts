@@ -112,8 +112,12 @@ export class GoalStack {
 	 * - AgentManager's retention sweep only evicts old finished records, not dispatches or
 	 *   notices. These tests never wait for retention; the interval is unref'd in its constructor
 	 *   and cleared by dispose(), reached through cleanup()'s awaited quit shutdown below.
-	 * Follow-up fork seams: pass Clock to checkAdmission and AgentManager retention/cleanup
-	 * (including retention timestamps). No asserted path here needs either native timer to fire.
+	 * - agent-manager.ts's 3 s child-shutdown watchdog races each child's `session_shutdown` emit.
+	 *   It is unref'd. Children never start a monitor manager (`isChildSession`), so the kit's child
+	 *   shutdown handlers resolve without timers, the emit wins the race and dispose() follows;
+	 *   teardown never waits for the watchdog to fire.
+	 * Follow-up fork seams: pass Clock to checkAdmission, the child-shutdown watchdog and
+	 * AgentManager retention/cleanup (including retention timestamps). No asserted path here needs either native timer to fire.
 	 */
 	async subagents(): Promise<ExtensionFactory> {
 		assertHostIdentity("pi-subagents");
