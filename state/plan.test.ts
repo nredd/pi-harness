@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { Task } from "../tool/types.js";
-import { applyPlanApproval, parsePlanItems, planTitle, selectOpenPlanItems, selectPlanProgress } from "./plan.js";
-import type { TaskState } from "./state.js";
+import type { Task } from "../tool/types.ts";
+import { applyPlanApproval, parsePlanItems, planTitle, selectOpenPlanItems, selectPlanProgress } from "./plan.ts";
+import type { TaskState } from "./state.ts";
 
 /** A synthetic plan shaped like a real approved one: context sections, labeled bullets, nested and numbered lists. */
 const SAMPLE_PLAN = readFileSync(new URL("./fixtures/approved-plan.md", import.meta.url), "utf-8");

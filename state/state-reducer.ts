@@ -50,6 +50,8 @@ export function changesState(op: Op): boolean {
 			return true;
 		case "update":
 			return op.changed;
+		case "batch":
+			return op.results.some(changesState);
 		case "list":
 		case "get":
 		case "error":

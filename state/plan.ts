@@ -1,5 +1,5 @@
-import type { PlanRef, PlanTaskIdentity, Task } from "../tool/types.js";
-import type { TaskState } from "./state.js";
+import type { PlanRef, PlanTaskIdentity, Task } from "../tool/types.ts";
+import type { TaskState } from "./state.ts";
 
 /** Approved-plan parsing and deterministic reconciliation. */
 

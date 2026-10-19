@@ -78,7 +78,9 @@ describe("registerTodoTool — execute persists a state entry for every state ch
 			await call(tool, { action: "clear" }),
 		];
 		expect(captured.entries.map((e) => e.customType)).toEqual(Array(4).fill(STATE_ENTRY_TYPE));
-		expect(captured.entries.map((e) => e.data)).toEqual(results.map((r) => r?.details));
+		expect(captured.entries.map((e) => e.data)).toEqual(
+			results.map((r) => ({ ...(r?.details as TaskDetails), persistenceVersion: 1 })),
+		);
 		const cleared = captured.entries.at(-1)?.data as TaskDetails;
 		expect(cleared.tasks).toEqual([]);
 		expect(cleared.nextId).toBe(1);

@@ -130,7 +130,10 @@ export interface TaskDetails {
 }
 
 /** Payload of a `rpiv-todo-state` custom entry: the replay-relevant part of `TaskDetails`. */
-export type TaskSnapshot = Pick<TaskDetails, "tasks" | "nextId" | "plan">;
+export type TaskSnapshot = Pick<TaskDetails, "tasks" | "nextId" | "plan"> & {
+	/** All subsequent mutations have custom entries, unlike legacy Plan-only snapshots. */
+	persistenceVersion?: 1;
+};
 
 /**
  * Open-shape input bag the reducer accepts. Stays an interface so the index

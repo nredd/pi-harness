@@ -5,6 +5,22 @@ All notable changes to `@juicesharp/rpiv-todo` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Keep clickable headings, wheel scrolling over every task, atomic `ops` batches, whole-list counts, and duplicate-of-plan-item guards.
+- Seed verbatim approved Plan tasks, require completion evidence and deferral reasons, and remind once before wrapping up with open Plan work.
+- Collapse the Todos panel on resume by default, configurable with `collapseOnResume`.
+
+### Fixed
+
+- Preserve evidence only across unambiguous, unchanged Plan work with versioned heading scope and provenance. Preserve prose, code-only work, shared context, and fence boundaries.
+- Render settled rows from validated historical snapshots after reload and resize; report batch mutations from their own immutable outcomes.
+- Suspend implementation reminders during replanning, preserve foreground ownership across stale child shutdowns, and skip malformed snapshots.
+- Rebase the seven fork patches onto released `2.13.9`. Persist atomic mutations and Plan approvals with an explicit persistence marker; replay legacy Plan snapshots plus later tool results without rolling completed work back, while rejecting stale outer results after nested mutations.
+- Convert fork-only imports to `.ts` and use public Pi 1.1.0 mouse and settlement types.
+
 ## [2.13.9] - 2026-10-17
 
 ### Changed
@@ -32,37 +48,6 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [2.13.1] - 2026-10-11
 
 ## [2.13.0] - 2026-10-11
-
-### Fixed
-
-- Reconcile approved tasks by versioned full heading scope and verbatim work text. Ambiguous matches and legacy identities restart pending; carried state records its prior plan and task.
-- Preserve prose, code-only work, and shared ancestor context; distinguish fence markers, lengths, and indentation so examples cannot become enforced tasks.
-- Render settled todo subjects from validated historical result snapshots, including after reload and resize.
-- Suspend old-plan implementation reminders during replanning, including restored and compacted sessions, without discarding approved work.
-- Report batch mutations from their own outcomes and notify only net plan deferrals with the final reason.
-- Keep stale child shutdowns from clearing foreground ownership; skip malformed replay snapshots while retaining valid historical tasks.
-
-### Added
-
-- Clickable `▾`/`▸` disclosure markers on the todo heading for collapsing and expanding the overlay.
-- Plan-seeded todos: on `pi-plan-mode:plan-approved` (`pi.events`), the approved plan's actionable bullets become verbatim todos tagged `source: "plan"`, grouped by heading, context sections skipped. Re-approval replaces them; agent todos are untouched. Persisted as a `rpiv-todo-state` custom entry.
-- `deferred` status with a required `reason`; deferring a plan item notifies the user.
-- `N/M plan items open` in the overlay heading and `list`; `/todos` reports overall status counts.
-- One wrap-up reminder per prompt (`agent_before_settle` + `context`) listing open plan items when a run would end with them open.
-
-- The overlay is a mouse-wheel scrollable window over every todo, with `↑ N above` / `↓ N below` hints; it follows the active task.
-- `ops` batching: open, close, update, or read many todos in one atomic `todo` call (`ops[3]: ...` names the failing op).
-- `create` is rejected when it duplicates a plan item's subject while a plan is active.
-
-### Changed
-
-- Resuming a session (`session_start` reason `resume`) renders the Todos panel collapsed. Startup, reload, new and fork stay expanded. `collapseOnResume: false` in the config disables it.
-- Heading counts are spelled out and computed from the whole list: `Todos (19 done, 1 deferred, 4 open)`. `/todos` uses the same line. The separate `N/M plan items open` suffix appears only next to non-plan todos.
-- Plan parsing also skips `Decisions`, `Scope`, `Diagnosis`, `Current state`, `Constraints`, `Defaults`, `Goals`, `Success criteria`, `Intent`, `Compatibility`, `Rationale`, and `Approved` sections.
-- The plan reminder tells the model to update the listed ids rather than create duplicates.
-- Completed rows are no longer hidden at the next turn: every todo stays reachable by scrolling.
-- `completed` requires an `evidence` string, shown in `list`, `get`, and the expanded row. Plan item text cannot change and plan items cannot be deleted; activity labels, ownership, dependencies, and metadata remain editable. `clear` keeps plan items.
-- A rejected `todo` call renders `✗ <error>` instead of echoing the requested status.
 
 ## [2.12.0] - 2026-09-30
 

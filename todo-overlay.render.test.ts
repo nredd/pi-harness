@@ -249,8 +249,8 @@ describe("TodoOverlay — scrollable window", () => {
 
 	it("shows a separate plan suffix only when non-plan todos exist", async () => {
 		const { widget, tool } = await setup([{ action: "create", subject: "extra" }]);
-		const { applyPlanApproval } = await import("./state/plan.js");
-		const { commitState, getRenderState } = await import("./state/store.js");
+		const { applyPlanApproval } = await import("./state/plan.ts");
+		const { commitState, getRenderState } = await import("./state/store.ts");
 		commitState("test-session", applyPlanApproval(getRenderState(), "p1", "# T\n\n## Work\n- one\n- two\n").state);
 		expect(widget.render(200)[0]).toContain("Todos (3 open · 2/2 plan items open)");
 		await tool.execute?.(

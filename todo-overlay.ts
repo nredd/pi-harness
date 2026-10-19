@@ -14,7 +14,7 @@
  */
 
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
-import { type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import { type TUI, type TuiMouseEvent, truncateToWidth } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, getMaxWidgetLines, resolveCollapseKey } from "./config.ts";
 import { formatProgress, t } from "./state/i18n-bridge.ts";
 import { selectHasActive, selectShowTaskIds, selectVisibleTasks } from "./state/selectors.ts";
@@ -29,13 +29,6 @@ const OVERLAY_ABOVE = "above";
 const OVERLAY_BELOW = "below";
 const OVERLAY_EXPAND_HINT = "{key} to expand";
 const OVERLAY_COLLAPSED = "collapsed";
-
-interface TodoMouseEvent {
-	type: string;
-	button: string;
-	y: number;
-	wheelDelta?: number;
-}
 
 /** A slice of the todo list: `[start, end)` plus which edge hints take a row. */
 interface TodoWindow {
@@ -95,7 +88,7 @@ export class TodoOverlay {
 					this.tui = tui;
 					return {
 						render: (width: number) => this.renderWidget(this.uiCtx?.theme ?? factoryTheme, width),
-						handleMouse: (event: TodoMouseEvent) => this.handleMouse(event),
+						handleMouse: (event: TuiMouseEvent) => this.handleMouse(event),
 						invalidate: () => {
 							// No rendered strings are cached. Pi invalidates on theme changes;
 							// the next render reads uiCtx.theme.
@@ -129,7 +122,7 @@ export class TodoOverlay {
 		return this.widgetRegistered;
 	}
 
-	private handleMouse(event: TodoMouseEvent): { handled: true } | undefined {
+	private handleMouse(event: TuiMouseEvent): { handled: true } | undefined {
 		if (event.type === "wheel") return this.scrollBy(event.wheelDelta ?? 0);
 		if (event.type !== "click" || event.button !== "left" || event.y !== 0) return undefined;
 		this.toggleCollapse();

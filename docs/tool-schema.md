@@ -192,14 +192,28 @@ tasks' `blockedBy` arrays.
 }
 ```
 
-`details` is the persistence format. Every successful call embeds the complete
-post-mutation snapshot, and the session-lifecycle handlers rebuild state by
-walking the branch and taking the last valid snapshot they find, which is why
-tasks survive `/reload` and compaction without any disk writes. Invalid task
+`details` carries the complete post-call snapshot. Every state-changing call,
+including an atomic `ops` batch, also appends a `rpiv-todo-state` custom entry.
+Reads, no-op updates/batches, and rejected calls/batches append nothing. A batch
+writes only its final state, never a provisional mutation that was rolled back.
+This also persists nested codemode calls, whose results are not separate branch
+messages. Plan approvals use the same custom entry. Custom entries are not sent
+to the model.
+
+New fork custom snapshots include `persistenceVersion: 1`: every subsequent
+mutation is persisted, so replay ignores potentially stale outer/read tool
+results. Unmarked upstream custom entries without `plan` already have that
+same authoritative behavior. Legacy fork Plan snapshots have `plan` but no
+marker, and were followed by tool-result-only mutations: replay those branches
+chronologically until the first authoritative entry. A completed legacy task
+must not roll back to its earlier approved/pending snapshot.
+
+Replay retains `plan`/`PlanRef`, deferral reasons and evidence, cloning nested
+metadata so restored state cannot mutate historical entries. Invalid task
 shapes, duplicate ids, invalid counters, and dangling dependencies cause a
 snapshot to be skipped, not partially installed. Historical completed tasks
 without evidence remain readable; the current evidence rule applies to new
-mutations.
+mutations. Tasks survive `/reload`, `/resume`, `/tree` and compaction.
 
 ## Content strings
 

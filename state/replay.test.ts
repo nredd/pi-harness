@@ -171,6 +171,48 @@ const stateEntry = (details: unknown) => makeCustomEntry(STATE_ENTRY_TYPE, detai
 const todoResult = (details: TaskDetails) => makeMessageEntry(makeTodoToolResult(details));
 
 describe("replayFromBranch — state entries", () => {
+	it("does not roll legacy Plan-only snapshots back after tool-result-only completion (audit replay-probe)", () => {
+		const pending = {
+			tasks: [taskFixture(1, "Approved work", { source: "plan" })],
+			nextId: 2,
+			plan: { id: "p", title: "Plan" },
+		};
+		const completed: TaskDetails = {
+			...pending,
+			action: "update",
+			params: {},
+			tasks: [{ ...pending.tasks[0], status: "completed", evidence: "test passed" }],
+		};
+		const ctx = createMockCtx({ branch: [stateEntry(pending), todoResult(completed)] });
+		expect(replayFromBranch(ctx)).toEqual({ tasks: completed.tasks, nextId: 2, plan: pending.plan });
+	});
+
+	it("switches legacy Plan branches to authoritative custom entries at the first new mutation", () => {
+		const legacy = { ...snap([taskFixture(1, "Approved", { source: "plan" })], 2), plan: { id: "p", title: "Plan" } };
+		const completed = { ...legacy, tasks: [{ ...legacy.tasks[0], status: "completed" as const, evidence: "pass" }] };
+		const nested = {
+			...completed,
+			tasks: [{ ...completed.tasks[0], status: "deferred" as const, reason: "owner decision" }],
+			persistenceVersion: 1,
+		};
+		const ctx = createMockCtx({
+			branch: [stateEntry(legacy), todoResult(completed), stateEntry(nested), todoResult(legacy)],
+		});
+		expect(replayFromBranch(ctx)).toEqual({ tasks: nested.tasks, nextId: 2, plan: legacy.plan });
+	});
+
+	it("keeps new Plan approvals authoritative before their first todo mutation", () => {
+		const approved = {
+			...snap([taskFixture(1, "New plan", { source: "plan", metadata: { nested: { value: 1 } } })], 2),
+			plan: { id: "p", title: "Plan" },
+			persistenceVersion: 1,
+		};
+		const replayed = replayFromBranch(createMockCtx({ branch: [stateEntry(approved), todoResult(snap([], 1))] }));
+		expect(replayed.plan).toEqual(approved.plan);
+		expect(replayed.tasks).toEqual(approved.tasks);
+		(replayed.tasks[0].metadata!.nested as { value: number }).value = 2;
+		expect(approved.tasks[0].metadata).toEqual({ nested: { value: 1 } });
+	});
 	it("matches the STATE_ENTRY_TYPE the tool writes (replay.ts keeps the literal)", () => {
 		expect(STATE_ENTRY_TYPE).toBe("rpiv-todo-state");
 	});

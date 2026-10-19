@@ -93,7 +93,8 @@ export function registerTodoTool(pi: ExtensionAPI): void {
 			// tool was reached: a call made through another tool (`ctx.executeTool`, e.g. codemode)
 			// never lands as a standalone `toolResult`, so its `details` alone would not survive
 			// replay. Pi's own codemode persists its `store()` the same way.
-			if (changesState(result.op)) pi.appendEntry(STATE_ENTRY_TYPE, toolResult.details);
+			if (changesState(result.op))
+				pi.appendEntry(STATE_ENTRY_TYPE, { ...toolResult.details, persistenceVersion: 1 });
 			return toolResult;
 		},
 

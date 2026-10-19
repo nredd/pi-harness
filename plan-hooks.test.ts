@@ -1,13 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import registerTodo from "./index.js";
-import { PLAN_REMINDER_MARKER } from "./plan-hooks.js";
-import { replayFromBranch } from "./state/replay.js";
-import { getState } from "./state/store.js";
-import { __resetState } from "./todo.js";
-import { PLAN_APPROVED_EVENT, PLAN_REMINDER_MESSAGE_TYPE, STATE_ENTRY_TYPE, type TaskDetails } from "./tool/types.js";
-import { renderTodoResult } from "./view/format.js";
+import registerTodo from "./index.ts";
+import { PLAN_REMINDER_MARKER } from "./plan-hooks.ts";
+import { replayFromBranch } from "./state/replay.ts";
+import { getState } from "./state/store.ts";
+import { __resetState } from "./todo.ts";
+import { PLAN_APPROVED_EVENT, PLAN_REMINDER_MESSAGE_TYPE, STATE_ENTRY_TYPE, type TaskDetails } from "./tool/types.ts";
+import { renderTodoResult } from "./view/format.ts";
 
 const PLAN = `# Add widgets
 
@@ -79,6 +79,7 @@ describe("plan approval event", () => {
 		expect(appendEntry).toHaveBeenCalledTimes(1);
 		const [type, data] = appendEntry.mock.calls[0];
 		expect(type).toBe(STATE_ENTRY_TYPE);
+		expect(data).toMatchObject({ persistenceVersion: 1 });
 		// Replay sees the custom entry exactly like a todo tool result.
 		const replayed = replayFromBranch({
 			sessionManager: { getBranch: () => [{ type: "custom", customType: type, data }] },
@@ -106,7 +107,8 @@ describe("plan approval event", () => {
 		await call(ctx, { action: "create", subject: "agent todo" });
 		await announce(approval("p1"));
 		await announce(approval("p1"));
-		expect(appendEntry).toHaveBeenCalledTimes(1);
+		// The create and first approval persist; re-announcing the approval does not.
+		expect(appendEntry).toHaveBeenCalledTimes(2);
 
 		await announce(approval("p2", "s1", "# v2\n\n## Work\n- Only this\n"));
 		expect(getState("s1").tasks.map((t) => [t.subject, t.source])).toEqual([

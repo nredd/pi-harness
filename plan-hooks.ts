@@ -11,11 +11,16 @@
  *   list itself is never persisted.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./state/plan.js";
-import type { TaskState } from "./state/state.js";
-import { commitState, getState, sid } from "./state/store.js";
-import { sanitizeTerminalText } from "./tool/sanitize.js";
+import type {
+	AgentBeforeSettleEvent,
+	AgentBeforeSettleEventResult,
+	ExtensionAPI,
+	SessionBoundaryDraft,
+} from "@earendil-works/pi-coding-agent";
+import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./state/plan.ts";
+import type { TaskState } from "./state/state.ts";
+import { commitState, getState, sid } from "./state/store.ts";
+import { sanitizeTerminalText } from "./tool/sanitize.ts";
 import {
 	PLAN_APPROVED_EVENT,
 	PLAN_APPROVED_VERSION,
@@ -23,34 +28,17 @@ import {
 	type PlanApprovedPayload,
 	STATE_ENTRY_TYPE,
 	type TaskSnapshot,
-} from "./tool/types.js";
+} from "./tool/types.ts";
 
 /** Persisted marker text; the `context` hook expands it on the request right after it. */
 export const PLAN_REMINDER_MARKER = "[rpiv-todo] Plan items were still open when this run tried to finish.";
 
-// `agent_before_settle` landed in Pi 1.0; rpiv-mono still type-checks against
-// 0.80.6, which doesn't declare it. These mirror the 1.0 declarations we use.
 interface SettleMessage {
 	role?: string;
 	customType?: string;
 }
-interface AgentBeforeSettleEvent {
-	outcome: "completed" | "aborted" | "error";
-	entries: unknown[];
-	context: { contextMessages: SettleMessage[] };
-}
-interface ReminderDraft {
-	type: "custom_message";
-	customType: string;
-	content: string;
-	display: boolean;
-	details?: unknown;
-}
 type PlanContext = Parameters<typeof sid>[0] & { sessionManager: { getBranch(): readonly unknown[] } };
-type SettleHandler = (
-	event: AgentBeforeSettleEvent,
-	ctx: PlanContext,
-) => { entries: unknown[]; continue: boolean } | undefined;
+type SettleHandler = (event: AgentBeforeSettleEvent, ctx: PlanContext) => AgentBeforeSettleEventResult | undefined;
 
 /** Narrow an event-bus payload to the versioned plan-approval contract. */
 export function isPlanApprovedPayload(value: unknown): value is PlanApprovedPayload {
@@ -163,6 +151,7 @@ export function registerPlanHooks(
 		if (!result.changed) return;
 		commitState(payload.sessionId, result.state);
 		const snapshot: TaskSnapshot = {
+			persistenceVersion: 1,
 			tasks: result.state.tasks,
 			nextId: result.state.nextId,
 			...(result.state.plan ? { plan: result.state.plan } : {}),
@@ -182,7 +171,7 @@ export function registerPlanHooks(
 		if (remindedSinceLastPrompt(event.context.contextMessages)) return undefined;
 		const open = selectOpenPlanItems(getState(sid(ctx)));
 		if (!open.length) return undefined;
-		const draft: ReminderDraft = {
+		const draft: SessionBoundaryDraft = {
 			type: "custom_message",
 			customType: PLAN_REMINDER_MESSAGE_TYPE,
 			content: PLAN_REMINDER_MARKER,
@@ -191,10 +180,7 @@ export function registerPlanHooks(
 		};
 		return { entries: [...event.entries, draft], continue: true };
 	};
-	(pi.on as unknown as (event: "agent_before_settle", handler: SettleHandler) => void)(
-		"agent_before_settle",
-		onSettle,
-	);
+	pi.on("agent_before_settle", onSettle);
 
 	pi.on("context", async (event, ctx) => {
 		if (isPlanning(ctx, event.messages)) return undefined;

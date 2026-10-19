@@ -1,5 +1,5 @@
-import { STATE_ENTRY_TYPE, type Task, type TaskSnapshot } from "../tool/types.js";
-import { EMPTY_STATE, type TaskState } from "./state.js";
+import { STATE_ENTRY_TYPE, type Task, type TaskSnapshot } from "../tool/types.ts";
+import { EMPTY_STATE, type TaskState } from "./state.ts";
 
 /**
  * Discriminator for `details` envelopes that match the persisted `TaskDetails`
@@ -76,26 +76,27 @@ function snapshotOf(entry: unknown): TaskSnapshot | undefined {
 }
 
 /**
- * Walk the current branch in chronological order; the LAST snapshot wins
- * (last-write-wins). Snapshots are `todo` tool results whose `details` match
- * `TaskDetails`, and `rpiv-todo-state` custom entries written when a plan
- * approval changes the list outside a tool call. When none exists, returns
- * `EMPTY_STATE`.
- *
- * Pure of module state — `index.ts` writes the returned snapshot into the
- * store after this returns. The function explicitly does NOT touch the store
- * cell.
+ * Replay chronologically until custom entries become authoritative. Legacy fork
+ * Plan snapshots have `plan` but no persistenceVersion: their later tool results
+ * still carry mutations. New fork entries explicitly mark complete persistence;
+ * unmarked upstream entries (no Plan metadata) already persist every mutation.
+ * Once either appears, ignore tool results, which may be stale outer/read calls
+ * arriving after a nested mutation. Never infer freshness from task status.
  */
 export function replayFromBranch(ctx: { sessionManager: { getBranch(): Iterable<unknown> } }): TaskState {
 	let result: TaskState = { tasks: [...EMPTY_STATE.tasks], nextId: EMPTY_STATE.nextId };
+	let authoritative = false;
 	for (const entry of ctx.sessionManager.getBranch()) {
 		const details = snapshotOf(entry);
-		if (!details) continue;
-		result = {
-			tasks: details.tasks.map((t) => ({ ...t })),
+		if (!details || !isRecord(entry)) continue;
+		if (entry.type === "custom") {
+			if (details.persistenceVersion === 1 || !details.plan) authoritative = true;
+		} else if (authoritative) continue;
+		result = structuredClone({
+			tasks: details.tasks,
 			nextId: details.nextId,
-			...(details.plan ? { plan: { ...details.plan } } : {}),
-		};
+			...(details.plan ? { plan: details.plan } : {}),
+		});
 	}
 	return result;
 }

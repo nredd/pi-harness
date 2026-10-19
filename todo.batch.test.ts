@@ -1,8 +1,8 @@
 import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPlanApproval } from "./state/plan.js";
-import { commitState, getState } from "./state/store.js";
-import { __resetState, registerTodoTool, setActiveRenderSession, type TaskDetails, TOOL_NAME } from "./todo.js";
+import { applyPlanApproval } from "./state/plan.ts";
+import { commitState, getState } from "./state/store.ts";
+import { __resetState, registerTodoTool, setActiveRenderSession, type TaskDetails, TOOL_NAME } from "./todo.ts";
 
 type Params = Record<string, unknown>;
 

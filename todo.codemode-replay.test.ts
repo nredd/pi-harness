@@ -139,8 +139,10 @@ text("ok");`),
 		const listed = await listAfterResume([
 			toolCall("todo", { action: "create", subject: "Completion persistence test" }),
 			toolCall("todo", { action: "update", id: 1, status: "in_progress" }),
-			codemode(`text(await tools.todo({ action: "update", id: 1, status: "completed" }));`),
+			codemode(
+				`text(await tools.todo({ action: "update", id: 1, status: "completed", evidence: "codemode completion probe passed" }));`,
+			),
 		]);
-		expect(listed).toBe("[completed] #1 Completion persistence test");
+		expect(listed).toBe("[completed] #1 Completion persistence test\n    evidence: codemode completion probe passed");
 	});
 });

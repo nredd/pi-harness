@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { Task } from "../tool/types.ts";
 import { isTransitionValid } from "./invariants.ts";
 import type { TaskState } from "./state.ts";
-import { applyTaskCall, applyTaskMutation, changesState, ERR_EVIDENCE_REQUIRED, ERR_REASON_REQUIRED } from "./state-reducer.ts";
+import {
+	applyTaskCall,
+	applyTaskMutation,
+	changesState,
+	ERR_EVIDENCE_REQUIRED,
+	ERR_REASON_REQUIRED,
+} from "./state-reducer.ts";
 
 const emptyState = (): TaskState => ({ tasks: [], nextId: 1 });
 
