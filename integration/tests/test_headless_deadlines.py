@@ -29,6 +29,15 @@ def test_silent_stdout_still_has_a_hard_deadline(monkeypatch: pytest.MonkeyPatch
         headless.run_headless(build_sandbox(tmp_path / "box"), {}, [], timeout_s=0.1)
 
 
+def test_exited_leader_cannot_leave_a_pipe_reader_hung(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    program = 'import subprocess,sys; subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"])'
+    monkeypatch.setattr(headless, "pi_command", lambda: [sys.executable, "-c", program])
+    with pytest.raises(TimeoutError, match="deadline"):
+        headless.run_headless(build_sandbox(tmp_path / "box"), {}, [], timeout_s=0.1)
+
+
 @pytest.mark.parametrize("pipe", ["stdout", "stderr"])
 def test_output_is_bounded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pipe: str) -> None:
     monkeypatch.setattr(headless, "MAX_OUTPUT_BYTES", 4096)

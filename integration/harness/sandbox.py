@@ -37,16 +37,9 @@ BASE_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
 }
-FAKE_AUTH = {
-    "anthropic": {"type": "api_key", "key": "harness-fake-key"},
-    "openai-codex": {
-        "type": "oauth",
-        "access": "harness-fake-access",
-        "refresh": "harness-fake-refresh",
-        "expires": 4_102_444_800_000,
-        "accountId": "harness",
-    },
-}
+# Faux providers register their own inert API keys. Generic startup/resize must not even
+# offer fake subscription credentials to background usage warmup; auth D supplies its own.
+FAKE_AUTH: dict[str, Any] = {}
 SILENT_CHANGELOG_VERSION = "999.0.0"
 SHIMMED_COMMANDS = ("ssh", "scp", "rsync", "curl", "wget", "gh", "sudo", "brew", "npm", "open")
 SHIM_SCRIPT = '#!/bin/sh\necho "SHIM $(basename "$0") $*"\n'
