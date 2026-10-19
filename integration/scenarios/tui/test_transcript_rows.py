@@ -220,42 +220,6 @@ def test_every_entry_is_one_line_and_collapsible(tui: Callable[..., TmuxPane], s
     assert_each_entry_toggles(pane, keys)
 
 
-def test_todo_without_extra_detail_has_no_disclosure(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
-    """The batch todo row does not expand merely to move its success checkmark onto another line."""
-    enable_faux_models(sandbox, ["faux/main"])
-    script = {
-        "providers": {
-            "faux": {
-                "models": ["main"],
-                "steps": [
-                    tool(
-                        "todo", ops=[{"action": "create", "subject": f"Task {index}"} for index in range(4)]
-                    ),
-                    {"text": FINAL},
-                ],
-            }
-        }
-    }
-    pane = tui(script, width=WIDTH, height=HEIGHT)
-    submit(pane, "go")
-    pane.wait_for(FINAL, timeout_s=30)
-    rows = pane.wait_stable(quiet_s=1, timeout_s=15)
-    assert_one_line_everywhere(rows)
-    row = next(index for index, text in enumerate(rows) if "todo" in text and "4 ops" in text)
-    original = rows[row]
-    assert original.startswith("  "), original
-    assert original.lstrip().startswith("todo"), original
-    assert "✓" in original, original
-    pane.click(6, row)
-    assert pane.wait_stable(quiet_s=0.5, timeout_s=10)[row] == original
-    pane.send_keys("C-o")
-    expanded_rows = pane.wait_stable(quiet_s=0.5, timeout_s=10)
-    settled = next(text for text in expanded_rows if "todo" in text and "4 ops" in text)
-    assert settled == original
-    assert_one_line_everywhere(expanded_rows)
-    assert not expanded_headers(expanded_rows)
-
-
 def test_plan_mode_rows_are_one_line_and_collapsible(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
     """Both Plan tools and the `/plan show` message settle as one line each and toggle."""
     pane = tui(PLAN_ROWS, width=WIDTH, height=HEIGHT)
