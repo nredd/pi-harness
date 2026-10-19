@@ -1,4 +1,5 @@
 /** Collects a bounded batch for a fixed window after the first item. */
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
 
 export interface CoalescedBatch<T> {
 	items: T[];
@@ -11,7 +12,7 @@ export class Coalescer<T> {
 	private bytes = 0;
 	private dropped = 0;
 	private droppedMatched = false;
-	private timer: NodeJS.Timeout | undefined;
+	private timer: TimerHandle | undefined;
 
 	constructor(
 		private readonly windowMs: number,
@@ -22,6 +23,7 @@ export class Coalescer<T> {
 			sizeOf?: (item: T) => number;
 			matched?: (item: T) => boolean;
 		} = {},
+		private readonly clock: Clock = realClock,
 	) {}
 
 	add(item: T): void {
@@ -36,12 +38,11 @@ export class Coalescer<T> {
 			this.bytes += size;
 		}
 		if (this.timer) return;
-		this.timer = setTimeout(() => this.flush(), this.windowMs);
-		this.timer.unref();
+		this.timer = this.clock.setTimeout(() => this.flush(), this.windowMs);
 	}
 
 	flush(): void {
-		if (this.timer) clearTimeout(this.timer);
+		this.timer?.cancel();
 		this.timer = undefined;
 		const batch = this.takeBatch();
 		if (batch.items.length === 0 && batch.dropped === 0) return;
@@ -50,13 +51,13 @@ export class Coalescer<T> {
 
 	/** Take what is pending without calling `onFlush`. */
 	take(): CoalescedBatch<T> {
-		if (this.timer) clearTimeout(this.timer);
+		this.timer?.cancel();
 		this.timer = undefined;
 		return this.takeBatch();
 	}
 
 	cancel(): void {
-		if (this.timer) clearTimeout(this.timer);
+		this.timer?.cancel();
 		this.timer = undefined;
 		this.items = [];
 		this.bytes = 0;
