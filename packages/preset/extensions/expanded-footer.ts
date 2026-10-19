@@ -22,7 +22,7 @@
 
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { analyzeCache, cacheTtlSeconds, formatCacheMarker } from "../lib/footer-cache.ts";
 import { createQuotaPoller, formatQuotaRow } from "../lib/footer-quota.ts";
@@ -66,222 +66,262 @@ function addUsage(
 	totals.cost += usage.cost.total;
 }
 
-export default function (pi: ExtensionAPI) {
-	let stopQuota: (() => void) | undefined;
-	const stopPoller = () => {
-		stopQuota?.();
-		stopQuota = undefined;
-	};
-
-	pi.on("session_shutdown", async () => stopPoller());
-
-	pi.on("session_start", async (_event, ctx) => {
-		if (ctx.mode !== "tui") return;
-		stopPoller();
-
-		ctx.ui.setFooter((tui, theme, footerData) => {
-			const unsub = footerData.onBranchChange(() => tui.requestRender());
-			stopPoller();
-			const quota = createQuotaPoller({ events: pi.events, onChange: () => tui.requestRender() });
-			// Local extensions can mount before package session_start handlers run.
-			// Wait one event-loop tick so the router has its session context before refreshing.
-			const startTimer = setTimeout(() => quota.start(), 0);
-			const disposeQuota = () => {
-				clearTimeout(startTimer);
-				quota.dispose();
-			};
-			stopQuota = disposeQuota;
-			let coldTimer: ReturnType<typeof setTimeout> | undefined;
-			let coldTimerAt: number | undefined;
-			const scheduleCold = (coldAt: number | undefined) => {
-				if (coldAt === coldTimerAt) return;
-				clearTimeout(coldTimer);
-				coldTimerAt = coldAt;
-				coldTimer = undefined;
-				if (coldAt === undefined) return;
-				// Idle footers never repaint on their own; wake once when the cache expires.
-				coldTimer = setTimeout(() => tui.requestRender(), Math.max(0, coldAt - Date.now()) + 50);
-				coldTimer.unref?.();
-			};
-
-			return {
-				dispose() {
-					unsub();
-					clearTimeout(coldTimer);
-					disposeQuota();
-					if (stopQuota === disposeQuota) stopQuota = undefined;
-				},
-				invalidate() {},
-				render(width: number): string[] {
-					// --- Line 1: cwd / branch / session name (unchanged from stock) ---
-					let pwd = formatCwd(ctx.cwd, process.env.HOME || process.env.USERPROFILE || homedir());
-					const branch = footerData.getGitBranch();
-					if (branch) pwd = `${pwd} (${branch})`;
-					const sessionName = ctx.sessionManager.getSessionName();
-					if (sessionName) pwd = `${pwd} • ${sessionName}`;
-					const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
-
-					// --- Usage totals across the whole session (unchanged from stock) ---
-					const totals = emptyTotals();
-					for (const entry of ctx.sessionManager.getEntries()) {
-						if (entry.type === "usage") {
-							addUsage(totals, entry.usage);
-						} else if (entry.type === "message" && entry.message.role === "assistant") {
-							addUsage(totals, entry.message.usage);
-						} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
-							addUsage(totals, entry.message.usage);
-						} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
-							addUsage(totals, entry.usage);
-						}
-					}
-
-					const cache = analyzeCache(
-						ctx.sessionManager.getBranch(),
-						Date.now(),
-						cacheTtlSeconds(ctx.model?.promptCache),
-					);
-					scheduleCold(cache.coldAt);
-					const latestCacheHitRate = cache.hitRate;
-
-					const contextUsage = ctx.getContextUsage();
-					const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-					const contextPercentValue = contextUsage?.percent ?? 0;
-					const contextPercent = contextUsage?.percent != null ? contextPercentValue.toFixed(1) : "?";
-
-					// Subscription detection: kimi-coding is subscription-backed despite using
-					// API-key auth (per stock footer); everything else uses OAuth as the proxy
-					// for "subscription", since ExtensionContext has no direct equivalent of
-					// ModelRuntime.isUsingSubscription().
-					const usingSubscription = ctx.model
-						? ctx.model.provider === "kimi-coding" || ctx.modelRegistry.isUsingOAuth(ctx.model)
-						: false;
-
-					// Auto-compact is on by default; ExtensionContext doesn't expose the live
-					// toggle, so this always shows "(auto)" rather than tracking the real state.
-					const autoSuffix = " (auto)";
-					const contextDisplayRaw =
-						contextPercent === "?"
-							? `?/${formatTokens(contextWindow)}${autoSuffix}`
-							: `${contextPercent}%/${formatTokens(contextWindow)}${autoSuffix}`;
-					let contextSegmentPlain = contextDisplayRaw;
-					let contextSegmentFull = `ctx ${contextDisplayRaw}`;
-					if (contextPercentValue > 90) {
-						contextSegmentPlain = theme.fg("error", contextSegmentPlain);
-						contextSegmentFull = theme.fg("error", contextSegmentFull);
-					} else if (contextPercentValue > 70) {
-						contextSegmentPlain = theme.fg("warning", contextSegmentPlain);
-						contextSegmentFull = theme.fg("warning", contextSegmentFull);
-					}
-
-					function buildParts(tier: "full" | "compact"): string[] {
-						const full = tier === "full";
-						const parts: string[] = [];
-						if (totals.input) parts.push(full ? `in ${formatTokens(totals.input)}` : `↑${formatTokens(totals.input)}`);
-						if (totals.output)
-							parts.push(full ? `out ${formatTokens(totals.output)}` : `↓${formatTokens(totals.output)}`);
-						if (totals.cacheRead)
-							parts.push(full ? `read ${formatTokens(totals.cacheRead)}` : `R${formatTokens(totals.cacheRead)}`);
-						if (totals.cacheWrite)
-							parts.push(full ? `write ${formatTokens(totals.cacheWrite)}` : `W${formatTokens(totals.cacheWrite)}`);
-						if ((totals.cacheRead > 0 || totals.cacheWrite > 0) && latestCacheHitRate !== undefined) {
-							const marker = formatCacheMarker(cache, tier);
-							parts.push(
-								full
-									? `hit ${latestCacheHitRate.toFixed(1)}%${marker}`
-									: `CH${latestCacheHitRate.toFixed(1)}%${marker}`,
-							);
-						}
-						if (totals.cost || usingSubscription) {
-							const costStr = `$${totals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
-							parts.push(full ? `cost ${costStr}` : costStr);
-						}
-						parts.push(full ? contextSegmentFull : contextSegmentPlain);
-						return parts;
-					}
-
-					const minPadding = 2;
-					const modelName = ctx.model?.id || "no-model";
-					let rightSideBase = modelName;
-					if (ctx.model?.reasoning) {
-						const level = ctx.thinkingLevel || "off";
-						rightSideBase = level === "off" ? `${modelName} • thinking off` : `${modelName} • ${level}`;
-					}
-
-					function buildLine(tier: "full" | "compact"): string {
-						let statsLeft = buildParts(tier).join(" ");
-						let statsLeftWidth = visibleWidth(statsLeft);
-						if (statsLeftWidth > width) {
-							statsLeft = truncateToWidth(statsLeft, width, "...");
-							statsLeftWidth = visibleWidth(statsLeft);
-						}
-
-						let rightSide = rightSideBase;
-						if (footerData.getAvailableProviderCount() > 1 && ctx.model) {
-							const withProvider = `(${ctx.model.provider}) ${rightSideBase}`;
-							if (statsLeftWidth + minPadding + visibleWidth(withProvider) <= width) {
-								rightSide = withProvider;
-							}
-						}
-						const rightSideWidth = visibleWidth(rightSide);
-						const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
-
-						let statsLine: string;
-						if (totalNeeded <= width) {
-							statsLine = statsLeft + " ".repeat(width - statsLeftWidth - rightSideWidth) + rightSide;
-						} else {
-							const availableForRight = width - statsLeftWidth - minPadding;
-							if (availableForRight > 0) {
-								const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
-								const pad = " ".repeat(Math.max(0, width - statsLeftWidth - visibleWidth(truncatedRight)));
-								statsLine = statsLeft + pad + truncatedRight;
-							} else {
-								statsLine = statsLeft;
-							}
-						}
-
-						const dimStatsLeft = theme.fg("dim", statsLeft);
-						const remainder = statsLine.slice(statsLeft.length);
-						const dimRemainder = theme.fg("dim", remainder);
-						return dimStatsLeft + dimRemainder;
-					}
-
-					// Prefer the full word-label tier when it fits untruncated alongside the
-					// model name; otherwise fall back to the compact tier (which has its own
-					// truncation fallback, guaranteeing the line always fits `width`).
-					const fullStatsLeft = buildParts("full").join(" ");
-					const fitsUntruncated = visibleWidth(fullStatsLeft) + minPadding + visibleWidth(rightSideBase) <= width;
-					const statsLine = buildLine(fitsUntruncated ? "full" : "compact");
-
-					const lines = [pwdLine, statsLine];
-
-					// --- Quota row: only once the router has answered at least once ---
-					const quotaState = quota.getState();
-					if (quotaState) {
-						const colorize = (color: "warning" | "error" | "dim", text: string) => theme.fg(color, text);
-						const plainFull = formatQuotaRow(quotaState, "full", (_color, text) => text);
-						const tier = visibleWidth(plainFull) <= width ? "full" : "compact";
-						const row = formatQuotaRow(quotaState, tier, colorize);
-						lines.push(truncateToWidth(row, width, theme.fg("dim", "...")));
-					}
-
-					// --- Line 3: extension statuses (unchanged from stock) ---
-					const extensionStatuses = footerData.getExtensionStatuses();
-					if (extensionStatuses.size > 0) {
-						const sortedStatuses = Array.from(extensionStatuses.entries())
-							.sort(([a], [b]) => a.localeCompare(b))
-							.map(([, text]) =>
-								text
-									.replace(/[\r\n\t]/g, " ")
-									.replace(/ +/g, " ")
-									.trim(),
-							);
-						const statusLine = sortedStatuses.join(" ");
-						lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
-					}
-
-					return lines;
-				},
-			};
-		});
-	});
+/** Mirrors packages/session-kit/src/clock.ts: handles own cancellation, not Node timer methods. */
+export interface TimerHandle {
+	cancel(): void;
 }
+
+/** Same structural boundary as session-kit's Clock, without a cross-package dependency. */
+export interface FooterClock {
+	now(): number;
+	setTimeout(callback: () => void, ms: number): TimerHandle;
+	setInterval(callback: () => void, ms: number): TimerHandle;
+}
+
+const realClock: FooterClock = {
+	now: () => Date.now(),
+	setTimeout(callback, ms) {
+		const timer = setTimeout(callback, ms);
+		timer.unref();
+		return { cancel: () => clearTimeout(timer) };
+	},
+	setInterval(callback, ms) {
+		const timer = setInterval(callback, ms);
+		timer.unref();
+		return { cancel: () => clearInterval(timer) };
+	},
+};
+
+/** Mount the expanded footer; omitted options preserve the real clock and timers. */
+export function createExpandedFooter(options: { clock?: FooterClock } = {}): ExtensionFactory {
+	const clock = options.clock ?? realClock;
+	return (pi: ExtensionAPI) => {
+		let stopQuota: (() => void) | undefined;
+		const stopPoller = () => {
+			stopQuota?.();
+			stopQuota = undefined;
+		};
+
+		pi.on("session_shutdown", async () => stopPoller());
+
+		pi.on("session_start", async (_event, ctx) => {
+			if (ctx.mode !== "tui") return;
+			stopPoller();
+
+			ctx.ui.setFooter((tui, theme, footerData) => {
+				const unsub = footerData.onBranchChange(() => tui.requestRender());
+				stopPoller();
+				const quota = createQuotaPoller({
+					events: pi.events,
+					onChange: () => tui.requestRender(),
+					now: () => clock.now(),
+					setTimeout: (fn, ms) => clock.setTimeout(fn, ms),
+					clearTimeout: (handle) => (handle as TimerHandle | undefined)?.cancel(),
+					setInterval: (fn, ms) => clock.setInterval(fn, ms),
+					clearInterval: (handle) => (handle as TimerHandle | undefined)?.cancel(),
+				});
+				// Local extensions can mount before package session_start handlers run.
+				// Wait one event-loop tick so the router has its session context before refreshing.
+				const startTimer = clock.setTimeout(() => quota.start(), 0);
+				const disposeQuota = () => {
+					startTimer.cancel();
+					quota.dispose();
+				};
+				stopQuota = disposeQuota;
+				let coldTimer: TimerHandle | undefined;
+				let coldTimerAt: number | undefined;
+				const scheduleCold = (coldAt: number | undefined) => {
+					if (coldAt === coldTimerAt) return;
+					coldTimer?.cancel();
+					coldTimerAt = coldAt;
+					coldTimer = undefined;
+					if (coldAt === undefined) return;
+					// Idle footers never repaint on their own; wake once when the cache expires.
+					coldTimer = clock.setTimeout(() => tui.requestRender(), Math.max(0, coldAt - clock.now()) + 50);
+				};
+
+				return {
+					dispose() {
+						unsub();
+						coldTimer?.cancel();
+						disposeQuota();
+						if (stopQuota === disposeQuota) stopQuota = undefined;
+					},
+					invalidate() {},
+					render(width: number): string[] {
+						// --- Line 1: cwd / branch / session name (unchanged from stock) ---
+						let pwd = formatCwd(ctx.cwd, process.env.HOME || process.env.USERPROFILE || homedir());
+						const branch = footerData.getGitBranch();
+						if (branch) pwd = `${pwd} (${branch})`;
+						const sessionName = ctx.sessionManager.getSessionName();
+						if (sessionName) pwd = `${pwd} • ${sessionName}`;
+						const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
+
+						// --- Usage totals across the whole session (unchanged from stock) ---
+						const totals = emptyTotals();
+						for (const entry of ctx.sessionManager.getEntries()) {
+							if (entry.type === "usage") {
+								addUsage(totals, entry.usage);
+							} else if (entry.type === "message" && entry.message.role === "assistant") {
+								addUsage(totals, entry.message.usage);
+							} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
+								addUsage(totals, entry.message.usage);
+							} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
+								addUsage(totals, entry.usage);
+							}
+						}
+
+						const cache = analyzeCache(
+							ctx.sessionManager.getBranch(),
+							clock.now(),
+							cacheTtlSeconds(ctx.model?.promptCache),
+						);
+						scheduleCold(cache.coldAt);
+						const latestCacheHitRate = cache.hitRate;
+
+						const contextUsage = ctx.getContextUsage();
+						const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+						const contextPercentValue = contextUsage?.percent ?? 0;
+						const contextPercent = contextUsage?.percent != null ? contextPercentValue.toFixed(1) : "?";
+
+						// Subscription detection: kimi-coding is subscription-backed despite using
+						// API-key auth (per stock footer); everything else uses OAuth as the proxy
+						// for "subscription", since ExtensionContext has no direct equivalent of
+						// ModelRuntime.isUsingSubscription().
+						const usingSubscription = ctx.model
+							? ctx.model.provider === "kimi-coding" || ctx.modelRegistry.isUsingOAuth(ctx.model)
+							: false;
+
+						// Auto-compact is on by default; ExtensionContext doesn't expose the live
+						// toggle, so this always shows "(auto)" rather than tracking the real state.
+						const autoSuffix = " (auto)";
+						const contextDisplayRaw =
+							contextPercent === "?"
+								? `?/${formatTokens(contextWindow)}${autoSuffix}`
+								: `${contextPercent}%/${formatTokens(contextWindow)}${autoSuffix}`;
+						let contextSegmentPlain = contextDisplayRaw;
+						let contextSegmentFull = `ctx ${contextDisplayRaw}`;
+						if (contextPercentValue > 90) {
+							contextSegmentPlain = theme.fg("error", contextSegmentPlain);
+							contextSegmentFull = theme.fg("error", contextSegmentFull);
+						} else if (contextPercentValue > 70) {
+							contextSegmentPlain = theme.fg("warning", contextSegmentPlain);
+							contextSegmentFull = theme.fg("warning", contextSegmentFull);
+						}
+
+						function buildParts(tier: "full" | "compact"): string[] {
+							const full = tier === "full";
+							const parts: string[] = [];
+							if (totals.input)
+								parts.push(full ? `in ${formatTokens(totals.input)}` : `↑${formatTokens(totals.input)}`);
+							if (totals.output)
+								parts.push(full ? `out ${formatTokens(totals.output)}` : `↓${formatTokens(totals.output)}`);
+							if (totals.cacheRead)
+								parts.push(full ? `read ${formatTokens(totals.cacheRead)}` : `R${formatTokens(totals.cacheRead)}`);
+							if (totals.cacheWrite)
+								parts.push(full ? `write ${formatTokens(totals.cacheWrite)}` : `W${formatTokens(totals.cacheWrite)}`);
+							if ((totals.cacheRead > 0 || totals.cacheWrite > 0) && latestCacheHitRate !== undefined) {
+								const marker = formatCacheMarker(cache, tier);
+								parts.push(
+									full
+										? `hit ${latestCacheHitRate.toFixed(1)}%${marker}`
+										: `CH${latestCacheHitRate.toFixed(1)}%${marker}`,
+								);
+							}
+							if (totals.cost || usingSubscription) {
+								const costStr = `$${totals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
+								parts.push(full ? `cost ${costStr}` : costStr);
+							}
+							parts.push(full ? contextSegmentFull : contextSegmentPlain);
+							return parts;
+						}
+
+						const minPadding = 2;
+						const modelName = ctx.model?.id || "no-model";
+						let rightSideBase = modelName;
+						if (ctx.model?.reasoning) {
+							const level = ctx.thinkingLevel || "off";
+							rightSideBase = level === "off" ? `${modelName} • thinking off` : `${modelName} • ${level}`;
+						}
+
+						function buildLine(tier: "full" | "compact"): string {
+							let statsLeft = buildParts(tier).join(" ");
+							let statsLeftWidth = visibleWidth(statsLeft);
+							if (statsLeftWidth > width) {
+								statsLeft = truncateToWidth(statsLeft, width, "...");
+								statsLeftWidth = visibleWidth(statsLeft);
+							}
+
+							let rightSide = rightSideBase;
+							if (footerData.getAvailableProviderCount() > 1 && ctx.model) {
+								const withProvider = `(${ctx.model.provider}) ${rightSideBase}`;
+								if (statsLeftWidth + minPadding + visibleWidth(withProvider) <= width) {
+									rightSide = withProvider;
+								}
+							}
+							const rightSideWidth = visibleWidth(rightSide);
+							const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
+
+							let statsLine: string;
+							if (totalNeeded <= width) {
+								statsLine = statsLeft + " ".repeat(width - statsLeftWidth - rightSideWidth) + rightSide;
+							} else {
+								const availableForRight = width - statsLeftWidth - minPadding;
+								if (availableForRight > 0) {
+									const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
+									const pad = " ".repeat(Math.max(0, width - statsLeftWidth - visibleWidth(truncatedRight)));
+									statsLine = statsLeft + pad + truncatedRight;
+								} else {
+									statsLine = statsLeft;
+								}
+							}
+
+							const dimStatsLeft = theme.fg("dim", statsLeft);
+							const remainder = statsLine.slice(statsLeft.length);
+							const dimRemainder = theme.fg("dim", remainder);
+							return dimStatsLeft + dimRemainder;
+						}
+
+						// Prefer the full word-label tier when it fits untruncated alongside the
+						// model name; otherwise fall back to the compact tier (which has its own
+						// truncation fallback, guaranteeing the line always fits `width`).
+						const fullStatsLeft = buildParts("full").join(" ");
+						const fitsUntruncated = visibleWidth(fullStatsLeft) + minPadding + visibleWidth(rightSideBase) <= width;
+						const statsLine = buildLine(fitsUntruncated ? "full" : "compact");
+
+						const lines = [pwdLine, statsLine];
+
+						// --- Quota row: only once the router has answered at least once ---
+						const quotaState = quota.getState();
+						if (quotaState) {
+							const colorize = (color: "warning" | "error" | "dim", text: string) => theme.fg(color, text);
+							const plainFull = formatQuotaRow(quotaState, "full", (_color, text) => text);
+							const tier = visibleWidth(plainFull) <= width ? "full" : "compact";
+							const row = formatQuotaRow(quotaState, tier, colorize);
+							lines.push(truncateToWidth(row, width, theme.fg("dim", "...")));
+						}
+
+						// --- Line 3: extension statuses (unchanged from stock) ---
+						const extensionStatuses = footerData.getExtensionStatuses();
+						if (extensionStatuses.size > 0) {
+							const sortedStatuses = Array.from(extensionStatuses.entries())
+								.sort(([a], [b]) => a.localeCompare(b))
+								.map(([, text]) =>
+									text
+										.replace(/[\r\n\t]/g, " ")
+										.replace(/ +/g, " ")
+										.trim(),
+								);
+							const statusLine = sortedStatuses.join(" ");
+							lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+						}
+
+						return lines;
+					},
+				};
+			});
+		});
+	};
+}
+
+export default createExpandedFooter();

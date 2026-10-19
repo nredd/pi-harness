@@ -2,7 +2,7 @@
 // peers vs devDependencies, privacy scan of every shipped byte, and README honesty.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { test } from "vitest";
 import { manifest, packedFiles, pkgRoot, readText, walk } from "./support.ts";
 
 const SHIPPED_DIRS = ["agents", "extensions", "lib", "licenses", "settings", "skills", "themes"];
@@ -49,7 +49,7 @@ test("metadata: public, versioned, correctly attributed", () => {
 		directory: "packages/preset",
 	});
 	assert.ok(pkg.keywords.includes("pi-package"));
-	assert.deepEqual(Object.keys(pkg.scripts).sort(), ["check", "format", "lint", "test", "typecheck"]);
+	assert.deepEqual(Object.keys(pkg.scripts).sort(), ["check", "format", "lint", "test", "test:bun", "typecheck"]);
 	for (const hook of ["preinstall", "install", "postinstall", "prepare", "prepublishOnly", "prepack"]) {
 		assert.ok(!(hook in pkg.scripts), `lifecycle script '${hook}'`);
 	}
