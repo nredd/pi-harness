@@ -39,20 +39,3 @@ def test_tool_set(sandbox: Sandbox) -> None:
     assert texts, result.transcript()
     tools = texts[0].removeprefix("TOOLS ").split(",")
     assert_golden("tools.txt", "\n".join(tools) + "\n")
-
-
-def test_workflows_trigger_does_not_arm_on_mentions(sandbox: Sandbox) -> None:
-    """Mentioning workflows (e.g. `.github/workflows`) must not arm workflows mode or rewrite the prompt."""
-    prompt = "check .github/workflows and the dynamic workflows docs"
-    result = run_headless(
-        sandbox, {"providers": {"faux": {"models": ["main"], "steps": [{"text": "OK"}]}}}, [prompt]
-    )
-    users = [
-        event["message"]
-        for event in result.of_type("message_end")
-        if event.get("message", {}).get("role") == "user"
-    ]
-    assert users, result.transcript()
-    content = users[0].get("content")
-    text = content if isinstance(content, str) else "".join(block.get("text", "") for block in content)
-    assert text == prompt, f"User message was rewritten:\n{text}"

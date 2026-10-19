@@ -1,0 +1,9 @@
+{
+	"name": "@nredd/pi-session-kit",
+	"type": "module",
+	"pi": {
+		"extensions": [
+			"index.ts"
+		]
+	}
+}
