@@ -51,9 +51,32 @@ Upstream candidates in the core patch queue:
 
 pi-subagents patch queue:
 
-- Injectable clock (nredd/pi-subagents#4, `v0.22.0-nredd.3`): `createSubagentsExtension({ clock })` drives the
-  scheduler and the completion outbox idle hold, so in-process stack tests share one fake clock with session-kit
-  and the router. The default export keeps real time
+- Base: tintinweb master `ca93a5247e72e7053fcd10bea7125d6c4205f949`, five unreleased commits after
+  `v0.22.0`; release branch `nredd/v0.22.0-ca93a52`, selected tag `v0.22.0-nredd.4` (nredd/pi-subagents#5/#6).
+  The upstream audit confirms nicobailon/pi-subagents is an independent project, not our upstream
+- Retain explicit/model-map/enterprise alias precedence and newest-enabled fuzzy resolution, router admission,
+  quota parking/re-admission/refusal, session-scoped detached delivery, bounded tool-free final reports,
+  child nesting/workflow refusals, read/unread TTL/tombstones, queued steering, canonical project trust and
+  strict startup, named-cwd worktrees, package-directory extension matching, one-line/live model rows,
+  fleet reload survival and viewer input. Reconcile upstream resume budgets/stops and steering/usage events
+  without weakening the fork contracts; see the fork's `docs/rebase-ca93a52.md`
+- `createSubagentsExtension({ clock })` now also drives manager retention, admission, model activity and
+  row/fleet/viewer timers, alongside scheduling/outbox. Defaults keep native time; render probes do not start
+  tickers. Sixteen B rows plus absent-router admission are native in
+  `test/{worktree-isolation-e2e,session-scenarios,fleet-session,viewer-session}.test.ts`, under Vitest and Bun
+
+pi-plan-mode patch queue:
+
+- Base: `@narumitw/pi-plan-mode@0.59.3` from `narumiruna/pi-extensions`, split `fb74f34b`;
+  release branch `nredd/v0.59.3`, selected tag `v0.59.3-nredd.1` (nredd/pi-plan-mode#1/#2)
+- Drop the redundant custom-start ready-plan source patch now owned upstream. Retain compact ready/review
+  presentation, Escape preserving ready plans, explicit canonical reproposal confirmation and `/plan finalize`,
+  headless turn waiting, annotated read-only/typed SSH admission, per-segment trusted-root Bash policy,
+  one-line Plan tool/proposed-plan rows and `pi-plan-mode:plan-approved` delivery. Keep the standalone
+  vendored harness and rebuilt `dist/` for git installs
+- Seven B rows are native in `test/{confirmation,decline,policy,transcript}-session.test.ts`, under Vitest
+  and Bun. Both forks' test hosts now use exact core `v1.3.0-nredd.6` coding-agent/TUI/AI/agent-core tarballs,
+  not stock npm host copies. Full suites passed the parent [CI probe #37](https://github.com/nredd/pi-harness/pull/37)
 
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached

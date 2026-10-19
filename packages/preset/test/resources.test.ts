@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import test from "node:test";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import Schema from "typebox/schema";
+import { test } from "vitest";
 import { frontmatterOf, type Json, manifest, packedFiles, pkgRoot, readJson, readText, walk } from "./support.ts";
 
 const AGENTS = ["architect", "code-reviewer", "critic", "debugger", "general-purpose", "researcher", "verifier"];

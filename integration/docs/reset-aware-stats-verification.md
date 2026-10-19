@@ -1,5 +1,9 @@
 # Reset-aware routing and global hourly stats
 
+Historical release receipt, not current gate instructions. The router shell runner is retired;
+all 13 case destinations are recorded in `docs/verification-rebuild.md`. Use the monorepo native
+checks and CI assembled-stack gate described in `docs/ci.md`, not the old commands below.
+
 The release changes `pi-subscription-router`, `pi-session-kit`, and chezmoi together. Testing only
 one extension does not verify the installed behavior.
 

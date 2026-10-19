@@ -130,12 +130,12 @@ third-party skills, global `AGENTS.md`, `mcp.json`, router/subagents/enterprise 
 
 Byte-identical to the source (`cmp`): 6 of 7 agents (all but `architect`) and `coding-like-redd`.
 
-Also byte-identical: `lib/footer-cache.ts`. NOT byte-identical: `extensions/expanded-footer.ts`,
-`lib/footer-quota.ts`, and the two migrated test files were reformatted with the package's Biome
-configuration (tabs, 120 columns, wrapping, trailing commas). Verified token-identical to the
-source after removing whitespace and trailing commas before closing brackets. The two
-tests additionally differ by one import path each (`private_dot_pi/agent/lib/` -> `lib/`). No
-assertion was changed.
+Also byte-identical: `lib/footer-cache.ts`. `lib/footer-quota.ts` differs only by Biome formatting
+(tabs, 120 columns, wrapping, trailing commas). The initial import of `extensions/expanded-footer.ts`
+and the two migrated helper tests was likewise formatting-only plus sibling import paths, with no
+assertion changes. The native footer port adds the optional `createExpandedFooter({ clock })` seam,
+retaining real defaults, and switches both helper tests to static sibling imports and Vitest. Their
+assertions remain unchanged. Package-native host scenarios now live in `packages/preset/test/scenarios/`.
 
 New in this package (not from the source): `test/{discovery,resources,package}.test.ts`,
 `test/support.ts`.

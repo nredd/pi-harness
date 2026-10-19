@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Retire the shell E2E runner and unused faux helpers after all 13 cases moved to native package, stack and pi-subagents suites
+
 ## 0.3.0
 
 - Add opt-in per-profile `strategy: "balanced"` with pure, provider-neutral reset-aware scoring, arbitrary chain lengths and strict >20% incumbent hysteresis
