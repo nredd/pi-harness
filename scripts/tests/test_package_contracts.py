@@ -75,12 +75,22 @@ def test_supplied_tarball_is_never_repacked(
         sandbox (Sandbox): Scrubbed real tools.
         monkeypatch (pytest.MonkeyPatch): Forbids any second pack invocation.
         contract (PackageContract): Selected package.
+
+    Returns:
+        None: Supplied tarball identity remains unchanged without repacking.
     """
     artifact = pc.pack(contract, tmp_path, sandbox)
     before = artifact.path.read_bytes()
 
     def forbid_pack(*_args: object) -> pc.PackedArtifact:
-        """Refuse a rebuild of bytes that already passed verification."""
+        """Refuse a rebuild of bytes that already passed verification.
+
+        Parameters:
+            *_args (object): Unexpected pack arguments.
+
+        Returns:
+            PackedArtifact: Never returned; any invocation fails the test.
+        """
         pytest.fail("Supplied candidate was repacked")
 
     monkeypatch.setattr(pc, "pack", forbid_pack)
@@ -101,15 +111,32 @@ def test_stock_gate_audits_and_installs_supplied_bytes(
         tmp_path (Path): Scratch directory.
         sandbox (Sandbox): Real packing tools.
         monkeypatch (pytest.MonkeyPatch): Forbids repacking and substitutes stock Pi setup/scenario.
+
+    Returns:
+        None: The stock gate audits and installs the supplied candidate.
     """
     artifact = pc.pack(DEV_TOOLS, tmp_path, sandbox)
 
     def forbid(*_args: object) -> pc.PackedArtifact:
-        """The stock gate must not rebuild the candidate."""
+        """The stock gate must not rebuild the candidate.
+
+        Parameters:
+            *_args (object): Unexpected pack arguments.
+
+        Returns:
+            PackedArtifact: Never returned; any invocation fails the test.
+        """
         pytest.fail("Candidate was repacked")
 
     def exercise(ctx: pc.Context) -> pc.DevToolsEvidence:
-        """Check the installed artifact instead of starting Pi."""
+        """Check the installed artifact instead of starting Pi.
+
+        Parameters:
+            ctx (Context): Installed candidate and stock-gate context.
+
+        Returns:
+            DevToolsEvidence: Synthetic scenario evidence after byte comparison.
+        """
         assert ctx.artifact == artifact
         assert (ctx.installed / "src/index.ts").read_bytes() == pc.read_member(artifact.path, "src/index.ts")
         return {"tool": "git_status", "untracked": ["fixture"], "failure_path": "Pi boundary substituted"}
@@ -131,6 +158,9 @@ def test_load_tarball_refuses_invalid_candidate(tmp_path: Path, case: str) -> No
     Parameters:
         tmp_path (Path): Disposable destination.
         case (str): Invalid input shape.
+
+    Returns:
+        None: Invalid supplied tarballs are refused.
     """
     path = tmp_path / "nredd-pi-dev-tools-1.0.0.tgz"
     if case == "broken":
@@ -160,6 +190,9 @@ def test_tarball_pairs_refuse_bad_selection(tmp_path: Path, pairs: list[str]) ->
     Parameters:
         tmp_path (Path): Fixture directory.
         pairs (list[str]): Invalid option list.
+
+    Returns:
+        None: Invalid tarball selections are refused.
     """
     path = make_tarball(
         tmp_path / "nredd-pi-dev-tools-1.0.0.tgz",
