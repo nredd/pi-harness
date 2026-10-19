@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "release": {
+    "id": "2026-10-19-interactive-testing",
+    "created_at": "2026-10-19T04:58:42.926173Z",
+    "commit": "cd9e5b9e361f26efde9058a5de954c8a1deb7604",
+    "dirty": false
+  },
+  "forks": [
+    {
+      "path": "forks/pi",
+      "commit": "c7e285d12146b660d6db6da07c39883103250c9c",
+      "remote_url": "https://github.com/nredd/pi.git",
+      "initialized": true,
+      "tag": "v1.3.0-nredd.5",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-claude-auth",
+      "commit": "f78a407c72f0c384e3ac5fc4e171d61975e89767",
+      "remote_url": "https://github.com/nredd/pi-claude-auth.git",
+      "initialized": true,
+      "tag": "v0.1.3-nredd.1",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-computer-use",
+      "commit": "3fd2fe39b702558c86491e488019ac9c80f7583e",
+      "remote_url": "https://github.com/nredd/pi-computer-use.git",
+      "initialized": true,
+      "tag": "v0.5.1-nredd.2",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-plan-mode",
+      "commit": "d91bb2b7f8e7aab532400e472cb72a41214e5fb3",
+      "remote_url": "https://github.com/nredd/pi-plan-mode.git",
+      "initialized": true,
+      "tag": "v0.59.2-nredd.4",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-subagents",
+      "commit": "2fc9632198745527b0478b6e79b130eed75d284a",
+      "remote_url": "https://github.com/nredd/pi-subagents.git",
+      "initialized": true,
+      "tag": "v0.22.0-nredd.2",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/rpiv-todo",
+      "commit": "3403b659748fa870d8309ae7d3da88bdb8aa1b1d",
+      "remote_url": "https://github.com/nredd/rpiv-todo.git",
+      "initialized": true,
+      "tag": "v2.12.0-nredd.6",
+      "fetched_tag_object": null
+    }
+  ],
+  "owned_packages": [
+    {
+      "name": "@nredd/pi-dev-tools",
+      "version": "0.4.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-session-kit",
+      "version": "0.3.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-subscription-router",
+      "version": "0.3.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-preset",
+      "version": "0.1.0",
+      "private": false,
+      "tarball_sha256": null
+    }
+  ],
+  "third_party": {
+    "package_lock_lockfile_version": 3,
+    "files": [
+      {
+        "path": "package-lock.json",
+        "sha256": "c74b2f61d9e7d1024ce1557ea488b241f34420d0b29b69a52a6f475175ca41d0"
+      },
+      {
+        "path": "integration/uv.lock",
+        "sha256": "20bacc9c89f1b56c4b54baa4a8ad426cb9797d6b34720135537e837d0f1da17b"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "pi-coding-agent-tgz",
+      "basename": "earendil-works-pi-coding-agent-1.3.0.tgz",
+      "size": 7626127,
+      "sha256": "84f1c4b5075efca538a8f7b65334dba8dff265525d7b1f1f69bb0c1d677ac644",
+      "url": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.5/earendil-works-pi-coding-agent-1.3.0.tgz"
+    },
+    {
+      "name": "pi-tui-tgz",
+      "basename": "earendil-works-pi-tui-1.3.0.tgz",
+      "size": 537460,
+      "sha256": "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
+      "url": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.5/earendil-works-pi-tui-1.3.0.tgz"
+    },
+    {
+      "name": "pi-agent-core-tgz",
+      "basename": "earendil-works-pi-agent-core-1.3.0.tgz",
+      "size": 61897,
+      "sha256": "e08bbd6b348a00eb97250ebfa33a722c70323b55a2d1e6f5b446513fcb5dad35",
+      "url": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.5/earendil-works-pi-agent-core-1.3.0.tgz"
+    },
+    {
+      "name": "pi-ai-tgz",
+      "basename": "earendil-works-pi-ai-1.3.0.tgz",
+      "size": 801779,
+      "sha256": "1b7ed741d704e0e288056630c1abc1a71eaec83eac148689c1d9b152361085b7",
+      "url": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.5/earendil-works-pi-ai-1.3.0.tgz"
+    }
+  ],
+  "evidence": {
+    "core_pr": "https://github.com/nredd/pi/pull/5",
+    "core_pr_receipt": "https://github.com/nredd/pi/pull/5#issuecomment-6259628281",
+    "core_tag": "v1.3.0-nredd.5",
+    "core_release": "https://github.com/nredd/pi/releases/tag/v1.3.0-nredd.5",
+    "package_install_gate": "pi-harness-builds/interactive-export/package-install3.log",
+    "no_xterm_consumer": "pi-harness-builds/interactive-export/no-xterm.log",
+    "tui_resolution": "pi-harness-builds/interactive-export/tui-resolution.log",
+    "release_url_consumer_node_bun": "pi-harness-builds/release-nredd5/consumer-parity.log",
+    "make_check": "pi-harness-builds/release-nredd5/make-check.log",
+    "tap_and_pin": "not bumped, CLI bundle changed by optional seams; pin waits for the assembled-stack gate, owner-approved"
+  }
+}
