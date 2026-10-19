@@ -1,5 +1,5 @@
 /** Real multi-extension sessions, with one host identity shared by every fork. */
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +52,52 @@ export function isolateStackHome(): { root: string; cleanup(): void } {
 	};
 }
 
+/**
+ * Keep the real web/memory entries inert before either parent imports or child discovery.
+ * Web 0.36.0 registers locally; session_start only resets/restores local caches. Eager
+ * activation preserves every registered schema, cookies/browser UI are disabled, and
+ * tests never execute its network tools (a fetch spy in specialists.test.ts enforces this).
+ * PI_CODING_AGENT_DIR comes from isolateStackHome; the cache override also stays temporary.
+ * Memory 0.4.2 reads PI_MEMORY_DIR at import. Updates/search/exit summaries are disabled,
+ * but session_start STILL probes qmd. A first-on-PATH failing executable replaces that
+ * external dependency for both parent and child loaders, with a log proving it was used.
+ */
+export function isolateResearchPackages(root: string): () => void {
+	const bin = join(root, "bin");
+	const memory = join(root, "memory");
+	mkdirSync(bin, { recursive: true });
+	mkdirSync(memory, { recursive: true });
+	mkdirSync(join(root, "agent"), { recursive: true });
+	writeFileSync(join(bin, "qmd"), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PI_MEMORY_DIR/qmd-calls"\nexit 1\n', {
+		mode: 0o700,
+	});
+	writeFileSync(
+		join(root, "agent/web-search.json"),
+		JSON.stringify({ toolActivation: "eager", allowBrowserCookies: false, autoOpenBrowser: false }),
+	);
+	const previous = new Map<string, string | undefined>();
+	for (const [key, value] of Object.entries({
+		PATH: `${bin}:${process.env.PATH ?? ""}`,
+		PI_MEMORY_DIR: memory,
+		PI_MEMORY_QMD_UPDATE: "off",
+		PI_MEMORY_NO_SEARCH: "1",
+		PI_MEMORY_SNAPSHOT: "stable",
+		PI_MEMORY_EXIT_SUMMARY: "0",
+		PI_ALLOW_BROWSER_COOKIES: "0",
+		FEYNMAN_ALLOW_BROWSER_COOKIES: "0",
+		PI_WEB_ACCESS_CACHE_ROOT: join(root, "web-cache"),
+	})) {
+		previous.set(key, process.env[key]);
+		process.env[key] = value;
+	}
+	return () => {
+		for (const [key, value] of previous) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	};
+}
+
 /** Refuse fork-local host copies before importing any extension code. */
 export function assertHostIdentity(fork: ForkName): void {
 	const directory = new URL(`forks/${fork}/`, ROOT);
@@ -100,6 +146,17 @@ export async function loadFork(fork: ForkName): Promise<ExtensionFactory> {
 /** Load an owned workspace's real source entry; callers may also pass its createXxx factory directly. */
 export async function loadOwned(name: OwnedName): Promise<ExtensionFactory> {
 	return loadFactory(new URL(`packages/${OWNED_ENTRIES[name]}/src/index.ts`, ROOT));
+}
+
+/** Load pinned third-party manifest entries from this workspace, never the live install. */
+export async function loadThirdParty(name: "workflow" | "deferred" | "web" | "memory"): Promise<ExtensionFactory> {
+	const entries = {
+		workflow: () => new URL("../extensions/workflow.ts", import.meta.resolve("@quintinshaw/pi-dynamic-workflows")),
+		deferred: () => new URL(import.meta.resolve("pi-deferred-context-engine")),
+		web: () => new URL("dist/index.js", import.meta.resolve("pi-web-access/package.json")),
+		memory: () => new URL(import.meta.resolve("pi-memory")),
+	};
+	return loadFactory(entries[name]());
 }
 
 export interface StackOptions {
