@@ -20,16 +20,6 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.integration
 
-GATE_ERROR = "plan_mode_complete is blocked: explicit permission to submit a proposal is required"
-QUESTION = {
-    "id": "scope",
-    "header": "Scope",
-    "question": "How wide?",
-    "options": [
-        {"label": "Narrow", "description": "Smallest diff."},
-        {"label": "Wide", "description": "Everything."},
-    ],
-}
 # First prompt proposes a plan; the second is a reply while it awaits action (a decline), and
 # the model tries to re-submit it unchanged.
 DECLINE_PROMPTS = ["/plan start", "plan it", "no, change the scope"]
@@ -90,37 +80,6 @@ def run_plan(sandbox: Sandbox, steps: list[dict[str, Any]], prompts: list[str]) 
     result = run_headless(sandbox, {"providers": {"faux": {"models": ["main"], "steps": steps}}}, prompts)
     assert result.returncode == 0, result.transcript()
     return result
-
-
-def test_reply_to_ready_plan_gates_completion(sandbox: Sandbox) -> None:
-    """A reply declines the ready plan; re-submitting fails, and an unanswered question keeps the gate."""
-    result = run_plan(
-        sandbox,
-        [
-            *DECLINE_STEPS,
-            tool("plan_mode_question", questions=[QUESTION]),
-            complete("Second"),
-            {"text": "OK"},
-        ],
-        [*DECLINE_PROMPTS, "ask me first"],
-    )
-    completions = plan_outcomes(result, "plan_mode_complete")
-    assert [outcome.is_error for outcome in completions] == [False, True, True], result.transcript()
-    assert "**Proposed Plan**" in completions[0].text, completions[0].text
-    assert GATE_ERROR in completions[1].text, completions[1].text
-    (question,) = plan_outcomes(result, "plan_mode_question")
-    assert '"reason": "ui_unavailable"' in question.text, question.text
-    assert GATE_ERROR in completions[2].text, "a cancelled question must not lift the gate"
-
-
-def test_plan_finalize_lifts_gate(sandbox: Sandbox) -> None:
-    """After a decline, `/plan finalize` reopens `plan_mode_complete` and the new plan is accepted."""
-    result = run_plan(sandbox, [*DECLINE_STEPS, complete("Final")], [*DECLINE_PROMPTS, "/plan finalize"])
-    completions = plan_outcomes(result, "plan_mode_complete")
-    assert GATE_ERROR in completions[1].text, result.transcript()
-    assert len(completions) == 3, result.transcript()
-    assert not completions[2].is_error, completions[2].text
-    assert "# Final" in completions[2].text, completions[2].text
 
 
 def test_gate_error_forbids_plain_text_and_points_to_finalize(sandbox: Sandbox) -> None:

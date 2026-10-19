@@ -24,7 +24,7 @@ Use a `pi-usage` data-only branch in existing private dotfiles repo. Independent
 
 ## Verification and shipping
 
-Router unit coverage: short/weekly bottlenecks, reset timing/floor, missing metadata, family limits, weekly-only, >=3 providers, ties, >20% boundary, unlimited, stale/missing, fallbacks, pure status/admission, existing confirmation/recovery/parking. Faux E2E adds balanced 3-provider route, prompt switching, continuation stickiness and fallback, all in e2e/run.sh all.
+Router unit coverage: short/weekly bottlenecks, reset timing/floor, missing metadata, family limits, weekly-only, >=3 providers, ties, >20% boundary, unlimited, stale/missing, fallbacks, pure status/admission, existing confirmation/recovery/parking. Faux E2E adds balanced 3-provider route, prompt switching, continuation stickiness and fallback, now in `test/scenarios/balanced.test.ts` under Vitest and Bun. All 13 former shell case destinations are recorded in the monorepo's `docs/verification-rebuild.md`; the shell runner is retired.
 
 Stats tests: hour boundaries, partial/midnight/DST, inactive hours, future timestamps, total invariance, cache migration/deleted history, copied/fork/multi-machine dedup, legacy/strong matching, distinct identical-value events, corrupt import retention. Actual bundled CLI + actual sync helper against bare Git with multiple machines: concurrent/offline/rejected pushes, signing failures, repeat sync, isolation, atomic imports, unchanged dotfiles main, absence of secrets/paths/text. Harness tmux 60..320 columns, both tabs, resize/scroll/filter/close/Plan mode/freshness/footer and work-profile producer without personal extensions.
 
