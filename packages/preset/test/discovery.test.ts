@@ -116,9 +116,9 @@ test("sandbox redirects every env var that can move Pi's reads, and restores the
 	);
 });
 
-test("host is the declared stock Pi", () => {
-	assert.equal(VERSION, manifest().devDependencies["@earendil-works/pi-coding-agent"]);
+test("host is the declared Pi 1.3.0 release", () => {
 	assert.equal(VERSION, "1.3.0");
+	assert.match(manifest().devDependencies["@earendil-works/pi-coding-agent"] ?? "", new RegExp(`-${VERSION}\\.tgz$`));
 });
 
 test("resource loader discovers the footer, skills, and themes without diagnostics", () =>

@@ -34,6 +34,8 @@ const EXPECTED_FILES = [
 ].sort();
 const HOST_PEERS = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"];
 const HOST_PACKAGES = ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core", ...HOST_PEERS, "typebox"];
+const HOST_RELEASE_TARBALL =
+	/^https:\/\/github\.com\/nredd\/pi\/releases\/download\/v1\.3\.0-nredd\.\d+\/earendil-works-pi-[a-z-]+-1\.3\.0\.tgz$/;
 
 test("metadata: public, versioned, correctly attributed", () => {
 	const pkg = manifest();
@@ -74,9 +76,11 @@ test("host packages are peers (*) and exact-pinned devDependencies; none are bun
 	for (const name of HOST_PEERS) assert.equal(pkg.peerDependencies[name], "*");
 	assert.ok(!pkg.dependencies && !pkg.bundledDependencies && !pkg.bundleDependencies, "no runtime dependencies");
 	for (const name of HOST_PACKAGES) assert.ok(!(name in (pkg.dependencies ?? {})), name);
-	assert.equal(pkg.devDependencies["@earendil-works/pi-coding-agent"], "1.3.0");
-	assert.equal(pkg.devDependencies["@earendil-works/pi-tui"], "1.3.0");
-	for (const [name, range] of Object.entries(pkg.devDependencies)) assert.match(range, /^\d+\.\d+\.\d+$/, name);
+	// The host is the core fork's immutable release tarball of upstream 1.3.0; everything else is an exact version.
+	for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"])
+		assert.match(pkg.devDependencies[name] ?? "", HOST_RELEASE_TARBALL, name);
+	for (const [name, range] of Object.entries(pkg.devDependencies))
+		if (!name.startsWith("@earendil-works/pi-")) assert.match(range, /^\d+\.\d+\.\d+$/, name);
 });
 
 test("npm pack ships exactly the allowlist", () => {
