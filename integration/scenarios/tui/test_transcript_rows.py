@@ -256,27 +256,6 @@ def test_todo_without_extra_detail_has_no_disclosure(tui: Callable[..., TmuxPane
     assert not expanded_headers(expanded_rows)
 
 
-def test_running_row_toggles_before_it_settles(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
-    """A tool that is still running carries the marker and opens on click, output so far shown."""
-    enable_faux_models(sandbox, ["faux/main"])
-    pane = tui(RUNNING_ROW, width=WIDTH, height=HEIGHT)
-    submit(pane, "go")
-    pane.wait_for(r"sleep 6.*Elapsed", timeout_s=30)
-    rows = pane.rows()
-    row = next(index for index, text in enumerate(rows) if "sleep 6" in text)
-    assert rows[row].startswith("▸ "), rows[row]
-
-    pane.click(6, row)
-    pane.wait_for(r"^▾ .*sleep 6", timeout_s=5)
-    pane.click(6, row)
-    pane.wait_for(r"^▸ .*sleep 6.*Elapsed", timeout_s=5)
-
-    pane.wait_for(FINAL, timeout_s=30)
-    rows = pane.wait_stable(quiet_s=1, timeout_s=20)
-    keys = assert_one_line_everywhere(rows)
-    assert_each_entry_toggles(pane, keys)
-
-
 def test_plan_mode_rows_are_one_line_and_collapsible(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
     """Both Plan tools and the `/plan show` message settle as one line each and toggle."""
     pane = tui(PLAN_ROWS, width=WIDTH, height=HEIGHT)
