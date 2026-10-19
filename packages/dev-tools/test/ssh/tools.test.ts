@@ -65,7 +65,8 @@ describe("ssh_exec", () => {
 		// Nothing after the stray `)` ran: stdout is empty, the only mention is sh's own error line.
 		expect(mock.text(paren)).toMatch(/^home: command exited 2 in [\d.]+s\nstderr:\n/);
 		expect(mock.text(paren)).not.toContain("may not have run");
-		expect(mock.text(paren)).toContain("syntax error");
+		// dash (Linux /bin/sh) says "Syntax error", bash "syntax error".
+		expect(mock.text(paren)).toMatch(/syntax error/i);
 		const quote = await mock.call("ssh_exec", { host: "home", command: "echo 'unterminated" }, work);
 		expect(quote.structuredContent).toMatchObject({ state: "command-failed", remoteExit: 2 });
 		const spoof = await mock.call("ssh_exec", { host: "home", command: "printf '\\n__PI_RC=0'; exit 9" }, work);

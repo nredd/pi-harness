@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
 
-from harness.paths import chezmoi_source
 from harness.quota import (
     UsageFixture,
     fixture_env,
@@ -22,18 +19,6 @@ from harness.quota import (
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def test_footer_typescript_unit_suite() -> None:
-    """Run the actual footer helpers and fake-clock lifecycle tests as part of every harness gate."""
-    node = shutil.which("node")
-    assert node is not None, "Node is required for footer tests"
-    suite = chezmoi_source() / "tests" / "footer-quota.test.mjs"
-    assert suite.is_file(), f"Footer unit suite is missing: '{suite}'"
-    result = subprocess.run(
-        [node, "--test", str(suite)], capture_output=True, text=True, timeout=30, check=False
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_snapshot_shape_and_unknown_provider() -> None:
