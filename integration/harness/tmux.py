@@ -108,6 +108,7 @@ class TmuxPane:
     name: str
     width: int = 120
     height: int = 40
+    exit_status_path: Path | None = None
 
     def _tmux(self, *args: str, env: dict[str, str] | None = None) -> str:
         """Run a tmux client command on the private socket.

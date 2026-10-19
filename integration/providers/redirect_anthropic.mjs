@@ -14,7 +14,8 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import { basename } from "node:path";
 
 const mock = process.env.HARNESS_ANTHROPIC_MOCK;
-if (!mock) throw new Error("redirect_anthropic.mjs needs HARNESS_ANTHROPIC_MOCK");
+const nonce = process.env.HARNESS_AUTH_NONCE;
+if (!mock || !nonce) throw new Error("redirect_anthropic.mjs needs HARNESS_ANTHROPIC_MOCK and HARNESS_AUTH_NONCE");
 
 const REDIRECTED_HOSTS = new Set([
 	"api.anthropic.com",
@@ -27,7 +28,12 @@ let innerFetch = globalThis.fetch;
 const redirecting = (input, init) => {
 	const raw = input instanceof Request ? input.url : String(input);
 	const url = new URL(raw);
-	if (!REDIRECTED_HOSTS.has(url.hostname)) return innerFetch(input, init);
+	if (!REDIRECTED_HOSTS.has(url.hostname)) {
+		if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost" && url.hostname !== "[::1]") {
+			throw new Error(`harness refused non-loopback fetch: ${url.origin}`);
+		}
+		return innerFetch(input, init);
+	}
 	const target = new URL(`${url.pathname}${url.search}`, mock);
 	return innerFetch(input instanceof Request ? new Request(target, input) : target, init);
 };
@@ -62,3 +68,8 @@ for (const fn of ["exec", "execSync", "execFile", "execFileSync", "spawn", "spaw
 	};
 }
 syncBuiltinESMExports();
+Object.defineProperty(globalThis, Symbol.for("pi-harness.auth-redirect"), {
+	value: { mock, nonce },
+	writable: false,
+	configurable: false,
+});

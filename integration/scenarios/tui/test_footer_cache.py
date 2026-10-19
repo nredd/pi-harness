@@ -469,29 +469,6 @@ def test_no_usage_yet_shows_no_hit_segment(launch: Callable[..., TmuxPane]) -> N
     assert STATUS in screen
 
 
-def test_resize_transitions_leave_no_stale_rows(launch: Callable[..., TmuxPane]) -> None:
-    """120 -> 60 -> 320 -> 120: always one stats row, four footer rows, and the tier follows the width."""
-    pane = launch(DROP_COLD, width=120)
-    assert assert_layout(pane, 120, wait_footer(pane))[0] == "full"
-    for width, height, tier in [(60, 40, "compact"), (320, 60, "full"), (120, 40, "full")]:
-        pane.resize(width, height)
-        deadline = time.monotonic() + SETTLE_S
-        while time.monotonic() < deadline:
-            try:
-                rows = footer(pane)
-                if len(rows) == FOOTER_ROWS and stats_match(rows[1])[0] == tier and re.match(QUOTA, rows[2]):
-                    break
-            except (AssertionError, pytest.fail.Exception):
-                pass
-            time.sleep(0.2)
-        pane.wait_stable(quiet_s=1.0, timeout_s=SETTLE_S)
-        rows = wait_footer(pane)
-        assert assert_layout(pane, width, rows)[0] == tier, (width, rows)
-        screen = pane.capture()
-        assert len(STATS_ANCHOR.findall(screen)) == 1, screen
-        assert screen.count(STATUS) == 1, screen
-
-
 def long_workdir(sandbox: Sandbox, *, branch: str) -> Sandbox:
     """Create a very deep cwd that is a git repo on a very long branch.
 

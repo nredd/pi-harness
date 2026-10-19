@@ -18,10 +18,13 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_sandbox_disables_titles_preserving_module_cfg(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bool
-) -> None:
-    """Handle absent cfg and deep-merge only the title enable flag in existing cfg."""
+def test_sandbox_disables_titles_preserving_module_cfg(tmp_path: Path, existing: bool) -> None:
+    """Handle absent cfg and deep-merge only the title enable flag in existing cfg.
+
+    Parameters:
+        tmp_path (Path): private template and copied sandbox roots.
+        existing (bool): seed a module configuration before copying when true.
+    """
     template = tmp_path / "template"
     agent = template / ".pi" / "agent"
     agent.mkdir(parents=True)
@@ -34,7 +37,6 @@ def test_sandbox_disables_titles_preserving_module_cfg(
     source = agent / "pi-session-kit.json"
     if existing:
         source.write_text(json.dumps(cfg))
-    monkeypatch.setattr(sandbox, "LIVE_AGENT_DIR", tmp_path / "missing")
     box = sandbox.build_sandbox(tmp_path / "box", template)
     actual = json.loads((box.agent_dir / "pi-session-kit.json").read_text())
     expected = (

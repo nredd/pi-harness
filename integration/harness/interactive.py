@@ -53,12 +53,27 @@ def launch_tui(
     script_path = sandbox.root / f"script-{name}-{time.monotonic_ns()}.json"
     script_path.write_text(json.dumps(script))
     socket_dir = Path(tempfile.mkdtemp(prefix="pih-", dir=SOCKET_ROOT))
-    pane = TmuxPane(socket=socket_dir / f"{name}.sock", name=name, width=width, height=height)
+    exit_status = sandbox.root / f"{name}.exit"
+    pane = TmuxPane(
+        socket=socket_dir / f"{name}.sock",
+        name=name,
+        width=width,
+        height=height,
+        exit_status_path=exit_status,
+    )
     pi_argv = [*pi_command(), "-e", str(FAUX_EXTENSION), "--model", model, *(extra_args or [])]
     # Extensions that print to stderr would scribble over the TUI; keep it as an artifact instead.
     stderr_path = sandbox.root / f"{name}.stderr"
-    argv = ["/bin/sh", "-c", 'exec "$@" 2>>"$PI_HARNESS_STDERR"', "sh", *pi_argv]
-    pane_env = {"HARNESS_SCRIPT": str(script_path), "PI_HARNESS_STDERR": str(stderr_path)} | (env or {})
+    wrapper = (
+        '"$@" 2>>"$PI_HARNESS_STDERR"; status=$?; '
+        'printf "%s\\n" "$status" >"$PI_HARNESS_EXIT_STATUS"; exit "$status"'
+    )
+    argv = ["/bin/sh", "-c", wrapper, "sh", *pi_argv]
+    pane_env = {
+        "HARNESS_SCRIPT": str(script_path),
+        "PI_HARNESS_STDERR": str(stderr_path),
+        "PI_HARNESS_EXIT_STATUS": str(exit_status),
+    } | (env or {})
     try:
         pane.start(argv, sandbox.workdir, sandbox.env(pane_env))
         if wait_pattern is not None:

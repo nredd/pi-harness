@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from harness.paths import PROVIDERS_DIR
 
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 REDIRECT_PRELOAD = PROVIDERS_DIR / "redirect_anthropic.mjs"
+AUTH_GUARD_EXTENSION = PROVIDERS_DIR / "auth_guard.mjs"
 MOCK_ENV = "HARNESS_ANTHROPIC_MOCK"
 REPLY_TEXT = "MOCK ANTHROPIC OK"
 # Commands an Anthropic run must never reach for: Claude Code's CLI and the macOS keychain.
@@ -92,6 +94,14 @@ class AnthropicMock:
         mock = self
 
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                """Answer only a loopback runtime-readiness nonce, not any real API."""
+                parsed = urlsplit(self.path)
+                nonce = parse_qs(parsed.query).get("nonce", [""])[0]
+                _send_json(
+                    self, 200 if parsed.path == "/__harness_ready__" and nonce else 404, {"nonce": nonce}
+                )
+
             def do_POST(self) -> None:
                 """Read the body and hand the request to `AnthropicMock.handle`."""
                 length = int(self.headers.get("content-length") or 0)
@@ -283,6 +293,7 @@ def anthropic_env(mock: AnthropicMock, box: Sandbox) -> dict[str, str]:
     """
     return {
         MOCK_ENV: mock.url,
+        "HARNESS_AUTH_NONCE": secrets.token_hex(16),
         "HARNESS_BLOCKED_LOG": str(shim_log(box)),
         "NODE_OPTIONS": f"--import {REDIRECT_PRELOAD}",
     }

@@ -17,9 +17,15 @@ from harness import power
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS wake assertions")
-def test_runner_holds_assertion() -> None:
-    """Direct pytest invocations keep detached tmux benchmarks out of maintenance sleep."""
-    processes = subprocess.check_output(["/bin/ps", "-axo", "pid,ppid,args"], text=True)
+def test_runner_holds_assertion(awake_host: None) -> None:
+    """Direct pytest invocations keep detached tmux benchmarks out of maintenance sleep.
+
+    Parameters:
+        awake_host (None): fixture holding this runner's wake assertion.
+    """
+    processes = subprocess.check_output(
+        ["/bin/ps", "-axo", "pid,ppid,args"], text=True, stderr=subprocess.STDOUT
+    )
     assert any(
         fields[1] == str(os.getpid()) and fields[2:] == [power.CAFFEINATE, "-disu", "-w", str(os.getpid())]
         for line in processes.splitlines()[1:]

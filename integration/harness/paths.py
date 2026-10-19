@@ -21,11 +21,6 @@ FAUX_EXTENSION = PROVIDERS_DIR / "faux.ts"
 PROBE_EXTENSION = REPO_ROOT / "probes" / "render.ts"
 LATENCY_EXTENSION = REPO_ROOT / "probes" / "latency.ts"
 
-HOME = Path.home()
-LIVE_AGENT_DIR = HOME / ".pi" / "agent"
-CODE_DIR = HOME / "code"
-CACHE_DIR = HOME / ".cache" / "pi-harness-e2e"
-
 
 def is_wsl(version_file: Path = Path("/proc/version")) -> bool:
     """Report whether this is WSL2 (`microsoft` or `WSL` in `/proc/version`).
@@ -57,7 +52,6 @@ def _tool(name: str, fallback: str) -> str:
     return shutil.which(name) or fallback
 
 
-CHEZMOI_BIN = _tool("chezmoi", "/opt/homebrew/bin/chezmoi")
 TMUX_BIN = _tool("tmux", "/opt/homebrew/bin/tmux")
 GIT_BIN = _tool("git", "/usr/bin/git")
 NODE_BIN = _tool("node", "/opt/homebrew/bin/node")
@@ -73,21 +67,9 @@ def pi_command() -> list[str]:
         list[str]: argv prefix that launches pi.
 
     Raises:
-        FileNotFoundError: `PI_BIN` is unset and no `pi` is on `PATH`.
+        FileNotFoundError: the explicit `PI_BIN` input is unset.
     """
     override = os.environ.get("PI_BIN")
     if override:
         return [str(Path(part).expanduser()) for part in shlex.split(override)]
-    found = shutil.which("pi")
-    if found is None:
-        raise FileNotFoundError("No `pi` on PATH; install it or set `PI_BIN`")
-    return [found]
-
-
-def chezmoi_source() -> Path:
-    """Return the chezmoi source directory, honoring `CHEZMOI_SOURCE`.
-
-    Returns:
-        Path: the chezmoi source checkout.
-    """
-    return Path(os.environ.get("CHEZMOI_SOURCE", HOME / ".local" / "share" / "chezmoi")).expanduser()
+    raise FileNotFoundError("Set explicit `PI_BIN`, or fetch a core release with `python -m harness.release`")
