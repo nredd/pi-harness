@@ -1,4 +1,9 @@
-"""Formula-equivalent release input, checksum and prebuild-selection tests, no binary execution."""
+"""Formula-equivalent release input, checksum and prebuild-selection tests, no binary execution.
+
+References:
+- https://github.com/nredd/homebrew-tap/blob/main/Formula/pi-coding-agent.rb
+- https://docs.python.org/3/library/hashlib.html
+"""
 
 from __future__ import annotations
 
@@ -19,11 +24,27 @@ if TYPE_CHECKING:
 
 
 def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Require an exact tag and retain git diagnostics plus exception chaining on failure.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): substitute successful and failing git output.
+        tmp_path (Path): explicit Gitlink directory.
+    """
     calls = []
 
     def tagged(argv: list[str], **kwargs: Any) -> str:
+        """Return an exact tag while recording the requested git command.
+
+        Parameters:
+            argv (list[str]): git command and arguments.
+            **kwargs (Any): subprocess capture options.
+
+        Returns:
+            str: simulated tagged git output.
+        """
         calls.append(argv)
         assert kwargs["text"]
+        assert kwargs["stderr"] == subprocess.STDOUT
         return "v1.3.0-nredd.4\n"
 
     monkeypatch.setattr(subprocess, "check_output", tagged)
@@ -31,14 +52,29 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
     assert calls[0][-3:] == ["describe", "--tags", "--exact-match"]
 
     def untagged(*args: Any, **kwargs: Any) -> str:
-        raise subprocess.CalledProcessError(128, args[0])
+        """Simulate git's diagnostic for an untagged checkout.
+
+        Parameters:
+            *args (Any): subprocess positional arguments.
+            **kwargs (Any): subprocess capture options.
+
+        Raises:
+            subprocess.CalledProcessError: exact tag lookup failed with captured output.
+        """
+        raise subprocess.CalledProcessError(128, args[0], output="fatal: no tag exactly matches")
 
     monkeypatch.setattr(subprocess, "check_output", untagged)
-    with pytest.raises(RuntimeError, match="untagged; release it"):
+    with pytest.raises(RuntimeError, match=r"untagged; release it.*fatal: no tag exactly matches") as caught:
         gitlink_tag(tmp_path)
+    assert isinstance(caught.value.__cause__, subprocess.CalledProcessError)
 
 
 def test_manifest_checksums_fail_closed(tmp_path: Path) -> None:
+    """Accept matching bytes only, refusing mismatches and missing recorded identities.
+
+    Parameters:
+        tmp_path (Path): private downloaded asset and manifest directory.
+    """
     tag = "v1.3.0-nredd.4"
     url = f"https://github.com/nredd/pi/releases/download/{tag}/core.tgz"
     asset = tmp_path / "core.tgz"
@@ -53,16 +89,54 @@ def test_manifest_checksums_fail_closed(tmp_path: Path) -> None:
     verify_asset(asset, url, checksums)
     with pytest.raises(ValueError, match="mismatch"):
         verify_asset(asset, url, {url: "0" * 64})
-    with pytest.raises(ValueError, match="mismatch"):
+    with pytest.raises(ValueError, match="No recorded release checksum"):
         verify_asset(asset, url + "missing", checksums)
-    verify_asset(asset, url, {})
-    assert manifest_checksums("v1.3.0-nredd.9", tmp_path) == {}
+    with pytest.raises(ValueError, match="No recorded release checksum"):
+        verify_asset(asset, url, {})
+    with pytest.raises(ValueError, match="No recorded release checksums"):
+        manifest_checksums("v1.3.0-nredd.9", tmp_path)
     manifest.write_text(json.dumps({"forks": [{"path": "forks/pi", "tag": tag}], "artifacts": []}))
     with pytest.raises(ValueError, match="no release assets"):
         manifest_checksums(tag, tmp_path)
 
 
+@pytest.mark.parametrize("exists", [False, True])
+def test_missing_manifest_refuses_installation_before_network(tmp_path: Path, exists: bool) -> None:
+    """Refuse missing or empty manifest directories before creating an install prefix.
+
+    Parameters:
+        tmp_path (Path): isolated installation paths.
+        exists (bool): create the directory without a manifest when true.
+    """
+    manifests = tmp_path / "manifests"
+    if exists:
+        manifests.mkdir()
+    prefix = tmp_path / "prefix"
+    with pytest.raises(ValueError, match="No recorded release checksums"):
+        fetch_release("v1.3.0-nredd.6", prefix, manifests)
+    assert not prefix.exists()
+
+
+def test_manifest_without_requested_tag_refuses_installation(tmp_path: Path) -> None:
+    """Refuse a recorded release unrelated to the requested tag.
+
+    Parameters:
+        tmp_path (Path): private manifest and installation paths.
+    """
+    (tmp_path / "other.json").write_text(
+        json.dumps({"forks": [{"path": "forks/pi", "tag": "v1.3.0-nredd.4"}], "artifacts": []})
+    )
+    with pytest.raises(ValueError, match="No recorded release checksums"):
+        fetch_release("v1.3.0-nredd.6", tmp_path / "prefix", tmp_path)
+    assert not (tmp_path / "prefix").exists()
+
+
 def test_conflicting_manifests_are_not_ignored(tmp_path: Path) -> None:
+    """Refuse conflicting digests for one release URL across manifests.
+
+    Parameters:
+        tmp_path (Path): private contradictory manifest directory.
+    """
     url = "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.4/core.tgz"
     for index in range(2):
         (tmp_path / f"{index}.json").write_text(
@@ -73,6 +147,11 @@ def test_conflicting_manifests_are_not_ignored(tmp_path: Path) -> None:
 
 
 def test_prune_matches_formula_platform_spellings(tmp_path: Path) -> None:
+    """Retain only native prebuilds using each dependency's platform spelling.
+
+    Parameters:
+        tmp_path (Path): private fake nested node_modules tree.
+    """
     for system, arch in (("darwin", "arm64"), ("linux", "x64")):
         (tmp_path / f"koffi/build/koffi/{system}_{arch}").mkdir(parents=True)
         (tmp_path / f"@earendil-works/pi-tui/native/tui/prebuilds/{system}-{arch}").mkdir(parents=True)
@@ -86,7 +165,12 @@ def test_prune_matches_formula_platform_spellings(tmp_path: Path) -> None:
 def test_fetch_installs_formula_layout_and_replaces_nested_tui(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Use fake downloads/npm writes to exercise the entire recipe without a Pi launch."""
+    """Use fake downloads/npm writes to exercise the entire recipe without a Pi launch.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): substitute network downloads, npm discovery and execution.
+        tmp_path (Path): private release prefix and recorded checksum directory.
+    """
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as archive:
         member = tarfile.TarInfo("package/package.json")
@@ -97,6 +181,15 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
     urls: list[str] = []
 
     def download(url: str, **kwargs: Any) -> io.BytesIO:
+        """Serve a deterministic tarball instead of contacting GitHub.
+
+        Parameters:
+            url (str): canonical release asset URL.
+            **kwargs (Any): network timeout options.
+
+        Returns:
+            io.BytesIO: in-memory download stream.
+        """
         urls.append(url)
         assert kwargs["timeout"] == 120
         return io.BytesIO(tarball)
@@ -108,7 +201,17 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
     commands = []
 
     def npm(argv: list[str], **kwargs: Any) -> str:
+        """Write the formula's nested dependency layout without executing npm.
+
+        Parameters:
+            argv (list[str]): npm install command.
+            **kwargs (Any): isolated subprocess environment and capture options.
+
+        Returns:
+            str: simulated npm output.
+        """
         commands.append(argv)
+        assert kwargs["stderr"] == subprocess.STDOUT
         assert kwargs["env"]["HOME"] == str(prefix / "fetch-home")
         assert kwargs["env"]["npm_config_userconfig"] == str(prefix / "npmrc-user")
         assert kwargs["env"]["npm_config_globalconfig"] == str(prefix / "npmrc-global")
@@ -121,7 +224,23 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
     monkeypatch.setattr(release, "urlopen", download)
     monkeypatch.setattr(release.shutil, "which", lambda _: "/explicit/npm")
     monkeypatch.setattr(subprocess, "check_output", npm)
-    binary = fetch_release("v1.3.0-nredd.4", prefix, tmp_path / "manifests")
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    base = "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.4/"
+    (manifests / "release.json").write_text(
+        json.dumps(
+            {
+                "artifacts": [
+                    {
+                        "url": base + f"earendil-works-{package}-1.3.0.tgz",
+                        "sha256": hashlib.sha256(tarball).hexdigest(),
+                    }
+                    for package in ("pi-coding-agent", "pi-tui")
+                ]
+            }
+        )
+    )
+    binary = fetch_release("v1.3.0-nredd.4", prefix, manifests)
     assert binary == prefix / "bin/pi"
     assert len(urls) == 2
     assert urls[0].endswith("/earendil-works-pi-coding-agent-1.3.0.tgz")
@@ -133,6 +252,11 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
 
 
 def test_fetch_refuses_bad_tag_or_reused_prefix_before_network(tmp_path: Path) -> None:
+    """Reject floating tags and nonempty destinations before touching network or npm.
+
+    Parameters:
+        tmp_path (Path): private prefix and sentinel file.
+    """
     with pytest.raises(ValueError, match="release tag"):
         fetch_release("main", tmp_path / "new", tmp_path)
     (tmp_path / "sentinel").write_text("do not overwrite")

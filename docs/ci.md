@@ -77,7 +77,11 @@ The thirteen `DOTFILES` rows moved out to the item-7 doctor, not a distribution 
 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
 A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
-`stack` currently tests the Node release delivered by the formula. Bun assembled auth parity still needs
-the runtime adapter (Bun ignores `NODE_OPTIONS --import`); this is not claimed as a Bun gate.
+`stack` tests the Homebrew-shaped Node bundle, not a Bun standalone. Fork release
+`v1.3.0-nredd.6` publishes only npm tarballs. Each stack job checks the selected release's assets and
+prints `Bun standalone: not run (no standalone asset in <tag>)` when absent; a standalone asset makes
+the job refuse unsupported coverage rather than silently ignoring it. No Bun binary is built.
+Bun standalone validation is deferred with the Bun checklist (#26-31), blocked on runtime adapter
+#58 (Bun ignores `NODE_OPTIONS --import`). This is NOT RUN, never a Bun pass.
 
 Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI), npm trusted publishing.

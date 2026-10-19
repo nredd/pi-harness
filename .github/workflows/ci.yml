@@ -141,6 +141,18 @@ jobs:
           git -C ../forks/pi fetch --tags origin
           uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$RUNNER_TEMP/pi-release"
           echo "PI_BIN=$RUNNER_TEMP/pi-release/bin/pi" >>"$GITHUB_ENV"
+      - name: Report Bun standalone as NOT RUN
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(git -C forks/pi describe --tags --exact-match)
+          assets=$(gh release view "$tag" --repo nredd/pi --json assets --jq '.assets[].name')
+          if printf '%s\n' "$assets" | grep -Eq '^pi-(darwin|linux|windows)-.*\.(tar\.gz|zip)$'; then
+            echo "::error::Bun standalone asset exists in $tag but this gate has no runtime adapter (#58); refusing to claim coverage"
+            exit 1
+          fi
+          echo "Bun standalone: not run (no standalone asset in $tag)"
+          echo "Bun standalone: not run (no standalone asset in $tag)" >>"$GITHUB_STEP_SUMMARY"
       - name: Report binary identity
         run: |
           mkdir -p "$RUNNER_TEMP/version-home" "$RUNNER_TEMP/version-agent"

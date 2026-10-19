@@ -254,16 +254,25 @@ class RpcProcess:
     def __exit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
-        """Close stdin gracefully, force cleanup only on failure/timeout."""
+        """Close stdin gracefully, force cleanup only on failure/timeout.
+
+        Parameters:
+            exc_type (type[BaseException] | None): active context exception type.
+            exc (BaseException | None): active exception, if any.
+            tb (TracebackType | None): active exception traceback.
+
+        Raises:
+            TimeoutError: an otherwise successful session does not exit on EOF.
+        """
         assert self.process.stdin is not None
         self.process.stdin.close()
         try:
             self.process.wait(timeout=15)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as error:
             self.process.kill()
             self.process.wait(timeout=10)
             if exc is None:
-                raise TimeoutError("RPC did not exit on EOF") from None
+                raise TimeoutError(f"RPC did not exit on EOF: {error}") from error
         finally:
             for reader in self.readers:
                 reader.join(timeout=5)

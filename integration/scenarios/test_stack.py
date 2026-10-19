@@ -36,6 +36,9 @@ def wait_dead(pane: TmuxPane) -> int:
 
     Returns:
         int: child's status.
+
+    Raises:
+        AssertionError: the process does not exit and record status before the deadline.
     """
     deadline = time.monotonic() + 30
     assert pane.exit_status_path is not None
@@ -48,7 +51,13 @@ def wait_dead(pane: TmuxPane) -> int:
 
 @pytest.mark.parametrize("mode", ["text", "json", "rpc", "tui"])
 def test_extensions_load_without_warnings(sandbox: Sandbox, tui: Callable[..., TmuxPane], mode: str) -> None:
-    """Actual package discovery is quiet in every CLI mode, with no GUI-helper side effects."""
+    """Actual package discovery is quiet in every CLI mode, with no GUI-helper side effects.
+
+    Parameters:
+        sandbox (Sandbox): private installed stack.
+        tui (Callable[..., TmuxPane]): private terminal launcher.
+        mode (str): real CLI output mode.
+    """
     if mode == "json":
         result = run_headless(sandbox, SCRIPT, ["hi"], extra_args=["--no-approve"])
         assert result.returncode == 0, result.transcript()
@@ -87,7 +96,11 @@ def test_extensions_load_without_warnings(sandbox: Sandbox, tui: Callable[..., T
 
 
 def test_tool_set(sandbox: Sandbox) -> None:
-    """The stack's exact schema golden and deferred monitor/worktree promotion survive the real loader."""
+    """The stack's exact schema golden and deferred monitor/worktree promotion survive the real loader.
+
+    Parameters:
+        sandbox (Sandbox): private installed stack with explicit tool policy.
+    """
     searches = [
         {"name": "search_tools", "args": {"query": query, "kind": "tool"}}
         for query in ("background monitor process watcher", "git worktree add remove")

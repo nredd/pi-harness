@@ -25,7 +25,12 @@ pytestmark = pytest.mark.stack
 
 @pytest.mark.parametrize("mode", ["text", "json"])
 def test_diff_prints_the_stat_outside_the_tui(sandbox: Sandbox, mode: str) -> None:
-    """Real diff, bad-ref notification and seeded stats all route through CLI output without a UI."""
+    """Real diff, bad-ref notification and seeded stats all route through CLI output without a UI.
+
+    Parameters:
+        sandbox (Sandbox): private stack, git repository and seeded stats history.
+        mode (str): text or JSON CLI channel.
+    """
     repo = sandbox.workdir
     git(repo, "init", "-q")
     (repo / "a.txt").write_text("x\n")

@@ -73,7 +73,9 @@ def alive(tag: int) -> list[str]:
     Returns:
         list[str]: matching process lines.
     """
-    output = subprocess.check_output(["/bin/ps", "-axo", "pid=,command="], text=True)
+    output = subprocess.check_output(
+        ["/bin/ps", "-axo", "pid=,command="], text=True, stderr=subprocess.STDOUT
+    )
     return [line for line in output.splitlines() if line.split()[1:] == ["/bin/sleep", str(tag)]]
 
 
@@ -83,6 +85,9 @@ def wait_until(check: Callable[[], bool], what: str) -> None:
     Parameters:
         check (Callable[[], bool]): condition.
         what (str): failure diagnostic.
+
+    Raises:
+        AssertionError: the condition does not become true before the deadline.
     """
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
@@ -111,7 +116,13 @@ def tags() -> Iterator[tuple[int, int]]:
 
 @pytest.mark.parametrize("mode", ["print", "rpc", "stop"])
 def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[int, int], mode: str) -> None:
-    """Print completion, RPC EOF and explicit stop reap descendants/pidfiles without a wake."""
+    """Print completion, RPC EOF and explicit stop reap descendants/pidfiles without a wake.
+
+    Parameters:
+        sandbox (Sandbox): private installed stack.
+        tags (tuple[int, int]): worker-separated process argv identities.
+        mode (str): print completion, RPC EOF or explicit stop path.
+    """
     tag = tags[0]
     payload = script(tag, stop=mode == "stop")
     requests = sandbox.root / "lifetime-requests.jsonl"
@@ -159,15 +170,38 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[in
         assert stopped[0].is_error, stopped[0]
 
 
+def monitor_list(owner: RpcProcess) -> str:
+    """Read the owner's public `/monitor` listing through RPC notifications.
+
+    Parameters:
+        owner (RpcProcess): live session whose registry is queried.
+
+    Returns:
+        str: command notification, not filesystem-derived ownership.
+    """
+    owner.send({"type": "prompt", "message": "/monitor"})
+    event = owner.receive(
+        lambda event: event.get("type") == "extension_ui_request" and event.get("method") == "notify"
+    )
+    return event["message"]
+
+
 def test_next_session_sweeps_only_dead_owners(
     sandbox: Sandbox, template_home: Path, tags: tuple[int, int]
 ) -> None:
-    """Three RPC owners share one tmp root; SIGKILL orphans A and C sweeps A, never live B."""
+    """Successive startups sweep dead A, preserve live B and inherit no monitor ownership.
+
+    Parameters:
+        sandbox (Sandbox): owner A's private installed stack.
+        template_home (Path): installed fixture copied for independent B, C and D sessions.
+        tags (tuple[int, int]): worker-separated sleep argv identities for A and B.
+    """
     tag_a, tag_b = tags
     boxes = [
         sandbox,
         build_sandbox(sandbox.root / "b", template_home),
         build_sandbox(sandbox.root / "c", template_home),
+        build_sandbox(sandbox.root / "d", template_home),
     ]
     shared_tmp = sandbox.root / "tmp"
     for box in boxes:
@@ -193,6 +227,7 @@ def test_next_session_sweeps_only_dead_owners(
         files = list(shared_tmp.glob("pi-monitors-*/*/*.json"))
         records = {json.loads(path.read_text())["ownerPid"]: path for path in files}
         assert set(records) == {owner_a.process.pid, owner_b.process.pid}
+        assert records[owner_a.process.pid].parent != records[owner_b.process.pid].parent
         owner_a.process.kill()
         owner_a.process.wait(timeout=10)
         assert alive(tag_a), "SIGKILL must leave a real orphan to exercise sweep"
@@ -207,3 +242,15 @@ def test_next_session_sweeps_only_dead_owners(
         assert alive(tag_b), "live B's group was swept"
         assert records[owner_b.process.pid].exists()
         assert owner_b.process.poll() is None
+        assert 'm1 "lifetime" running' in monitor_list(owner_b)
+        assert monitor_list(owner_c) == "no monitors"
+        # A second completed startup must not sweep B either.
+        owner_d = lifetime.enter_context(
+            RpcProcess(boxes[3], {"providers": {"faux": {"models": ["main"], "steps": []}}})
+        )
+        owner_d.send({"id": "ready-again", "type": "get_state"})
+        owner_d.receive(lambda event: event.get("id") == "ready-again")
+        assert alive(tag_b), "another startup swept live B's group"
+        assert records[owner_b.process.pid].exists()
+        assert owner_b.process.poll() is None
+        assert 'm1 "lifetime" running' in monitor_list(owner_b)
