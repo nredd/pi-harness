@@ -27,6 +27,7 @@ from harness.paths import GIT_BIN, REPO_ROOT
 
 LOGGER = logging.getLogger(__name__)
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-nredd\.\d+$")
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -80,7 +81,7 @@ def manifest_checksums(tag: str, manifests: Path) -> dict[str, str]:
             raise ValueError(f"Manifest '{path}' names '{tag}' but records no release assets")
         for asset in assets:
             url, digest = asset["url"], asset["sha256"]
-            if not re.fullmatch(r"[0-9a-f]{64}", digest) or (url in checksums and checksums[url] != digest):
+            if not SHA256_HEX.fullmatch(digest) or (url in checksums and checksums[url] != digest):
                 raise ValueError(f"Conflicting or invalid checksum for '{url}' in '{path}'")
             checksums[url] = digest
     if not checksums:
