@@ -32,6 +32,11 @@ const execFileAsync = promisify(execFile);
 
 /** Allowed drift between the recorded spawn time and `ps -o lstart=` (1s resolution plus slack). */
 export const START_TOLERANCE_MS = 5_000;
+/**
+ * `ps lstart` is a whole-second floor of a start time derived from an integer boot time, so a process
+ * started milliseconds after `Date.now()` can read up to one second later, or nearly two earlier.
+ */
+const PS_START_RESOLUTION_MS = 1_000;
 /** Malformed files and empty dirs older than this are cleaned up; younger ones may be mid-write. */
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
@@ -293,8 +298,8 @@ export async function sweepOrphans(
 						(m) =>
 							m.pgid === record.childPid &&
 							(m.sessionId === undefined || m.sessionId === record.childPid) &&
-							m.startedAt <= record.startedAt &&
-							record.startedAt - m.startedAt < 1_000,
+							m.startedAt < record.startedAt + PS_START_RESOLUTION_MS &&
+							record.startedAt - m.startedAt < 2 * PS_START_RESOLUTION_MS,
 					);
 					if (
 						record.members?.length ||
