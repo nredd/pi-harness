@@ -20,12 +20,11 @@ async function verifyTransport() {
 	if (!response.ok || ready.nonce !== nonce) throw new Error("Auth transport loopback readiness nonce did not match");
 }
 
-export default function guardAuthTransport(pi) {
-	pi.on("session_start", async () => {
-		try {
-			await verifyTransport();
-		} catch (error) {
-			throw new ExtensionStartupError(`Auth transport guard failed: ${String(error)}`);
-		}
-	});
+export default async function guardAuthTransport() {
+	// Factories finish before any session_start handler (including router usage warmup).
+	try {
+		await verifyTransport();
+	} catch (error) {
+		throw new ExtensionStartupError(`Auth transport guard failed: ${String(error)}`);
+	}
 }
