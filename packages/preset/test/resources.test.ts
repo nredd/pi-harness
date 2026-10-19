@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import Schema from "typebox/schema";
 import { frontmatterOf, type Json, manifest, packedFiles, pkgRoot, readJson, readText, walk } from "./support.ts";
 
@@ -40,9 +41,7 @@ const csv = (value: unknown): string[] =>
 		.filter(Boolean);
 const list = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : csv(value));
 const piSchema = (name: string): Json =>
-	JSON.parse(
-		readFileSync(join(pkgRoot, "node_modules/@earendil-works/pi-coding-agent/schemas", `${name}.schema.json`), "utf8"),
-	);
+	JSON.parse(readFileSync(join(getPackageDir(), "schemas", `${name}.schema.json`), "utf8"));
 /** Unwrap a lookup that the test has already established must succeed. */
 function must<T>(value: T | undefined): T {
 	assert.notEqual(value, undefined);
