@@ -21,8 +21,8 @@ const TITLE_TIMEOUT_MS = 20_000;
 const TITLE_MAX_TOKENS = 128;
 
 /** First candidate the registry can resolve and has credentials for. */
-function resolveModel(ctx: ExtensionContext, titleModel?: string) {
-	for (const { provider, id } of modelCandidates(titleModel, loadModelAliases())) {
+function resolveModel(ctx: ExtensionContext, titleModel?: string, agentDir?: string) {
+	for (const { provider, id } of modelCandidates(titleModel, loadModelAliases(agentDir))) {
 		const model = ctx.modelRegistry.find(provider, id);
 		if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return model;
 	}
@@ -30,9 +30,14 @@ function resolveModel(ctx: ExtensionContext, titleModel?: string) {
 }
 
 /** Ask the model for a title; undefined on any failure. */
-async function generateTitle(ctx: ExtensionContext, prompt: string, titleModel?: string): Promise<string | undefined> {
+async function generateTitle(
+	ctx: ExtensionContext,
+	prompt: string,
+	titleModel?: string,
+	agentDir?: string,
+): Promise<string | undefined> {
 	try {
-		const model = resolveModel(ctx, titleModel);
+		const model = resolveModel(ctx, titleModel, agentDir);
 		if (!model) return undefined;
 		const stream = ctx.modelRegistry.streamSimple(
 			model,
@@ -50,7 +55,7 @@ async function generateTitle(ctx: ExtensionContext, prompt: string, titleModel?:
 	}
 }
 
-export function register(pi: ExtensionAPI, config: KitConfig): void {
+export function register(pi: ExtensionAPI, config: KitConfig, agentDir?: string): void {
 	let attempted = false;
 	let generation = 0;
 
@@ -71,7 +76,7 @@ export function register(pi: ExtensionAPI, config: KitConfig): void {
 
 		attempted = true;
 		const started = generation;
-		const title = await generateTitle(ctx, buildTitlePrompt(exchange), config.titleModel);
+		const title = await generateTitle(ctx, buildTitlePrompt(exchange), config.titleModel, agentDir);
 		if (!title || started !== generation || pi.getSessionName()?.trim()) return;
 		try {
 			pi.setSessionName(title);

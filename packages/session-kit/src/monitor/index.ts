@@ -44,7 +44,7 @@ function text(out: string, details?: unknown, isError = false) {
 	return { content: [{ type: "text" as const, text: out }], details, isError };
 }
 
-export function register(pi: ExtensionAPI, _config: KitConfig): void {
+export function register(pi: ExtensionAPI, _config: KitConfig, monitorRoot?: string): void {
 	registerChildIdentity(pi);
 	let manager: MonitorManager | undefined;
 	let widget: MonitorWidget | undefined;
@@ -62,7 +62,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig): void {
 		await teardown();
 		if (isChildSession(pi)) return;
 		const sessionId = ctx.sessionManager.getSessionId();
-		const root = rootDir();
+		const root = monitorRoot ?? rootDir();
 		try {
 			ensureRoot(root);
 		} catch (error) {
