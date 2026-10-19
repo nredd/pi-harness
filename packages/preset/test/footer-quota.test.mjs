@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
-import { dirname, join, resolve } from "node:path";
-import test from "node:test";
-import { fileURLToPath } from "node:url";
-
-const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const q = await import(join(repo, "lib/footer-quota.ts"));
+import { test } from "vitest";
+import * as q from "../lib/footer-quota.ts";
 
 const NOW = 1_000_000;
 const win = (name, usedPercent, scope = "provider") => ({

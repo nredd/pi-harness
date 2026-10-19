@@ -95,9 +95,39 @@ def test_manifest_checksums_fail_closed(tmp_path: Path) -> None:
         verify_asset(asset, url, {})
     with pytest.raises(ValueError, match="No recorded release checksums"):
         manifest_checksums("v1.3.0-nredd.9", tmp_path)
-    manifest.write_text(json.dumps({"forks": [{"path": "forks/pi", "tag": tag}], "artifacts": []}))
+    manifest.write_text(
+        json.dumps(
+            {
+                "forks": [{"path": "forks/pi", "tag": tag}],
+                "artifacts": [{"url": "https://example.invalid/unrelated.tgz", "sha256": sha}],
+            }
+        )
+    )
     with pytest.raises(ValueError, match="no release assets"):
         manifest_checksums(tag, tmp_path)
+
+
+@pytest.mark.parametrize("snapshot_name", ["0-source.json", "z-source.json"])
+def test_source_only_snapshot_keeps_recorded_asset_checksums(tmp_path: Path, snapshot_name: str) -> None:
+    """A Gitlink-only snapshot neither declares assets nor hides real release identities.
+
+    Parameters:
+        tmp_path (Path): private release and source-only manifests.
+        snapshot_name (str): sort the source snapshot before or after the asset receipt.
+    """
+    tag = "v1.3.0-nredd.6"
+    url = f"https://github.com/nredd/pi/releases/download/{tag}/core.tgz"
+    (tmp_path / snapshot_name).write_text(
+        json.dumps({"forks": [{"path": "forks/pi", "tag": tag}], "artifacts": []})
+    )
+    (tmp_path / "release.json").write_text(json.dumps({"artifacts": [{"url": url, "sha256": "a" * 64}]}))
+    assert manifest_checksums(tag, tmp_path) == {url: "a" * 64}
+    with pytest.raises(ValueError, match="No recorded release checksum"):
+        verify_asset(tmp_path / "unrecorded.tgz", url + "missing", manifest_checksums(tag, tmp_path))
+    (tmp_path / "release.json").unlink()
+    with pytest.raises(ValueError, match="No recorded release checksums"):
+        fetch_release(tag, tmp_path / "prefix", tmp_path)
+    assert not (tmp_path / "prefix").exists()
 
 
 @pytest.mark.parametrize("exists", [False, True])

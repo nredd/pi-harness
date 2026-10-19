@@ -17,8 +17,8 @@ The publish job alone requests a short-lived npm OIDC identity.
 | Job | Runs |
 | --- | --- |
 | `core (forks/pi)` | `npm ci`, the release's model data restored from npm `@earendil-works/pi-ai@<version>` (never the live fetch), `npm run build:offline`, the steps of the fork's `check` with Biome check-only (the step fails if the fork's `check` list changes), the env daemon, `./test.sh` |
-| `pi-subagents` | `npm ci`, `npm run check` |
-| `pi-plan-mode` | `npm ci`, `npm run check`, `npm test` |
+| `pi-subagents` | Pinned Bun, `npm ci`, `npm run check` (full Vitest suite and Bun session scenarios) |
+| `pi-plan-mode` | Pinned Bun, `npm ci`, `npm run check` (Bun session scenarios), `npm test` (full Vitest suite) |
 | `pi-claude-auth` | pnpm at the fork's `packageManager`, `pnpm install --frozen-lockfile`, lint, build, test |
 | `rpiv-todo, pi-computer-use (not run)` | a notice: rpiv-todo gates inside an upstream `rpiv-mono` clone, pi-computer-use needs macOS TCC |
 
@@ -59,7 +59,12 @@ Required checks on `main`:
 - `migration-review/standards` and `migration-review/spec` stay manual: the orchestrator posts them with
   `gh api -X POST repos/nredd/pi-harness/statuses/<FULL sha>` after both Sol reviews pass on that exact
   HEAD. No review bot exists. A PR cannot set them itself
-- CI jobs become required once they are green on `main`
+- `owned (ubuntu-24.04)` and `owned (macos-14)`
+- `contracts (ubuntu-24.04)` and `contracts (macos-14)`
+- `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
+
+These are the configured protection checks. `forks.yml` jobs are path-filtered and cannot be required;
+when triggered, every applicable fork job must still pass before merging.
 
 Flake policy (migration plan section 7):
 

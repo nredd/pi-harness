@@ -132,6 +132,17 @@ describe("run", () => {
 		expect(lines).toEqual(["é"]);
 	});
 
+	it("keeps a short line after an oversized line in one write", async () => {
+		const lines: string[] = [];
+		await run({
+			cmd: process.execPath,
+			args: ["-e", "process.stderr.end('z'.repeat(5000) + '\\ntail\\n')"],
+			maxBytes: 100,
+			onStderrLine: (line) => lines.push(line),
+		});
+		expect(lines).toEqual(["tail"]);
+	});
+
 	it("bounds the pending line buffer and swallows listener errors", async () => {
 		const lines: string[] = [];
 		const r = await run({

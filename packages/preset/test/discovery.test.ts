@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
 import {
 	DefaultPackageManager,
 	DefaultResourceLoader,
@@ -14,6 +13,7 @@ import {
 	SettingsManager,
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
+import { test } from "vitest";
 import { manifest, pkgRoot } from "./support.ts";
 
 const SKILLS = ["code-review", "coding-like-redd", "get-it-merged", "ship-issue"];
