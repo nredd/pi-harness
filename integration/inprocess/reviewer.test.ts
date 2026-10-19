@@ -2,23 +2,27 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { makeGitFixture } from "../../packages/dev-tools/test/scenarios/support.ts";
 import { agentStack, ask, call, closeAgentStack, GIT_READS, listTools, READS, report } from "./agents-support.ts";
 import { isolateStackHome } from "./support.ts";
 
-let home: ReturnType<typeof isolateStackHome>;
+let home: Awaited<ReturnType<typeof isolateStackHome>>;
 let h: Harness;
 let fixture: ReturnType<typeof makeGitFixture>;
 beforeAll(async () => {
-	home = isolateStackHome();
+	home = await isolateStackHome();
 	fixture = makeGitFixture();
+});
+beforeEach(async () => {
 	h = await agentStack(home.root);
 });
-afterAll(async () => {
+afterEach(async () => {
 	if (h) await closeAgentStack(h);
+});
+afterAll(async () => {
 	if (fixture) rmSync(dirname(fixture.repo), { recursive: true, force: true });
-	home.cleanup();
+	await home.cleanup();
 });
 
 it("reviewer exposes exactly seven reads plus the refusal helper", async () => {

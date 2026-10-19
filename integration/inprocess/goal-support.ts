@@ -86,7 +86,6 @@ export class StackUsage extends UsageService {
 
 /** Own every session and its timers, shutting down before restoring the isolated home. */
 export class GoalStack {
-	readonly home = isolateStackHome();
 	readonly nativeTimers = freezeNativeTimers();
 	readonly clock = new FakeClock();
 	readonly usage = new StackUsage(this.clock);
@@ -95,6 +94,13 @@ export class GoalStack {
 	private readonly live: Harness[] = [];
 	private readonly physical: FauxProviderRegistration[] = [];
 	private serial = 0;
+
+	private constructor(readonly home: Awaited<ReturnType<typeof isolateStackHome>>) {}
+
+	/** Isolate the home (and hold macOS wake assertions) before freezing timers. */
+	static async create(): Promise<GoalStack> {
+		return new GoalStack(await isolateStackHome());
+	}
 
 	/** Own physical transports and quota seeds; callers keep scenario responses and assertions. */
 	registerPhysical(chain: Profile["chain"], usedPercent = 0): FauxProviderRegistration[] {
@@ -192,7 +198,7 @@ export class GoalStack {
 		} finally {
 			try {
 				for (const p of this.physical.splice(0)) p.unregister();
-				this.home.cleanup();
+				await this.home.cleanup();
 			} finally {
 				this.nativeTimers.restore();
 			}

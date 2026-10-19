@@ -11,10 +11,10 @@ import {
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { isolateStackHome, loadThirdParty, startStack } from "./support.ts";
 
-let home: ReturnType<typeof isolateStackHome>;
+let home: Awaited<ReturnType<typeof isolateStackHome>>;
 let h: Harness;
 beforeAll(async () => {
-	home = isolateStackHome();
+	home = await isolateStackHome();
 	const settings = join(home.root, ".pi", "workflows");
 	mkdirSync(settings, { recursive: true });
 	writeFileSync(join(settings, "settings.json"), JSON.stringify({ keywordTriggerEnabled: false }));
@@ -30,7 +30,7 @@ afterAll(async () => {
 		await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		h.cleanup();
 	}
-	home.cleanup();
+	await home.cleanup();
 });
 
 it("workflow mentions do not rewrite prompts when keyword triggering is disabled", async () => {
