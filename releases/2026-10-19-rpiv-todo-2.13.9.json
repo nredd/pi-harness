@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "release": {
+    "id": "2026-10-19-rpiv-todo-2.13.9",
+    "created_at": "2026-10-19T20:05:26.620456Z",
+    "commit": "0e2c781b8476110b4528f175e16310e91441b8a2",
+    "dirty": false
+  },
+  "forks": [
+    {
+      "path": "forks/pi",
+      "commit": "9351a7853c96a684442492902cd8805a4c13092f",
+      "remote_url": "https://github.com/nredd/pi.git",
+      "initialized": true,
+      "tag": "v1.3.0-nredd.6",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-claude-auth",
+      "commit": "f78a407c72f0c384e3ac5fc4e171d61975e89767",
+      "remote_url": "https://github.com/nredd/pi-claude-auth.git",
+      "initialized": false,
+      "tag": null,
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-computer-use",
+      "commit": "3fd2fe39b702558c86491e488019ac9c80f7583e",
+      "remote_url": "https://github.com/nredd/pi-computer-use.git",
+      "initialized": false,
+      "tag": null,
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-plan-mode",
+      "commit": "4c2bfc3459b07b294efab62e9a8a01849f67a831",
+      "remote_url": "https://github.com/nredd/pi-plan-mode.git",
+      "initialized": true,
+      "tag": "v0.59.3-nredd.1",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-subagents",
+      "commit": "a4116d3b5853bc86347d5d7eb62ca1ef883162a1",
+      "remote_url": "https://github.com/nredd/pi-subagents.git",
+      "initialized": true,
+      "tag": "v0.22.0-nredd.4",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/rpiv-todo",
+      "commit": "3c62a0b6c408b8aacee045a77d2741bcf53ba0b0",
+      "remote_url": "https://github.com/nredd/rpiv-todo.git",
+      "initialized": true,
+      "tag": "v2.13.9-nredd.1",
+      "fetched_tag_object": null
+    }
+  ],
+  "owned_packages": [
+    {
+      "name": "@nredd/pi-dev-tools",
+      "version": "0.4.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-session-kit",
+      "version": "0.3.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-subscription-router",
+      "version": "0.3.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-preset",
+      "version": "0.1.0",
+      "private": false,
+      "tarball_sha256": null
+    }
+  ],
+  "third_party": {
+    "package_lock_lockfile_version": 3,
+    "files": [
+      {
+        "path": "package-lock.json",
+        "sha256": "684e01a50b60866fef2e8f3a37ce5c8a7644d607da16855798fd05b069ddd033"
+      },
+      {
+        "path": "integration/uv.lock",
+        "sha256": "66f3e46e37b50f8334aff383687cb164afc645b6e81f1e1436ba3a6f9b34ee04"
+      }
+    ]
+  },
+  "artifacts": [],
+  "evidence": {
+    "scope": "Gitlink-only,no-new-artifacts",
+    "fork_review": "https://github.com/nredd/rpiv-todo/pull/1",
+    "fork_probe": "https://github.com/nredd/pi-harness/pull/39",
+    "upstream_audit": "pi-harness-builds/upstream-audit/rpiv-todo.md",
+    "inprocess_gate": "pi-harness-builds/ports/rpiv2-inprocess.log"
+  }
+}
