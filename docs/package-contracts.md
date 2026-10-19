@@ -240,3 +240,6 @@ Review dispositions (PR3, round 2, HEAD `738a241`), all fixed:
   `test_assistant_messages_rejects_malformed_events`, `test_faux_provider_answers_malformed_request_with_400`,
   `test_faux_provider_rejects_bad_content_length`; valid shapes are covered by the existing tests plus
   `test_standalone_stats_artifact_over_real_fixture_session` (real-format session, real built artifact)
+
+- `exercise_stats_artifact` copies only real session JSONL into a clean producer home and plants private text/name/path sentinels. Packed standalone bytes run twice with only `HOME`, default executable `PATH` and `TZ`: stable UUID/directory and identical content-addressed month refs are required. Manifest/month bytes are inspected for strict usage-only fields, hash/size/header agreement and absence of sentinels, paths, `content` and `cwd`.
+- Two imports into a separate empty viewer must persist exactly those month events without duplication; neither home may acquire credentials, settings, Pi git/npm packages or `node_modules`. Unknown CLI flags still fail. The full real matrix runs only in CI `contracts`; `scripts/tests/test_stats_contract.py` replaces only the process boundary to attack privacy, UUID churn, corrupt/missing months, no-op/duplicated cache and unwanted installation state.
