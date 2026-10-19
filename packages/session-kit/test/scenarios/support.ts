@@ -132,9 +132,16 @@ export class TerminalFixture extends ScenarioFixture {
 	}
 
 	/** Wait for the real custom factory to mount, rather than polling terminal frames or sleeping. */
-	async open(command: string): Promise<void> {
+	async open(command: string, raw = false): Promise<void> {
 		const host = this.requireHost();
 		this.mounted = deferred<void>();
+		if (raw) {
+			host.input(command);
+			host.input("\r");
+			await this.mounted.promise;
+			await host.settle();
+			return;
+		}
 		this.command = host.harness.session.prompt(command);
 		const outcome = await Promise.race([
 			this.mounted.promise.then(() => "mounted"),

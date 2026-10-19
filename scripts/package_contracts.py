@@ -89,6 +89,7 @@ DEAD_PROXY = "http://127.0.0.1:9"
 IMPORT_AUDIT = Path(__file__).with_name("import_audit.ts")
 IMPORT_AUDIT_TIMEOUT_S = 120
 STATS_ARTIFACT = "dist/pi-stats-export.mjs"
+STATS_PRIVATE_SENTINEL = "STATS-PRIVATE-TEXT-DO-NOT-EXPORT"
 IMPORT_AUDIT_DIR = "pkg"  # Sources are laid out under this directory so the tsconfig cannot collide.
 
 
@@ -316,6 +317,38 @@ class StatsManifest(BaseModel):
         if len(set(months)) != len(months):
             raise ValueError(f"duplicate month in shards: {months}")
         return self
+
+
+class StatsEvent(BaseModel):
+    model_config = PROTOCOL_MODEL
+    id: Sha256Hex = Field(description="Opaque stable event fingerprint")
+    entryId: str | None = Field(description="Preserved entry identity, absent for legacy events")
+    sessionId: Sha256Hex = Field(description="Opaque session identity, never a source path")
+    ms: int = Field(gt=0, le=STATS_MAX_MS, description="UTC event instant in milliseconds")
+    provider: NonEmptyText = Field(description="Physical provider attribution")
+    model: NonEmptyText = Field(description="Physical model attribution")
+    input: int = Field(ge=0, description="Input tokens")
+    output: int = Field(ge=0, description="Output tokens")
+    cacheRead: int = Field(ge=0, description="Cache-read tokens")
+    cacheWrite: int = Field(ge=0, description="Cache-write tokens")
+    cost: float = Field(ge=0, allow_inf_nan=False, description="Notional event cost")
+
+
+class StatsSession(BaseModel):
+    model_config = PROTOCOL_MODEL
+    id: Sha256Hex = Field(description="Opaque session identity")
+    startMs: int = Field(gt=0, le=STATS_MAX_MS, description="UTC session start in milliseconds")
+    endMs: int = Field(gt=0, le=STATS_MAX_MS, description="UTC last event in milliseconds")
+    child: bool = Field(description="Whether this session belongs to a subagent")
+
+
+class StatsShard(BaseModel):
+    model_config = PROTOCOL_MODEL
+    version: int = Field(ge=1, le=1, description="Month-shard schema version")
+    machineId: UuidV4 = Field(description="Producer installation UUID")
+    month: SnapshotMonth = Field(description="UTC month covered by this shard")
+    events: list[StatsEvent] = Field(description="Usage-only assistant events")
+    sessions: list[StatsSession] = Field(description="Usage-only session metadata")
 
 
 class StatsExportResult(BaseModel):
@@ -1701,7 +1734,6 @@ def scenario_session_kit(ctx: Context) -> SessionKitEvidence:
     manifest = exercise_stats_artifact(
         ctx.sandbox.tools.node,
         read_member(ctx.artifact.path, STATS_ARTIFACT),
-        ctx.sandbox.env(),
         ctx.sandbox.agent_dir,
         ctx.work,
     )
@@ -1712,18 +1744,102 @@ def scenario_session_kit(ctx: Context) -> SessionKitEvidence:
     }
 
 
-def exercise_stats_artifact(
-    node: Path, artifact: bytes, env: dict[str, str], agent_dir: Path, work: Path
-) -> StatsManifest:
-    """Export and import a real session with the stats artifact copied alone into `work`.
+def require_clean_stats_home(home: Path, agent: Path) -> None:
+    """Reject credentials, package installations and settings created by standalone operations.
 
-    The artifact lives in `work/standalone` with nothing else, so a relative import into the package
-    (`../src/...`) or a bare package import cannot resolve, exactly as when the file is copied out.
+    Parameters:
+        home (Path): Clean process home.
+        agent (Path): Explicit producer/viewer agent directory.
+
+    Raises:
+        ContractError: A forbidden file or package directory appeared.
+    """
+    for name in ("auth.json", "settings.json", "git", "npm"):
+        require(not (agent / name).exists(), f"standalone stats created '{name}'")
+    require(not list(home.rglob("node_modules")), "standalone stats created node_modules")
+
+
+def inspect_stats_snapshot(directory: Path, machine_id: str, forbidden: Sequence[str]) -> StatsManifest:
+    """Inspect exact manifest/month bytes, strict usage-only fields and privacy sentinels.
+
+    Parameters:
+        directory (Path): Exported machine directory.
+        machine_id (str): UUID from the export response.
+        forbidden (Sequence[str]): Private strings forbidden anywhere in snapshot bytes.
+
+    Returns:
+        StatsManifest: Validated manifest with at least one real event.
+
+    Raises:
+        ContractError: A file is missing, corrupt, private or inconsistent with its manifest.
+    """
+    try:
+        manifest_text = (directory / "manifest.json").read_text()
+        manifest = parse_stats_json(StatsManifest, manifest_text, "manifest")
+        require(manifest.machineId == machine_id, "export manifest changed its installation UUID")
+        require(bool(manifest.shards), "export: the manifest references no shards")
+        texts = [path.read_text() for path in directory.rglob("*") if path.is_file()]
+        events = 0
+        for ref in manifest.shards:
+            data = (directory / ref.file).read_bytes()
+            require(
+                len(data) == ref.bytes and hashlib.sha256(data).hexdigest() == ref.sha256,
+                "export month shard disagrees with its content identity",
+            )
+            text = data.decode()
+            shard = parse_stats_json(StatsShard, text, "month shard")
+            require((shard.machineId, shard.month) == (machine_id, ref.month), "export shard header mismatch")
+            events += len(shard.events)
+        require(events > 0, "export produced no usage events")
+        exported = "\n".join(texts)
+        for secret in forbidden:
+            require(secret not in exported, f"export leaked a private sentinel: '{secret}'")
+        return manifest
+    except (OSError, UnicodeError) as e:
+        raise ContractError(f"Cannot inspect stats snapshot '{directory}': {e}") from e
+
+
+def inspect_stats_cache(viewer: Path, manifest: StatsManifest, snapshot_dir: Path) -> object:
+    """Require an import to persist exactly the manifest and month events it consumed.
+
+    Parameters:
+        viewer (Path): Clean viewer agent directory.
+        manifest (StatsManifest): Validated producer manifest.
+        snapshot_dir (Path): Export directory holding the expected month bytes.
+
+    Returns:
+        object: Stable machine map for comparison after repeated imports.
+
+    Raises:
+        ContractError: Persistent data is absent, malformed or changed.
+    """
+    try:
+        cache = json.loads((viewer / "pi-session-kit" / "stats-global.json").read_text())
+    except (OSError, ValueError) as e:
+        raise ContractError(f"import left no readable persistent cache: {e}") from e
+    require(isinstance(cache, dict), "import cache is not an object")
+    machines = cache.get("machines")
+    require(
+        isinstance(machines, dict) and set(machines) == {manifest.machineId}, "import cache lost the producer"
+    )
+    machine = machines[manifest.machineId]
+    require(isinstance(machine, dict), "import cache machine is not an object")
+    require(machine.get("manifest") == manifest.model_dump(), "import cache changed the manifest")
+    expected = [json.loads((snapshot_dir / ref.file).read_text()) for ref in manifest.shards]
+    require(machine.get("shards") == expected, "import cache changed or duplicated month events")
+    return machines
+
+
+def exercise_stats_artifact(node: Path, artifact: bytes, agent_dir: Path, work: Path) -> StatsManifest:
+    """Run packed bytes in clean producer/viewer homes, twice, with private source sentinels.
+
+    Only the source sessions are copied, never settings, auth, packages or an ambient environment.
+    The standalone file has no neighboring source tree or modules. Real execution belongs to CI's
+    `contracts` job; unit tests substitute the process boundary and attack the inspections.
 
     Parameters:
         node (Path): Absolute `node` path.
         artifact (bytes): Exact bytes of the packed `dist/pi-stats-export.mjs`.
-        env (dict[str, str]): Complete child environment.
         agent_dir (Path): Agent directory holding the real session to export.
         work (Path): Scratch directory; created if absent and used only for this run.
 
@@ -1740,45 +1856,82 @@ def exercise_stats_artifact(
     outside = work / "artifact-cwd"
     outside.mkdir()
     snapshots = work / "snapshots"
-    exported = run(
-        [node, script, "export", "--agent-dir", agent_dir, "--output", snapshots],
-        env=env,
-        cwd=outside,
-        timeout=PI_TIMEOUT_S,
-    )
-    export = parse_stats_json(StatsExportResult, exported.stdout, "export")
-    expected_dir = snapshots / "machines" / export.machineId
-    require(
-        Path(export.snapshotDir) == expected_dir, f"export wrote '{export.snapshotDir}', not '{expected_dir}'"
-    )
-    try:
-        manifest_text = (expected_dir / "manifest.json").read_text()
-    except OSError as e:
-        raise ContractError(f"export left no readable manifest in '{expected_dir}': {e}") from e
-    manifest = parse_stats_json(StatsManifest, manifest_text, "manifest")
-    require(manifest.machineId == export.machineId, f"export: manifest is for '{manifest.machineId}'")
-    require(bool(manifest.shards), "export: the manifest references no shards")
-    other = work / "other-agent"
-    other.mkdir()
-    imported = parse_stats_json(
-        StatsImportResult,
-        run(
-            [node, script, "import", "--agent-dir", other, "--input", snapshots],
-            env=env,
+    producer_home = work / "producer-home"
+    producer = producer_home / ".pi" / "agent"
+    shutil.copytree(agent_dir / "sessions", producer / "sessions" / "--private-source-path--")
+    histories = list(producer.rglob("*.jsonl"))
+    require(bool(histories), "stats producer has no source history")
+    for history in histories:
+        entries = [json.loads(line) for line in history.read_text().splitlines() if line.strip()]
+        for entry in entries:
+            if entry.get("type") == "session":
+                entry["cwd"] = str(history.parent)
+            message = entry.get("message")
+            if isinstance(message, dict):
+                message["content"] = [{"type": "text", "text": STATS_PRIVATE_SENTINEL}]
+        entries.append({"type": "session_info", "name": STATS_PRIVATE_SENTINEL})
+        history.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n")
+    producer_env = {"HOME": str(producer_home), "PATH": os.defpath, "TZ": "UTC"}
+    exports: list[StatsExportResult] = []
+    manifests: list[StatsManifest] = []
+    for _ in range(2):
+        exported = run(
+            [node, script, "export", "--agent-dir", producer, "--output", snapshots],
+            env=producer_env,
             cwd=outside,
             timeout=PI_TIMEOUT_S,
-        ).stdout,
-        "import",
-    )
-    require(
-        (imported.imported, imported.retained, imported.problems) == (1, 0, []),
-        f"import: {imported}",
-    )
+        )
+        export = parse_stats_json(StatsExportResult, exported.stdout, "export")
+        expected_dir = snapshots / "machines" / export.machineId
+        require(Path(export.snapshotDir) == expected_dir, "export wrote an unexpected snapshot directory")
+        manifest = inspect_stats_snapshot(
+            expected_dir,
+            export.machineId,
+            [
+                STATS_PRIVATE_SENTINEL,
+                str(producer_home),
+                *(str(path) for path in histories),
+                "--private-source-path--",
+                '"content"',
+                '"cwd"',
+            ],
+        )
+        exports.append(export)
+        manifests.append(manifest)
+    require(exports[0] == exports[1], "repeat export changed the installation UUID or directory")
+    require(manifests[0].shards == manifests[1].shards, "repeat export changed month-shard identities")
+    require_clean_stats_home(producer_home, producer)
+    viewer_home = work / "viewer-home"
+    viewer = viewer_home / ".pi" / "agent"
+    viewer.mkdir(parents=True)
+    viewer_env = {"HOME": str(viewer_home), "PATH": os.defpath, "TZ": "UTC"}
+    caches: list[object] = []
+    for _ in range(2):
+        imported = parse_stats_json(
+            StatsImportResult,
+            run(
+                [node, script, "import", "--agent-dir", viewer, "--input", snapshots],
+                env=viewer_env,
+                cwd=outside,
+                timeout=PI_TIMEOUT_S,
+            ).stdout,
+            "import",
+        )
+        require(
+            (imported.imported, imported.retained, imported.problems) == (1, 0, []), f"import: {imported}"
+        )
+        caches.append(inspect_stats_cache(viewer, manifests[-1], Path(exports[-1].snapshotDir)))
+    require(caches[0] == caches[1], "repeat import duplicated or changed cached usage")
+    require_clean_stats_home(viewer_home, viewer)
     bad = run(
-        [node, script, "export", "--bogus", "x"], env=env, cwd=outside, timeout=PI_TIMEOUT_S, check=False
+        [node, script, "export", "--bogus", "x"],
+        env=producer_env,
+        cwd=outside,
+        timeout=PI_TIMEOUT_S,
+        check=False,
     )
     require(bad.returncode != 0, "stats artifact accepted an unknown flag")
-    return manifest
+    return manifests[-1]
 
 
 def scenario_router(ctx: Context) -> RouterEvidence:

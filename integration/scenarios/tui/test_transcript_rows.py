@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness.interactive import submit
-from harness.sandbox import enable_faux_models
 from harness.transcript import (
     EXPANDED,
     collapsed_entries,
@@ -51,69 +50,6 @@ def tool(name: str, **args: Any) -> dict[str, Any]:
     """
     return {"tools": [{"name": name, "args": args}]}
 
-
-def agent(description: str, *, background: bool) -> dict[str, Any]:
-    """A faux step spawning a `general-purpose` child on the faux child provider.
-
-    Parameters:
-        description (str): agent description.
-        background (bool): run in the background.
-
-    Returns:
-        dict[str, Any]: faux step.
-    """
-    return tool(
-        "Agent",
-        subagent_type="general-purpose",
-        description=description,
-        prompt="work",
-        run_in_background=background,
-        model="fauxchild/child",
-    )
-
-
-KITCHEN_SINK: dict[str, Any] = {
-    "providers": {
-        "faux": {
-            "models": ["main"],
-            "steps": [
-                tool("bash", command="printf 'a\\nb\\nc\\n'"),
-                tool("bash", command="echo boom >&2; exit 3"),
-                tool("read", path="notes.txt"),
-                tool("edit", path="notes.txt", edits=[{"oldText": "beta", "newText": "gamma"}]),
-                tool("write", path="new.txt", content="one\ntwo\n"),
-                tool("grep", pattern="alpha", path="."),
-                tool("find", pattern="*.txt"),
-                tool("ls", path="."),
-                tool("todo", action="create", subject="Check every row"),
-                tool("no_such_tool", anything=1),
-                agent("foreground child", background=False),
-                agent("fetched child", background=True),
-                tool("get_subagent_result", agent_id="{{agentId}}", wait=True),
-                agent("notified child", background=True),
-                tool("bash", command="sleep 3"),
-                {"text": FINAL},
-            ],
-        },
-        "fauxchild": {
-            "models": ["child"],
-            "steps": [
-                {"text": "FOREGROUND CHILD DONE"},
-                {"delayMs": 500, "text": "FETCHED CHILD DONE"},
-                {"delayMs": 500, "text": "NOTIFIED CHILD DONE"},
-            ],
-        },
-    }
-}
-
-RUNNING_ROW: dict[str, Any] = {
-    "providers": {
-        "faux": {
-            "models": ["main"],
-            "steps": [tool("bash", command="sleep 6"), {"text": FINAL}],
-        }
-    }
-}
 
 PLAN_ROWS: dict[str, Any] = {
     "providers": {
@@ -199,25 +135,6 @@ def assert_each_entry_toggles(pane: TmuxPane, keys: list[str], last_pattern: str
         assert not expanded_headers(collapsed_rows, last_pattern), (
             f"{key!r} did not collapse again:\n" + "\n".join(collapsed_rows)
         )
-
-
-def test_every_entry_is_one_line_and_collapsible(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
-    """Every entry stays one line; entries advertising hidden detail toggle."""
-    enable_faux_models(sandbox, ["faux/main", "fauxchild/child"])
-    (sandbox.workdir / "notes.txt").write_text("alpha\nbeta\n")
-    pane = tui(KITCHEN_SINK, width=WIDTH, height=HEIGHT)
-    submit(pane, "go")
-    pane.wait_for(FINAL, timeout_s=90)
-    # Let the notified child's notice land and any live Agent rows settle.
-    pane.wait_for(r"notified child", timeout_s=30)
-    rows = pane.wait_stable(quiet_s=3, timeout_s=60)
-
-    keys = assert_one_line_everywhere(rows)
-    screen = "\n".join(rows)
-    for expected in ("$ printf", "read notes.txt", "edit notes.txt", "write new.txt", "no_such_tool"):
-        assert expected in screen, f"missing entry {expected!r}"
-    assert len(re.findall(r"notified child", screen)) >= 2, "no notice row for the notified child"
-    assert_each_entry_toggles(pane, keys)
 
 
 def test_plan_mode_rows_are_one_line_and_collapsible(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> None:

@@ -1161,12 +1161,26 @@ def test_standalone_stats_artifact_over_real_fixture_session(tmp_path: Path, san
         sandbox (pc.Sandbox): Scrubbed environment.
     """
     write_stats_session(sandbox.agent_dir)
-    manifest = pc.exercise_stats_artifact(
-        sandbox.tools.node, DIST_ARTIFACT.read_bytes(), sandbox.env(), sandbox.agent_dir, tmp_path / "work"
+    copied = tmp_path / "standalone" / "pi-stats-export.mjs"
+    copied.parent.mkdir()
+    copied.write_bytes(DIST_ARTIFACT.read_bytes())
+    result = pc.run(
+        [
+            sandbox.tools.node,
+            copied,
+            "export",
+            "--agent-dir",
+            sandbox.agent_dir,
+            "--output",
+            tmp_path / "out",
+        ],
+        env=sandbox.env(),
+        cwd=tmp_path,
+        timeout=60,
     )
+    exported = pc.parse_stats_json(pc.StatsExportResult, result.stdout, "export")
+    manifest = pc.inspect_stats_snapshot(Path(exported.snapshotDir), exported.machineId, [])
     assert len(manifest.shards) == 1
-    copied = tmp_path / "work" / "standalone" / "pi-stats-export.mjs"
-    assert copied.read_bytes() == DIST_ARTIFACT.read_bytes()
     assert [p.name for p in copied.parent.iterdir()] == ["pi-stats-export.mjs"]
 
 
@@ -1201,9 +1215,7 @@ def test_standalone_stats_artifact_cannot_reach_package_siblings(tmp_path: Path,
     )
     assert in_place.returncode == 0, in_place.stderr
     with pytest.raises(pc.ContractError, match="exited"):
-        pc.exercise_stats_artifact(
-            sandbox.tools.node, tampered, sandbox.env(), sandbox.agent_dir, tmp_path / "work"
-        )
+        pc.exercise_stats_artifact(sandbox.tools.node, tampered, sandbox.agent_dir, tmp_path / "work")
 
 
 def test_tool_text_rejects_malformed_result() -> None:
