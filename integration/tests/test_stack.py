@@ -77,7 +77,8 @@ def test_supplied_stacks_are_pinned_and_exclusion_is_explicit() -> None:
     local = load_stack(root / "stacks/local.json")
     assert len(personal.sources) == 12
     assert len(local.sources) == 13
-    assert "git:github.com/nredd/pi-subagents@v0.22.0-nredd.3" in personal.sources
+    assert "git:github.com/nredd/pi-subagents@v0.22.0-nredd.4" in personal.sources
+    assert "git:github.com/nredd/pi-plan-mode@v0.59.3-nredd.1" in personal.sources
     assert not any("pi-preset" in source for source in personal.sources)
     assert "../../packages/preset" in local.sources
     assert len(personal.disabled_extensions) == len(local.disabled_extensions) == 1
