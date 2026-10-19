@@ -172,7 +172,18 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
         assets.append(asset)
     try:
         subprocess.check_output(
-            [npm, "install", "--global", "--prefix", str(prefix), "--min-release-age=0", str(assets[0])],
+            [
+                npm,
+                "install",
+                "--global",
+                "--prefix",
+                str(prefix),
+                "--min-release-age=0",
+                "--build-from-source",
+                "--ignore-scripts",
+                "--loglevel=silly",
+                str(assets[0]),
+            ],
             cwd=prefix,
             env=env,
             text=True,

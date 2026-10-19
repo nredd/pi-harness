@@ -127,6 +127,7 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
     assert urls[0].endswith("/earendil-works-pi-coding-agent-1.3.0.tgz")
     assert urls[1].endswith("/earendil-works-pi-tui-1.3.0.tgz")
     assert commands[0][1:6] == ["install", "--global", "--prefix", str(prefix), "--min-release-age=0"]
+    assert {"--build-from-source", "--ignore-scripts", "--loglevel=silly"} <= set(commands[0])
     assert not (destination / "stale").exists()
     assert json.loads((destination / "package.json").read_text())["name"] == "@earendil-works/pi-tui"
 

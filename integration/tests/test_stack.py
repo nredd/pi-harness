@@ -123,7 +123,9 @@ def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch,
     assert json.loads((box.agent_dir / "subagents.json").read_text())["workflowsEnabled"] is False
     assert box.settings()["packages"][-1] == {"source": "git:github.com/x/two@v1", "extensions": []}
     assert (box.agent_dir / "stack-name").read_text() == "fixture"
+    box.patch_json("settings.json", {"retry": {"enabled": True}})
     other = sandbox.build_sandbox(tmp_path / "other", box.home)
+    assert other.settings()["retry"] == {"enabled": True}
     sentinel = package_directory("npm:one@1.2.3", other.agent_dir) / "sentinel"
     sentinel.write_text("private")
     assert not (package_directory("npm:one@1.2.3", box.agent_dir) / "sentinel").exists()

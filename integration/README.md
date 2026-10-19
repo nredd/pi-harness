@@ -17,7 +17,7 @@ uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
 # Repeat with --stack stacks/local.json.
 ```
 
-- `harness/release.py` copies the tap formula's recipe: global `npm install` of the released coding-agent tgz, replace its nested `@earendil-works/pi-tui` with the released tui tgz, remove foreign native prebuilds. It never reads the tap at runtime
+- `harness/release.py` copies the tap formula's recipe: global `npm install` of the released coding-agent tgz with Homebrew's `--build-from-source --ignore-scripts` defaults and the formula's `--min-release-age=0` override, replace its nested `@earendil-works/pi-tui` with the released tui tgz, remove foreign native prebuilds. It never reads the tap at runtime
 - The exact Gitlink must have a release tag (`git describe --tags --exact-match`), not a nearest ancestor. When `releases/*.json` records that tag, both downloaded assets must match its SHA-256s; missing/conflicting recorded identities fail closed. An unrecorded tag logs `manifest=not recorded`, not checksum verification
 - CI reports the binary's `--version` and exact tag; installation logs the stack document SHA-256 and each installed manifest name/version/source. Per-OS, per-stack artifacts retain failures and JUnit results
 - `Stack` is a strict Pydantic schema: `name`, nonempty unique `sources`, optional `settings`, optional reasoned `disabled_extensions`. npm versions and git refs are explicit; local paths resolve relative to the stack file. Unknown fields, implicit-home paths and a `settings.packages` override are refused
