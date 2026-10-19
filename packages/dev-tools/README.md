@@ -36,6 +36,9 @@ Tool groups land one per PR. Current state is in the table below.
 - Output is capped at pi's `DEFAULT_MAX_BYTES` / `DEFAULT_MAX_LINES`, truncation notice
   included. When cut, the full text is written to `$TMPDIR/pi-dev-tools-*/<label>-N.txt` and
   the path is named in the result
+- `run` caps captured stdout/stderr independently. Its stderr line listener drops only individual
+  oversized lines, through their newline or EOF; valid following lines are delivered even when
+  coalesced into the same chunk or after the capture cap is reached. Listener errors are swallowed
 - Exit codes become named states (`violations`, `no-tests`, `tool-error`, ...), never a bare
   "exit 1"
 - `annotations.readOnlyHint` is set honestly. The `pi-plan-mode` fork admits annotated read-only

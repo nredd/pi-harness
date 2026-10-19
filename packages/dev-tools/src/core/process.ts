@@ -85,7 +85,7 @@ class StreamBuffer {
 	finish(): string {
 		if (this.onLine) {
 			this.feedLines(this.decoder.end());
-			if (this.pending) this.emit(this.pending);
+			if (this.pending && !this.pendingDropped) this.emit(this.pending);
 			this.pending = "";
 		}
 		return Buffer.concat(this.chunks).toString("utf8");
@@ -93,23 +93,26 @@ class StreamBuffer {
 
 	private feedLines(text: string): void {
 		if (!text) return;
-		// A line longer than the cap is dropped rather than buffered without bound.
-		if (this.pending.length + text.length > this.max) {
-			this.pendingDropped = true;
-			this.pending = "";
-			const nl = text.lastIndexOf("\n");
+		let start = 0;
+		while (start < text.length) {
+			const nl = text.indexOf("\n", start);
+			const end = nl < 0 ? text.length : nl;
+			// Cap each line, not the entire chunk: later lines in this chunk may still fit.
+			if (!this.pendingDropped) {
+				if (this.pending.length + end - start > this.max) {
+					this.pending = "";
+					this.pendingDropped = true;
+				} else {
+					this.pending += text.slice(start, end);
+				}
+			}
 			if (nl < 0) return;
-			text = text.slice(nl + 1);
+			if (!this.pendingDropped) {
+				this.emit(this.pending.endsWith("\r") ? this.pending.slice(0, -1) : this.pending);
+			}
+			this.pending = "";
 			this.pendingDropped = false;
-		}
-		this.pending += text;
-		let idx = this.pending.indexOf("\n");
-		while (idx >= 0) {
-			const line = this.pending.slice(0, idx);
-			this.pending = this.pending.slice(idx + 1);
-			if (!this.pendingDropped) this.emit(line.endsWith("\r") ? line.slice(0, -1) : line);
-			this.pendingDropped = false;
-			idx = this.pending.indexOf("\n");
+			start = nl + 1;
 		}
 	}
 
