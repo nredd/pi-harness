@@ -43,6 +43,9 @@ Upstream candidates in the core patch queue:
 - `@earendil-works/pi-coding-agent/testing` (nredd/pi#4): exports the suite harness (`createHarness`, a real
   `AgentSession` around a scripted faux provider) so extension packages test in-process instead of launching
   pi. Only `dist/testing/` is added to the package; `dist/bundle` is byte-identical to `v1.3.0-nredd.3`
+- In-process TUI testing (nredd/pi#5): `@earendil-works/pi-tui/testing` (`VirtualTerminal`), `TUI.flushRender()`,
+  `@earendil-works/pi-coding-agent/testing/interactive` (`createInteractiveHarness` on the real `InteractiveMode`).
+  Optional `InteractiveMode` seams change `dist/bundle`; pi-tui gains an `exports` map (Breaking Changes)
 
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached

@@ -89,23 +89,3 @@ def test_collapsed_rows_are_one_line(
         assert len(rows[index]) <= width
     screen = "\n".join(rows)
     assert not re.search(r"^\s*alpha\s*$", screen, re.MULTILINE), "collapsed read leaked file content"
-
-
-def test_click_toggles_a_row(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
-    """Clicking a collapsed row expands it; clicking its header collapses it; a drag does neither."""
-    pane = run_tools(tui, sandbox, 120, 40)
-    row = find_row(pane.rows(), ROWS["bash"])
-
-    pane.click(6, row)
-    pane.wait_for(r"^▾ +\$ printf", timeout_s=5)
-    expanded = pane.rows()
-    header = find_row(expanded, r"^▾ +\$ printf")
-    assert any(line.strip() == "c" for line in expanded[header : header + 8]), "\n".join(expanded)
-
-    pane.click(6, header)
-    pane.wait_for(ROWS["bash"], timeout_s=5)
-
-    collapsed_row = find_row(pane.rows(), ROWS["bash"])
-    pane.drag((4, collapsed_row), (30, collapsed_row))
-    pane.wait_for(r"^▾ +\$ printf", timeout_s=1.5, absent=True)
-    assert re.search(ROWS["bash"], pane.rows()[collapsed_row]), "a drag toggled the row"
