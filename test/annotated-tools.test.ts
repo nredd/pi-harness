@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { ToolCallEventResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { classifyPlanModeTool, findBlockedSshExecCall, isAnnotatedReadOnlyTool } from "../src/tool-policy.js";
 import { defaultPlanModeToolNames, toolPolicyLabel } from "../src/tool-selection.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+
+/** The mock event map erases handler results; restore the async tool-call contract for assertions. */
+type ToolCallHook = (...args: unknown[]) => Promise<ToolCallEventResult | undefined>;
 
 function annotated(name: string, readOnlyHint?: boolean) {
   return { ...extensionTool(name), annotations: { readOnlyHint } } as ToolInfo;
@@ -139,7 +142,7 @@ test("configured defaultPlanTools and annotated tools are both admitted through 
     });
     planMode(mock.pi);
     const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0];
+    const hook = mock.events.get("tool_call")?.[0] as ToolCallHook | undefined;
     assert.ok(hook);
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
@@ -178,7 +181,7 @@ test("active Plan mode admits annotated tools and gates ssh_exec at the tool hoo
     });
     planMode(mock.pi);
     const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0];
+    const hook = mock.events.get("tool_call")?.[0] as ToolCallHook | undefined;
     assert.ok(hook);
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
