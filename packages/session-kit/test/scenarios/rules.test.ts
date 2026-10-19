@@ -19,28 +19,37 @@ function files(): ScenarioFixture {
 	return fixture;
 }
 
-it("matching rule injects once after unmatched read", async () => {
-	fixture = files();
-	const harness = await fixture.start(configFor("rules"));
-	harness.setResponses([
-		tool("read", { path: "README.md" }),
-		tool("read", { path: "src/a.ts" }),
-		tool("read", { path: "src/b.ts" }),
-		fauxAssistantMessage("OK"),
-	]);
-	await harness.session.prompt("go");
-	const results = outcomes(harness, "read");
-	expect(results).toHaveLength(3);
-	expect(results.every((result) => !result.isError)).toBe(true);
-	expect(results[0]?.text).not.toContain(RULE);
-	expect(results[1]?.text).toContain(RULE);
-	expect(results[2]?.text).not.toContain(RULE);
-	const injected = harness.sessionManager
+/** Rule-injection entries recorded on the session branch. */
+function injectedRules(harness: Awaited<ReturnType<ScenarioFixture["start"]>>): unknown[] {
+	return harness.sessionManager
 		.getBranch()
 		.flatMap((entry) =>
 			entry.type === "custom" && entry.customType === "session-kit:rule-injected" ? [entry.data] : [],
 		);
-	expect(injected).toEqual([{ rule: "project:ts.md" }]);
+}
+
+it("matching rule injects once after unmatched read", async () => {
+	fixture = files();
+	const harness = await fixture.start(configFor("rules"));
+	harness.setResponses([tool("read", { path: "README.md" }), fauxAssistantMessage("OK")]);
+	await harness.session.prompt("unmatched");
+	const [unmatched] = outcomes(harness, "read");
+	expect(unmatched?.isError).toBe(false);
+	expect(unmatched?.text).not.toContain(RULE);
+	expect(injectedRules(harness)).toEqual([]);
+
+	harness.setResponses([
+		tool("read", { path: "src/a.ts" }),
+		tool("read", { path: "src/b.ts" }),
+		fauxAssistantMessage("OK"),
+	]);
+	await harness.session.prompt("matched");
+	const results = outcomes(harness, "read");
+	expect(results).toHaveLength(3);
+	expect(results.every((result) => !result.isError)).toBe(true);
+	expect(results[1]?.text).toContain(RULE);
+	expect(results[2]?.text).not.toContain(RULE);
+	expect(injectedRules(harness)).toEqual([{ rule: "project:ts.md" }]);
 });
 
 it("file-backed restore remembers injected rules", async () => {
