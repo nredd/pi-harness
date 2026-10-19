@@ -78,6 +78,19 @@ pi-plan-mode patch queue:
   and Bun. Both forks' test hosts now use exact core `v1.3.0-nredd.6` coding-agent/TUI/AI/agent-core tarballs,
   not stock npm host copies. Full suites passed the parent [CI probe #37](https://github.com/nredd/pi-harness/pull/37)
 
+rpiv-todo patch queue:
+
+- Base: `@juicesharp/rpiv-todo@2.13.9` from `juicesharp/rpiv-mono` (release `54df50ee`), split `7903c76b`;
+  release branch `nredd/v2.13.9`, selected tag `v2.13.9-nredd.1` (nredd/rpiv-todo#1)
+- Adopt upstream's per-call `rpiv-todo-state` persistence and `.ts` import specifiers. Legacy fork sessions
+  (a Plan snapshot followed by tool-result-only updates) replay chronologically until the first authoritative
+  persistence marker, so a completed task never rolls back to its approved snapshot; regression covers the
+  audit's replay probe. Retain clickable heading, Plan seeding/evidence/reminders, wheel/atomic batches/counts,
+  resume collapse/config and the historical-result/replanning fix
+- The package gate runs in an rpiv-mono clone at the release commit with scratch-only Pi 1.1.0 sibling pins
+  (the untouched release graph fails on stock upstream too). The 4 real-session rows stay hosted in
+  `integration/inprocess/todo-*.test.ts`, green on this Gitlink
+
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
 through `@earendil-works/gondolin` 0.12.0, which is a dependency of the private example workspace
