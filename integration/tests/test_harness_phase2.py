@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 def make_box(root: Path) -> Sandbox:
-    """Build a bare sandbox layout without rendering chezmoi.
+    """Build a bare sandbox layout without installing packages.
 
     Parameters:
         root (Path): scratch dir.
@@ -122,7 +122,7 @@ def test_link_real_credentials_symlinks_never_copies(monkeypatch: pytest.MonkeyP
     real_agent = tmp_path / "real" / ".pi" / "agent"
     real_agent.mkdir(parents=True)
     (real_agent / "auth.json").write_text('{"secret": 1}')
-    monkeypatch.setattr(live, "LIVE_AGENT_DIR", real_agent)
+    monkeypatch.setenv("HARNESS_AUTH_FILE", str(real_agent / "auth.json"))
     box = make_box(tmp_path / "box")
 
     live.link_real_credentials(box)
@@ -134,8 +134,20 @@ def test_link_real_credentials_symlinks_never_copies(monkeypatch: pytest.MonkeyP
 
 
 def test_link_real_credentials_requires_real_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(live, "LIVE_AGENT_DIR", tmp_path / "missing")
+    monkeypatch.setenv("HARNESS_AUTH_FILE", str(tmp_path / "missing"))
     with pytest.raises(FileNotFoundError, match="No real credentials"):
+        live.link_real_credentials(make_box(tmp_path / "box"))
+
+
+def test_live_credentials_have_no_default_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Require an explicit credential file rather than discovering owner state.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): remove the deliberate credential input.
+        tmp_path (Path): private bare fixture root.
+    """
+    monkeypatch.delenv("HARNESS_AUTH_FILE", raising=False)
+    with pytest.raises(ValueError, match="explicit `HARNESS_AUTH_FILE`"):
         live.link_real_credentials(make_box(tmp_path / "box"))
 
 

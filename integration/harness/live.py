@@ -12,13 +12,10 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from harness.paths import LIVE_AGENT_DIR
-
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from harness.headless import RunResult
     from harness.sandbox import Sandbox
 
@@ -46,9 +43,14 @@ def link_real_credentials(box: Sandbox) -> None:
     Raises:
         FileNotFoundError: the real `auth.json` does not exist.
     """
-    real_auth = LIVE_AGENT_DIR / "auth.json"
+    supplied = os.environ.get("HARNESS_AUTH_FILE")
+    if not supplied:
+        raise ValueError(
+            "Live runs require explicit `HARNESS_AUTH_FILE`; default credentials are never discovered"
+        )
+    real_auth = Path(supplied).resolve()
     if not real_auth.is_file():
-        raise FileNotFoundError(f"No real credentials at '{real_auth}'; log in with `pi` first")
+        raise FileNotFoundError(f"No real credentials at '{real_auth}'")
     sandbox_auth = box.agent_dir / "auth.json"
     sandbox_auth.unlink(missing_ok=True)
     sandbox_auth.symlink_to(real_auth)

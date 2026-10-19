@@ -1,7 +1,7 @@
 [project]
-name = "pi-harness-e2e"
+name = "pi-harness-integration"
 version = "0.1.0"
-description = "End-to-end verification for Redd's pi harness: core fork, extension forks, and chezmoi config."
+description = "Explicit assembled-stack process boundaries and harness infrastructure units."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.0",
+    "pytest-xdist>=3.8,<4",
     "ruff>=0.15",
     "ty>=0.0.1a30",
 ]
@@ -43,10 +44,11 @@ respect-type-ignore-comments = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "scenarios"]
+pythonpath = ["."]
 python_files = ["test_*.py"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --import-mode=importlib"
 markers = [
-    "static: config and pin checks, no pi process",
+    "stack: declared assembled-stack D/E process gate",
     "integration: headless pi with faux providers",
     "tui: interactive pi in a real tmux pane",
     "bench: timing benchmarks against stored baselines",

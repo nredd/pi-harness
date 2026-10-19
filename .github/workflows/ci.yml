@@ -102,6 +102,80 @@ jobs:
           path: ${{ runner.temp }}/*contracts.json
           if-no-files-found: ignore
 
+  stack:
+    name: stack (${{ matrix.os }}, ${{ matrix.stack }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        stack: [personal, local]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Pin npm to packageManager
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Install tmux (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes tmux
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
+      - name: Install workspace and harness dependencies
+        run: |
+          npm ci --ignore-scripts
+          cd integration && uv sync --locked --python "$(tr -d '\n' < ../.python-version)"
+      - name: Fetch exact Gitlinked core release, formula-equivalent install
+        working-directory: integration
+        run: |
+          git -C ../forks/pi fetch --tags origin
+          uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$RUNNER_TEMP/pi-release"
+          echo "PI_BIN=$RUNNER_TEMP/pi-release/bin/pi" >>"$GITHUB_ENV"
+      - name: Report Bun standalone as NOT RUN
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(git -C forks/pi describe --tags --exact-match)
+          assets=$(gh release view "$tag" --repo nredd/pi --json assets --jq '.assets[].name')
+          if printf '%s\n' "$assets" | grep -Eq '^pi-(darwin|linux|windows)-.*\.(tar\.gz|zip)$'; then
+            echo "::error::Bun standalone asset exists in $tag but this gate has no runtime adapter (#58); refusing to claim coverage"
+            exit 1
+          fi
+          echo "Bun standalone: not run (no standalone asset in $tag)"
+          echo "Bun standalone: not run (no standalone asset in $tag)" >>"$GITHUB_STEP_SUMMARY"
+      - name: Report binary identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/version-home" "$RUNNER_TEMP/version-agent"
+          HOME="$RUNNER_TEMP/version-home" PI_CODING_AGENT_DIR="$RUNNER_TEMP/version-agent" "$PI_BIN" --version
+          git -C forks/pi describe --tags --exact-match
+      - name: Assembled D and E boundaries (explicit stack, no machine config)
+        working-directory: integration
+        run: |
+          uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
+            --stack "stacks/${{ matrix.stack }}.json" -m stack -n 2 --dist loadfile \
+            --log-cli-level=INFO --junitxml="artifacts/stack-${{ matrix.stack }}.xml"
+      - name: Report installed package identities and stack digests
+        if: always()
+        working-directory: integration
+        run: |
+          uv run --locked python -c 'from pathlib import Path; [print(p.read_text()) for p in sorted(Path("artifacts").glob("stack-*.json"))]'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: stack-${{ matrix.os }}-${{ matrix.stack }}
+          path: integration/artifacts/
+          if-no-files-found: ignore
+
   bench:
     name: bench (not run)
     runs-on: ubuntu-24.04

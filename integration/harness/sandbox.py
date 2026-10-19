@@ -1,12 +1,7 @@
-"""Throwaway pi homes rendered from chezmoi, wired to the real installed extensions.
-
-The rendered config is the chezmoi *target* state (what `chezmoi apply` would write), so the
-harness verifies the config as committed, not whatever drifted onto disk. Installed extension
-code is symlinked from the live agent dir; `auth.json` is never copied.
+"""Throwaway Pi homes populated only by explicit package sets and real `pi install`.
 
 References:
-- `chezmoi cat`: https://www.chezmoi.io/reference/commands/cat/
-- `chezmoi managed`: https://www.chezmoi.io/reference/commands/managed/
+- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
 """
 
 from __future__ import annotations
@@ -17,17 +12,17 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from harness.paths import CHEZMOI_BIN, HOME, LIVE_AGENT_DIR
+from harness.paths import pi_command
+from harness.stack import load_stack, package_directory, stack_digest
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from harness.stack import Stack
 
 LOGGER = logging.getLogger(__name__)
-
-# Rendered files that would shadow a symlinked live directory, or are docs only.
-SKIPPED_PREFIXES = (".pi/agent/npm/", ".pi/agent/git/")
-SKIPPED_FILES = frozenset({".pi/agent/README.md"})
-# Deterministic process environment for every pi launch.
 BASE_ENV = {
     "TZ": "UTC",
     "LANG": "en_US.UTF-8",
@@ -38,85 +33,26 @@ BASE_ENV = {
     "PI_SKIP_VERSION_CHECK": "1",
     "PI_TELEMETRY": "0",
     "NO_UPDATE_NOTIFIER": "1",
-    # pi-memory would otherwise fetch a 300 MB qmd embedding model into every fresh sandbox
-    # `$HOME` and hold the process open ~35s at exit while it embeds.
     "PI_MEMORY_QMD_UPDATE": "off",
+    "PI_MEMORY_EXIT_SUMMARY": "0",
+    "ANTHROPIC_CLI_VERSION": "2.1.0",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
 }
-# Placeholder credentials so configured models resolve. Requests with them fail closed, and
-# faux providers answer every scripted call; the real `auth.json` is never read.
-FAKE_AUTH = {
-    "anthropic": {"type": "api_key", "key": "harness-fake-key"},
-    "openai-codex": {
-        "type": "oauth",
-        "access": "harness-fake-access",
-        "refresh": "harness-fake-refresh",
-        "expires": 4_102_444_800_000,
-        "accountId": "harness",
-    },
-}
-# Package names kept out of every sandbox, whatever the source form (npm, git fork, local path).
-# `pi-computer-use` installs and launches its helper app under `$HOME/Applications`; a sandbox
-# `$HOME` makes that a new app per test, macOS pops a permission window for each one, and the
-# "helper did not start" warning lands in every TUI transcript.
-SANDBOX_EXCLUDED_PACKAGES = ("pi-computer-use",)
-# npm packages `HARNESS_LOCAL` may swap for a local checkout (git ones are matched by repo name).
-NPM_LOCAL_OVERRIDES = ("pi-claude-auth",)
-# Newer than any real release, so pi never shows "what's new" in a sandbox.
+# Faux providers register their own inert API keys. Generic startup/resize must not even
+# offer fake subscription credentials to background usage warmup; auth D supplies its own.
+FAKE_AUTH: dict[str, Any] = {}
 SILENT_CHANGELOG_VERSION = "999.0.0"
-# Commands that reach the network, another host, or the system are shimmed in every sandbox,
-# so a policy regression in a "must block" scenario cannot do real damage. Each shim prints
-# `SHIM <name> <args>` and exits 0.
-SHIMMED_COMMANDS = ("ssh", "scp", "rsync", "curl", "wget", "gh", "sudo", "brew", "chezmoi", "npm", "open")
+SHIMMED_COMMANDS = ("ssh", "scp", "rsync", "curl", "wget", "gh", "sudo", "brew", "npm", "open")
 SHIM_SCRIPT = '#!/bin/sh\necho "SHIM $(basename "$0") $*"\n'
-# Variables passed through from the caller's environment.
-PASSTHROUGH_ENV = ("PATH", "TMPDIR", "USER", "LOGNAME", "SHELL", "NODE_OPTIONS")
-
-
-def render_chezmoi_pi_tree(destination: Path) -> list[Path]:
-    """Render every chezmoi-managed file under `~/.pi` into `destination`.
-
-    Parameters:
-        destination (Path): directory standing in for `$HOME`.
-
-    Returns:
-        list[Path]: home-relative paths that were rendered.
-
-    Raises:
-        RuntimeError: chezmoi failed to list or render a file.
-    """
-    try:
-        listed = subprocess.check_output(
-            [CHEZMOI_BIN, "managed", "--include=files", "--path-style=relative", str(HOME / ".pi")],
-            text=True,
-            stderr=subprocess.PIPE,
-        )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"`chezmoi managed` failed: {e.stderr.strip()}") from e
-    rendered: list[Path] = []
-    for line in listed.splitlines():
-        relative = line.strip()
-        if not relative or relative in SKIPPED_FILES or relative.startswith(SKIPPED_PREFIXES):
-            continue
-        try:
-            content = subprocess.check_output(
-                [CHEZMOI_BIN, "cat", str(HOME / relative)], stderr=subprocess.PIPE
-            )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"`chezmoi cat` failed for '{relative}': {e.stderr.decode().strip()}") from e
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        rendered.append(Path(relative))
-    LOGGER.info(f"Rendered {len(rendered)} chezmoi-managed files under '{destination}'")
-    return rendered
 
 
 def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    """Merge `overlay` into a copy of `base`, recursing into nested objects.
+    """Recursively overlay objects, replacing arrays and scalars.
 
     Parameters:
-        base (dict[str, Any]): original mapping.
-        overlay (dict[str, Any]): values that win.
+        base (dict[str, Any]): original object.
+        overlay (dict[str, Any]): winning values.
 
     Returns:
         dict[str, Any]: merged copy.
@@ -132,15 +68,7 @@ def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
 
 @dataclass
 class Sandbox:
-    """One isolated pi home.
-
-    Attributes:
-        root (Path): scratch root holding everything below.
-        home (Path): stand-in `$HOME`.
-        agent_dir (Path): `$HOME/.pi/agent`, exported as `PI_CODING_AGENT_DIR`.
-        workdir (Path): cwd for pi runs.
-        env_overrides (dict[str, str]): extra environment for every launch.
-    """
+    """One isolated agent directory, HOME, cwd and process environment."""
 
     root: Path
     home: Path
@@ -148,168 +76,259 @@ class Sandbox:
     workdir: Path
     env_overrides: dict[str, str] = field(default_factory=dict)
 
-    def env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        """Build the process environment for a pi launch in this sandbox.
+    def env(self, extra: dict[str, str] | None = None, *, installing: bool = False) -> dict[str, str]:
+        """Build a scrubbed environment; installers alone receive the real npm/git PATH.
 
         Parameters:
-            extra (dict[str, str] | None): per-launch additions.
+            extra (dict[str, str] | None): deliberate scenario additions.
+            installing (bool): allow package manager executables, not policy shims.
 
         Returns:
-            dict[str, str]: complete environment; nothing else leaks from the caller.
+            dict[str, str]: complete child environment with private writable state.
         """
-        passthrough = {name: os.environ[name] for name in PASSTHROUGH_ENV if name in os.environ}
-        passthrough["PATH"] = os.pathsep.join([str(self.shims_dir), passthrough.get("PATH", os.defpath)])
+        path = os.environ.get("PATH", os.defpath)
         return (
-            passthrough
-            | BASE_ENV
-            | {"HOME": str(self.home), "PI_CODING_AGENT_DIR": str(self.agent_dir)}
+            BASE_ENV
+            | {
+                "PATH": path if installing else os.pathsep.join([str(self.shims_dir), path]),
+                "HOME": str(self.home),
+                "PI_CODING_AGENT_DIR": str(self.agent_dir),
+                "TMPDIR": str(self.root / "tmp"),
+                "TMP": str(self.root / "tmp"),
+                "TEMP": str(self.root / "tmp"),
+                "XDG_CONFIG_HOME": str(self.home / ".config"),
+                "XDG_CACHE_HOME": str(self.home / ".cache"),
+                "XDG_DATA_HOME": str(self.home / ".local/share"),
+                "XDG_STATE_HOME": str(self.home / ".local/state"),
+                "CODEX_HOME": str(self.home / ".codex"),
+                "npm_config_cache": str(self.root / "npm-cache"),
+                "npm_config_userconfig": str(self.root / "npmrc-user"),
+                "npm_config_globalconfig": str(self.root / "npmrc-global"),
+            }
             | self.env_overrides
             | (extra or {})
         )
 
     @property
     def shims_dir(self) -> Path:
-        """Directory of command shims prepended to `PATH`."""
+        """Command shims prepended to scenario PATH."""
         return self.root / "shims"
 
     @property
     def settings_path(self) -> Path:
-        """Path of the sandbox `settings.json`."""
+        """Sandbox settings file."""
         return self.agent_dir / "settings.json"
 
     def settings(self) -> dict[str, Any]:
-        """Return the sandbox settings.
+        """Read only this sandbox's settings.
 
         Returns:
-            dict[str, Any]: parsed `settings.json`, empty when absent.
+            dict[str, Any]: settings, empty when absent.
         """
-        if not self.settings_path.is_file():
-            return {}
-        return json.loads(self.settings_path.read_text())
+        return json.loads(self.settings_path.read_text()) if self.settings_path.is_file() else {}
 
     def patch_json(self, name: str, overlay: dict[str, Any]) -> None:
-        """Deep-merge `overlay` into an agent-dir JSON file, creating it if needed.
+        """Overlay one sandbox JSON document.
 
         Parameters:
-            name (str): file name relative to the agent dir, e.g. `settings.json`.
-            overlay (dict[str, Any]): values that win.
+            name (str): agent-relative file.
+            overlay (dict[str, Any]): winning values.
         """
         path = self.agent_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
         current = json.loads(path.read_text()) if path.is_file() else {}
         path.write_text(json.dumps(deep_merge(current, overlay), indent=2))
 
 
-def link_installed_extensions(agent_dir: Path, local_overrides: dict[str, Path]) -> None:
-    """Symlink the live `npm/` and per-repo `git/` checkouts into a sandbox agent dir.
+def build_sandbox(root: Path, template_home: Path | None = None) -> Sandbox:
+    """Copy an explicit installed fixture tree, never machine state.
 
     Parameters:
-        agent_dir (Path): sandbox agent dir.
-        local_overrides (dict[str, Path]): repo name -> local checkout used instead of the
-            installed one, e.g. `{"pi-subagents": ~/code/pi-subagents}` to verify a fork
-            before tagging it.
-
-    Raises:
-        FileNotFoundError: an override path does not exist.
-    """
-    live_npm = LIVE_AGENT_DIR / "npm"
-    if live_npm.is_dir():
-        (agent_dir / "npm").symlink_to(live_npm, target_is_directory=True)
-    live_git = LIVE_AGENT_DIR / "git"
-    if not live_git.is_dir():
-        return
-    for repo in sorted(live_git.glob("*/*/*")):
-        relative = repo.relative_to(live_git)
-        target = agent_dir / "git" / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        source = local_overrides.get(repo.name, repo)
-        if not source.exists():
-            raise FileNotFoundError(f"Local override for `{repo.name}` does not exist: '{source}'")
-        target.symlink_to(source, target_is_directory=True)
-
-
-def local_overrides_from_env() -> dict[str, Path]:
-    """Parse `HARNESS_LOCAL`, a comma list of `name` or `name=path` checkouts to test.
-
-    A bare `name` means `~/code/<name>`.
+        root (Path): new sandbox root.
+        template_home (Path | None): installed throwaway HOME; absent builds a bare fixture.
 
     Returns:
-        dict[str, Path]: repo name -> checkout path.
-    """
-    overrides: dict[str, Path] = {}
-    for item in filter(None, (part.strip() for part in os.environ.get("HARNESS_LOCAL", "").split(","))):
-        name, _, raw_path = item.partition("=")
-        overrides[name] = Path(raw_path or HOME / "code" / name).expanduser().resolve()
-    return overrides
-
-
-def build_sandbox(root: Path, template_home: Path, local_overrides: dict[str, Path] | None = None) -> Sandbox:
-    """Create a sandbox from a pre-rendered chezmoi home.
-
-    Parameters:
-        root (Path): empty scratch directory.
-        template_home (Path): output of `render_chezmoi_pi_tree`, copied per sandbox.
-        local_overrides (dict[str, Path] | None): see `link_installed_extensions`.
-
-    Returns:
-        Sandbox: ready-to-launch sandbox.
+        Sandbox: independent writable home and package copies.
     """
     home = root / "home"
-    shutil.copytree(template_home, home, symlinks=True)
+    if template_home is not None:
+        shutil.copytree(template_home, home, symlinks=False)
     agent_dir = home / ".pi" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
-    link_installed_extensions(agent_dir, local_overrides or {})
-    # Preserve public cached helpers in offline mode, without sharing a writable
-    # live bin directory or depending on subprocess-based PATH discovery.
-    for name in ("fd", "rg", "fd.exe", "rg.exe"):
-        helper = LIVE_AGENT_DIR / "bin" / name
-        if helper.is_file():
-            destination = agent_dir / "bin" / name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(helper, destination)
-    # Offline sandboxes need the same public model metadata as the installed harness.
-    # Copy, never symlink: a sandbox must not refresh or mutate the live catalogue.
-    catalogue = LIVE_AGENT_DIR / "models-store.json"
-    if catalogue.is_file():
-        shutil.copyfile(catalogue, agent_dir / catalogue.name)
-    # The live `lastChangelogVersion` rides along in the render; a stale one makes pi print its
-    # whole changelog over the first frame. Scenarios want a quiet start.
-    settings_path = agent_dir / "settings.json"
-    if settings_path.is_file():
-        settings = json.loads(settings_path.read_text())
-        settings["lastChangelogVersion"] = SILENT_CHANGELOG_VERSION
-        settings["packages"] = with_local_npm_packages(
-            without_excluded_packages(settings.get("packages", [])), local_overrides or {}
-        )
-        # A faux error must fail once, not back off and replay; retries make timing nondeterministic.
-        settings["retry"] = {"enabled": False}
-        settings_path.write_text(json.dumps(settings, indent=2))
-    auth_path = agent_dir / "auth.json"
-    auth_path.write_text(json.dumps(FAKE_AUTH, indent=2))
-    auth_path.chmod(0o600)
     workdir = root / "work"
     workdir.mkdir()
-    box = Sandbox(root=root, home=home, agent_dir=agent_dir, workdir=workdir)
-    # Auto-titles default to a real provider even in otherwise faux TUI runs.
-    # Explicit title scenarios opt back in with a faux model after sandbox creation.
+    (root / "tmp").mkdir()
+    box = Sandbox(root, home, agent_dir, workdir)
+    for name in ("npmrc-user", "npmrc-global"):
+        (root / name).touch()
+    defaults = {"lastChangelogVersion": SILENT_CHANGELOG_VERSION, "retry": {"enabled": False}}
+    box.patch_json("settings.json", deep_merge(defaults, box.settings()))
+    auth = agent_dir / "auth.json"
+    auth.write_text(json.dumps(FAKE_AUTH))
+    auth.chmod(0o600)
     box.patch_json("pi-session-kit.json", {"titles": {"enabled": False}})
-    # MCP servers stay registered but disabled: the configured `rea` server is an `npx` download
-    # and a 207-tool stdio process, neither of which a faux sandbox may spawn or wait for.
-    if (agent_dir / "mcp.json").is_file():
-        servers = json.loads((agent_dir / "mcp.json").read_text()).get("mcpServers", {})
-        box.patch_json("mcp.json", {"mcpServers": {name: {"enabled": False} for name in servers}})
     install_shims(box.shims_dir)
     return box
 
 
-def package_name(source: str) -> str:
-    """Name of the package a settings source installs, for npm, git, URL, and path sources.
+def install_stack(root: Path, stack_path: Path) -> Sandbox:
+    """Install every supplied source through Pi, then apply explicit overlays and exclusions.
 
     Parameters:
-        source (str): e.g. `npm:@scope/name@1.0`, `git:github.com/owner/name@v1`,
-            `https://github.com/owner/name.git`, `~/code/name`.
+        root (Path): new private install root.
+        stack_path (Path): validated package-set input.
 
     Returns:
-        str: the bare package or repo name (`name` for all of the above).
+        Sandbox: installed fixture, suitable for copying to per-test homes.
+
+    Raises:
+        RuntimeError: an actual package install failed, with captured diagnostics.
+        ValueError: an installed npm identity differs from its explicit pin.
+    """
+    stack = load_stack(stack_path)
+    sources = stack.resolved_sources(stack_path)
+    box = build_sandbox(root)
+    LOGGER.info(f"Stack '{stack.name}' sha256={stack_digest(stack_path)}")
+    _install_sources(box, stack, sources)
+    _record_stack(box, stack, stack_path, sources)
+    _configure_fixture_policy(box)
+    return box
+
+
+def _install_sources(box: Sandbox, stack: Stack, sources: list[str]) -> None:
+    """Install resolved sources with declared lifecycle exclusions.
+
+    Parameters:
+        box (Sandbox): private writable installation.
+        stack (Stack): validated exclusion policy.
+        sources (list[str]): resolved package inputs in declaration order.
+
+    Raises:
+        RuntimeError: Pi installation fails, retaining captured output and cause.
+    """
+    for original, source in zip(stack.sources, sources, strict=True):
+        LOGGER.info(f"pi install '{source}'")
+        extra = {"PI_OFFLINE": "0"}
+        if original in stack.disabled_extensions:
+            LOGGER.warning(f"NO INSTALL SCRIPTS '{source}': {stack.disabled_extensions[original]}")
+            extra["npm_config_ignore_scripts"] = "true"
+        try:
+            subprocess.check_output(
+                [*pi_command(), "install", source],
+                cwd=box.workdir,
+                env=box.env(extra, installing=True),
+                text=True,
+                stderr=subprocess.STDOUT,
+                timeout=600,
+            )
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(f"`pi install` failed for '{source}': {error.output[-6000:]}") from error
+
+
+def _record_stack(box: Sandbox, stack: Stack, stack_path: Path, sources: list[str]) -> None:
+    """Verify installed identities and persist portable source settings plus evidence.
+
+    Parameters:
+        box (Sandbox): installed package tree.
+        stack (Stack): explicit settings and exclusions.
+        stack_path (Path): original document for the evidence digest.
+        sources (list[str]): resolved inputs in declaration order.
+
+    Raises:
+        ValueError: an installed npm identity differs from its pin.
+    """
+    packages: list[Any] = []
+    identities = []
+    for original, resolved in zip(stack.sources, sources, strict=True):
+        directory = package_directory(resolved, box.agent_dir)
+        manifest = json.loads((directory / "package.json").read_text())
+        if resolved.startswith("npm:") and manifest["version"] != resolved.rsplit("@", 1)[1]:
+            raise ValueError(f"Installed npm version differs from '{resolved}': '{manifest['version']}'")
+        identities.append({"name": manifest["name"], "version": manifest["version"], "source": resolved})
+        LOGGER.info(f"Installed {manifest['name']}@{manifest['version']} from '{resolved}'")
+        disabled = original in stack.disabled_extensions
+        if disabled:
+            LOGGER.warning(f"NOT LOADED '{resolved}': {stack.disabled_extensions[original]}")
+        # Pi can save local sources relative to its agent directory. The stack's deliberate
+        # absolute inputs and exclusions must survive copying that tree to another HOME.
+        packages.append({"source": resolved, "extensions": []} if disabled else resolved)
+    box.patch_json("settings.json", stack.settings | {"packages": packages})
+    (box.agent_dir / "stack-name").write_text(stack.name)
+    (box.agent_dir / "stack-evidence.json").write_text(
+        json.dumps(
+            {
+                "stack": stack.name,
+                "sha256": stack_digest(stack_path),
+                "packages": identities,
+                "disabled_extensions": stack.disabled_extensions,
+            },
+            indent=2,
+        )
+    )
+
+
+def _configure_fixture_policy(box: Sandbox) -> None:
+    """Configure deterministic fixture policy independently of distribution evidence.
+
+    Parameters:
+        box (Sandbox): installed fixture whose runtime policy is patched.
+    """
+    # Fixture policy, not rendered owner preferences. The real deferred engine consumes this file.
+    box.patch_json(
+        "deferred-tools.json",
+        {
+            "alwaysActive": [
+                "read",
+                "edit",
+                "write",
+                "bash",
+                "grep",
+                "find",
+                "ls",
+                "Agent",
+                "todo",
+                "git_status",
+                "git_diff",
+                "git_log",
+                "git_show",
+                "git_commit",
+                "git_worktree_list",
+                "ssh_exec",
+                "monitor_read",
+                "search_tools",
+                "memory_read",
+                "memory_write",
+                "memory_search",
+                "scratchpad",
+                "web_search",
+                "fetch_content",
+                "source_check",
+                "get_search_content",
+                "get_subagent_result",
+                "steer_subagent",
+                "plan_mode_question",
+                "plan_mode_complete",
+            ],
+        },
+    )
+    box.patch_json("subagents.json", {"workflowsEnabled": False})
+    box.patch_json(
+        "subscription-router.json",
+        {"profiles": {"default": {"name": "Stack", "chain": [{"model": "anthropic/claude-haiku-4-5"}]}}},
+    )
+    workflows = box.home / ".pi" / "workflows" / "settings.json"
+    workflows.parent.mkdir(parents=True, exist_ok=True)
+    workflows.write_text('{"keywordTriggerEnabled":false}')
+
+
+def package_name(source: str) -> str:
+    """Return the short name of an explicit npm/git/path source.
+
+    Parameters:
+        source (str): package source.
+
+    Returns:
+        str: short name.
     """
     spec = source.removeprefix("npm:").removeprefix("git:").rstrip("/")
     last = spec.rsplit("/", 1)[-1]
@@ -318,61 +337,11 @@ def package_name(source: str) -> str:
     return spec.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
 
 
-def without_excluded_packages(packages: list[Any]) -> list[Any]:
-    """Drop packages named in `SANDBOX_EXCLUDED_PACKAGES` from a settings `packages` list.
-
-    Parameters:
-        packages (list[Any]): source strings or `{source: ...}` objects.
-
-    Returns:
-        list[Any]: the list without excluded packages, order kept.
-    """
-
-    def source(package: Any) -> str:
-        return str(package.get("source", "")) if isinstance(package, dict) else str(package)
-
-    return [package for package in packages if package_name(source(package)) not in SANDBOX_EXCLUDED_PACKAGES]
-
-
-def with_local_npm_packages(packages: list[Any], local_overrides: dict[str, Path]) -> list[Any]:
-    """Point `npm:<name>` sources at a `HARNESS_LOCAL` checkout, in the sandbox settings only.
-
-    Only the npm packages in `NPM_LOCAL_OVERRIDES` are eligible, so `HARNESS_LOCAL=pi-claude-auth`
-    swaps the sandbox's `npm:pi-claude-auth[@version]` entry for the checkout path and leaves the
-    live `~/.pi/agent/npm` tree alone. Other entries, and git overrides, are untouched.
-
-    Parameters:
-        packages (list[Any]): source strings or `{source: ...}` objects.
-        local_overrides (dict[str, Path]): `HARNESS_LOCAL` name -> checkout.
-
-    Returns:
-        list[Any]: the list with eligible sources replaced by the checkout path, order kept.
-
-    Raises:
-        FileNotFoundError: an eligible override path does not exist.
-    """
-    wanted = {name: local_overrides[name] for name in NPM_LOCAL_OVERRIDES if name in local_overrides}
-    for name, path in wanted.items():
-        if not path.exists():
-            raise FileNotFoundError(f"Local override for `{name}` does not exist: '{path}'")
-
-    def replaced(package: Any) -> Any:
-        source = str(package.get("source", "")) if isinstance(package, dict) else str(package)
-        if not source.startswith("npm:"):
-            return package
-        name = source.removeprefix("npm:").rpartition("@")[0] or source.removeprefix("npm:")
-        if name not in wanted:
-            return package
-        return package | {"source": str(wanted[name])} if isinstance(package, dict) else str(wanted[name])
-
-    return [replaced(package) for package in packages]
-
-
 def install_shims(shims_dir: Path) -> None:
-    """Write the `SHIMMED_COMMANDS` stand-ins.
+    """Write non-destructive policy stand-ins.
 
     Parameters:
-        shims_dir (Path): directory to create.
+        shims_dir (Path): private executable directory.
     """
     shims_dir.mkdir(parents=True, exist_ok=True)
     for name in SHIMMED_COMMANDS:
@@ -382,14 +351,13 @@ def install_shims(shims_dir: Path) -> None:
 
 
 def enable_faux_models(box: Sandbox, models: list[str]) -> None:
-    """Append faux `provider/id` entries to the sandbox `enabledModels`.
-
-    Subagents with `scopeModels` only run on enabled models, so faux children need this.
+    """Make declared faux child models eligible for scoped dispatch.
 
     Parameters:
-        box (Sandbox): sandbox to patch.
-        models (list[str]): `provider/id` entries.
+        box (Sandbox): fixture to patch.
+        models (list[str]): provider/model identities.
     """
-    settings = box.settings()
-    enabled = list(dict.fromkeys([*settings.get("enabledModels", []), *models]))
-    box.patch_json("settings.json", {"enabledModels": enabled})
+    box.patch_json(
+        "settings.json",
+        {"enabledModels": list(dict.fromkeys([*box.settings().get("enabledModels", []), *models]))},
+    )

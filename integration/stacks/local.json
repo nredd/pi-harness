@@ -1,0 +1,22 @@
+{
+  "name": "local",
+  "sources": [
+    "../../forks/pi-claude-auth",
+    "npm:pi-web-access@0.36.0",
+    "../../forks/rpiv-todo",
+    "../../forks/pi-subagents",
+    "../../packages/subscription-router",
+    "../../forks/pi-plan-mode",
+    "../../packages/dev-tools",
+    "npm:pi-deferred-context-engine@0.5.0",
+    "npm:@quintinshaw/pi-dynamic-workflows@3.14.0",
+    "npm:pi-memory@0.4.2",
+    "../../forks/pi-computer-use",
+    "../../packages/session-kit",
+    "../../packages/preset"
+  ],
+  "settings": {"quietStartup": true, "fullscreen": true},
+  "disabled_extensions": {
+    "../../forks/pi-computer-use": "Installed on both OSes, never loaded: macOS helper needs GUI/TCC; Linux has no supported helper. Fork-owned desktop tests remain opt-in."
+  }
+}

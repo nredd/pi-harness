@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from harness.paths import PROVIDERS_DIR
+from harness.stack import find_package, package_directory
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -159,10 +160,12 @@ def install_usage_fixture(box: Sandbox, *, keep_router: bool = False) -> UsageFi
     fixture.set()
     if not keep_router:
         packages = box.settings().get("packages", [])
+        router = find_package(ROUTER_PACKAGE, packages, box.agent_dir)
         kept = [
             p
             for p in packages
-            if ROUTER_PACKAGE not in str(p.get("source", "") if isinstance(p, dict) else p)
+            if package_directory(str(p.get("source", "") if isinstance(p, dict) else p), box.agent_dir)
+            != router
         ]
         settings = box.settings() | {"packages": kept}
         box.settings_path.write_text(json.dumps(settings, indent=2))

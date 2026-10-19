@@ -1,7 +1,7 @@
 """Stats histories and cross-machine fixtures produced by the actual portable CLI.
 
-No snapshot schema is mirrored here. Export/import always runs the chezmoi-rendered,
-standalone artifact, in a producer home with no Pi packages or credentials.
+No snapshot schema is mirrored here. Export/import runs the declared package's standalone
+artifact in a producer home with no Pi packages or credentials.
 
 References:
 - https://github.com/nredd/pi-session-kit

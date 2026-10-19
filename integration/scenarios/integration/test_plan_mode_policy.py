@@ -14,7 +14,7 @@ import pytest
 
 from harness.headless import RunResult, ToolOutcome, run_headless
 from harness.paths import GIT_BIN
-from harness.sandbox import build_sandbox, local_overrides_from_env
+from harness.sandbox import build_sandbox
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -81,7 +81,7 @@ def policy_run(tmp_path_factory: pytest.TempPathFactory, template_home: Path) ->
     Returns:
         dict[str, ToolOutcome]: command -> settled outcome.
     """
-    box = build_sandbox(tmp_path_factory.mktemp("plan-policy"), template_home, local_overrides_from_env())
+    box = build_sandbox(tmp_path_factory.mktemp("plan-policy"), template_home)
     init_repo(box.home / "code" / "pi")
     init_repo(box.home / ".local" / "share" / "chezmoi")
     cwd = box.home / "code" / "pi-plan-mode"
