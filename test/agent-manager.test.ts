@@ -848,6 +848,31 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
       expect(vi.mocked(resumeAgent).mock.calls.at(-1)![2]!.maxTurns).toBe(50);
     });
 
+    it.each([false, true])("preserves outcome precedence and fresh controllers (background=%s)", async (isBackground) => {
+      const id = await spawnSettled();
+      const record = manager.getRecord(id)!;
+      const cases = [
+        { aborted: false, steered: true, failure: undefined, stopped: false, status: "steered" },
+        { aborted: false, steered: true, failure: "provider failed", stopped: false, status: "error" },
+        { aborted: true, steered: true, failure: "provider failed", stopped: false, status: "aborted" },
+        { aborted: true, steered: true, failure: "provider failed", stopped: true, status: "stopped" },
+      ];
+      for (const outcome of cases) {
+        const previousController = record.abortController;
+        vi.mocked(resumeAgent).mockImplementation(async (_session, _prompt, opts) => {
+          expect(record.abortController).not.toBe(previousController);
+          expect(opts.signal?.aborted).toBe(false);
+          if (outcome.stopped) manager.abort(id);
+          return { text: "this invocation", ...outcome };
+        });
+        const resumed = await manager.resume(id, "more", undefined, { isBackground });
+        if (isBackground) await resumed!.promise;
+        expect(record.status).toBe(outcome.status);
+        expect(record.result).toBe("this invocation");
+        expect(record.completedAt).toBeDefined();
+      }
+    });
+
     it("inline: abort() reaches the resumed run and the record stays stopped", async () => {
       const id = await spawnSettled();
       let runSignal: AbortSignal | undefined;

@@ -190,6 +190,42 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     }
   });
 
+  it("delivers queued RPC and tool steers once each without duplicate events on admission", async () => {
+    vi.mocked(runAgent).mockReset();
+    writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({ maxConcurrent: 1, schedulingEnabled: false }));
+    const { pi, tools, lifecycle, busHandlers } = makePi();
+    subagentsExtension(pi);
+    await lifecycle.get("session_start")({}, ctx());
+    const sessionSteer = vi.fn(async () => {});
+    const session = { steer: sessionSteer, subscribe: () => () => {}, dispose: vi.fn(), messages: [] } as never;
+    let finishBlocker!: () => void;
+    vi.mocked(runAgent).mockImplementation((_c, _t, prompt, opts) => {
+      if (prompt === "queued") opts.onSessionCreated?.(session);
+      return new Promise(resolve => {
+        if (prompt === "blocker") finishBlocker = () => resolve({ responseText: "done", session, aborted: false, steered: false });
+      });
+    });
+    try {
+      for (const prompt of ["blocker", "queued"]) {
+        await busHandlers.get("subagents:rpc:spawn")!({ requestId: prompt, type: "general-purpose", prompt, options: { description: prompt, isBackground: true } });
+      }
+      const id: string = pi.events.emit.mock.calls.find(([name]: [string]) => name === "subagents:rpc:spawn:reply:queued")[1].data.id;
+      expect(runAgent).toHaveBeenCalledTimes(1);
+      await busHandlers.get("subagents:rpc:steer")!({ requestId: "steer-queued", agentId: id, message: "RPC correction" });
+      const toolResult = await tools.get("steer_subagent").execute("steer-tool", { agent_id: id, message: "tool correction" }, undefined, undefined, ctx());
+      expect(toolResult.content[0].text).toContain("status: queued");
+      const steered = () => pi.events.emit.mock.calls.filter(([name]: [string]) => name === "subagents:steered");
+      expect(steered().map(([, payload]: [string, { message: string }]) => payload.message)).toEqual(["RPC correction", "tool correction"]);
+      expect(sessionSteer).not.toHaveBeenCalled();
+      finishBlocker();
+      await vi.waitFor(() => expect(runAgent).toHaveBeenCalledTimes(2));
+      expect(sessionSteer.mock.calls).toEqual([["RPC correction"], ["tool correction"]]);
+      expect(steered()).toHaveLength(2);
+    } finally {
+      await lifecycle.get("session_shutdown")();
+    }
+  });
+
   it("renders an RPC-spawned agent in the native widget while it is running", async () => {
     const { pi, lifecycle, busHandlers } = makePi();
     const activeCtx = ctx(true);
