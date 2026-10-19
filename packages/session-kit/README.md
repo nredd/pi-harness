@@ -33,7 +33,10 @@ Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
 }
 ```
 
-Every module defaults on. Malformed config reports a diagnostic and uses defaults. No daemon or
+Every module defaults on. Malformed config reports a diagnostic and uses defaults. SDK hosts can use
+`createSessionKit({ config, agentDir, monitorRoot })` from `src/index.ts`: explicit `config` avoids
+loading the config file, `agentDir` scopes config/rules/title aliases, and `monitorRoot` isolates
+monitor pidfiles and orphan sweeps. Omitted options keep the CLI defaults. No daemon or
 persistent cron is installed. Deferred-tool configurations need `goal_update` in `neverDefer`
 (without forcing it active), and `monitor_read` in `alwaysActive` and `neverDefer` for Plan mode.
 
@@ -168,7 +171,8 @@ No private subagent marker is imported. Existing tool permissions are not widene
 A prior settle handler's continuation (including a todo reminder) suppresses the goal nudge;
 the kit does not append a second reminder or request another continuation.
 
-`npm run check`: Biome, TypeScript and Vitest. `pi-harness-e2e` adds faux-provider integration tests,
-real tmux width matrices (60 through 320 columns), Plan-mode tests, background-agent/todo interaction
-and two-pane lifecycle/isolation scenarios. Run its full `make verify` before tags or pins. Real
-monitor/display testing remains manual; see that repo's `docs/footer-cache-ultrawide.md`.
+`test/scenarios/` drives the real kit through core's in-process session harness under Vitest and Bun,
+covering goals, file-backed restore, child rename/reload, read-rule injection and print-mode titles.
+`npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
+Cross-extension Plan/subagent/todo interactions and terminal rendering remain in the integration tier;
+`docs/verification-rebuild.md` at the monorepo root tracks their destinations.
