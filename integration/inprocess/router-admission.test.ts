@@ -1,9 +1,5 @@
 /** Admission refusals traverse the real subagents RPC client and router policy. */
-import {
-	type FauxProviderRegistration,
-	fauxAssistantMessage,
-	registerFauxProvider,
-} from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { GoalStack, outcomes, spoken, tool } from "./goal-support.ts";
 
@@ -14,11 +10,8 @@ const CHAIN = [
 
 describe("router/subagents admission", () => {
 	let stack: GoalStack;
-	let physical: FauxProviderRegistration[] = [];
 	afterEach(async () => {
 		await stack?.cleanup();
-		for (const p of physical) p.unregister();
-		physical = [];
 	});
 
 	for (const policy of ["wait", "fail", "capped"] as const) {
@@ -28,10 +21,7 @@ describe("router/subagents admission", () => {
 				: `${policy} policy ${policy === "wait" ? "parks" : "refuses"} exhausted child`,
 			async () => {
 				stack = new GoalStack();
-				for (const { provider, id } of CHAIN) {
-					stack.usage.set(provider, 100);
-					physical.push(registerFauxProvider({ provider, models: [{ id }] }));
-				}
+				const physical = stack.registerPhysical(CHAIN, 100);
 				const scheduled: unknown[] = [];
 				const started: unknown[] = [];
 				const h = await stack.start(
@@ -48,14 +38,6 @@ describe("router/subagents admission", () => {
 					{ useModelRuntimeStream: true },
 				);
 				for (const p of physical) {
-					const model = p.getModel();
-					h.session.modelRuntime.registerProvider(model.provider, {
-						baseUrl: model.baseUrl,
-						apiKey: "faux",
-						api: p.api,
-						models: p.models,
-					});
-					expect(await h.session.modelRuntime.getAuth(model)).toBeDefined();
 					p.setResponses([fauxAssistantMessage("ANSWERED on physical provider")]);
 				}
 				h.setResponses([
@@ -72,6 +54,10 @@ describe("router/subagents admission", () => {
 				const result = outcomes(h, "Agent");
 				expect(result).toHaveLength(1);
 				expect(result[0]?.isError).toBe(policy !== "wait");
+				// The native admission timeout fails open; only a router reply yields this block.
+				expect(result[0]?.text).toContain(
+					`Subscription quota for router/spike is exhausted; it resets at ${new Date(stack.clock.now() + 3_600_000).toISOString()}.`,
+				);
 				expect(result[0]?.text).toContain(policy === "wait" ? "Queued" : "was not started");
 				expect(result[0]?.text).not.toContain(policy === "wait" ? "was not started" : "Queued");
 				expect(spoken(h)).toEqual(["DRIVER DONE"]);
