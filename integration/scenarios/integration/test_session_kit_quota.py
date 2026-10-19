@@ -1,4 +1,4 @@
-"""Real subscription-router quota recovery/admission with session-kit goals and loops.
+"""Remaining quota admission scenario, pending an injectable subagent scheduler clock.
 
 Only router e2e faux providers run. Its usage stub seeds the REAL router's shared
 tracker before the router loads; no provider-error stand-in or live credentials.
@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from harness.headless import RunResult, run_headless
 from harness.paths import FAUX_EXTENSION, pi_command
 from harness.pinned import pinned_checkout
 from harness.quota import fixture_env
@@ -38,7 +37,6 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.integration
 
-QUOTA_ERROR = "insufficient_quota: You exceeded your current quota"
 CHAIN = ["spike-a/sonnet-a", "spike-b/terra-b"]
 
 
@@ -80,80 +78,6 @@ def profile(box: Sandbox, chain: list[str], policy: str = "wait") -> None:
             {"profiles": {"spike": {"chain": [{"model": m} for m in chain], "exhaustionPolicy": policy}}}
         )
     )
-
-
-def assistants(result: RunResult) -> list[dict[str, Any]]:
-    """Return settled physical assistant messages, including quota errors.
-
-    Parameters:
-        result (RunResult): recorded pi events.
-
-    Returns:
-        list[dict[str, Any]]: assistant messages in order.
-    """
-    return [e["message"] for e in result.of_type("message_end") if e["message"].get("role") == "assistant"]
-
-
-@pytest.mark.parametrize("kit_first", [False, True], ids=["router-first", "kit-first"])
-def test_settled_chain_exhaustion_pauses_goal_without_spin(sandbox: Sandbox, kit_first: bool) -> None:
-    """A fresh quota confirmation exhausts the entire chain; no nudge or repeat request follows."""
-    profile(sandbox, CHAIN[:1], "fail")
-    result = run_headless(
-        sandbox,
-        {},
-        ["/goal finish quota work --turns 10", "go"],
-        model="router/spike",
-        load_faux=False,
-        extra_args=extensions(sandbox, "faux-quota.ext.ts", kit_first=kit_first),
-        env={"SPIKE_ERROR": QUOTA_ERROR},
-    )
-    assert result.returncode == 0, result.transcript()
-    messages = assistants(result)
-    assert len(messages) == 2, result.transcript()
-    assert [m["provider"] for m in messages] == ["spike-a", "spike-a"]
-    assert messages[-1]["errorMessage"] == QUOTA_ERROR
-    assert "usage.get spike-a -> confirmed=true" in result.stderr, result.transcript()
-    assert len(result.of_type("agent_settled")) == 1, result.events
-    assert nudges(sandbox) == []
-    goal = goal_states(sandbox)[-1]
-    assert goal is not None
-    assert (goal["status"], goal["reason"], goal["turns"]) == ("paused", "provider error", 2), goal
-
-
-@pytest.mark.parametrize(
-    "error", [QUOTA_ERROR, "429 Too Many Requests: rate_limit_error"], ids=["settle", "retry"]
-)
-def test_router_recovery_owns_continuation_before_goal(sandbox: Sandbox, error: str) -> None:
-    """Router recovery advances once, without a goal nudge on the failed quota boundary."""
-    profile(sandbox, CHAIN)
-    sandbox.patch_json("settings.json", {"retry": {"enabled": True, "maxRetries": 1, "baseDelayMs": 10}})
-    result = run_headless(
-        sandbox,
-        {},
-        ["/goal finish quota work --turns 4", "go"],
-        model="router/spike",
-        load_faux=False,
-        extra_args=extensions(sandbox, "faux-quota.ext.ts"),
-        env={"SPIKE_ERROR": error},
-    )
-    assert result.returncode == 0, result.transcript()
-    messages = assistants(result)
-    assert [m["provider"] for m in messages] == ["spike-a", "spike-a", "spike-b", "spike-b"], (
-        result.transcript()
-    )
-    assert messages[1]["errorMessage"] == error
-    assert "usage.get spike-a -> confirmed=true" in result.stderr, result.transcript()
-    assert len(result.of_type("auto_retry_start")) == (1 if error.startswith("429") else 0), result.events
-    assert len(nudges(sandbox)) == 1, nudges(sandbox)
-    # Both recovered calls have the same user count only until the successful settle:
-    # the first sees the original user + tool result, never a premature goal nudge.
-    roles = [line for line in result.stderr.splitlines() if "spike-b request roles:" in line]
-    assert len(roles) == 2, result.stderr
-    assert roles[0].split("roles: ")[1].split(",").count("user") == 1, roles
-    assert roles[1].split("roles: ")[1].split(",").count("user") == 2, roles
-    goal = goal_states(sandbox)[-1]
-    assert goal is not None
-    assert (goal["status"], goal["turns"]) == ("budget", 4), goal
 
 
 class Rpc:
@@ -272,29 +196,6 @@ def rpc(box: Sandbox, args: list[str], model: str, env: dict[str, str]) -> Itera
                 process.stdin.close()
             if process.stdout is not None:
                 process.stdout.close()
-
-
-def test_live_loop_and_goal_pause_after_confirmed_quota_failure(sandbox: Sandbox) -> None:
-    """Leave the session alive after exhaustion: neither loop ticks nor goal wake restart it."""
-    profile(sandbox, CHAIN[:1], "fail")
-    with rpc(
-        sandbox, extensions(sandbox, "faux-quota.ext.ts"), "router/spike", {"SPIKE_ERROR": QUOTA_ERROR}
-    ) as client:
-        client.command("/loop 30s quota-loop --max 10")
-        client.command("/goal finish quota work --turns 10")
-        client.wait(lambda e: e.get("type") == "agent_settled")
-        client.observe(5)
-        client.command("/loop list")
-        listing = client.wait(
-            lambda e: e.get("type") == "extension_ui_request" and "0/10 runs" in e.get("message", "")
-        )
-        assert "paused: provider error" in listing["message"], listing
-        assert len([e for e in client.events if e.get("type") == "agent_start"]) == 1, client.events
-        assert nudges(sandbox) == []
-        goal = goal_states(sandbox)[-1]
-        assert goal is not None
-        assert (goal["status"], goal["reason"]) == ("paused", "provider error"), goal
-    assert "usage.get spike-a -> confirmed=true" in (sandbox.root / "quota-rpc.stderr").read_text()
 
 
 @pytest.mark.parametrize("policy", ["wait", "fail"])

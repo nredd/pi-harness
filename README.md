@@ -15,7 +15,7 @@ Layout:
 - `packages/`: independently versioned plugins and optional preset.
 - `forks/`: exact upstream-fork source commits (submodules), with their native build systems. See
   [fork ownership](docs/forks.md).
-- `integration/inprocess/`: private `A-stack` workspace, real extension pairs on core's harness, Vitest + Bun.
+- `integration/inprocess/`: private `A-stack` scenarios on core's real harness, Vitest + Bun: Plan/todos, goals/loops, subagent delivery, router quota/admission. Port limits: [here](docs/stack-goal-ports.md).
 - `integration/scenarios/`: remaining E2E scenarios, including the existing performance gates.
 - `benchmarks/comparison/`: historical comparison experiments and annotated results.
 - `scripts/`: build, release, and chezmoi integration implementation.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Run the faux e2e against the installed `pi` in a throwaway agent dir, and assert the outcome.
-# Usage: e2e/run.sh [all|wait|fail|capped|no-router]
+# Usage: e2e/run.sh [all|wait|no-router]
 #
-# wait|fail|capped|no-router: pi-subagents dispatch admission and the exhaustion policy
+# wait|no-router: pi-subagents dispatch admission (fail/capped moved to integration/inprocess)
 # (router + pi-subagents; `no-router` is the enterprise profile, subagents alone).
 # pi-subagents comes from $PI_SUBAGENTS_DIR (default ~/code/pi-subagents).
 set -euo pipefail
@@ -12,7 +12,7 @@ scenario="${1:-all}"
 
 if [[ "$scenario" == all ]]; then
   status=0
-  for each in wait fail capped no-router; do
+  for each in wait no-router; do
     echo "=== $each"
     "$0" "$each" || status=1
   done
@@ -27,7 +27,7 @@ profile() { # $1 = extra profile fields, with a leading comma
 expect=() # grep -E patterns that must match
 reject=() # grep -E patterns that must not match
 case "$scenario" in
-  wait|fail|capped|no-router)
+  wait|no-router)
     [[ -d "$subagents" ]] || { echo "pi-subagents not found at $subagents (set PI_SUBAGENTS_DIR)" >&2; exit 2; }
     export SPIKE_BLOCKED=1
     model=spike-main/driver
@@ -35,10 +35,6 @@ case "$scenario" in
     case "$scenario" in
       wait) profile ', "exhaustionPolicy": "wait"' >"$agent/subscription-router.json"
         expect=("Queued" "DRIVER DONE") reject=("was not started") ;;
-      fail) profile ', "exhaustionPolicy": "fail"' >"$agent/subscription-router.json"
-        expect=("was not started" "DRIVER DONE") reject=("Queued") ;;
-      capped) profile ', "maxWaitMinutes": 30' >"$agent/subscription-router.json"
-        expect=("was not started" "DRIVER DONE") reject=("Queued") ;;
       no-router)
         # Enterprise: no router loaded, so the Agent call is admitted and the child runs on a physical model.
         export SPIKE_AGENT_MODEL=spike-b/terra-b SPIKE_BACKGROUND=0 SPIKE_BLOCKED=0
