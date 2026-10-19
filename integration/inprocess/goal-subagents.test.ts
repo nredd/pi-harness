@@ -4,11 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getCurrentTools } from "@earendil-works/pi-ai/compat";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import {
-	type FauxProviderRegistration,
-	fauxAssistantMessage,
-	registerFauxProvider,
-} from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { complete, deferred, GoalStack, goalStates, nudges, outcomes, spoken, tick, tool } from "./goal-support.ts";
@@ -26,12 +22,10 @@ function agent(background: boolean) {
 
 describe("goal and real subagent sessions", () => {
 	let stack: GoalStack;
-	let child: FauxProviderRegistration | undefined;
 	const releases: (() => void)[] = [];
 	afterEach(async () => {
 		for (const release of releases.splice(0)) release();
 		await stack?.cleanup();
-		child?.unregister();
 	});
 
 	/** Load the kit through the child's actual resource loader as well as the parent factory. */
@@ -55,20 +49,12 @@ describe("goal and real subagent sessions", () => {
 				Object.fromEntries(["titles", "rules", "monitor", "diff", "stats"].map((f) => [f, { enabled: false }])),
 			),
 		);
-		stack.usage.set("kid", 0);
-		child = registerFauxProvider({ provider: "kid", models: [{ id: "child" }] });
+		const [child] = stack.registerPhysical([{ provider: "kid", id: "child" }]);
+		if (!child) throw new Error("Missing physical child provider");
 		const h = await stack.start(
 			[await stack.subagents(), stack.router([{ provider: "kid", id: "child" }]), stack.kit(), ...extra],
 			{ useModelRuntimeStream: true },
 		);
-		const model = child.getModel();
-		h.session.modelRuntime.registerProvider("kid", {
-			baseUrl: model.baseUrl,
-			apiKey: "faux",
-			api: child.api,
-			models: child.models,
-		});
-		expect(await h.session.modelRuntime.getAuth(model)).toBeDefined();
 		return { h, child };
 	}
 

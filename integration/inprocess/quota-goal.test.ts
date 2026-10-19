@@ -1,9 +1,5 @@
 /** Quota settlement/retry competes with goal continuation in the actual router/kit stack. */
-import {
-	type FauxProviderRegistration,
-	fauxAssistantMessage,
-	registerFauxProvider,
-} from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { GoalStack, goalStates, nudges, spoken, tool } from "./goal-support.ts";
@@ -17,20 +13,14 @@ const CHAIN = [
 
 describe("router quota and goal settlement", () => {
 	let stack: GoalStack;
-	let providers: FauxProviderRegistration[] = [];
 	afterEach(async () => {
 		await stack?.cleanup();
-		for (const p of providers) p.unregister();
-		providers = [];
 	});
 
 	/** Register physical scripted providers in the real runtime, preserving router dispatch. */
 	async function start(kitFirst = false, exhausted = false) {
 		stack = new GoalStack();
-		for (const { provider, id } of CHAIN) {
-			stack.usage.set(provider, 0);
-			providers.push(registerFauxProvider({ provider, models: [{ id }] }));
-		}
+		const providers = stack.registerPhysical(CHAIN);
 		stack.usage.onRefresh = (provider) => {
 			if (provider === "spike-a") stack.usage.set(provider, 100);
 		};
@@ -56,16 +46,6 @@ describe("router quota and goal settlement", () => {
 				settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 }, compaction: { enabled: false } },
 			},
 		);
-		for (const p of providers) {
-			const model = p.getModel();
-			h.session.modelRuntime.registerProvider(model.provider, {
-				baseUrl: model.baseUrl,
-				apiKey: "faux",
-				api: p.api,
-				models: p.models,
-			});
-			expect(await h.session.modelRuntime.getAuth(model)).toBeDefined();
-		}
 		const model = h.session.modelRuntime.getModel("router", "spike");
 		if (!model) throw new Error("Missing real router/spike model");
 		await h.session.setModel(model);

@@ -2,7 +2,13 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { createTestUiContext, type Harness, type HarnessOptions } from "@earendil-works/pi-coding-agent/testing";
+import {
+	createTestUiContext,
+	type FauxProviderRegistration,
+	type Harness,
+	type HarnessOptions,
+	registerFauxProvider,
+} from "@earendil-works/pi-coding-agent/testing";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
 import { configFor, FakeClock } from "../../packages/session-kit/test/scenarios/support.ts";
 import type { Profile } from "../../packages/subscription-router/src/config.ts";
@@ -85,9 +91,30 @@ export class GoalStack {
 	readonly tracker = new ExhaustionTracker(() => this.clock.now());
 	readonly notifications: string[] = [];
 	private readonly live: Harness[] = [];
+	private readonly physical: FauxProviderRegistration[] = [];
 	private serial = 0;
 
-	/** Import after home isolation, keeping fork, router and kit on one timer queue. */
+	/** Own physical transports and quota seeds; callers keep scenario responses and assertions. */
+	registerPhysical(chain: Profile["chain"], usedPercent = 0): FauxProviderRegistration[] {
+		return chain.map(({ provider, id }) => {
+			this.usage.set(provider, usedPercent);
+			const registration = registerFauxProvider({ provider, models: [{ id }] });
+			this.physical.push(registration);
+			return registration;
+		});
+	}
+
+	/**
+	 * Import after home isolation; scheduling and completion delivery share the fake clock.
+	 * Residual fork-native timers (not driven by clock.advance):
+	 * - quota-admission.ts's 100 ms fail-open timeout is cancelled by the cached router reply.
+	 *   Admission tests assert the exact returned quota block, which a timeout cannot produce.
+	 * - AgentManager's retention sweep only evicts old finished records, not dispatches or
+	 *   notices. These tests never wait for retention; the interval is unref'd in its constructor
+	 *   and cleared by dispose(), reached through cleanup()'s awaited quit shutdown below.
+	 * Follow-up fork seams: pass Clock to checkAdmission and AgentManager retention/cleanup
+	 * (including retention timestamps). No asserted path here needs either native timer to fire.
+	 */
 	async subagents(): Promise<ExtensionFactory> {
 		assertHostIdentity("pi-subagents");
 		const url = new URL("../../forks/pi-subagents/src/index.ts", import.meta.url);
@@ -133,6 +160,18 @@ export class GoalStack {
 			...options,
 		});
 		this.live.push(h);
+		for (const p of this.physical) {
+			const model = p.getModel();
+			h.session.modelRuntime.registerProvider(model.provider, {
+				baseUrl: model.baseUrl,
+				apiKey: "faux",
+				api: p.api,
+				models: p.models,
+			});
+			if (!(await h.session.modelRuntime.getAuth(model))) {
+				throw new Error(`Missing faux auth for '${model.provider}/${model.id}'`);
+			}
+		}
 		return h;
 	}
 
@@ -142,6 +181,7 @@ export class GoalStack {
 			await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 			h.cleanup();
 		}
+		for (const p of this.physical.splice(0)) p.unregister();
 		this.home.cleanup();
 	}
 }
