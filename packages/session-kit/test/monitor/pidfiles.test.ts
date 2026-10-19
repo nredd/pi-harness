@@ -105,9 +105,13 @@ describe("sweepOrphans", () => {
 			const dir = join(tmp.dir, "early");
 			const path = writePidfile(dir, "m1", record({ ownerPid: await deadPid(), childPid: pid, pgid: pid, startedAt }));
 			const ready = join(tmp.dir, "cleaner-ready");
+			const t0 = Date.now();
 			cleaner = spawn(process.execPath, [join(import.meta.dirname, "sweep-child.ts"), tmp.dir, ready], {
-				stdio: "ignore",
+				stdio: ["ignore", "inherit", "inherit"],
 			});
+			cleaner.once("exit", (code, signal) => console.error(`DEBUG cleaner exit code=${code} signal=${signal} after ${Date.now() - t0}ms`));
+			const probe = setInterval(() => console.error(`DEBUG t+${Date.now() - t0}ms ready=${existsSync(ready)} pidfile=${readFileSync(path, "utf8")}`), 1000);
+			setTimeout(() => clearInterval(probe), 6000).unref();
 			await waitFor(() => existsSync(ready));
 			expect(JSON.parse(readFileSync(path, "utf8")).members.length).toBeGreaterThan(0);
 			const second = await sweepOrphans(tmp.dir, "other");

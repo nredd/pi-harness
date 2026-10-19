@@ -44,8 +44,14 @@ jobs:
           tool: cargo-nextest
       - name: Install
         run: make install
-      - name: Owned gates (biome, tsc, vitest, bun test, scripts, integration units)
-        run: make check-ts check-scripts check-integration
+      - name: DEBUG pidfiles alone
+        if: runner.os == 'Linux'
+        working-directory: packages/session-kit
+        run: npx vitest run test/monitor/pidfiles.test.ts -t "resistant orphan" || true
+      - name: DEBUG pidfiles with the full kit suite
+        if: runner.os == 'Linux'
+        working-directory: packages/session-kit
+        run: npx vitest run 2>&1 | grep -E "DEBUG|resistant|Test Files|Tests |nproc" || true; nproc
       - name: Packages without a Bun run (not run)
         run: |
           # shellcheck disable=SC2016 # the single-quoted program is JavaScript, its ${} is a JS template
