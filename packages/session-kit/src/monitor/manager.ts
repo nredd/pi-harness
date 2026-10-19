@@ -5,6 +5,7 @@
  */
 
 import { join } from "node:path";
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
 import { type CoalescedBatch, Coalescer } from "./coalescer.ts";
 import { BoundedMatcher } from "./matcher.ts";
 import { formatMessage, type TaggedLine } from "./messages.ts";
@@ -35,6 +36,8 @@ export interface ManagerOptions {
 	ownerPid?: number;
 	coalesceMs?: number;
 	killGraceMs?: number;
+	clock?: Clock;
+	spawnMonitor?: typeof spawnMonitor;
 }
 
 export class MonitorError extends Error {}
@@ -55,7 +58,7 @@ interface Monitor {
 	proc: MonitorProcess;
 	ring: RingBuffer;
 	coalescer: Coalescer<TaggedLine>;
-	timeoutTimer: NodeJS.Timeout;
+	timeoutTimer: TimerHandle;
 	stopReason: "stop" | "timeout" | undefined;
 	/** Resolves after the exit was fully processed (status set, pidfile removed). */
 	done: Promise<void>;
@@ -67,6 +70,7 @@ export class MonitorManager {
 	private readonly opts: Required<Pick<ManagerOptions, "coalesceMs" | "killGraceMs" | "ownerPid">> & ManagerOptions;
 	/** Names of monitors being spawned right now; reserved so parallel starts cannot exceed the caps. */
 	private readonly starting = new Set<string>();
+	private readonly clock: Clock;
 	private counter = 0;
 	private disposed = false;
 	private readonly exitBackstop = () => {
@@ -74,6 +78,7 @@ export class MonitorManager {
 	};
 
 	constructor(opts: ManagerOptions) {
+		this.clock = opts.clock ?? realClock;
 		this.opts = { coalesceMs: COALESCE_MS, killGraceMs: KILL_GRACE_MS, ownerPid: process.pid, ...opts };
 		this.sessionDir = join(opts.root ?? defaultRootDir(), sessionDirName(opts.sessionId, this.opts.ownerPid));
 		// SIGKILL cannot be caught (the pidfile sweep covers that), but any other exit path must not leak children.
@@ -128,18 +133,22 @@ export class MonitorManager {
 		const ring = new RingBuffer();
 		let monitor: Monitor | undefined;
 		const early: string[] = [];
-		const onLine = (text: string) => {
-			if (monitor) this.ingest(monitor, text);
-			else early.push(text);
+		const onLine = (text: string): Promise<void> => {
+			if (monitor) return this.ingest(monitor, text);
+			early.push(text);
+			return Promise.resolve();
+		};
+		const consume = async (splitter: LineSplitter, chunk: Buffer): Promise<void> => {
+			await Promise.all(splitter.push(chunk).map(onLine));
 		};
 		const out = new LineSplitter();
 		const err = new LineSplitter();
 		let proc: MonitorProcess;
 		try {
-			proc = await spawnMonitor(argv, {
+			proc = await (this.opts.spawnMonitor ?? spawnMonitor)(argv, {
 				cwd,
-				onStdout: (chunk) => out.push(chunk).forEach(onLine),
-				onStderr: (chunk) => err.push(chunk).forEach(onLine),
+				onStdout: (chunk) => consume(out, chunk),
+				onStderr: (chunk) => consume(err, chunk),
 			});
 		} catch (error) {
 			throw new MonitorError(`cannot start ${JSON.stringify(argv[0])}: ${(error as Error).message}`);
@@ -176,9 +185,9 @@ export class MonitorManager {
 			this.opts.coalesceMs,
 			(batch) => this.emitBatch(monitor as Monitor, batch),
 			{ sizeOf: (line) => Buffer.byteLength(line.text), matched: (line) => line.matched },
+			this.clock,
 		);
-		const timeoutTimer = setTimeout(() => this.finishRequested(monitor as Monitor, "timeout"), timeoutMs);
-		timeoutTimer.unref();
+		const timeoutTimer = this.clock.setTimeout(() => this.finishRequested(monitor as Monitor, "timeout"), timeoutMs);
 		monitor = {
 			id,
 			name,
@@ -235,7 +244,7 @@ export class MonitorManager {
 		this.disposed = true;
 		const running = [...this.monitors.values()].filter((m) => m.status === "running");
 		for (const m of running) {
-			clearTimeout(m.timeoutTimer);
+			m.timeoutTimer.cancel();
 			m.coalescer.cancel();
 			m.proc.terminate(this.opts.killGraceMs);
 			// Interrupt a busy regex immediately, rather than making shutdown wait for its deadline.
@@ -248,11 +257,16 @@ export class MonitorManager {
 		process.off("exit", this.exitBackstop);
 	}
 
-	private ingest(m: Monitor, text: string): void {
+	private ingest(m: Monitor, text: string): Promise<void> {
 		const line = m.ring.push(text);
-		const add = (matched: boolean) => m.coalescer.add({ ...line, matched });
-		if (m.matcher) m.matcher.test(text, add);
-		else add(false);
+		return new Promise((resolve) => {
+			const add = (matched: boolean) => {
+				m.coalescer.add({ ...line, matched });
+				resolve();
+			};
+			if (m.matcher) m.matcher.test(text, add);
+			else add(false);
+		});
 	}
 
 	private finishRequested(m: Monitor, reason: "stop" | "timeout"): void {
@@ -262,9 +276,9 @@ export class MonitorManager {
 	}
 
 	private onExited(m: Monitor, exit: ExitInfo): void {
-		clearTimeout(m.timeoutTimer);
+		m.timeoutTimer.cancel();
 		m.exit = exit;
-		m.endedAt = Date.now();
+		m.endedAt = this.clock.now();
 		m.status = m.stopReason === "timeout" ? "timeout" : m.stopReason === "stop" ? "stopped" : "exited";
 		removePidfile(this.sessionDir, m.id);
 		const pending = m.coalescer.take();

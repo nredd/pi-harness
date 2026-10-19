@@ -11,6 +11,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { isChildSession, registerChildIdentity, registerParentTool } from "../child.ts";
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
 import type { KitConfig } from "../config.ts";
 import { coordination, planModeActive, planModeEnteredSince, watchQuota, watchStops } from "../shared.ts";
 import {
@@ -52,22 +53,22 @@ export function turnTokens(message: unknown): number {
 	return (m.usage.input ?? 0) + (m.usage.output ?? 0) + (m.usage.cacheWrite ?? 0);
 }
 
-export function register(pi: ExtensionAPI, _config: KitConfig): void {
+export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = realClock): void {
 	registerChildIdentity(pi);
 	const shared = coordination(pi);
 	let goal: Goal | undefined;
 	let lastCtx: ExtensionContext | undefined;
-	let wakeTimer: ReturnType<typeof setTimeout> | undefined;
+	let wakeTimer: TimerHandle | undefined;
 	let skippedForAgents = false;
 
 	const clearWake = (): void => {
-		if (wakeTimer !== undefined) clearTimeout(wakeTimer);
+		wakeTimer?.cancel();
 		wakeTimer = undefined;
 	};
 
 	const armWake = (): void => {
 		if (wakeTimer !== undefined || goal?.status !== "active" || shared.quotaParked.size > 0) return;
-		wakeTimer = setTimeout(() => {
+		wakeTimer = clock.setTimeout(() => {
 			wakeTimer = undefined;
 			const ctx = lastCtx;
 			if (!ctx || !goal || goal.status !== "active" || isChildSession(pi) || shared.quotaParked.size > 0) return;
@@ -80,7 +81,6 @@ export function register(pi: ExtensionAPI, _config: KitConfig): void {
 				// Stale context: the session is gone.
 			}
 		}, WAKE_MS);
-		wakeTimer.unref();
 	};
 
 	const tracker = new SubagentTracker(() => {
