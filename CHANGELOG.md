@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Resolve test fixtures from the package location, not the runner's working directory,
+  so standalone and full-monorepo gates both exercise the package sources and builder.
 - Type the annotation-hook test results and include tests in the standalone typecheck.
   The full monorepo gate exposed six assertions on an erased mock result type.
 - Restore late new-session setup and announce approved plans before returning from a

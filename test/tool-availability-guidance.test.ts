@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
@@ -10,6 +10,7 @@ import { showPlanLaunchMenu } from "../src/plan-launch-menu.js";
 import planMode from "../src/plan-mode.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
 import { planModeToolSelection } from "../src/tool-selection.js";
+import { packagePath } from "./package-path.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
 const tools = ["read", "grep", "find", "ls", "edit", "write"].map(builtinTool) as ToolInfo[];
@@ -17,7 +18,7 @@ tools.push(extensionTool("custom") as ToolInfo);
 const active = ["read", "edit", "plan_mode_question", "plan_mode_complete"];
 
 test("published activation examples separate full selection from Pi 0.99+ modifiers", async () => {
-  const reference = await readFile(resolve("docs/settings.md"), "utf8");
+  const reference = await readFile(packagePath("docs/settings.md"), "utf8");
   const activation = reference
     .split("### Enable inactive built-in search tools in Pi")[1]
     ?.split("### Plan reinjection")[0];

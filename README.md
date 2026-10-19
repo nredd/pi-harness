@@ -447,7 +447,7 @@ pi-plan-mode/
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
-Fork maintenance follows the split/diff-replay queue, never unreleased upstream main. Exclude `dist/` from replay and regenerate the standalone lockfile for the release's development pins. Run `npm run check && npm test` locally; the typecheck covers source and test files. Also apply the queue in a full upstream monorepo clone at the release tag, run `npm ci --ignore-scripts`, build `packages/pi-tui-kit`, run the Plan package's `npm run check`, then run root `PI_EXTENSIONS_TEST_BASE='@narumitw/pi-plan-mode@0.59.3' npm test`. Rebuild the Plan package there after the final source change, copy its `dist/` back here, and commit those artifacts last. The vendored harness tracks that release, including the mock UI's `onTerminalInput` method.
+Fork maintenance follows the split/diff-replay queue, never unreleased upstream main. Exclude `dist/` from replay and regenerate the standalone lockfile for the release's development pins. Run `npm run check && npm test` locally; the typecheck covers source and test files. Test fixtures resolve relative to the package's source location rather than the runner's working directory, so both gate layouts exercise the same files. Also apply the queue in a full upstream monorepo clone at the release tag, run `npm ci --ignore-scripts`, build `packages/pi-tui-kit`, run the Plan package's `npm run check`, then run root `PI_EXTENSIONS_TEST_BASE='@narumitw/pi-plan-mode@0.59.3' npm test`. Rebuild the Plan package there after the final source change, copy its `dist/` back here, and commit those artifacts last. The vendored harness tracks that release, including the mock UI's `onTerminalInput` method.
 
 ## 🔎 Keywords
 

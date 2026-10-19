@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "vitest";
+import { packagePath } from "../package-path.js";
 
 export interface BuildMetadata {
   inputs?: Record<string, { imports: Array<{ path: string; kind: string; external?: boolean }> }>;
@@ -42,7 +43,7 @@ interface RuntimeBuilderContractOptions {
 }
 
 export function registerRuntimeBuilderContract(options: RuntimeBuilderContractOptions) {
-  const packageRoot = resolve(".");
+  const packageRoot = packagePath();
   const builderUrl = pathToFileURL(join(packageRoot, "scripts/build-runtime.mjs")).href;
   const forbiddenEagerInputs = options.forbiddenEagerInputs ?? [];
   const forbiddenExternals = options.forbiddenEagerExternals ?? [];

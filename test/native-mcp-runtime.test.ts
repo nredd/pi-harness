@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -16,6 +16,7 @@ import {
   VERSION,
 } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
+import { packagePath } from "./package-path.js";
 
 const fauxSpecifier = "@earendil-works/pi-ai/providers/faux";
 
@@ -48,7 +49,7 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
         mcpServers: {
           fixture: {
             command: process.execPath,
-            args: [resolve("test/fixtures/native-mcp-server.mjs"), callLog],
+            args: [packagePath("test/fixtures/native-mcp-server.mjs"), callLog],
             exposure: "codemode",
             toolExposure: {
               direct: "direct",
@@ -106,7 +107,7 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
       noExtensions: true,
       noSkills: true,
       noContextFiles: true,
-      additionalExtensionPaths: [resolve("src/index.ts"), "builtin:codemode", "builtin:mcp", "builtin:tool-search"],
+      additionalExtensionPaths: [packagePath("src/index.ts"), "builtin:codemode", "builtin:mcp", "builtin:tool-search"],
       extensionFactories: [
         { name: "codemode", builtin: true, factory: createCodemodeExtension({ models: false }) },
         { name: "tool-search", builtin: true, factory: createToolSearchExtension() },

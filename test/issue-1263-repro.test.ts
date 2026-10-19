@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { builtinTool, createMockContext, extensionTool } from "./harness/support.js";
+import { packagePath } from "./package-path.js";
 
 const EVENT_RECORDER = Symbol.for("pi-plan-mode.issue-1263-events");
 
@@ -46,7 +47,7 @@ export default function laterExtension(pi) {
       cwd: root,
       agentDir,
       settingsManager: SettingsManager.inMemory({}),
-      additionalExtensionPaths: [resolve("src/index.ts"), followerPath],
+      additionalExtensionPaths: [packagePath("src/index.ts"), followerPath],
     });
     await loader.reload();
     const loaded = loader.getExtensions();

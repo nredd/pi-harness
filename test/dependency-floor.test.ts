@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import path from "node:path";
 import { test } from "vitest";
+import { packagePath } from "./package-path.js";
 
 const { minVersion, gte } = createRequire(import.meta.url)("semver") as {
   minVersion(range: string): { version: string } | null;
@@ -10,7 +10,7 @@ const { minVersion, gte } = createRequire(import.meta.url)("semver") as {
 };
 
 test("Plan mode's Kit floor excludes releases without custom-editor questionnaire support", () => {
-  const manifest = JSON.parse(readFileSync(path.resolve("package.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(packagePath("package.json"), "utf8"));
   const range = manifest.dependencies["@narumitw/pi-tui-kit"];
   const minimum = minVersion(range);
   assert.ok(minimum, `Expected a valid Kit dependency range, received ${range}`);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
+import { packagePath } from "./package-path.js";
 import { createMockContext } from "./support.js";
 
 const fixtures = [
@@ -65,7 +66,7 @@ for (const fixture of fixtures) {
           noExtensions: true,
           noSkills: true,
           noContextFiles: true,
-          additionalExtensionPaths: [resolve(".")],
+          additionalExtensionPaths: [packagePath()],
         });
         await loader.reload();
         assert.deepEqual(loader.getExtensions().errors, []);
