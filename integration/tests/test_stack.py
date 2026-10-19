@@ -59,8 +59,10 @@ def test_supplied_stacks_are_pinned_and_exclusion_is_explicit() -> None:
     root = Path(__file__).resolve().parents[1]
     personal = load_stack(root / "stacks/personal.json")
     local = load_stack(root / "stacks/local.json")
-    assert len(personal.sources) == len(local.sources) == 13
-    assert "npm:@nredd/pi-preset@0.1.0" in personal.sources
+    assert len(personal.sources) == 12
+    assert len(local.sources) == 13
+    assert "git:github.com/nredd/pi-subagents@v0.22.0-nredd.3" in personal.sources
+    assert not any("pi-preset" in source for source in personal.sources)
     assert "../../packages/preset" in local.sources
     assert len(personal.disabled_extensions) == len(local.disabled_extensions) == 1
     assert "pi-computer-use" in next(iter(personal.disabled_extensions))
