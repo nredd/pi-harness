@@ -1,38 +1,22 @@
 # Plan todo lifecycle coverage
 
-`scenarios/integration/test_plan_todos.py` exercises both extensions in one sandbox, using
-Pi sessions rather than extension mocks. `HARNESS_LOCAL=pi-plan-mode,rpiv-todo` selects the
-usual source checkouts; use `name=/absolute/worktree/path` entries when testing isolated worktrees.
+`integration/inprocess/plan-todos.test.ts` runs the real Gitlinked `pi-plan-mode` and `rpiv-todo`
+entries in one core harness session, under Vitest and Bun. No extension mocks or Pi process.
 
-- `test_plan_items_close_in_one_evidenced_batch` approves a three-item plan, closes all three in
-  one atomic `todo.ops` call, requires completion evidence and a deferral reason, and verifies
-  the `0/3 plan items open` heading plus persisted details.
-- `test_closed_plan_heading_counts_sum` resumes that session through actual RPC and checks
-  `/todos` reports `2 done, 1 deferred`, accounting for all three items with none left open.
-- `scenarios/tui/test_todo_history.py` reloads and resizes the actual Pi host, checking that
-  settled todo rows retain their own historical subject instead of today's renamed task.
-- `test_replacement_approval_replaces_unfinished_plan_todos` resumes a session with unfinished
-  work, plans a replacement, and approves it. Only the replacement plan's items remain.
-- `test_declined_replacement_preserves_old_plan_todos` declines a replacement, drives the
-  canonical `reproposal_confirmation` question in headless mode, verifies its cancelled result
-  cannot authorize another completion, exits Plan mode, and confirms the original items remain.
-- `test_plan_mode_confirmation.py` uses Pi's real RPC extension-UI protocol: canonical
-  `Re-propose now` permits exactly one replacement completion, while `Not yet` and cancellation
-  keep it blocked. It validates the normalized question labels, rather than a mock handler.
-- `test_replanning_defers_old_reminder_across_compaction_and_restore` starts with approved work,
-  enters replanning, forces real Pi compaction, resumes the persisted session, exits without an
-  approval, and verifies old-plan reminders resume. It also appends the historical
-  `plan-mode-state` envelope to the real session to cover its enabled/disabled fallback.
-- The older seed/evidence/reminder scenarios keep the verbatim plan-event, proof requirement,
-  and one-reminder-per-request contracts covered.
+- Approval seeds the exact plan bullets before any `todo` call
+- One evidenced/deferred `todo.ops` batch closes all three items. A file-backed reopen checks
+  `/todos` reports `2 done, 1 deferred`, with no open counts
+- Approved replacement work supersedes old unfinished items only after the canonical RPC
+  `Implement here` selection. A decline plus unanswered confirmation cannot overwrite them
+- Real core compaction consumes scripted summary/prefix replies. Replanning suppresses old-work
+  reminders across compaction, dispose/reopen and legacy `plan-mode-state` entries; exit restores them
+- Bare completion is refused; the same update with evidence succeeds
+- A premature done reply gets exactly one request-local reminder with only open items. The session
+  persists only its short hidden marker, never the expanded open-item list
 
-Fresh handoff and `/tree` navigation are Plan-mode-owned session routing paths. Fresh handoff
-creates a new session; tree navigation restores branch-local state into the current session's
-slot. Their plan lifecycle behavior is covered in `pi-plan-mode`'s
-`test/` suite. The cross-package regression here targets the shared boundary: an approved plan
-emits `pi-plan-mode:plan-approved`, and `rpiv-todo` must preserve or replace that session's plan
-items only at an explicit approval boundary.
+`support.ts` checks host identity before importing each fork. Keep their `node_modules/` absent.
+`isolateStackHome()` isolates Pi and rpiv config, including legacy HOME paths. See `docs/ci.md`.
 
-The headless declined-replacement test covers the `ui_unavailable` path. The RPC scenario
-covers the affirmative and non-affirmative interactive answers through the real extension-UI
-protocol; the Plan-mode unit suite separately owns custom-TUI layout and keyboard behavior.
+`scenarios/tui/test_todo_history.py` still owns actual host row rendering, reload and resize.
+`test_plan_mode_confirmation.py` still owns the real RPC extension-UI protocol. The Plan-mode
+fork's native suite owns custom-TUI keyboard/layout, fresh handoff and tree routing.
