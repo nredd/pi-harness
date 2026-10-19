@@ -159,9 +159,8 @@ def build_sandbox(root: Path, template_home: Path | None = None) -> Sandbox:
     box = Sandbox(root, home, agent_dir, workdir)
     for name in ("npmrc-user", "npmrc-global"):
         (root / name).touch()
-    box.patch_json(
-        "settings.json", {"lastChangelogVersion": SILENT_CHANGELOG_VERSION, "retry": {"enabled": False}}
-    )
+    defaults = {"lastChangelogVersion": SILENT_CHANGELOG_VERSION, "retry": {"enabled": False}}
+    box.patch_json("settings.json", deep_merge(defaults, box.settings()))
     auth = agent_dir / "auth.json"
     auth.write_text(json.dumps(FAKE_AUTH))
     auth.chmod(0o600)

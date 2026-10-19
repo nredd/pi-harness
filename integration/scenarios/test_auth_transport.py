@@ -35,7 +35,16 @@ MODEL = "anthropic/claude-haiku-4-5"
 FUTURE = 4_102_444_800_000
 ACCESS = "sk-ant-oat01-harness-access"
 PLANTED = "sk-ant-oat01-PLANTED"
-UNRELATED = {"openrouter": {"type": "api_key", "key": "unrelated-preserve-me"}}
+UNRELATED = {
+    "openrouter": {"type": "api_key", "key": "unrelated-preserve-me"},
+    "openai-codex": {
+        "type": "oauth",
+        "access": "codex-fake-access",
+        "refresh": "codex-fake-refresh",
+        "expires": FUTURE,
+        "accountId": "harness",
+    },
+}
 USER_AGENT = re.compile(r"^claude-cli/\S+ \(external, [^)]+\)$")
 BILLING = "x-anthropic-billing-header"
 
@@ -201,7 +210,7 @@ def test_expired_token_refreshes_natively_and_persists(sandbox: Sandbox, mock: A
     assert saved["anthropic"]["access"] == "sk-ant-oat01-fresh"
     assert saved["anthropic"]["refresh"] == "sk-ant-ort01-new"
     assert saved["anthropic"]["expires"] > 1
-    assert saved["openrouter"] == UNRELATED["openrouter"]
+    assert {name: saved[name] for name in UNRELATED} == UNRELATED
     assert mock.messages[0].headers["authorization"] == "Bearer sk-ant-oat01-fresh"
     assert (sandbox.agent_dir / "auth.json").read_bytes() == default
 

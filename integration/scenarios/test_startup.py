@@ -92,5 +92,7 @@ def test_fatal_startup_modes(sandbox: Sandbox, mode: str, phase: str, fatal: boo
         assert code != 0, f"Fatal {phase} was swallowed in {mode}: {output}"
         assert not requests.exists(), requests.read_text() if requests.exists() else ""
         assert HELD not in output
+        for history in (sandbox.agent_dir / "sessions").rglob("*.jsonl"):
+            assert HELD not in history.read_text(), history
     else:
         assert code == 0, output
