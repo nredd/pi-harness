@@ -20,6 +20,27 @@ CI is the gate. Local runs are for development. Hosted runners only, no credenti
 | `pi-claude-auth` | pnpm at the fork's `packageManager`, `pnpm install --frozen-lockfile`, lint, build, test |
 | `rpiv-todo, pi-computer-use (not run)` | a notice: rpiv-todo gates inside an upstream `rpiv-mono` clone, pi-computer-use needs macOS TCC |
 
+`integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
+
+- `owned` initializes `forks/pi-subagents`, `forks/pi-plan-mode`, `forks/rpiv-todo` at their Gitlinks
+  before `make install`. No fork-local `npm ci`, no fork-local `node_modules/`
+- `support.ts`: `startStack({ cwd?, factories, settings?, sessionManager?, mode?, ui? })` creates and
+  binds core's real harness. `loadFork(name)` imports each fork's declared entry; `loadOwned(name)`
+  imports the owned plugin's `src/index.ts`. Direct `createXxx()` factories work too
+- Before importing a fork, resolve `pi-coding-agent`, `pi-tui`, `pi-ai`, `typebox` from both directories
+  and compare real paths. A mismatch or unresolvable entry fails with the fork's `node_modules/`
+  deletion path. Node uses import conditions on `createRequire().resolve`; Bun uses
+  `import.meta.resolve` with an explicit parent. No aliases or copied extension code
+- Root workspace dependencies supply `croner` `10.0.1`, `nanoid` `5.1.16`, `pi-tui-kit` `0.65.5`
+  from the forks' lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
+  `3.x` and leaves the fork's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
+  split has no lockfile: `rpiv-config` and optional peer
+  `rpiv-i18n` are pinned to its release `2.12.0`, recorded in the root lockfile
+- `isolateStackHome()` isolates `HOME`, `PI_CODING_AGENT_DIR`, XDG config before loading entries.
+  `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
+  compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
+  `/todos` heading counts share the evidenced-batch test; no second process
+
 The unit gates must not read the machine: the first CI run found three `integration/tests` that only
 passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
 
