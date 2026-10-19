@@ -7,7 +7,9 @@ Nothing in this repository installs it, and nothing here changes a live Pi insta
 Standalone plugin users are unaffected. This is deliberately opt-in policy, not a replacement
 imposed on `@nredd/pi-dev-tools`, `@nredd/pi-session-kit`, or `@nredd/pi-subscription-router`.
 
-Tested host: stock Pi `1.3.0` only (exact devDependencies; peers are `*` per Pi's package rules).
+Tested hosts: the package tests run on core `v1.3.0-nredd.4` (upstream `1.3.0` plus the fork's patch queue,
+the release tarballs pinned in `devDependencies`); `make check-package-contracts` installs the packed
+preset into exact stock Pi `1.3.0`. Peers are `*` per Pi's package rules.
 
 ## Contents
 

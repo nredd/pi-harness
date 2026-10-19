@@ -35,6 +35,10 @@ Validated development toolchain: Node `26.12.0` (`.node-version`), Python `3.13.
 (`.python-version`), Bun `1.3.14` (`.bun-version`), npm `11.20.0` (`packageManager`), uv `0.13.1`.
 Fork build toolchains are separate, see [forks.md](docs/forks.md).
 
+Packages build and test against the core fork's `v1.3.0-nredd.4` release tarballs (root `overrides`
+plus each package's `devDependencies`), the host that ships `@earendil-works/pi-coding-agent/testing`.
+Stock Pi compatibility is `make check-package-contracts`' job, not the unit gate's.
+
 Development (Node with npm workspaces, `uv`, Git, macOS or Linux; the benchmark is macOS-only):
 
 ```sh
