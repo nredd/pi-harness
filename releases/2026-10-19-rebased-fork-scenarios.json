@@ -2,8 +2,8 @@
   "schema_version": 1,
   "release": {
     "id": "2026-10-19-rebased-fork-scenarios",
-    "created_at": "2026-10-19T17:27:06.109544Z",
-    "commit": "d253b32ad2be146044db571f62f13636499bfe13",
+    "created_at": "2026-10-19T18:03:45.441330Z",
+    "commit": "257aed86d5702e978c2484bcc4f4b728b2bffed2",
     "dirty": false
   },
   "forks": [
@@ -101,9 +101,10 @@
     "fork_probe": "https://github.com/nredd/pi-harness/pull/37",
     "subagents_review": "https://github.com/nredd/pi-subagents/pull/6",
     "plan_mode_review": "https://github.com/nredd/pi-plan-mode/pull/2",
-    "local_gates": "npm-ci,check-integration,check-ts-pinned-bun-caffeinate,check-scripts,actionlint,integration-ty:PASS",
+    "local_gates": "npm-ci,check-integration-98-units,check-ts-pinned-bun-caffeinate,check-scripts-416-units,actionlint,integration-ty:PASS",
+    "manifest_regression": "two-file-orders-red-before-fix,green-after,actual-repository-four-core-checksums-PASS",
     "parent_review": "pending-exact-final-HEAD",
-    "assembled_stack": "pending-parent-PR-CI",
+    "assembled_stack": "pending-parent-PR-CI-after-checksum-fix",
     "local_process_scenarios": "NOT-RUN",
     "dotfiles_promotion": "separate"
   }
