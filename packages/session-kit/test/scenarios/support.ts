@@ -18,6 +18,7 @@ import {
 	type InteractiveHarness,
 	type InteractiveHarnessOptions,
 } from "@earendil-works/pi-coding-agent/testing/interactive";
+import { StdinBuffer } from "@earendil-works/pi-tui";
 import type { Clock, TimerHandle } from "../../src/clock.ts";
 import { defaultConfig, type Feature, type KitConfig } from "../../src/config.ts";
 import { GOAL_ENTRY, GOAL_NUDGE_TYPE, type GoalSnapshot } from "../../src/goal/state.ts";
@@ -118,6 +119,15 @@ export class TerminalFixture extends ScenarioFixture {
 				...(options.extensionFactories ?? []),
 			],
 		});
+		// VirtualTerminal sends chunks verbatim; ProcessTerminal uses this parser before TUI input.
+		// Flush incomplete input because fixture calls supply whole keys (including a lone Escape).
+		const input = this.host.input;
+		const parser = new StdinBuffer();
+		parser.on("data", input);
+		this.host.input = (data) => {
+			parser.process(data);
+			for (const sequence of parser.flush()) input(sequence);
+		};
 		return this.host;
 	}
 

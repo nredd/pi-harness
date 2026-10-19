@@ -152,7 +152,7 @@ export function chart(shown: string): void {
 /** Preserve exact accounting, including the source's rejection of rounded/widened totals. */
 export async function selectTotal(fixture: TerminalFixture, tokens: number): Promise<void> {
 	for (let range = 0; range < 6; range++) {
-		for (let i = 0; i < 60; i++) await fixture.key("k");
+		await fixture.key("k".repeat(60));
 		if (new RegExp(`Total tokens: ${tokens}(?![\\d.,kMB])`).test(layout(fixture))) return;
 		await fixture.key("r");
 	}
