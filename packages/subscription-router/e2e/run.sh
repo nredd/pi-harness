@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Run the faux e2e against the installed `pi` in a throwaway agent dir, and assert the outcome.
-# Usage: e2e/run.sh [all|wait|no-router]
+# Usage: e2e/run.sh [all|no-router]
 #
-# wait|no-router: pi-subagents dispatch admission (fail/capped moved to integration/inprocess)
-# (router + pi-subagents; `no-router` is the enterprise profile, subagents alone).
+# no-router: optional admission RPC absence, owned by the pi-subagents fork.
+# Router wait/fail/capped admission moved to integration/inprocess.
 # pi-subagents comes from $PI_SUBAGENTS_DIR (default ~/code/pi-subagents).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,7 +12,7 @@ scenario="${1:-all}"
 
 if [[ "$scenario" == all ]]; then
   status=0
-  for each in wait no-router; do
+  for each in no-router; do
     echo "=== $each"
     "$0" "$each" || status=1
   done
@@ -21,26 +21,16 @@ fi
 
 agent="$(mktemp -d)"
 trap 'rm -rf "$agent"' EXIT
-profile() { # $1 = extra profile fields, with a leading comma
-  echo "{ \"profiles\": { \"spike\": { \"chain\": [{ \"model\": \"spike-a/sonnet-a\" }, { \"model\": \"spike-b/terra-b\" }]$1 } } }"
-}
 expect=() # grep -E patterns that must match
 reject=() # grep -E patterns that must not match
 case "$scenario" in
-  wait|no-router)
+  no-router)
     [[ -d "$subagents" ]] || { echo "pi-subagents not found at $subagents (set PI_SUBAGENTS_DIR)" >&2; exit 2; }
-    export SPIKE_BLOCKED=1
     model=spike-main/driver
-    extensions=(-e "$here/e2e/faux-admission.ext.ts" -e "$subagents/src/index.ts" -e "$here/src/index.ts")
-    case "$scenario" in
-      wait) profile ', "exhaustionPolicy": "wait"' >"$agent/subscription-router.json"
-        expect=("Queued" "DRIVER DONE") reject=("was not started") ;;
-      no-router)
-        # Enterprise: no router loaded, so the Agent call is admitted and the child runs on a physical model.
-        export SPIKE_AGENT_MODEL=spike-b/terra-b SPIKE_BACKGROUND=0 SPIKE_BLOCKED=0
-        extensions=(-e "$here/e2e/faux-admission.ext.ts" -e "$subagents/src/index.ts")
-        expect=("ANSWERED on spike-b" "DRIVER DONE") reject=("was not started" "Queued") ;;
-    esac ;;
+    # No router loaded: admit the physical foreground child after the optional RPC times out.
+    export SPIKE_AGENT_MODEL=spike-b/terra-b SPIKE_BACKGROUND=0 SPIKE_BLOCKED=0
+    extensions=(-e "$here/e2e/faux-admission.ext.ts" -e "$subagents/src/index.ts")
+    expect=("ANSWERED on spike-b" "DRIVER DONE") reject=("was not started" "Queued") ;;
   *) echo "unknown scenario: $scenario" >&2; exit 2 ;;
 esac
 

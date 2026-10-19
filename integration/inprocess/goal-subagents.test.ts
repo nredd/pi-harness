@@ -11,8 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent/testing";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { complete, deferred, GoalStack, goalStates, nudges, outcomes, spoken, tool } from "./goal-support.ts";
-import { loadFork } from "./support.ts";
+import { complete, deferred, GoalStack, goalStates, nudges, outcomes, spoken, tick, tool } from "./goal-support.ts";
 
 /** A real Agent request, not a replacement manager/runner. */
 function agent(background: boolean) {
@@ -28,7 +27,9 @@ function agent(background: boolean) {
 describe("goal and real subagent sessions", () => {
 	let stack: GoalStack;
 	let child: FauxProviderRegistration | undefined;
+	const releases: (() => void)[] = [];
 	afterEach(async () => {
+		for (const release of releases.splice(0)) release();
 		await stack?.cleanup();
 		child?.unregister();
 	});
@@ -57,7 +58,7 @@ describe("goal and real subagent sessions", () => {
 		stack.usage.set("kid", 0);
 		child = registerFauxProvider({ provider: "kid", models: [{ id: "child" }] });
 		const h = await stack.start(
-			[await loadFork("pi-subagents"), stack.router([{ provider: "kid", id: "child" }]), stack.kit(), ...extra],
+			[await stack.subagents(), stack.router([{ provider: "kid", id: "child" }]), stack.kit(), ...extra],
 			{ useModelRuntimeStream: true },
 		);
 		const model = child.getModel();
@@ -118,60 +119,145 @@ describe("goal and real subagent sessions", () => {
 		expect(h.getPendingResponseCount()).toBe(1);
 	});
 
-	it("background notice wins before goal nudge", async () => {
-		const completed = deferred<void>();
-		const held = deferred<void>();
+	for (const scheduled of [false, true]) {
+		it(scheduled ? "scheduled notice wins before goal nudge" : "background notice wins before goal nudge", async () => {
+			const completed = deferred<void>();
+			const held = deferred<void>();
+			const release = deferred<void>();
+			releases.push(
+				() => release.resolve(),
+				() => completed.resolve(),
+			);
+			const fired: unknown[] = [];
+			const { h, child } = await start([
+				(pi) => {
+					pi.events.on("subagents:completed", () => completed.resolve());
+					pi.events.on("subagents:scheduled", (event) => {
+						if ((event as { type: string }).type === "fired") fired.push(event);
+					});
+					pi.registerTool({
+						name: "hold",
+						label: "Hold",
+						description: "Hold the actual parent tool boundary",
+						parameters: Type.Object({}),
+						execute: async () => {
+							held.resolve();
+							await completed.promise;
+							return { content: [{ type: "text", text: "child finished" }], details: undefined };
+						},
+					});
+				},
+			]);
+			child.setResponses([
+				async (ctx) => {
+					await release.promise;
+					return fauxAssistantMessage(
+						`TOOLS ${getCurrentTools(ctx.messages)
+							.map((t) => t.name)
+							.join(",")}`,
+					);
+				},
+			]);
+			h.setResponses([
+				scheduled
+					? tool("Agent", {
+							subagent_type: "general-purpose",
+							description: "scheduled child",
+							prompt: "work",
+							model: "kid/child",
+							schedule: "+2s",
+						})
+					: agent(true),
+				tool("hold", {}),
+				fauxAssistantMessage("waiting"),
+				fauxAssistantMessage("after notice"),
+				complete(),
+				fauxAssistantMessage("end"),
+			]);
+			await h.session.prompt("/goal watch the child --turns 10");
+			const run = h.session.prompt("go");
+			await held.promise;
+			expect(nudges(h)).toEqual([]);
+			if (scheduled) {
+				expect(child.state.callCount).toBe(0);
+				stack.clock.advance(1_999);
+				expect(fired).toEqual([]);
+				stack.clock.advance(1);
+				expect(fired).toHaveLength(1);
+			}
+			release.resolve();
+			await run;
+			const messages = h.sessionManager.getBranch().filter((e) => e.type === "custom_message");
+			const kinds = messages.map((e) => e.customType);
+			expect(kinds.filter((k) => k === "subagent-notification")).toHaveLength(1);
+			expect(kinds.indexOf("subagent-notification")).toBeLessThan(kinds.indexOf("session-kit:goal-nudge"));
+			const notice = messages.find((e) => e.customType === "subagent-notification");
+			expect(notice?.content).toContain("TOOLS ");
+			expect(notice?.content).not.toContain("goal_update");
+			expect(spoken(h)).toContain("after notice");
+			expect(goalStates(h).at(-1)?.status).toBe("complete");
+			expect(child.state.callCount).toBe(1);
+			expect(h.getPendingResponseCount()).toBe(0);
+		});
+	}
+
+	it("loop cannot steal a goal child-wait gap", async () => {
+		const entered = deferred<void>();
 		const release = deferred<void>();
+		const completed = deferred<void>();
+		releases.push(() => release.resolve());
 		const { h, child } = await start([
 			(pi) => {
 				pi.events.on("subagents:completed", () => completed.resolve());
-				pi.registerTool({
-					name: "hold",
-					label: "Hold",
-					description: "Hold the actual parent tool boundary",
-					parameters: Type.Object({}),
-					execute: async () => {
-						held.resolve();
-						await completed.promise;
-						return { content: [{ type: "text", text: "child finished" }], details: undefined };
-					},
-				});
 			},
 		]);
 		child.setResponses([
-			async (ctx) => {
+			async () => {
+				entered.resolve();
 				await release.promise;
-				return fauxAssistantMessage(
-					`TOOLS ${getCurrentTools(ctx.messages)
-						.map((t) => t.name)
-						.join(",")}`,
-				);
+				return fauxAssistantMessage("CHILD RESULT");
 			},
 		]);
 		h.setResponses([
 			agent(true),
-			tool("hold", {}),
-			fauxAssistantMessage("waiting"),
-			fauxAssistantMessage("after notice"),
+			fauxAssistantMessage("GOAL WAITING"),
+			fauxAssistantMessage("AFTER NOTICE"),
 			complete(),
-			fauxAssistantMessage("end"),
+			fauxAssistantMessage("GOAL END"),
+			fauxAssistantMessage("DONE"),
 		]);
-		await h.session.prompt("/goal watch the child --turns 10");
-		const run = h.session.prompt("go");
-		await held.promise;
+		await h.session.prompt("/loop 30s ping");
+		await h.session.prompt("/goal watch the child");
+		await h.session.prompt("go");
+		await entered.promise;
+		expect(spoken(h)).toEqual(["GOAL WAITING"]);
+		expect(nudges(h)).toEqual([]);
+		stack.clock.advance(90_000);
+		await h.session.waitForIdle();
+		await h.session.prompt("/loop list");
+		expect(stack.notifications.at(-1)).toContain("0/50 runs, 3 skipped");
+		expect(spoken(h)).toEqual(["GOAL WAITING"]);
+		expect(h.eventsOfType("agent_start")).toHaveLength(1);
 		expect(nudges(h)).toEqual([]);
 		release.resolve();
-		await run;
-		const messages = h.sessionManager.getBranch().filter((e) => e.type === "custom_message");
-		const kinds = messages.map((e) => e.customType);
-		expect(kinds.filter((k) => k === "subagent-notification")).toHaveLength(1);
-		expect(kinds.indexOf("subagent-notification")).toBeLessThan(kinds.indexOf("session-kit:goal-nudge"));
-		const notice = messages.find((e) => e.customType === "subagent-notification");
-		expect(notice?.content).toContain("TOOLS ");
-		expect(notice?.content).not.toContain("goal_update");
-		expect(spoken(h)).toContain("after notice");
+		await completed.promise;
+		stack.clock.advance(199);
+		await h.session.waitForIdle();
+		expect(spoken(h)).toEqual(["GOAL WAITING"]);
+		expect(h.sessionManager.getBranch().filter((e) => e.type === "custom_message")).toEqual([]);
+		await tick(h, stack.clock, 1);
+		expect(spoken(h)).toEqual(["GOAL WAITING", "AFTER NOTICE", "GOAL END"]);
+		const kinds = h.sessionManager.getBranch().flatMap((e) => (e.type === "custom_message" ? [e.customType] : []));
+		expect(kinds).toEqual(["subagent-notification", "session-kit:goal-nudge"]);
 		expect(goalStates(h).at(-1)?.status).toBe("complete");
-		expect(child.state.callCount).toBe(1);
+		await tick(h, stack.clock, 29_800);
+		expect(spoken(h)).toEqual(["GOAL WAITING", "AFTER NOTICE", "GOAL END", "DONE"]);
+		await h.session.prompt("/loop stop all");
+		stack.clock.advance(90_000);
+		await h.session.waitForIdle();
 		expect(h.getPendingResponseCount()).toBe(0);
+		// Initial run, notice wake, goal continuation, then the released loop.
+		expect(h.eventsOfType("agent_start")).toHaveLength(4);
+		expect(child.state.callCount).toBe(1);
 	});
 });

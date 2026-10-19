@@ -40,10 +40,11 @@ CI is the gate. Local runs are for development. Hosted runners only, no credenti
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
   `/todos` heading counts share the evidenced-batch test; no second process
-- `goal-support.ts` composes the real kit/router factories with one injected clock and credential-free
-  usage snapshots. Goal/Plan/todo, loop/Plan, child-session accounting/busy-parent notices and
-  quota settlement/refusal tests run on the same host. The child runner loads the real kit itself.
-  Scheduler/idle-outbox rows stay unported until the fork exposes its timers: [here](stack-goal-ports.md)
+- `goal-support.ts` shares one injected clock across the real kit, router and subagents factories,
+  with credential-free usage snapshots and explicitly configured faux auth. Goal/Plan/todo,
+  loop/Plan, child accounting, scheduled/busy/idle notices and quota park/refuse/resume tests
+  run on the same host. The child runner loads the real kit itself. All assertion destinations
+  and native timer boundaries live in the ledger: [here](verification-rebuild.md)
 
 The unit gates must not read the machine: the first CI run found three `integration/tests` that only
 passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
