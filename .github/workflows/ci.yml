@@ -1,0 +1,101 @@
+# Owned-code gates and packed-artifact contracts on every PR and on main. See docs/ci.md.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  owned:
+    name: owned (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Pin npm to packageManager
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Install
+        run: make install
+      - name: Owned gates (biome, tsc, vitest, bun test, scripts, integration units)
+        run: make check-ts check-scripts check-integration
+      - name: Benchmark unit gate
+        if: runner.os == 'macOS'
+        run: |
+          # The native_runtime test runs the real Codex sandbox (Seatbelt); exact historical pin, no credentials.
+          npm install --ignore-scripts --prefix "$RUNNER_TEMP/codex" @openai/codex@0.154.0
+          mkdir -p "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-cache"
+          CODEX_HOME="$RUNNER_TEMP/codex-home" XDG_CACHE_HOME="$RUNNER_TEMP/codex-cache" \
+            PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" make check-benchmark
+      - name: Benchmark unit gate (not run)
+        if: runner.os != 'macOS'
+        run: echo "::notice title=check-benchmark not run::macOS only, its native_runtime test needs Seatbelt"
+
+  contracts:
+    name: contracts (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize the pi-subagents fork at its Gitlink
+        run: git submodule update --init forks/pi-subagents
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Pin npm to packageManager
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Install
+        run: make install
+      - name: Packed plugins alone on exact stock Pi
+        run: make check-package-contracts REPORT="$RUNNER_TEMP/package-contracts.json"
+      - name: Packed preset and dev-tools through the pi-subagents fork
+        run: make check-fork-package-contracts REPORT="$RUNNER_TEMP/fork-package-contracts.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: contract-reports-${{ matrix.os }}
+          path: ${{ runner.temp }}/*contracts.json
+          if-no-files-found: ignore
+
+  bench:
+    name: bench (not run)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report
+        run: |
+          echo "::notice title=bench not run::No quiet self-hosted runner yet; hosted runners cannot meet the bench admission policy"
+          echo "### bench: NOT RUN" >>"$GITHUB_STEP_SUMMARY"
+          echo "No quiet self-hosted runner exists yet (migration plan section 7). This is not a pass." >>"$GITHUB_STEP_SUMMARY"
