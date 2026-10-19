@@ -2,6 +2,7 @@
 
 - Run `npm run check --workspace integration/inprocess` with pinned Bun `1.3.14` first on `PATH`. Checks Biome, TypeScript, Vitest and `bun test`.
 - `support.ts` / `startStack` binds real extension factories to core's real `AgentSession`. Forks share the workspace's host SDK; fork-local `node_modules` are forbidden.
+- `goal-support.ts` owns physical faux-provider registration, runtime/auth binding and teardown for goal/subagents/quota/router scenarios; responses and assertions stay local. Kit, router and subagents scheduling/delivery share one injected clock. `native-timers.ts` freezes every positive-delay global timeout/interval before extension loading through shutdown, recording delays and origin frames. Passing with these callbacks unable to fire mechanically proves inertness, without a hand-maintained allowlist. Node/Bun-compatible inert handles support ref/unref/hasRef/refresh, numeric clearing and disposal; teardown restores all four globals in `finally`, even on failure. Zero/omitted delays pass through, preserving core's `baseDelayMs: 0` retry macrotask without elapsed-time assertions (orchestrator ruling, #33). `native-timers.test.ts` checks suppression, zero-delay progress, handle behavior and restoration after a teardown error.
 - `plan-todos.test.ts` covers approved plans and persisted todo state. `annotated-tools.test.ts` covers real dev-tools/monitor annotations consumed by Plan, fake SSH and a controlled monitor with a fake clock.
 - `agents-support.ts` configures only fixture settings and package sources. The real pi-subagents factory discovers the unmodified `packages/preset/agents/*.md`; its real child runner loads dev-tools and enforces frontmatter. Parent and child share the faux transport, not a stub runner.
 - `specialists.test.ts` covers five agent surfaces, read-only writes and debugger commit exclusion against real npm `pi-web-access@0.36.0` and `pi-memory@0.4.2`. Parent registration assertions prevent vacuous exclusion checks; the real child loader resolves their manifest entries and provenance. No synthetic web/memory packages remain.
@@ -11,6 +12,14 @@
 - `nesting.test.ts` loads real workflow/deferred factories and checks explanatory child refusals. `turn-cap.test.ts` reaches the real child cap after promotion, then proves exactly one tool-free final report request despite the deferred engine's always-active spine.
 - `workflow-trigger.test.ts` loads npm `@quintinshaw/pi-dynamic-workflows@3.14.0` with fixture `keywordTriggerEnabled: false`. A UI-capable host ensures the disabled setting is actually tested. This version leaves user input intact even when armed, so the test also checks the faux request for the keyword-arming directive.
 - Third-party code is pinned in this workspace: workflows `3.14.0`, deferred engine `0.5.0`, web access `0.36.0`, memory `0.4.2`. The root override keeps web access's MCP SDK at `1.32.1`, matching the personal stack's fix for `GHSA-6qxp-vccf-f47h`. Tests read no live settings, installed extension code or credentials. No source seams were added to forks or owned extensions.
+
+Timer-import audit (source imports and unbundled core `dist` used by the harness):
+
+- `forks/pi-subagents/src`, `forks/pi-plan-mode` and `forks/rpiv-todo`: no `timers` or `node:timers` imports.
+- `packages/*/src`: only session-kit `stats/load.ts` imports `setImmediate` from `node:timers/promises`, not a delayed timer. Stats is disabled in `GoalStack.kit()`.
+- Core `dist/core/auth-storage.js` imports `timers/promises.setTimeout` only for file-lock contention retries. `dist/testing/harness.js` constructs `AuthStorage.inMemory()`; children inherit that parent's `modelRuntime` via subagents `agent-runner.ts`, so neither uses the file backend.
+- Core `dist/extensions/mcp/runtime.js` imports `node:timers/promises.setTimeout` for connection retries. Parents use explicit factories without MCP; children have no configured/registered servers in the isolated home/project, so `extensions/mcp/index.js` never calls `createConnection`/`loadMcpRuntime`. Bundle chunks are not imported by the unbundled testing entry.
+- No nonzero imported timer bypass is exercised; the global freezer covers the remaining native timer calls. Known residuals are short diagnostic notes at `GoalStack.subagents`, not the proof.
 
 Mutation checks (each reverted before the final gates):
 

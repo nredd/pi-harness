@@ -24,7 +24,7 @@ CI is the gate. Local runs are for development. Hosted runners only, no credenti
 
 - `owned` initializes `forks/pi-subagents`, `forks/pi-plan-mode`, `forks/rpiv-todo` at their Gitlinks
   before `make install`. No fork-local `npm ci`, no fork-local `node_modules/`
-- `support.ts`: `startStack({ cwd?, factories, settings?, sessionManager?, mode?, ui? })` creates and
+- `support.ts`: `startStack({ cwd?, factories, settings?, sessionManager?, useModelRuntimeStream?, withConfiguredAuth?, mode?, ui? })` creates and
   binds core's real harness. `loadFork(name)` imports each fork's declared entry; `loadOwned(name)`
   imports the owned plugin's `src/index.ts`. Direct `createXxx()` factories work too
 - Before importing a fork, resolve `pi-coding-agent`, `pi-tui`, `pi-ai`, `typebox` from both directories
@@ -40,6 +40,11 @@ CI is the gate. Local runs are for development. Hosted runners only, no credenti
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
   `/todos` heading counts share the evidenced-batch test; no second process
+- `goal-support.ts` shares one injected clock across the real kit, router and subagents factories,
+  with credential-free usage snapshots and explicitly configured faux auth. Goal/Plan/todo,
+  loop/Plan, child accounting, scheduled/busy/idle notices and quota park/refuse/resume tests
+  run on the same host. The child runner loads the real kit itself. All assertion destinations
+  and native timer boundaries live in the ledger: [here](verification-rebuild.md)
 
 The unit gates must not read the machine: the first CI run found three `integration/tests` that only
 passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
