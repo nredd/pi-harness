@@ -4,6 +4,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type Clock, realClock } from "../clock.ts";
 import type { KitConfig } from "../config.ts";
 import { say } from "../output.ts";
 import { StatsView, summary } from "./component.ts";
@@ -21,7 +22,12 @@ function problems({ errors, badLines }: Pick<Loaded, "errors" | "badLines">): st
 	];
 }
 
-export function register(pi: ExtensionAPI, _config: KitConfig): void {
+export function register(
+	pi: ExtensionAPI,
+	_config: KitConfig,
+	options: { agentDir?: string; clock?: Clock } = {},
+): void {
+	const clock = options.clock ?? realClock;
 	pi.registerCommand("stats", {
 		description: "Usage stats: activity heatmap, tokens per day and per-model breakdown across all sessions",
 		async handler(args: string, ctx: ExtensionCommandContext) {
@@ -34,7 +40,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig): void {
 			let loaded: Combined;
 			try {
 				loaded = await loadCombined(
-					undefined,
+					options.agentDir,
 					tui ? (done, total) => ctx.ui.setStatus(STATUS_KEY, `stats: loading ${done}/${total}...`) : undefined,
 				);
 			} catch (error) {
@@ -51,7 +57,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig): void {
 					pi,
 					ctx,
 					MESSAGE_TYPE,
-					[summary(loaded.calls.filter((c) => c.ms <= Date.now())), coverage, ...damage].join("\n"),
+					[summary(loaded.calls.filter((c) => c.ms <= clock.now())), coverage, ...damage].join("\n"),
 					"info",
 				);
 				return;
@@ -69,6 +75,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig): void {
 						sessions,
 						badLines,
 						coverage,
+						now: clock.now(),
 						theme,
 						rows: () => tuiHost.terminal.rows,
 						requestRender: () => tuiHost.requestRender(),

@@ -77,12 +77,6 @@
   "scenarios/bench/test_multisession.py::test_multi_session_responsiveness": "Finding: TUI input and streaming lag grows with open sessions at low CPU; N=1/4/8 panes on a 2k transcript, probe-measured",
   "scenarios/tui/test_latency_probe.py::test_probe_reports_a_blocked_event_loop": "Instrument check: `probes/latency.ts` reports a deliberate 400 ms event-loop block and captures the TUI",
   "scenarios/tui/test_latency_probe.py::test_probe_sees_keystrokes_and_idle_silence": "Instrument check: keystrokes yield input-to-paint samples, an idle pane writes nothing",
-  "scenarios/tui/test_session_kit_stats.py::test_stats_overlay_layout_keys_and_close": "Stats All/daily Overview and Models fit 60..320 columns, with chart/heatmap, provider filters, scroll and footer restoration",
-  "scenarios/tui/test_session_kit_stats.py::test_stats_overlay_survives_resize": "Stats both tabs re-layout across 60..320 columns; Escape restores the footer",
-  "scenarios/tui/test_session_kit_stats.py::test_stats_reopens_from_cache": "Stats writes migration-version cache and reopens with identical token totals",
-  "scenarios/tui/test_session_kit_stats.py::test_stats_is_allowed_in_plan_mode": "Stats overlay remains available in Plan mode",
-  "scenarios/tui/test_session_kit_stats.py::test_stats_hourly_ranges_totals_filters_and_close": "Real tmux 60..320: rolling 5h/24h hourly chart on both tabs, exact All/hourly/provider totals, future and ignored usage excluded, local-only freshness and Escape/footer",
   "scenarios/tui/test_session_kit_stats.py::test_stats_shared_machines_default_combined_freshness_and_plan_mode": "Actual standalone CLI exports/imports three installs: default combined totals dedup copied events but retain distinct IDs with equal usage, repeat import is idempotent, coverage and sync labels, hourly totals/provider filters, both tabs/resize/close/footer/Plan mode",
-  "scenarios/tui/test_session_kit_stats.py::test_stats_corrupt_import_retains_totals_and_local_scan_stays_fresh": "Corrupt actual snapshot retains last-good combined totals, reports incomplete coverage and still includes newly written local usage",
   "scenarios/integration/test_stats_portable.py::test_work_producer_needs_no_pi_packages_or_credentials": "Managed standalone artifact exports month shards with stable UUID and no text/names/paths; clean work homes need no Pi/private packages/credentials to export and import"
 }
