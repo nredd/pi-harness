@@ -833,11 +833,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    if (event.messageType === "custom") return;
     refreshStateForFirstPrompt(ctx);
-    // A fresh implementation session's approval entry arrives with its setup, after
-    // session_start; announce it before the first model request.
+    // New-session setup arrives after session_start. Restore and announce its approval
+    // even when an extension starts the first run, without treating that run as user input.
     planApprovals.announceLatest(ctx);
+    if (event.messageType === "custom") return;
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
       readyPresentationIntent = undefined;

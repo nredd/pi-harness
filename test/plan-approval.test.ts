@@ -94,6 +94,65 @@ test("a session whose branch holds an approval announces it before the first pro
   );
 });
 
+test("custom starts restore late setup and announce approvals before returning, once per plan", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi);
+  const seen = listen(mock);
+  const branch: unknown[] = [];
+  const context = createMockContext({
+    sessionManager: {
+      getSessionId: () => "custom-first-session",
+      getSessionName: () => undefined,
+      getBranch: () => branch,
+      getEntries: () => branch,
+    },
+  });
+  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  assert.equal(seen.length, 0);
+
+  // New-session setup arrives after session_start, before an extension wakes the session.
+  const first = createPlanApproval(PLAN);
+  branch.push(
+    { type: "custom", customType: PLAN_APPROVAL_ENTRY_TYPE, data: first },
+    {
+      type: "custom",
+      customType: "plan-mode-state",
+      data: { enabled: true, awaitingAction: true, latestPlan: PLAN.trim() },
+    },
+  );
+  const statusesAtDelivery: Array<string | undefined> = [];
+  mock.eventBus.on(PLAN_APPROVED_EVENT, () => {
+    // Event-bus observers swallow errors, so assert on captured state outside the callback.
+    statusesAtDelivery.push(context.statuses.get("plan-mode"));
+  });
+  const beforeAgentStart = mock.events.get("before_agent_start")?.[0];
+  assert.ok(beforeAgentStart);
+  for (const content of ["notice", [{ type: "text", text: "notice" }]]) {
+    await beforeAgentStart(
+      {
+        messageType: "custom",
+        message: { role: "custom", customType: "notification", content, display: false, timestamp: 1 },
+        systemPrompt: "base",
+      },
+      context.ctx,
+    );
+    assert.deepEqual(seen, [{ ...first, sessionId: "custom-first-session" }]);
+    assert.equal(context.statuses.get("plan-mode"), "plan ready", "custom starts keep restored plans");
+  }
+
+  const second = createPlanApproval("# Revised\n\n- one\n");
+  branch.push({ type: "custom", customType: PLAN_APPROVAL_ENTRY_TYPE, data: second });
+  await beforeAgentStart({ messageType: "custom" }, context.ctx);
+  assert.deepEqual(
+    seen,
+    [first, second].map((approval) => ({ ...approval, sessionId: "custom-first-session" })),
+  );
+  assert.deepEqual(statusesAtDelivery, ["plan ready", "plan ready"], "restore precedes announcement");
+  await beforeAgentStart({ messageType: "user", prompt: "Revise it", systemPrompt: "base" }, context.ctx);
+  assert.equal(seen.length, 2, "a subsequent user start does not repeat approval delivery");
+  assert.equal(context.statuses.get("plan-mode"), "plan active", "user starts still clear ready plans");
+});
+
 test("latestPlanApproval takes the newest well-formed entry", () => {
   const good = createPlanApproval("# A");
   assert.equal(latestPlanApproval([]), undefined);

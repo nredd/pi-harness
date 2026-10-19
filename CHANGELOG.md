@@ -1,8 +1,12 @@
 # @nredd/pi-plan-mode
 
-## Unreleased
+## [Unreleased]
 
 ### Fixed
+
+- Restore late new-session setup and announce approved plans before returning from a
+  custom `before_agent_start`. Approval delivery remains once per plan and session;
+  custom starts preserve ready plans while user starts still clear them.
 
 - Replace the decline clarification gate with persisted `reproposalReview`: only the
   machine-readable `plan_mode_question` `reproposal_confirmation` mode's canonical
