@@ -19,6 +19,7 @@ import {
 	UsageService,
 	type UsageSnapshot,
 } from "../../packages/subscription-router/src/usage.ts";
+import { freezeNativeTimers } from "./native-timers.ts";
 import { assertHostIdentity, isolateStackHome, startStack } from "./support.ts";
 
 export {
@@ -86,6 +87,7 @@ export class StackUsage extends UsageService {
 /** Own every session and its timers, shutting down before restoring the isolated home. */
 export class GoalStack {
 	readonly home = isolateStackHome();
+	readonly nativeTimers = freezeNativeTimers();
 	readonly clock = new FakeClock();
 	readonly usage = new StackUsage(this.clock);
 	readonly tracker = new ExhaustionTracker(() => this.clock.now());
@@ -105,25 +107,17 @@ export class GoalStack {
 	}
 
 	/**
-	 * Import after home isolation; scheduling and completion delivery share the fake clock.
-	 * Residual fork-native timers (not driven by clock.advance):
-	 * - quota-admission.ts's 100 ms fail-open timeout is cancelled by the cached router reply.
-	 *   Admission tests assert the exact returned quota block, which a timeout cannot produce.
-	 * - AgentManager's retention sweep only evicts old finished records, not dispatches or
-	 *   notices. These tests never wait for retention; the interval is unref'd in its constructor
-	 *   and cleared by dispose(), reached through cleanup()'s awaited quit shutdown below.
-	 * - agent-manager.ts's 3 s child-shutdown watchdog races each child's `session_shutdown` emit.
-	 *   It is unref'd. Children never start a monitor manager (`isChildSession`), so the kit's child
-	 *   shutdown handlers resolve without timers, the emit wins the race and dispose() follows;
-	 *   teardown never waits for the watchdog to fire.
-	 * - index.ts's 80 ms foreground spinner interval only repaints the running Agent row through
-	 *   `streamUpdate()`; it is cleared in the foreground run's `finally`. No assertion reads a
-	 *   spinner frame or counts row updates, so its ticks cannot change an outcome.
-	 * Core: quota-goal.test.ts retries with `baseDelayMs: 0`, so AgentSession's retry sleep is a
-	 * zero-delay macrotask. It always fires and no assertion depends on elapsed time; a core
-	 * retry clock seam would buy nothing here (orchestrator adjudication on #33).
-	 * Follow-up fork seams: pass Clock to checkAdmission, the child-shutdown watchdog and
-	 * AgentManager retention/cleanup (including retention timestamps). No asserted path here needs either native timer to fire.
+	 * Import after home isolation and native-timer freezing. Every positive native timeout/
+	 * interval stays inert through shutdown, proving passing outcomes need none to fire.
+	 * Zero/omitted delays pass through: core retry uses baseDelayMs: 0, a real macrotask
+	 * with no elapsed-time assertion; no core clock seam needed (orchestrator ruling, #33).
+	 * Known residuals (diagnostics, NOT an exhaustive allowlist):
+	 * - Admission fail-open timeout: 100 ms.
+	 * - AgentManager retention sweep: periodic finished-record eviction.
+	 * - Child-shutdown watchdog: 3 s.
+	 * - Foreground spinner and AgentWidget repaint: 80 ms.
+	 * - FleetList repaint: 200 ms.
+	 * - rpiv-todo overlay prewarm: 2000 ms.
 	 */
 	async subagents(): Promise<ExtensionFactory> {
 		assertHostIdentity("pi-subagents");
@@ -187,11 +181,21 @@ export class GoalStack {
 
 	/** Drain extension resources, then dispose their actual host sessions. */
 	async cleanup(): Promise<void> {
-		for (const h of this.live.reverse()) {
-			await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-			h.cleanup();
+		try {
+			for (const h of this.live.splice(0).reverse()) {
+				try {
+					await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+				} finally {
+					h.cleanup();
+				}
+			}
+		} finally {
+			try {
+				for (const p of this.physical.splice(0)) p.unregister();
+				this.home.cleanup();
+			} finally {
+				this.nativeTimers.restore();
+			}
 		}
-		for (const p of this.physical.splice(0)) p.unregister();
-		this.home.cleanup();
 	}
 }
