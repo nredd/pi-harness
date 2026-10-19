@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from harness.git_fixture import make_git_fixture
 from harness.headless import run_headless
 from harness.sandbox import enable_faux_models
-from scenarios.integration.test_dev_tools import make_git_fixture
 from scenarios.integration.test_subagents import outcomes, script, spawn
 
 if TYPE_CHECKING:
