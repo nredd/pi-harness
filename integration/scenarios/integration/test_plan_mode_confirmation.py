@@ -14,8 +14,8 @@ import pytest
 
 from harness.headless import RunResult, run_headless
 from harness.paths import FAUX_EXTENSION
+from harness.rpc import Rpc, rpc
 from scenarios.integration.test_plan_mode_gate import GATE_ERROR, complete, tool
-from scenarios.integration.test_session_kit_quota import Rpc, rpc
 
 if TYPE_CHECKING:
     from harness.sandbox import Sandbox
