@@ -96,6 +96,7 @@ def test_transcript_invariant() -> None:
 
 
 def test_transcript_static_entries_stay_one_line() -> None:
+    """A blank gutter is valid only at an entry boundary, and must not hide multiline output."""
     rule = "┄" * 40
     valid = [rule, "  todo ≡ 4 ops · ✓", rule, "▸ read notes.txt · alpha", rule]
     assert one_line_violations(valid, 0, len(valid), []) == []
