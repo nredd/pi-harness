@@ -315,6 +315,7 @@ export function createMockContext(overrides: Record<string, unknown> = {}) {
       setFooter(value: unknown) {
         footer = value;
       },
+      onTerminalInput: overrides.onTerminalInput ?? (() => () => undefined),
       pasteToEditor(value: string) {
         pastedEditorTexts.push(value);
         if (pasteOverride) pasteOverride(value);

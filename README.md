@@ -1,8 +1,8 @@
-# 🧭 pi-plan-mode (nredd fork) — Plan Before Pi Edits Code
+# pi-plan-mode (nredd fork) -- Plan Before Pi Edits Code
 
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.59.2` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.3`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
+Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT). This unreleased maintenance branch rebases the patch queue onto upstream `@narumitw/pi-plan-mode@0.59.3` (release commit `9b8befda`), with Pi `1.2.0` development hosts. The latest released fork remains `v0.59.2-nredd.4`; the install examples below deliberately use that tag, not this review branch. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
 
 Differences from upstream. The presentational ones come first; the ready-plan flow, decline gate, and bash policy changes follow:
 
@@ -27,7 +27,7 @@ Differences from upstream. The presentational ones come first; the ready-plan fl
 - In print and JSON mode, `/plan` commands that send a model turn (`finalize`, `implement`, `/plan <prompt>`) return only after that turn has run, so a scripted `pi -p "/plan start" "plan it" "/plan finalize"` gets every turn answered. Upstream returns right after sending, and print mode exits with the turn unanswered.
 - `Start fresh and implement` starts the fresh session right away. Upstream stages it until the run that produced the plan settles (`fresh-handoff-coordinator.ts`); the fork drops that path because its chooser only opens once the run is already idle.
 
-Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.59.2.
+Upstream 0.59.3 now preserves ready plans on custom-message starts; the fork keeps that guard after late state restoration and approval announcement. The workflow mutex and saved/implementation plan lifecycle otherwise remain upstream-owned. The fork's policy and decline-contract differences are listed above.
 
 Use a Codex-like `/plan` mode to explore a codebase, resolve important questions, and approve an implementation-ready plan before Pi edits files.
 
@@ -49,20 +49,21 @@ This release requires Pi 0.80.6 or newer.
 Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
 
 ```bash
-pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.3
+pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.4
 ```
 
 Try without installing permanently:
 
 ```bash
-pi -e git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.3
+pi -e git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.4
 ```
 
 Build and try this package locally from the repository root:
 
 ```bash
-npm --workspace @narumitw/pi-plan-mode run build
-pi -e ./packages/pi-plan-mode
+npm ci --ignore-scripts
+npm run build
+pi -e .
 ```
 
 The package declares `dist/index.ts`, so build an unbuilt local checkout before Pi loads the package directory.
@@ -150,8 +151,8 @@ Another active-tool policy may hide them, in which case Plan start or restore fa
 By default, the Plan policy allows active safe built-ins such as `read`, limited `bash`, limited `powershell`, `grep`, `find`, and `ls`.
 The optional native `powershell` tool must be active when an automatic Plan policy starts, for example through Pi's Windows `defaultTools` setting, unless its name was explicitly retained for first-request resolution.
 Tools named `edit`, `write`, or `update_plan` and deselected tools are blocked at execution time even though active schemas remain visible.
-Tools outside the reviewed core policy—including native MCP tools, native orchestration, extensions, and custom tools—are denied by default; explicitly allow their names before starting only when you accept the risk.
-Server annotations such as `readOnlyHint` are unverified hints, not permission or a safety guarantee.
+Tools outside the reviewed core policy are denied by default except trusted user-scope/package extension tools declaring `annotations.readOnlyHint: true`, as described above. Native MCP, native orchestration, built-in extensions, and project-scope extensions still require explicit opt-in.
+Server annotations such as `readOnlyHint` are unverified hints, not permission or a safety guarantee; the fork trusts the declaration only from the admitted extension sources.
 For example, opt into `mcp__docs__read`, `mcp__firecrawl__firecrawl_scrape`, or `lsp_diagnostics` through `/plan tools` or `defaultPlanTools` before the next workflow.
 
 Direct and `model-only` tools must be active in Pi; `model-only` tools cannot be called by another tool.
@@ -434,7 +435,7 @@ This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
 ## 🗂️ Package layout
 
 ```text
-packages/pi-plan-mode/
+pi-plan-mode/
 ├── src/                               # Policy, questions, settings, and handoff modules
 │   ├── index.ts                       # Thin Pi entrypoint
 │   └── plan-mode.ts                   # Planning policy and implementation handoff
@@ -445,6 +446,8 @@ packages/pi-plan-mode/
 ```
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
+
+Fork maintenance follows the split/diff-replay queue, never unreleased upstream main. Exclude `dist/` from replay and regenerate the standalone lockfile for the release's development pins. Run `npm run check && npm test` locally. Also apply the queue in a full upstream monorepo clone at the release tag, run `npm ci --ignore-scripts`, build `packages/pi-tui-kit`, run the Plan package's `npm run check`, then run root `PI_EXTENSIONS_TEST_BASE='@narumitw/pi-plan-mode@0.59.3' npm test`. Rebuild the Plan package there after the final source change, copy its `dist/` back here, and commit those artifacts last. The vendored harness tracks that release, including the mock UI's `onTerminalInput` method.
 
 ## 🔎 Keywords
 
