@@ -68,6 +68,10 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
   `$TMPDIR/pi-monitors-<uid>/<sessionId>.<ownerPid>/<monitorId>.json`. Startup checks dead-owner
   records, including a resumed session, and validates process identity before signalling. It never
   sweeps a live owner's monitors. Two panes resuming the same session have separate directories.
+  A group whose leader already exited is reaped only when a member started at spawn anchors it: its
+  `ps lstart` must read under one second after, or under two before, the recorded spawn (`lstart` is
+  a whole-second floor). A member born later cannot authenticate a possibly reused group, so its
+  record is kept, not signalled.
 - Plan mode admits only `monitor_read`; start and stop are mutating tools. Ordinary tool hooks apply
   to the tool call, but a custom argv tool does not automatically inherit Bash-specific policies.
 
