@@ -98,7 +98,12 @@ def test_resize_transitions_leave_no_stale_rows(sandbox: Sandbox, tui: Callable[
     entries = [json.loads(line) for line in session.read_text().splitlines()]
     for entry in entries:
         if entry.get("message", {}).get("role") == "assistant":
-            entry["message"]["usage"]["cacheRead"] = 3000
+            turn_usage = entry["message"]["usage"]
+            turn_usage["cacheRead"] = 3000
+            turn_usage["totalTokens"] += 3000
+            # The frozen footer fixture has nonzero cost; the generic transcript generator
+            # does not. Preserve the mandatory cost segment in both tier assertions.
+            turn_usage["cost"]["cacheRead"] = turn_usage["cost"]["total"] = 0.004
     session.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
     usage = install_usage_fixture(sandbox)
     usage.set(anthropic=(20, 40), codex=(30, 50))
