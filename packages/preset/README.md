@@ -7,7 +7,7 @@ Nothing in this repository installs it, and nothing here changes a live Pi insta
 Standalone plugin users are unaffected. This is deliberately opt-in policy, not a replacement
 imposed on `@nredd/pi-dev-tools`, `@nredd/pi-session-kit`, or `@nredd/pi-subscription-router`.
 
-Tested hosts: the package tests run on core `v1.3.0-nredd.4` (upstream `1.3.0` plus the fork's patch queue,
+Tested hosts: the package tests run on core `v1.3.0-nredd.6` (upstream `1.3.0` plus the fork's patch queue,
 the release tarballs pinned in `devDependencies`); `make check-package-contracts` installs the packed
 preset into exact stock Pi `1.3.0`. Peers are `*` per Pi's package rules.
 
@@ -92,10 +92,10 @@ is exactly the known managed link, and it happens only during explicit activatio
 
 ## Evidence and what is pending
 
-Executed in this workspace (see the gate below): footer unit tests (migrated; Biome formatting plus
-one import path each, no assertion changes), static resource/schema/privacy/dependency tests, `npm pack` allowlist and license
-tests, and real Pi 1.3.0 resource discovery (extensions, skills, themes, collisions, package
-manager resolution) in a temporary `HOME`/agent dir with no model calls or auth.
+Executed in this workspace (see the gate below): preserved footer helper assertions, real interactive
+footer scenarios (quota, cache, widths, lifecycle), headless mode bindings, static resource/schema/privacy/
+dependency tests, `npm pack` allowlist/license tests, and real Pi 1.3.0 resource discovery in a temporary
+`HOME`/agent dir with no live model calls or auth. Every test runs under Vitest and Bun.
 
 Real packed-tarball, real-fork evidence (committed, `make check-fork-package-contracts`, see
 [package contracts](../../docs/package-contracts.md)): the packed preset and packed
@@ -122,19 +122,14 @@ From the repository root:
 
 ```sh
 npm ci --ignore-scripts
-npm run check -w @nredd/pi-preset   # biome, tsc (against Pi 1.3.0 types), node:test
+npm run check -w @nredd/pi-preset   # biome, strict tsc, Vitest, bun test (Bun 1.3.14)
 ```
 
-Everything under `extensions/`, `lib/`, and `test/` is formatted by Biome (no formatter override).
-`extensions/expanded-footer.ts`, `lib/footer-quota.ts`, and the two migrated `test/footer-*.test.mjs`
-therefore differ from the source snapshot in whitespace and line wrapping only (token-identical after whitespace
-normalization), plus one `import` path per migrated test (see
-[source provenance](../../docs/source-provenance.md)). They are not byte-faithful.
-`lib/footer-cache.ts` is byte-identical.
-
-The tests written for this package (`test/*.test.ts`, `test/support.ts`) are TypeScript, run directly
-by Node's type stripping, and checked by `tsc --strict` with no `any`. The two migrated `.mjs` tests
-stay untyped JavaScript, as in the source.
+- `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
+- `createExpandedFooter({ clock })` optionally injects one clock for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
+- `test/*.test.ts` and support code are checked by strict TypeScript; preserved `test/footer-*.test.mjs` helper assertions stay JavaScript. Everything under `extensions/`, `lib/` and `test/` is Biome-formatted.
+- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam. `lib/footer-quota.ts` differs only by formatting; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
+- These tests cover `packages/preset`, not the live dotfiles footer. Dotfiles' own `tests/footer-*.test.mjs` cover that copy; preset adoption remains profile split #21.
 
 Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_*`,
 and `PI_OFFLINE` into a temporary directory (restored afterwards) and pass the agent dir explicitly.
