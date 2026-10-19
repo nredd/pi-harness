@@ -8,8 +8,6 @@
   "scenarios/bench/test_startup.py": "Cold startup to first frame and faux TTFT within 20% of baseline",
   "scenarios/tui/test_transcript_rows.py::test_every_entry_is_one_line_and_collapsible": "Every settled transcript entry is ONE line; only entries with hidden detail advertise disclosure and toggle on click",
   "scenarios/tui/test_transcript_rows.py::test_plan_mode_rows_are_one_line_and_collapsible": "Finding: `plan_mode_question` had no renderCall and a Markdown result; Esc on a ready plan discarded it",
-  "scenarios/tui/test_todo_history.py": "Settled todo rows use historical result snapshots after actual host reload and resize, never the current task subject",
-  "scenarios/tui/test_todo_heading.py::test_heading_click_toggles_the_list": "rpiv-todo: clicking the `Todos` heading collapses the list to an expand hint and back",
   "scenarios/tui/test_conversation_viewer.py::test_viewer_wheel_and_click_footer_close": "Subagent conversation viewer (fullscreen observer, no backdrop): opens from the fleet by keyboard, wheel scrolls `fullscreenWheelScrollLines`, Alt+wheel 5x, a click on the footer `Esc close` label closes it, footer hint names `PgUp/PgDn`",
   "scenarios/tui/test_fleet_stall.py::test_silent_child_reads_thinking_then_stalled": "Finding: no way to tell a busy child from a dead stream. Silent call reads `thinking · Ns`, then `stalled? · 2mNNs` past `STALL_MS` (real time, `slow`)",
   "scenarios/bench/test_render.py::test_render_2k_message_transcript": "Full-frame ms and live heap with a resumed 2000-message session, within 20% of baseline",
@@ -49,7 +47,6 @@
   "scenarios/integration/test_quota_footer_headless.py::test_json_print_mode_never_polls": "Non-TUI (JSON print) runs never issue the usage RPC",
   "scenarios/integration/test_quota_footer_headless.py::test_plain_print_mode_never_polls": "Plain-text print mode never polls subscription usage",
   "scenarios/integration/test_quota_footer_headless.py::test_rpc_mode_never_mounts_quota_poller": "RPC startup and get_state never mount quota polling, with no model calls",
-  "scenarios/tui/test_transcript_rows.py::test_todo_without_extra_detail_has_no_disclosure": "A settled batch todo row has no disclosure and stays one line after click or Ctrl+O",
   "scenarios/bench/test_multisession.py::test_multi_session_responsiveness": "Finding: TUI input and streaming lag grows with open sessions at low CPU; N=1/4/8 panes on a 2k transcript, probe-measured",
   "scenarios/tui/test_latency_probe.py::test_probe_reports_a_blocked_event_loop": "Instrument check: `probes/latency.ts` reports a deliberate 400 ms event-loop block and captures the TUI",
   "scenarios/tui/test_latency_probe.py::test_probe_sees_keystrokes_and_idle_silence": "Instrument check: keystrokes yield input-to-paint samples, an idle pane writes nothing",
@@ -67,5 +64,8 @@
   "scenarios/tui/test_footer_resize.py::test_resize_transitions_leave_no_stale_rows": "Test-scoped preset footer survives real SIGWINCH 120 -> 60 -> 320 -> 120 with no stale rows",
   "inprocess/workflow-trigger.test.ts": "Workflow mentions do not arm keyword-disabled orchestration",
   "inprocess/nesting.test.ts": "Real child pipeline denies nested workflow/background Agent calls",
-  "inprocess/turn-cap.test.ts": "Turn-capped child produces bounded tool-free final report"
+  "inprocess/turn-cap.test.ts": "Turn-capped child produces bounded tool-free final report",
+  "inprocess/todo-widget-session.test.ts": "Single-fork B:rpiv-todo heading clicks and wheel reach all 28 batch-created todos with exact completion counts",
+  "inprocess/todo-history-session.test.ts": "Single-fork B:rpiv-todo historical renderer arguments and viewport survive real resource-loader reload and resize",
+  "inprocess/todo-host-disclosure.test.ts": "Single-fork B:rpiv-todo settled four-create batch stays flat under raw click and Ctrl+O"
 }
