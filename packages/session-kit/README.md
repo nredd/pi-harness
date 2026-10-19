@@ -70,8 +70,10 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
   sweeps a live owner's monitors. Two panes resuming the same session have separate directories.
   A group whose leader already exited is reaped only when a member started at spawn anchors it: its
   `ps lstart` must read under one second after, or under two before, the recorded spawn (`lstart` is
-  a whole-second floor). A member born later cannot authenticate a possibly reused group, so its
-  record is kept, not signalled.
+  a whole-second floor). A member that reads a second or more after the spawn cannot authenticate a
+  possibly reused group, so its record is kept, not signalled. Within that window a later-born member
+  in a reused group is indistinguishable; the dead leader, matching group and session, and no prior
+  members bound that case, they do not exclude it.
 - Plan mode admits only `monitor_read`; start and stop are mutating tools. Ordinary tool hooks apply
   to the tool call, but a custom argv tool does not automatically inherit Bash-specific policies.
 
