@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.integration
 
-GATE_ERROR = "plan_mode_complete is blocked: explicit permission to submit a proposal is required"
 # First prompt proposes a plan; the second is a reply while it awaits action (a decline), and
 # the model tries to re-submit it unchanged.
 DECLINE_PROMPTS = ["/plan start", "plan it", "no, change the scope"]

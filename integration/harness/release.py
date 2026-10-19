@@ -55,7 +55,7 @@ def gitlink_tag(directory: Path) -> str:
 
 
 def manifest_checksums(tag: str, manifests: Path) -> dict[str, str]:
-    """Collect recorded release asset identities, refusing contradictory manifests.
+    """Collect release asset identities, skipping explicit artifact-free source snapshots.
 
     Parameters:
         tag (str): requested core tag.
@@ -71,6 +71,9 @@ def manifest_checksums(tag: str, manifests: Path) -> dict[str, str]:
     prefix = f"https://github.com/nredd/pi/releases/download/{tag}/"
     for path in sorted(manifests.glob("*.json")):
         doc = json.loads(path.read_text())
+        # Gitlink-only manifests record source provenance, not a new core asset release.
+        if doc.get("artifacts") == []:
+            continue
         matches = any(
             fork.get("path") == "forks/pi" and fork.get("tag") == tag for fork in doc.get("forks", [])
         )
