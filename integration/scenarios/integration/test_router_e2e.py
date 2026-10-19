@@ -35,7 +35,7 @@ def pi_shim(directory: Path) -> Path:
 
 
 def test_router_e2e_all(tmp_path: Path, rendered_settings: dict[str, Any]) -> None:
-    """The four remaining admission/exhaustion shell cases pass on the pinned repos."""
+    """The remaining wait/no-router shell cases pass on the pinned repos."""
     packages = rendered_settings.get("packages", [])
     overrides = local_overrides_from_env()
     router_dir = pinned_checkout("pi-subscription-router", packages, overrides)

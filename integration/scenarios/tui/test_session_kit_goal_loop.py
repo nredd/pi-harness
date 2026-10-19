@@ -1,4 +1,4 @@
-"""pi-session-kit `/loop` and `/goal` in real TUI panes: ticks, caps, suspension, isolation.
+"""Remaining goal/loop child-wait scenario, pending an injectable subagent outbox clock.
 
 `/loop` needs a live, idle TUI (print mode disposes the session when the command returns), so the
 loop scenarios run here. The 30s minimum interval is scaled to 1s with `providers/fast_timers.mjs`
@@ -33,19 +33,6 @@ CHILD = "kid/child"
 EVIDENCE = "make test: 12 passed"
 
 
-def ticks(count: int = 30, **step: Any) -> list[dict[str, Any]]:
-    """Faux steps answering `tick 1` .. `tick N`, each with the same extra step keys.
-
-    Parameters:
-        count (int): number of steps.
-        **step (Any): extra step keys, e.g. `delayMs`.
-
-    Returns:
-        list[dict[str, Any]]: faux steps.
-    """
-    return [{"text": f"tick {i}"} | step for i in range(1, count + 1)]
-
-
 def script(steps: list[dict[str, Any]], **children: list[dict[str, Any]]) -> dict[str, Any]:
     """A faux script: the parent on `faux/main`, each child provider serving model `child`.
 
@@ -77,35 +64,6 @@ def pane_for(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> Callable[[dict[s
         return tui(payload, extra_args=kit_args(sandbox), env=FAST)
 
     return launch
-
-
-def count(pane: TmuxPane, pattern: str) -> int:
-    """How many times a regex-free marker shows on the current screen.
-
-    Parameters:
-        pane (TmuxPane): pane to read.
-        pattern (str): literal text.
-
-    Returns:
-        int: occurrences in the visible capture.
-    """
-    return pane.capture().count(pattern)
-
-
-def test_loop_is_suspended_in_plan_mode(pane_for: Callable[[dict[str, Any]], TmuxPane]) -> None:
-    """In Plan mode ticks skip without spending runs; leaving it lets the loop run again."""
-    pane = pane_for(script(ticks()))
-    submit(pane, "/plan start")
-    pane.wait_for(r"Plan mode enabled", timeout_s=15)
-    submit(pane, "/loop 30s ping --max 5")
-    pane.wait_for(r"loop 1: every 30s", timeout_s=15)
-    time.sleep(3.5)
-    submit(pane, "/loop list")
-    pane.wait_for(r"1: every 30s, 0/5 runs, [1-9]\d* skipped", timeout_s=10)
-    assert count(pane, "tick 1") == 0, pane.capture()
-    submit(pane, "/plan exit")
-    pane.wait_for(r"tick 1", timeout_s=30)
-    submit(pane, "/loop stop all")
 
 
 def test_no_tick_while_a_goal_waits_on_a_subagent(

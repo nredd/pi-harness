@@ -163,6 +163,8 @@ export interface StackOptions {
 	cwd?: string;
 	factories: ExtensionFactory[];
 	settings?: HarnessOptions["settings"];
+	useModelRuntimeStream?: boolean;
+	withConfiguredAuth?: boolean;
 	sessionManager?: HarnessOptions["sessionManager"];
 	mode?: "print" | "json" | "rpc" | "tui";
 	ui?: ExtensionUIContext;
