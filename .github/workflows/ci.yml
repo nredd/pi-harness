@@ -46,6 +46,12 @@ jobs:
         run: make install
       - name: Owned gates (biome, tsc, vitest, bun test, scripts, integration units)
         run: make check-ts check-scripts check-integration
+      - name: Packages without a Bun run (not run)
+        run: |
+          # shellcheck disable=SC2016 # the single-quoted program is JavaScript, its ${} is a JS template
+          for manifest in packages/*/package.json; do
+            node -e 'const m = require(process.argv[1]); if (!m.scripts["test:bun"]) console.log(`::notice title=bun test not run::${m.name} has no test/scenarios suite under bun yet`)' "./$manifest"
+          done
       - name: Benchmark unit gate
         if: runner.os == 'macOS'
         run: |
@@ -97,6 +103,7 @@ jobs:
   bench:
     name: bench (not run)
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Report
         run: |
