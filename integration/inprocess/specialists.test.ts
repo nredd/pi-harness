@@ -1,8 +1,9 @@
 /** Real pi-subagents enforces the unmodified preset package's specialist frontmatter. */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
 	agentStack,
 	ask,
@@ -15,7 +16,7 @@ import {
 	report,
 	WEB,
 } from "./agents-support.ts";
-import { isolateStackHome } from "./support.ts";
+import { isolateResearchPackages, isolateStackHome, loadThirdParty } from "./support.ts";
 
 const SURFACES: Record<string, { required: string[]; forbidden: string[] }> = {
 	architect: { required: [...READS, ...GIT_READS], forbidden: [...MUTATIONS, ...WEB] },
@@ -32,15 +33,38 @@ const SURFACES: Record<string, { required: string[]; forbidden: string[] }> = {
 };
 let home: ReturnType<typeof isolateStackHome>;
 let h: Harness;
+let restoreDependencies: () => void;
+let fetchCalls = 0;
 beforeAll(async () => {
 	home = isolateStackHome();
+	restoreDependencies = isolateResearchPackages(home.root);
+	vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+		fetchCalls++;
+		throw new Error("Specialist scope tests must not access the network");
+	});
 	h = await agentStack(home.root, {
-		packages: ["pi-web-access", "pi-memory"].map((p) => new URL(`fixtures/${p}`, import.meta.url).pathname),
+		factories: [await loadThirdParty("web"), await loadThirdParty("memory")],
+		packages: ["pi-web-access", "pi-memory"].map((name) =>
+			fileURLToPath(new URL("./", import.meta.resolve(`${name}/package.json`))),
+		),
 	});
 });
 afterAll(async () => {
-	if (h) await closeAgentStack(h);
-	home.cleanup();
+	try {
+		if (h) await closeAgentStack(h);
+		expect(fetchCalls).toBe(0);
+	} finally {
+		vi.restoreAllMocks();
+		restoreDependencies?.();
+		home.cleanup();
+	}
+});
+
+it("real packages register the capabilities excluded from specialists without external work", () => {
+	const registered = h.session.getAllTools().map((tool) => tool.name);
+	for (const name of [...WEB, "memory_write", "scratchpad"]) expect(registered).toContain(name);
+	expect(readFileSync(join(home.root, "memory/qmd-calls"), "utf8")).toContain("collection list");
+	expect(fetchCalls).toBe(0);
 });
 
 it.each(Object.keys(SURFACES))("specialists expose their declared surfaces: %s", async (type) => {

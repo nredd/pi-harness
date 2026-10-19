@@ -2,13 +2,11 @@
 
 One headless run issues every row as a faux tool call, so each row checks what the policy hook
 actually decided, not what a unit test of `tool-policy.ts` predicts. Bash rows cover the shell
-policy; tool rows cover annotated read-only admission for pi-dev-tools and the denial of its
-mutating tools.
+policy. Typed-tool admission lives in `integration/inprocess/annotated-tools.test.ts`.
 """
 
 from __future__ import annotations
 
-import json
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -32,28 +30,6 @@ ALLOWED = [
     "gh api repos/x",
     "curl -s https://x",
     "rg -i foo",
-]
-WORKTREE_TOOLS = ["git_worktree_list", "git_worktree_add", "git_worktree_remove", "git_worktree_prune"]
-# pi-dev-tools calls: annotated read-only tools run, mutating ones are not selected by the policy.
-# `ssh_exec` rows only check the gate: `ssh` is shimmed and the sandbox has no `~/.ssh/config`,
-# so an admitted call fails inside the tool, never with the block marker. Deferred tools
-# (`ssh_push`, `py_*`, `cargo_*`) never reach the gate unpromoted, so `git_commit` stands for
-# the mutating-tool denial. `git_worktree_*` are deferred too; `policy_run` makes them always
-# active in the sandbox so their annotations are what decides.
-TOOL_ALLOWED: list[tuple[str, dict[str, object]]] = [
-    ("git_status", {}),
-    ("git_log", {"max_count": 1}),
-    ("git_worktree_list", {}),
-    ("ssh_exec", {"host": "home", "command": "ls /config"}),
-]
-TOOL_BLOCKED: list[tuple[str, dict[str, object]]] = [
-    ("git_commit", {"subject": "Nope", "paths": ["README.md"]}),
-    ("git_worktree_add", {"branch": "nope"}),
-    ("git_worktree_remove", {"path": "/tmp/nope"}),
-    ("git_worktree_prune", {"dry_run": True}),
-    ("ssh_exec", {"host": "home", "command": "rm -rf ~"}),
-    ("ssh_exec", {"host": "home", "command": "ls; rm x"}),
-    ("ssh_exec", {"host": "evil", "command": "ls"}),
 ]
 BLOCKED = [
     "cd .. && ls",
@@ -110,41 +86,22 @@ def policy_run(tmp_path_factory: pytest.TempPathFactory, template_home: Path) ->
     init_repo(box.home / ".local" / "share" / "chezmoi")
     cwd = box.home / "code" / "pi-plan-mode"
     init_repo(cwd)
-    # Plan mode freezes its tool set at `/plan start` and a `search_tools` promotion does not
-    # outlive its prompt, so deferred tools cannot be exercised here; make the worktree tools
-    # always active in the sandbox to test the admission policy itself.
-    deferred_path = box.agent_dir / "deferred-tools.json"
-    deferred = json.loads(deferred_path.read_text())
-    deferred["alwaysActive"] = [*deferred["alwaysActive"], *WORKTREE_TOOLS]
-    deferred_path.write_text(json.dumps(deferred, indent=2))
     commands = ALLOWED + BLOCKED
-    calls: list[tuple[str, dict[str, object]]] = [("bash", {"command": command}) for command in commands]
-    calls += TOOL_ALLOWED + TOOL_BLOCKED
-    steps: list[dict[str, object]] = [{"tools": [{"name": name, "args": args}]} for name, args in calls]
+    steps = [{"tools": [{"name": "bash", "args": {"command": command}}]} for command in commands]
     result: RunResult = run_headless(
         box,
         {"providers": {"faux": {"models": ["main"], "steps": [*steps, {"text": "POLICY DONE"}]}}},
         ["/plan start", "go"],
         cwd=cwd,
     )
-    outcomes = {policy_key(outcome.name, outcome.args): outcome for outcome in result.tool_outcomes()}
-    expected = [*commands, *(policy_key(name, args) for name, args in TOOL_ALLOWED + TOOL_BLOCKED)]
-    missing = [key for key in expected if key not in outcomes]
+    outcomes = {
+        str(outcome.args.get("command")): outcome
+        for outcome in result.tool_outcomes()
+        if outcome.name == "bash"
+    }
+    missing = [command for command in commands if command not in outcomes]
     assert not missing, f"Calls never settled: {missing}\n{result.transcript()}"
     return outcomes
-
-
-def policy_key(name: str, args: dict[str, object]) -> str:
-    """Key an outcome by its bash command, or by `tool:name` for typed tools.
-
-    Parameters:
-        name (str): tool name.
-        args (dict[str, object]): call arguments.
-
-    Returns:
-        str: lookup key.
-    """
-    return str(args.get("command")) if name == "bash" else f"tool:{name}:{sorted(args.items())}"
 
 
 @pytest.mark.parametrize("command", ALLOWED)
