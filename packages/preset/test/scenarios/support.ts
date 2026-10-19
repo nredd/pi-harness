@@ -9,7 +9,7 @@ import {
 	type InteractiveHarness,
 	type InteractiveHarnessOptions,
 } from "@earendil-works/pi-coding-agent/testing/interactive";
-import { createExpandedFooter, type FooterClock } from "../../extensions/expanded-footer.ts";
+import { createExpandedFooter, type FooterClock, type TimerHandle } from "../../extensions/expanded-footer.ts";
 import { USAGE_CHANNEL } from "../../lib/footer-quota.ts";
 
 export const STATUS = "STATUS-LINE-OK";
@@ -21,13 +21,17 @@ export class FakeClock implements FooterClock {
 	private nextId = 0;
 	private timers = new Map<number, { at: number; interval?: number; callback: () => void }>();
 	readonly fired: number[] = [];
-	readonly now = () => this.time;
-	readonly setTimeout = (callback: () => void, ms: number): unknown => this.schedule(callback, ms);
-	readonly setInterval = (callback: () => void, ms: number): unknown => this.schedule(callback, ms, ms);
-	readonly clearTimeout = (handle: unknown): void => {
-		this.timers.delete(handle as number);
-	};
-	readonly clearInterval = this.clearTimeout;
+	now(): number {
+		return this.time;
+	}
+
+	setTimeout(callback: () => void, ms: number): TimerHandle {
+		return this.schedule(callback, ms);
+	}
+
+	setInterval(callback: () => void, ms: number): TimerHandle {
+		return this.schedule(callback, ms, ms);
+	}
 
 	/** Live timers prove shutdown and one-shot expiry leave no scheduling behind. */
 	get pending(): number {
@@ -50,10 +54,14 @@ export class FakeClock implements FooterClock {
 		this.time = end;
 	}
 
-	private schedule(callback: () => void, ms: number, interval?: number): number {
+	private schedule(callback: () => void, ms: number, interval?: number): TimerHandle {
 		const id = ++this.nextId;
 		this.timers.set(id, { at: this.time + ms, interval, callback });
-		return id;
+		return {
+			cancel: () => {
+				this.timers.delete(id);
+			},
+		};
 	}
 }
 

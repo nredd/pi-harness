@@ -25,7 +25,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { analyzeCache, cacheTtlSeconds, formatCacheMarker } from "../lib/footer-cache.ts";
-import { createQuotaPoller, formatQuotaRow, type PollerDeps } from "../lib/footer-quota.ts";
+import { createQuotaPoller, formatQuotaRow } from "../lib/footer-quota.ts";
 
 /** Format token counts for compact footer display. Mirrors the stock footer's formatTokens. */
 function formatTokens(count: number): string {
@@ -66,17 +66,30 @@ function addUsage(
 	totals.cost += usage.cost.total;
 }
 
-/** One clock for deferred startup, quota cadence/staleness, and cache expiry. */
-export type FooterClock = Required<
-	Pick<PollerDeps, "now" | "setTimeout" | "clearTimeout" | "setInterval" | "clearInterval">
->;
+/** Mirrors packages/session-kit/src/clock.ts: handles own cancellation, not Node timer methods. */
+export interface TimerHandle {
+	cancel(): void;
+}
+
+/** Same structural boundary as session-kit's Clock, without a cross-package dependency. */
+export interface FooterClock {
+	now(): number;
+	setTimeout(callback: () => void, ms: number): TimerHandle;
+	setInterval(callback: () => void, ms: number): TimerHandle;
+}
 
 const realClock: FooterClock = {
 	now: () => Date.now(),
-	setTimeout: (fn, ms) => setTimeout(fn, ms),
-	clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-	setInterval: (fn, ms) => setInterval(fn, ms),
-	clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+	setTimeout(callback, ms) {
+		const timer = setTimeout(callback, ms);
+		timer.unref();
+		return { cancel: () => clearTimeout(timer) };
+	},
+	setInterval(callback, ms) {
+		const timer = setInterval(callback, ms);
+		timer.unref();
+		return { cancel: () => clearInterval(timer) };
+	},
 };
 
 /** Mount the expanded footer; omitted options preserve the real clock and timers. */
@@ -103,41 +116,34 @@ export function createExpandedFooter(options: { clock?: FooterClock } = {}): Ext
 					onChange: () => tui.requestRender(),
 					now: () => clock.now(),
 					setTimeout: (fn, ms) => clock.setTimeout(fn, ms),
-					clearTimeout: (handle) => clock.clearTimeout(handle),
+					clearTimeout: (handle) => (handle as TimerHandle | undefined)?.cancel(),
 					setInterval: (fn, ms) => clock.setInterval(fn, ms),
-					clearInterval: (handle) => clock.clearInterval(handle),
+					clearInterval: (handle) => (handle as TimerHandle | undefined)?.cancel(),
 				});
 				// Local extensions can mount before package session_start handlers run.
 				// Wait one event-loop tick so the router has its session context before refreshing.
 				const startTimer = clock.setTimeout(() => quota.start(), 0);
 				const disposeQuota = () => {
-					clock.clearTimeout(startTimer);
+					startTimer.cancel();
 					quota.dispose();
 				};
 				stopQuota = disposeQuota;
-				let coldTimer: unknown;
+				let coldTimer: TimerHandle | undefined;
 				let coldTimerAt: number | undefined;
 				const scheduleCold = (coldAt: number | undefined) => {
 					if (coldAt === coldTimerAt) return;
-					clock.clearTimeout(coldTimer);
+					coldTimer?.cancel();
 					coldTimerAt = coldAt;
 					coldTimer = undefined;
 					if (coldAt === undefined) return;
 					// Idle footers never repaint on their own; wake once when the cache expires.
 					coldTimer = clock.setTimeout(() => tui.requestRender(), Math.max(0, coldAt - clock.now()) + 50);
-					if (
-						coldTimer &&
-						typeof coldTimer === "object" &&
-						"unref" in coldTimer &&
-						typeof coldTimer.unref === "function"
-					)
-						coldTimer.unref();
 				};
 
 				return {
 					dispose() {
 						unsub();
-						clock.clearTimeout(coldTimer);
+						coldTimer?.cancel();
 						disposeQuota();
 						if (stopQuota === disposeQuota) stopQuota = undefined;
 					},

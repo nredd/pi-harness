@@ -126,7 +126,7 @@ npm run check -w @nredd/pi-preset   # biome, strict tsc, Vitest, bun test (Bun 1
 ```
 
 - `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
-- `createExpandedFooter({ clock })` optionally injects one clock for deferred startup, quota polling/staleness and cache expiry. The default export keeps real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
+- `createExpandedFooter({ clock })` optionally injects one clock for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
 - `test/*.test.ts` and support code are checked by strict TypeScript; preserved `test/footer-*.test.mjs` helper assertions stay JavaScript. Everything under `extensions/`, `lib/` and `test/` is Biome-formatted.
 - The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam. `lib/footer-quota.ts` differs only by formatting; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
 - These tests cover `packages/preset`, not the live dotfiles footer. Dotfiles' own `tests/footer-*.test.mjs` cover that copy; preset adoption remains profile split #21.
