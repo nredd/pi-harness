@@ -13,7 +13,7 @@ import {
 	UsageService,
 	type UsageSnapshot,
 } from "../../packages/subscription-router/src/usage.ts";
-import { isolateStackHome, startStack } from "./support.ts";
+import { assertHostIdentity, isolateStackHome, startStack } from "./support.ts";
 
 export {
 	complete,
@@ -86,6 +86,16 @@ export class GoalStack {
 	readonly notifications: string[] = [];
 	private readonly live: Harness[] = [];
 	private serial = 0;
+
+	/** Import after home isolation, keeping fork, router and kit on one timer queue. */
+	async subagents(): Promise<ExtensionFactory> {
+		assertHostIdentity("pi-subagents");
+		const url = new URL("../../forks/pi-subagents/src/index.ts", import.meta.url);
+		const { createSubagentsExtension } = (await import(/* @vite-ignore */ url.href)) as {
+			createSubagentsExtension(options: { clock: FakeClock }): ExtensionFactory;
+		};
+		return createSubagentsExtension({ clock: this.clock });
+	}
 
 	/** Real kit with no disk configuration or process-oriented modules enabled. */
 	kit(): ExtensionFactory {

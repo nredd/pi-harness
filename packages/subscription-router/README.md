@@ -100,9 +100,8 @@ Development:
 make install
 npm run check --workspace @nredd/pi-subscription-router  # biome, tsc, vitest, bun scenarios
 cd packages/subscription-router
-e2e/run.sh             # two remaining admission cases; exits non-zero on any FAIL
-e2e/run.sh wait        # pi-subagents background dispatch, all exhausted, policy wait -> parked
-e2e/run.sh no-router   # enterprise profile, no router loaded -> admitted, child runs
+e2e/run.sh             # remaining optional-RPC case, owned by the pi-subagents fork
+e2e/run.sh no-router   # no router loaded -> admitted, physical child runs
 ```
 
 `test/scenarios/` covers terminal/retry/unconfirmed recovery and all six balanced cases through the real router factory and core session harness, under Vitest and Bun.
