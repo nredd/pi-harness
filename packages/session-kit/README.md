@@ -1,6 +1,6 @@
 # pi-session-kit
 
-Published to npm as `@nredd/pi-session-kit` (public), version `0.3.0`; see `releases/2026-10-18-npm-publication.json` for the tarball digest.
+Published to npm as `@nredd/pi-session-kit` (public). Each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-session-kit@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`). `0.4.0` adds `createSessionKit(options)` (explicit `config`, `agentDir`, `monitorRoot`, injectable `clock` and `spawnMonitor`; the default export is unchanged) and fixes leaderless orphan-group sweeps at `ps` start-time resolution.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and standalone harness
 references below describe the legacy deployment, not installation or candidate verification of
 this package.
@@ -16,7 +16,7 @@ session branch. Closing pi stops its work.
 ## Install and config
 
 ```sh
-pi install git:github.com/nredd/pi-session-kit@v0.3.0
+pi install npm:@nredd/pi-session-kit@0.4.0
 ```
 
 Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
