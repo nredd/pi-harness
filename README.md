@@ -2,7 +2,7 @@
 
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT). This unreleased maintenance branch rebases the patch queue onto upstream `@narumitw/pi-plan-mode@0.59.3` (release commit `9b8befda`), with Pi `1.2.0` development hosts. The latest released fork remains `v0.59.2-nredd.4`; the install examples below deliberately use that tag, not this review branch. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
+Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT). This unreleased maintenance branch rebases the patch queue onto upstream `@narumitw/pi-plan-mode@0.59.3` (release commit `9b8befda`), with the core fork's `v1.3.0-nredd.6` development host. The latest released fork remains `v0.59.2-nredd.4`; the install examples below deliberately use that tag, not this review branch. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
 
 Differences from upstream. The presentational ones come first; the ready-plan flow, decline gate, and bash policy changes follow:
 
@@ -446,6 +446,8 @@ pi-plan-mode/
 ```
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
+
+`test/{confirmation,decline,policy,transcript}-session.test.ts` ports the seven retired process scenarios through the real core session and interactive harnesses. File-backed restore, canonical RPC select choices, all seven allowed/eleven blocked shell rows, and raw terminal clicks/Escape run without Pi binaries, owner configuration, polling, or sleeps. Only the Bash executor is inert; the production factory and admission hook run unchanged. `npm run check` includes these scenarios on Bun (verified with 1.3.14); `npm test` runs the full Vitest suite. The release-tarball development host provides `/testing` and `/testing/interactive`; `@xterm/headless@5.5.0` supplies its terminal emulator. Peer dependencies and the shipped runtime are unchanged.
 
 Fork maintenance follows the split/diff-replay queue, never unreleased upstream main. Exclude `dist/` from replay and regenerate the standalone lockfile for the release's development pins. Run `npm run check && npm test` locally; the typecheck covers source and test files. Test fixtures resolve relative to the package's source location rather than the runner's working directory, so both gate layouts exercise the same files. Also apply the queue in a full upstream monorepo clone at the release tag, run `npm ci --ignore-scripts`, build `packages/pi-tui-kit`, run the Plan package's `npm run check`, then run root `PI_EXTENSIONS_TEST_BASE='@narumitw/pi-plan-mode@0.59.3' npm test`. Rebuild the Plan package there after the final source change, copy its `dist/` back here, and commit those artifacts last. The vendored harness tracks that release, including the mock UI's `onTerminalInput` method.
 
