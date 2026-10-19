@@ -1,5 +1,5 @@
 /** Real multi-extension sessions, with one host identity shared by every fork. */
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -29,6 +29,52 @@ const HOSTS = [
 
 export type ForkName = keyof typeof FORK_ENTRIES;
 export type OwnedName = keyof typeof OWNED_ENTRIES;
+
+/** Same bound as harness/power.py `STOP_TIMEOUT_S`. */
+const WAKE_STOP_TIMEOUT_MS = 5_000;
+/** Captured at import so a test that patches global timers cannot unbound teardown. */
+const nativeSetTimeout = globalThis.setTimeout;
+
+/**
+ * Wait for `child` to exit, at most `ms`.
+ *
+ * Parameters:
+ *   child (ChildProcess): process already signalled.
+ *   ms (number): bound in milliseconds.
+ *
+ * Returns:
+ *   Promise<boolean>: true when it exited within the bound.
+ */
+async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<false>((resolve) => {
+		timer = nativeSetTimeout(() => resolve(false), ms);
+	});
+	try {
+		return await Promise.race([once(child, "exit").then(() => true as const), timeout]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Release the wake helper like harness/power.py: SIGTERM, bounded wait, then SIGKILL and one
+ * more bounded wait.
+ *
+ * Parameters:
+ *   wake (ChildProcess): the `caffeinate` helper.
+ *
+ * Raises:
+ *   Error: the helper survived SIGKILL past the bound.
+ */
+async function stopWake(wake: ChildProcess): Promise<void> {
+	if (wake.exitCode !== null || wake.signalCode !== null) return;
+	wake.kill("SIGTERM");
+	if (await exitedWithin(wake, WAKE_STOP_TIMEOUT_MS)) return;
+	wake.kill("SIGKILL");
+	if (!(await exitedWithin(wake, WAKE_STOP_TIMEOUT_MS)))
+		throw new Error(`caffeinate ${wake.pid} survived SIGKILL for ${WAKE_STOP_TIMEOUT_MS} ms`);
+}
 
 /**
  * Isolate Pi and peers before imports. macOS holds the same process-scoped wake
@@ -68,11 +114,7 @@ export async function isolateStackHome(): Promise<{ root: string; cleanup(): Pro
 				}
 				rmSync(root, { recursive: true, force: true });
 			} finally {
-				if (wake && wake.exitCode === null && wake.signalCode === null) {
-					const exited = once(wake, "exit");
-					wake.kill("SIGTERM");
-					await exited;
-				}
+				if (wake) await stopWake(wake);
 			}
 		},
 	};
