@@ -45,12 +45,24 @@ LONG_DIR = "docs/a/really/deeply/nested/directory/structure/that/goes/on"
 
 
 def git(repo: Path, *args: str) -> None:
-    """Run fixture git operations with a fixed identity and signing disabled."""
+    """Run git in `repo`, failing the test on a non-zero exit.
+
+    Parameters:
+        repo (Path): working tree.
+        *args (str): git arguments.
+    """
     subprocess.check_call([*GIT, "-C", str(repo), *args], stdout=subprocess.DEVNULL)
 
 
 def make_repo(repo: Path) -> None:
-    """Create the five-status fixture retained for the Plan/diff stack smoke."""
+    """Create a repo with one commit and five changed paths of every status.
+
+    The five: modified (many hunks, an overlong line, a tab, wide characters), staged add, worktree
+    delete, a file with a very long path, and an untracked file. Counts are asserted via the title.
+
+    Parameters:
+        repo (Path): directory to initialise (the pane's cwd).
+    """
     repo.mkdir(parents=True, exist_ok=True)
     git(repo, "init", "-q")
     (repo / "app.py").write_text("".join(f"line {i}\n" for i in range(1, 301)))
@@ -73,7 +85,14 @@ def make_repo(repo: Path) -> None:
 
 @pytest.fixture
 def usage(sandbox: Sandbox) -> UsageFixture:
-    """Install a visible status row in the isolated sandbox."""
+    """Usage fixture (status row) for this sandbox.
+
+    Parameters:
+        sandbox (Sandbox): sandbox the fixture is installed into.
+
+    Returns:
+        UsageFixture: state with quota values set.
+    """
     state = install_usage_fixture(sandbox)
     state.set(anthropic=(20, 40), codex=(30, 50))
     return state
@@ -81,13 +100,31 @@ def usage(sandbox: Sandbox) -> UsageFixture:
 
 @pytest.fixture
 def launch(tui: Callable[..., TmuxPane], sandbox: Sandbox, usage: UsageFixture) -> Callable[..., TmuxPane]:
-    """Launch kit panes sharing only an explicit monitor pidfile root."""
+    """A launcher for panes with the kit and the status fixture, pidfile root inside the sandbox.
+
+    Parameters:
+        tui (Callable[..., TmuxPane]): shared pane launcher (kills panes at teardown).
+        sandbox (Sandbox): sandbox the panes run in.
+        usage (UsageFixture): status fixture.
+
+    Returns:
+        Callable[..., TmuxPane]: `start(width=, height=, steps=)`.
+    """
     (sandbox.root / "tmp").mkdir(exist_ok=True)
 
     def start(
         *, width: int = 120, height: int | None = None, steps: list[dict[str, Any]] | None = None
     ) -> TmuxPane:
-        """Start one pane and wait for its fixture status row."""
+        """Launch one pane and wait for its status row.
+
+        Parameters:
+            width (int): pane columns.
+            height (int | None): pane rows; defaults by width.
+            steps (list[dict[str, Any]] | None): faux steps.
+
+        Returns:
+            TmuxPane: pane showing the first frame.
+        """
         return tui(
             {"providers": {"faux": {"models": ["main"], "steps": steps or []}}},
             width=width,
@@ -102,19 +139,34 @@ def launch(tui: Callable[..., TmuxPane], sandbox: Sandbox, usage: UsageFixture) 
 
 @pytest.fixture
 def dirty_repo(sandbox: Sandbox) -> Path:
-    """Use the pane cwd as a disposable dirty repository."""
+    """The pane cwd as a repo with five changed paths.
+
+    Parameters:
+        sandbox (Sandbox): sandbox whose workdir becomes the repo.
+
+    Returns:
+        Path: the repo.
+    """
     make_repo(sandbox.workdir)
     return sandbox.workdir
 
 
 def open_diff(pane: TmuxPane) -> None:
-    """Open the real command and wait for its overlay title."""
+    """Run `/diff` and wait for the overlay title.
+
+    Parameters:
+        pane (TmuxPane): running pane.
+    """
     submit(pane, "/diff")
     pane.wait_for(r"^ /diff \S+\s+\d+ files?", timeout_s=20)
 
 
 def check_layout(pane: TmuxPane) -> None:
-    """Require the full overlay, stable separators and bounded display-cell rows."""
+    """Assert the overlay is structurally sound at the pane's size.
+
+    Parameters:
+        pane (TmuxPane): pane showing the overlay.
+    """
     time.sleep(0.4)
     rows = pane.rows()[: pane.height]
     shown = "\n".join(rows)
@@ -137,7 +189,12 @@ def check_layout(pane: TmuxPane) -> None:
 
 
 def test_diff_is_allowed_in_plan_mode(launch: Callable[..., TmuxPane], dirty_repo: Path) -> None:
-    """`/diff` is a command, not a tool, so Plan mode does not stop it."""
+    """`/diff` is a command, not a tool, so Plan mode does not stop it.
+
+    Parameters:
+        launch (Callable[..., TmuxPane]): pane launcher with the kit and status fixture.
+        dirty_repo (Path): pane cwd seeded with five changed paths.
+    """
     pane = launch(width=120)
     submit(pane, "/plan start")
     pane.wait_for(r"(?i)plan", timeout_s=15)
@@ -149,12 +206,26 @@ def test_diff_is_allowed_in_plan_mode(launch: Callable[..., TmuxPane], dirty_rep
 
 
 def pid_of(pane: TmuxPane) -> int:
-    """Return the exec-replaced program's pid from tmux."""
+    """Process id of the program running in a pane (`exec` replaced the wrapper shell).
+
+    Parameters:
+        pane (TmuxPane): running pane.
+
+    Returns:
+        int: pid of pi.
+    """
     return int(pane._tmux("display-message", "-p", "-t", pane.name, "#{pane_pid}").strip())
 
 
 def ps_lines(tag: int) -> list[str]:
-    """Return process lines carrying this scenario's sleep tag."""
+    """Process lines carrying `sleep <tag>`.
+
+    Parameters:
+        tag (int): unique sleep duration.
+
+    Returns:
+        list[str]: `ps` lines.
+    """
     out = subprocess.run(
         ["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True, check=True
     ).stdout
@@ -162,7 +233,13 @@ def ps_lines(tag: int) -> list[str]:
 
 
 def wait_until(check: Callable[[], bool], what: str, timeout_s: float = 20.0) -> None:
-    """Poll an OS lifetime condition with a bounded deadline."""
+    """Poll until `check()` holds.
+
+    Parameters:
+        check (Callable[[], bool]): condition.
+        what (str): failure description.
+        timeout_s (float): give up after this long.
+    """
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if check():
@@ -172,14 +249,27 @@ def wait_until(check: Callable[[], bool], what: str, timeout_s: float = 20.0) ->
 
 
 def monitor_steps(name: str, tag: int) -> list[dict[str, Any]]:
-    """Promote monitor tools, start a passive monitor and acknowledge its start."""
+    """Faux steps: promote the deferred monitor tools, start one passive monitor, say `STARTED <name>`.
+
+    Parameters:
+        name (str): monitor name.
+        tag (int): unique sleep duration.
+
+    Returns:
+        list[dict[str, Any]]: faux steps.
+    """
     search = {"name": "search_tools", "args": {"query": "background monitor process watcher", "kind": "tool"}}
     begin = {"name": "monitor_start", "args": {"argv": ["/bin/sh", "-c", f"/bin/sleep {tag}"], "name": name}}
     return [{"tools": [search]}, {"tools": [begin]}, {"text": f"STARTED {name}"}]
 
 
 def test_next_session_sweeps_only_dead_owners(launch: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
-    """SIGKILL leaves A's child and pidfile; a new session reaps them and leaves live B's alone."""
+    """SIGKILL leaves A's child and pidfile; a new session reaps them and leaves live B's alone.
+
+    Parameters:
+        launch (Callable[..., TmuxPane]): pane launcher sharing the sandbox pidfile root.
+        sandbox (Sandbox): sandbox containing per-session monitor pidfiles.
+    """
     root = sandbox.root / "tmp"
     tag_a, tag_b = (900_000_000 + random.randint(0, 99_999) for _ in range(2))
     try:

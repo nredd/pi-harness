@@ -40,13 +40,27 @@ ZERO_ROW = re.compile(r"^\s*0 ┼")
 
 
 def cells(text: str) -> int:
-    """Return terminal display cells, counting wide/fullwidth characters twice."""
+    """Display width of plain text: wide and fullwidth characters take two cells.
+
+    Parameters:
+        text (str): one screen row.
+
+    Returns:
+        int: terminal cells.
+    """
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
 
 
 @pytest.fixture
 def usage(sandbox: Sandbox) -> UsageFixture:
-    """Install the status fixture in this isolated sandbox."""
+    """Usage fixture (status row) for this sandbox.
+
+    Parameters:
+        sandbox (Sandbox): sandbox the fixture is installed into.
+
+    Returns:
+        UsageFixture: state with quota values set.
+    """
     state = install_usage_fixture(sandbox)
     state.set(anthropic=(20, 40), codex=(30, 50))
     return state
@@ -54,10 +68,27 @@ def usage(sandbox: Sandbox) -> UsageFixture:
 
 @pytest.fixture
 def launch(tui: Callable[..., TmuxPane], sandbox: Sandbox, usage: UsageFixture) -> Callable[..., TmuxPane]:
-    """Launch a real pane with explicit kit and status fixture arguments."""
+    """A launcher for panes with the kit and the status fixture.
+
+    Parameters:
+        tui (Callable[..., TmuxPane]): shared pane launcher (kills panes at teardown).
+        sandbox (Sandbox): sandbox the panes run in.
+        usage (UsageFixture): status fixture.
+
+    Returns:
+        Callable[..., TmuxPane]: `start(width=, height=)`.
+    """
 
     def start(*, width: int = 120, height: int | None = None) -> TmuxPane:
-        """Start one pane and wait for its first status row."""
+        """Launch one pane and wait for its status row.
+
+        Parameters:
+            width (int): pane columns.
+            height (int | None): pane rows; defaults by width.
+
+        Returns:
+            TmuxPane: pane showing the first frame.
+        """
         return tui(
             {"providers": {"faux": {"models": ["main"], "steps": []}}},
             width=width,
@@ -71,12 +102,26 @@ def launch(tui: Callable[..., TmuxPane], sandbox: Sandbox, usage: UsageFixture) 
 
 
 def screen(pane: TmuxPane) -> list[str]:
-    """Return exactly the visible terminal rows."""
+    """The visible rows, exactly `height` of them.
+
+    Parameters:
+        pane (TmuxPane): running pane.
+
+    Returns:
+        list[str]: rows, trailing spaces removed.
+    """
     return pane.rows()[: pane.height]
 
 
 def check_layout(pane: TmuxPane) -> str:
-    """Check title/help positions, row widths and the overlay's footer coverage."""
+    """Assert the overlay fits the pane, title first and help last, and return the screen text.
+
+    Parameters:
+        pane (TmuxPane): pane showing the overlay.
+
+    Returns:
+        str: screen rows joined by newlines.
+    """
     time.sleep(0.4)
     rows = screen(pane)
     shown = "\n".join(rows)
@@ -91,7 +136,11 @@ def check_layout(pane: TmuxPane) -> str:
 
 
 def assert_chart(shown: str) -> None:
-    """Check chart title, multiple numeric ticks and the zero axis."""
+    """The chart has a titled header, at least two y labels, and a zero row.
+
+    Parameters:
+        shown (str): screen text.
+    """
     assert re.search(r"Tokens per (hour|day|\d+ days|week)", shown), shown
     rows = shown.splitlines()
     assert sum(1 for r in rows if Y_LABEL.match(r)) >= 2, shown
@@ -99,7 +148,19 @@ def assert_chart(shown: str) -> None:
 
 
 def wait_text(pane: TmuxPane, pattern: str) -> str:
-    """Require a matching screen on two consecutive settled captures."""
+    """Poll the screen until `pattern` shows on a settled frame.
+
+    Matching the first capture that contains `pattern` raced pi's repaint on wide panes: the selector
+    row could be new while the model list below it was still the previous frame. So the match must
+    hold on two identical captures in a row.
+
+    Parameters:
+        pane (TmuxPane): running pane.
+        pattern (str): regex.
+
+    Returns:
+        str: screen text.
+    """
     deadline = time.monotonic() + 8
     shown = previous = ""
     while time.monotonic() < deadline:
@@ -112,7 +173,11 @@ def wait_text(pane: TmuxPane, pattern: str) -> str:
 
 
 def assert_footer_intact(pane: TmuxPane) -> None:
-    """Require the core stats row followed by the fixture status after closing."""
+    """Assert the overlay is gone and the stats and status rows are drawn again.
+
+    Parameters:
+        pane (TmuxPane): pane after closing the overlay.
+    """
     pane.wait_for(STATUS, timeout_s=10)
     rows = screen(pane)
     shown = "\n".join(rows)
@@ -123,14 +188,32 @@ def assert_footer_intact(pane: TmuxPane) -> None:
 
 
 def open_stats(pane: TmuxPane) -> str:
-    """Open the real command and check its first overlay frame."""
+    """Run `/stats` and wait for the overlay title.
+
+    Parameters:
+        pane (TmuxPane): running pane.
+
+    Returns:
+        str: screen text.
+    """
     submit(pane, "/stats")
     pane.wait_for(r"^ /stats\s+Overview", timeout_s=30)
     return check_layout(pane)
 
 
 def select_total(pane: TmuxPane, tokens: int) -> str:
-    """Find a range with the exact integer total, not a rounded approximation."""
+    """Cycle ranges until Overview reports the fixture's exact integer total.
+
+    Matching totals rather than a fixed cycle order permits compact range labels,
+    but never accepts rounded/widened accounting or a different time filter.
+
+    Parameters:
+        pane (TmuxPane): Overview pane.
+        tokens (int): exact expected tokens for the requested fixture range.
+
+    Returns:
+        str: settled frame at the top of Overview.
+    """
     expected = re.compile(rf"Total tokens: {tokens}(?![\d.,kMB])")
     shown = ""
     for _ in range(6):
@@ -145,7 +228,15 @@ def select_total(pane: TmuxPane, tokens: int) -> str:
 
 
 def select_filter(pane: TmuxPane, label: str) -> str:
-    """Find a provider or All filter without assuming filter order."""
+    """Cycle forward to a provider/All filter without assuming model filter order.
+
+    Parameters:
+        pane (TmuxPane): Overview pane.
+        label (str): exact provider or `All models` label.
+
+    Returns:
+        str: settled frame with the requested filter.
+    """
     expected = re.compile(r"filter:\s*" + re.escape(label) + r"(?=\s|$)")
     shown = ""
     for _ in range(12):
@@ -157,7 +248,11 @@ def select_filter(pane: TmuxPane, label: str) -> str:
 
 
 def assert_hourly_tabs(pane: TmuxPane) -> None:
-    """Exercise both hourly tabs and scrolling before returning to Overview."""
+    """Check the hourly plot, both tabs, and scroll keys without relying on range order.
+
+    Parameters:
+        pane (TmuxPane): Overview pane in a short range.
+    """
     for _ in range(40):
         pane.send_keys("j")
     shown = wait_text(pane, r"Tokens per hour")
@@ -179,7 +274,14 @@ def assert_hourly_tabs(pane: TmuxPane) -> None:
 def test_stats_shared_machines_default_combined_freshness_and_plan_mode(
     launch: Callable[..., TmuxPane], sandbox: Sandbox, portable_stats_artifact: Path, tmp_path: Path
 ) -> None:
-    """Ordinary `/stats` consumes CLI imports, dedups copied events and labels coverage/sync."""
+    """Ordinary `/stats` consumes CLI imports, dedups copied events and labels coverage/sync.
+
+    Parameters:
+        launch (Callable[..., TmuxPane]): pane launcher with the kit and status fixture.
+        sandbox (Sandbox): sandbox whose agent directory receives imported usage.
+        portable_stats_artifact (Path): standalone stats CLI artifact.
+        tmp_path (Path): temporary producer and import homes.
+    """
     machines = seed_shared_stats(portable_stats_artifact, tmp_path / "producers", sandbox.agent_dir)
     assert len({machine.machine_id for machine in machines}) == 3
     import_machines(
