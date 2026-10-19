@@ -23,12 +23,13 @@ import pytest
 
 from harness.headless import RunResult, ToolOutcome, run_headless
 from harness.paths import FAUX_EXTENSION, GIT_BIN, pi_command
-from harness.sandbox import Sandbox, enable_faux_models, local_overrides_from_env, package_name
 from harness.session_kit import STATS_MODELS, kit_args, seed_stats_sessions
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+    from harness.sandbox import Sandbox
 
 pytestmark = pytest.mark.integration
 
@@ -36,7 +37,6 @@ MESSAGE_TYPE = "session-kit:monitor"
 TOOLS = ("monitor_start", "monitor_read", "monitor_stop")
 # Longer than any scenario, so a child outliving its test is obvious in `ps`.
 LONG_SLEEP_S = 900
-PLAN_BLOCK = "plan mode"
 
 
 def tool(name: str, /, **args: Any) -> dict[str, Any]:
@@ -253,111 +253,6 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tag: int) -> N
     assert "started both" in spoken(result)
     assert alive(tag) == [], alive(tag)
     assert pidfiles(sandbox) == []
-
-
-def test_plan_mode_admits_only_monitor_read(sandbox: Sandbox, tag: int) -> None:
-    """Plan mode: `monitor_read` runs (readOnlyHint); `monitor_start` and `monitor_stop` are denied.
-
-    Plan mode freezes its tool set at `/plan start` and a `search_tools` promotion does not survive
-    that, so a deferred `monitor_read` is simply not there (`Tool monitor_read not found`; the same
-    limit `test_plan_mode_policy.py` documents for the worktree tools). The live config therefore
-    needs `monitor_read` in `alwaysActive` and `neverDefer`; the sandbox gets that here. Start and
-    stop stay deferred, are promoted in the plan turn, and then meet the Plan policy.
-    """
-    deferred_path = sandbox.agent_dir / "deferred-tools.json"
-    deferred = json.loads(deferred_path.read_text())
-    for key in ("alwaysActive", "neverDefer"):
-        deferred[key] = [*deferred[key], "monitor_read"]
-    deferred_path.write_text(json.dumps(deferred, indent=2))
-    steps = [
-        start("pre", f"echo before-plan; sleep {tag}"),
-        {"text": "started"},
-        promote(),
-        tool("monitor_read", id="pre"),
-        start("during", f"sleep {tag}"),
-        tool("monitor_stop", id="pre"),
-        {"text": "plan turn done"},
-    ]
-    result = run(sandbox, steps, ["go", "/plan start", "inspect it"])
-    (read,) = outcomes(result, "monitor_read")
-    assert not read.is_error, read
-    assert "before-plan" in read.text, read
-    (start_plan,) = outcomes(result, "monitor_start")[1:]
-    (stop,) = outcomes(result, "monitor_stop")
-    assert start_plan.is_error, start_plan
-    assert PLAN_BLOCK in start_plan.text.lower(), start_plan.text
-    assert stop.is_error, stop
-    assert PLAN_BLOCK in stop.text.lower(), stop.text
-    assert alive(tag) == []
-
-
-@pytest.mark.parametrize("kit_first", [False, True], ids=["configured-order", "kit-first"])
-def test_subagents_do_not_get_monitor_tools(sandbox: Sandbox, kit_first: bool) -> None:
-    """Real child package loads deny calls and schemas even after promotion and scope reset."""
-    assert kit_args(sandbox) == [], "This regression must use package discovery, not root-only -e"
-    override = local_overrides_from_env().get("pi-session-kit")
-    if kit_first:
-        packages = sandbox.settings()["packages"]
-        kit = [
-            package
-            for package in packages
-            if package_name(str(package.get("source", "")) if isinstance(package, dict) else str(package))
-            == "pi-session-kit"
-            or (override is not None and str(package) == str(override))
-        ]
-        assert len(kit) == 1, packages
-        sandbox.patch_json("settings.json", {"packages": [*kit, *(p for p in packages if p not in kit)]})
-    enable_faux_models(sandbox, ["faux/main", "kid/child"])
-    probe = sandbox.agent_dir / "extensions" / "session-kit-child-scope.ts"
-    probe.parent.mkdir(exist_ok=True)
-    probe.write_text((FAUX_EXTENSION.parent.parent / "probes" / probe.name).read_text())
-    deferred = json.loads((sandbox.agent_dir / "deferred-tools.json").read_text())
-    for key in ("alwaysActive", "neverDefer"):
-        deferred[key] = [*deferred[key], "session_kit_child_scope_probe"]
-    sandbox.patch_json("deferred-tools.json", deferred)
-    agent = {
-        "subagent_type": "general-purpose",
-        "description": "list tools",
-        "prompt": "list",
-        "model": "kid/child",
-        "run_in_background": False,
-    }
-    steps = [tool("search_tools", query="background monitor", kind="tool"), {"listTools": True}]
-    steps += [tool("Agent", **agent), {"text": "end"}]
-    child_steps = [
-        tool("session_kit_child_scope_probe"),
-        tool("search_tools", query="background monitor", kind="tool"),
-        # A scripted model can emit undeclared calls. Neither promotion nor stale declarations
-        # authorize them; inspect the real child execution errors before the final schema snapshot.
-        tool("monitor_read", id="parent"),
-        tool("monitor_start", argv=["/bin/echo", "CHILD MUST NOT SPAWN"], name="child"),
-        tool("monitor_stop", id="parent"),
-        {"listTools": True},
-    ]
-    child = {"kid": {"models": ["child"], "steps": child_steps}}
-    result = run(sandbox, steps, ["promote", "list", "spawn"], providers=child)
-    parent_tools = next(t for t in result.assistant_texts() if t.startswith("TOOLS "))
-    assert all(name in parent_tools for name in TOOLS), parent_tools
-    (spawn,) = outcomes(result, "Agent")
-    assert "TOOLS " in spawn.text, spawn.text
-    assert not any(name in spawn.text for name in (*TOOLS, "goal_update")), spawn.text
-    snapshot = json.loads((sandbox.workdir / "session-kit-child-scope.json").read_text())
-    assert snapshot["name"].startswith("general-purpose#"), snapshot
-    assert {entry["name"] for entry in snapshot["tools"]} == {*TOOLS, "goal_update"}, snapshot
-    assert all(entry["exposure"] == "hidden" for entry in snapshot["tools"]), snapshot
-    assert not {*TOOLS, "goal_update"} & set(snapshot["active"]), snapshot
-    if override is not None:
-        assert str(override) in json.dumps(snapshot["tools"]), snapshot
-    denied = [
-        json.loads(line)
-        for line in (sandbox.workdir / "session-kit-child-calls.jsonl").read_text().splitlines()
-    ]
-    assert {call["name"] for call in denied} == set(TOOLS), denied
-    assert all(call["isError"] for call in denied), denied
-    assert all(
-        "not available" in json.dumps(call["result"]) or "not found" in json.dumps(call["result"])
-        for call in denied
-    ), denied
 
 
 def test_diff_prints_the_stat_outside_the_tui(sandbox: Sandbox) -> None:

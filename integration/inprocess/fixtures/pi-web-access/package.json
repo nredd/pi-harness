@@ -1,0 +1,9 @@
+{
+	"name": "pi-web-access",
+	"type": "module",
+	"pi": {
+		"extensions": [
+			"index.ts"
+		]
+	}
+}

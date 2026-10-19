@@ -102,6 +102,15 @@ export async function loadOwned(name: OwnedName): Promise<ExtensionFactory> {
 	return loadFactory(new URL(`packages/${OWNED_ENTRIES[name]}/src/index.ts`, ROOT));
 }
 
+/** Load pinned third-party manifest entries from this workspace, never the live install. */
+export async function loadThirdParty(name: "workflow" | "deferred"): Promise<ExtensionFactory> {
+	const entry =
+		name === "workflow"
+			? new URL("../extensions/workflow.ts", import.meta.resolve("@quintinshaw/pi-dynamic-workflows"))
+			: new URL(import.meta.resolve("pi-deferred-context-engine"));
+	return loadFactory(entry);
+}
+
 export interface StackOptions {
 	cwd?: string;
 	factories: ExtensionFactory[];

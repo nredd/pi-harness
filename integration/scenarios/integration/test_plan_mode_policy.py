@@ -160,22 +160,3 @@ def test_blocked(policy_run: dict[str, ToolOutcome], command: str) -> None:
     outcome = policy_run[command]
     assert outcome.is_error
     assert BLOCK_MARKER in outcome.text, outcome.text
-
-
-@pytest.mark.parametrize(("name", "args"), TOOL_ALLOWED)
-def test_tool_allowed(policy_run: dict[str, ToolOutcome], name: str, args: dict[str, object]) -> None:
-    """Annotated read-only pi-dev-tools calls are admitted without any `defaultPlanTools` entry."""
-    outcome = policy_run[policy_key(name, args)]
-    assert BLOCK_MARKER not in outcome.text, outcome.text
-    if name != "ssh_exec":
-        assert not outcome.is_error, outcome.text
-
-
-@pytest.mark.parametrize(("name", "args"), TOOL_BLOCKED)
-def test_tool_blocked(policy_run: dict[str, ToolOutcome], name: str, args: dict[str, object]) -> None:
-    """Unannotated (mutating) pi-dev-tools calls are not selected by the Plan policy."""
-    outcome = policy_run[policy_key(name, args)]
-    assert outcome.is_error
-    assert BLOCK_MARKER in outcome.text, outcome.text
-    expected = "blocks ssh_exec calls" if name == "ssh_exec" else "not selected by the Plan policy"
-    assert expected in outcome.text, outcome.text

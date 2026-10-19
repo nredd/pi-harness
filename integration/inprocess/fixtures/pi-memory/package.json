@@ -1,0 +1,9 @@
+{
+	"name": "pi-memory",
+	"type": "module",
+	"pi": {
+		"extensions": [
+			"index.ts"
+		]
+	}
+}
