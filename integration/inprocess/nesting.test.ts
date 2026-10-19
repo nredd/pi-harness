@@ -6,10 +6,10 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { agentStack, ask, call, closeAgentStack, jsonFile, report } from "./agents-support.ts";
 import { isolateStackHome, loadThirdParty } from "./support.ts";
 
-let home: ReturnType<typeof isolateStackHome>;
+let home: Awaited<ReturnType<typeof isolateStackHome>>;
 let h: Harness;
 beforeAll(async () => {
-	home = isolateStackHome();
+	home = await isolateStackHome();
 	jsonFile(join(home.root, ".pi/workflows/settings.json"), { keywordTriggerEnabled: false });
 	jsonFile(join(home.root, "agent/deferred-tools.json"), {
 		alwaysActive: ["Agent", "read", "bash"],
@@ -25,7 +25,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
 	if (h) await closeAgentStack(h);
-	home.cleanup();
+	await home.cleanup();
 });
 
 it("child refuses promoted workflow and background Agent with reasons", async () => {

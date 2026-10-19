@@ -11,7 +11,7 @@ describe("loop and Plan mode", () => {
 	});
 
 	it("Plan suspension skips loop ticks until exit", async () => {
-		stack = new GoalStack();
+		stack = await GoalStack.create();
 		const h = await stack.start([await loadFork("pi-plan-mode"), stack.kit()]);
 		h.setResponses([fauxAssistantMessage("tick 1"), fauxAssistantMessage("SHOULD NOT RUN")]);
 		await h.session.prompt("/plan start");

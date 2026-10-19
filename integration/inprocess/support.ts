@@ -1,4 +1,6 @@
 /** Real multi-extension sessions, with one host identity shared by every fork. */
+import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -28,9 +30,71 @@ const HOSTS = [
 export type ForkName = keyof typeof FORK_ENTRIES;
 export type OwnedName = keyof typeof OWNED_ENTRIES;
 
-/** Isolate Pi, rpiv's XDG/legacy config and optional peers before importing any entries. */
-export function isolateStackHome(): { root: string; cleanup(): void } {
+/** Same bound as harness/power.py `STOP_TIMEOUT_S`. */
+const WAKE_STOP_TIMEOUT_MS = 5_000;
+/** Captured at import so a test that patches global timers cannot unbound teardown. */
+const nativeSetTimeout = globalThis.setTimeout;
+
+/**
+ * Wait for `child` to exit, at most `ms`.
+ *
+ * Parameters:
+ *   child (ChildProcess): process already signalled.
+ *   ms (number): bound in milliseconds.
+ *
+ * Returns:
+ *   Promise<boolean>: true when it exited within the bound.
+ */
+async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<false>((resolve) => {
+		timer = nativeSetTimeout(() => resolve(false), ms);
+	});
+	try {
+		return await Promise.race([once(child, "exit").then(() => true as const), timeout]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Release the wake helper like harness/power.py: SIGTERM, bounded wait, then SIGKILL and one
+ * more bounded wait.
+ *
+ * Parameters:
+ *   wake (ChildProcess): the `caffeinate` helper.
+ *
+ * Raises:
+ *   Error: the helper survived SIGKILL past the bound.
+ */
+async function stopWake(wake: ChildProcess): Promise<void> {
+	if (wake.exitCode !== null || wake.signalCode !== null) return;
+	wake.kill("SIGTERM");
+	if (await exitedWithin(wake, WAKE_STOP_TIMEOUT_MS)) return;
+	wake.kill("SIGKILL");
+	if (!(await exitedWithin(wake, WAKE_STOP_TIMEOUT_MS)))
+		throw new Error(`caffeinate ${wake.pid} survived SIGKILL for ${WAKE_STOP_TIMEOUT_MS} ms`);
+}
+
+/**
+ * Isolate Pi and peers before imports. macOS holds the same process-scoped wake
+ * assertions as harness/power.py: idle-only `-i` cannot prevent maintenance sleep.
+ * `-w` releases assertions if the runner is killed before cleanup.
+ */
+export async function isolateStackHome(): Promise<{ root: string; cleanup(): Promise<void> }> {
 	const root = mkdtempSync(join(tmpdir(), "pi-stack-"));
+	const wake =
+		process.platform === "darwin"
+			? spawn("/usr/bin/caffeinate", ["-disu", "-w", String(process.pid)], { stdio: "ignore" })
+			: undefined;
+	if (wake) {
+		try {
+			await once(wake, "spawn");
+		} catch (error) {
+			rmSync(root, { recursive: true, force: true });
+			throw new Error("Cannot hold macOS wake assertions for stack tests", { cause: error });
+		}
+	}
 	const previous = new Map<string, string | undefined>();
 	for (const [key, value] of Object.entries({
 		HOME: root,
@@ -42,12 +106,16 @@ export function isolateStackHome(): { root: string; cleanup(): void } {
 	}
 	return {
 		root,
-		cleanup() {
-			for (const [key, value] of previous) {
-				if (value === undefined) delete process.env[key];
-				else process.env[key] = value;
+		async cleanup() {
+			try {
+				for (const [key, value] of previous) {
+					if (value === undefined) delete process.env[key];
+					else process.env[key] = value;
+				}
+				rmSync(root, { recursive: true, force: true });
+			} finally {
+				if (wake) await stopWake(wake);
 			}
-			rmSync(root, { recursive: true, force: true });
 		},
 	};
 }

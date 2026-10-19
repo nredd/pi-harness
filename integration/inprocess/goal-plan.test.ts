@@ -11,7 +11,7 @@ describe("goals and Plan mode", () => {
 		await stack?.cleanup();
 	});
 	async function start() {
-		stack = new GoalStack();
+		stack = await GoalStack.create();
 		return stack.start([await loadFork("pi-plan-mode"), stack.kit()]);
 	}
 

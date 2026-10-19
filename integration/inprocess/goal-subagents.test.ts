@@ -30,7 +30,7 @@ describe("goal and real subagent sessions", () => {
 
 	/** Load the kit through the child's actual resource loader as well as the parent factory. */
 	async function start(extra: ExtensionFactory[] = []) {
-		stack = new GoalStack();
+		stack = await GoalStack.create();
 		const agentDir = join(stack.home.root, "agent");
 		mkdirSync(agentDir, { recursive: true });
 		// The runner's REAL DefaultResourceLoader loads the kit into every child.

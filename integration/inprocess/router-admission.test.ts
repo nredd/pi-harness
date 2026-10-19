@@ -20,7 +20,7 @@ describe("router/subagents admission", () => {
 				? "max wait cap refuses distant reset"
 				: `${policy} policy ${policy === "wait" ? "parks" : "refuses"} exhausted child`,
 			async () => {
-				stack = new GoalStack();
+				stack = await GoalStack.create();
 				const physical = stack.registerPhysical(CHAIN, 100);
 				const scheduled: unknown[] = [];
 				const started: unknown[] = [];

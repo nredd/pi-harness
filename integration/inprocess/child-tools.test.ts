@@ -15,7 +15,7 @@ const TOOLS = ["monitor_start", "monitor_read", "monitor_stop"];
 it.each([false, true])(
 	"children cannot regain monitor tools in either factory order: kitFirst=%s",
 	async (kitFirst) => {
-		const home = isolateStackHome();
+		const home = await isolateStackHome();
 		const clock = new FakeClock();
 		const processes = new ControlledProcesses(clock);
 		const kitOptions = {
@@ -92,7 +92,7 @@ it.each([false, true])(
 		} finally {
 			await closeAgentStack(h);
 			delete (globalThis as Record<symbol, unknown>)[OPTIONS];
-			home.cleanup();
+			await home.cleanup();
 		}
 	},
 );

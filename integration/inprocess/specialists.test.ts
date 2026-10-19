@@ -31,12 +31,12 @@ const SURFACES: Record<string, { required: string[]; forbidden: string[] }> = {
 		forbidden: ["git_commit", "git_worktree_remove", "git_worktree_prune", "memory_write", "scratchpad"],
 	},
 };
-let home: ReturnType<typeof isolateStackHome>;
+let home: Awaited<ReturnType<typeof isolateStackHome>>;
 let h: Harness;
 let restoreDependencies: () => void;
 let fetchCalls = 0;
 beforeAll(async () => {
-	home = isolateStackHome();
+	home = await isolateStackHome();
 	restoreDependencies = isolateResearchPackages(home.root);
 	vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
 		fetchCalls++;
@@ -56,7 +56,7 @@ afterAll(async () => {
 	} finally {
 		vi.restoreAllMocks();
 		restoreDependencies?.();
-		home.cleanup();
+		await home.cleanup();
 	}
 });
 
