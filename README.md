@@ -15,7 +15,8 @@ Layout:
 - `packages/`: independently versioned plugins and optional preset.
 - `forks/`: exact upstream-fork source commits (submodules), with their native build systems. See
   [fork ownership](docs/forks.md).
-- `integration/`: E2E scenarios, including the existing performance gates.
+- `integration/inprocess/`: private `A-stack` workspace, real extension pairs on core's harness, Vitest + Bun.
+- `integration/scenarios/`: remaining E2E scenarios, including the existing performance gates.
 - `benchmarks/comparison/`: historical comparison experiments and annotated results.
 - `scripts/`: build, release, and chezmoi integration implementation.
 - `docs/`: development, source provenance, release, and recovery documentation.
@@ -40,6 +41,10 @@ Packages build and test against the core fork's `v1.3.0-nredd.4` release tarball
 plus each package's `devDependencies`), the host that ships `@earendil-works/pi-coding-agent/testing`.
 Stock Pi compatibility is `make check-package-contracts`' job, not the unit gate's.
 
+`integration/inprocess/` needs `git submodule update --init forks/pi-subagents forks/pi-plan-mode
+forks/rpiv-todo` before `make install`. Keep fork-local `node_modules/` absent: the stack loader
+refuses a second host copy. Its API and coverage are in [CI](docs/ci.md).
+
 Development (Node with npm workspaces, `uv`, Git, macOS or Linux; the benchmark is macOS-only):
 
 ```sh
@@ -53,7 +58,8 @@ make check-fork-package-contracts # explicit: real packed preset/dev-tools via t
 
 `make check` runs, without rewriting files:
 
-- `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*` (published packages:
+- `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
+  `integration/inprocess/` stack suite under Vitest and Bun (published packages:
   `@nredd/pi-dev-tools@0.4.0`, `@nredd/pi-session-kit@0.3.0`,
   `@nredd/pi-subscription-router@0.3.0`, `@nredd/pi-preset@0.1.0`)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
