@@ -666,8 +666,8 @@ def test_registry_propagation_is_bounded(
     )
     responses = {
         "appears": [None, nr.Distribution(integrity=identity.integrity), published],
-        "absent": [None] * 7,
-        "no-provenance": [nr.Distribution(integrity=identity.integrity)] * 7,
+        "absent": [None] * nr.REGISTRY_POLL_ATTEMPTS,
+        "no-provenance": [nr.Distribution(integrity=identity.integrity)] * nr.REGISTRY_POLL_ATTEMPTS,
         "different": [nr.Distribution(integrity="different")],
     }[case]
     reads: list[nr.Distribution | None] = []
@@ -695,4 +695,4 @@ def test_registry_propagation_is_bounded(
         with pytest.raises(nr.ReleaseError):
             nr.wait_for_registry(repo, identity)
     assert len(reads) == len(responses)
-    assert sleeps == [10] * (len(responses) - 1)
+    assert sleeps == [nr.REGISTRY_POLL_INTERVAL_S] * (len(responses) - 1)
