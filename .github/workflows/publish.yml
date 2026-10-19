@@ -1,0 +1,129 @@
+# Trusted publisher: nredd/pi-harness + publish.yml + environment npm. No npm credentials.
+name: Publish
+
+on:
+  push:
+    tags: ['@nredd/*@*']
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Fetch current main for ancestry check
+        run: git fetch origin main:refs/remotes/origin/main
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Pin npm to packageManager
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest
+      - name: Resolve and validate release tag
+        id: target
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: uv run --locked --project integration python scripts/npm_release.py preflight --tag "$RELEASE_TAG"
+      - name: Initialize contract fork at its Gitlink
+        if: steps.target.outputs.directory == 'preset' || steps.target.outputs.directory == 'dev-tools'
+        run: git submodule update --init forks/pi-subagents
+      - name: Install, check package, pack once, exercise tarball and generate manifest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          uv run --locked --project integration python scripts/npm_release.py verify
+          --tag "$RELEASE_TAG" --artifact-dir "$RUNNER_TEMP/npm-release"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/npm-release/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Pin npm to packageManager
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/npm-release/
+      - name: Assert toolchain, verify bytes, refuse duplicate publication
+        id: candidate
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          uv run --locked --project integration python scripts/npm_release.py publish-check
+          --tag "$RELEASE_TAG" --artifact-dir "$RUNNER_TEMP/npm-release"
+      - name: Publish verified tarball with OIDC
+        if: steps.candidate.outputs.publish == 'true'
+        env:
+          TARBALL: ${{ steps.candidate.outputs.tarball }}
+        run: npm publish "$RUNNER_TEMP/npm-release/$TARBALL" --access public
+      - name: Verify registry integrity, npm signatures and source-bound DSSE provenance
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          uv run --locked --project integration python scripts/npm_release.py registry-check
+          --tag "$RELEASE_TAG" --artifact-dir "$RUNNER_TEMP/npm-release"
+
+  release:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/npm-release/
+      - name: Create release from verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --notes "Verified npm publication."
+          "$RUNNER_TEMP/npm-release/"*.tgz
+          "$RUNNER_TEMP/npm-release/SHA256SUMS"
+          "$RUNNER_TEMP/npm-release/identity.json"
+          "$RUNNER_TEMP/npm-release/manifest.json"

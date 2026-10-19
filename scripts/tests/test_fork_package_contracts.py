@@ -66,6 +66,66 @@ def sandbox(tmp_path: Path) -> pc.Sandbox:
     return pc.Sandbox(tmp_path / "sandbox", pc.locate_tools())
 
 
+@pytest.mark.parametrize(
+    "candidate", [fpc.PRESET_CONTRACT, fpc.DEV_TOOLS_CONTRACT], ids=lambda c: c.directory
+)
+def test_fork_audit_reuses_candidate_and_packs_only_companion(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    candidate: pc.PackageContract,
+) -> None:
+    """The fork gate audits the supplied bytes and packs only the other package, without running Pi.
+
+    Parameters:
+        tmp_path (Path): Scratch directories.
+        sandbox (Sandbox): Real npm and Node tools.
+        monkeypatch (pytest.MonkeyPatch): Traces companion packs and forbids candidate rebuilds.
+        candidate (PackageContract): Selected release package.
+
+    Returns:
+        None: The candidate is reused unchanged and only its companion is packed.
+    """
+    artifact = pc.pack(candidate, tmp_path, sandbox)
+    before = artifact.path.read_bytes()
+    packed: list[str] = []
+    original = pc.pack
+
+    def pack(
+        contract: pc.PackageContract,
+        dest: Path,
+        env: pc.Sandbox,
+        package_dir: Path | None = None,
+    ) -> pc.PackedArtifact:
+        """Forbid rebuilding the selected release while packing a real companion.
+
+        Parameters:
+            contract (PackageContract): Companion package to pack.
+            dest (Path): Tarball output directory.
+            env (Sandbox): Scrubbed npm environment.
+            package_dir (Path | None): Companion source directory.
+
+        Returns:
+            PackedArtifact: Real companion tarball identity.
+        """
+        assert contract != candidate
+        packed.append(contract.directory)
+        return original(contract, dest, env, package_dir)
+
+    monkeypatch.setattr(pc, "pack", pack)
+    contracts = [fpc.PRESET_CONTRACT, fpc.DEV_TOOLS_CONTRACT]
+    artifacts = fpc.pack_and_audit(
+        pc.REPO_ROOT,
+        contracts,
+        tmp_path / "audit",
+        sandbox,
+        {candidate.directory: artifact.path},
+    )
+    assert next(a for a in artifacts if a.contract == candidate) == artifact
+    assert packed == [c.directory for c in contracts if c != candidate]
+    assert artifact.path.read_bytes() == before
+
+
 def git(sandbox: pc.Sandbox, repo: Path, *args: str) -> str:
     """Run git in a disposable repository with a fixed identity and no signing.
 
