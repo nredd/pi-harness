@@ -407,6 +407,9 @@ interface ResumeOptions {
    * counted afresh from the resume prompt (#368).
    */
   maxTurns?: number;
+  /** Called on streaming text and model-call changes during this resume. */
+  onTextDelta?: (delta: string, fullText: string) => void;
+  onModelCall?: (event: ModelCallEvent) => void;
   /** Called at the end of each resumed turn with the count since the resume. */
   onTurnEnd?: (turnCount: number) => void;
   /** Called on tool start/end with activity info (for streaming progress to UI). */
@@ -1364,6 +1367,8 @@ export class AgentManager {
         type: record.type,
         maxTurns: options?.maxTurns ?? record.invocation?.maxTurns,
         onTurnEnd: options?.onTurnEnd,
+        onTextDelta: options?.onTextDelta,
+        onModelCall: options?.onModelCall,
         onToolActivity: (activity) => {
           if (activity.type === "end") record.toolUses++;
           options?.onToolActivity?.(activity);
@@ -1487,6 +1492,8 @@ export class AgentManager {
       type: record.type,
       maxTurns: options.maxTurns ?? record.invocation?.maxTurns,
       onTurnEnd: options.onTurnEnd,
+      onTextDelta: options.onTextDelta,
+      onModelCall: options.onModelCall,
       onToolActivity: (activity) => {
         if (activity.type === "end") record.toolUses++;
         options.onToolActivity?.(activity);

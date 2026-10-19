@@ -250,7 +250,7 @@ While a model call is in flight, the widget, the fleet row and the conversation 
 | `writing · 3.2k tok` | it is writing text or tool-call arguments; the figure is an estimate (characters / 4) until the provider reports usage |
 | `stalled? · 2m41s` | no stream event of any kind for 2 minutes (the time is the silence, not the call) |
 
-Tools running take precedence (`reading…`, `running command…`). Activity is tracked for spawns made through the `Agent` tool, RPC and mentions; a resumed run shows `thinking…` until it finishes.
+Tools running take precedence (`reading…`, `running command…`). Activity is tracked for spawns made through the `Agent` tool, RPC and mentions, and for foreground and background resumes. Each resume gets fresh text/model-call tracking and turn counts; physical-model labels follow the assistant messages.
 
 ### Conversation viewer input
 
@@ -718,7 +718,7 @@ Instead of hard-aborting at the turn limit, agents get a graceful shutdown:
 3. Hard abort only after the grace period
 4. Whenever a limit fired and the agent did not end on a finished answer (text, no pending tool call), one more tool-less turn asks for the full final report. The steer is only a request: an agent deep in a tool loop ignores it, and without that turn the result was whatever it narrated before the abort ("Now let me check the tests..."). That turn is tool-free even when another extension re-activates its tools from `before_agent_start` (e.g. pi-deferred-context-engine): the loadout is pinned empty for the turn, any call that still gets through is refused, and the turn is stopped if it calls a tool or runs past one turn
 
-A resumed agent gets a fresh budget: `max_turns` is counted from the resume prompt, resolved as for a spawn — the agent file's `max_turns`, else the resume call's, else the limit the agent was spawned with, else the default.
+A resumed agent gets a fresh budget: `max_turns` is counted from the resume prompt, resolved as for a spawn -- the agent file's `max_turns`, else the resume call's, else the limit the agent was spawned with, else the default. The same bounded, tool-free final report applies on resume. A caller stop, including one arriving while an aborted batch drains, never launches that report.
 
 | Status | Meaning | Icon |
 |--------|---------|------|
@@ -933,7 +933,7 @@ Agent lifecycle events are emitted via `pi.events.emit()` so other extensions ca
 | `subagents:steered` | Steering message accepted from any path (`steer_subagent`, `@handle`, the viewers, `subagents:rpc:steer`) — fires for a *queued* steer as well as a delivered one | `id`, `message` |
 | `subagents:usage` | Every assistant message any agent spends on — top-level, nested and workflow children alike, live while it runs | Always: `id`, `type`, `description`, `depth`, `usage` (that one message's spend as a pi `Usage`; never emitted for a message that spent nothing). Omitted when unknown, never `undefined`: `model` (`provider/id`) and `thinking` (the effective level) until the session has reported them; `requestedThinking`, only when the agent did not get the level it asked for; `parentAgentId`, nested agents only; `workflowId`, a workflow's agents only |
 | `subagents:compacted` | Agent's session successfully compacted | `id`, `type`, `description`, `reason` (`"manual"` / `"threshold"` / `"overflow"`), `tokensBefore`, `compactionCount` |
-| `subagents:disposed` | End of `session_shutdown`, after every agent is stopped and every child session has shut down — no `subagents:usage` can follow it. A ledger flushing in its own `session_shutdown` may run before the agents are aborted; flush again here, **synchronously** (`writeFileSync`, not `fs.promises`): `emit` does not await listeners and pi calls `process.exit` once the shutdown handlers return, so nothing after a listener's first `await` is guaranteed to run | `{}` |
+| `subagents:disposed` | After actual shutdown disposal of this activation's manager and child sessions. Not emitted when a session switch detaches surviving background work; those agents can still emit `subagents:usage`. Other detached activations may also still report usage, so this is not a process-global barrier. On quit, flush **synchronously** (`writeFileSync`, not `fs.promises`): `emit` does not await listeners and pi exits once shutdown handlers return | `{}` |
 | `subagents:scheduled` | Schedule lifecycle change | `{ type: "added" \| "removed" \| "updated" \| "fired" \| "error", … }` (job/agentId/error fields per type) |
 | `subagents:scheduler_ready` | Scheduler bound to session, enabled jobs armed | `sessionId`, `jobCount` |
 | `subagents:ready` | RPC handlers registered and armed — fired on session start; not emitted in a session that excludes pi-subagents | `{}` (empty object) |

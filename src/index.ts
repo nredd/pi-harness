@@ -1287,9 +1287,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // pi awaits this handler, and the process exits right after — unawaited, those
     // handlers would never run. Internally bounded, so a hung one can't strand quit.
     await manager.dispose(pi);
-    // Every agent is stopped and every child session has shut down, so no more
-    // `subagents:usage` can arrive. A ledger flushing in its own
-    // `session_shutdown` may have run before this handler aborted the agents
+    // This manager's agents and child sessions have shut down. Other detached
+    // activations may still emit usage; this is not a process-global barrier.
+    // A ledger's `session_shutdown` may have run before this handler aborted the agents
     // (handlers run in load order) and missed their last messages; this is the
     // point after which a synchronous final flush is complete. Synchronous:
     // `emit` does not await listeners, and pi exits once this handler returns.
@@ -1532,7 +1532,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    * was spawned with, else the default (#368).
    */
   function resumeTurnLimit(record: AgentRecord, explicit?: number): number | undefined {
-    return normalizeMaxTurns(getAgentConfig(record.type)?.maxTurns ?? explicit ?? record.invocation?.maxTurns ?? getDefaultMaxTurns());
+    // Preserve 0 until the runner resolves it: normalizing it here would turn
+    // an explicit unlimited budget into "unspecified" and restore the spawn cap.
+    return getAgentConfig(record.type)?.maxTurns ?? explicit ?? record.invocation?.maxTurns ?? getDefaultMaxTurns();
   }
 
   /**
@@ -1573,7 +1575,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // this index, so it is written exactly once.
     const transcriptAnchor = existing.session?.messages.length ?? 0;
 
-    const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(opts.maxTurns);
+    const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(normalizeMaxTurns(opts.maxTurns));
     // resumeAgent has no onSessionCreated — the session predates this run —
     // so seed it directly, or the widget shows no context % for the agent.
     bgState.session = existing.session;
@@ -1586,6 +1588,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       isBackground: true,
       maxTurns: opts.maxTurns,
       onTurnEnd: bgCallbacks.onTurnEnd,
+      onTextDelta: bgCallbacks.onTextDelta,
+      onModelCall: bgCallbacks.onModelCall,
       onToolActivity: bgCallbacks.onToolActivity,
       onAssistantUsage: bgCallbacks.onAssistantUsage,
       // Fires when the run actually starts — immediately, or on queue
@@ -2240,7 +2244,7 @@ Terse command-style prompts produce shallow, generic work.
         // Tracked like a foreground spawn, so the widget row and the result
         // card show THIS run's `↻N≤M` and tool activity rather than the
         // previous run's. The session predates this run, so it is seeded here.
-        const { state: resumeState, callbacks: resumeCallbacks } = createActivityTracker(resumeMaxTurns);
+        const { state: resumeState, callbacks: resumeCallbacks } = createActivityTracker(normalizeMaxTurns(resumeMaxTurns));
         resumeState.session = existing.session;
         agentActivity.set(existing.id, resumeState);
         widget.markRunning(existing.id);
@@ -2252,7 +2256,10 @@ Terse command-style prompts produce shallow, generic work.
           record = await manager.resume(params.resume, params.prompt, signal, {
             maxTurns: resumeMaxTurns,
             onTurnEnd: resumeCallbacks.onTurnEnd,
+            onTextDelta: resumeCallbacks.onTextDelta,
+            onModelCall: resumeCallbacks.onModelCall,
             onToolActivity: resumeCallbacks.onToolActivity,
+            onAssistantUsage: resumeCallbacks.onAssistantUsage,
           });
         } finally {
           agentActivity.delete(existing.id);

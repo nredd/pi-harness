@@ -315,6 +315,63 @@ describe("Agent tool — background resume wiring", () => {
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
 
+  it.each([false, true])("keeps an explicit unlimited resume from inheriting the spawn cap (background=%s)", async (runInBackground) => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = makeCtx(cwd);
+    const spawned = await tools.get("Agent").execute("spawn", {
+      prompt: "first task", description: "first", subagent_type: "general-purpose", run_in_background: true, max_turns: 9,
+    }, undefined, undefined, ctx);
+    const id = agentIdOf(spawned);
+    await new Promise(resolve => setImmediate(resolve));
+    vi.mocked(resumeAgent).mockClear();
+    try {
+      const result = await tools.get("Agent").execute("resume", {
+        prompt: "continue", description: "continue", subagent_type: "general-purpose", resume: id, run_in_background: runInBackground, max_turns: 0,
+      }, undefined, undefined, ctx);
+      expect(vi.mocked(resumeAgent).mock.calls[0][2].maxTurns).toBe(0);
+      if (!runInBackground) expect(result.details.maxTurns).toBeUndefined();
+    } finally {
+      await lifecycle.get("session_shutdown")?.({}, ctx);
+    }
+  });
+
+  it.each([false, true])("tracks resumed text/model activity and final physical spend (background=%s)", async (runInBackground) => {
+    const { pi, tools, lifecycle, emitted } = makePi();
+    subagentsExtension(pi);
+    const ctx = makeCtx(cwd);
+    const id = await spawnSettled(tools, ctx);
+    emitted.length = 0;
+    vi.mocked(resumeAgent).mockImplementation(async (_session, _prompt, opts) => {
+      expect(opts.onTextDelta).toBeTypeOf("function");
+      expect(opts.onModelCall).toBeTypeOf("function");
+      opts.onModelCall?.({ type: "start" });
+      opts.onTextDelta?.("new answer", "new answer");
+      opts.onTurnEnd?.(3);
+      opts.onToolActivity?.({ type: "start", toolName: "read" });
+      opts.onToolActivity?.({ type: "end", toolName: "read" });
+      opts.onAssistantUsage?.({ input: 7, output: 3, cacheWrite: 0, cost: 0.001 }, { provider: "physical", model: "model-b" });
+      opts.onModelCall?.({ type: "end" });
+      return { text: "new answer", aborted: false, steered: true };
+    });
+    try {
+      const result = await tools.get("Agent").execute("resume", {
+        prompt: "continue", description: "continue", subagent_type: "general-purpose", resume: id, run_in_background: runInBackground, max_turns: 7,
+      }, undefined, undefined, ctx);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(emitted.filter(event => event.event === "subagents:usage").map(event => event.payload))
+        .toEqual([expect.objectContaining({ id, model: "physical/model-b", usage: expect.objectContaining({ totalTokens: 10 }) })]);
+      if (!runInBackground) {
+        expect(result.details).toMatchObject({ turnCount: 3, maxTurns: 7, status: "steered", toolUses: 1 });
+        expect(resultText(result)).toBe("new answer");
+      } else {
+        expect(emitted.find(event => event.event === "subagents:completed")?.payload).toMatchObject({ id, status: "steered" });
+      }
+    } finally {
+      await lifecycle.get("session_shutdown")?.({}, ctx);
+    }
+  });
+
   it("passes the effective turn limit to a foreground resume (#368)", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);

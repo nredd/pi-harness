@@ -19,6 +19,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
+import { drainDetached } from "../src/detached-results.js";
 import subagentsExtension from "../src/index.js";
 import { addUsage, PendingUsagePool } from "../src/usage.js";
 import { ctx, flush, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
@@ -495,6 +496,41 @@ describe("reporting subagent usage back to the parent session", () => {
       expect(usageIdx).toBeGreaterThan(-1);
       expect(usageIdx).toBeLessThan(names.lastIndexOf("subagents:disposed"));
       expect(names.at(-1)).toBe("subagents:disposed");
+    });
+
+    it.each(["new", "resume", "fork", "reload"] as const)("does not emit disposed while %s leaves background work alive", async (reason) => {
+      const { pi, tools, lifecycle } = boot({ schedulingEnabled: false });
+      const sessionFile = `${hermetic.dir}/parent.jsonl`;
+      const context = ctx({ sessionManager: { getSessionId: () => "s1", getBranch: () => [], getSessionFile: () => sessionFile } });
+      await startSession(lifecycle, true, { sessionManager: context.sessionManager });
+      let finish!: () => void;
+      let childSignal: AbortSignal | undefined;
+      const dispose = vi.fn();
+      vi.mocked(runAgent).mockImplementation((_c, _t, _p, opts) => {
+        childSignal = opts.signal;
+        const session = { dispose, subscribe: () => () => {}, messages: [] } as never;
+        opts.onSessionCreated?.(session);
+        return new Promise(resolve => {
+          finish = () => {
+            opts.onAssistantUsage?.({ input: 7, output: 3, cacheWrite: 0, cost: 0.001 }, { provider: "physical", model: "model-b" });
+            resolve({ responseText: "done", session, aborted: false, steered: false });
+          };
+        });
+      });
+      await tools.get("Agent").execute("detached", {
+        prompt: "go", description: "survivor", subagent_type: "general-purpose", run_in_background: true,
+      }, undefined, undefined, context);
+      await lifecycle.get("session_shutdown")?.({ type: "session_shutdown", reason }, context);
+      expect(childSignal?.aborted).toBe(false);
+      expect(dispose).not.toHaveBeenCalled();
+      expect(pi.events.emit.mock.calls.filter(([name]: [string]) => name === "subagents:disposed")).toHaveLength(0);
+      finish();
+      await flush();
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(usageEvents(pi)).toEqual([expect.objectContaining({ model: "physical/model-b", usage: expect.objectContaining({ totalTokens: 10 }) })]);
+      // The terminal shutdown event is not a delayed session-switch event either.
+      expect(pi.events.emit.mock.calls.filter(([name]: [string]) => name === "subagents:disposed")).toHaveLength(0);
+      drainDetached(sessionFile);
     });
 
     it("reports a nested child's message once, as the child's own", async () => {

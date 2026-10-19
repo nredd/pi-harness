@@ -749,12 +749,15 @@ const FINAL_REPORT_TOOL_BLOCKED = "No tools are available for the final report. 
  * blocked with `terminate`, which ends the loop after that batch. The caller's
  * turn hook is the hard stop behind both.
  */
-async function forceFinalReport(session: AgentSession, startIndex: number): Promise<boolean> {
+async function forceFinalReport(session: AgentSession, startIndex: number, signal?: AbortSignal): Promise<boolean> {
   const previousTools = session.getActiveToolNames();
   const setActiveTools = session.setActiveToolsByName;
   const priorBeforeToolCall = session.agent.beforeToolCall;
   try {
     await session.waitForIdle?.();
+    // A stop can arrive while an aborted tool batch drains. Never start a new
+    // prompt after that stop just because the report was already scheduled.
+    if (signal?.aborted) return false;
     setActiveTools.call(session, []);
     session.setActiveToolsByName = () => setActiveTools.call(session, []);
     session.agent.beforeToolCall = async () => ({ block: true, terminate: true, reason: FINAL_REPORT_TOOL_BLOCKED });
@@ -1421,7 +1424,7 @@ export async function runAgent(
     // in a turn that cannot call tools.
     if (run.steered && options.signal?.aborted !== true && !endedWithReport(session, startLen)) {
       run.finalizing = true;
-      const reported = await forceFinalReport(session, startLen);
+      const reported = await forceFinalReport(session, startLen, options.signal);
       // A delivered report is a wrap-up, not a failure: the agent did hand back
       // its findings, just later than it would have chosen.
       if (reported) run.aborted = false;
@@ -1472,7 +1475,7 @@ export async function runAgent(
 export async function resumeAgent(
   session: AgentSession,
   prompt: string,
-  options: Pick<RunOptions, "maxTurns" | "onTurnEnd" | "onToolActivity" | "onAssistantUsage" | "onCompaction" | "signal"> & {
+  options: Pick<RunOptions, "maxTurns" | "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction" | "signal"> & {
     /** The agent's type, for its own `max_turns`. */
     type: SubagentType;
   },
@@ -1490,7 +1493,7 @@ export async function resumeAgent(
     if (options.signal?.aborted !== true) await session.prompt(prompt);
     if (run.steered && options.signal?.aborted !== true && !endedWithReport(session, startLen)) {
       run.finalizing = true;
-      if (await forceFinalReport(session, startLen)) run.aborted = false;
+      if (await forceFinalReport(session, startLen, options.signal)) run.aborted = false;
     }
   } finally {
     collector.unsubscribe();
