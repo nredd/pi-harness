@@ -17,6 +17,7 @@ entries in one core harness session, under Vitest and Bun. No extension mocks or
 `support.ts` checks host identity before importing each fork. Keep their `node_modules/` absent.
 `isolateStackHome()` isolates Pi and rpiv config, including legacy HOME paths. See `docs/ci.md`.
 
-`scenarios/tui/test_todo_history.py` still owns actual host row rendering, reload and resize.
+`integration/inprocess/todo-history-session.test.ts` owns actual host row rendering, file-backed
+history, resource-loader reload and resize under Vitest and Bun.
 `test_plan_mode_confirmation.py` still owns the real RPC extension-UI protocol. The Plan-mode
 fork's native suite owns custom-TUI keyboard/layout, fresh handoff and tree routing.
