@@ -140,6 +140,12 @@ def test_link_real_credentials_requires_real_auth(monkeypatch: pytest.MonkeyPatc
 
 
 def test_live_credentials_have_no_default_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Require an explicit credential file rather than discovering owner state.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): remove the deliberate credential input.
+        tmp_path (Path): private bare fixture root.
+    """
     monkeypatch.delenv("HARNESS_AUTH_FILE", raising=False)
     with pytest.raises(ValueError, match="explicit `HARNESS_AUTH_FILE`"):
         live.link_real_credentials(make_box(tmp_path / "box"))

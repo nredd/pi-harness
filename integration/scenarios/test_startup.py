@@ -28,7 +28,14 @@ HELD = "HELD-MESSAGE-MUST-NOT-LEAK"
 @pytest.mark.parametrize("phase", ["factory", "session_start"])
 @pytest.mark.parametrize("fatal", [False, True], ids=["ordinary", "fatal"])
 def test_fatal_startup_modes(sandbox: Sandbox, mode: str, phase: str, fatal: bool) -> None:
-    """Real CLI modes distinguish ordinary errors from fatal startup, with zero fatal provider dispatch."""
+    """Real CLI modes distinguish ordinary errors from fatal startup, with zero fatal provider dispatch.
+
+    Parameters:
+        sandbox (Sandbox): private stack receiving the failing extension.
+        mode (str): text, JSON, RPC or TUI CLI entry.
+        phase (str): extension factory or session-start handler.
+        fatal (bool): use ExtensionStartupError instead of an ordinary Error.
+    """
     extension = sandbox.root / "startup.ts"
     error = f"new {'ExtensionStartupError' if fatal else 'Error'}({json.dumps(MESSAGE)})"
     # Use the host's symbol bridge, not a second bundled host identity.

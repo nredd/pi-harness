@@ -28,7 +28,16 @@ if TYPE_CHECKING:
     from harness.tmux import TmuxPane
 
 pytestmark = [pytest.mark.stack, pytest.mark.tui]
-STATS = re.compile(r"\bhit \d|\bCH\d")
+STATS = re.compile(r"\bhit \d+\.\d%|\bCH\d+\.\d%")
+FULL_STATS = re.compile(
+    r"^\s*in \S+ out \S+ (?:read \S+ )?(?:write \S+ )?"
+    r"hit (?P<rate>\d+\.\d)%(?P<marker> (?:warm|cold))(?P<cause> \S+)? "
+    r"cost \$\S+ ctx \S+/\S+ \(auto\)(?:\s+.*)?$"
+)
+COMPACT_STATS = re.compile(
+    r"^\s*↑\S+ ↓\S+ (?:R\S+ )?(?:W\S+ )?"
+    r"CH(?P<rate>\d+\.\d)%(?P<marker> [wc])(?P<cause> \S+)?\s+\$\S+\s+\S+/\S+ \(auto\)"
+)
 QUOTA = re.compile(r"^\s*(?:Quota left:|Left:)")
 STATUS = "STATUS-LINE-OK"
 
@@ -39,6 +48,9 @@ def assert_footer(pane: TmuxPane, width: int) -> None:
     Parameters:
         pane (TmuxPane): actual terminal process.
         width (int): new OS-level terminal width.
+
+    Raises:
+        AssertionError: the full pane and footer never settle into the expected layout.
     """
     deadline = time.monotonic() + 20
     screen = ""
@@ -54,15 +66,20 @@ def assert_footer(pane: TmuxPane, width: int) -> None:
             and status[0] == stats[0] + 2
         ):
             footer = rows[stats[0] - 1 : status[0] + 1]
-            compact = "CH" in rows[stats[0]]
-            if len(footer) == 4 and all(len(row) <= width for row in footer) and compact == (width == 60):
+            pattern = COMPACT_STATS if width == 60 else FULL_STATS
+            if len(footer) == 4 and pattern.match(rows[stats[0]]) and all(len(row) <= width for row in rows):
                 return
         time.sleep(0.05)
     raise AssertionError(f"Footer did not repaint cleanly at {width}:\n{screen}")
 
 
 def test_resize_transitions_leave_no_stale_rows(sandbox: Sandbox, tui: Callable[..., TmuxPane]) -> None:
-    """120 -> 60 -> 320 -> 120 preserves one stats/quota/status row without timer scaling."""
+    """120 -> 60 -> 320 -> 120 preserves one stats/quota/status row without timer scaling.
+
+    Parameters:
+        sandbox (Sandbox): private installed stack with a test-scoped preset.
+        tui (Callable[..., TmuxPane]): actual terminal launcher for that sandbox.
+    """
     # Install only into this test's writable copy. Keep resolved sources after Pi's
     # installer saves cwd-relative paths, and avoid loading the local preset twice.
     source = str(REPO_ROOT.parent / "packages/preset")

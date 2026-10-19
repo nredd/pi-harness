@@ -19,7 +19,12 @@ if TYPE_CHECKING:
 
 @pytest.mark.parametrize("existing", [False, True])
 def test_sandbox_disables_titles_preserving_module_cfg(tmp_path: Path, existing: bool) -> None:
-    """Handle absent cfg and deep-merge only the title enable flag in existing cfg."""
+    """Handle absent cfg and deep-merge only the title enable flag in existing cfg.
+
+    Parameters:
+        tmp_path (Path): private template and copied sandbox roots.
+        existing (bool): seed a module configuration before copying when true.
+    """
     template = tmp_path / "template"
     agent = template / ".pi" / "agent"
     agent.mkdir(parents=True)

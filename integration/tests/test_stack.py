@@ -1,4 +1,9 @@
-"""Explicit-stack validation and isolation tests; no Pi process or live state."""
+"""Explicit-stack validation and isolation tests; no Pi process or live state.
+
+References:
+- https://docs.pydantic.dev/latest/concepts/strict_mode/
+- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
+"""
 
 from __future__ import annotations
 
@@ -35,11 +40,21 @@ from harness.stack import Stack, find_package, load_stack, package_directory, st
     ],
 )
 def test_stack_rejects_implicit_or_ambiguous_inputs(change: dict[str, Any]) -> None:
+    """Reject invalid source shapes, floating identities and implicit machine state.
+
+    Parameters:
+        change (dict[str, Any]): invalid overlay on a minimal explicit stack.
+    """
     with pytest.raises(ValidationError):
         Stack.model_validate({"name": "unit", "sources": ["./pkg"]} | change)
 
 
 def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> None:
+    """Resolve local sources against the document and require real package manifests.
+
+    Parameters:
+        tmp_path (Path): private stack and local package tree.
+    """
     package = tmp_path / "pkg"
     package.mkdir()
     (package / "package.json").write_text('{"name":"@test/pkg","version":"1.2.3"}')
@@ -56,6 +71,7 @@ def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> Non
 
 
 def test_supplied_stacks_are_pinned_and_exclusion_is_explicit() -> None:
+    """Keep personal/local source counts, exact pins and headless exclusions deliberate."""
     root = Path(__file__).resolve().parents[1]
     personal = load_stack(root / "stacks/personal.json")
     local = load_stack(root / "stacks/local.json")
@@ -70,6 +86,11 @@ def test_supplied_stacks_are_pinned_and_exclusion_is_explicit() -> None:
 
 
 def test_no_pi_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Require an explicit CLI command instead of discovering the owner's installation.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): control the explicit PI_BIN input.
+    """
     monkeypatch.delenv("PI_BIN", raising=False)
     with pytest.raises(FileNotFoundError, match="explicit `PI_BIN`"):
         pi_command()
@@ -78,6 +99,12 @@ def test_no_pi_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Verify install isolation, evidence and fixture policy without launching Pi.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace the installer and plant forbidden environment values.
+        tmp_path (Path): private package-set document and installation roots.
+    """
     stack_path = tmp_path / "stack.json"
     stack_path.write_text(
         json.dumps(
@@ -95,7 +122,17 @@ def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setenv("NODE_OPTIONS", "must-not-leak")
 
     def fake_install(argv: list[str], *, cwd: Path, env: dict[str, str], **kwargs: Any) -> str:
-        """Model installer writes only, never launch Pi."""
+        """Model installer writes only, never launch Pi.
+
+        Parameters:
+            argv (list[str]): expected explicit Pi installation command.
+            cwd (Path): private installation working directory.
+            env (dict[str, str]): scrubbed installer environment.
+            **kwargs (Any): subprocess capture and deadline options.
+
+        Returns:
+            str: simulated installer output.
+        """
         assert cwd.is_dir()
         assert "ANTHROPIC_API_KEY" not in env
         assert "NODE_OPTIONS" not in env
@@ -136,6 +173,11 @@ def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch,
 
 
 def test_package_lookup_does_not_guess_an_owner_checkout(tmp_path: Path) -> None:
+    """Fail lookup without guessing live package or checkout locations.
+
+    Parameters:
+        tmp_path (Path): empty private package root.
+    """
     with pytest.raises(FileNotFoundError, match="not installed"):
         package_directory("npm:@scope/missing@1.2.3", tmp_path)
     with pytest.raises(LookupError, match="not declared"):

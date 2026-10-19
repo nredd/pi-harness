@@ -67,7 +67,7 @@ def pi_command() -> list[str]:
         list[str]: argv prefix that launches pi.
 
     Raises:
-        FileNotFoundError: `PI_BIN` is unset and no `pi` is on `PATH`.
+        FileNotFoundError: the explicit `PI_BIN` input is unset.
     """
     override = os.environ.get("PI_BIN")
     if override:

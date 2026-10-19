@@ -49,7 +49,7 @@ def gitlink_tag(directory: Path) -> str:
         ).strip()
     except subprocess.CalledProcessError as error:
         raise RuntimeError(
-            f"Core Gitlink at '{directory}' is untagged; release it before gating pins"
+            f"Core Gitlink at '{directory}' is untagged; release it before gating pins: {error.output}"
         ) from error
 
 
@@ -61,10 +61,10 @@ def manifest_checksums(tag: str, manifests: Path) -> dict[str, str]:
         manifests (Path): repository release manifests.
 
     Returns:
-        dict[str, str]: asset URL -> sha256; empty if the tag has no manifest.
+        dict[str, str]: nonempty asset URL -> sha256 mapping.
 
     Raises:
-        ValueError: a manifest for this tag is incomplete or contradictory.
+        ValueError: no recorded checksums, or this tag's manifest is incomplete or contradictory.
     """
     checksums: dict[str, str] = {}
     prefix = f"https://github.com/nredd/pi/releases/download/{tag}/"
@@ -83,11 +83,13 @@ def manifest_checksums(tag: str, manifests: Path) -> dict[str, str]:
             if not re.fullmatch(r"[0-9a-f]{64}", digest) or (url in checksums and checksums[url] != digest):
                 raise ValueError(f"Conflicting or invalid checksum for '{url}' in '{path}'")
             checksums[url] = digest
+    if not checksums:
+        raise ValueError(f"No recorded release checksums for '{tag}' in '{manifests}'")
     return checksums
 
 
 def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
-    """Compare downloaded bytes with a matching manifest, when one exists.
+    """Require downloaded bytes to match a recorded manifest identity.
 
     Parameters:
         path (Path): downloaded asset.
@@ -95,16 +97,16 @@ def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
         checksums (dict[str, str]): tag's recorded assets.
 
     Raises:
-        ValueError: a recorded tag lacks this asset or its bytes disagree.
+        ValueError: no recorded checksum for this asset or its bytes disagree.
     """
+    if url not in checksums:
+        raise ValueError(f"No recorded release checksum for '{url}'")
     actual = hashlib.sha256(path.read_bytes()).hexdigest()
-    if checksums and checksums.get(url) != actual:
+    if checksums[url] != actual:
         raise ValueError(
             f"Release checksum mismatch for '{url}': '{actual}', expected '{checksums.get(url)}'"
         )
-    LOGGER.info(
-        f"Release asset '{url}' sha256={actual} manifest={'verified' if checksums else 'not recorded'}"
-    )
+    LOGGER.info(f"Release asset '{url}' sha256={actual} manifest=verified")
 
 
 def prune_native(node_modules: Path, system: str, arch: str) -> None:
@@ -136,7 +138,7 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
         Path: private pi executable.
 
     Raises:
-        ValueError: invalid tag or nonempty prefix.
+        ValueError: invalid tag, nonempty prefix, or missing/mismatched recorded checksums.
         FileNotFoundError: npm is unavailable.
     """
     match = TAG.fullmatch(tag)
@@ -144,6 +146,15 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
         raise ValueError(f"Not a core fork release tag: '{tag}'")
     if prefix.exists() and any(prefix.iterdir()):
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
+    checksums = manifest_checksums(tag, manifests)
+    version = match["version"]
+    urls = [
+        f"https://github.com/nredd/pi/releases/download/{tag}/earendil-works-{package}-{version}.tgz"
+        for package in ("pi-coding-agent", "pi-tui")
+    ]
+    for url in urls:
+        if url not in checksums:
+            raise ValueError(f"No recorded release checksum for '{url}'")
     npm = shutil.which("npm")
     if npm is None:
         raise FileNotFoundError("Release installation requires `npm`")
@@ -160,12 +171,9 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
         "npm_config_cache": str(prefix / "npm-cache"),
         "PI_SKIP_VERSION_CHECK": "1",
     }
-    checksums = manifest_checksums(tag, manifests)
-    version = match["version"]
     assets = []
-    for package in ("pi-coding-agent", "pi-tui"):
-        asset = prefix / f"earendil-works-{package}-{version}.tgz"
-        url = f"https://github.com/nredd/pi/releases/download/{tag}/{asset.name}"
+    for url in urls:
+        asset = prefix / url.rsplit("/", 1)[1]
         with urlopen(url, timeout=120) as response:
             asset.write_bytes(response.read())
         verify_asset(asset, url, checksums)

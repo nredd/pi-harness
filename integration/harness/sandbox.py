@@ -20,6 +20,8 @@ from harness.stack import load_stack, package_directory, stack_digest
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from harness.stack import Stack
+
 LOGGER = logging.getLogger(__name__)
 BASE_ENV = {
     "TZ": "UTC",
@@ -180,12 +182,30 @@ def install_stack(root: Path, stack_path: Path) -> Sandbox:
         Sandbox: installed fixture, suitable for copying to per-test homes.
 
     Raises:
-        subprocess.CalledProcessError: an actual package install failed.
+        RuntimeError: an actual package install failed, with captured diagnostics.
+        ValueError: an installed npm identity differs from its explicit pin.
     """
     stack = load_stack(stack_path)
     sources = stack.resolved_sources(stack_path)
     box = build_sandbox(root)
     LOGGER.info(f"Stack '{stack.name}' sha256={stack_digest(stack_path)}")
+    _install_sources(box, stack, sources)
+    _record_stack(box, stack, stack_path, sources)
+    _configure_fixture_policy(box)
+    return box
+
+
+def _install_sources(box: Sandbox, stack: Stack, sources: list[str]) -> None:
+    """Install resolved sources with declared lifecycle exclusions.
+
+    Parameters:
+        box (Sandbox): private writable installation.
+        stack (Stack): validated exclusion policy.
+        sources (list[str]): resolved package inputs in declaration order.
+
+    Raises:
+        RuntimeError: Pi installation fails, retaining captured output and cause.
+    """
     for original, source in zip(stack.sources, sources, strict=True):
         LOGGER.info(f"pi install '{source}'")
         extra = {"PI_OFFLINE": "0"}
@@ -203,6 +223,20 @@ def install_stack(root: Path, stack_path: Path) -> Sandbox:
             )
         except subprocess.CalledProcessError as error:
             raise RuntimeError(f"`pi install` failed for '{source}': {error.output[-6000:]}") from error
+
+
+def _record_stack(box: Sandbox, stack: Stack, stack_path: Path, sources: list[str]) -> None:
+    """Verify installed identities and persist portable source settings plus evidence.
+
+    Parameters:
+        box (Sandbox): installed package tree.
+        stack (Stack): explicit settings and exclusions.
+        stack_path (Path): original document for the evidence digest.
+        sources (list[str]): resolved inputs in declaration order.
+
+    Raises:
+        ValueError: an installed npm identity differs from its pin.
+    """
     packages: list[Any] = []
     identities = []
     for original, resolved in zip(stack.sources, sources, strict=True):
@@ -231,6 +265,14 @@ def install_stack(root: Path, stack_path: Path) -> Sandbox:
             indent=2,
         )
     )
+
+
+def _configure_fixture_policy(box: Sandbox) -> None:
+    """Configure deterministic fixture policy independently of distribution evidence.
+
+    Parameters:
+        box (Sandbox): installed fixture whose runtime policy is patched.
+    """
     # Fixture policy, not rendered owner preferences. The real deferred engine consumes this file.
     box.patch_json(
         "deferred-tools.json",
@@ -277,7 +319,6 @@ def install_stack(root: Path, stack_path: Path) -> Sandbox:
     workflows = box.home / ".pi" / "workflows" / "settings.json"
     workflows.parent.mkdir(parents=True, exist_ok=True)
     workflows.write_text('{"keywordTriggerEnabled":false}')
-    return box
 
 
 def package_name(source: str) -> str:

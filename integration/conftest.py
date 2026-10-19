@@ -151,6 +151,7 @@ def tui(
     Parameters:
         sandbox (Sandbox): sandbox the panes run in.
         request (pytest.FixtureRequest): used to inspect the test outcome.
+        reap_stale_tmux (None): fixture cleaning only abandoned harness servers.
 
     Yields:
         Callable[..., TmuxPane]: `launch_tui` bound to the sandbox.
@@ -167,6 +168,20 @@ def tui(
         env: dict[str, str] | None = None,
         wait_pattern: str | None = FIRST_FRAME_PATTERN,
     ) -> TmuxPane:
+        """Start and retain a private pane for teardown and failure capture.
+
+        Parameters:
+            script (dict[str, Any]): faux provider script.
+            width (int): initial terminal columns.
+            height (int): initial terminal rows.
+            model (str): explicit provider/model identity.
+            extra_args (list[str] | None): additional CLI arguments.
+            env (dict[str, str] | None): deliberate child environment overrides.
+            wait_pattern (str | None): first-frame readiness pattern, or no wait.
+
+        Returns:
+            TmuxPane: running private terminal.
+        """
         pane = launch_tui(
             sandbox,
             script,

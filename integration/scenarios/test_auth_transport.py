@@ -152,7 +152,13 @@ def answered(result: RunResult, mock: AnthropicMock) -> None:
 def test_request_uses_auth_json_token_with_claude_code_headers(
     sandbox: Sandbox, mock: AnthropicMock, kind: str
 ) -> None:
-    """OAuth mutates direct/routed transport, never API-key or custom providers; Claude auth is ignored."""
+    """OAuth mutates direct/routed transport, never API-key or custom providers; Claude auth is ignored.
+
+    Parameters:
+        sandbox (Sandbox): private stack and fake native credentials.
+        mock (AnthropicMock): loopback wire recorder.
+        kind (str): provider/auth path or missing-preload refusal branch.
+    """
     write_auth(sandbox.agent_dir, {"anthropic": oauth()})
     if kind == "missing-preload":
         refused = run(sandbox, mock, preload=False)
@@ -195,7 +201,12 @@ def test_request_uses_auth_json_token_with_claude_code_headers(
 
 
 def test_expired_token_refreshes_natively_and_persists(sandbox: Sandbox, mock: AnthropicMock) -> None:
-    """Only a custom agent directory changes on refresh; unrelated provider/default sentinels survive."""
+    """Only a custom agent directory changes on refresh; unrelated provider/default sentinels survive.
+
+    Parameters:
+        sandbox (Sandbox): private default agent directory and installed stack.
+        mock (AnthropicMock): scripted token and message server.
+    """
     default = (sandbox.agent_dir / "auth.json").read_bytes()
     custom = sandbox.root / "custom-agent"
     shutil.copytree(sandbox.agent_dir, custom)
@@ -219,7 +230,13 @@ def test_expired_token_refreshes_natively_and_persists(sandbox: Sandbox, mock: A
 def test_refresh_failure_sends_nothing_and_keeps_credentials(
     sandbox: Sandbox, mock: AnthropicMock, kind: str
 ) -> None:
-    """Refused refresh preserves credentials; logout stays absent and explicit relogin works next launch."""
+    """Refused refresh preserves credentials; logout stays absent and explicit relogin works next launch.
+
+    Parameters:
+        sandbox (Sandbox): private fake credentials and installed stack.
+        mock (AnthropicMock): loopback server refusing token refresh.
+        kind (str): refresh-refusal or logout/relogin branch.
+    """
     original = (
         {"anthropic": oauth("sk-ant-oat01-stale", 1)} | UNRELATED if kind == "refresh-refusal" else UNRELATED
     )
