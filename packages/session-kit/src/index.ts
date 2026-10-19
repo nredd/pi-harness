@@ -13,16 +13,6 @@ import { register as registerRules } from "./rules/index.ts";
 import { register as registerStats } from "./stats/index.ts";
 import { register as registerTitles } from "./titles/index.ts";
 
-const MODULES: Record<Feature, (pi: ExtensionAPI, config: ReturnType<typeof loadConfig>) => void> = {
-	titles: registerTitles,
-	rules: registerRules,
-	goal: registerGoal,
-	loop: registerLoop,
-	monitor: registerMonitor,
-	diff: registerDiff,
-	stats: registerStats,
-};
-
 /** Explicit configuration and filesystem roots for SDK hosts; omitted values keep CLI defaults. */
 export interface SessionKitOptions {
 	config?: KitConfig;
@@ -30,16 +20,24 @@ export interface SessionKitOptions {
 	monitorRoot?: string;
 }
 
+type Register = (pi: ExtensionAPI, config: KitConfig, options: SessionKitOptions) => void;
+
+const MODULES: Record<Feature, Register> = {
+	titles: (pi, config, options) => registerTitles(pi, config, options.agentDir),
+	rules: (pi, config, options) => registerRules(pi, config, options.agentDir),
+	goal: registerGoal,
+	loop: registerLoop,
+	monitor: (pi, config, options) => registerMonitor(pi, config, options.monitorRoot),
+	diff: registerDiff,
+	stats: registerStats,
+};
+
 /** Create the real kit without requiring a machine-local agent configuration. */
 export function createSessionKit(options: SessionKitOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		const config = options.config ?? loadConfig(configPath(options.agentDir));
-		for (const [feature, register] of Object.entries(MODULES) as [Feature, (typeof MODULES)[Feature]][]) {
-			if (!config.features[feature]) continue;
-			if (feature === "rules") registerRules(pi, config, options.agentDir);
-			else if (feature === "titles") registerTitles(pi, config, options.agentDir);
-			else if (feature === "monitor") registerMonitor(pi, config, options.monitorRoot);
-			else register(pi, config);
+		for (const [feature, register] of Object.entries(MODULES) as [Feature, Register][]) {
+			if (config.features[feature]) register(pi, config, options);
 		}
 	};
 }
