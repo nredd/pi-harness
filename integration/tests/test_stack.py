@@ -104,13 +104,14 @@ def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch,
         calls.append(argv)
         agent = Path(env["PI_CODING_AGENT_DIR"])
         source = argv[-1]
+        assert env.get("npm_config_ignore_scripts") == ("true" if source.startswith("git:") else None)
         target = agent / ("npm/node_modules/one" if source.startswith("npm:") else "git/github.com/x/two")
         target.mkdir(parents=True)
         (target / "package.json").write_text(
             json.dumps({"name": "one" if source.startswith("npm:") else "two", "version": "1.2.3"})
         )
         settings = json.loads((agent / "settings.json").read_text())
-        settings["packages"] = [*settings.get("packages", []), source]
+        settings["packages"] = [*settings.get("packages", []), {"source": source, "autoload": True}]
         (agent / "settings.json").write_text(json.dumps(settings))
         return "installed"
 
@@ -118,6 +119,8 @@ def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch,
     box = sandbox.install_stack(tmp_path / "install", stack_path)
     assert calls == [["/explicit/pi", "install", source] for source in load_stack(stack_path).sources]
     assert box.settings()["quietStartup"] is True
+    assert box.settings()["packages"][0] == "npm:one@1.2.3"
+    assert json.loads((box.agent_dir / "subagents.json").read_text())["workflowsEnabled"] is False
     assert box.settings()["packages"][-1] == {"source": "git:github.com/x/two@v1", "extensions": []}
     assert (box.agent_dir / "stack-name").read_text() == "fixture"
     other = sandbox.build_sandbox(tmp_path / "other", box.home)

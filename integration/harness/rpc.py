@@ -144,6 +144,8 @@ class RpcProcess:
         """
         path = box.root / f"rpc-{time.monotonic_ns()}.json"
         path.write_text(json.dumps(script))
+        self.log_path = path.with_suffix(".events.jsonl")
+        self.stderr_path = path.with_suffix(".stderr")
         self.lines: Queue[str | None] = Queue()
         self.stderr: list[str] = []
         self.events: list[dict[str, Any]] = []
@@ -269,3 +271,5 @@ class RpcProcess:
             assert self.process.stderr is not None
             self.process.stdout.close()
             self.process.stderr.close()
+            self.log_path.write_text("".join(json.dumps(event) + "\n" for event in self.events))
+            self.stderr_path.write_text("".join(self.stderr))

@@ -14,7 +14,8 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import { basename } from "node:path";
 
 const mock = process.env.HARNESS_ANTHROPIC_MOCK;
-if (!mock) throw new Error("redirect_anthropic.mjs needs HARNESS_ANTHROPIC_MOCK");
+const nonce = process.env.HARNESS_AUTH_NONCE;
+if (!mock || !nonce) throw new Error("redirect_anthropic.mjs needs HARNESS_ANTHROPIC_MOCK and HARNESS_AUTH_NONCE");
 
 const REDIRECTED_HOSTS = new Set([
 	"api.anthropic.com",
@@ -67,3 +68,8 @@ for (const fn of ["exec", "execSync", "execFile", "execFileSync", "spawn", "spaw
 	};
 }
 syncBuiltinESMExports();
+Object.defineProperty(globalThis, Symbol.for("pi-harness.auth-redirect"), {
+	value: { mock, nonce },
+	writable: false,
+	configurable: false,
+});

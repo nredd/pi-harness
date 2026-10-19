@@ -38,10 +38,12 @@ def wait_dead(pane: TmuxPane) -> int:
         int: child's status.
     """
     deadline = time.monotonic() + 30
-    while pane.is_alive() and time.monotonic() < deadline:
+    assert pane.exit_status_path is not None
+    while time.monotonic() < deadline:
+        if pane.exit_status_path.is_file() and not pane.is_alive():
+            return int(pane.exit_status_path.read_text().strip())
         time.sleep(0.05)
-    assert not pane.is_alive(), pane.capture()
-    return int(pane._tmux("display-message", "-p", "-t", pane.name, "#{pane_dead_status}").strip())
+    raise AssertionError(f"TUI never reported its exit status: {pane.capture()}")
 
 
 @pytest.mark.parametrize("mode", ["text", "json", "rpc", "tui"])
@@ -86,17 +88,17 @@ def test_extensions_load_without_warnings(sandbox: Sandbox, tui: Callable[..., T
 
 def test_tool_set(sandbox: Sandbox) -> None:
     """The stack's exact schema golden and deferred monitor/worktree promotion survive the real loader."""
-    search = {
-        "name": "search_tools",
-        "args": {"query": "monitor_start monitor_stop git_worktree_add git_worktree_remove", "kind": "tool"},
-    }
+    searches = [
+        {"name": "search_tools", "args": {"query": query, "kind": "tool"}}
+        for query in ("background monitor process watcher", "git worktree add remove")
+    ]
     script = {
         "providers": {
             "faux": {
                 "models": ["main"],
                 "steps": [
                     {"listTools": True},
-                    {"tools": [search]},
+                    {"tools": searches},
                     {"listTools": True},
                 ],
             }
@@ -113,6 +115,8 @@ def test_tool_set(sandbox: Sandbox) -> None:
     assert not before & promoted, before
     assert promoted <= after, after
     assert {"monitor_read", "git_worktree_list"} <= before
-    (found,) = [outcome for outcome in result.tool_outcomes() if outcome.name == "search_tools"]
-    assert not found.is_error, found.text
-    assert all(tool in found.text for tool in promoted), found.text
+    found = [outcome for outcome in result.tool_outcomes() if outcome.name == "search_tools"]
+    assert len(found) == 2, result.transcript()
+    assert all(not outcome.is_error for outcome in found), found
+    text = "\n".join(outcome.text for outcome in found)
+    assert all(tool in text for tool in promoted), text

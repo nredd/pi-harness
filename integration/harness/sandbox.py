@@ -187,29 +187,38 @@ def install_stack(root: Path, stack_path: Path) -> Sandbox:
     sources = stack.resolved_sources(stack_path)
     box = build_sandbox(root)
     LOGGER.info(f"Stack '{stack.name}' sha256={stack_digest(stack_path)}")
-    for source in sources:
+    for original, source in zip(stack.sources, sources, strict=True):
         LOGGER.info(f"pi install '{source}'")
+        extra = {"PI_OFFLINE": "0"}
+        if original in stack.disabled_extensions:
+            LOGGER.warning(f"NO INSTALL SCRIPTS '{source}': {stack.disabled_extensions[original]}")
+            extra["npm_config_ignore_scripts"] = "true"
         try:
             subprocess.check_output(
                 [*pi_command(), "install", source],
                 cwd=box.workdir,
-                env=box.env({"PI_OFFLINE": "0"}, installing=True),
+                env=box.env(extra, installing=True),
                 text=True,
                 stderr=subprocess.STDOUT,
                 timeout=600,
             )
         except subprocess.CalledProcessError as error:
             raise RuntimeError(f"`pi install` failed for '{source}': {error.output[-6000:]}") from error
-    packages = box.settings().get("packages", [])
+    packages: list[Any] = []
     identities = []
     for original, resolved in zip(stack.sources, sources, strict=True):
         directory = package_directory(resolved, box.agent_dir)
         manifest = json.loads((directory / "package.json").read_text())
+        if resolved.startswith("npm:") and manifest["version"] != resolved.rsplit("@", 1)[1]:
+            raise ValueError(f"Installed npm version differs from '{resolved}': '{manifest['version']}'")
         identities.append({"name": manifest["name"], "version": manifest["version"], "source": resolved})
         LOGGER.info(f"Installed {manifest['name']}@{manifest['version']} from '{resolved}'")
-        if original in stack.disabled_extensions:
+        disabled = original in stack.disabled_extensions
+        if disabled:
             LOGGER.warning(f"NOT LOADED '{resolved}': {stack.disabled_extensions[original]}")
-            packages = [({"source": resolved, "extensions": []} if p == resolved else p) for p in packages]
+        # Pi can save local sources relative to its agent directory. The stack's deliberate
+        # absolute inputs and exclusions must survive copying that tree to another HOME.
+        packages.append({"source": resolved, "extensions": []} if disabled else resolved)
     box.patch_json("settings.json", stack.settings | {"packages": packages})
     (box.agent_dir / "stack-name").write_text(stack.name)
     (box.agent_dir / "stack-evidence.json").write_text(
@@ -261,6 +270,7 @@ def install_stack(root: Path, stack_path: Path) -> Sandbox:
             ],
         },
     )
+    box.patch_json("subagents.json", {"workflowsEnabled": False})
     box.patch_json(
         "subscription-router.json",
         {"profiles": {"default": {"name": "Stack", "chain": [{"model": "anthropic/claude-haiku-4-5"}]}}},
