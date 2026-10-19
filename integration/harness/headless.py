@@ -329,6 +329,7 @@ def finish_process(process: subprocess.Popen[str], readers: list[Thread], timeou
     Returns:
         bool: whether the process exceeded its deadline.
     """
+    deadline = time.monotonic() + timeout_s
     timed_out = False
     try:
         process.wait(timeout=timeout_s)
@@ -337,7 +338,14 @@ def finish_process(process: subprocess.Popen[str], readers: list[Thread], timeou
         kill_process_group(process.pid)
         process.wait(timeout=10)
     for reader in readers:
-        reader.join(timeout=10)
+        reader.join(timeout=max(0, deadline - time.monotonic()))
+    if any(reader.is_alive() for reader in readers):
+        timed_out = True
+        kill_process_group(process.pid)
+        for reader in readers:
+            reader.join(timeout=2)
+        if any(reader.is_alive() for reader in readers):
+            raise RuntimeError("Pi left inherited output pipes open outside its process group")
     assert process.stdout is not None
     assert process.stderr is not None
     process.stdout.close()
