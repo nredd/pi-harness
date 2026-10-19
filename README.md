@@ -30,6 +30,7 @@ Imported sources and every deliberate sanitization: [source provenance](docs/sou
 Standalone Bun evidence and limits: [Bun prerequisite](docs/bun-prerequisite.md).
 Packed-package independence against exact stock Pi: [package contracts](docs/package-contracts.md).
 Where every e2e scenario moves in the verification rebuild: [verification rebuild](docs/verification-rebuild.md).
+What CI runs, what it does not, and the flake policy: [CI](docs/ci.md).
 
 Validated development toolchain: Node `26.12.0` (`.node-version`), Python `3.13.15`
 (`.python-version`), Bun `1.3.14` (`.bun-version`), npm `11.20.0` (`packageManager`), uv `0.13.1`.
