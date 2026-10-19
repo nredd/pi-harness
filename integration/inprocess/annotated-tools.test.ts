@@ -13,12 +13,12 @@ import { isolateStackHome, loadFork, startStack } from "./support.ts";
 const SSH = new URL("../../packages/dev-tools/test/fixtures/ssh/fake-ssh", import.meta.url).pathname;
 
 describe("Plan consumes stack annotations", () => {
-	let home: ReturnType<typeof isolateStackHome>;
+	let home: Awaited<ReturnType<typeof isolateStackHome>>;
 	let plan: ExtensionFactory;
 	let h: Harness | undefined;
 	let serial = 0;
 	beforeAll(async () => {
-		home = isolateStackHome();
+		home = await isolateStackHome();
 		plan = await loadFork("pi-plan-mode");
 	});
 	afterEach(async () => {
