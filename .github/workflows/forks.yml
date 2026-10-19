@@ -51,10 +51,24 @@ jobs:
           cp -R "$RUNNER_TEMP/package/dist/providers/data" packages/ai/src/providers/data
       - name: Build
         run: npm run build:offline
-      - name: Check (fails on any formatter rewrite)
+      - name: Check without rewriting
         run: |
-          npm run check
-          git diff --exit-code
+          # The fork's `check` runs Biome with --write; CI runs the same steps with Biome check-only.
+          # Fail loudly if the fork changes its check list instead of silently drifting from it.
+          expected='node scripts/biome-check.mjs --write && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke'
+          actual=$(node -p 'require("./package.json").scripts.check')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::forks/pi changed its check script; update this step: $actual"
+            exit 1
+          fi
+          node scripts/biome-check.mjs
+          npm run check:pinned-deps
+          npm run check:runtime-deps
+          npm run check:ts-imports
+          npm run check:entry-graphs
+          npm run check:install-lock:coding-agent
+          npx tsc --noEmit
+          npm run check:browser-smoke
       - name: Build the pi-env daemon
         run: npm run build:daemon --workspace packages/env
       - name: Test (isolated HOME, no credentials)
@@ -128,6 +142,7 @@ jobs:
   not-run:
     name: rpiv-todo, pi-computer-use (not run)
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Report
         run: |
