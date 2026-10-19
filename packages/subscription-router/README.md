@@ -98,22 +98,17 @@ Development:
 ```sh
 # From the monorepo root:
 make install
-npm run check --workspace @nredd/pi-subscription-router  # biome, tsc, vitest
+npm run check --workspace @nredd/pi-subscription-router  # biome, tsc, vitest, bun scenarios
 cd packages/subscription-router
-e2e/run.sh             # every scenario below, asserted; exits non-zero on any FAIL
-e2e/run.sh terminal    # faux providers + installed pi: terminal quota error -> settle recovery
-e2e/run.sh retry       # 429 -> confirmed on retry -> next chain model
-e2e/run.sh unconfirmed # usage disagrees -> error stands, no loop
+e2e/run.sh             # four remaining admission cases; exits non-zero on any FAIL
 e2e/run.sh wait        # pi-subagents background dispatch, all exhausted, policy wait -> parked
 e2e/run.sh fail        # same, policy fail -> refused, nothing queued
 e2e/run.sh capped      # reset beyond maxWaitMinutes -> refused
 e2e/run.sh no-router   # enterprise profile, no router loaded -> admitted, child runs
-e2e/run.sh balanced-route    # actual pi RPC, three providers -> highest reset-aware score
-e2e/run.sh balanced-switch   # multiple user prompts -> 20% boundary stays, then switches
-e2e/run.sh balanced-sticky   # quota changes after tool -> continuation stays on incumbent
-e2e/run.sh balanced-blocked  # exhausted incumbent after tool -> eligible balanced fallback
-e2e/run.sh balanced-fallback # stale/missing data -> fresh measured provider
-e2e/run.sh balanced-unmeasured # measured quota exhausted -> usable unmeasured fallback
 ```
 
-The last four load pi-subagents from `$PI_SUBAGENTS_DIR` (default `~/code/pi-subagents`).
+`test/scenarios/` covers terminal/retry/unconfirmed recovery and all six balanced cases through the real router factory and core session harness, under Vitest and Bun.
+
+`createSubscriptionRouter({ config, usage, tracker?, now? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.
+
+The four shell cases load pi-subagents from `$PI_SUBAGENTS_DIR` (default `~/code/pi-subagents`). `e2e/faux-quota.ext.ts` and `e2e/faux.ts` remain for cross-extension quota/admission scenarios.
