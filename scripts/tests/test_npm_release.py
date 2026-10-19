@@ -67,7 +67,14 @@ def repo(tmp_path: Path) -> Path:
 
 
 def test_resolve_all_owned_names(repo: Path) -> None:
-    """All four owned names resolve by manifest identity, not tag path guessing."""
+    """All four owned names resolve by manifest identity, not tag path guessing.
+
+    Parameters:
+        repo (Path): Test repository.
+
+    Returns:
+        None: Every owned package resolves to its workspace.
+    """
     for contract in nr.CONTRACTS:
         target = nr.resolve_target(repo, f"{contract.name}@1.2.3")
         assert (target.name, target.directory, target.version) == (contract.name, contract.directory, "1.2.3")
@@ -93,13 +100,23 @@ def test_resolve_rejects_bad_tags(repo: Path, tag: str) -> None:
     Parameters:
         repo (Path): Test repository.
         tag (str): Invalid tag.
+
+    Returns:
+        None: Invalid tags are refused.
     """
     with pytest.raises(nr.ReleaseError):
         nr.resolve_target(repo, tag)
 
 
 def test_private_and_duplicate_names_refused(repo: Path) -> None:
-    """Private or ambiguous workspace identities must never be publishable."""
+    """Private or ambiguous workspace identities must never be publishable.
+
+    Parameters:
+        repo (Path): Test repository.
+
+    Returns:
+        None: Both unsafe workspace shapes are refused.
+    """
     path = repo / "packages/session-kit/package.json"
     value = json.loads(path.read_text())
     path.write_text(json.dumps(value | {"private": True}))
@@ -117,6 +134,9 @@ def test_preflight_ancestry_and_existing_version(repo: Path, monkeypatch: pytest
     Parameters:
         repo (Path): Test repository.
         monkeypatch (pytest.MonkeyPatch): Replaces registry only, not git.
+
+    Returns:
+        None: Source ancestry and registry preconditions hold.
     """
     monkeypatch.setattr(nr, "registry_dist", lambda *_: None)
     assert nr.preflight(repo, TAG).directory == "session-kit"
@@ -147,10 +167,25 @@ def test_registry_only_404_is_absence(
         monkeypatch (pytest.MonkeyPatch): Injects npm errors.
         code (str): npm error code.
         absent (bool): Whether this code proves absence.
+
+    Returns:
+        None: Only an explicit registry miss permits publishing.
     """
 
     def fail(_repo: Path, tool: str, *args: str) -> str:
-        """Keep merged-stream JSON parseable and force fresh registry metadata."""
+        """Keep merged-stream JSON parseable and force fresh registry metadata.
+
+        Parameters:
+            _repo (Path): Unused checkout.
+            tool (str): Expected npm command.
+            *args (str): Registry query arguments.
+
+        Returns:
+            str: Never returned; this simulates an npm failure.
+
+        Raises:
+            subprocess.CalledProcessError: The selected npm error.
+        """
         assert tool == "npm"
         assert args == (
             "view",
@@ -172,8 +207,12 @@ def test_registry_only_404_is_absence(
             nr.registry_dist(repo, target)
 
 
-def test_registry_requires_integrity_and_provenance() -> None:
-    """A publish receipt alone is not provenance and changed bytes can never recover."""
+def test_registry_metadata_requires_integrity_and_provenance_hint() -> None:
+    """A publish receipt alone cannot satisfy the preliminary provenance-visibility gate.
+
+    Returns:
+        None: Metadata visibility and byte identity are enforced before actual attestation verification.
+    """
     target = nr.Target(tag=TAG, name="@nredd/pi-session-kit", version="1.2.3", directory="session-kit")
     identity = nr.Identity(
         target=target,
@@ -191,7 +230,7 @@ def test_registry_requires_integrity_and_provenance() -> None:
             },
         }
     )
-    nr.confirm_registry(identity, dist)
+    nr.confirm_registry_metadata(identity, dist)
     for bad in (
         None,
         dist.model_copy(update={"integrity": "changed"}),
@@ -213,7 +252,7 @@ def test_registry_requires_integrity_and_provenance() -> None:
         ),
     ):
         with pytest.raises(nr.ReleaseError):
-            nr.confirm_registry(identity, bad)
+            nr.confirm_registry_metadata(identity, bad)
 
 
 @pytest.mark.parametrize(
@@ -243,6 +282,9 @@ def test_toolchain_minima(
         tool (str): Tool under test.
         version (str): Reported version.
         ok (bool): Expected acceptance.
+
+    Returns:
+        None: Supported stable toolchains alone pass.
     """
     monkeypatch.setattr(nr, "command", lambda _repo, name, *_: version if name == tool else "26.0.0")
     if ok:
@@ -266,7 +308,17 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
     """
 
     def exercise(_work: Path, _stock: Path, only: list[str], supplied: dict[str, Path]) -> SimpleNamespace:
-        """Assert the stock gate receives precisely the already-packed candidate bytes."""
+        """Assert the stock gate receives precisely the already-packed candidate bytes.
+
+        Parameters:
+            _work (Path): Unused gate scratch directory.
+            _stock (Path): Unused Pi install directory.
+            only (list[str]): Selected package directories.
+            supplied (dict[str, Path]): Candidate tarball paths.
+
+        Returns:
+            SimpleNamespace: Synthetic gate evidence without running Pi.
+        """
         assert only == ["session-kit"]
         assert set(supplied) == {"session-kit"}
         assert supplied["session-kit"].is_file()
@@ -276,7 +328,17 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
     original_command = nr.command
 
     def skip_package_check(root: Path, tool: str, *args: str, timeout: int = 300) -> str:
-        """Skip only install/check, retaining real git, npm pack and byte validation."""
+        """Skip only install/check, retaining real git, npm pack and byte validation.
+
+        Parameters:
+            root (Path): Command working directory.
+            tool (str): Executable name.
+            *args (str): Command arguments.
+            timeout (int): Subprocess timeout in seconds.
+
+        Returns:
+            str: Substituted package-check output or real command output.
+        """
         if tool == "npm" and args in (
             ("ci", "--ignore-scripts"),
             ("run", "check", "--workspace", "@nredd/pi-session-kit"),
@@ -291,7 +353,15 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
 
 
 def test_real_pack_manifest_checksum_round_trip(repo: Path, verified: tuple[Path, nr.Identity]) -> None:
-    """The artifact bytes, SHA-256, SRI, manifest, tag and source commit cross-check together."""
+    """The artifact bytes, SHA-256, SRI, manifest, tag and source commit cross-check together.
+
+    Parameters:
+        repo (Path): Test repository.
+        verified (tuple[Path, Identity]): Real packed fixture.
+
+    Returns:
+        None: Artifact identity round-trips without a rebuild.
+    """
     output, identity = verified
     assert nr.check_artifact(repo, TAG, output) == identity
     assert len(list(output.glob("*.tgz"))) == 1
@@ -308,6 +378,9 @@ def test_artifact_tampering_refused(repo: Path, verified: tuple[Path, nr.Identit
         repo (Path): Test repository.
         verified (tuple[Path, Identity]): Real packed fixture.
         file (str): Artifact component to corrupt.
+
+    Returns:
+        None: Modified artifacts fail validation.
     """
     output, identity = verified
     if file == "tarball":
@@ -339,6 +412,9 @@ def test_publish_recovery_skips_accepted_version(
         verified (tuple[Path, Identity]): Verified artifact fixture.
         monkeypatch (pytest.MonkeyPatch): Injects registry response only.
         tmp_path (Path): GitHub output file parent.
+
+    Returns:
+        None: Matching bytes skip publication, different bytes fail closed.
     """
     output, identity = verified
     monkeypatch.setattr(nr, "assert_toolchain", lambda *_: None)
@@ -382,11 +458,21 @@ def test_artifact_destination_checked_before_install(
         tmp_path (Path): Artifact parent.
         monkeypatch (pytest.MonkeyPatch): Forbids invoking install/check.
         case (str): Invalid destination kind.
+
+    Returns:
+        None: No install runs for an invalid artifact destination.
     """
     output = repo / "artifacts" if case == "inside" else tmp_path
 
     def forbid(*_args: object) -> str:
-        """No child process should run for an invalid destination."""
+        """No child process should run for an invalid destination.
+
+        Parameters:
+            *_args (object): Unexpected command arguments.
+
+        Returns:
+            str: Never returned; an invocation fails the test.
+        """
         pytest.fail("Install ran before destination validation")
 
     monkeypatch.setattr(nr, "command", forbid)
@@ -395,7 +481,11 @@ def test_artifact_destination_checked_before_install(
 
 
 def test_workflow_permissions_and_immutable_transfer() -> None:
-    """Pin release workflow security/transfer invariants without running a workflow locally."""
+    """Pin release workflow security/transfer invariants without running a workflow locally.
+
+    Returns:
+        None: Permissions, immutable transfer and release dependencies match the design.
+    """
     workflow = (pc.REPO_ROOT / ".github/workflows/publish.yml").read_text()
     assert "tags: ['@nredd/*@*']" in workflow
     assert "cancel-in-progress: false" in workflow
@@ -426,6 +516,9 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
         tmp_path (Path): Artifact parent.
         monkeypatch (pytest.MonkeyPatch): Replaces package checks and Pi gates, never packing or hashing.
         contract (PackageContract): Selected owned package contract.
+
+    Returns:
+        None: The selected package check precedes one pack and every applicable gate.
     """
     events: list[str] = []
     original_command = nr.command
@@ -433,7 +526,17 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
     candidate: list[Path] = []
 
     def command(root: Path, tool: str, *args: str, timeout: int = 300) -> str:
-        """Record install/check without executing any package scenario suite."""
+        """Record install/check without executing any package scenario suite.
+
+        Parameters:
+            root (Path): Command working directory.
+            tool (str): Executable name.
+            *args (str): Command arguments.
+            timeout (int): Subprocess timeout in seconds.
+
+        Returns:
+            str: Synthetic install/check output or real Git output.
+        """
         if tool == "npm":
             assert args in (("ci", "--ignore-scripts"), ("run", "check", "--workspace", contract.name))
             events.append(args[0])
@@ -441,7 +544,17 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
         return original_command(root, tool, *args, timeout=timeout)
 
     def pack(c: pc.PackageContract, dest: Path, sandbox: pc.Sandbox, source: Path) -> pc.PackedArtifact:
-        """Retain real npm packing and insist it happens only after the selected check."""
+        """Retain real npm packing and insist it happens only after the selected check.
+
+        Parameters:
+            c (PackageContract): Package being packed.
+            dest (Path): Tarball destination.
+            sandbox (Sandbox): Scrubbed npm environment.
+            source (Path): Source package directory.
+
+        Returns:
+            PackedArtifact: Real packed candidate identity.
+        """
         assert events == ["ci", "run"]
         events.append("pack")
         artifact = original_pack(c, dest, sandbox, source)
@@ -449,7 +562,15 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
         return artifact
 
     def gate(kind: str, supplied: dict[str, Path]) -> SimpleNamespace:
-        """Require both gates to consume exactly the candidate's original path and bytes."""
+        """Require both gates to consume exactly the candidate's original path and bytes.
+
+        Parameters:
+            kind (str): Gate name recorded in the event log.
+            supplied (dict[str, Path]): Candidate tarball paths.
+
+        Returns:
+            SimpleNamespace: Synthetic gate evidence without running Pi.
+        """
         assert supplied == {contract.directory: candidate[0]}
         assert pc.load_tarball(contract, candidate[0]).version == "1.2.3"
         events.append(kind)
@@ -483,10 +604,26 @@ def test_check_failure_never_packs(
         tmp_path (Path): Artifact parent.
         monkeypatch (pytest.MonkeyPatch): Substitutes a failed install or check.
         failure (str): Command to fail.
+
+    Returns:
+        None: A failed package check produces no release artifact.
     """
 
     def fail(_repo: Path, _tool: str, *args: str, timeout: int = 300) -> str:
-        """Return an npm failure without running package checks."""
+        """Return an npm failure without running package checks.
+
+        Parameters:
+            _repo (Path): Unused checkout.
+            _tool (str): Unused executable name.
+            *args (str): Arguments selecting the simulated command.
+            timeout (int): Unused subprocess timeout.
+
+        Returns:
+            str: Synthetic successful output for the other command.
+
+        Raises:
+            subprocess.CalledProcessError: For the selected failed command.
+        """
         if args[0] == failure:
             raise subprocess.CalledProcessError(1, ["npm", *args], "check failed")
         return "okay"
@@ -513,6 +650,9 @@ def test_registry_propagation_is_bounded(
         verified (tuple[Path, Identity]): Verified byte identity.
         monkeypatch (pytest.MonkeyPatch): Substitutes registry reads and sleep.
         case (str): Registry outcome.
+
+    Returns:
+        None: Metadata-visibility retries stay within their budget.
     """
     _, identity = verified
     published = nr.Distribution.model_validate(
@@ -534,7 +674,15 @@ def test_registry_propagation_is_bounded(
     sleeps: list[int] = []
 
     def lookup(_repo: Path, _target: nr.Target) -> nr.Distribution | None:
-        """Serve a finite response sequence, failing if retries exceed the budget."""
+        """Serve a finite response sequence, failing if retries exceed the budget.
+
+        Parameters:
+            _repo (Path): Unused checkout.
+            _target (Target): Unused selected release.
+
+        Returns:
+            Distribution | None: The next simulated registry response.
+        """
         value = responses[len(reads)]
         reads.append(value)
         return value

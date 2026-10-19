@@ -6,11 +6,14 @@ References:
     https://docs.npmjs.com/trusted-publishers/
     https://docs.npmjs.com/cli/v11/commands/npm-view
     https://docs.npmjs.com/generating-provenance-statements
+    https://docs.npmjs.com/cli/v11/commands/npm-audit#signature-audit
+    https://slsa.dev/provenance/v1
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import os
@@ -18,9 +21,11 @@ import re
 import subprocess
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -37,6 +42,9 @@ VERSION = rf"{NUMBER}\.{NUMBER}\.{NUMBER}(?:-{PRE_ID}(?:\.{PRE_ID})*)?"
 TAG = re.compile(rf"(?P<name>@nredd/[a-z0-9-]+)@(?P<version>{VERSION})")
 TOOL_VERSION = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 PROVENANCE_TYPE = "https://slsa.dev/provenance/v1"
+WORKFLOW_REPOSITORY = "https://github.com/nredd/pi-harness"
+WORKFLOW_PATH = ".github/workflows/publish.yml"
+MAX_ATTESTATION_BYTES = 2 * 1024 * 1024
 STRICT = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
@@ -80,6 +88,75 @@ class Distribution(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
     integrity: str = Field(description="Published tarball integrity")
     attestations: Attestations | None = Field(default=None, description="npm provenance metadata")
+
+
+class DsseEnvelope(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    payloadType: Literal["application/vnd.in-toto+json"] = Field(description="In-toto DSSE content type")
+    payload: str = Field(description="Base64-encoded in-toto statement")
+
+
+class ProvenanceBundle(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    dsseEnvelope: DsseEnvelope = Field(description="Signed provenance envelope")
+
+
+class RegistryAttestation(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    predicateType: str = Field(description="Registry predicate selector")
+    bundle: ProvenanceBundle = Field(description="Sigstore bundle, cryptographically verified by npm")
+
+
+class RegistryAttestations(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    attestations: list[RegistryAttestation] = Field(
+        description="Actual attestation bundles, not dist metadata"
+    )
+
+
+class Subject(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    name: str = Field(description="Package URL naming the released npm version")
+    digest: dict[str, str] = Field(description="Subject digests, including hex SHA-512")
+
+
+class Workflow(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    repository: str = Field(description="Build workflow repository URL")
+    ref: str = Field(description="Exact tagged Git ref")
+    path: str = Field(description="Workflow file path")
+
+
+class ExternalParameters(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    workflow: Workflow = Field(description="GitHub Actions build workflow")
+
+
+class ResolvedDependency(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    uri: str = Field(description="Resolved build source URI")
+    digest: dict[str, str] = Field(description="Resolved source commit")
+
+
+class BuildDefinition(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    externalParameters: ExternalParameters = Field(description="Build workflow identity")
+    resolvedDependencies: list[ResolvedDependency] = Field(description="Resolved tagged source")
+
+
+class Predicate(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    buildDefinition: BuildDefinition = Field(description="SLSA v1 build definition")
+
+
+class Statement(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+    statement_type: Literal["https://in-toto.io/Statement/v1"] = Field(
+        alias="_type", description="Statement schema"
+    )
+    subject: list[Subject] = Field(min_length=1, max_length=1, description="The one released package")
+    predicateType: Literal["https://slsa.dev/provenance/v1"] = Field(description="SLSA provenance v1")
+    predicate: Predicate = Field(description="Build/source binding")
 
 
 def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
@@ -213,6 +290,9 @@ def emit_outputs(**values: str) -> None:
 
     Parameters:
         **values (str): Step outputs.
+
+    Returns:
+        None: Outputs are appended when running in GitHub Actions.
     """
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
@@ -319,6 +399,9 @@ def assert_toolchain(repo: Path) -> None:
 
     Parameters:
         repo (Path): Working directory.
+
+    Returns:
+        None: Both toolchains meet the OIDC minimum versions.
     """
     for tool, minimum in (("node", (22, 14, 0)), ("npm", (11, 5, 1))):
         version = command(repo, tool, "--version")
@@ -328,12 +411,15 @@ def assert_toolchain(repo: Path) -> None:
             raise ReleaseError(f"Unsupported '{tool}' version '{version}', minimum {minimum}")
 
 
-def confirm_registry(identity: Identity, dist: Distribution | None) -> None:
-    """Require exact published integrity AND provenance, including during recovery.
+def confirm_registry_metadata(identity: Identity, dist: Distribution | None) -> None:
+    """Wait for integrity and provenance metadata; this is not attestation verification.
 
     Parameters:
         identity (Identity): Verified artifact identity.
         dist (Distribution | None): Exact-version registry response.
+
+    Returns:
+        None: Metadata advertises matching bytes and a provenance bundle.
 
     Raises:
         ReleaseError: If publication is absent, changed, or lacks provenance.
@@ -355,6 +441,9 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
         repo (Path): Working directory for npm metadata reads.
         identity (Identity): Verified artifact identity.
 
+    Returns:
+        None: Registry metadata is visible and ready for attestation verification.
+
     Raises:
         ReleaseError: If bytes differ immediately, or metadata is still absent after one minute.
     """
@@ -363,12 +452,146 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
         if dist is not None and dist.integrity != identity.integrity:
             raise ReleaseError("Registry integrity differs from verified tarball; refusing recovery")
         try:
-            confirm_registry(identity, dist)
+            confirm_registry_metadata(identity, dist)
             return
         except ReleaseError:
             if attempt == 6:
                 raise
             time.sleep(10)
+
+
+def verify_signatures(identity: Identity) -> None:
+    """Delegate registry signature and Sigstore attestation verification to npm in an isolated project.
+
+    Parameters:
+        identity (Identity): Exact released version and verified tarball integrity.
+
+    Returns:
+        None: Only after npm reports both verified signatures and verified attestations.
+
+    Raises:
+        ReleaseError: If the installed tree or npm's verification report is incomplete.
+        subprocess.CalledProcessError: If npm installation or cryptographic verification fails.
+    """
+    with tempfile.TemporaryDirectory(prefix="npm-signatures-") as temporary:
+        project = Path(temporary)
+        (project / "package.json").write_text('{"name":"release-signature-check","private":true}\n')
+        LOGGER.info(
+            command(
+                project,
+                "npm",
+                "install",
+                f"{identity.target.name}@{identity.target.version}",
+                "--ignore-scripts",
+                "--legacy-peer-deps",
+                "--no-audit",
+                "--no-fund",
+                "--prefer-online",
+                "--registry=https://registry.npmjs.org",
+            )
+        )
+        # Owned packages have no runtime dependencies. With peers suppressed, a one-package tree
+        # makes npm's verified counts unambiguously about the selected release, not a dependency.
+        lock = pc.read_lockfile(project / "package-lock.json")
+        key = f"node_modules/{identity.target.name}"
+        if set(lock.packages) != {"", key}:
+            raise ReleaseError("Signature audit must install only the released package")
+        installed = lock.packages[key]
+        if installed.version != identity.target.version or installed.integrity != identity.integrity:
+            raise ReleaseError("Signature audit installed bytes differ from the verified tarball")
+        report = command(
+            project,
+            "npm",
+            "audit",
+            "signatures",
+            "--color=false",
+            "--prefer-online",
+            "--registry=https://registry.npmjs.org",
+        )
+        LOGGER.info(report)
+        required = {"1 package has a verified registry signature", "1 package has a verified attestation"}
+        if not required <= set(report.splitlines()):
+            raise ReleaseError(
+                "npm must report verified registry signatures AND attestations for the release"
+            )
+
+
+def fetch_attestations(target: Target) -> bytes:
+    """Fetch actual bundles from the canonical npm endpoint, not an untrusted metadata URL.
+
+    Parameters:
+        target (Target): Exact public package version.
+
+    Returns:
+        bytes: Bounded registry attestation response.
+
+    Raises:
+        ReleaseError: If the response exceeds the size limit.
+        OSError: If the bounded HTTPS fetch fails.
+    """
+    package = urllib.parse.quote(f"{target.name}@{target.version}", safe="@/")
+    url = f"https://registry.npmjs.org/-/npm/v1/attestations/{package}"
+    with urllib.request.urlopen(url, timeout=30) as response:
+        content = response.read(MAX_ATTESTATION_BYTES + 1)
+    if len(content) > MAX_ATTESTATION_BYTES:
+        raise ReleaseError("Registry attestation response exceeds the size limit")
+    return content
+
+
+def verify_provenance(identity: Identity, content: bytes) -> None:
+    """Bind the actual DSSE statement to the published bytes, workflow, tag and source commit.
+
+    Signature verification belongs to npm, not this parser. Call after `verify_signatures` succeeds.
+
+    Parameters:
+        identity (Identity): Contract-tested tarball and tagged source identity.
+        content (bytes): Actual npm attestation endpoint response.
+
+    Returns:
+        None: Only when the sole SLSA provenance statement describes this release.
+
+    Raises:
+        ReleaseError: If provenance or any expected binding is absent or different.
+        ValueError: If the response, base64 payload or statement is malformed.
+    """
+    attestations = RegistryAttestations.model_validate_json(content)
+    provenance = [a for a in attestations.attestations if a.predicateType == PROVENANCE_TYPE]
+    if len(provenance) != 1:
+        raise ReleaseError("Registry must return exactly one SLSA provenance attestation")
+    payload = base64.b64decode(provenance[0].bundle.dsseEnvelope.payload, validate=True)
+    statement = Statement.model_validate_json(payload)
+    subject = statement.subject[0]
+    expected_name = f"pkg:npm/{identity.target.name}@{identity.target.version}"
+    expected_digest = base64.b64decode(identity.integrity.removeprefix("sha512-"), validate=True).hex()
+    if urllib.parse.unquote(subject.name) != expected_name or subject.digest.get("sha512") != expected_digest:
+        raise ReleaseError("Provenance subject or SHA-512 digest differs from the verified tarball")
+    build = statement.predicate.buildDefinition
+    expected_ref = f"refs/tags/{identity.target.tag}"
+    expected_workflow = Workflow(repository=WORKFLOW_REPOSITORY, ref=expected_ref, path=WORKFLOW_PATH)
+    if build.externalParameters.workflow != expected_workflow:
+        raise ReleaseError("Provenance workflow repository, ref or path differs from the tagged release")
+    source_uri = f"git+{WORKFLOW_REPOSITORY}@{expected_ref}"
+    if not any(
+        d.uri == source_uri and d.digest.get("gitCommit") == identity.commit
+        for d in build.resolvedDependencies
+    ):
+        raise ReleaseError("Provenance source commit differs from the tagged release")
+
+
+def verify_published(repo: Path, identity: Identity) -> None:
+    """Require registry visibility, npm cryptographic verification and actual provenance binding.
+
+    Parameters:
+        repo (Path): Working directory for metadata probes.
+        identity (Identity): Verified release identity.
+
+    Returns:
+        None: Only after all post-publication gates pass.
+    """
+    wait_for_registry(repo, identity)
+    verify_signatures(identity)
+    verify_provenance(identity, fetch_attestations(identity.target))
+    LOGGER.info("Verified npm registry signatures, Sigstore attestations and tagged-source binding")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -409,7 +632,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 LOGGER.info("::notice::Already accepted with matching integrity; skipping publication")
             emit_outputs(publish=str(dist is None).lower(), tarball=identity.tarball)
         else:
-            wait_for_registry(repo, identity)
+            verify_published(repo, identity)
     except (
         ReleaseError,
         pc.ContractError,
