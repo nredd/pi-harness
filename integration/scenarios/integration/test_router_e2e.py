@@ -1,11 +1,15 @@
-"""Pass through to the router repo's own faux e2e, against the pi under test."""
+"""Retain the fork-owned no-router shell receipt on explicitly installed local inputs.
+
+References:
+- https://github.com/nredd/pi-harness/blob/main/docs/verification-rebuild.md
+"""
 
 from __future__ import annotations
 
 import os
 import shlex
 import subprocess
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -35,19 +39,19 @@ def pi_shim(directory: Path) -> Path:
     return directory
 
 
-def test_router_e2e_all(tmp_path: Path, rendered_settings: dict[str, Any], sandbox: Sandbox) -> None:
+def test_router_e2e_all(tmp_path: Path, sandbox: Sandbox) -> None:
     """The remaining `no-router` shell case passes on explicitly installed packages.
 
     Parameters:
         tmp_path (Path): private executable shim directory.
-        rendered_settings (dict[str, Any]): settings from the explicit installed stack fixture.
-        sandbox (Sandbox): private stack resolving package locations.
+        sandbox (Sandbox): explicit local stack fixture resolving package locations.
     """
-    packages = rendered_settings.get("packages", [])
+    packages = sandbox.settings()["packages"]
     router_dir = find_package("pi-subscription-router", packages, sandbox.agent_dir)
     subagents_dir = find_package("pi-subagents", packages, sandbox.agent_dir)
-    env = os.environ | {
-        "PATH": os.pathsep.join([str(pi_shim(tmp_path)), os.environ.get("PATH", "")]),
+    env = sandbox.env()
+    env |= {
+        "PATH": os.pathsep.join([str(pi_shim(tmp_path)), env["PATH"]]),
         "PI_SUBAGENTS_DIR": str(subagents_dir),
         "PI_OFFLINE": "1",
     }
