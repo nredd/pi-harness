@@ -67,6 +67,32 @@ test("a ready plan keeps its one-line widget and switches the footer chip to rea
   assert.ok(widget, "expected a widget for a ready plan");
 });
 
+test("implementing a plan has no above-editor widget, only a colored footer chip", () => {
+  const { theme } = fgTrackingTheme();
+  const context = createMockContext({ hasUI: true, theme });
+  const state: PlanModeState = {
+    ...BASE_STATE,
+    activeImplementation: { id: "plan-1", plan: "# Plan", source: "plan_mode_complete", startedAt: 0 },
+  };
+
+  updatePlanModeUi(context.ctx, state, () => "unused");
+
+  assert.equal(context.widgets.get("plan-mode-plan"), undefined);
+  assert.equal(context.statuses.get("plan-mode"), "[accent]plan implementing[/accent]");
+});
+
+test("a saved plan keeps its one-line widget and switches the footer chip to saved", () => {
+  const { theme } = fgTrackingTheme();
+  const context = createMockContext({ hasUI: true, theme });
+  const state: PlanModeState = { ...BASE_STATE, savedPlan: { plan: "# Plan", source: "plan_mode_complete" } };
+
+  updatePlanModeUi(context.ctx, state, () => "unused");
+
+  assert.equal(context.statuses.get("plan-mode"), "[accent]plan saved[/accent]");
+  const widget = context.widgets.get("plan-mode-plan");
+  assert.ok(widget, "expected a widget for a saved plan");
+});
+
 test("clears the footer chip and widget once Plan mode is fully off", () => {
   const { theme } = fgTrackingTheme();
   const context = createMockContext({ hasUI: true, theme });

@@ -9,17 +9,17 @@ const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 export function updatePlanModeUi(ctx: ExtensionContext, state: PlanModeState, toolSummary: () => string) {
   ctx.ui.setStatus(STATUS_KEY, formatStatus(state, ctx));
   // Kept deliberately minimal: the full tool policy and next-step guidance
-  // are still one `/plan` away. Plain "planning" has no widget at all (the
-  // footer status chip carries it, Codex-style); only states with a
-  // concrete pending action get an above-editor line.
+  // are still one `/plan` away. The footer status chip (Codex-style,
+  // accent-colored) is the sole indicator for "planning" and "implementing";
+  // both are otherwise steady states with no immediate decision pending, so
+  // an above-editor line would just duplicate the footer. Only "ready" and
+  // "saved" -- states with a concrete pending action -- get a widget line.
   void toolSummary;
   let lines: string[] | undefined;
   if (state.enabled && state.latestPlan) {
     lines = ["Plan ready — /plan to implement, save, revise, or exit"];
   } else if (state.savedPlan) {
     lines = ["Plan saved — /plan to show, implement, or clear"];
-  } else if (state.activeImplementation) {
-    lines = ["Implementing plan — /plan to show, replace, or clear"];
   }
 
   publishPlanModeWidget(ctx, lines);

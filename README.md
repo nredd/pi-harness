@@ -6,8 +6,8 @@ Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-ext
 
 Differences from upstream (all purely presentational, no tool-policy or contract changes):
 
-- Plain "planning" (Plan mode on, no plan ready yet) has no above-editor widget at all — no `Plan mode — ...` line, no divider. The only indicator is the footer status chip, now colored with the theme's `accent` role like Codex's `Plan mode` footer badge, instead of upstream's plain unstyled `plan active`/`plan ready` text. The tool policy is still reachable via `/plan` and `/plan settings`.
-- States with a concrete pending action (`plan ready`, `plan saved`, `plan implementing`) keep their existing one-line above-editor widget, unchanged from the previous compact-widget pass.
+- "Planning" and "implementing" (Plan mode on with no plan ready yet, and actively implementing an approved plan) have no above-editor widget at all -- no `Plan mode — ...` / `Implementing plan — ...` line, no divider. Both are steady states with nothing pending, so the widget only duplicated the footer. The only indicator is the footer status chip, colored with the theme's `accent` role like Codex's `Plan mode` footer badge, instead of upstream's plain unstyled text. The tool policy is still reachable via `/plan` and `/plan settings`.
+- States with a concrete pending action (`plan ready`, `plan saved`) keep their existing one-line above-editor widget, since there's a decision to make that the footer chip alone doesn't surface.
 - `plan_mode_question` now has a `renderResult`, so the transcript shows a short Markdown summary of the questions and answers instead of the raw JSON payload. `plan_mode_complete` already had this upstream; this fork brings the question tool in line with it.
 
 Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.0.

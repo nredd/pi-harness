@@ -4,7 +4,6 @@ import { PLAN_MODE_MAX_CHARS } from "../src/completion-tool.js";
 import planModeExtension from "../src/plan-mode.js";
 import { type ActiveImplementationPlan, restorePlanModeState } from "../src/state.js";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
-import { renderMockWidget } from "./widget-support.js";
 
 const PLAN = `# Compaction-safe implementation
 
@@ -267,7 +266,9 @@ test("implementation transition rejects a busy run before committing and succeed
   idle = true;
   await mock.commands.get("plan")?.handler("implement", context.ctx);
   assert.equal(context.statuses.get("plan-mode"), "plan implementing");
-  assert.match(renderMockWidget(context.widgets.get("plan-mode-plan")).join("\n"), /implementing plan/i);
+  // Implementing has no above-editor widget -- the footer status chip is the
+  // sole indicator, avoiding a redundant duplicate line.
+  assert.equal(context.widgets.get("plan-mode-plan"), undefined);
   assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
   assert.equal(mock.sentUserMessages.at(-1)?.options, undefined);
   const activeState = latestState(mock.entries);

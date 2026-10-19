@@ -1,5 +1,15 @@
 # @nredd/pi-plan-mode
 
+## 0.58.0-nredd.3
+
+### Changed
+
+- Removed the above-editor widget for the "implementing" state (`Implementing
+  plan — /plan to show, replace, or clear`) -- redundant with the
+  `plan implementing` footer status chip added in 0.58.0-nredd.2
+  (`presentation.ts`).
+- `plan ready` and `plan saved` are unaffected and keep their one-line widget.
+
 ## 0.58.0-nredd.2
 
 ### Changed
