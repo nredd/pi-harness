@@ -108,4 +108,4 @@ e2e/run.sh no-router   # no router loaded -> admitted, physical child runs
 
 `createSubscriptionRouter({ config, usage, tracker?, now? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.
 
-`integration/inprocess/router-admission.test.ts` covers `fail` and `capped` with the real router/subagents factories under Vitest and Bun. The two remaining shell cases load pi-subagents from `$PI_SUBAGENTS_DIR` (default `~/code/pi-subagents`). `e2e/faux-quota.ext.ts` and `e2e/faux.ts` remain for cross-extension quota/admission scenarios.
+`integration/inprocess/router-admission.test.ts` covers `wait`, `fail` and `capped` with the real router/subagents factories on one fake clock under Vitest and Bun. The one remaining shell case, `no-router`, loads pi-subagents from `$PI_SUBAGENTS_DIR` (default `~/code/pi-subagents`). `e2e/faux-quota.ext.ts` and `e2e/faux.ts` remain for cross-extension quota/admission scenarios.
