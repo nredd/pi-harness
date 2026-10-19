@@ -19,5 +19,6 @@ entries in one core harness session, under Vitest and Bun. No extension mocks or
 
 `integration/inprocess/todo-history-session.test.ts` owns actual host row rendering, file-backed
 history, resource-loader reload and resize under Vitest and Bun.
-`test_plan_mode_confirmation.py` still owns the real RPC extension-UI protocol. The Plan-mode
-fork's native suite owns custom-TUI keyboard/layout, fresh handoff and tree routing.
+`forks/pi-plan-mode/test/confirmation-session.test.ts` now owns restored canonical confirmation
+through a real session with RPC chooser doubles; core owns RPC protocol serialization. The fork's
+native suite also owns custom-TUI keyboard/layout, fresh handoff and tree routing.

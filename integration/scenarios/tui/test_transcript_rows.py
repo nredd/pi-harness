@@ -106,41 +106,6 @@ KITCHEN_SINK: dict[str, Any] = {
     }
 }
 
-RUNNING_ROW: dict[str, Any] = {
-    "providers": {
-        "faux": {
-            "models": ["main"],
-            "steps": [tool("bash", command="sleep 6"), {"text": FINAL}],
-        }
-    }
-}
-
-PLAN_ROWS: dict[str, Any] = {
-    "providers": {
-        "faux": {
-            "models": ["main"],
-            "steps": [
-                tool(
-                    "plan_mode_question",
-                    questions=[
-                        {
-                            "id": "scope",
-                            "header": "Scope",
-                            "question": "How wide?",
-                            "options": [
-                                {"label": "Narrow", "description": "Smallest diff."},
-                                {"label": "Wide", "description": "Everything."},
-                            ],
-                        }
-                    ],
-                ),
-                tool("plan_mode_complete", plan="# Tiny plan\n\n- Do the narrow thing.\n"),
-                {"text": FINAL},
-            ],
-        }
-    }
-}
-
 
 def assert_one_line_everywhere(rows: list[str], last_pattern: str | None = LAST_ROW) -> list[str]:
     """Assert the transcript invariant and return the collapsed entry keys.
@@ -218,29 +183,3 @@ def test_every_entry_is_one_line_and_collapsible(tui: Callable[..., TmuxPane], s
         assert expected in screen, f"missing entry {expected!r}"
     assert len(re.findall(r"notified child", screen)) >= 2, "no notice row for the notified child"
     assert_each_entry_toggles(pane, keys)
-
-
-def test_plan_mode_rows_are_one_line_and_collapsible(tui: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
-    """Both Plan tools and the `/plan show` message settle as one line each and toggle."""
-    pane = tui(PLAN_ROWS, width=WIDTH, height=HEIGHT)
-    submit(pane, "/plan start")
-    pane.wait_stable(quiet_s=1, timeout_s=20)
-    submit(pane, "go")
-    pane.wait_for(r"Narrow", timeout_s=30)
-    pane.send_keys("Enter")
-    # Stay in Plan mode on the ready-plan chooser: Escape keeps the plan.
-    pane.wait_for(r"(?i)tiny plan", timeout_s=30)
-    pane.wait_stable(quiet_s=1, timeout_s=20)
-    pane.send_keys("Escape")
-    pane.wait_stable(quiet_s=2, timeout_s=30)
-    # `/plan show` posts the plan as a `proposed-plan` message; it must collapse like a tool row.
-    submit(pane, "/plan show")
-    pane.wait_for(r"Proposed Plan", timeout_s=30)
-    rows = pane.wait_stable(quiet_s=2, timeout_s=30)
-
-    keys = assert_one_line_everywhere(rows, None)
-    screen = "\n".join(rows)
-    assert re.search(r"^▸ .*Scope → Narrow", screen, re.MULTILINE), screen
-    assert re.search(r"^▸ .*Tiny plan · plan proposed", screen, re.MULTILINE), screen
-    assert re.search(r"^▸ Proposed Plan · Tiny plan", screen, re.MULTILINE), screen
-    assert_each_entry_toggles(pane, keys, None)

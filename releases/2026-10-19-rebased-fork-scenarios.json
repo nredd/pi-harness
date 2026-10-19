@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "release": {
+    "id": "2026-10-19-rebased-fork-scenarios",
+    "created_at": "2026-10-19T18:03:45.441330Z",
+    "commit": "257aed86d5702e978c2484bcc4f4b728b2bffed2",
+    "dirty": false
+  },
+  "forks": [
+    {
+      "path": "forks/pi",
+      "commit": "9351a7853c96a684442492902cd8805a4c13092f",
+      "remote_url": "https://github.com/nredd/pi.git",
+      "initialized": true,
+      "tag": "v1.3.0-nredd.6",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-claude-auth",
+      "commit": "f78a407c72f0c384e3ac5fc4e171d61975e89767",
+      "remote_url": "https://github.com/nredd/pi-claude-auth.git",
+      "initialized": false,
+      "tag": null,
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-computer-use",
+      "commit": "3fd2fe39b702558c86491e488019ac9c80f7583e",
+      "remote_url": "https://github.com/nredd/pi-computer-use.git",
+      "initialized": false,
+      "tag": null,
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-plan-mode",
+      "commit": "4c2bfc3459b07b294efab62e9a8a01849f67a831",
+      "remote_url": "https://github.com/nredd/pi-plan-mode.git",
+      "initialized": true,
+      "tag": "v0.59.3-nredd.1",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-subagents",
+      "commit": "a4116d3b5853bc86347d5d7eb62ca1ef883162a1",
+      "remote_url": "https://github.com/nredd/pi-subagents.git",
+      "initialized": true,
+      "tag": "v0.22.0-nredd.4",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/rpiv-todo",
+      "commit": "3403b659748fa870d8309ae7d3da88bdb8aa1b1d",
+      "remote_url": "https://github.com/nredd/rpiv-todo.git",
+      "initialized": true,
+      "tag": "v2.12.0-nredd.6",
+      "fetched_tag_object": null
+    }
+  ],
+  "owned_packages": [
+    {
+      "name": "@nredd/pi-dev-tools",
+      "version": "0.4.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-session-kit",
+      "version": "0.3.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-subscription-router",
+      "version": "0.3.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-preset",
+      "version": "0.1.0",
+      "private": false,
+      "tarball_sha256": null
+    }
+  ],
+  "third_party": {
+    "package_lock_lockfile_version": 3,
+    "files": [
+      {
+        "path": "package-lock.json",
+        "sha256": "b8a205375f04b01f796d5135185b74e4a477ec2bfa3b8420bc95a006dadceffe"
+      },
+      {
+        "path": "integration/uv.lock",
+        "sha256": "66f3e46e37b50f8334aff383687cb164afc645b6e81f1e1436ba3a6f9b34ee04"
+      }
+    ]
+  },
+  "artifacts": [],
+  "evidence": {
+    "scope": "Gitlink-only,no-new-artifacts",
+    "fork_probe": "https://github.com/nredd/pi-harness/pull/37",
+    "subagents_review": "https://github.com/nredd/pi-subagents/pull/6",
+    "plan_mode_review": "https://github.com/nredd/pi-plan-mode/pull/2",
+    "local_gates": "npm-ci,check-integration-98-units,check-ts-pinned-bun-caffeinate,check-scripts-416-units,actionlint,integration-ty:PASS",
+    "manifest_regression": "two-file-orders-red-before-fix,green-after,actual-repository-four-core-checksums-PASS",
+    "parent_review": "pending-exact-final-HEAD",
+    "assembled_stack": "pending-parent-PR-CI-after-checksum-fix",
+    "local_process_scenarios": "NOT-RUN",
+    "dotfiles_promotion": "separate"
+  }
+}
