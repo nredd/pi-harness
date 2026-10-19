@@ -7,6 +7,10 @@ import {
   askPlanModeQuestions,
   MAX_PLAN_MODE_RESPONSE_LENGTH,
   type PlanModeQuestion,
+  planModeQuestionAnswered,
+  planModeQuestionCancelled,
+  planModeQuestionMarkdown,
+  renderPlanModeQuestion,
 } from "../src/question-tool.js";
 import { createMockContext, createMockPi } from "./support.js";
 
@@ -46,6 +50,46 @@ test("plan_mode_question reports non-interactive cancellation", async () => {
   await mock.commands.get("plan")?.handler("start", context.ctx);
   const result = await execute("call-1", { questions: [questions[0]] }, undefined, undefined, context.ctx);
   assert.equal(result.details?.reason, "ui_unavailable");
+});
+
+test("renderPlanModeQuestion summarizes answers instead of dumping the raw JSON payload", () => {
+  const result = planModeQuestionAnswered(questions, [
+    {
+      id: "scope",
+      header: "Scope",
+      question: "How broad?",
+      answer: "Small",
+      wasCustom: false,
+      optionIndex: 1,
+    },
+    {
+      id: "tests",
+      header: "Tests",
+      question: "Which checks?",
+      answer: "Run the linter too",
+      wasCustom: true,
+      note: "Only the linter, skip the full suite.",
+    },
+  ]);
+
+  const markdown = planModeQuestionMarkdown(result);
+  assert.doesNotMatch(markdown, /"cancelled"/);
+  assert.doesNotMatch(markdown, /\{/);
+  assert.match(markdown, /2 answered/);
+  assert.match(markdown, /\*\*Scope\*\* — Small/);
+  assert.match(markdown, /\*\*Tests\*\* — Run the linter too \(custom\)/);
+  assert.match(markdown, /Note: Only the linter, skip the full suite\./);
+
+  const component = renderPlanModeQuestion(result);
+  assert.ok(component);
+});
+
+test("renderPlanModeQuestion summarizes a cancelled question without dumping JSON", () => {
+  const result = planModeQuestionCancelled(questions, "ui_unavailable", "Unable to ask.");
+  const markdown = planModeQuestionMarkdown(result);
+  assert.doesNotMatch(markdown, /\{/);
+  assert.match(markdown, /cancelled/i);
+  assert.match(markdown, /ui_unavailable/);
 });
 
 test("normalizePlanModeQuestionParams validates question shape without changing schema", () => {

@@ -267,7 +267,7 @@ test("implementation transition rejects a busy run before committing and succeed
   idle = true;
   await mock.commands.get("plan")?.handler("implement", context.ctx);
   assert.equal(context.statuses.get("plan-mode"), "plan implementing");
-  assert.match(renderMockWidget(context.widgets.get("plan-mode-plan")).join("\n"), /implementation plan active/i);
+  assert.match(renderMockWidget(context.widgets.get("plan-mode-plan")).join("\n"), /implementing plan/i);
   assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
   assert.equal(mock.sentUserMessages.at(-1)?.options, undefined);
   const activeState = latestState(mock.entries);

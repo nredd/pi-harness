@@ -15,6 +15,7 @@ import planMode, {
   stripProposedPlanBlocks,
   stripProposedPlanBlocksFromMessage,
 } from "../src/plan-mode.js";
+import { planModeQuestionAnswered } from "../src/question-tool.js";
 import { createMockContext, createMockPi } from "./support.js";
 import { renderMockWidget } from "./widget-support.js";
 
@@ -146,6 +147,32 @@ test("plan_mode_complete result renders the plan as Markdown", () => {
   const fallback = renderMarkdown({ content: [], details: result.details });
   assert.match(fallback, /Proposed Plan/);
   assert.match(fallback, /const x = 1;/);
+});
+
+test("plan_mode_question is registered with a renderResult so answers never dump raw JSON", () => {
+  initTheme("dark");
+  const mock = createMockPi({ activeTools: ["read", "bash"] });
+  planMode(mock.pi);
+  const tool = mock.tools.find((candidate) => candidate.name === "plan_mode_question");
+  assert.equal(typeof tool?.renderResult, "function");
+
+  const renderResult = tool?.renderResult as (result: unknown, options: unknown) => { render(width: number): string[] };
+  const ansiPattern = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+  const renderMarkdown = (result: unknown) =>
+    renderResult(result, { expanded: false, isPartial: false })
+      .render(80)
+      .map((line) => line.replace(ansiPattern, ""))
+      .join("\n");
+
+  const result = planModeQuestionAnswered(
+    [{ id: "scope", header: "Scope", question: "How broad?", options: [{ label: "Small", description: "x" }] }],
+    [{ id: "scope", header: "Scope", question: "How broad?", answer: "Small", wasCustom: false, optionIndex: 1 }],
+  );
+  const rendered = renderMarkdown(result);
+  assert.match(rendered, /Scope/);
+  assert.match(rendered, /Small/);
+  assert.doesNotMatch(rendered, /"cancelled"/);
+  assert.doesNotMatch(rendered, /\{/);
 });
 
 test("completePlanArguments suggests management tokens only", () => {
@@ -1318,9 +1345,12 @@ test("active Plan UI advertises the completion tool rather than legacy XML", asy
     },
   });
   await mock.commands.get("plan")?.handler("start", context.ctx);
+  // The always-visible widget is intentionally kept to one short line (see
+  // presentation.ts); it points at `/plan` rather than naming the tool
+  // directly. The completion-tool-over-legacy-XML guarantee is exercised via
+  // the `/plan` launch menu below instead.
   const widget = renderMockWidget(context.widgets.get("plan-mode-plan"));
   assert.equal(widget[0], "─".repeat(80));
-  assert.match(widget.join("\n"), /plan_mode_complete/);
   assert.doesNotMatch(widget.join("\n"), /proposed_plan/);
   await mock.commands.get("plan")?.handler("", context.ctx);
   assert.match(activeMenu, /plan_mode_complete/);

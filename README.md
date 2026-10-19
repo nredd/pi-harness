@@ -1,6 +1,15 @@
-# 🧭 pi-plan-mode — Plan Before Pi Edits Code
+# 🧭 pi-plan-mode (nredd fork) — Plan Before Pi Edits Code
 
-[![npm](https://img.shields.io/npm/v/@narumitw/pi-plan-mode)](https://www.npmjs.com/package/@narumitw/pi-plan-mode) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+
+Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), extracted from its monorepo into a standalone repo so it can be installed with `pi install git:github.com/nredd/pi-plan-mode`.
+
+Differences from upstream (both purely presentational, no tool-policy or contract changes):
+
+- The always-visible Plan-mode widget is one short line (`Plan mode — /plan for tools and options`) instead of a three-line block that spells out the full tool policy on every turn. The tool policy is still reachable via `/plan` and `/plan settings`; only the always-on widget dump was removed.
+- `plan_mode_question` now has a `renderResult`, so the transcript shows a short Markdown summary of the questions and answers instead of the raw JSON payload. `plan_mode_complete` already had this upstream; this fork brings the question tool in line with it.
+
+Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.0.
 
 Use a Codex-like `/plan` mode to explore a codebase, resolve important questions, and approve an implementation-ready plan before Pi edits files.
 
@@ -22,13 +31,13 @@ This release requires Pi 0.80.6 or newer.
 Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
 
 ```bash
-pi install npm:@narumitw/pi-plan-mode
+pi install git:github.com/nredd/pi-plan-mode
 ```
 
 Try without installing permanently:
 
 ```bash
-pi -e npm:@narumitw/pi-plan-mode
+pi -e git:github.com/nredd/pi-plan-mode
 ```
 
 Build and try this package locally from the repository root:

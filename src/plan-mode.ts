@@ -64,6 +64,7 @@ import {
   PLAN_MODE_QUESTION_PARAMS,
   PLAN_MODE_QUESTION_TOOL_NAME,
   planModeQuestionCancelled,
+  renderPlanModeQuestion,
 } from "./question-tool.js";
 import { assertPlanModeHelperToolsAvailable, planModeHelperToolsAvailable } from "./required-tools.js";
 import { preflightSavedPlanImplementation, savedPlanBlocksNewWorkflow } from "./saved-plan-preflight.js";
@@ -242,6 +243,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     description:
       "Ask one to three structured questions only when the latest effective Plan contract explicitly says /plan mode is active. Tool visibility alone does not activate Plan mode. Never call for ordinary planning requests, the writing-plans skill, roadmaps, checklists, or plan-file work.",
     parameters: PLAN_MODE_QUESTION_PARAMS,
+    renderResult: renderPlanModeQuestion,
     async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
       if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
         return planModeQuestionCancelled(

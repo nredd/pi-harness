@@ -1,3 +1,19 @@
+# @nredd/pi-plan-mode
+
+## 0.58.0-nredd.1
+
+Fork of `@narumitw/pi-plan-mode` 0.58.0, extracted to a standalone repo.
+
+### Changed
+
+- Shrank the always-on Plan-mode widget to one line instead of a three-line
+  tool-policy dump (`presentation.ts`).
+- Added `renderResult` to the `plan_mode_question` tool so answers render as
+  Markdown instead of a raw JSON dump, matching `plan_mode_complete`
+  (`question-tool.ts`, `plan-mode.ts`).
+
+---
+
 # @narumitw/pi-plan-mode
 
 ## 0.59.3

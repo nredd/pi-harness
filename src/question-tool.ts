@@ -1,4 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Markdown } from "@earendil-works/pi-tui";
 import type { QuestionnaireAnswer, QuestionnaireQuestion, RunQuestionnaireResult } from "@narumitw/pi-tui-kit";
 
 export const PLAN_MODE_QUESTION_TOOL_NAME = "plan_mode_question";
@@ -289,6 +291,54 @@ function formatPlanModeQuestionPayload(payload: {
   answers?: PlanModeQuestionAnswer[];
 }) {
   return JSON.stringify(payload, null, 2);
+}
+
+type PlanModeQuestionRenderResult = {
+  content: Array<{ type: string; text?: string }>;
+  details?: unknown;
+};
+
+/**
+ * Renders plan_mode_question results as a short Markdown summary instead of
+ * dumping the raw JSON payload into the transcript. Mirrors
+ * `renderPlanModeCompletion` in completion-tool.ts so both Plan-mode tools
+ * present consistently.
+ */
+export function renderPlanModeQuestion(result: PlanModeQuestionRenderResult) {
+  return new Markdown(planModeQuestionMarkdown(result), 0, 0, getMarkdownTheme());
+}
+
+export function planModeQuestionMarkdown(result: PlanModeQuestionRenderResult): string {
+  const details = isPlanModeQuestionDetails(result.details) ? result.details : undefined;
+  if (!details) return fallbackText(result);
+
+  if (details.cancelled) {
+    const reason = details.reason ? ` (${details.reason})` : "";
+    return `**Plan question cancelled${reason}**`;
+  }
+
+  const answers = details.answers ?? [];
+  if (answers.length === 0) return fallbackText(result);
+
+  const lines = [`**Plan question** \u00b7 ${answers.length} answered`, ""];
+  for (const answer of answers) {
+    const suffix = answer.wasCustom ? " (custom)" : "";
+    lines.push(`- **${answer.header}** \u2014 ${answer.answer}${suffix}`);
+    if (answer.note?.trim()) lines.push(`  - Note: ${answer.note.trim()}`);
+  }
+  return lines.join("\n");
+}
+
+function fallbackText(result: PlanModeQuestionRenderResult): string {
+  return result.content
+    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+}
+
+function isPlanModeQuestionDetails(value: unknown): value is PlanModeQuestionDetails {
+  return isRecord(value) && typeof value.cancelled === "boolean" && Array.isArray(value.questions);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

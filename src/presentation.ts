@@ -8,15 +8,19 @@ const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 
 export function updatePlanModeUi(ctx: ExtensionContext, state: PlanModeState, toolSummary: () => string) {
   ctx.ui.setStatus(STATUS_KEY, formatStatus(state));
+  // Kept deliberately to one line: the full tool policy and next-step
+  // guidance are still one `/plan` away, so the always-visible widget stays
+  // Claude/Codex-terse instead of dumping the policy line on every turn.
+  void toolSummary;
   let lines: string[] | undefined;
   if (state.enabled && state.latestPlan) {
-    lines = ["Proposed plan ready", "Use /plan to implement, save, revise, or exit Plan mode."];
+    lines = ["Plan ready — /plan to implement, save, revise, or exit"];
   } else if (state.enabled) {
-    lines = ["Plan mode: planning", toolSummary(), "Finish with plan_mode_complete when decision-ready."];
+    lines = ["Plan mode — /plan for tools and options"];
   } else if (state.savedPlan) {
-    lines = ["Plan saved for later", "Use /plan to show, implement, or clear it."];
+    lines = ["Plan saved — /plan to show, implement, or clear"];
   } else if (state.activeImplementation) {
-    lines = ["Implementation plan active", "Use /plan to show, replace, or clear it."];
+    lines = ["Implementing plan — /plan to show, replace, or clear"];
   }
 
   publishPlanModeWidget(ctx, lines);
