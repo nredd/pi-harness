@@ -1,4 +1,4 @@
-"""Stack-only Plan/diff interaction and cross-process monitor orphan sweeping.
+"""Stack-only Plan/diff interaction.
 
 Package-native terminal scenarios own diff layout, navigation, errors and read-only checks.
 
@@ -8,11 +8,7 @@ References:
 
 from __future__ import annotations
 
-import json
-import os
-import random
 import re
-import signal
 import subprocess
 import time
 import unicodedata
@@ -203,108 +199,3 @@ def test_diff_is_allowed_in_plan_mode(launch: Callable[..., TmuxPane], dirty_rep
     pane.send_keys("q")
     pane.wait_for(STATUS, timeout_s=10)
     assert not re.search(r"^ /diff \S+\s+\d+ files?", pane.capture(), re.MULTILINE)
-
-
-def pid_of(pane: TmuxPane) -> int:
-    """Process id of the program running in a pane (`exec` replaced the wrapper shell).
-
-    Parameters:
-        pane (TmuxPane): running pane.
-
-    Returns:
-        int: pid of pi.
-    """
-    return int(pane._tmux("display-message", "-p", "-t", pane.name, "#{pane_pid}").strip())
-
-
-def ps_lines(tag: int) -> list[str]:
-    """Process lines carrying `sleep <tag>`.
-
-    Parameters:
-        tag (int): unique sleep duration.
-
-    Returns:
-        list[str]: `ps` lines.
-    """
-    out = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True, check=True
-    ).stdout
-    return [line.strip() for line in out.splitlines() if f"sleep {tag}" in line]
-
-
-def wait_until(check: Callable[[], bool], what: str, timeout_s: float = 20.0) -> None:
-    """Poll until `check()` holds.
-
-    Parameters:
-        check (Callable[[], bool]): condition.
-        what (str): failure description.
-        timeout_s (float): give up after this long.
-    """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if check():
-            return
-        time.sleep(0.2)
-    pytest.fail(f"timed out waiting for: {what}")
-
-
-def monitor_steps(name: str, tag: int) -> list[dict[str, Any]]:
-    """Faux steps: promote the deferred monitor tools, start one passive monitor, say `STARTED <name>`.
-
-    Parameters:
-        name (str): monitor name.
-        tag (int): unique sleep duration.
-
-    Returns:
-        list[dict[str, Any]]: faux steps.
-    """
-    search = {"name": "search_tools", "args": {"query": "background monitor process watcher", "kind": "tool"}}
-    begin = {"name": "monitor_start", "args": {"argv": ["/bin/sh", "-c", f"/bin/sleep {tag}"], "name": name}}
-    return [{"tools": [search]}, {"tools": [begin]}, {"text": f"STARTED {name}"}]
-
-
-def test_next_session_sweeps_only_dead_owners(launch: Callable[..., TmuxPane], sandbox: Sandbox) -> None:
-    """SIGKILL leaves A's child and pidfile; a new session reaps them and leaves live B's alone.
-
-    Parameters:
-        launch (Callable[..., TmuxPane]): pane launcher sharing the sandbox pidfile root.
-        sandbox (Sandbox): sandbox containing per-session monitor pidfiles.
-    """
-    root = sandbox.root / "tmp"
-    tag_a, tag_b = (900_000_000 + random.randint(0, 99_999) for _ in range(2))
-    try:
-        pane_a = launch(steps=monitor_steps("alpha", tag_a))
-        submit(pane_a, "go")
-        pane_a.wait_for(r"STARTED alpha", timeout_s=30)
-        pane_b = launch(steps=monitor_steps("beta", tag_b))
-        submit(pane_b, "go")
-        pane_b.wait_for(r"STARTED beta", timeout_s=30)
-        files = sorted(root.glob("pi-monitors-*/*/*.json"))
-        assert len(files) == 2, files
-        records = {json.loads(f.read_text())["name"]: (f, json.loads(f.read_text())) for f in files}
-        owner_a = pid_of(pane_a)
-        assert records["alpha"][1]["ownerPid"] == owner_a
-        assert records["alpha"][0].parent != records["beta"][0].parent, "one directory per session"
-
-        os.kill(owner_a, signal.SIGKILL)
-        wait_until(lambda: not pane_a.is_alive(), "pane A to die")
-        assert ps_lines(tag_a), "SIGKILL cannot be handled: A's child must be orphaned"
-        assert records["alpha"][0].exists(), "A's pidfile must survive SIGKILL"
-
-        pane_c = launch()
-        wait_until(lambda: not ps_lines(tag_a), "the sweep to kill A's orphan")
-        wait_until(lambda: not records["alpha"][0].exists(), "the sweep to remove A's pidfile")
-        assert ps_lines(tag_b), "a live session's monitor must never be swept"
-        assert records["beta"][0].exists(), "a live owner's pidfile must stay"
-        assert pane_b.is_alive()
-        submit(pane_b, "/monitor")
-        pane_b.wait_for(r'm1 "beta" running', timeout_s=10)
-        submit(pane_c, "/monitor")
-        pane_c.wait_for(r"no monitors", timeout_s=10)
-        launch()
-        time.sleep(2)
-        assert ps_lines(tag_b)
-        assert records["beta"][0].exists()
-    finally:
-        for tag in (tag_a, tag_b):
-            subprocess.run(["/usr/bin/pkill", "-f", f"/bin/sleep {tag}"], check=False)

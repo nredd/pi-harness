@@ -97,10 +97,13 @@ nothing, otherwise; run `make bootstrap-forks` yourself) and the npm registry fo
 fork's two locked runtime dependencies, which are installed into a disposable archive of the fork
 commit, never into `forks/`. See [package contracts](docs/package-contracts.md).
 
-`make check` is the owned-code unit gate *only*. It does not run fork gates (use each fork's native
-tooling, see [forks.md](docs/forks.md)), the integration scenarios (`make verify-fast`/`verify` in
-`integration/`, which need pi, tmux, and sandbox state), or any
-candidate/full-stack verification. No such gate exists yet.
+`make check` is the owned-code unit gate *only*. Forks use their native gates, see
+[forks.md](docs/forks.md). The CI `stack` matrix is the assembled gate for tap/profile pin bumps:
+exact Gitlinked core release, `integration/stacks/{personal,local}.json`, real `pi install`,
+throwaway HOME/agent directories, D boundaries and the one E tmux resize seam. It replaces local
+`pi-harness-e2e make verify`; no owner config or installed package state is read. Inputs and
+headless exclusions are documented [here](integration/README.md). Bench remains visibly NOT RUN
+until a quiet runner exists, and Bun auth interception remains unfinished.
 
 `bootstrap-forks` discovers submodules from the index and checks every initialized one (nested
 included) for tracked, staged, and untracked changes before running

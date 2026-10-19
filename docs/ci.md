@@ -8,6 +8,7 @@ CI is the gate. Local runs are for development. Hosted runners only, no credenti
 | --- | --- | --- |
 | `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Biome, tsc and each package's unit suite (Vitest; preset `node --test`), `bun test` on each package's `test/scenarios/` where it has one (`test:bun`; a notice names every package without one, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts`, `make check-fork-package-contracts` | Packed tarballs alone on exact stock Pi 1.3.0, and the packed preset + dev-tools through the Gitlinked `pi-subagents`. JSON reports uploaded as artifacts |
+| `stack (ubuntu-24.04, macos-14; personal, local)` | Fetch exact Gitlinked core release with formula-equivalent npm + tui replacement, real `pi install` of explicit `integration/stacks/*.json`, `D` startup/transport/lifetime/output/tool surfaces and `E` tmux resize | The released Node bundle and declared stack work together without owner config; binary version, stack SHA-256, installed package versions and JUnit/failure artifacts are retained. A reasoned headless exclusion installs but never loads the computer-use helper |
 | `bench (not run)` | a notice and a step summary | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
 
 `.github/workflows/forks.yml`, when `forks/**`, `.gitmodules` or the workflow changes, plus manual dispatch:
@@ -68,5 +69,15 @@ Flake policy (migration plan section 7):
   core `chord`/`durable` 5 s timeouts. They were green alone and flaky on a loaded laptop
 - Never rerun until green, never relabel NOT RUN as a pass
 
-Not in CI yet: the assembled-stack smoke and the TUI tier (`PLAN.md` item 4), bench on a quiet runner,
-npm trusted publishing.
+The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
+`integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
+Unported `A`/`A-stack`/`B` scenarios stay in the legacy subdirectories, excluded from this process gate.
+The thirteen `DOTFILES` rows moved out to the item-7 doctor, not a distribution check. See
+[here](../integration/README.md) for inputs, package sets and deliberate headless exclusions.
+
+Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
+A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
+`stack` currently tests the Node release delivered by the formula. Bun assembled auth parity still needs
+the runtime adapter (Bun ignores `NODE_OPTIONS --import`); this is not claimed as a Bun gate.
+
+Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI), npm trusted publishing.

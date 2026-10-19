@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from harness.interactive import FIRST_FRAME_PATTERN, launch_tui, submit
 from harness.latency import Reading, combine, latency_args, read_records, summarize
-from harness.sandbox import build_sandbox, local_overrides_from_env
+from harness.sandbox import build_sandbox
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,7 +30,7 @@ def make_sandboxes(root: Path, template_home: Path, count: int, *, shared: bool)
 
     Parameters:
         root (Path): scratch directory.
-        template_home (Path): session chezmoi render.
+        template_home (Path): explicit installed fixture.
         count (int): panes.
         shared (bool): one agent dir for all panes instead of one each.
 
@@ -42,10 +42,9 @@ def make_sandboxes(root: Path, template_home: Path, count: int, *, shared: bool)
     """
     if count < 1:
         raise ValueError(f"`count` must be positive, got '{count}'")
-    overrides = local_overrides_from_env()
     if shared:
-        return [build_sandbox(root / "shared", template_home, overrides)] * count
-    return [build_sandbox(root / f"box{i}", template_home, overrides) for i in range(count)]
+        return [build_sandbox(root / "shared", template_home)] * count
+    return [build_sandbox(root / f"box{i}", template_home) for i in range(count)]
 
 
 def streaming_script(chars: int, tokens_per_s: int) -> dict[str, Any]:

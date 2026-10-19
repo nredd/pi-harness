@@ -26,7 +26,7 @@
  * tool result (how a background `Agent` reports its handle).
  */
 
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import {
 	type AssistantMessage,
 	type AssistantMessageEventStream,
@@ -258,6 +258,8 @@ export default function harnessFaux(pi: ExtensionAPI): void {
 		const steps = [...(script.steps ?? [])];
 		core.setResponses(
 			Array.from({ length: steps.length + 64 }, () => async (context: FauxContext) => {
+				const requestLog = process.env.HARNESS_REQUEST_LOG;
+				if (requestLog) appendFileSync(requestLog, `${JSON.stringify({ provider })}\n`);
 				const step = nextStep(steps, context);
 				if (step?.delayMs) await new Promise((resolve) => setTimeout(resolve, step.delayMs));
 				return respond(step, context);

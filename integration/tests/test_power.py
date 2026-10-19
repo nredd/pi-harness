@@ -17,7 +17,7 @@ from harness import power
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS wake assertions")
-def test_runner_holds_assertion() -> None:
+def test_runner_holds_assertion(awake_host: None) -> None:
     """Direct pytest invocations keep detached tmux benchmarks out of maintenance sleep."""
     processes = subprocess.check_output(["/bin/ps", "-axo", "pid,ppid,args"], text=True)
     assert any(
