@@ -4,17 +4,7 @@ import { dirname, join } from "node:path";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { makeGitFixture } from "../../packages/dev-tools/test/scenarios/support.ts";
-import {
-	agentStack,
-	ask,
-	call,
-	closeAgentStack,
-	GIT_READS,
-	listTools,
-	MUTATIONS,
-	READS,
-	report,
-} from "./agents-support.ts";
+import { agentStack, ask, call, closeAgentStack, GIT_READS, listTools, READS, report } from "./agents-support.ts";
 import { isolateStackHome } from "./support.ts";
 
 let home: ReturnType<typeof isolateStackHome>;
@@ -61,17 +51,17 @@ it("reviewer rejects every explicit mutation", async () => {
 	const path = join(home.root, "protected.txt");
 	const original = "REVIEWER MUST NOT CHANGE THIS\n";
 	writeFileSync(path, original);
-	const args: Parameters<typeof call>[1][] = [
-		{ path, oldText: original, newText: "CORRUPTED" },
-		{ path, content: "CORRUPTED\n" },
-		{ command: `printf CORRUPTED > ${path}` },
-		{ subject: "Corrupt fixture", paths: [path], push: false },
-		{ branch: "reviewer-mutation" },
-		{ path: home.root, force: true },
-		{ dry_run: false },
+	const calls: { name: string; args: Parameters<typeof call>[1] }[] = [
+		{ name: "edit", args: { path, oldText: original, newText: "CORRUPTED" } },
+		{ name: "write", args: { path, content: "CORRUPTED\n" } },
+		{ name: "bash", args: { command: `printf CORRUPTED > ${path}` } },
+		{ name: "git_commit", args: { subject: "Corrupt fixture", paths: [path], push: false } },
+		{ name: "git_worktree_add", args: { branch: "reviewer-mutation" } },
+		{ name: "git_worktree_remove", args: { path: home.root, force: true } },
+		{ name: "git_worktree_prune", args: { dry_run: false } },
 	];
-	for (const [index, name] of MUTATIONS.entries()) {
-		const answer = await ask(h, "code-reviewer", [call(name, args[index] ?? {}), report]);
+	for (const { name, args } of calls) {
+		const answer = await ask(h, "code-reviewer", [call(name, args), report]);
 		expect(answer).toContain(`Tool ${name} not found`);
 		expect(readFileSync(path, "utf8"), name).toBe(original);
 	}

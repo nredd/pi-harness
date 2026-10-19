@@ -1,4 +1,10 @@
-/** Loader adapter injects only existing production options; child scope is the real kit's work. */
+/**
+ * Real workspace factory, not synthetic registrations. Child package discovery cannot pass
+ * SessionKitOptions, so this loader adapter shares the parent's controlled clock/spawn.
+ * child-tools.test.ts proves hidden provenance and denied calls in both load orders, plus
+ * zero ControlledProcesses spawns. Loading the default entry would bypass that last check
+ * and could launch a real process if the child guard regressed. Keep this injection boundary.
+ */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSessionKit, type SessionKitOptions } from "../../../../packages/session-kit/src/index.ts";
 
