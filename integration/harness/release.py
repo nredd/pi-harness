@@ -150,11 +150,13 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
     prefix.mkdir(parents=True, exist_ok=True)
     home = prefix / "fetch-home"
     home.mkdir()
+    for name in ("npmrc-user", "npmrc-global"):
+        (prefix / name).touch()
     env = {
         "PATH": os.environ.get("PATH", os.defpath),
         "HOME": str(home),
-        "npm_config_userconfig": "/dev/null",
-        "npm_config_globalconfig": "/dev/null",
+        "npm_config_userconfig": str(prefix / "npmrc-user"),
+        "npm_config_globalconfig": str(prefix / "npmrc-global"),
         "npm_config_cache": str(prefix / "npm-cache"),
         "PI_SKIP_VERSION_CHECK": "1",
     }
@@ -168,14 +170,17 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
             asset.write_bytes(response.read())
         verify_asset(asset, url, checksums)
         assets.append(asset)
-    subprocess.check_output(
-        [npm, "install", "--global", "--prefix", str(prefix), "--min-release-age=0", str(assets[0])],
-        cwd=prefix,
-        env=env,
-        text=True,
-        stderr=subprocess.STDOUT,
-        timeout=600,
-    )
+    try:
+        subprocess.check_output(
+            [npm, "install", "--global", "--prefix", str(prefix), "--min-release-age=0", str(assets[0])],
+            cwd=prefix,
+            env=env,
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=600,
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"Core release npm installation failed: {error.output[-6000:]}") from error
     modules = prefix / "lib/node_modules/@earendil-works/pi-coding-agent/node_modules"
     destination = modules / "@earendil-works/pi-tui"
     if destination.exists():

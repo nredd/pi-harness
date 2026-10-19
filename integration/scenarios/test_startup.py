@@ -61,6 +61,8 @@ def test_fatal_startup_modes(sandbox: Sandbox, mode: str, phase: str, fatal: boo
             code = wait_dead(pane)
             output = pane.capture() + (sandbox.root / "pi.stderr").read_text()
         finally:
+            (sandbox.root / "startup-tui.txt").write_text(pane.capture())
+            (sandbox.root / "startup-tui.ansi").write_text(pane.capture(styled=True))
             pane.kill()
     else:
         args = [*pi_command(), "-e", str(FAUX_EXTENSION), "--model", "faux/main", *extra]

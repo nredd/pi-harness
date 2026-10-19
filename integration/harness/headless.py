@@ -222,7 +222,13 @@ def run_headless(
         text=True,
         start_new_session=True,
     )
-    return collect_json_process(process, argv, started, timeout_s)
+    result = collect_json_process(process, argv, started, timeout_s)
+    script_path.with_suffix(".events.jsonl").write_text(
+        "".join(json.dumps(event) + "\n" for event in result.events)
+    )
+    script_path.with_suffix(".stderr").write_text(result.stderr)
+    script_path.with_suffix(".noise.txt").write_text("\n".join(result.stdout_noise))
+    return result
 
 
 def collect_json_process(

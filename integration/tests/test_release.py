@@ -110,7 +110,10 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
     def npm(argv: list[str], **kwargs: Any) -> str:
         commands.append(argv)
         assert kwargs["env"]["HOME"] == str(prefix / "fetch-home")
-        assert kwargs["env"]["npm_config_userconfig"] == "/dev/null"
+        assert kwargs["env"]["npm_config_userconfig"] == str(prefix / "npmrc-user")
+        assert kwargs["env"]["npm_config_globalconfig"] == str(prefix / "npmrc-global")
+        assert (prefix / "npmrc-user").read_text() == ""
+        assert (prefix / "npmrc-global").read_text() == ""
         destination.mkdir(parents=True)
         (destination / "stale").write_text("registry copy must go away")
         return "installed"
