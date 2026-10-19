@@ -47,13 +47,14 @@ Excluded scenario files (paths below are relative to `scenarios/`; the six `stac
 | `integration/test_agent_worktree.py`, `integration/test_plan_mode_confirmation.py`, `integration/test_plan_mode_gate.py`, `integration/test_plan_mode_policy.py`, `integration/test_subagents.py` | Unported fork-owned `B` rows, not D process boundaries |
 | `integration/test_router_e2e.py` | Only the fork-owned `B:pi-subagents` `no-router` case remains. Pending its native port, the legacy wrapper requires explicit `PI_BIN` and `--stack stacks/local.json` (the local router source contains the shell fixture); no `pinned_checkout`, rendered owner settings or live environment. This is excluded from the assembled D/E gate, not claimed covered |
 | `integration/test_stats_portable.py` | Portable artifact contract belongs in `C`, not the D/E gate |
-| `integration/test_quota_footer_headless.py`, `tui/test_footer_cache.py`, `tui/test_quota_footer.py` | Preset-native `A` ports; live dotfiles footer adoption remains deferred, so retain these legacy receipts |
 | `tui/test_conversation_viewer.py`, `tui/test_fleet.py`, `tui/test_fleet_stall.py`, `tui/test_one_line_rows.py`, `tui/test_transcript_rows.py`, `tui/test_virtual_model_row.py` | Unported fork-owned `B` or composed `A-stack` terminal rows; native virtual-terminal suites own these |
 | `tui/test_session_kit_monitor_diff.py`, `tui/test_session_kit_stats.py` | Remaining `A-stack` command/Plan/shared-state interactions; package-native terminal ports already landed and their old rows stay removed |
 | `tui/test_latency_probe.py`, `bench/test_compaction.py`, `bench/test_fanout.py`, `bench/test_multisession.py`, `bench/test_render.py`, `bench/test_startup.py`, `bench/test_typed_vs_bash.py` | `F` measurements/instrumentation require a quiet runner and explicit baseline; hosted CI reports NOT RUN |
 | `live/test_live.py` | `G` requires explicit credentials and opt-in; never CI |
 
 The goal/quota/loop ports in #33 remain native; their three deleted Python files are not restored or listed as exclusions. Main's Progress lines and per-row receipts remain in `docs/verification-rebuild.md`.
+
+Native preset footer receipts are in `packages/preset/test/scenarios/footer-{quota,cache,headless}.test.ts` (Vitest + Bun); the three legacy Python files are deleted. The live footer is still the separately tested dotfiles copy; adopting the preset footer remains profile split #21.
 
 Native stats receipts from main remain in `packages/session-kit/test/scenarios/{stats-view,stats-data}.test.ts`. The surviving shared-machines scenario covers CLI exports/imports, three installs, dedup, freshness labels and Plan mode. The standalone portable artifact contract must not be silently replaced by kit source.
 
