@@ -110,6 +110,8 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[in
     """Print completion, RPC EOF and explicit stop reap descendants/pidfiles without a wake."""
     tag = tags[0]
     payload = script(tag, stop=mode == "stop")
+    requests = sandbox.root / "lifetime-requests.jsonl"
+    sandbox.env_overrides["HARNESS_REQUEST_LOG"] = str(requests)
     if mode == "print":
         result = run_headless(sandbox, payload, ["go"])
         assert result.returncode == 0, result.transcript()
@@ -118,6 +120,12 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[in
         with RpcProcess(sandbox, payload) as rpc:
             rpc.prompt()
             if mode == "stop":
+                stopped = [
+                    event
+                    for event in rpc.events
+                    if event.get("type") == "tool_execution_end" and event.get("toolName") == "monitor_stop"
+                ]
+                assert [event["isError"] for event in stopped] == [False, True], stopped
                 wait_until(lambda: not alive(tag), "explicit stop to reap descendants")
                 assert not list((sandbox.root / "tmp").glob("pi-monitors-*/*/*.json"))
             else:
@@ -125,6 +133,7 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[in
         assert rpc.process.returncode == 0, "".join(rpc.stderr)
     wait_until(lambda: not alive(tag), "shutdown to reap monitor group")
     assert not list((sandbox.root / "tmp").glob("pi-monitors-*/*/*.json"))
+    assert len(requests.read_text().splitlines()) == (5 if mode == "stop" else 3), "unexpected monitor wake"
 
 
 def test_next_session_sweeps_only_dead_owners(

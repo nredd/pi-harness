@@ -146,6 +146,7 @@ class RpcProcess:
         path.write_text(json.dumps(script))
         self.lines: Queue[str | None] = Queue()
         self.stderr: list[str] = []
+        self.events: list[dict[str, Any]] = []
         self.process = subprocess.Popen(
             [
                 *pi_command(),
@@ -226,6 +227,7 @@ class RpcProcess:
             if line is None:
                 raise AssertionError(f"RPC exited before expected event: {''.join(self.stderr)}")
             event = json.loads(line)
+            self.events.append(event)
             if predicate(event):
                 return event
         raise AssertionError(f"RPC deadline waiting for event: {''.join(self.stderr)}")

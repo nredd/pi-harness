@@ -230,7 +230,12 @@ def save_sandbox_artifacts(box: Sandbox, nodeid: str) -> None:
     sessions = box.agent_dir / "sessions"
     if sessions.is_dir():
         shutil.copytree(sessions, destination / "sessions", dirs_exist_ok=True)
-    for leftover in [*box.root.glob("script-*.json"), *box.root.glob("*.stderr")]:
+    leftovers = [
+        path
+        for pattern in ("script-*.json", "*.stderr", "*.jsonl", "*.txt", "*.ansi")
+        for path in box.root.glob(pattern)
+    ]
+    for leftover in leftovers:
         shutil.copy2(leftover, destination / leftover.name)
     LOGGER.warning(f"Saved artifacts for '{nodeid}' to '{destination}'")
 

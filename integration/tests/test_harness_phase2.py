@@ -139,6 +139,12 @@ def test_link_real_credentials_requires_real_auth(monkeypatch: pytest.MonkeyPatc
         live.link_real_credentials(make_box(tmp_path / "box"))
 
 
+def test_live_credentials_have_no_default_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("HARNESS_AUTH_FILE", raising=False)
+    with pytest.raises(ValueError, match="explicit `HARNESS_AUTH_FILE`"):
+        live.link_real_credentials(make_box(tmp_path / "box"))
+
+
 def test_live_enabled_reads_the_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(live.LIVE_ENV, raising=False)
     assert not live.live_enabled()

@@ -100,8 +100,8 @@ class Sandbox:
                 "XDG_STATE_HOME": str(self.home / ".local/state"),
                 "CODEX_HOME": str(self.home / ".codex"),
                 "npm_config_cache": str(self.root / "npm-cache"),
-                "npm_config_userconfig": "/dev/null",
-                "npm_config_globalconfig": "/dev/null",
+                "npm_config_userconfig": str(self.root / "npmrc-user"),
+                "npm_config_globalconfig": str(self.root / "npmrc-global"),
             }
             | self.env_overrides
             | (extra or {})
@@ -157,6 +157,8 @@ def build_sandbox(root: Path, template_home: Path | None = None) -> Sandbox:
     workdir.mkdir()
     (root / "tmp").mkdir()
     box = Sandbox(root, home, agent_dir, workdir)
+    for name in ("npmrc-user", "npmrc-global"):
+        (root / name).touch()
     box.patch_json(
         "settings.json", {"lastChangelogVersion": SILENT_CHANGELOG_VERSION, "retry": {"enabled": False}}
     )
@@ -187,14 +189,17 @@ def install_stack(root: Path, stack_path: Path) -> Sandbox:
     LOGGER.info(f"Stack '{stack.name}' sha256={stack_digest(stack_path)}")
     for source in sources:
         LOGGER.info(f"pi install '{source}'")
-        subprocess.check_output(
-            [*pi_command(), "install", source],
-            cwd=box.workdir,
-            env=box.env({"PI_OFFLINE": "0"}, installing=True),
-            text=True,
-            stderr=subprocess.STDOUT,
-            timeout=600,
-        )
+        try:
+            subprocess.check_output(
+                [*pi_command(), "install", source],
+                cwd=box.workdir,
+                env=box.env({"PI_OFFLINE": "0"}, installing=True),
+                text=True,
+                stderr=subprocess.STDOUT,
+                timeout=600,
+            )
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(f"`pi install` failed for '{source}': {error.output[-6000:]}") from error
     packages = box.settings().get("packages", [])
     identities = []
     for original, resolved in zip(stack.sources, sources, strict=True):
