@@ -1,5 +1,4 @@
 {
-  "scenarios/tui/test_fleet.py::test_fleet_survives_plan_mode_round_trip": "Same, across plan enter/exit",
   "scenarios/bench/test_startup.py": "Cold startup to first frame and faux TTFT within 20% of baseline",
   "scenarios/bench/test_render.py::test_render_2k_message_transcript": "Full-frame ms and live heap with a resumed 2000-message session, within 20% of baseline",
   "scenarios/bench/test_render.py::test_render_50k_line_bash_output": "50k-line `bash` output: settle time and expanded full-frame ms within 20% of baseline",
@@ -8,7 +7,6 @@
   "scenarios/live/test_live.py::test_anthropic_through_router_and_subscription_usage": "Live: `router/default` answers on Anthropic; `subscription_usage` reports windows. Cost-capped at $0.50 for the tier",
   "scenarios/live/test_live.py::test_codex_through_router": "Live: with Codex first in the `default` chain, `router/default` answers on Codex",
   "scenarios/live/test_live.py::test_background_subagent": "Live: a background `general-purpose` child runs on a real model and `get_subagent_result` returns its reply",
-  "scenarios/integration/test_plan_mode_gate.py::test_gate_error_forbids_plain_text_and_points_to_finalize": "Incident: a long planning session looped (prose question, prose reply, gate error); the built dist gate error must require canonical `reproposal_confirmation`, reject plain text, and point to `/plan finalize`",
   "inprocess/plan-todos.test.ts": "Incident: approved plan paraphrased into todos, ticked without proof, reported done with items open. Plan items are seeded verbatim from `pi-plan-mode:plan-approved`; one atomic `todo.ops` batch completes or defers every item with evidence/reason and leaves `0/N` plan items open; old-plan reminders stay suppressed while replanning through actual compaction/reload and legacy mode-state restore, then resume after exit; ending a run with plan items open gets one request-local reminder",
   "scenarios/live/test_live.py::test_anthropic_with_only_pi_credentials": "Live, cost-capped: minimal real Anthropic request on the `auth.json` OAuth entry alone, no Claude Code store",
   "scenarios/bench/test_multisession.py::test_multi_session_responsiveness": "Finding: TUI input and streaming lag grows with open sessions at low CPU; N=1/4/8 panes on a 2k transcript, probe-measured",
@@ -22,6 +20,7 @@
   "scenarios/test_print_output.py::test_diff_prints_the_stat_outside_the_tui": "Real diff/bad-ref/stats commands reach text and JSON output channels",
   "scenarios/test_startup.py::test_fatal_startup_modes": "Ordinary/fatal factory and session-start errors across CLI modes; fatal exit, no provider or held-message leak",
   "scenarios/tui/test_footer_resize.py::test_resize_transitions_leave_no_stale_rows": "Test-scoped preset footer survives real SIGWINCH 120 -> 60 -> 320 -> 120 with no stale rows",
+  "inprocess/fleet-plan.test.ts": "Real running child fleet survives raw Plan start/exit on VirtualTerminal with one injected subagents clock",
   "inprocess/workflow-trigger.test.ts": "Workflow mentions do not arm keyword-disabled orchestration",
   "inprocess/nesting.test.ts": "Real child pipeline denies nested workflow/background Agent calls",
   "inprocess/turn-cap.test.ts": "Turn-capped child produces bounded tool-free final report",
