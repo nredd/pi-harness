@@ -16,7 +16,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test("ready-menu fresh handoff waits for settled and prompt-end dispatch", async () => {
+test("user-opened fresh handoff starts only after settled and prompt-end dispatch", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-issue-1263-"));
   const agentDir = join(root, "agent");
   const followerPath = join(root, "later-extension.ts");
@@ -178,6 +178,8 @@ export default function laterExtension(pi) {
       runner.createToolContext("complete", signal),
     );
     await runner.emit({ type: "agent_settled", aborted: false });
+    assert.equal(events.includes("replacement-started"), false, JSON.stringify(events));
+    await command.handler("", runner.createCommandContext());
     await handoffFinished.promise;
     await Promise.resolve();
 

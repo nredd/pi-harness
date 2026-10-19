@@ -155,46 +155,36 @@ test("plan save exits Plan mode, restores runtime state, and keeps the plan out 
   assert.match(context.notifications.at(-1)?.message ?? "", /no completed plan/i);
 });
 
-test("automatic and manual ready menus expose Save for later", async () => {
-  for (const automatic of [true, false]) {
-    const mock = createMockPi({ activeTools: ["read", "edit"] });
-    planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-    const context = createMockContext({
-      hasUI: true,
-      select: async (title: string, options: string[]) => {
-        assert.match(title, /Plan reinjection: Off; use conversation history only/i);
-        assert.deepEqual(
-          options.filter((option) => option !== "Close"),
-          automatic
-            ? [
-                "Implement here",
-                "Start fresh and implement",
-                "Export plan…",
-                "Save for later",
-                "Stay in Plan mode",
-                "Discard plan and exit",
-              ]
-            : [
-                "Show latest proposed plan",
-                "Implement here",
-                "Start fresh and implement",
-                "Export plan…",
-                "Save for later",
-                "Stay in Plan mode",
-                "Discard plan and exit",
-              ],
-        );
-        return "Save for later";
-      },
-    });
-    await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
-    if (automatic) await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-    else await mock.commands.get("plan")?.handler("", context.ctx);
+test("user-opened ready menu exposes Save for later", async () => {
+  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext({
+    hasUI: true,
+    select: async (title: string, options: string[]) => {
+      assert.match(title, /Plan reinjection: Off; use conversation history only/i);
+      assert.deepEqual(
+        options.filter((option) => option !== "Close"),
+        [
+          "Show latest proposed plan",
+          "Implement here",
+          "Start fresh and implement",
+          "Export plan…",
+          "Save for later",
+          "Stay in Plan mode",
+          "Discard plan and exit",
+        ],
+      );
+      return "Save for later";
+    },
+  });
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  await completePlan(mock, context.ctx);
+  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  assert.equal(context.statuses.get("plan-mode"), "plan ready");
 
-    assert.equal(context.statuses.get("plan-mode"), "plan saved");
-    assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
-  }
+  await mock.commands.get("plan")?.handler("", context.ctx);
+  assert.equal(context.statuses.get("plan-mode"), "plan saved");
+  assert.equal(latestState(mock.entries)?.savedPlan?.plan, PLAN);
 });
 
 test("saved Plan management can show, implement, clear, or cancel", async () => {

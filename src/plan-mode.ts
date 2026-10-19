@@ -2,13 +2,7 @@ import { randomUUID } from "node:crypto";
 import { watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
-  InputEvent,
-  InputSource,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, InputEvent, InputSource } from "@earendil-works/pi-coding-agent";
 import { completePlanArguments } from "./command.js";
 import {
   normalizePlanModeCompletion,
@@ -24,7 +18,6 @@ import {
   type FinalizationRunOutcome,
   RETRY_FINALIZE_PLAN_PROMPT,
 } from "./finalization-request.js";
-import { createDeferredFreshHandoffCoordinator } from "./fresh-handoff-coordinator.js";
 import {
   formatHistoryImplementationPrompt,
   formatImplementationHandoff,
@@ -50,7 +43,7 @@ import {
   type PlanModeContract,
   reconcileModeContract,
 } from "./mode-contract.js";
-import { createPlanActionController, type FreshImplementationTiming } from "./plan-action-controller.js";
+import { createPlanActionController } from "./plan-action-controller.js";
 import { createPlanExportController } from "./plan-export-controller.js";
 import {
   clearPlanModeUi,
@@ -73,7 +66,6 @@ import {
   configuredImplementationPlanRetention,
   configuredPlanModeToggleShortcut,
   configuredThinkingLevel,
-  type ImplementationPlanRetention,
   type PlanModeSettings,
   type PlanModeSettingsPatch,
   planModeSettingsPath,
@@ -113,20 +105,6 @@ interface ReadyPresentationIntent {
   nonce: number;
   plan: string;
   source: PlanCompletionSource;
-}
-interface DeferredFreshImplementation {
-  ctx: ExtensionContext;
-  sourceSession: object;
-  menuGeneration: number;
-  workflowGeneration: number;
-  workflowOwner: WorkflowMutexOwner | undefined;
-  enabled: boolean;
-  plan: string;
-  source: PlanCompletionSource;
-  savedPlan: PlanModeState["savedPlan"];
-  retention: ImplementationPlanRetention;
-  runtime: ImplementationRuntimeSelection | undefined;
-  menuIsCurrent(): boolean;
 }
 interface PendingWorkflowToolPolicy {
   generation: number;
@@ -185,9 +163,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let publishedContractMode: PlanModeContract | undefined;
   let modeContractsRelevant = false;
   let readyPresentationIntent: ReadyPresentationIntent | undefined;
-  let latestCommandContext: ExtensionCommandContext | undefined;
-  let stagedFreshImplementation: DeferredFreshImplementation | undefined;
-  const deferredFreshHandoff = createDeferredFreshHandoffCoordinator();
   let nextReadyPresentationNonce = 0;
   let menuGeneration = 0;
   let workflowGeneration = 0;
@@ -303,7 +278,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     description: "Enter or manage Codex-like Plan mode",
     getArgumentCompletions: completePlanArguments,
     handler: async (args, ctx) => {
-      latestCommandContext = ctx;
       const prompt = args.trim();
       const command = prompt.toLowerCase();
       if (command === "start") {
@@ -481,7 +455,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   };
 
   pi.on("session_start", async (event, ctx) => {
-    cancelDeferredFreshImplementation();
     const generation = ++menuGeneration;
     finalizationRequest.reset();
     currentSession = ctx.sessionManager;
@@ -494,7 +467,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     menuController.abort(new DOMException("Plan-mode session replaced", "AbortError"));
     menuController = new AbortController();
     readyPresentationIntent = undefined;
-    latestCommandContext = undefined;
     workflowAllowedToolNames = undefined;
     pendingWorkflowToolPolicy = undefined;
     implementationRetention.reset();
@@ -540,13 +512,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("session_tree", async (_event, ctx) => {
-    cancelDeferredFreshImplementation();
     advanceWorkflowGeneration();
     menuGeneration += 1;
     menuController.abort(new DOMException("Plan-mode tree branch changed", "AbortError"));
     menuController = new AbortController();
     readyPresentationIntent = undefined;
-    latestCommandContext = undefined;
     pendingRuntimeAdmissionSession = undefined;
     queuedRuntimeAdmissionInputs = [];
     implementationRetention.reset();
@@ -574,7 +544,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    cancelDeferredFreshImplementation();
     const shutdownSession = ctx.sessionManager;
     const runtimeApplication =
       activeImplementationRuntimeApplication?.sessionManager === shutdownSession &&
@@ -597,7 +566,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     menuGeneration += 1;
     menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
     readyPresentationIntent = undefined;
-    latestCommandContext = undefined;
     refreshStateBeforeFirstAgentStart = false;
     pendingRuntimeAdmissionSession = undefined;
     queuedRuntimeAdmissionInputs = [];
@@ -787,7 +755,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     refreshStateForFirstPrompt(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
-      cancelDeferredFreshImplementation();
       readyPresentationIntent = undefined;
       state = {
         ...state,
@@ -841,26 +808,21 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
 
     readyPresentationIntent = undefined;
-    stagedFreshImplementation = undefined;
+    // Do not open the action menu automatically. `ctx.ui.custom()` captures
+    // editor input, which prevents transcript scrolling exactly when the user
+    // needs to review the completed plan. The persistent ready-plan widget
+    // keeps `/plan` visible as the explicit, user-controlled review action.
+    if (intent.source !== "legacy_proposed_plan") return;
     try {
-      if (intent.source === "legacy_proposed_plan") {
-        pi.sendMessage(
-          {
-            customType: PROPOSED_PLAN_MESSAGE_TYPE,
-            content: `**Proposed Plan**\n\n${intent.plan}`,
-            display: true,
-          },
-          { triggerTurn: false },
-        );
-      }
-      if (ctx.hasUI && completedPlanIsCurrent(intent)) {
-        await planActions.showReady(latestCommandContext ?? ctx);
-      }
-      const request = stagedFreshImplementation;
-      stagedFreshImplementation = undefined;
-      if (request) armDeferredFreshImplementation(request);
+      pi.sendMessage(
+        {
+          customType: PROPOSED_PLAN_MESSAGE_TYPE,
+          content: `**Proposed Plan**\n\n${intent.plan}`,
+          display: true,
+        },
+        { triggerTurn: false },
+      );
     } catch (error: unknown) {
-      stagedFreshImplementation = undefined;
       if (!isStaleExtensionContextError(error)) throw error;
     }
   });
@@ -1110,94 +1072,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     ctx: ExtensionContext,
     menuIsCurrent: () => boolean,
     runtime: ImplementationRuntimeSelection | undefined,
-    timing: FreshImplementationTiming,
   ) {
-    const retention = configuredImplementationPlanRetention(settings);
-    if (timing === "immediate") {
-      await startFreshImplementationFromState(ctx, {
-        getState: () => state,
-        menuIsCurrent,
-        retention,
-        stateEntryType: STATE_ENTRY_TYPE,
-        runtime,
-      });
-      return;
-    }
-
-    const initialState = state;
-    const savedPlan = initialState.enabled ? undefined : initialState.savedPlan;
-    const plan = (initialState.enabled ? initialState.latestPlan : savedPlan?.plan)?.trim();
-    const source = initialState.enabled ? initialState.latestPlanSource : savedPlan?.source;
-    if (!plan || !source || !menuIsCurrent()) return;
-    stagedFreshImplementation = {
-      ctx,
-      sourceSession: ctx.sessionManager,
-      menuGeneration,
-      workflowGeneration,
-      workflowOwner,
-      enabled: initialState.enabled,
-      plan,
-      source,
-      savedPlan,
-      retention,
-      runtime: runtime
-        ? {
-            ...(runtime.model ? { model: { ...runtime.model } } : {}),
-            ...(runtime.thinkingLevel ? { thinkingLevel: runtime.thinkingLevel } : {}),
-          }
-        : undefined,
+    await startFreshImplementationFromState(ctx, {
+      getState: () => state,
       menuIsCurrent,
-    };
-  }
-
-  function armDeferredFreshImplementation(request: DeferredFreshImplementation) {
-    deferredFreshHandoff.schedule(
-      async (taskIsCurrent) => {
-        const isCurrent = () => taskIsCurrent() && deferredFreshImplementationIsCurrent(request);
-        if (!isCurrent()) return;
-        await startFreshImplementationFromState(request.ctx, {
-          getState: () => state,
-          menuIsCurrent: isCurrent,
-          retention: request.retention,
-          stateEntryType: STATE_ENTRY_TYPE,
-          runtime: request.runtime,
-        });
-      },
-      (error) => {
-        if (!deferredFreshImplementationIsCurrent(request)) return;
-        try {
-          request.ctx.ui.notify(
-            `Unable to start the deferred fresh implementation: ${terminalErrorDetail(error)}`,
-            "error",
-          );
-        } catch {
-          // The source context can become stale while a detached failure is reported.
-        }
-      },
-    );
-  }
-
-  function deferredFreshImplementationIsCurrent(request: DeferredFreshImplementation) {
-    if (
-      currentSession !== request.sourceSession ||
-      menuGeneration !== request.menuGeneration ||
-      workflowGeneration !== request.workflowGeneration ||
-      workflowOwner !== request.workflowOwner ||
-      !request.menuIsCurrent() ||
-      state.enabled !== request.enabled
-    ) {
-      return false;
-    }
-    return request.enabled
-      ? workflowMutex.isOwner(request.workflowOwner) &&
-          state.latestPlan === request.plan &&
-          state.latestPlanSource === request.source
-      : state.savedPlan === request.savedPlan;
-  }
-
-  function cancelDeferredFreshImplementation() {
-    stagedFreshImplementation = undefined;
-    deferredFreshHandoff.cancel();
+      retention: configuredImplementationPlanRetention(settings),
+      stateEntryType: STATE_ENTRY_TYPE,
+      runtime,
+    });
   }
 
   async function startImplementation(ctx: ExtensionContext) {
@@ -1445,7 +1327,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function advanceWorkflowGeneration() {
-    cancelDeferredFreshImplementation();
     workflowGeneration += 1;
     pendingWorkflowToolPolicy = undefined;
     finalizationRequest.reset();
@@ -2050,12 +1931,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   function terminalModelReference(model: { provider: string; modelId: string }) {
     const safe = safeTerminalText(`${model.provider}/${model.modelId}`) || "(unnamed model)";
     return safe.length > 160 ? `${safe.slice(0, 159)}…` : safe;
-  }
-
-  function terminalErrorDetail(error: unknown) {
-    const safe = safeTerminalText(error instanceof Error ? error.message : String(error));
-    if (!safe) return "unknown error";
-    return safe.length > 500 ? `${safe.slice(0, 499)}…` : safe;
   }
 
   function safeTerminalText(value: string) {

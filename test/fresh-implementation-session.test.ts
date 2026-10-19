@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { test, vi } from "vitest";
+import { test } from "vitest";
 import {
   formatImplementationHandoff,
   formatTransferredPlanPrompt,
@@ -47,29 +47,29 @@ function assertImplementationChoiceCopy(title: string, options: string[]) {
   assert.ok(options.length <= 8, "seven actions plus the Pi TUI Kit Close route");
 }
 
-test("automatic and manual ready menus present both implementation contexts in one flat group", async () => {
-  for (const automatic of [true, false]) {
-    const mock = createMockPi({ activeTools: ["read", "edit"] });
-    planMode(mock.pi, MISSING_SETTINGS);
-    let observedMenu: { title: string; options: string[] } | undefined;
-    const context = createMockContext({
-      mode: "tui",
-      hasUI: true,
-      select: async (title: string, options: string[]) => {
-        observedMenu = { title, options };
-        return "Stay in Plan mode";
-      },
-    });
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
-    await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
-    if (automatic) await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-    else await mock.commands.get("plan")?.handler("", context.ctx);
-    assert.ok(observedMenu);
-    assertImplementationChoiceCopy(observedMenu.title, observedMenu.options);
-    assert.equal(observedMenu.options.includes("Show latest proposed plan"), !automatic);
-    assert.ok(observedMenu.options.includes("Discard plan and exit"));
-  }
+test("user-opened ready menu presents both implementation contexts in one flat group", async () => {
+  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  planMode(mock.pi, MISSING_SETTINGS);
+  let observedMenu: { title: string; options: string[] } | undefined;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    select: async (title: string, options: string[]) => {
+      observedMenu = { title, options };
+      return "Stay in Plan mode";
+    },
+  });
+  await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  await completePlan(mock, context.ctx);
+  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  assert.equal(observedMenu, undefined, "completion leaves transcript navigation active");
+
+  await mock.commands.get("plan")?.handler("", context.ctx);
+  assert.ok(observedMenu);
+  assertImplementationChoiceCopy(observedMenu.title, observedMenu.options);
+  assert.ok(observedMenu.options.includes("Show latest proposed plan"));
+  assert.ok(observedMenu.options.includes("Discard plan and exit"));
 });
 
 test("ready choice descriptions stay bounded and cancellation has no side effects", async () => {
@@ -123,7 +123,7 @@ test("ready choice descriptions stay bounded and cancellation has no side effect
   }
 });
 
-test("automatic completion presents the ready menu without a model turn exactly once", async () => {
+test("completion leaves the ready menu closed until explicitly requested", async () => {
   const mock = createMockPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let menuCount = 0;
@@ -141,8 +141,11 @@ test("automatic completion presents the ready menu without a model turn exactly 
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
 
   assert.deepEqual(mock.sentUserMessages, []);
-  assert.equal(menuCount, 1);
+  assert.equal(menuCount, 0);
   await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  assert.equal(menuCount, 0);
+
+  await mock.commands.get("plan")?.handler("", context.ctx);
   assert.equal(menuCount, 1);
   assert.equal(mock.sentUserMessages.length, 0);
 });
@@ -409,151 +412,6 @@ test("fresh menu work stops after source session shutdown while waiting for idle
   assert.equal(newSessionCalls, 0);
   const persisted = mock.entries.at(-1)?.data as { latestPlan?: string };
   assert.equal(persisted.latestPlan, PLAN);
-});
-
-test("automatic fresh handoff is cancelled before its deferred turn becomes stale", async () => {
-  for (const invalidation of ["shutdown", "reload", "new-turn", "workflow-exit"] as const) {
-    vi.useFakeTimers();
-    try {
-      let newSessionCalls = 0;
-      const mock = createMockPi({ activeTools: ["read", "edit"] });
-      planMode(mock.pi, MISSING_SETTINGS);
-      const context = createMockContext({
-        mode: "rpc",
-        hasUI: true,
-        model: { provider: "test-provider", id: "test-model" },
-        modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
-        select: async (_title: string, options: string[]) => {
-          if (options.includes("Start fresh and implement")) {
-            return "Start fresh and implement";
-          }
-          if (options.includes("Start fresh implementation")) {
-            return "Start fresh implementation";
-          }
-          return undefined;
-        },
-        newSession: async () => {
-          newSessionCalls += 1;
-          return { cancelled: false };
-        },
-      });
-      await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-      await mock.commands.get("plan")?.handler("start", context.ctx);
-      await completePlan(mock, context.ctx);
-      await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-      assert.equal(newSessionCalls, 0, invalidation);
-
-      if (invalidation === "new-turn") {
-        await mock.events.get("before_agent_start")?.[0]?.({ systemPrompt: "base" }, context.ctx);
-      } else if (invalidation === "workflow-exit") {
-        await mock.commands.get("plan")?.handler("exit", context.ctx);
-      } else {
-        await mock.events.get("session_shutdown")?.[0]?.(
-          { reason: invalidation === "shutdown" ? "quit" : "reload" },
-          context.ctx,
-        );
-        if (invalidation === "reload") {
-          await mock.events.get("session_start")?.[0]?.({ reason: "reload" }, context.ctx);
-        }
-      }
-      await vi.runAllTimersAsync();
-      assert.equal(newSessionCalls, 0, invalidation);
-    } finally {
-      vi.useRealTimers();
-    }
-  }
-});
-
-test("running automatic fresh preflight stops after source shutdown", async () => {
-  vi.useFakeTimers();
-  try {
-    let markWaiting!: () => void;
-    let releaseIdle!: () => void;
-    const waiting = new Promise<void>((resolve) => {
-      markWaiting = resolve;
-    });
-    const idleGate = new Promise<void>((resolve) => {
-      releaseIdle = resolve;
-    });
-    let newSessionCalls = 0;
-    const mock = createMockPi({ activeTools: ["read", "edit"] });
-    planMode(mock.pi, MISSING_SETTINGS);
-    const context = createMockContext({
-      mode: "rpc",
-      hasUI: true,
-      model: { provider: "test-provider", id: "test-model" },
-      modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
-      select: async (_title: string, options: string[]) => {
-        if (options.includes("Start fresh and implement")) return "Start fresh and implement";
-        if (options.includes("Start fresh implementation")) {
-          return "Start fresh implementation";
-        }
-        return undefined;
-      },
-      waitForIdle: async () => {
-        markWaiting();
-        await idleGate;
-      },
-      newSession: async () => {
-        newSessionCalls += 1;
-        return { cancelled: false };
-      },
-    });
-    await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-    await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
-    await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-    await vi.runAllTimersAsync();
-    await waiting;
-    await mock.events.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx);
-    releaseIdle();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    assert.equal(newSessionCalls, 0);
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
-test("unexpected deferred fresh failures are reported without terminal controls", async () => {
-  vi.useFakeTimers();
-  try {
-    const mock = createMockPi({ activeTools: ["read", "edit"] });
-    planMode(mock.pi, MISSING_SETTINGS);
-    const context = createMockContext({
-      mode: "rpc",
-      hasUI: true,
-      model: { provider: "test-provider", id: "test-model" },
-      modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true as const }) },
-      select: async (_title: string, options: string[]) => {
-        if (options.includes("Start fresh and implement")) return "Start fresh and implement";
-        if (options.includes("Start fresh implementation")) {
-          return "Start fresh implementation";
-        }
-        return undefined;
-      },
-      waitForIdle: async () => {
-        throw new Error(`deferred \u001b[31mfailure ${"x".repeat(1_000)}`);
-      },
-      newSession: async () => ({ cancelled: false }),
-    });
-    await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-    await mock.commands.get("plan")?.handler("start", context.ctx);
-    await completePlan(mock, context.ctx);
-    await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
-
-    const notification = context.notifications.at(-1);
-    assert.match(notification?.message ?? "", /deferred fresh implementation: deferred failure/u);
-    assert.equal(notification?.message.includes("\u001b"), false);
-    assert.ok((notification?.message.length ?? Number.POSITIVE_INFINITY) < 560);
-    assert.match(notification?.message ?? "", /…$/u);
-    assert.equal(notification?.level, "error");
-  } finally {
-    vi.useRealTimers();
-  }
 });
 
 test("fresh destination adopts setup state before kickoff for guaranteed-plan policies", async () => {

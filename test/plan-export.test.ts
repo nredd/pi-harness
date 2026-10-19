@@ -409,7 +409,7 @@ test("plan export fails observably without a plan or on an existing path in no-U
 });
 
 test("completion and management TUI menus preview and use the configured export default", async () => {
-  for (const scenario of ["automatic-ready", "manual-ready", "saved", "active"] as const) {
+  for (const scenario of ["manual-ready", "saved", "active"] as const) {
     await withTempDirectory(async (directory) => {
       const expectedPath = "configured/default-plan.md";
       const mock = createMockPi({ activeTools: ["read", "edit"] });
@@ -469,9 +469,8 @@ test("completion and management TUI menus preview and use the configured export 
       } else {
         await mock.commands.get("plan")?.handler("start", context.ctx);
         await completePlan(mock, context.ctx);
-        if (scenario === "automatic-ready") {
+        if (scenario === "manual-ready") {
           await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-        } else if (scenario === "manual-ready") {
           await mock.commands.get("plan")?.handler("", context.ctx);
         } else {
           await mock.commands.get("plan")?.handler("implement", context.ctx);

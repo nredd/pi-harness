@@ -7,7 +7,7 @@ Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-ext
 Differences from upstream (all purely presentational, no tool-policy or contract changes):
 
 - "Planning" and "implementing" (Plan mode on with no plan ready yet, and actively implementing an approved plan) have no above-editor widget at all -- no `Plan mode — ...` / `Implementing plan — ...` line, no divider. Both are steady states with nothing pending, so the widget only duplicated the footer. The only indicator is the footer status chip, colored with the theme's `accent` role like Codex's `Plan mode` footer badge, instead of upstream's plain unstyled text. The tool policy is still reachable via `/plan` and `/plan settings`.
-- States with a concrete pending action (`plan ready`, `plan saved`) keep their existing one-line above-editor widget, since there's a decision to make that the footer chip alone doesn't surface.
+- States with a concrete pending action (`plan ready`, `plan saved`) keep their existing one-line above-editor widget, since there's a decision to make that the footer chip alone doesn't surface. Completing a plan no longer opens the action menu automatically and captures editor input; the transcript remains scrollable until `/plan` explicitly opens review.
 - `plan_mode_question` now has a `renderResult`, so the transcript shows a short Markdown summary of the questions and answers instead of the raw JSON payload. `plan_mode_complete` already had this upstream; this fork brings the question tool in line with it.
 
 Everything else — the workflow mutex, tool allowlisting, saved/implementation plan lifecycle, settings schema (`~/.pi/agent/pi-plan-mode.json`), and `/plan` command surface — is unchanged from upstream 0.58.0.
@@ -54,7 +54,7 @@ Install only from sources you trust because Pi extensions run with Pi's permissi
 ## 🚀 Quick start
 
 Run `/plan` to open the state-aware menu, then start Plan mode and ask the agent to inspect and design the change.
-Run `/plan <prompt>` when the first planning request is already known.
+Run `/plan <prompt>` when the first planning request is already known. When the plan is ready, review the transcript freely, then run `/plan` again to choose an action.
 
 ## 🗺️ How it works
 
@@ -65,7 +65,8 @@ flowchart LR
     start["Start: /plan or /plan with a prompt"]
     start --> explore["Explore safely: inspect and clarify"]
     explore --> complete["Complete the plan with plan_mode_complete"]
-    complete --> review["Review the ready plan"]
+    complete --> pending["Plan ready widget; transcript remains scrollable"]
+    pending -->|Run /plan| review["Review ready-plan actions"]
     review -->|Revise| explore
     review -->|Implement here| current["Current session: planning context retained"]
     review -->|Start fresh| fresh["Fresh session: approved plan transferred"]
@@ -87,7 +88,9 @@ sequenceDiagram
     Plan->>User: Ask material questions when needed
     User-->>Plan: Answer or refine the request
     Plan->>Pi: Submit the complete plan
-    Pi-->>User: Show the ready-plan review
+    Pi-->>User: Show a compact plan-ready widget
+    User->>Pi: Run /plan after reviewing the transcript
+    Pi-->>User: Show ready-plan actions
     alt Implement here
         Pi->>Work: Restore Normal mode in the current session
     else Start fresh and implement

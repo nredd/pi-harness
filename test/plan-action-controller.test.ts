@@ -35,15 +35,13 @@ test("stale Plan actions do not load interactive UI", async () => {
 
   await controller.showSaved(context.ctx);
   await controller.showCurrent(context.ctx);
-  await controller.showReady(context.ctx);
 
   assert.equal(interactiveLoads, 0);
 });
 
-test("only ready-plan fresh actions survive normal menu disposal for deferred handoff", async () => {
-  const timings: string[] = [];
+test("user-opened fresh actions stop after menu disposal", async () => {
   const currents: Array<() => boolean> = [];
-  const invokeFresh = async (menuOptions: Record<string, unknown>, kind: "saved" | "current" | "ready") => {
+  const invokeFresh = async (menuOptions: Record<string, unknown>, kind: "saved" | "current") => {
     const controller = new AbortController();
     if (kind === "saved") {
       await (menuOptions.implementFresh as (signal: AbortSignal) => Promise<void>)(controller.signal);
@@ -60,7 +58,6 @@ test("only ready-plan fresh actions survive normal menu disposal for deferred ha
       ({
         showSavedPlanMenu: (_ctx: unknown, options: Record<string, unknown>) => invokeFresh(options, "saved"),
         showPlanModeMenu: (_ctx: unknown, options: Record<string, unknown>) => invokeFresh(options, "current"),
-        showReadyPlanMenu: (_ctx: unknown, options: Record<string, unknown>) => invokeFresh(options, "ready"),
       }) as never,
     getState: () => ({
       enabled: true,
@@ -80,8 +77,7 @@ test("only ready-plan fresh actions survive normal menu disposal for deferred ha
     show: () => undefined,
     finalize: () => undefined,
     implementHere: () => undefined,
-    implementFresh: (_ctx, isCurrent, _runtime, timing) => {
-      timings.push(timing);
+    implementFresh: (_ctx, isCurrent) => {
       currents.push(isCurrent);
     },
     exportPlan: async () => false,
@@ -99,12 +95,10 @@ test("only ready-plan fresh actions survive normal menu disposal for deferred ha
 
   await controller.showSaved(context.ctx);
   await controller.showCurrent(context.ctx);
-  await controller.showReady(context.ctx);
 
-  assert.deepEqual(timings, ["immediate", "immediate", "after-settled"]);
   assert.deepEqual(
     currents.map((isCurrent) => isCurrent()),
-    [false, false, true],
+    [false, false],
   );
 });
 

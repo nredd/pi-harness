@@ -1,5 +1,13 @@
 # @nredd/pi-plan-mode
 
+## 0.58.0-nredd.4
+
+### Changed
+
+- Kept the transcript scrollable after plan completion by leaving the ready-plan
+  action menu closed until the user runs `/plan`. The compact `plan ready`
+  footer and one-line widget remain visible while review is pending.
+
 ## 0.58.0-nredd.3
 
 ### Changed

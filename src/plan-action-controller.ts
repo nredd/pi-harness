@@ -16,8 +16,6 @@ interface MenuLifecycle {
   isCurrent(): boolean;
 }
 
-export type FreshImplementationTiming = "immediate" | "after-settled";
-
 interface PlanActionControllerOptions {
   loadInteractiveUi(): Promise<InteractiveUi>;
   getState(): PlanModeState;
@@ -34,7 +32,6 @@ interface PlanActionControllerOptions {
     ctx: ExtensionContext,
     isCurrent: () => boolean,
     runtime: ImplementationRuntimeSelection | undefined,
-    timing: FreshImplementationTiming,
   ): void | Promise<void>;
   exportPlan(ctx: ExtensionContext, path: string, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean>;
   settings(ctx: ExtensionContext, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean>;
@@ -76,11 +73,10 @@ export function createPlanActionController(options: PlanActionControllerOptions)
     lifecycle: MenuLifecycle,
     signal: AbortSignal,
     runtime: ImplementationRuntimeSelection | undefined,
-    timing: FreshImplementationTiming,
   ) => {
     if (signal.aborted) return;
-    const isCurrent = timing === "after-settled" ? lifecycle.isCurrent : () => lifecycle.isCurrent() && !signal.aborted;
-    return options.implementFresh(ctx, isCurrent, runtime, timing);
+    const isCurrent = () => lifecycle.isCurrent() && !signal.aborted;
+    return options.implementFresh(ctx, isCurrent, runtime);
   };
 
   return {
@@ -97,7 +93,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         isCurrent: lifecycle.isCurrent,
         show: () => options.show(ctx),
         implementHere: () => options.implementHere(ctx),
-        implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx), "immediate"),
+        implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
         settings: (signal) => options.settings(ctx, signal, lifecycle.isCurrent),
         clear: () => options.clearSaved(ctx),
@@ -123,29 +119,10 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         show: () => options.show(ctx),
         finalize: () => options.finalize(ctx),
         implementHere: () => options.implementHere(ctx),
-        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime, "immediate"),
+        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
         save: () => options.save(ctx),
         stay: () => options.stay(ctx),
-        exit: () => options.exitReady(ctx),
-      });
-    },
-    async showReady(ctx: ExtensionContext) {
-      const lifecycle = options.captureLifecycle();
-      if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
-      const ui = await options.loadInteractiveUi();
-      if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
-      await ui.showReadyPlanMenu(ctx, {
-        ...lifecycle,
-        planThinkingLevel: options.getThinkingLevel(),
-        implementationDefaults: configuredDefaults(),
-        implementationOutcome: options.implementationOutcome,
-        getExportDestination: () => options.getExportDestination(ctx),
-        implementHere: () => options.implementHere(ctx),
-        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime, "after-settled"),
-        exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
-        save: () => options.save(ctx),
-        stay: () => undefined,
         exit: () => options.exitReady(ctx),
       });
     },
