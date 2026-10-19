@@ -35,6 +35,7 @@
 Progress (a row is DONE when its native test is green under Vitest and `bun test` and the scenario is deleted from `integration/scenarios/`; `pi-harness-e2e` stays frozen until it is archived):
 
 - dev-tools: 4 DONE in `packages/dev-tools/test/scenarios/`, `test_py_tools`/`test_cargo_tools` dropped as duplicates, `test_git_commit_relays_hook_failure` dropped as `D1`. `integration/scenarios/integration/test_dev_tools.py` deleted; its git fixture moved to `integration/harness/git_fixture.py` for `test_code_reviewer.py`
+- subscription-router: 9 of 13 `run.sh` cases DONE in `packages/subscription-router/test/scenarios/{recovery,balanced}.test.ts` on `createSubscriptionRouter({ config, usage, tracker, now })`. `run.sh` keeps `wait`/`fail`/`capped`/`no-router` (pi-subagents), so `test_router_e2e_all` stays until those land
 
 Orchestrator adjudication, 2026-10-18 (verdicts reviewed row by row against `PLAN.md` "The rebuild"; changes from the drafting pass):
 
