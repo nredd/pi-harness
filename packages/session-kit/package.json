@@ -27,7 +27,8 @@
     "typecheck": "tsc --noEmit",
     "build:stats-export": "esbuild src/stats/cli.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/pi-stats-export.mjs",
     "test": "npm run build:stats-export && vitest run",
-    "check": "npm run lint && npm run typecheck && npm run test"
+    "test:bun": "bun test test/scenarios",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

@@ -86,20 +86,6 @@ def write_rule(sandbox: Sandbox) -> None:
         (sandbox.workdir / name).write_text("content\n")
 
 
-def test_rule_injected_once_on_matching_read(sandbox: Sandbox) -> None:
-    """First read of a matching file carries the rule; the second and a non-matching read do not."""
-    write_rule(sandbox)
-    steps = [read_step("src/a.ts"), read_step("src/b.ts"), read_step("README.md"), {"text": "OK"}]
-    result = run_kit(sandbox, steps, ["go"])
-    assert result.returncode == 0, result.transcript()
-    first, second, third = result.tool_outcomes()
-    assert RULE_TEXT in first.text, result.transcript()
-    assert RULE_TEXT not in second.text, result.transcript()
-    assert RULE_TEXT not in third.text, result.transcript()
-    injected = [e for e in session_entries(sandbox) if e.get("customType") == RULE_ENTRY]
-    assert [e["data"]["rule"] for e in injected] == ["project:ts.md"], injected
-
-
 def test_rule_not_injected_for_non_matching_path(sandbox: Sandbox) -> None:
     """A path no glob matches never triggers the rule or a session entry."""
     write_rule(sandbox)
@@ -107,28 +93,3 @@ def test_rule_not_injected_for_non_matching_path(sandbox: Sandbox) -> None:
     (outcome,) = result.tool_outcomes()
     assert RULE_TEXT not in outcome.text, result.transcript()
     assert not [e for e in session_entries(sandbox) if e.get("customType") == RULE_ENTRY]
-
-
-def test_rule_state_survives_resume(sandbox: Sandbox) -> None:
-    """After `--continue`, the injection recorded in the session is remembered: no second injection."""
-    write_rule(sandbox)
-    first = run_kit(sandbox, [read_step("src/a.ts"), {"text": "OK"}], ["go"])
-    assert RULE_TEXT in first.tool_outcomes()[0].text, first.transcript()
-    second = run_kit(sandbox, [read_step("src/b.ts"), {"text": "OK"}], ["again"], "--continue")
-    assert second.returncode == 0, second.transcript()
-    assert RULE_TEXT not in second.tool_outcomes()[0].text, second.transcript()
-
-
-def test_titles_skipped_in_print_mode(sandbox: Sandbox) -> None:
-    """With the title model pointed at the scripted faux model, a non-TUI run still names nothing.
-
-    A title call would consume the second step and set `Skipme Title Words`.
-    """
-    sandbox.patch_json("pi-session-kit.json", {"titles": {"enabled": True, "model": "faux/main"}})
-    result = run_kit(sandbox, [{"text": "OK"}, {"text": TITLE_REPLY}], ["name this session please"])
-    assert result.returncode == 0, result.transcript()
-    assert result.assistant_texts() == ["OK"], result.transcript()
-    entries = session_entries(sandbox)
-    assert entries, "no session file was written"
-    assert not [e for e in entries if e.get("type") == "session_info"], entries
-    assert TITLE_REPLY not in json.dumps(entries)

@@ -3,8 +3,8 @@
  * state in session entries (or per-session files) so concurrent pi processes never see each other.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type Feature, loadConfig } from "./config.ts";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { configPath, type Feature, type KitConfig, loadConfig } from "./config.ts";
 import { register as registerDiff } from "./diff/index.ts";
 import { register as registerGoal } from "./goal/index.ts";
 import { register as registerLoop } from "./loop/index.ts";
@@ -23,9 +23,25 @@ const MODULES: Record<Feature, (pi: ExtensionAPI, config: ReturnType<typeof load
 	stats: registerStats,
 };
 
-export default function (pi: ExtensionAPI): void {
-	const config = loadConfig();
-	for (const [feature, register] of Object.entries(MODULES) as [Feature, (typeof MODULES)[Feature]][]) {
-		if (config.features[feature]) register(pi, config);
-	}
+/** Explicit configuration and filesystem roots for SDK hosts; omitted values keep CLI defaults. */
+export interface SessionKitOptions {
+	config?: KitConfig;
+	agentDir?: string;
+	monitorRoot?: string;
 }
+
+/** Create the real kit without requiring a machine-local agent configuration. */
+export function createSessionKit(options: SessionKitOptions = {}): ExtensionFactory {
+	return (pi: ExtensionAPI): void => {
+		const config = options.config ?? loadConfig(configPath(options.agentDir));
+		for (const [feature, register] of Object.entries(MODULES) as [Feature, (typeof MODULES)[Feature]][]) {
+			if (!config.features[feature]) continue;
+			if (feature === "rules") registerRules(pi, config, options.agentDir);
+			else if (feature === "titles") registerTitles(pi, config, options.agentDir);
+			else if (feature === "monitor") registerMonitor(pi, config, options.monitorRoot);
+			else register(pi, config);
+		}
+	};
+}
+
+export default createSessionKit();
