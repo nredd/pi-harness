@@ -320,6 +320,22 @@ export async function tick(harness: Harness, clock: FakeClock, ms = 30_000): Pro
 	await harness.session.waitForIdle();
 }
 
+/** Advance a timer that must not wake the host, including asynchronously scheduled turns. */
+export async function advanceQuietly(harness: Harness, clock: FakeClock, ms: number): Promise<void> {
+	let started = false;
+	const off = harness.session.subscribe((event) => {
+		if (event.type === "agent_start") started = true;
+	});
+	try {
+		clock.advance(ms);
+		for (let turn = 0; turn < 3; turn++) await new Promise<void>((resolve) => setImmediate(resolve));
+		await harness.session.waitForIdle();
+	} finally {
+		off();
+	}
+	if (started) throw new Error("quiet timer started an agent turn");
+}
+
 /** Controlled child only: the real manager still owns splitting, matching, batching and lifecycle. */
 export class ControlledProcess implements MonitorProcess {
 	readonly exited: Promise<ExitInfo>;

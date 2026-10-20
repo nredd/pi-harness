@@ -2,8 +2,8 @@
  * `/monitor`: background process watchers the model can start, read and stop.
  *
  * - `monitor_start` / `monitor_read` / `monitor_stop` tools and a `/monitor` command (list, stop)
- * - output is coalesced for 2s into ONE custom message per monitor; the agent is only woken on a
- *   `match` hit, on exit/timeout, or when `wake: true`, otherwise the message is passive context
+ * - output is coalesced for 2s in each monitor's ring buffer; only `match`, exit/timeout or
+ *   `wake: true` emits a compact custom wake, while passive output stays out of the session
  * - every child dies on `session_shutdown`, which pi fires for quit AND for /new, /resume, /fork
  *   and /reload (a reload replaces the extension runtime, so a monitor could not be reattached
  *   anyway). A SIGKILLed pi leaves pidfiles; the next session sweeps only dead owners' files
@@ -107,9 +107,9 @@ export function register(
 		description:
 			"Start a long-running background process (log tail, watcher, poller) and get its output as it appears. " +
 			'argv is spawned directly with no shell; use ["sh","-c","..."] explicitly for pipes. ' +
-			"Output lines are coalesced for 2s into one message. You are woken only when a line matches `match` " +
-			"(JS regex), when the process exits or times out, or on every batch when `wake` is true; otherwise output " +
-			"is passive context and monitor_read fetches it. Do not use this for commands that finish quickly.",
+			"Output lines are retained in the monitor buffer and read with monitor_read. You are woken only when a line " +
+			"matches `match` (JS regex), when the process exits or times out, or on every batch when `wake` is true; " +
+			"passive output is not added to the session. Do not use this for commands that finish quickly.",
 		promptSnippet: "Start a background process and be woken on matching output or exit",
 		parameters: Type.Object({
 			argv: Type.Array(Type.String(), { minItems: 1, description: "Command and arguments, no shell" }),
