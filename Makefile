@@ -31,9 +31,9 @@ check-integration:  ## integration/ unit gate (no pi, tmux, or scenarios)
 	cd integration && uv run --locked pytest tests -p no:cacheprovider
 	$(MAKE) check-probes
 
-check-probes:  ## Lifecycle probe Biome + strict tsc against real sources, then explicit node --test files (no glob)
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/process-lifecycle.test.ts
-	node_modules/.bin/tsc -p integration/probes/tsconfig.process-lifecycle.json
+check-probes:  ## Probes (process-lifecycle, stack-resources) Biome + strict tsc against real sources, then explicit node --test files (no glob)
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/process-lifecycle.test.ts integration/probes/stack-resources.ts
+	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
 	node --test integration/probes/transcript-types.test.ts integration/probes/process-lifecycle.test.ts
 
 check-import-audit:  ## Import-audit helper Biome + strict tsc, then node --test against the real TypeScript parser

@@ -98,16 +98,23 @@ def test_supplied_stacks_are_pinned_and_exclusion_is_explicit() -> None:
     root = Path(__file__).resolve().parents[1]
     personal = load_stack(root / "stacks/personal.json")
     local = load_stack(root / "stacks/local.json")
-    assert len(personal.sources) == 12
+    assert len(personal.sources) == 13
     assert len(local.sources) == 13
     assert "git:github.com/nredd/pi-subagents@v0.22.0-nredd.5" in personal.sources
     assert "git:github.com/nredd/pi-plan-mode@v0.59.3-nredd.1" in personal.sources
     assert "npm:@nredd/pi-session-kit@0.6.0" in personal.sources
-    assert not any("pi-preset" in source_string(source) for source in personal.sources)
+    assert isinstance(personal.sources[0], PackageSource)
+    assert personal.sources[0].model_dump(exclude_unset=True) == {
+        "source": "npm:@nredd/pi-preset@0.2.0",
+        "extensions": ["extensions/expanded-footer.ts"],
+        "skills": [],
+        "prompts": [],
+        "themes": [],
+    }
     assert "../../packages/preset" in local.sources
     assert len(personal.disabled_extensions) == len(local.disabled_extensions) == 1
     assert "pi-computer-use" in next(iter(personal.disabled_extensions))
-    assert personal.sources[0] == local.sources[0] == "npm:@gotgenes/pi-anthropic-auth@3.4.3"
+    assert personal.sources[1] == local.sources[0] == "npm:@gotgenes/pi-anthropic-auth@3.4.3"
     assert len([source for source in personal.sources if source_string(source).startswith("git:")]) == 4
 
 
@@ -264,6 +271,8 @@ def test_installer_preserves_object_filters_and_omissions(
         entries[2],
     ]
     assert box.settings()["packages"] == expected
+    subagents = json.loads((box.agent_dir / "subagents.json").read_text())
+    assert subagents == {"workflowsEnabled": False, "packageAgents": False}
     # Missing themes/extensions MUST remain missing, not become [] during model serialization.
     assert "themes" not in expected[0]
     assert "extensions" not in expected[1]
@@ -285,3 +294,11 @@ def test_package_lookup_does_not_guess_an_owner_checkout(tmp_path: Path) -> None
         package_directory("npm:@scope/missing@1.2.3", tmp_path)
     with pytest.raises(LookupError, match="not declared"):
         find_package("missing", [], tmp_path)
+
+
+def test_package_agents_gate_follows_filtered_sources_not_stack_name() -> None:
+    """A filtered object source disables package agents under any name; plain strings do not."""
+    plain = Stack(name="personal", sources=["npm:@scope/pkg@1.2.3"])
+    filtered = Stack(name="renamed", sources=[PackageSource(source="npm:@scope/pkg@1.2.3", skills=[])])
+    assert sandbox.subagents_policy(plain) == {"workflowsEnabled": False}
+    assert sandbox.subagents_policy(filtered) == {"workflowsEnabled": False, "packageAgents": False}
