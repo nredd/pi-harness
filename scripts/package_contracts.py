@@ -2008,6 +2008,7 @@ def run_gate(
     *,
     contracts: Sequence[PackageContract] = CONTRACTS,
     scenarios: Mapping[str, Callable[[Context], ScenarioEvidence]] = SCENARIOS,
+    siblings: Sequence[PackageContract] = CONTRACTS,
 ) -> ContractReport:
     """Run the whole contract gate and build the identity/evidence report.
 
@@ -2018,6 +2019,7 @@ def run_gate(
         supplied (Mapping[str, Path] | None): Existing tarballs by package directory; never repacked.
         contracts (Sequence[PackageContract]): Contracts eligible for this invocation.
         scenarios (Mapping[str, Callable[[Context], ScenarioEvidence]]): Executable gate per directory.
+        siblings (Sequence[PackageContract]): Every peer contract to test for leaked sibling tools.
 
     Returns:
         ContractReport: Validated report.
@@ -2058,10 +2060,10 @@ def run_gate(
         installed = install_alone(artifact, sandbox, sandbox.root / "project")
         scratch = sandbox.root / "scenario"
         scratch.mkdir()
-        siblings = tuple(candidate for candidate in contracts if candidate is not contract)
+        sibling_contracts = tuple(candidate for candidate in siblings if candidate is not contract)
         LOGGER.info(f"Exercising '{contract.name}' through stock Pi {STOCK_PI_VERSION}")
         evidence = scenarios[contract.directory](
-            Context(pi_bin, sandbox, installed, artifact, scratch, siblings)
+            Context(pi_bin, sandbox, installed, artifact, scratch, sibling_contracts)
         )
         if not dict(evidence):
             raise ContractError(f"Stock gate produced empty subject evidence for '{contract.name}'")

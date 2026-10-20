@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import fnmatch
 import json
 import logging
 import os
@@ -26,9 +25,9 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -302,15 +301,20 @@ def native_matches(workspace: Path, descriptor: rd.ReleaseDescriptor) -> tuple[P
     Raises:
         ReleaseError: If a native-artifact pattern is unsafe or has no files.
     """
+    root = workspace.resolve()
+    candidates = tuple(
+        path
+        for path in workspace.rglob("*")
+        if not path.is_symlink() and path.is_file() and path.resolve().is_relative_to(root)
+    )
     matches: list[Path] = []
     for pattern in descriptor.native_artifacts:
         if pattern.is_absolute() or any(part in {"", ".", ".."} for part in pattern.parts):
             raise ReleaseError(f"Release descriptor has unsafe native artifact: '{pattern}'")
         found = sorted(
             path
-            for path in workspace.rglob("*")
-            if path.is_file()
-            and matches_native_artifact(pattern, PurePosixPath(path.relative_to(workspace).as_posix()))
+            for path in candidates
+            if matches_native_artifact(pattern, PurePosixPath(path.relative_to(workspace).as_posix()))
         )
         if not found:
             raise ReleaseError(f"Missing native artifact: '{pattern}'")
@@ -332,16 +336,19 @@ def validate_native_sources(workspace: Path, descriptor: rd.ReleaseDescriptor) -
 
 
 def matches_native_artifact(pattern: PurePosixPath, relative: PurePosixPath) -> bool:
-    """Match one safe package-relative path using ``fnmatch`` glob language.
+    """Match one package-relative path with ``PurePosixPath.full_match`` glob semantics.
+
+    ``*`` and ``?`` stay within one path segment; ``**`` recurses through zero or more segments.
 
     Parameters:
-        pattern (PurePosixPath): Descriptor pattern, supporting `*`, `?`, classes and `**`.
+        pattern (PurePosixPath): Descriptor pattern, supporting ``*``, ``?``, classes and ``**``.
         relative (PurePosixPath): Candidate regular-file path relative to the package root.
 
     Returns:
         bool: Whether the full relative path matches.
     """
-    return fnmatch.fnmatchcase(relative.as_posix(), pattern.as_posix())
+    matcher = cast(Callable[[PurePosixPath], bool], object.__getattribute__(relative, "full_match"))
+    return matcher(pattern)
 
 
 def validate_native_tarball(tarball: Path, descriptor: rd.ReleaseDescriptor) -> None:
@@ -401,6 +408,7 @@ def run_stock_contract(
         supplied,
         contracts=(descriptor.contract,),
         scenarios={descriptor.contract.directory: descriptor.stock_gate},
+        siblings=tuple(candidate.contract for candidate in rd.DESCRIPTORS),
     )
     if set(report.packages) != {descriptor.name}:
         raise ReleaseError(f"Stock contract did not report the release subject '{descriptor.name}'")
