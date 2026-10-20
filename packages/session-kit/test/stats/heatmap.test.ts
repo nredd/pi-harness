@@ -12,9 +12,11 @@ describe("heatmap", () => {
 		expect(level(5, undefined)).toBe(0);
 	});
 
-	it("fills the width, one week per column", () => {
-		expect(weeksFor(200)).toBe(196);
-		expect(weeksFor(30)).toBe(26);
+	it("fills the width, one week per column, up to two years", () => {
+		expect(weeksFor(200)).toBe(104);
+		expect(weeksFor(110)).toBe(104);
+		expect(weeksFor(109)).toBe(103);
+		expect(weeksFor(30)).toBe(24);
 		expect(weeksFor(1)).toBe(1);
 	});
 
@@ -48,7 +50,7 @@ describe("heatmap", () => {
 			["2026-10-07", 20],
 			["2026-09-01", 10],
 		]);
-		const lines = heatmap(daily, "2026-10-13", 12, plain);
+		const lines = heatmap(daily, "2026-10-13", 14, plain);
 		expect(lines).toEqual([
 			"      Sep Oct",
 			"    ········",

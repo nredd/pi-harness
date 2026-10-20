@@ -1,13 +1,13 @@
 /**
  * The "Tokens per day" line chart: an asciichart-style plot (`╭╮╰╯│─`) with nice y-axis ticks and
- * date labels. Pure: colours go through a `paint` callback so tests can render plain text.
+ * time ticks in `ticks.ts`. Pure: colours go through a `paint` callback so tests can render plain text.
  *
  * Days are bucketed (1, 2, 3, 7, 14 or 30 days) so the whole range fits the width, then sampled
  * with linear interpolation across every column so a short range draws a smooth curve rather
  * than a staircase.
  */
 
-import { addDays, daysBetween, shortDate } from "./days.ts";
+import { addDays, daysBetween } from "./days.ts";
 import { axisLabel } from "./format.ts";
 
 export const BUCKET_SIZES = [1, 2, 3, 7, 14, 30] as const;
@@ -194,7 +194,7 @@ export function plot<C extends string | number>(series: readonly Series<C>[], op
 		const y = height - r;
 		const tick = Number.isInteger(y / perTick) ? y / perTick : -1;
 		const label = tick >= 0 ? (labels[tick] ?? "") : "";
-		const axis = y === 0 ? "┼" : tick >= 0 ? "┤" : "│";
+		const axis = tick >= 0 ? "┤" : "│";
 		let body = "";
 		let run = "";
 		let runColor: C | undefined;
@@ -213,35 +213,4 @@ export function plot<C extends string | number>(series: readonly Series<C>[], op
 		lines.push(`${options.paint("axis", `${label.padStart(labelWidth)} ${axis}`)}${body}`);
 	}
 	return { lines, gutter: labelWidth + 2, max };
-}
-
-/**
- * Two to five date labels under a plot of `width` columns spanning `buckets`: first and last always,
- * evenly spaced ones between when they fit with two spaces of air. Never past the plot's right edge.
- */
-export function xAxis(buckets: readonly Bucket[], width: number, gutter: number): string {
-	if (buckets.length === 0 || width <= 0) return "";
-	const last = buckets.length - 1;
-	const at = (col: number) => buckets[Math.round((col * last) / Math.max(1, width))]?.start ?? "";
-	const line = new Array<string>(width).fill(" ");
-	const place = (col: number, text: string): boolean => {
-		const start = Math.max(0, Math.min(width - text.length, col));
-		for (let i = Math.max(0, start - 2); i < Math.min(width, start + text.length + 2); i++) {
-			if (line[i] !== " ") return false;
-		}
-		for (let i = 0; i < text.length && start + i < width; i++) line[start + i] = text[i] ?? " ";
-		return true;
-	};
-	const first = shortDate(buckets[0]?.start ?? "");
-	const end = shortDate(buckets[last]?.start ?? "");
-	// The newest date first: on a plot too narrow for both, today's end of the range wins.
-	if (last > 0) place(width - end.length, end);
-	place(0, first);
-	if (last === 0) return `${" ".repeat(gutter)}${line.join("").trimEnd()}`;
-	const slots = Math.max(1, Math.min(4, Math.floor(width / 14)));
-	for (let i = 1; i < slots; i++) {
-		const col = Math.round((i * width) / slots);
-		place(col - 3, shortDate(at(col)));
-	}
-	return `${" ".repeat(gutter)}${line.join("").trimEnd()}`;
 }

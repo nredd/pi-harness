@@ -21,6 +21,7 @@ import {
 	matches,
 	modelName,
 	modelTotals,
+	type Overview,
 	overview,
 	RANGE_LABEL,
 	RANGES,
@@ -29,12 +30,13 @@ import {
 	TOKENS_NOTE,
 	tokensOf,
 } from "./aggregate.ts";
-import { bucketize, GUTTER, plot, TICKS, xAxis } from "./chart.ts";
-import { dayKey, shortDate } from "./days.ts";
+import { bucketize, GUTTER, plot, TICKS } from "./chart.ts";
+import { dayKey, keyDate, shortDate } from "./days.ts";
 import { duration, formatTokens, money, percent } from "./format.ts";
-import { DAY_LABEL_WIDTH, heatmap, weeksFor, YEAR_WEEKS } from "./heatmap.ts";
+import { DAY_LABEL_WIDTH, heatmap, MAX_WEEKS, MONTH_OVERFLOW, weeksFor, YEAR_WEEKS } from "./heatmap.ts";
 import type { Call, Session } from "./load.ts";
 import { seriesPalette } from "./palette.ts";
+import { timeAxis } from "./ticks.ts";
 
 type ThemeLike = Pick<Theme, "fg" | "bg" | "bold" | "style" | "colors">;
 export type Tab = "Overview" | "Models";
@@ -43,16 +45,10 @@ const TABS: readonly Tab[] = ["Overview", "Models"];
 const SERIES = 3;
 /** Narrowest plot `plot` can draw; only panes too narrow for a 6-week heatmap hit it. */
 const MIN_PLOT_WIDTH = 2;
-/** Share of the pane the heatmap and chart span. */
-export const CONTENT_SHARE = 0.75;
 
-/**
- * Columns the heatmap and the chart both span in a `paneWidth` pane (after the 1-column margin):
- * `CONTENT_SHARE` of it, but never narrower than a year of heatmap when that fits.
- */
+/** Columns every block spans in a `paneWidth` pane: all of it after the 1-column margin. */
 export function contentWidth(paneWidth: number): number {
-	const inner = Math.max(1, paneWidth - 1);
-	return Math.min(inner, Math.max(Math.round(inner * CONTENT_SHARE), DAY_LABEL_WIDTH + YEAR_WEEKS));
+	return Math.max(1, paneWidth - 1);
 }
 
 /** Tallest chart, in rows above the zero line. */
@@ -64,8 +60,8 @@ export function chartHeight(available: number): number {
 	return Math.max(TICKS, Math.min(MAX_CHART_HEIGHT, steps));
 }
 
-/** Model list goes two-up from this width. */
-const TWO_COLUMN_WIDTH = 80;
+/** Columns between the heatmap and the numbers beside it, and between number columns. */
+const GAP = 4;
 
 export interface StatsViewOptions {
 	calls: readonly Call[];
@@ -84,6 +80,9 @@ export interface StatsViewOptions {
 }
 
 /** One scroll step of the model list: a provider header, or one or two models side by side. */
+/** Per-provider or per-model sums the list shows. */
+type Totals = Pick<ModelTotals, "input" | "output" | "cacheRead" | "cacheWrite" | "cost">;
+
 interface ListRow {
 	lines: string[];
 	/** Positions of its models in list order, for the `1-4 of N` hint. */
@@ -151,7 +150,7 @@ export class StatsView implements Component {
 	render(width: number): string[] {
 		const w = Math.max(1, Math.floor(width));
 		const rows = Math.max(4, Math.floor(this.o.rows()));
-		const header = [this.tabsLine(), this.paint("muted", this.o.coverage ?? "local-only · never synced")];
+		const header = this.header(contentWidth(w), rows);
 		const room = Math.max(0, rows - header.length - 2);
 		let body: string[];
 		let hint = "";
@@ -163,6 +162,24 @@ export class StatsView implements Component {
 		}
 		while (body.length < room) body.push("");
 		return [...header, ...body, "", this.help(hint)].map((line) => truncateToWidth(` ${line}`, w, ""));
+	}
+
+	/**
+	 * Tabs and warning with the coverage note flush right, then the range and filter (what `r` and `m`
+	 * change), then a rule. Pinned above the scrolling body. Coverage drops under the selectors when the
+	 * tabs row cannot hold it; on a very short pane the rule goes first.
+	 */
+	private header(inner: number, rows: number): string[] {
+		const coverage = this.paint("muted", this.o.coverage ?? "local-only · never synced");
+		const tabs = this.tabsLine();
+		const joined = spread(tabs, coverage, inner);
+		const lines = [
+			joined ?? tabs,
+			...this.selectors(inner),
+			...(joined ? [] : [coverage]),
+			this.paint("dim", "─".repeat(inner)),
+		];
+		return lines.slice(0, Math.max(2, Math.min(lines.length, rows - 2)));
 	}
 
 	/**
@@ -210,12 +227,31 @@ export class StatsView implements Component {
 		return `${t.bold(this.paint("accent", "/stats"))}  ${tabs}${bad}`;
 	}
 
-	private selectors(): string {
+	/** Range choices and the filter on one line, or the filter on its own line when they do not fit. */
+	private selectors(inner: number): string[] {
 		const t = this.o.theme;
 		const ranges = RANGES.map((r) =>
 			r === this.range ? t.bold(this.paint("accent", RANGE_LABEL[r])) : this.paint("dim", RANGE_LABEL[r]),
 		).join(this.paint("dim", " · "));
-		return `${ranges}    ${this.paint("muted", "filter:")} ${t.bold(sanitize(filterLabel(this.filter)))}`;
+		const filter = `${this.paint("muted", "filter:")} ${t.bold(sanitize(filterLabel(this.filter)))}`;
+		const line = `${ranges}    ${filter}`;
+		return visibleWidth(line) <= inner ? [line] : [ranges, truncateToWidth(filter, inner, "…")];
+	}
+
+	/** Muted `parts` joined by a dim ` · `, wrapped onto more lines rather than cut. */
+	private wrapParts(parts: readonly string[], inner: number): string[] {
+		const sep = this.paint("dim", " · ");
+		const lines: string[] = [];
+		let line = "";
+		for (const part of parts.map((p) => this.paint("muted", p))) {
+			if (line && visibleWidth(line) + 3 + visibleWidth(part) > inner) {
+				lines.push(line);
+				line = "";
+			}
+			line += (line ? sep : "") + part;
+		}
+		if (line) lines.push(line);
+		return lines.map((l) => truncateToWidth(l, inner, "…"));
 	}
 
 	private help(hint = ""): string {
@@ -228,48 +264,95 @@ export class StatsView implements Component {
 		return { all, ranged: all.filter((c) => inRange(this.range, this.today, c.ms, this.now)) };
 	}
 
+	/**
+	 * Headline numbers as `label  value` cells, in reading order: favorite model and total tokens,
+	 * sessions and longest session, and so on.
+	 */
+	private statCells(ov: Overview): { label: string; value: string }[] {
+		const t = this.o.theme;
+		const v = (s: string) => this.paint("accent", s);
+		const days = (n: number) => `${t.bold(v(String(n)))} ${n === 1 ? "day" : "days"}`;
+		return [
+			{ label: "Favorite model", value: t.bold(v(ov.favorite ?? "-")) },
+			{ label: "Total tokens", value: `${v(formatTokens(ov.totalTokens))} ${this.paint("muted", TOKENS_NOTE)}` },
+			{ label: "Sessions", value: v(String(ov.sessions)) },
+			{ label: "Longest session", value: v(duration(ov.longestSessionMs)) },
+			{ label: "Active days", value: `${v(String(ov.activeDays))}${this.paint("muted", `/${ov.rangeDays}`)}` },
+			{ label: "Longest streak", value: days(ov.longestStreak) },
+			{ label: "Most active day", value: v(ov.mostActiveDay ? shortDate(ov.mostActiveDay) : "-") },
+			{ label: "Current streak", value: days(ov.currentStreak) },
+			{
+				label: "Cache tokens",
+				value: `${v(formatTokens(ov.cacheRead))} read · ${v(formatTokens(ov.cacheWrite))} write`,
+			},
+			{ label: "Notional cost", value: v(money(ov.cost)) },
+		];
+	}
+
+	/**
+	 * Cells in `columns` columns, row-major, each column's labels and values aligned; `columns` shrinks
+	 * until the grid fits `width`.
+	 */
+	private statGrid(cells: readonly { label: string; value: string }[], width: number, columns: number): string[] {
+		const widthOf = (cols: number) => {
+			const per = Array.from({ length: cols }, (_, c) => cells.filter((_, i) => i % cols === c));
+			// Every label is padded to the column's longest, so a cell is that plus the widest value.
+			return per.map((col) => {
+				const label = Math.max(0, ...col.map((x) => x.label.length));
+				return { label, cell: label + 2 + Math.max(0, ...col.map((x) => visibleWidth(x.value))) };
+			});
+		};
+		let cols = Math.max(1, Math.min(columns, cells.length));
+		while (cols > 1 && widthOf(cols).reduce((n, c) => n + c.cell, 0) + GAP * (cols - 1) > width) cols--;
+		const sizes = widthOf(cols);
+		const out: string[] = [];
+		for (let r = 0; r < cells.length; r += cols) {
+			out.push(
+				cells
+					.slice(r, r + cols)
+					.map((cell, c) => {
+						const size = sizes[c];
+						const text = `${this.paint("muted", cell.label.padEnd(size?.label ?? 0))}  ${cell.value}`;
+						return c < cols - 1 ? padTo(text, (size?.cell ?? 0) + GAP) : text;
+					})
+					.join(""),
+			);
+		}
+		return out.map((line) => truncateToWidth(line, width, "…"));
+	}
+
 	private overviewBody(width: number, room: number): string[] {
 		const { all, ranged } = this.scoped();
-		const t = this.o.theme;
+		const inner = contentWidth(width);
 		const out: string[] = [];
 		const daily = dailyTotals(all);
-		if (!isHourly(this.range))
-			out.push(
-				...heatmap(daily, this.today, contentWidth(width), (color, text) =>
-					color === "heat" ? this.paint("accent", text) : this.paint(color === "empty" ? "dim" : "muted", text),
-				),
+		const showHeat = !isHourly(this.range);
+		if (ranged.length === 0 && !showHeat) return [this.paint("muted", "No usage in this range.")];
+		const cells =
+			ranged.length === 0
+				? []
+				: this.statCells(overview(ranged, this.o.sessions, this.range, this.today, daily.keys()));
+		const heat = (area: number) =>
+			heatmap(daily, this.today, area, (color, text) =>
+				color === "heat" ? this.paint("accent", text) : this.paint(color === "empty" ? "dim" : "muted", text),
 			);
-		out.push("", this.selectors(), "");
+		if (showHeat) {
+			// Numbers beside the heatmap when a year of it still fits next to them, else underneath.
+			const column = this.statGrid(cells, inner, 1);
+			const beside = Math.max(0, ...column.map(visibleWidth));
+			const area = Math.min(inner - GAP - beside, DAY_LABEL_WIDTH + MAX_WEEKS + MONTH_OVERFLOW);
+			if (cells.length > 0 && weeksFor(area) >= YEAR_WEEKS) {
+				const left = heat(area);
+				for (let i = 0; i < Math.max(left.length, column.length); i++)
+					out.push(`${padTo(left[i] ?? "", area + GAP)}${column[i] ?? ""}`.trimEnd());
+			} else {
+				out.push(...heat(inner));
+				if (cells.length > 0) out.push("", ...this.statGrid(cells, inner, 2));
+			}
+		} else out.push(...this.statGrid(cells, inner, width >= 130 ? 3 : 2));
 		if (ranged.length === 0) {
-			out.push(this.paint("muted", "No usage in this range."));
+			out.push("", this.paint("muted", "No usage in this range."));
 			return out;
-		}
-		const ov = overview(ranged, this.o.sessions, this.range, this.today, daily.keys());
-		const v = (s: string) => this.paint("accent", s);
-		const pairs: [string, string][] = [
-			[
-				`Favorite model: ${t.bold(v(ov.favorite ?? "-"))}`,
-				`Total tokens: ${v(formatTokens(ov.totalTokens))} ${this.paint("muted", TOKENS_NOTE)}`,
-			],
-			[`Sessions: ${v(String(ov.sessions))}`, `Longest session: ${v(duration(ov.longestSessionMs))}`],
-			[
-				`Active days: ${v(String(ov.activeDays))}${this.paint("muted", `/${ov.rangeDays}`)}`,
-				`Longest streak: ${t.bold(v(String(ov.longestStreak)))} ${ov.longestStreak === 1 ? "day" : "days"}`,
-			],
-			[
-				`Most active day: ${v(ov.mostActiveDay ? shortDate(ov.mostActiveDay) : "-")}`,
-				`Current streak: ${t.bold(v(String(ov.currentStreak)))} ${ov.currentStreak === 1 ? "day" : "days"}`,
-			],
-			[
-				`Cache tokens: ${v(formatTokens(ov.cacheRead))} read · ${v(formatTokens(ov.cacheWrite))} write`,
-				`Notional cost: ${v(money(ov.cost))}`,
-			],
-		];
-		const col = Math.max(36, Math.min(48, Math.floor(width / 2)));
-		const twoCol = width >= col * 2;
-		for (const [left, right] of pairs) {
-			if (twoCol) out.push(`${left}${" ".repeat(Math.max(2, col - visibleWidth(left)))}${right}`);
-			else out.push(left, right);
 		}
 		// Grow the chart into whatever the pane has left, in whole tick steps.
 		const smallest = this.chart(ranged, width, TICKS).lines;
@@ -279,8 +362,8 @@ export class StatsView implements Component {
 	}
 
 	/**
-	 * "Tokens per <bucket>", x-axis, peak/average caption and legend. One line per provider under
-	 * the "all" filter, else one per model; top three.
+	 * Title, legend, plot, time axis and a peak/average caption. One line per provider under the "all"
+	 * filter, else one per model; top three. The legend shares the title row when both fit.
 	 */
 	private chart(
 		ranged: readonly Call[],
@@ -288,23 +371,49 @@ export class StatsView implements Component {
 		height: number,
 	): { lines: string[]; colors: Map<string, number> } {
 		const t = this.o.theme;
-		const out: string[] = [];
+		const inner = contentWidth(width);
 		const { by, keys: top } = chartSeries(this.filter, ranged, SERIES);
 		const colors = new Map(top.map((k, i): [string, number] => [k.key, i]));
-		if (isHourly(this.range)) {
-			const series = hourlySeries(ranged, this.range, this.now, by === "provider" ? (c) => c.provider : modelName);
-			const plotWidth = Math.max(MIN_PLOT_WIDTH, contentWidth(width) - GUTTER);
+		const hourly = isHourly(this.range);
+		const unit = hourly ? "hour" : undefined;
+		const title = (name: string) => t.bold(name) + this.paint("muted", `  ${TOKENS_NOTE} · by ${by}`);
+		const legend = this.legend(
+			top.map((k) => k.key),
+			colors,
+			inner,
+		);
+		const head = (name: string): string[] => {
+			const row = legend.length === 1 ? spread(title(name), legend[0] ?? "", inner) : undefined;
+			if (row) return [row];
+			// A pane too narrow for the title splits the name from its unit note.
+			const lines =
+				visibleWidth(title(name)) <= inner
+					? [title(name)]
+					: [t.bold(name), this.paint("muted", truncateToWidth(`${TOKENS_NOTE} · by ${by}`, inner, "…"))];
+			return [...lines, ...legend];
+		};
+		const paint = (color: number | "axis", text: string) =>
+			color === "axis" ? this.paint("muted", text) : this.paintSeries(color, top.length, text);
+		const plotWidth = Math.max(MIN_PLOT_WIDTH, inner - GUTTER);
+		if (hourly) {
+			const series = hourlySeries(
+				ranged,
+				this.range as "5h" | "24h",
+				this.now,
+				by === "provider" ? (c) => c.provider : modelName,
+			);
 			const p = plot(
 				top.map((k, i) => ({ values: series.map((s) => s.byKey.get(k.key) ?? 0), color: i })),
-				{
-					width: plotWidth,
-					height,
-					paint: (color, text) =>
-						color === "axis" ? this.paint("muted", text) : this.paintSeries(color, top.length, text),
-				},
+				{ width: plotWidth, height, paint },
 			);
-			out.push(t.bold("Tokens per hour") + this.paint("muted", `  ${TOKENS_NOTE} · by ${by}`), ...p.lines);
-			out.push(this.paint("muted", `From: ${series[0]?.day}`), this.paint("muted", `To:   ${series.at(-1)?.day}`));
+			const axis = timeAxis(
+				series.map((s) => s.ms ?? 0),
+				{ kind: "hour" },
+				plotWidth,
+				p.gutter,
+			);
+			const out = [...head(`Tokens per ${unit}`), ...p.lines, ...axis.lines.map((l) => this.paint("muted", l))];
+			out.push(...this.wrapParts([`From: ${series[0]?.day}`, `To: ${series.at(-1)?.day}`], inner));
 			// Repeated wall-clock hours get an explicit offset-bearing label, even between axis edges.
 			const labels = new Map<string, string>();
 			for (const point of series) {
@@ -317,13 +426,9 @@ export class StatsView implements Component {
 			const peak = Math.max(0, ...series.map((s) => s.total));
 			const avg = series.reduce((n, s) => n + s.total, 0) / series.length;
 			out.push(
-				this.paint("muted", `total: peak ${formatTokens(peak)}/hour · avg ${formatTokens(avg)}/bucket · partial edges`),
-			);
-			out.push(
-				...this.legend(
-					top.map((k) => k.key),
-					colors,
-					width - 1,
+				...this.wrapParts(
+					[`total: peak ${formatTokens(peak)}/hour`, `avg ${formatTokens(avg)}/hour`, "partial edges"],
+					inner,
 				),
 			);
 			return { lines: out, colors };
@@ -331,41 +436,36 @@ export class StatsView implements Component {
 		const from = rangeStart(this.range, this.today) ?? dayKey(ranged[0]?.ms ?? Date.now());
 		const series = dailySeries(ranged, from, this.today, by === "provider" ? (c) => c.provider : modelName);
 		const byDay = new Map(series.map((p) => [p.day, top.map((k) => p.byKey.get(k.key) ?? 0)]));
-		// Same total width as the heatmap above it: its day labels + weeks == the y gutter + plot.
-		const plotWidth = Math.max(MIN_PLOT_WIDTH, DAY_LABEL_WIDTH + weeksFor(contentWidth(width)) - GUTTER);
 		const bucketed = bucketize(from, this.today, (d) => byDay.get(d) ?? [], top.length, plotWidth + 1);
-		out.push(t.bold(`Tokens per ${bucketed.unit}`) + this.paint("muted", `  ${TOKENS_NOTE} · by ${by}`));
+		const out = head(`Tokens per ${bucketed.unit}`);
 		if (series.length < 2) {
 			out.push(this.paint("muted", "Not enough data for a chart yet"));
-		} else {
-			const p = plot(
-				top.map((k, i) => ({
-					values: bucketed.buckets.map((b) => b.values[i] ?? 0),
-					color: colors.get(k.key) ?? 0,
-				})),
-				{
-					width: plotWidth,
-					height,
-					paint: (color, text) =>
-						color === "axis" ? this.paint("muted", text) : this.paintSeries(color, top.length, text),
-				},
-			);
-			out.push(...p.lines, this.paint("muted", xAxis(bucketed.buckets, plotWidth, p.gutter)));
-			let peak = series[0];
-			for (const point of series) if (point.total > (peak?.total ?? 0)) peak = point;
-			const avg = series.reduce((n, point) => n + point.total, 0) / series.length;
-			out.push(
-				this.paint(
-					"muted",
-					`total: peak ${formatTokens(peak?.total ?? 0)} on ${shortDate(peak?.day ?? this.today)} · avg ${formatTokens(avg)}/day`,
-				),
-			);
+			return { lines: out, colors };
 		}
+		const p = plot(
+			top.map((k, i) => ({
+				values: bucketed.buckets.map((b) => b.values[i] ?? 0),
+				color: colors.get(k.key) ?? i,
+			})),
+			{ width: plotWidth, height, paint },
+		);
+		const axis = timeAxis(
+			bucketed.buckets.map((b) => keyDate(b.start).getTime()),
+			{ kind: "day", size: bucketed.size },
+			plotWidth,
+			p.gutter,
+		);
+		out.push(...p.lines, ...axis.lines.map((l) => this.paint("muted", l)));
+		let peak = series[0];
+		for (const point of series) if (point.total > (peak?.total ?? 0)) peak = point;
+		const avg = series.reduce((n, point) => n + point.total, 0) / series.length;
 		out.push(
-			...this.legend(
-				top.map((k) => k.key),
-				colors,
-				width - 1,
+			...this.wrapParts(
+				[
+					`total: peak ${formatTokens(peak?.total ?? 0)} on ${shortDate(peak?.day ?? this.today)}`,
+					`avg ${formatTokens(avg)}/day`,
+				],
+				inner,
 			),
 		);
 		return { lines: out, colors };
@@ -393,20 +493,22 @@ export class StatsView implements Component {
 	}
 
 	/**
-	 * Chart, range line and the model list, scrolled as one body like Overview so even a short pane
-	 * reaches every model. `owners[i]` holds the list positions of the models drawn on line `i`.
+	 * Chart and the model list, scrolled as one body like Overview so even a short pane reaches every
+	 * model. `owners[i]` holds the list positions of the models drawn on line `i`.
 	 */
 	private modelsBody(width: number, room: number): { lines: string[]; owners: number[][]; count: number } {
 		const { ranged } = this.scoped();
 		const totals = modelTotals(ranged);
 		if (totals.length === 0) {
-			const lines = [this.selectors(), "", this.paint("muted", "No usage in this range.")];
+			const lines = [this.paint("muted", "No usage in this range.")];
 			return { lines, owners: lines.map(() => []), count: 0 };
 		}
-		// The list scrolls under the chart, so the chart gets about half the pane.
-		const chart = this.chart(ranged, width, chartHeight(Math.floor(room / 2) - 5));
-		const head = [...chart.lines, "", this.selectors(), ""];
-		const list = this.listRows(totals, width, chart.colors);
+		// The list scrolls under the chart: the chart gets what a short list leaves, at least half the pane.
+		const colors = this.chart(ranged, width, TICKS).colors;
+		const list = this.listRows(totals, contentWidth(width), colors);
+		const listLines = list.reduce((n, row) => n + row.lines.length, 0);
+		const chart = this.chart(ranged, width, chartHeight(Math.max(Math.floor(room / 2), room - listLines) - 7));
+		const head = [...chart.lines, ""];
 		return {
 			lines: [...head, ...list.flatMap((row) => row.lines)],
 			owners: [...head.map(() => []), ...list.flatMap((row) => row.lines.map(() => row.models))],
@@ -415,19 +517,75 @@ export class StatsView implements Component {
 	}
 
 	/**
-	 * Provider headers, then that provider's models: two per row when the pane is `TWO_COLUMN_WIDTH`
-	 * or wider, else one. Rows are indented two columns inside the overlay's one-column margin.
+	 * Models grouped under their provider: a table when its columns fit, one aligned line per model with a
+	 * provider subtotal line above its models, else three-line cards one per row. Indented two columns.
 	 */
-	private listRows(totals: readonly ModelTotals[], width: number, colors: ReadonlyMap<string, number>): ListRow[] {
+	private listRows(totals: readonly ModelTotals[], inner: number, colors: ReadonlyMap<string, number>): ListRow[] {
 		const t = this.o.theme;
 		const grand = totals.reduce((n, m) => n + tokensOf(m), 0);
-		const twoUp = width >= TWO_COLUMN_WIDTH;
-		const inner = Math.max(1, width - 3);
-		const colWidth = twoUp ? Math.floor(inner / 2) : inner;
 		const bullet = (key: string) => {
 			const index = colors.get(key);
 			return index === undefined ? this.paint("muted", "•") : this.paintSeries(index, colors.size, "•");
 		};
+		const sumOf = (models: readonly ModelTotals[]): Totals => ({
+			input: models.reduce((n, m) => n + m.input, 0),
+			output: models.reduce((n, m) => n + m.output, 0),
+			cacheRead: models.reduce((n, m) => n + m.cacheRead, 0),
+			cacheWrite: models.reduce((n, m) => n + m.cacheWrite, 0),
+			cost: models.reduce((n, m) => n + m.cost, 0),
+		});
+		const providers = [...new Set(totals.map((m) => m.provider))].map((provider) => {
+			const models = totals.filter((m) => m.provider === provider);
+			const sub = sumOf(models);
+			return { provider, models, sub, sum: models.reduce((n, m) => n + tokensOf(m), 0) };
+		});
+		const rows: ListRow[] = [];
+		let position = 0;
+		const numbers = (m: Totals, sum: number) => [
+			formatTokens(sum),
+			percent(sum, grand),
+			formatTokens(m.input),
+			formatTokens(m.output),
+			formatTokens(m.cacheRead),
+			formatTokens(m.cacheWrite),
+			money(m.cost),
+		];
+		const heads = ["Tokens", "Share", "In", "Out", "Cache read", "Cache write", "Cost (notional)"];
+		const nameWidth = Math.max(
+			...totals.map((m) => visibleWidth(sanitize(m.model)) + 4),
+			...providers.map((p) => visibleWidth(sanitize(p.provider)) + 2),
+		);
+		const widths = heads.map((h, c) =>
+			Math.max(
+				h.length,
+				...totals.map((m) => (numbers(m, tokensOf(m))[c] ?? "").length),
+				...providers.map((p) => (numbers(p.sub, p.sum)[c] ?? "").length),
+			),
+		);
+		const tableWidth = 2 + nameWidth + widths.reduce((n, x) => n + x + 2, 0);
+		if (tableWidth <= inner) {
+			const line = (name: string, cells: readonly string[], paint: (s: string) => string) =>
+				`  ${padTo(name, nameWidth)}${cells.map((cell, c) => paint(cell.padStart((widths[c] ?? 0) + 2))).join("")}`;
+			rows.push({ lines: [line("", heads, (s) => this.paint("muted", s))], models: [] });
+			for (const { provider, models, sub, sum } of providers) {
+				rows.push({
+					lines: [line(`${bullet(provider)} ${t.bold(sanitize(provider))}`, numbers(sub, sum), (s) => t.bold(s))],
+					models: [],
+				});
+				for (const m of models)
+					rows.push({
+						lines: [
+							line(
+								`${colors.has(m.name) ? `  ${bullet(m.name)} ` : "    "}${sanitize(m.model)}`,
+								numbers(m, tokensOf(m)),
+								(s) => this.paint("muted", s),
+							),
+						],
+						models: [position++],
+					});
+			}
+			return rows;
+		}
 		const entry = (m: ModelTotals): string[] => [
 			`${bullet(m.name)} ${t.bold(sanitize(m.model))} ${this.paint("muted", `(${percent(tokensOf(m), grand)})`)}`,
 			this.paint("muted", `  In: ${formatTokens(m.input)} · Out: ${formatTokens(m.output)}`),
@@ -436,38 +594,32 @@ export class StatsView implements Component {
 				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${money(m.cost)} notional`,
 			),
 		];
-		const rows: ListRow[] = [];
-		let position = 0;
-		for (const provider of [...new Set(totals.map((m) => m.provider))]) {
-			const models = totals.filter((m) => m.provider === provider).map((m) => ({ m, i: position++ }));
-			const sum = models.reduce((n, { m }) => n + tokensOf(m), 0);
+		for (const { provider, models, sum } of providers) {
 			rows.push({
 				lines: [
 					`${bullet(provider)} ${t.bold(sanitize(provider))}  ${formatTokens(sum)} ${this.paint("muted", `(${percent(sum, grand)})`)}`,
 				],
 				models: [],
 			});
-			const per = twoUp ? 2 : 1;
-			for (let k = 0; k < models.length; k += per) {
-				const group = models.slice(k, k + per);
-				const blocks = group.map(({ m }) => entry(m));
-				const lines = [0, 1, 2].map((line) =>
-					blocks
-						.map((b, col) => {
-							const cell = truncateToWidth(
-								b[line] ?? "",
-								Math.max(1, colWidth - (col < blocks.length - 1 ? 2 : 0)),
-								"…",
-							);
-							return col < blocks.length - 1 ? cell + " ".repeat(Math.max(0, colWidth - visibleWidth(cell))) : cell;
-						})
-						.join(""),
-				);
-				rows.push({ lines: lines.map((l) => `  ${l}`), models: group.map(({ i }) => i) });
-			}
+			for (const m of models)
+				rows.push({
+					lines: entry(m).map((l) => `  ${truncateToWidth(l, Math.max(1, inner - 2), "…")}`),
+					models: [position++],
+				});
 		}
 		return rows;
 	}
+}
+
+/** `text` padded with spaces to `width` columns (ANSI-aware); never cuts. */
+function padTo(text: string, width: number): string {
+	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+}
+
+/** `left` and `right` on one `width`-column line, right flush; `undefined` if they would touch. */
+function spread(left: string, right: string, width: number): string | undefined {
+	const gap = width - visibleWidth(left) - visibleWidth(right);
+	return gap >= 3 ? `${left}${" ".repeat(gap)}${right}` : undefined;
 }
 
 /** Plain-text per-model table for print/json/rpc modes, all time. */

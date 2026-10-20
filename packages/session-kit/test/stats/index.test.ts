@@ -93,7 +93,7 @@ describe("/stats command", () => {
 			overlay: true,
 			overlayOptions: { width: "100%", maxHeight: "100%" },
 		});
-		expect(rendered[0]?.join("\n")).toContain("Favorite model: anthropic/claude-opus-5-5");
+		expect(rendered[0]?.join("\n")).toMatch(/Favorite model +anthropic\/claude-opus-5-5/);
 		expect(existsSync(join(dir, "pi-session-kit", "stats-cache.json"))).toBe(true);
 	});
 
