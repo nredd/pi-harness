@@ -9,7 +9,7 @@ second list of release pins here.
 | `forks/pi` | `earendil-works/pi` | Core npm workspace, standalone Bun build, native helpers |
 | `forks/pi-subagents` | `tintinweb/pi-subagents` | Fork npm check/test gate |
 | `forks/pi-plan-mode` | `narumiruna/pi-extensions`, `packages/pi-plan-mode` | Standalone vendored build/test harness |
-| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate in candidate patch |
+| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate since `v2.13.9-nredd.2` |
 | `forks/pi-claude-auth` | `pankajudhas81/pi-claude-auth` | Fork pnpm lint/build/test gate |
 | `forks/pi-computer-use` | `injaneity/pi-computer-use` | Fork tests and native-helper build |
 
