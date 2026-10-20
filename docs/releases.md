@@ -20,6 +20,7 @@
 - `@nredd/pi-dev-tools@0.5.0` (signed tag at `3cf77bc`): NEVER PUBLISHED. `verify` failed one dev-tools test (run [here](https://github.com/nredd/pi-harness/actions/runs/39370449677)): it ran the package check inside the `uv run --project integration` venv, so `uv run pytest` in a pytest-less fixture project found the harness's `pytest`. CI's `owned` job never activates that venv. `scripts/npm_release.py` now strips the activation from every child command; the tag stays where it is and the release moves to `0.5.1`
 - `@nredd/pi-dev-tools@0.5.1` (`90538d7`, #50): the `0.5.0` content, published by `publish.yml` in one attempt (run [here](https://github.com/nredd/pi-harness/actions/runs/39373169935)); release carries the four assets. `integration/stacks/personal.json` pins it with router `0.4.0` (#51)
 - `@nredd/pi-session-kit@0.5.0` (`8c7c084`, #52): the `/stats` redesign with timescale-aware time axes, published by `publish.yml` in one attempt (run [here](https://github.com/nredd/pi-harness/actions/runs/39377430743)); release carries the four assets. `integration/stacks/personal.json` pins it (#53)
+- `@nredd/pi-session-kit@0.6.0` (signed tag at `7f26025`, #68): quiet passive monitor output, compact wakes with unread `since` cursors, and a summary widget, published by `publish.yml` in one attempt (run [here](https://github.com/nredd/pi-harness/actions/runs/39475730345)); release carries the four assets. `integration/stacks/personal.json` pins it
 
 ## Owned npm packages
 
