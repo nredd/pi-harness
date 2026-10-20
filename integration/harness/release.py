@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import logging
 import os
 import platform
@@ -21,38 +20,61 @@ import shutil
 import subprocess
 import tarfile
 from pathlib import Path
+from types import MappingProxyType
 from urllib.request import urlopen
 
-from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
+from harness.paths import GH_BIN, GIT_BIN, NPM_BIN
 
 LOGGER = logging.getLogger(__name__)
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 CODING_AGENT_TARBALL = "earendil-works-pi-coding-agent-1.3.0.tgz"
 TUI_TARBALL = "earendil-works-pi-tui-1.3.0.tgz"
-LEGACY_CHECKSUMS = {
-    "v1.3.0-nredd.3": {
-        CODING_AGENT_TARBALL: "753efe6fcb54da651e1dc02f6cc56dda029d55e5a40f833bdf9308dae88babd5",
-        TUI_TARBALL: "ccd8f2d2aa8e99fed96394cc5ade43c13597bcdd2472552dab5957d038a5afbd",
-    },
-    "v1.3.0-nredd.4": {
-        CODING_AGENT_TARBALL: "0042ebdca83a8cf92f406f097ec5f05dd131c859761c954e3f2feae0fef3cf87",
-        TUI_TARBALL: "ccd8f2d2aa8e99fed96394cc5ade43c13597bcdd2472552dab5957d038a5afbd",
-    },
-    "v1.3.0-nredd.5": {
-        CODING_AGENT_TARBALL: "84f1c4b5075efca538a8f7b65334dba8dff265525d7b1f1f69bb0c1d677ac644",
-        TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
-    },
-    "v1.3.0-nredd.6": {
-        CODING_AGENT_TARBALL: "0c1b9549cfed58c19f03b642cb259bf52f83beb1a339f154e5616c9b28c939b8",
-        TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
-    },
-    "v1.3.0-nredd.7": {
-        CODING_AGENT_TARBALL: "16479a0cb393c7820d8b1fbcdc5c941ceb5a271dc64ecb4b8be6574df3a2e617",
-        TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
-    },
-}
+AGENT_CORE_TARBALL = "earendil-works-pi-agent-core-1.3.0.tgz"
+AI_TARBALL = "earendil-works-pi-ai-1.3.0.tgz"
+LEGACY_CHECKSUMS = MappingProxyType(
+    {
+        "v1.3.0-nredd.3": MappingProxyType(
+            {
+                CODING_AGENT_TARBALL: "753efe6fcb54da651e1dc02f6cc56dda029d55e5a40f833bdf9308dae88babd5",
+                TUI_TARBALL: "ccd8f2d2aa8e99fed96394cc5ade43c13597bcdd2472552dab5957d038a5afbd",
+            }
+        ),
+        "v1.3.0-nredd.4": MappingProxyType(
+            {
+                CODING_AGENT_TARBALL: "0042ebdca83a8cf92f406f097ec5f05dd131c859761c954e3f2feae0fef3cf87",
+                TUI_TARBALL: "ccd8f2d2aa8e99fed96394cc5ade43c13597bcdd2472552dab5957d038a5afbd",
+                AGENT_CORE_TARBALL: "e08bbd6b348a00eb97250ebfa33a722c70323b55a2d1e6f5b446513fcb5dad35",
+                AI_TARBALL: "1b7ed741d704e0e288056630c1abc1a71eaec83eac148689c1d9b152361085b7",
+            }
+        ),
+        "v1.3.0-nredd.5": MappingProxyType(
+            {
+                CODING_AGENT_TARBALL: "84f1c4b5075efca538a8f7b65334dba8dff265525d7b1f1f69bb0c1d677ac644",
+                TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
+                AGENT_CORE_TARBALL: "e08bbd6b348a00eb97250ebfa33a722c70323b55a2d1e6f5b446513fcb5dad35",
+                AI_TARBALL: "1b7ed741d704e0e288056630c1abc1a71eaec83eac148689c1d9b152361085b7",
+            }
+        ),
+        "v1.3.0-nredd.6": MappingProxyType(
+            {
+                CODING_AGENT_TARBALL: "0c1b9549cfed58c19f03b642cb259bf52f83beb1a339f154e5616c9b28c939b8",
+                TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
+                AGENT_CORE_TARBALL: "e08bbd6b348a00eb97250ebfa33a722c70323b55a2d1e6f5b446513fcb5dad35",
+                AI_TARBALL: "1b7ed741d704e0e288056630c1abc1a71eaec83eac148689c1d9b152361085b7",
+            }
+        ),
+        "v1.3.0-nredd.7": MappingProxyType(
+            {
+                CODING_AGENT_TARBALL: "16479a0cb393c7820d8b1fbcdc5c941ceb5a271dc64ecb4b8be6574df3a2e617",
+                TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
+            }
+        ),
+    }
+)
 LEGACY_RELEASE_TAGS = frozenset(LEGACY_CHECKSUMS)
+# Every asset the harness consumes, coding-agent and tui first: they are the ones npm installs.
+RELEASE_PACKAGES = ("pi-coding-agent", "pi-tui", "pi-agent-core", "pi-ai")
 ATTESTATION_WORKFLOW = "nredd/pi/.github/workflows/fork-release.yml"
 
 
@@ -80,50 +102,11 @@ def gitlink_tag(directory: Path) -> str:
         ) from error
 
 
-def manifest_checksums(tag: str, manifests: Path) -> dict[str, str]:
-    """Collect release asset identities, skipping explicit artifact-free source snapshots.
-
-    Parameters:
-        tag (str): requested core tag.
-        manifests (Path): repository release manifests.
-
-    Returns:
-        dict[str, str]: nonempty asset URL -> sha256 mapping.
-
-    Raises:
-        ValueError: no recorded checksums, or this tag's manifest is incomplete or contradictory.
-    """
-    checksums: dict[str, str] = {}
-    prefix = f"https://github.com/nredd/pi/releases/download/{tag}/"
-    for path in sorted(manifests.glob("*.json")):
-        doc = json.loads(path.read_text())
-        # Gitlink-only manifests record source provenance, not a new core asset release.
-        if doc.get("artifacts") == []:
-            continue
-        matches = any(
-            fork.get("path") == "forks/pi" and fork.get("tag") == tag for fork in doc.get("forks", [])
-        )
-        assets = [asset for asset in doc.get("artifacts", []) if str(asset.get("url", "")).startswith(prefix)]
-        if not matches and not assets:
-            continue
-        if not assets:
-            raise ValueError(f"Manifest '{path}' names '{tag}' but records no release assets")
-        for asset in assets:
-            url, digest = asset["url"], asset["sha256"]
-            if not SHA256_HEX.fullmatch(digest) or (url in checksums and checksums[url] != digest):
-                raise ValueError(f"Conflicting or invalid checksum for '{url}' in '{path}'")
-            checksums[url] = digest
-    if not checksums:
-        raise ValueError(f"No recorded release checksums for '{tag}' in '{manifests}'")
-    return checksums
-
-
-def release_checksums(tag: str, manifests: Path) -> dict[str, str]:
+def release_checksums(tag: str) -> dict[str, str]:
     """Read a release checksum file, preserving named pre-attestation releases.
 
     Parameters:
         tag (str): requested core tag.
-        manifests (Path): repository release manifests holding legacy identities.
 
     Returns:
         dict[str, str]: release asset URL -> sha256 mapping.
@@ -154,6 +137,22 @@ def release_checksums(tag: str, manifests: Path) -> dict[str, str]:
     if not checksums:
         raise ValueError(f"No release checksums for '{tag}'")
     return checksums
+
+
+def _error_tail(error: subprocess.CalledProcessError | subprocess.TimeoutExpired) -> str:
+    """Return the last 6000 characters of a failed subprocess's captured output.
+
+    Parameters:
+        error (subprocess.CalledProcessError | subprocess.TimeoutExpired): the failure; its
+            `output` may be `str`, `bytes` or `None`.
+
+    Returns:
+        str: decoded output tail, empty when nothing was captured.
+    """
+    output = error.output or ""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    return output[-6000:]
 
 
 def verify_provenance(path: Path, tag: str) -> None:
@@ -189,14 +188,13 @@ def verify_provenance(path: Path, tag: str) -> None:
             timeout=120,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        output = getattr(error, "output", "") or ""
         raise RuntimeError(
-            f"Core release provenance verification failed for '{path}': {output[-6000:]}"
+            f"Core release provenance verification failed for '{path}': {_error_tail(error)}"
         ) from error
 
 
 def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
-    """Require downloaded bytes to match a recorded manifest identity.
+    """Require downloaded bytes to match a recorded release identity.
 
     Parameters:
         path (Path): downloaded asset.
@@ -213,7 +211,7 @@ def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
         raise ValueError(
             f"Release checksum mismatch for '{url}': '{actual}', expected '{checksums.get(url)}'"
         )
-    LOGGER.info(f"Release asset '{url}' sha256={actual} manifest=verified")
+    LOGGER.info(f"Release asset '{url}' sha256={actual}")
 
 
 def prune_native(node_modules: Path, system: str, arch: str) -> None:
@@ -233,19 +231,23 @@ def prune_native(node_modules: Path, system: str, arch: str) -> None:
                 shutil.rmtree(directory)
 
 
-def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
-    """Install two exact release assets into a new private prefix, never the live installation.
+def fetch_release(tag: str, prefix: Path) -> Path:
+    """Verify every consumed release asset, then install into a new private prefix, never the live one.
+
+    New tags must publish all of `RELEASE_PACKAGES`. Legacy tags are verified for exactly the assets
+    in `LEGACY_CHECKSUMS`. Only coding-agent and tui are installed; `pi-agent-core` and `pi-ai` are
+    verified because pi-harness's root overrides consume them.
 
     Parameters:
         tag (str): released core tag.
         prefix (Path): empty installation prefix.
-        manifests (Path): explicit manifest directory.
 
     Returns:
         Path: private pi executable.
 
     Raises:
         ValueError: invalid tag, nonempty prefix, or missing/mismatched recorded checksums.
+        RuntimeError: provenance or npm installation failed.
         FileNotFoundError: npm is unavailable.
     """
     match = TAG.fullmatch(tag)
@@ -253,12 +255,14 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
         raise ValueError(f"Not a core fork release tag: '{tag}'")
     if prefix.exists() and any(prefix.iterdir()):
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
-    checksums = release_checksums(tag, manifests)
+    checksums = release_checksums(tag)
     version = match["version"]
     urls = [
         f"https://github.com/nredd/pi/releases/download/{tag}/earendil-works-{package}-{version}.tgz"
-        for package in ("pi-coding-agent", "pi-tui")
+        for package in RELEASE_PACKAGES
     ]
+    if tag in LEGACY_RELEASE_TAGS:
+        urls = [url for url in urls if url in checksums]
     for url in urls:
         if url not in checksums:
             raise ValueError(f"No recorded release checksum for '{url}'")
@@ -307,8 +311,7 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
             timeout=600,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        output = getattr(error, "output", "") or ""
-        raise RuntimeError(f"Core release npm installation failed: {output[-6000:]}") from error
+        raise RuntimeError(f"Core release npm installation failed: {_error_tail(error)}") from error
     modules = prefix / "lib/node_modules/@earendil-works/pi-coding-agent/node_modules"
     destination = modules / "@earendil-works/pi-tui"
     if destination.exists():
@@ -334,10 +337,9 @@ def main() -> None:
     source.add_argument("--tag")
     source.add_argument("--gitlink", type=Path)
     parser.add_argument("--prefix", type=Path, required=True)
-    parser.add_argument("--manifests", type=Path, default=REPO_ROOT.parent / "releases")
     args = parser.parse_args()
     tag = args.tag or gitlink_tag(args.gitlink.resolve())
-    fetch_release(tag, args.prefix.resolve(), args.manifests.resolve())
+    fetch_release(tag, args.prefix.resolve())
 
 
 if __name__ == "__main__":
