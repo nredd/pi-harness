@@ -10,7 +10,6 @@ second list of release pins here.
 | `forks/pi-subagents` | `tintinweb/pi-subagents` | Fork npm check/test gate |
 | `forks/pi-plan-mode` | `narumiruna/pi-extensions`, `packages/pi-plan-mode` | Standalone vendored build/test harness |
 | `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate since `v2.13.9-nredd.2` |
-| `forks/pi-claude-auth` | `pankajudhas81/pi-claude-auth` | No longer in assembled stacks; Gitlink and pnpm lint/build/test gate retained until a later retirement PR |
 | `forks/pi-computer-use` | `injaneity/pi-computer-use` | Fork tests and native-helper build |
 
 The initial Gitlinks select published fork tags already used by the existing installation. Adding

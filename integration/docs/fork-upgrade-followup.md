@@ -64,14 +64,14 @@ This disproves a simple deterministic misclassification of text after thinking f
 these inputs. It is NOT a replay of the incident or proof that the bug is fixed.
 
 Read-only tracing found no Anthropic response-classification patch in our core diff.
-`pi-claude-auth` changes outbound request formatting; that can affect model behavior,
+The retired Anthropic auth formatter changed outbound request formatting; that can affect model behavior,
 but is not itself evidence of response relabelling. The router selects physical models
 and handles quota recovery. These findings narrow the search, not establish a cause.
 
 ## Live boundary checks
 
 A fresh in-memory session using the old `1.0.0-nredd.7` runtime, Sonnet 5.5,
-medium thinking, and the installed `pi-claude-auth` request formatter was tested
+medium thinking, and the installed Anthropic request formatter was tested
 with only a terminating synthetic `noop` tool. No credentials were copied.
 
 First attempt explicitly requested a visible acknowledgement, then `noop`:
@@ -155,9 +155,8 @@ and exited 0 without a model request.
    delivery at parent boundaries versus our notice outbox and detached-session logic.
    Recheck tags before starting; do not mix this rebase with the classification probe.
 5. Latest released bases checked on 2026-10-16: `pi-computer-use` remains at
-   `v0.5.1` (upstream tags), and `pi-claude-auth` at `0.1.3` (npm). Those match our
-   current fork bases; no release-base rebase is needed for either. Any further
-   source work uses checkouts under `~/code`, never installed package trees.
+   `v0.5.1` (upstream tags). The retired Anthropic auth fork is no longer a release base.
+   Any further source work uses checkouts under `~/code`, never installed package trees.
    Plan-mode/todos remain excluded.
 6. For each required change: document, run the owning repo's full gate, two-axis
    review, staged `make verify`, then release/tag, tap or package pin, and live
