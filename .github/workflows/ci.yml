@@ -105,18 +105,13 @@ jobs:
           if-no-files-found: ignore
 
   stack:
-    if: github.head_ref != 'probe/type3-diagnostics' || (matrix.os == 'ubuntu-24.04' && matrix.stack == 'personal')
     name: stack (${{ matrix.os }}, ${{ matrix.stack }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
-        stack: [personal, local]
-        include:
-          - os: ubuntu-24.04
-            platform: linux-x64
-          - os: macos-14
-            platform: darwin-arm64
+        os: ${{ fromJSON(github.head_ref == 'probe/type3-diagnostics' && '["ubuntu-24.04"]' || '["ubuntu-24.04", "macos-14"]') }}
+        stack: ${{ fromJSON(github.head_ref == 'probe/type3-diagnostics' && '["personal"]' || '["personal", "local"]') }}
+        include: ${{ fromJSON(github.head_ref == 'probe/type3-diagnostics' && '[{"os":"ubuntu-24.04","platform":"linux-x64"}]' || '[{"os":"ubuntu-24.04","platform":"linux-x64"},{"os":"macos-14","platform":"darwin-arm64"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
