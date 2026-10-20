@@ -1,6 +1,6 @@
 # Handoff: the rebuilt pi harness verification stack
 
-- Updated 2026-10-19 against pi-harness `main` at `c3bf27a`. This is a handoff, not a request to rebuild again.
+- Updated 2026-10-20 against pi-harness `origin/main` at `1b2332d` and dotfiles `origin/main` at `10ca8dd`. This is a handoff, not a request to rebuild again.
 - Repo-relative paths below belong to pi-harness unless another checkout is named. Historical receipts describe their own release, not the current pins.
 
 Owner rules, non-negotiable:
@@ -8,8 +8,8 @@ Owner rules, non-negotiable:
 - CI is the gate; local runs are for development. NO local scenario runs, including by subagents. Read CI logs for timing evidence.
 - Every PR, including docs, forks and dotfiles, gets independent Standards + Spec `code-reviewer` reviews on the EXACT final HEAD. Dotfiles `agentModels` routes `code-reviewer` through `router/review` (Sonnet 5.5, `gpt-6.1-sol`); the receipt names the model each transcript actually ran and what it read. A changed HEAD invalidates both reviews.
 - Fetch the reviewed SHA locally FIRST. Read-only reviewers cannot fetch; an unresolved revision is not a clean review.
-- `~/code/pi-harness-builds/merge-pr.sh` checks the exact HEAD and both transcripts, quotes each one's model, verdict and reads, refuses unresolved-revision transcripts and non-green CI, posts the receipt and `migration-review/standards` / `migration-review/spec` statuses, then merges. Its transcript directory is session-specific; inspect it before reuse.
-- Main requires `owned` and `contracts` on `ubuntu-24.04` + `macos-14`, `stack` on both OSes x `personal` / `local`, and both review statuses. Applicable path-filtered fork jobs must also pass. See [here](docs/ci.md).
+- `~/code/pi-harness-builds/merge-pr.sh` checks the exact HEAD and both transcripts, quotes each one's model, verdict and reads, refuses unresolved-revision transcripts and non-green CI, posts the receipt as a PR comment, then merges. Reviews are our process, not a CI gate; the script posts no commit statuses. Its transcript directory is session-specific; inspect it before reuse.
+- Main requires eight CI checks: `owned` and `contracts` on `ubuntu-24.04` + `macos-14`, and `stack` on both OSes x `personal` / `local`. Neither `migration-review/standards` nor `migration-review/spec` is required. Applicable path-filtered fork jobs must also pass. See [here](docs/ci.md).
 - No CPU load generators. Reproduce races with deterministic injected delays/awaits and plain repeats, not synthetic load on this Mac.
 - No toolchain installs (`rustup`, `brew`, `apt`, `npm -g`). Use installed tools. Pinned Bun 1.3.14: `~/code/pi-harness-builds/tools/bun-1.3.14/bun-darwin-aarch64/bun`; put its directory FIRST on `PATH`.
 - `check-benchmark` uses pinned Codex: `~/code/pi-harness-builds/tools/codex-0.154.0/node_modules/.bin`, with throwaway `CODEX_HOME` / `XDG_CACHE_HOME`; root `README.md` has the recipe.
@@ -20,8 +20,8 @@ Owner rules, non-negotiable:
 
 Repos, verified with GitHub branch heads (upstream/default branches are NOT the released fork selections):
 
-- `nredd/pi-harness` main `c3bf27a`: owned packages, fork Gitlinks, native suites, contracts, assembled stack, release tooling. Local checkout `~/code/pi-harness`.
-- `nredd/dotfiles` main `fea75d5`: machine configuration, activation and doctor. Local checkout `~/code/dotfiles`; chezmoi source `~/.local/share/chezmoi`.
+- `nredd/pi-harness` main `1b2332d` (before this docs change): owned packages, fork Gitlinks, native suites, contracts, assembled stack, release tooling. Local checkout `~/code/pi-harness`.
+- `nredd/dotfiles` main `10ca8dd` (before this docs change): machine configuration, activation and doctor. Local checkout `~/code/dotfiles`; chezmoi source `~/.local/share/chezmoi`.
 - `nredd/homebrew-tap` main `66e9289`: core nredd.6 formula, #1.
 - `nredd/pi` main `bd6444a`; released selection is `v1.3.0-nredd.6` at `9351a78` on `nredd/v1.3.0`.
 - `nredd/pi-subagents` has no main; master `927cf03`. Released selection is `v0.22.0-nredd.5` at `526fa2d` (nredd/pi-subagents#7: user skill roots follow symlinks), rebased onto tintinweb master `ca93a524`, on `nredd/v0.22.0-ca93a52`.
@@ -32,8 +32,8 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 
 Live selection / promotion state:
 
-- Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selected `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`; #16 selected `@nredd/pi-session-kit@0.5.0`. PENDING: dotfiles#17 promotes pi-subagents `v0.22.0-nredd.5` after #55's `stack` passes.
-- Compare `integration/stacks/personal.json` with `~/code/dotfiles` main's `third_party/pi-agent-settings.base.json`; they select the same twelve package sources once dotfiles#17 merges; until then dotfiles still pins pi-subagents `v0.22.0-nredd.4`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
+- Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selected `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`; #16 selected `@nredd/pi-session-kit@0.5.0`. Dotfiles #17 selected pi-subagents `v0.22.0-nredd.5` after #55's four `stack` jobs passed.
+- Compare `integration/stacks/personal.json` with dotfiles `origin/main`'s `third_party/pi-agent-settings.base.json`; they select the same twelve package sources, including pi-subagents `v0.22.0-nredd.5`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
 - Exact third-party npm pins: `pi-web-access@0.36.0`, `pi-deferred-context-engine@0.5.0`, `@quintinshaw/pi-dynamic-workflows@3.14.0`, `pi-memory@0.4.2`.
 - Other fork pins: `pi-claude-auth v0.1.3-nredd.1`, `pi-computer-use v0.5.1-nredd.2`. The stack installs but never loads computer-use in headless CI.
 - Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, promoted by dotfiles#14), `@nredd/pi-session-kit@0.5.0` (gated by #53 `stack`, promoted by dotfiles#16). preset carries unreleased changes; cut it through `publish.yml` when needed.
@@ -73,7 +73,10 @@ Historical, not the current deployment inventory:
 
 ## Plan item status (the approved plan, pi-harness docs/migration-plan.md)
 
-- Ownership/imports, package publication, fork provenance, staging/activation/rollback, CI and machine-local doctor are implemented. Rebuild items 1-7 below are DONE, not new work.
+- Ownership/imports, package publication, fork provenance, CI and machine-local doctor are implemented. Rebuild items 1-7 below are DONE, not new work.
+- The planned dotfiles release-manifest consumer and staging/activation/rollback transaction were never built.
+  Dotfiles applies pins with `chezmoi update --upgrade`; require `pi-profile doctor` afterward and
+  restart Pi sessions. This is not the transaction in migration plan section 8.
 - The approved plan still contains deferred acceptance and automation work. In particular, CI's formula-shaped Node binary is not acceptance of the Bun standalone prerequisite. Do not mark the entire migration complete.
 - Release records intentionally omit complete third-party integrities, profile fields and runtime-tree archives; see `docs/releases.md` for the current manifest boundary.
 
@@ -92,7 +95,7 @@ Historical, not the current deployment inventory:
    - Bun standalone checklist #26-31 and compiled-runtime adapter #58; auth transport interception remains a runtime boundary, native timer tests no longer need preloads.
    - linux-arm64 execution/acceptance, not just cross-building.
    - Quiet bench runner; F stays NOT RUN until provisioned and baselined with evidence.
-   - GitHub App / promotion automation #57. `migration-review/*` remains manual until a trusted review bot exists.
+   - GitHub App / promotion automation #57. Dual review receipts remain PR comments, not CI statuses.
    - Scratchpad: rpiv-todo `renderCall` reads the live task subject without `context.invalidate()`; a collapsed update/delete row can retain the subject from settlement. Diagnose at the fork seam before changing it.
 
 ## Where to start
