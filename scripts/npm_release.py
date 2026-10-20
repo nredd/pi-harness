@@ -25,9 +25,9 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -347,8 +347,7 @@ def matches_native_artifact(pattern: PurePosixPath, relative: PurePosixPath) -> 
     Returns:
         bool: Whether the full relative path matches.
     """
-    matcher = cast(Callable[[PurePosixPath], bool], object.__getattribute__(relative, "full_match"))
-    return matcher(pattern)
+    return relative.full_match(pattern)
 
 
 def validate_native_tarball(tarball: Path, descriptor: rd.ReleaseDescriptor) -> None:
