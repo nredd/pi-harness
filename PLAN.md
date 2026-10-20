@@ -32,11 +32,11 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 
 Live selection / promotion state:
 
-- Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selects `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`.
-- Compare `integration/stacks/personal.json` with `~/code/dotfiles` main's `third_party/pi-agent-settings.base.json`; both currently select the same twelve package sources. Git/gh verifies the committed selections, not whether a particular machine has applied them.
+- Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`. PENDING: dotfiles#14 promotes `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0` after #51's `stack` passes.
+- Compare `integration/stacks/personal.json` with `~/code/dotfiles` main's `third_party/pi-agent-settings.base.json`; they select the same twelve package sources once dotfiles#14 merges; until then dotfiles still pins dev-tools `0.4.0` and router `0.3.0`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
 - Exact third-party npm pins: `pi-web-access@0.36.0`, `pi-deferred-context-engine@0.5.0`, `@quintinshaw/pi-dynamic-workflows@3.14.0`, `pi-memory@0.4.2`.
 - Other fork pins: `pi-claude-auth v0.1.3-nredd.1`, `pi-computer-use v0.5.1-nredd.2`. The stack installs but never loads computer-use in headless CI.
-- Owned pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, promoted by dotfiles#14), `@nredd/pi-session-kit@0.4.0` (gated by #46 `stack`, promoted by dotfiles#11). preset carries unreleased changes; cut it through `publish.yml` when needed.
+- Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, dotfiles#14 promotion pending), `@nredd/pi-session-kit@0.4.0` (gated by #46 `stack`, promoted by dotfiles#11). preset carries unreleased changes; cut it through `publish.yml` when needed.
 - `@nredd/pi-preset@0.1.0` is published, not adopted live. The live footer remains dotfiles-owned until profiles/preset adoption.
 
 Verification layers now implemented:
