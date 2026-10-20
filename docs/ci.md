@@ -48,6 +48,18 @@ The publish job alone requests a short-lived npm OIDC identity.
   run on the same host. The child runner loads the real kit itself. All assertion destinations
   and native timer boundaries live in the ledger: [here](verification-rebuild.md)
 
+- `memory-deferred-kit.test.ts` loads real npm memory/context-engine factories with session-kit:
+  memory write/read and system-message refresh coexist with hidden monitor registration,
+  session-lifetime search promotion and successful controlled monitor execution. qmd is a
+  failing fixture shim; no network is allowed. The D `test_extension_coverage.py` canaries
+  separately prove installed registry/commands, memory persistence/path rejection, workflow
+  list/missing-run behavior, a clean refused-loopback raw web fetch error and computer-use's
+  installed-but-not-loaded headless exclusion. No version pins are copied into scenarios.
+  See the [per-extension matrix](verification-rebuild.md#shipped-extension-coverage-audit)
+  for each layer's actual assertions and GUI/live limitations. The shared third-party loader
+  resets pi-memory's own path/snapshot/qmd caches before a new fixture: Bun caches npm modules
+  across test files, so import-time state must not retain a deleted prior private home.
+
 The unit gates must not read the machine: the first CI run found three `integration/tests` that only
 passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
 

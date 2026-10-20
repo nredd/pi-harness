@@ -1,5 +1,56 @@
 # Rebuild verification at the owning boundary
 
+## Shipped extension coverage audit
+
+Scope: the twelve sources in `integration/stacks/personal.json`, plus the local-only
+`@nredd/pi-preset` in `integration/stacks/local.json`. Sources/versions for D come from
+those documents through `harness/sandbox.py::install_stack`, never a second scenario pin.
+This is a coverage audit, not a claim that each layer exhaustively tests each package.
+`A` = package-native, `B` = fork-native, `A-stack` = real factories on core's harness,
+`C` = packed artifact on stock Pi, `D/E` = installed released binary. Native A-stack runs
+on Vitest and pinned Bun in `owned`; D/E run only in CI on both OSes and both stacks.
+
+Shared D evidence for every enabled source is
+`integration/scenarios/test_stack.py::test_extensions_load_without_warnings`: real
+`pi install`, quiet text/JSON/RPC/TUI startup, faux reply, no helper app. Its `test_tool_set`
+compares the exact model-visible schema golden and promotes monitor/worktree tools with
+real `search_tools`. These assertions prove discovery/surface, NOT execution of all listed
+tools. The computer-use exception below is deliberate. The added D functions are not part
+of the historical 191-function migration totals below.
+
+| Extension | Existing layers and concrete behavior before this change | Added verification / remaining limit |
+| --- | --- | --- |
+| `@nredd/pi-dev-tools` | A: `packages/dev-tools/test/scenarios/{git,ssh}.test.ts`, real faux-dispatched git/worktree/SSH calls, hook/guard/host failures; native `test/{py,cargo}/tools.test.ts` use real toolchains. A-stack: `integration/inprocess/{annotated-tools,reviewer}.test.ts`, Plan annotation admission/refusal and restricted child reads/mutations. C: `scripts/package_contracts.py`, packed `git_status` success/non-repo failure; `scripts/fork_package_contracts.py`, packed dev-tools in real subagent. Shared D startup/schema/promotion. | Already behavioral; no duplicate suite. |
+| `@nredd/pi-session-kit` | A: `packages/session-kit/test/scenarios/*.test.ts`, goal/loop/monitor/rules/titles, diff/stats UI, success and failure/restore paths on real host. A-stack: `integration/inprocess/{goal-subagents,quota-goal,stats-plan,child-tools}.test.ts`, real kit/router/Plan/subagent composition including deferred-engine child denial. C: `scripts/package_contracts.py` and `exercise_stats_artifact`, packed monitor start/read and exporter privacy/idempotency. D: `test_monitor_lifetime.py`, OS groups/orphan ownership; `test_print_output.py`, diff/stat channels and bad ref; shared startup/schema. | `memory-deferred-kit.test.ts` adds memory system-context refresh alongside deferred kit discovery and successful monitor execution. |
+| `@nredd/pi-subscription-router` | A: `packages/subscription-router/test/scenarios/{balanced,recovery}.test.ts`, actual virtual-model dispatch, quota/fallback/hysteresis/retry failures. A-stack: `integration/inprocess/{router-admission,quota-admission,quota-goal}.test.ts`, child park/refuse/cap and kit continuation ownership. C: `scripts/package_contracts.py`, packed virtual dispatch. D: `test_auth_transport.py`, routed OAuth request reaches recording loopback server, plus shared startup. | Already behavioral; live subscription interoperability remains opt-in G, not fake-credential coverage. |
+| `pi-subagents` | B: `.github/workflows/forks.yml` runs its full Vitest/Bun `check`; `forks/pi-subagents/test/{session-scenarios,fleet-session,worktree-isolation-e2e}.test.ts` exercise real children, steering, TTL, model selection, restore/reload and failures. A-stack: `integration/inprocess/{specialists,nesting,turn-cap,fleet-plan}.test.ts`, real scoped children and policy/Plan/deferral interactions. C: `scripts/fork_package_contracts.py`, archived fork executes packed preset/dev-tools child. Shared D discovery/schema. | Already behavioral. Native fork job is path-filtered, not run on every harness-only PR. |
+| `pi-plan-mode` | B: `.github/workflows/forks.yml`, full Vitest + Bun session suites; `forks/pi-plan-mode/test/{confirmation,decline,policy,transcript}-session.test.ts`, real command/tool approval/decline/headless errors and policy tables. A-stack: `integration/inprocess/{plan-todos,annotated-tools,diff-plan,stats-plan}.test.ts`, actual cross-extension events/commands/tool refusals. Shared D startup/schema. | Already behavioral; no new fork changes. |
+| `rpiv-todo` | B hosted: `integration/inprocess/todo-{widget-session,history-session,host-disclosure}.test.ts`, actual todo calls, raw UI input, history/reload and batch disclosure. A-stack: `plan-todos.test.ts` / `goal-todos.test.ts`, evidence/atomic batches and reminder arbitration. Shared D startup/schema. Own split-repo suite is explicitly NOT RUN by `forks.yml`. | Unchanged here as requested; hosted coverage is not a claim that its native suite ran. |
+| `pi-claude-auth` | B: `.github/workflows/forks.yml`, pnpm lint/build/test. D: `integration/scenarios/test_auth_transport.py`, actual direct/routed OAuth headers/billing, API-key/custom exclusions, fake token refresh persistence/refusal/logout, no credential import or forbidden subprocess. Shared quiet startup. No tool or slash-command surface is expected from this transport hook. | Already behavioral; real login/subscription remains opt-in G. |
+| `pi-computer-use` | D installer `harness/sandbox.py::_install_sources/_record_stack` disables lifecycle scripts and records a reasoned `extensions: []` exclusion; shared startup checks no GUI app. `forks.yml` explicitly NOT RUN, no native/helper behavioral claim. | New D `test_extension_coverage.py::test_computer_use_headless_exclusion`: installed manifest declares extensions, evidence retains reason/source, settings forbid loading, actual registry lacks desktop capabilities, no app created, faux session survives. GUI helper remains NOT RUN; see requirements below. |
+| `pi-web-access` | Shared D registers four tools in model golden. A-stack `integration/inprocess/specialists.test.ts` loads real package, scopes researcher tools, asserts zero fetches; it did NOT call web tools. No owned native/B/C suite. | New D `test_installed_extension_behavior`: registry has all four tools, real `fetch_content(mode=raw)` against bound non-listening loopback port returns `isError`, includes target, then next faux reply succeeds, with no startup warnings/noise. No public network or browser/cookie/API-key success claim. |
+| `pi-deferred-context-engine` | Shared D `test_tool_set` actually calls `search_tools` and checks model schema promotion. A-stack `integration/inprocess/{child-tools,nesting,turn-cap}.test.ts` loads real npm engine with kit/subagents, including actual denied promoted child calls and forced-report schema stripping. No owned native/B/C suite. | New A-stack `memory-deferred-kit.test.ts`: real memory + kit + engine; monitor starts hidden, session-lifetime search promotion reaches subsequent faux schema, promoted start/read execute, pinned memory remains callable. D additionally searches/promotes and executes `workflow_control` in the same run. |
+| `@quintinshaw/pi-dynamic-workflows` | A-stack `integration/inprocess/workflow-trigger.test.ts` asserts exact unchanged user input with keyword trigger disabled; `nesting.test.ts` asserts scoped child refusal. Shared D loads package but workflow tools are deferred out of the initial golden. No owned native/B/C suite. | New D observes `workflow`/`workflow_control` and `workflows`/`workflows-trigger`/`effort` command registration; real search promotion then `workflow_control(list)` succeeds with zero runs, missing-run status returns upstream's semantic `result=error` (it does NOT set host `isError`). Does not launch workflow agents or claim UI execution. |
+| `pi-memory` | Shared D four pinned memory tools in golden. A-stack `integration/inprocess/specialists.test.ts` loads real entry and asserts registration/exclusion and qmd probe, but made no successful memory call. No owned native/B/C suite. | New D writes/reads actual `MEMORY.md`, checks disk marker, rejects daily path traversal and survives. New A-stack `memory-deferred-kit.test.ts` asserts the long-term write refreshes a SYSTEM message, not merely tool-result echo, while kit deferral/promotion/execution continues; memory read and invalid-date failure traverse core. qmd is a failing fixture executable, search/update/exit summaries off; no semantic-search claim. |
+| `@nredd/pi-preset` (local only) | A: `packages/preset/test/`, resource/schema/trust tests and Vitest/Bun footer scenarios. A-stack `integration/inprocess/{specialists,reviewer}.test.ts` discovers real preset agent files and enforces child capabilities, not copied frontmatter. C: both contract runners pack/discover preset resources with stock Pi/subagents. D local loads preset; E `scenarios/tui/test_footer_resize.py` explicitly installs it in either stack and asserts real resize/repaint. | Already covered; no preset/footer changes here. Not adopted by personal.json. |
+
+The new D canaries use `providers/extension_inventory.ts` only to observe the real registry
+via public `getAllTools`/`getCommands`, not to stub package behavior. It is typechecked through
+and exercised by `memory-deferred-kit.test.ts`. Scenario selection uses the existing root
+`test_*.py` glob, so no workflow selector or second package list is added. The registry is
+not the active model surface; promotion and actual calls are separately asserted.
+
+Computer-use GUI acceptance still needs an explicit macOS desktop session, lifecycle-enabled
+install in a disposable agent directory, Accessibility/Screen Recording TCC grants for the
+native helper, then screenshot and input against a disposable app/fixture (including
+root/window targeting and helper restart). Existing fork-owned opt-in desktop tests should
+run there. A hosted headless exclusion cannot verify pixel content, TCC, or input delivery.
+Web provider credentials/browser success, qmd semantic search, live subscription calls,
+Bun standalone and quiet-runner benchmarks remain outside this offline gate. Exclusion and
+clean offline failures must never be reported as successful GUI/network coverage.
+
+## Historical migration inventory
+
 | Destination | Scenario functions |
 | --- | ---: |
 | `A:dev-tools` | 4 |
