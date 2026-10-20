@@ -9,7 +9,7 @@ second list of release pins here.
 | `forks/pi` | `earendil-works/pi` | Core npm workspace, standalone Bun build, native helpers |
 | `forks/pi-subagents` | `tintinweb/pi-subagents` | Fork npm check/test gate |
 | `forks/pi-plan-mode` | `narumiruna/pi-extensions`, `packages/pi-plan-mode` | Standalone vendored build/test harness |
-| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package, upstream monorepo gate |
+| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate since `v2.13.9-nredd.2` |
 | `forks/pi-claude-auth` | `pankajudhas81/pi-claude-auth` | Fork pnpm lint/build/test gate |
 | `forks/pi-computer-use` | `injaneity/pi-computer-use` | Fork tests and native-helper build |
 
@@ -84,15 +84,25 @@ pi-plan-mode patch queue:
 rpiv-todo patch queue:
 
 - Base: `@juicesharp/rpiv-todo@2.13.9` from `juicesharp/rpiv-mono` (release `54df50ee`), split `7903c76b`;
-  release branch `nredd/v2.13.9`, selected tag `v2.13.9-nredd.1` (nredd/rpiv-todo#1)
+  release branch `nredd/v2.13.9`, selected tag `v2.13.9-nredd.2` (nredd/rpiv-todo#1/#2)
 - Adopt upstream's per-call `rpiv-todo-state` persistence and `.ts` import specifiers. Legacy fork sessions
   (a Plan snapshot followed by tool-result-only updates) replay chronologically until the first authoritative
   persistence marker, so a completed task never rolls back to its approved snapshot; regression covers the
   audit's replay probe. Retain clickable heading, Plan seeding/evidence/reminders, wheel/atomic batches/counts,
   resume collapse/config and the historical-result/replanning fix
-- The package gate runs in an rpiv-mono clone at the release commit with scratch-only Pi 1.1.0 sibling pins
-  (the untouched release graph fails on stock upstream too). The 4 real-session rows stay hosted in
-  `integration/inprocess/todo-*.test.ts`, green on this Gitlink
+- nredd/rpiv-todo#2 adds standalone scripts, dev dependencies/lockfile, Vitest config
+  and upstream mock helpers vendored from release `54df50ee`. No upstream assertions change: all 253 stock
+  tests (21 files) run; the selected fork's baseline is 377 tests (26 files), rising to 382 (28 files) with
+  rendering regressions. Biome/strict TypeScript and two native Bun 1.3.14 interactive regressions share
+  `npm run check`; the host pins core `v1.3.0-nredd.6` tarballs like the other forks
+- Invalidate core's cached settled call rows on foreground store changes when they still use the live
+  fallback (legacy/error results without a valid snapshot). Weak subscriptions cover mutations, replay,
+  eviction and foreground switches without polling or probe side effects. Valid historical snapshots stay
+  immutable. Both update/delete regressions use the real interactive harness and VirtualTerminal and fail
+  before the fix on the stale subject
+- `forks.yml` runs the fork gate at its Gitlink, not a scratch monorepo or the parent stack suite. The four
+  hosted single-fork rows (`integration/inprocess/todo-{history,widget,host}-*.test.ts`) and the
+  Plan/todo pair in `plan-todos.test.ts` remain separate stack coverage
 
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
