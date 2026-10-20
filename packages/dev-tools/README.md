@@ -1,6 +1,6 @@
 # pi-dev-tools
 
-Published to npm as `@nredd/pi-dev-tools` (public), version `0.4.0`; see `releases/2026-10-18-npm-publication.json` for the tarball digest.
+Published to npm as `@nredd/pi-dev-tools` (public). Each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-dev-tools@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`). `0.5.0` adds `createDevTools(options)` (injectable `ssh`, `py`, `cargo` tool options; the default export is unchanged) and fixes process output that dropped a short line sharing a chunk with an oversized one.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). References below to standalone repositories,
 chezmoi pins, and installed-runtime harness gates describe the legacy deployment, not verification
 of this package.
