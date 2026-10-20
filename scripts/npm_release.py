@@ -162,8 +162,28 @@ class Statement(BaseModel):
     predicate: Predicate = Field(description="Build/source binding")
 
 
+def host_environment() -> dict[str, str]:
+    """Return this process's environment without the integration venv that `uv run` activated.
+
+    `publish.yml` runs this script via `uv run --project integration`, which exports `VIRTUAL_ENV` and
+    puts its `bin` first on `PATH`. Child tools must see what CI's `owned` job sees: otherwise a
+    package check that expects a tool to be missing from its own project (e.g. dev-tools' `uv run
+    pytest` case) silently finds the harness's `pytest`.
+
+    Returns:
+        dict[str, str]: `os.environ` minus `VIRTUAL_ENV` and that venv's `bin` `PATH` entries.
+    """
+    env = dict(os.environ)
+    venv = env.pop("VIRTUAL_ENV", None)
+    if venv:
+        scripts = Path(venv) / "bin"
+        entries = env.get("PATH", "").split(os.pathsep)
+        env["PATH"] = os.pathsep.join(e for e in entries if not e or Path(e) != scripts)
+    return env
+
+
 def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
-    """Run a bounded, absolute-path tool command, preserving failure diagnostics.
+    """Run a bounded, absolute-path tool command outside the `uv run` venv, preserving diagnostics.
 
     Parameters:
         repo (Path): Working directory.
@@ -177,6 +197,7 @@ def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
     return subprocess.check_output(
         [str(pc.locate_executable(executable)), *args],
         cwd=repo,
+        env=host_environment(),
         text=True,
         stderr=subprocess.STDOUT,
         timeout=timeout,
