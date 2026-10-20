@@ -502,8 +502,12 @@ def test_commands_run_outside_the_uv_run_venv(
     tool.chmod(0o755)
     monkeypatch.setenv("VIRTUAL_ENV", str(scripts.parent))
     monkeypatch.setenv("PATH", os.pathsep.join([f"{scripts}{suffix}", os.environ["PATH"]]))
-    probe = 'command -v harness-only-tool || echo missing; echo "VIRTUAL_ENV=${VIRTUAL_ENV-unset}"'
-    assert nr.command(tmp_path, "sh", "-c", probe).splitlines() == ["missing", "VIRTUAL_ENV=unset"]
+    # A real child reports what it can see; the lookup logic stays in Python, not a shell string.
+    probe = (
+        "import json, os, shutil; "
+        "print(json.dumps([shutil.which('harness-only-tool'), os.environ.get('VIRTUAL_ENV')]))"
+    )
+    assert json.loads(nr.command(tmp_path, "python3", "-c", probe)) == [None, None]
 
 
 def test_host_environment_without_activation_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
