@@ -115,6 +115,7 @@ def test_installed_extension_behavior(sandbox: Sandbox) -> None:
         "curator",
         "google-account",
         "search",
+        "anthropic-auth:status",
     } <= set(registry["commands"])
     assert not outcomes[1].is_error, result.transcript()
     assert "workflow_control" in outcomes[1].text
