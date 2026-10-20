@@ -324,17 +324,22 @@ def test_native_matches_skip_non_symlink_path_resolved_outside_workspace(
         assert path == workspace
         return (candidate,)
 
-    monkeypatch.setattr(Path, "rglob", rglob)
     native = replace(descriptor, native_artifacts=(PurePosixPath("prebuilt/helper"),))
-    with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
-        nr.validate_native_sources(workspace, native)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "rglob", rglob)
+        with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
+            nr.validate_native_sources(workspace, native)
 
 
-@pytest.mark.parametrize("subject", rd.DESCRIPTORS, ids=lambda descriptor: descriptor.contract.directory)
-def test_real_gate_gives_each_descriptor_all_other_siblings(
+@pytest.mark.parametrize(
+    "subject",
+    [descriptor for descriptor in rd.DESCRIPTORS if descriptor.stock_gate is not None],
+    ids=lambda descriptor: descriptor.contract.directory,
+)
+def test_release_contract_gives_each_stock_descriptor_all_other_siblings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subject: rd.ReleaseDescriptor
 ) -> None:
-    """The unpatched contract runner supplies every other descriptor to each release scenario.
+    """The release path supplies every descriptor peer to each executable stock scenario.
 
     Parameters:
         tmp_path (Path): Disposable contract-gate workspace.
@@ -411,15 +416,18 @@ def test_real_gate_gives_each_descriptor_all_other_siblings(
         "run",
         lambda args, **_: subprocess.CompletedProcess(args, 0, stdout="v22.0.0\n", stderr=""),
     )
-    monkeypatch.setattr(pc, "validate_report", lambda report: report)
-    pc.run_gate(
+    monkeypatch.setattr(
+        pc,
+        "validate_report",
+        lambda _report: SimpleNamespace(
+            packages={subject.name: SimpleNamespace(evidence={"subject": subject.name})}
+        ),
+    )
+    nr.run_stock_contract(
         tmp_path / "gate",
         tmp_path / "stock",
-        [subject.contract.directory],
+        replace(subject, stock_gate=scenario),
         {subject.contract.directory: artifact.path},
-        contracts=(subject.contract,),
-        scenarios={subject.contract.directory: scenario},
-        siblings=tuple(descriptor.contract for descriptor in rd.DESCRIPTORS),
     )
 
 
