@@ -57,7 +57,7 @@ Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-
 Required checks on `main`:
 
 - `migration-review/standards` and `migration-review/spec` stay manual: the orchestrator posts them with
-  `gh api -X POST repos/nredd/pi-harness/statuses/<FULL sha>` after both Sol reviews pass on that exact
+  `gh api -X POST repos/nredd/pi-harness/statuses/<FULL sha>` after both reviews pass on that exact
   HEAD. No review bot exists. A PR cannot set them itself
 - `owned (ubuntu-24.04)` and `owned (macos-14)`
 - `contracts (ubuntu-24.04)` and `contracts (macos-14)`

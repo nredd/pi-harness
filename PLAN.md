@@ -6,9 +6,9 @@
 Owner rules, non-negotiable:
 
 - CI is the gate; local runs are for development. NO local scenario runs, including by subagents. Read CI logs for timing evidence.
-- Every PR, including docs, forks and dotfiles, gets independent Standards + Spec `code-reviewer` reviews on `openai-codex/gpt-6.1-sol`, on the EXACT final HEAD. Verify the model in each transcript; a changed HEAD invalidates both reviews. No silent model substitution.
+- Every PR, including docs, forks and dotfiles, gets independent Standards + Spec `code-reviewer` reviews on the EXACT final HEAD. Dotfiles `agentModels` routes `code-reviewer` through `router/review` (Sonnet 5.5, `gpt-6.1-sol`); the receipt names the model each transcript actually ran and what it read. A changed HEAD invalidates both reviews.
 - Fetch the reviewed SHA locally FIRST. Read-only reviewers cannot fetch; an unresolved revision is not a clean review.
-- `~/code/pi-harness-builds/merge-pr.sh` checks the exact HEAD and both Sol transcripts, refuses unresolved-revision transcripts and non-green CI, posts the receipt and `migration-review/standards` / `migration-review/spec` statuses, then merges. Its transcript directory is session-specific; inspect it before reuse.
+- `~/code/pi-harness-builds/merge-pr.sh` checks the exact HEAD and both transcripts, quotes each one's model, verdict and reads, refuses unresolved-revision transcripts and non-green CI, posts the receipt and `migration-review/standards` / `migration-review/spec` statuses, then merges. Its transcript directory is session-specific; inspect it before reuse.
 - Main requires `owned` and `contracts` on `ubuntu-24.04` + `macos-14`, `stack` on both OSes x `personal` / `local`, and both review statuses. Applicable path-filtered fork jobs must also pass. See [here](docs/ci.md).
 - No CPU load generators. Reproduce races with deterministic injected delays/awaits and plain repeats, not synthetic load on this Mac.
 - No toolchain installs (`rustup`, `brew`, `apt`, `npm -g`). Use installed tools. Pinned Bun 1.3.14: `~/code/pi-harness-builds/tools/bun-1.3.14/bun-darwin-aarch64/bun`; put its directory FIRST on `PATH`.
@@ -98,4 +98,4 @@ Historical, not the current deployment inventory:
 ## Where to start
 
 - Read `PLAN.md`, `docs/verification-rebuild.md` (destination ledger; no non-boundary scenarios left), `docs/forks.md`, `docs/releases.md`, `docs/ci.md`.
-- Recheck current main/PR heads and pins, then choose from item 8. Fetch the exact review SHA before dual Sol reviews. Do not rerun the archived e2e suite or restart items 1-7.
+- Recheck current main/PR heads and pins, then choose from item 8. Fetch the exact review SHA before dual reviews. Do not rerun the archived e2e suite or restart items 1-7.
