@@ -1,5 +1,16 @@
 # Consolidate Pi harness development and distribution
 
+- Status 2026-10-20: historical approved design, not an implementation inventory. Current status is
+  [here](../PLAN.md); the rebuilt verification boundaries and scenario destinations are [here](verification-rebuild.md).
+- The rebuild superseded sections 1, 7 and 9's verification layout and gates. Section 2's required
+  review status is superseded: dual exact-HEAD reviews remain our process, recorded in PR comments,
+  not a CI gate. The current required checks are [here](ci.md).
+- Never built: sections 6-8's dotfiles release-manifest consumption/runtime-tree distribution,
+  section 8's staging/activation/rollback transaction, section 7's GitHub App promotion, and
+  section 5's three-platform standalone Bun acceptance. Standalone Bun is NOT RUN in CI yet.
+- Owned packages ship via `publish.yml`, core via the Homebrew tap, and dotfiles activates pins with
+  `chezmoi update --upgrade` plus `pi-profile doctor`. The plan body below is unchanged.
+
 ## Summary
 
 Create public `nredd/pi-harness` as the development home for owned plugins, presets, integration tests, benchmarks, and release tooling. Keep upstream forks as submodules and publish owned plugins independently under `@nredd`.

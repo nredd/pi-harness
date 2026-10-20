@@ -7,7 +7,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 
 | Job | Runs | Proves |
 | --- | --- | --- |
-| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Biome, tsc and each package's unit suite (Vitest; preset `node --test`), `bun test` on each package's `test/scenarios/` where it has one (`test:bun`; a notice names every package without one, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN |
+| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (preset runs all of `test/`; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts`, `make check-fork-package-contracts` | Packed tarballs alone on exact stock Pi 1.3.0, and the packed preset + dev-tools through the Gitlinked `pi-subagents`. JSON reports uploaded as artifacts |
 | `stack (ubuntu-24.04, macos-14; personal, local)` | Fetch exact Gitlinked core release with formula-equivalent npm + tui replacement, real `pi install`, D/E scenarios on Node. Each OS's existing `personal` job additionally builds Gitlinked core once with pinned Bun and runs D/E on that standalone for both `personal` and `local` | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 | `bench (not run)` | a notice and a step summary | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
@@ -20,7 +20,11 @@ The publish job alone requests a short-lived npm OIDC identity.
 | `pi-subagents` | Pinned Bun, `npm ci`, `npm run check` (full Vitest suite and Bun session scenarios) |
 | `pi-plan-mode` | Pinned Bun, `npm ci`, `npm run check` (Bun session scenarios), `npm test` (full Vitest suite) |
 | `pi-claude-auth` | pnpm at the fork's `packageManager`, `pnpm install --frozen-lockfile`, lint, build, test |
-| `rpiv-todo, pi-computer-use (not run)` | a notice: rpiv-todo gates inside an upstream `rpiv-mono` clone, pi-computer-use needs macOS TCC |
+| `rpiv-todo` | Pinned Bun, `npm ci --ignore-scripts`, `npm run check` (Biome, strict TypeScript, full standalone Vitest suite and native Bun settled-row regressions) at the Gitlinked commit |
+| `pi-computer-use (not run)` | a notice: pi-computer-use needs macOS TCC |
+
+The rpiv-todo job needs the standalone gate that `v2.13.9-nredd.2` (nredd/rpiv-todo#2) added; an older
+Gitlink has no lockfile or `check` script, so the job fails rather than reporting a false pass.
 
 `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
 
@@ -36,8 +40,9 @@ The publish job alone requests a short-lived npm OIDC identity.
 - Root workspace dependencies supply `croner` `10.0.1`, `nanoid` `5.1.16`, `pi-tui-kit` `0.65.5`
   from the forks' lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
   `3.x` and leaves the fork's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
-  split has no lockfile: `rpiv-config` and optional peer
-  `rpiv-i18n` are pinned to its release `2.12.0`, recorded in the root lockfile
+  split's own lockfile serves only its `forks.yml` gate; the stack workspace never installs fork-local
+  dependencies, so `rpiv-config` and optional peer `rpiv-i18n` are pinned here to the fork's `2.13.9`,
+  with the same integrity as its lockfile
 - `isolateStackHome()` isolates `HOME`, `PI_CODING_AGENT_DIR`, XDG config before loading entries.
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
@@ -56,15 +61,18 @@ Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-
 
 Required checks on `main`:
 
-- `migration-review/standards` and `migration-review/spec` stay manual: the orchestrator posts them with
-  `gh api -X POST repos/nredd/pi-harness/statuses/<FULL sha>` after both reviews pass on that exact
-  HEAD. No review bot exists. A PR cannot set them itself
 - `owned (ubuntu-24.04)` and `owned (macos-14)`
 - `contracts (ubuntu-24.04)` and `contracts (macos-14)`
 - `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
 
-These are the configured protection checks. `forks.yml` jobs are path-filtered and cannot be required;
-when triggered, every applicable fork job must still pass before merging.
+These eight jobs are the configured protection checks. `migration-review/standards` and
+`migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
+
+- Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
+- `~/code/pi-harness-builds/merge-pr.sh` checks that HEAD, both transcripts and green CI, then posts
+  the review receipt as a PR comment and merges. It does not post commit statuses
+- `forks.yml` jobs are path-filtered, not required protection checks; when triggered, every applicable
+  fork job must still pass before merging
 
 Flake policy (migration plan section 7):
 
@@ -77,8 +85,9 @@ Flake policy (migration plan section 7):
 
 The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
 `integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
-Unported `A`/`A-stack`/`B` scenarios stay in the legacy subdirectories, excluded from this process gate.
-The thirteen `DOTFILES` rows moved out to the item-7 doctor, not a distribution check. See
+No unported non-boundary Python scenarios remain. Package-native suites and `integration/inprocess/`
+own the ported assertions; the destination ledger is [here](verification-rebuild.md).
+The thirteen `DOTFILES` rows moved to dotfiles' implemented `pi-profile doctor`, not a distribution check. See
 [here](../integration/README.md) for inputs, package sets and deliberate headless exclusions.
 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
