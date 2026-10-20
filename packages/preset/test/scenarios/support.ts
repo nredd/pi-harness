@@ -91,6 +91,7 @@ export class UsageBus {
 	mode: "ok" | "hang" | "error" = "ok";
 	ready = false;
 	requests: { at: number; ready: boolean; refresh: unknown; reply: (body?: unknown) => void }[] = [];
+	private readonly firstRequest = deferred<void>();
 	readonly clock: FakeClock;
 	constructor(clock: FakeClock) {
 		this.clock = clock;
@@ -119,6 +120,7 @@ export class UsageBus {
 			const reply = (body: unknown = this.envelope()) =>
 				this.emit?.(`${USAGE_CHANNEL}:reply:${request.requestId}`, body);
 			this.requests.push({ at: this.clock.now(), ready: this.ready, refresh: request.refresh, reply });
+			this.firstRequest.resolve();
 			if (this.mode === "ok") reply();
 			else if (this.mode === "error") reply({ success: false, error: "fixture failure" });
 		});
@@ -131,6 +133,11 @@ export class UsageBus {
 			off();
 		});
 	};
+
+	/** Await the first protocol request before inspecting the asynchronously repainted quota row. */
+	waitForFirstRequest(): Promise<void> {
+		return this.firstRequest.promise;
+	}
 }
 
 export interface Turn {
@@ -228,7 +235,11 @@ export class FooterFixture {
 		if (ttl !== undefined)
 			await this.host.harness.session.setModel({ ...this.host.harness.getModel(), promptCache: { short: ttl } });
 		await this.host.settle();
-		if (!deferStart) await this.advance(0);
+		if (!deferStart && !absent) {
+			await this.advance(0);
+			await this.usage.waitForFirstRequest();
+			await this.host.settle();
+		}
 		return this.host;
 	}
 
