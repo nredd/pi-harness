@@ -6,9 +6,9 @@
 Owner rules, non-negotiable:
 
 - CI is the gate; local runs are for development. NO local scenario runs, including by subagents. Read CI logs for timing evidence.
-- Every PR, including docs, forks and dotfiles, gets independent Standards + Spec `code-reviewer` reviews on `openai-codex/gpt-6.1-sol`, on the EXACT final HEAD. Verify the model in each transcript; a changed HEAD invalidates both reviews. No silent model substitution.
+- Every PR, including docs, forks and dotfiles, gets independent Standards + Spec `code-reviewer` reviews on the EXACT final HEAD. Dotfiles `agentModels` routes `code-reviewer` through `router/review` (Sonnet 5.5, `gpt-6.1-sol`); the receipt names the model each transcript actually ran and what it read. A changed HEAD invalidates both reviews.
 - Fetch the reviewed SHA locally FIRST. Read-only reviewers cannot fetch; an unresolved revision is not a clean review.
-- `~/code/pi-harness-builds/merge-pr.sh` checks the exact HEAD and both Sol transcripts, refuses unresolved-revision transcripts and non-green CI, posts the receipt and `migration-review/standards` / `migration-review/spec` statuses, then merges. Its transcript directory is session-specific; inspect it before reuse.
+- `~/code/pi-harness-builds/merge-pr.sh` checks the exact HEAD and both transcripts, quotes each one's model, verdict and reads, refuses unresolved-revision transcripts and non-green CI, posts the receipt and `migration-review/standards` / `migration-review/spec` statuses, then merges. Its transcript directory is session-specific; inspect it before reuse.
 - Main requires `owned` and `contracts` on `ubuntu-24.04` + `macos-14`, `stack` on both OSes x `personal` / `local`, and both review statuses. Applicable path-filtered fork jobs must also pass. See [here](docs/ci.md).
 - No CPU load generators. Reproduce races with deterministic injected delays/awaits and plain repeats, not synthetic load on this Mac.
 - No toolchain installs (`rustup`, `brew`, `apt`, `npm -g`). Use installed tools. Pinned Bun 1.3.14: `~/code/pi-harness-builds/tools/bun-1.3.14/bun-darwin-aarch64/bun`; put its directory FIRST on `PATH`.
@@ -32,11 +32,11 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 
 Live selection / promotion state:
 
-- Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`.
-- Compare `integration/stacks/personal.json` with `~/code/dotfiles` main's `third_party/pi-agent-settings.base.json`; both currently select the same twelve package sources. Git/gh verifies the committed selections, not whether a particular machine has applied them.
+- Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`. PENDING: dotfiles#14 promotes `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0` after #51's `stack` passes.
+- Compare `integration/stacks/personal.json` with `~/code/dotfiles` main's `third_party/pi-agent-settings.base.json`; they select the same twelve package sources once dotfiles#14 merges; until then dotfiles still pins dev-tools `0.4.0` and router `0.3.0`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
 - Exact third-party npm pins: `pi-web-access@0.36.0`, `pi-deferred-context-engine@0.5.0`, `@quintinshaw/pi-dynamic-workflows@3.14.0`, `pi-memory@0.4.2`.
 - Other fork pins: `pi-claude-auth v0.1.3-nredd.1`, `pi-computer-use v0.5.1-nredd.2`. The stack installs but never loads computer-use in headless CI.
-- Owned pins: `@nredd/pi-dev-tools@0.4.0`, `@nredd/pi-subscription-router@0.3.0`, `@nredd/pi-session-kit@0.4.0` (gated by #46 `stack`, promoted by dotfiles#11). dev-tools, router and preset carry unreleased changes (new factory options); cut them through `publish.yml` when needed.
+- Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, dotfiles#14 promotion pending), `@nredd/pi-session-kit@0.4.0` (gated by #46 `stack`, promoted by dotfiles#11). preset carries unreleased changes; cut it through `publish.yml` when needed.
 - `@nredd/pi-preset@0.1.0` is published, not adopted live. The live footer remains dotfiles-owned until profiles/preset adoption.
 
 Verification layers now implemented:
@@ -98,4 +98,4 @@ Historical, not the current deployment inventory:
 ## Where to start
 
 - Read `PLAN.md`, `docs/verification-rebuild.md` (destination ledger; no non-boundary scenarios left), `docs/forks.md`, `docs/releases.md`, `docs/ci.md`.
-- Recheck current main/PR heads and pins, then choose from item 8. Fetch the exact review SHA before dual Sol reviews. Do not rerun the archived e2e suite or restart items 1-7.
+- Recheck current main/PR heads and pins, then choose from item 8. Fetch the exact review SHA before dual reviews. Do not rerun the archived e2e suite or restart items 1-7.

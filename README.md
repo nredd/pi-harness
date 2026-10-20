@@ -61,8 +61,8 @@ make check-fork-package-contracts # explicit: real packed preset/dev-tools via t
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
   `integration/inprocess/` stack suite under Vitest and Bun (published packages:
-  `@nredd/pi-dev-tools@0.4.0`, `@nredd/pi-session-kit@0.4.0`,
-  `@nredd/pi-subscription-router@0.3.0`, `@nredd/pi-preset@0.1.0`)
+  `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.4.0`,
+  `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.1.0`)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, no mocks)
