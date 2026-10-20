@@ -12,6 +12,8 @@
 - `2026-10-19-rpiv-todo-2.13.9`: Gitlink-only selection of rpiv-todo `v2.13.9-nredd.1` (upstream 2.13.9 with per-call state persistence and the legacy-snapshot replay guard); no new artifacts
 - Each npm publication is also a signed monorepo tag `@nredd/<name>@<version>` at the commit the tarball was packed from (`@nredd/pi-dev-tools@0.4.0`, `@nredd/pi-session-kit@0.3.0`, `@nredd/pi-subscription-router@0.3.0`, `@nredd/pi-preset@0.1.0` at `c1857f3`). Tag at publication, never retroactively to a different commit.
 - `@nredd/pi-session-kit@0.4.0` (`718b033`): first publication through `publish.yml` with npm trusted publishing (OIDC, no token) and SLSA provenance; GitHub release carries the tarball, `SHA256SUMS`, `identity.json` and `manifest.json`. Attempt 1 published but failed the one-minute registry poll; the failed-jobs rerun skipped re-publication on matching integrity, then verified signatures, attestations and source binding
+- `@nredd/pi-subscription-router@0.4.0` (`3cf77bc`): published by `publish.yml` in one attempt (npm served it after ~3.5 min of the ten-minute poll); release carries the four assets
+- `@nredd/pi-dev-tools@0.5.0` (signed tag at `3cf77bc`): NEVER PUBLISHED. `verify` failed one dev-tools test (run [here](https://github.com/nredd/pi-harness/actions/runs/39370449677)): it ran the package check inside the `uv run --project integration` venv, so `uv run pytest` in a pytest-less fixture project found the harness's `pytest`. CI's `owned` job never activates that venv. `scripts/npm_release.py` now strips the activation from every child command; the tag stays where it is and the release moves to `0.5.1`
 
 ## Owned npm packages
 
@@ -30,7 +32,9 @@
 
 `verify` refuses unknown packages, tag/version skew, tags not at the checkout commit, commits outside
 `origin/main`, and versions already present on npm. It installs with `npm ci --ignore-scripts`, runs
-only the selected package's `npm run check` with pinned Bun, and packs once. The stock package contract
+only the selected package's `npm run check` with pinned Bun, and packs once. Child commands run without
+the integration venv `uv run` activated for the script (`VIRTUAL_ENV` and its `bin` on `PATH`), matching
+CI's `owned` job. The stock package contract
 consumes that tarball for each standalone plugin; dev-tools also runs the fork contract, and preset
 runs the fork contract instead of a standalone contract. The fork contract packs only the companion
 package from the same checkout. Existing tarballs enter the gates via `supplied` (CLI equivalent:
