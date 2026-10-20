@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from typing import TYPE_CHECKING, Any
@@ -15,8 +16,9 @@ import pytest
 
 from harness.golden import assert_golden
 from harness.headless import run_headless
-from harness.paths import FAUX_EXTENSION, pi_command
+from harness.paths import FAUX_EXTENSION, REPO_ROOT, pi_command
 from harness.rpc import RpcProcess
+from harness.stack import find_package
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -93,6 +95,50 @@ def test_extensions_load_without_warnings(sandbox: Sandbox, tui: Callable[..., T
         assert wait_dead(pane) == 0
         assert not (sandbox.root / "pi0.stderr").read_text().strip()
     assert not list((sandbox.home / "Applications").glob("*.app"))
+
+
+def test_preset_resource_selection(sandbox: Sandbox) -> None:
+    """Real discovery distinguishes footer-only personal from intentionally full local resources.
+
+    Parameters:
+        sandbox (Sandbox): actual installed selection; no local preset injection or source replacement.
+    """
+    name = (sandbox.agent_dir / "stack-name").read_text()
+    preset = find_package("pi-preset", sandbox.settings()["packages"], sandbox.agent_dir)
+    report = sandbox.root / "script-stack-resources.json"
+    result = run_headless(
+        sandbox,
+        SCRIPT,
+        ["hi"],
+        extra_args=["--no-approve", "-e", str(REPO_ROOT / "probes/stack-resources.ts")],
+        env={"HARNESS_RESOURCE_REPORT": str(report), "HARNESS_PRESET_ROOT": str(preset)},
+    )
+    assert result.returncode == 0, result.transcript()
+    assert not result.stderr.strip(), result.stderr
+    receipt = json.loads(report.read_text())
+    expected = {"extensions": ["extensions/expanded-footer.ts"], "skills": [], "prompts": [], "themes": []}
+    if name == "local":
+        expected["skills"] = [
+            f"skills/{skill}/SKILL.md"
+            for skill in ("code-review", "coding-like-redd", "get-it-merged", "ship-issue")
+        ]
+        expected["themes"] = ["themes/belafonte-day.json", "themes/tokyonight-storm.json"]
+    else:
+        assert name == "personal", name
+        packages = sandbox.settings()["packages"]
+        assert len(packages) == 13
+        assert packages[0] == {"source": "npm:@nredd/pi-preset@0.2.0", **expected}
+        assert json.loads((sandbox.agent_dir / "subagents.json").read_text())["packageAgents"] is False
+    assert receipt["resources"] == expected
+    description = receipt["agentParameters"]["properties"]["subagent_type"]["description"]
+    available = re.search(r"Available types: (.*?)\.", description)
+    assert available, description
+    types = {value.strip() for value in available[1].split(",")}
+    specialists = {"architect", "code-reviewer", "critic", "debugger", "researcher", "verifier"}
+    if name == "personal":
+        assert types == {"general-purpose", "Explore", "Plan"}, types
+    else:
+        assert specialists <= types, types
 
 
 def test_tool_set(sandbox: Sandbox) -> None:

@@ -26,7 +26,7 @@ Layout:
 - `scripts/`: build, release, and chezmoi integration implementation.
 - `docs/`: development, source provenance, release, and recovery documentation.
 
-`packages/preset` (`@nredd/pi-preset` `0.1.0`, published) is the optional opinionated
+`packages/preset` (`@nredd/pi-preset` `0.2.0`, published) is the optional opinionated
 preset with agents, skills, footer, themes, and public-safe defaults. It is a resource snapshot only: no
 installer or activation, model roles and enterprise acceptance are pending, and its themes carry
 their own licenses. See [its README](packages/preset/README.md) and
@@ -67,12 +67,12 @@ make check-fork-package-contracts # explicit: real packed preset/dev-tools via t
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
   `integration/inprocess/` stack suite under Vitest and Bun (published packages:
   `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.6.0`,
-  `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.1.0`)
+  `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, no mocks)
 - `check-integration`: ruff, ty, unit tests for `integration/`, then `check-probes`
-- `check-probes`: Biome and strict `tsc` for `integration/probes/process-lifecycle.test.ts` (real
+- `check-probes`: Biome and strict `tsc` for `integration/probes/process-lifecycle.test.ts` and `stack-resources.ts` (real
   `dev-tools` and `session-kit` runner sources), then `node --test` on the explicit
   `transcript-types.test.ts` and `process-lifecycle.test.ts` (no glob; `todo-history.test.ts` is not in this gate)
 - `check-benchmark`: ruff, ty, all unit tests with the 90% coverage threshold for
