@@ -148,7 +148,17 @@ def answered(result: RunResult, mock: AnthropicMock) -> None:
     assert not result.stderr.strip(), result.stderr
 
 
-@pytest.mark.parametrize("kind", ["direct", "router", "api-key", "custom", "missing-preload"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        # These dispatch branches need proven interception before planting fake OAuth.
+        *[
+            pytest.param(kind, marks=pytest.mark.node_preload)
+            for kind in ("direct", "router", "api-key", "custom")
+        ],
+        "missing-preload",  # The refusal itself is safe and must also run on Bun standalone.
+    ],
+)
 def test_request_uses_auth_json_token_with_claude_code_headers(
     sandbox: Sandbox, mock: AnthropicMock, kind: str
 ) -> None:
@@ -200,6 +210,7 @@ def test_request_uses_auth_json_token_with_claude_code_headers(
         assert BILLING not in json.dumps(request.body)
 
 
+@pytest.mark.node_preload
 def test_expired_token_refreshes_natively_and_persists(sandbox: Sandbox, mock: AnthropicMock) -> None:
     """Only a custom agent directory changes on refresh; unrelated provider/default sentinels survive.
 
@@ -226,6 +237,7 @@ def test_expired_token_refreshes_natively_and_persists(sandbox: Sandbox, mock: A
     assert (sandbox.agent_dir / "auth.json").read_bytes() == default
 
 
+@pytest.mark.node_preload
 @pytest.mark.parametrize("kind", ["refresh-refusal", "logout-relogin"])
 def test_refresh_failure_sends_nothing_and_keeps_credentials(
     sandbox: Sandbox, mock: AnthropicMock, kind: str

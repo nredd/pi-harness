@@ -49,6 +49,7 @@ python_files = ["test_*.py"]
 addopts = "-ra --strict-markers --import-mode=importlib"
 markers = [
     "stack: declared assembled-stack D/E process gate",
+    "node_preload: requires NODE_OPTIONS --import redirect/egress readiness; skipped on Bun standalone",
     "integration: headless pi with faux providers",
     "tui: interactive pi in a real tmux pane",
     "bench: timing benchmarks against stored baselines",
