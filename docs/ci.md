@@ -60,8 +60,8 @@ Gitlink has no lockfile or `check` script, so the job fails rather than reportin
   separately prove installed registry/commands, memory persistence/path rejection, workflow
   list/missing-run behavior, a clean refused-loopback raw web fetch error and computer-use's
   installed-but-not-loaded headless exclusion. No version pins are copied into scenarios.
-  See the [per-extension matrix](verification-rebuild.md#shipped-extension-coverage-audit)
-  for each layer's actual assertions and GUI/live limitations. The shared third-party loader
+  The per-extension matrix is [here](verification-rebuild.md#shipped-extension-coverage-audit),
+  with each layer's actual assertions and GUI/live limitations. The shared third-party loader
   resets pi-memory's own path/snapshot/qmd caches before a new fixture: Bun caches npm modules
   across test files, so import-time state must not retain a deleted prior private home.
 
