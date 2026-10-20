@@ -28,6 +28,16 @@ from harness.paths import GIT_BIN, REPO_ROOT
 LOGGER = logging.getLogger(__name__)
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+LEGACY_RELEASE_TAGS = frozenset(
+    {
+        "v1.3.0-nredd.3",
+        "v1.3.0-nredd.4",
+        "v1.3.0-nredd.5",
+        "v1.3.0-nredd.6",
+        "v1.3.0-nredd.7",
+    }
+)
+ATTESTATION_WORKFLOW = "nredd/pi/.github/workflows/fork-release.yml"
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -92,6 +102,83 @@ def manifest_checksums(tag: str, manifests: Path) -> dict[str, str]:
     return checksums
 
 
+def release_checksums(tag: str, manifests: Path) -> dict[str, str]:
+    """Read a release checksum file, preserving named pre-attestation releases.
+
+    Parameters:
+        tag (str): requested core tag.
+        manifests (Path): repository release manifests holding legacy identities.
+
+    Returns:
+        dict[str, str]: release asset URL -> sha256 mapping.
+
+    Raises:
+        ValueError: malformed, incomplete, or unrecognized release identities.
+    """
+    if tag in LEGACY_RELEASE_TAGS:
+        return manifest_checksums(tag, manifests)
+    base = f"https://github.com/nredd/pi/releases/download/{tag}/"
+    try:
+        with urlopen(f"{base}SHA256SUMS", timeout=120) as response:
+            contents = response.read().decode("utf-8")
+    except OSError as error:
+        raise ValueError(f"Could not download release checksums for '{tag}'") from error
+    checksums: dict[str, str] = {}
+    for line in contents.splitlines():
+        fields = line.split(maxsplit=1)
+        if len(fields) != 2:
+            raise ValueError(f"Malformed release checksum line for '{tag}': '{line}'")
+        digest, name = fields
+        if not SHA256_HEX.fullmatch(digest) or "/" in name or name.startswith("*"):
+            raise ValueError(f"Invalid release checksum line for '{tag}': '{line}'")
+        url = f"{base}{name}"
+        if url in checksums:
+            raise ValueError(f"Duplicate release checksum for '{url}'")
+        checksums[url] = digest
+    if not checksums:
+        raise ValueError(f"No release checksums for '{tag}'")
+    return checksums
+
+
+def verify_provenance(path: Path, tag: str) -> None:
+    """Require GitHub provenance from the dedicated core-release workflow.
+
+    Parameters:
+        path (Path): downloaded release artifact.
+        tag (str): exact core tag bound to the source ref.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: the artifact lacks the required provenance identity.
+    """
+    gh = shutil.which("gh")
+    if gh is None:
+        raise FileNotFoundError("Core release verification requires `gh`")
+    try:
+        subprocess.check_output(
+            [
+                gh,
+                "attestation",
+                "verify",
+                str(path),
+                "--repo",
+                "nredd/pi",
+                "--signer-workflow",
+                ATTESTATION_WORKFLOW,
+                "--source-ref",
+                f"refs/tags/{tag}",
+                "--deny-self-hosted-runners",
+            ],
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=120,
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            f"Core release provenance verification failed for '{path}': {error.output[-6000:]}"
+        ) from error
+
+
 def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
     """Require downloaded bytes to match a recorded manifest identity.
 
@@ -150,7 +237,7 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
         raise ValueError(f"Not a core fork release tag: '{tag}'")
     if prefix.exists() and any(prefix.iterdir()):
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
-    checksums = manifest_checksums(tag, manifests)
+    checksums = release_checksums(tag, manifests)
     version = match["version"]
     urls = [
         f"https://github.com/nredd/pi/releases/download/{tag}/earendil-works-{package}-{version}.tgz"
@@ -181,6 +268,8 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
         with urlopen(url, timeout=120) as response:
             asset.write_bytes(response.read())
         verify_asset(asset, url, checksums)
+        if tag not in LEGACY_RELEASE_TAGS:
+            verify_provenance(asset, tag)
         assets.append(asset)
     try:
         subprocess.check_output(

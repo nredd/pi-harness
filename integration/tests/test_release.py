@@ -17,7 +17,16 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness import release
-from harness.release import fetch_release, gitlink_tag, manifest_checksums, prune_native, verify_asset
+from harness.release import (
+    ATTESTATION_WORKFLOW,
+    fetch_release,
+    gitlink_tag,
+    manifest_checksums,
+    prune_native,
+    release_checksums,
+    verify_asset,
+    verify_provenance,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -174,6 +183,75 @@ def test_conflicting_manifests_are_not_ignored(tmp_path: Path) -> None:
         )
     with pytest.raises(ValueError, match="Conflicting"):
         manifest_checksums("v1.3.0-nredd.4", tmp_path)
+
+
+def test_release_checksums_require_release_file_except_named_legacy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Trust only committed legacy identities or a strict release `SHA256SUMS` file.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace release checksum download.
+        tmp_path (Path): private manifest directory.
+    """
+    tag = "v1.3.0-nredd.8"
+    base = f"https://github.com/nredd/pi/releases/download/{tag}/"
+    monkeypatch.setattr(
+        release,
+        "urlopen",
+        lambda url, **kwargs: io.BytesIO(f"{'a' * 64}  earendil-works-pi-coding-agent-1.3.0.tgz\n".encode()),
+    )
+    assert release_checksums(tag, tmp_path) == {base + "earendil-works-pi-coding-agent-1.3.0.tgz": "a" * 64}
+    monkeypatch.setattr(release, "urlopen", lambda url, **kwargs: io.BytesIO(b"not a checksum\n"))
+    with pytest.raises(ValueError, match="Invalid"):
+        release_checksums(tag, tmp_path)
+
+
+def test_provenance_verification_pins_workflow_and_tag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pass exact provenance identity arguments to the GitHub CLI.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace GitHub CLI discovery and execution.
+        tmp_path (Path): private release artifact.
+    """
+    artifact = tmp_path / "core.tgz"
+    artifact.write_bytes(b"core")
+    calls = []
+
+    def gh(argv: list[str], **kwargs: Any) -> str:
+        """Record a successful provenance invocation.
+
+        Parameters:
+            argv (list[str]): GitHub CLI command and arguments.
+            **kwargs (Any): subprocess options.
+
+        Returns:
+            str: simulated verification output.
+        """
+        calls.append(argv)
+        assert kwargs["timeout"] == 120
+        return "verified"
+
+    monkeypatch.setattr(release.shutil, "which", lambda name: "/explicit/gh")
+    monkeypatch.setattr(subprocess, "check_output", gh)
+    verify_provenance(artifact, "v1.3.0-nredd.8")
+    assert calls == [
+        [
+            "/explicit/gh",
+            "attestation",
+            "verify",
+            str(artifact),
+            "--repo",
+            "nredd/pi",
+            "--signer-workflow",
+            ATTESTATION_WORKFLOW,
+            "--source-ref",
+            "refs/tags/v1.3.0-nredd.8",
+            "--deny-self-hosted-runners",
+        ]
+    ]
 
 
 def test_prune_matches_formula_platform_spellings(tmp_path: Path) -> None:
