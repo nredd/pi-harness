@@ -35,6 +35,13 @@ export function dayRange(from: string, to: string): string[] {
 	return out;
 }
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/** `Mon` for `Date#getDay()` 1. */
+export function weekdayName(day: number): string {
+	return WEEKDAYS[day] ?? "";
+}
+
 export function monthName(month: number): string {
 	return MONTHS[month] ?? "";
 }
