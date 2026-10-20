@@ -145,6 +145,28 @@ test("resource loader discovers the footer, skills, and themes without diagnosti
 		for (const name of THEMES) assert.ok(names.includes(name), `theme ${name} loaded`);
 	}));
 
+test("footer-only source filters load the extension without skills, prompts or themes", () =>
+	withSandbox(async (box) => {
+		box.settingsManager.setPackages([
+			{
+				source: pkgRoot,
+				extensions: ["extensions/expanded-footer.ts"],
+				skills: [],
+				prompts: [],
+				themes: [],
+			},
+		]);
+		const loader = await load(box);
+		assert.deepEqual(loader.getExtensions().errors, []);
+		assert.deepEqual(
+			loader.getExtensions().extensions.map((e) => e.path),
+			[join(pkgRoot, "extensions/expanded-footer.ts")],
+		);
+		assert.deepEqual(loader.getSkills().skills, []);
+		assert.deepEqual(loader.getPrompts().prompts, []);
+		assert.ok(loader.getThemes().themes.every((theme) => !THEMES.includes(theme.name ?? "")));
+	}));
+
 test("an existing global skill of the same name wins; the packaged one is reported, not loaded", () =>
 	withSandbox(async (box) => {
 		const globalSkill = join(box.home, ".agents/skills/ship-issue");
