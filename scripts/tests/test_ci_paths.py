@@ -191,6 +191,36 @@ def test_classify_rejects_renamed_tested_documentation(repo: Path) -> None:
     assert result.paths == ("README.md", "docs/readme.md")
 
 
+@pytest.mark.parametrize("operation", ["add", "change", "delete"])
+def test_classify_rejects_gitlink_at_documentation_path(repo: Path, operation: str) -> None:
+    """Treat every Gitlink endpoint as code, even at an allowed documentation path.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        operation (str): Gitlink transition to compare.
+
+    Returns:
+        None: Assertions verify classification.
+    """
+    path = "docs/example.md"
+    initial_gitlink = "1" * 40
+    changed_gitlink = "2" * 40
+    if operation != "add":
+        git(repo, "update-index", "--add", "--cacheinfo", f"160000,{initial_gitlink},{path}")
+        commit(repo, "add gitlink")
+    base = git(repo, "rev-parse", "HEAD")
+    if operation == "delete":
+        git(repo, "update-index", "--force-remove", path)
+    else:
+        git(repo, "update-index", "--add", "--cacheinfo", f"160000,{changed_gitlink},{path}")
+    commit(repo, f"{operation} gitlink")
+
+    result = ci_paths.classify(repo, base, "HEAD")
+
+    assert not result.docs_only
+    assert result.paths == ()
+
+
 def test_classify_rejects_deleted_code(repo: Path) -> None:
     """Treat deletion of a code input as code rather than an empty diff.
 
