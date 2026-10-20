@@ -10,6 +10,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 | `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Biome, tsc and each package's unit suite (Vitest; preset `node --test`), `bun test` on each package's `test/scenarios/` where it has one (`test:bun`; a notice names every package without one, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts`, `make check-fork-package-contracts` | Packed tarballs alone on exact stock Pi 1.3.0, and the packed preset + dev-tools through the Gitlinked `pi-subagents`. JSON reports uploaded as artifacts |
 | `stack (ubuntu-24.04, macos-14; personal, local)` | Fetch exact Gitlinked core release with formula-equivalent npm + tui replacement, real `pi install` of explicit `integration/stacks/*.json`, `D` startup/transport/lifetime/output/tool surfaces and `E` tmux resize | The released Node bundle and declared stack work together without owner config; binary version, stack SHA-256, installed package versions and JUnit/failure artifacts are retained. A reasoned headless exclusion installs but never loads the computer-use helper |
+| `standalone (ubuntu-24.04, macos-14)` | Build Gitlinked core once per OS with pinned Bun, then run the same D/E selection sequentially for `personal` and `local` | Source-built linux-x64 and darwin-arm64 standalones, real `pi install`, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per stack explicitly skip, the missing-preload refusal still runs. JUnit, stack identities and failure artifacts retained; binary/archive SHA-256 printed |
 | `bench (not run)` | a notice and a step summary | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
 
 `.github/workflows/forks.yml`, when `forks/**`, `.gitmodules` or the workflow changes, plus manual dispatch:
@@ -83,12 +84,36 @@ The thirteen `DOTFILES` rows moved out to the item-7 doctor, not a distribution 
 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
 A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
-`stack` tests the Homebrew-shaped Node bundle, not a Bun standalone. Fork release
-`v1.3.0-nredd.6` publishes only npm tarballs. Each stack job checks the selected release's assets and
-prints `Bun standalone: not run (no standalone asset in <tag>)` when absent; a standalone asset makes
-the job refuse unsupported coverage rather than silently ignoring it. No Bun binary is built.
-Bun standalone validation is deferred with the Bun checklist (#26-31), blocked on runtime adapter
-#58 (Bun ignores `NODE_OPTIONS --import`). This is NOT RUN, never a Bun pass.
+`stack` still tests the released Homebrew-shaped Node bundle. Fork release `v1.3.0-nredd.6`
+publishes only four npm tarballs, no standalone assets. `standalone` instead builds the exact
+Gitlinked source using `.bun-version` (1.3.14), the official `scripts/build-binaries.sh`, and frozen
+release model data with `build:offline`. It does not depend on a future standalone release, commit
+binaries, or test a Node wrapper in place of the compiled executable.
+
+Bun scope:
+
+- Native execution on `macos-14` (darwin-arm64) and `ubuntu-24.04` (baseline linux-x64).
+  Each job reuses one extracted official archive for both stacks, with independent installations
+- `--runtime bun-standalone` skips only the seven marked auth dispatch/refresh cases from
+  `integration/scenarios/test_auth_transport.py`: Bun ignores the `NODE_OPTIONS --import` redirect
+  and egress/readiness preload in `harness/anthropic_mock.py`. The missing-preload refusal case runs
+  on both runtimes. Skip reasons appear in pytest and JUnit before fake auth fixtures can dispatch
+- No other selected D/E case uses preloads, scaled timers or `--expose-gc`. Clock-driven behavior
+  moved to native suites. `providers/fast_timers.mjs` is no longer used by selected D/E scenarios;
+  `harness/probe.py`'s `--expose-gc` is used only by excluded `scenarios/bench/test_render.py`
+- The adapter blocker is [here](https://github.com/nredd/pi-harness/issues/14). Previous references
+  to #58 are stale: no such issue exists in this repository. The timer migration removed one
+  dependency, not the remaining auth transport interception requirement
+- NOT RUN: linux-arm64 (no `ubuntu-24.04-arm` job added), darwin-x64, Windows, packed contracts
+  hosted by the standalone, quiet-runner benchmarks, live credentials, REA and desktop/TCC helpers.
+  Source-built D/E coverage is not published-binary acceptance or a completed Bun checklist
+
+Capacity: two extra jobs per PR, not six build/test fan-out jobs. Each OS builds once and runs both
+stacks serially with two pytest workers. Budget approximately 10-20 runner minutes per OS (20-40
+additional runner minutes total), bounded by two 40-minute timeouts; these are estimates until CI
+provides measurements, not promised runtimes. Linux ARM64 is omitted to avoid another build and two
+stack installs while first establishing both existing OS targets. No branch protection changes;
+these new checks are not added to the required-check list above.
 
 `.github/workflows/publish.yml`, pushes of tags matching `@nredd/*@*`:
 

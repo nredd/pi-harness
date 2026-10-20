@@ -54,6 +54,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         parser (pytest.Parser): pytest option registry.
     """
     parser.addoption("--stack", help="Explicit package-set JSON; required by scenarios")
+    parser.addoption(
+        "--runtime", choices=("node", "bun-standalone"), default="node", help="Runtime behind explicit PI_BIN"
+    )
 
 
 @pytest.hookimpl(trylast=True)
@@ -64,6 +67,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         config (pytest.Config): parsed runner settings.
         items (list[pytest.Item]): selected tests after marker deselection.
     """
+    if config.getoption("--runtime") == "bun-standalone":
+        for item in items:
+            if item.get_closest_marker("node_preload"):
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason="Bun standalone ignores NODE_OPTIONS --import; auth redirect/egress "
+                        "readiness requires the Node preload (runtime adapter #14 remains NOT RUN)"
+                    )
+                )
     for tier in ("bench", "live"):
         if any(item.get_closest_marker(tier) for item in items):
             try:
