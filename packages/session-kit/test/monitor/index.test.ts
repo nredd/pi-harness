@@ -106,7 +106,7 @@ describe("monitor extension", () => {
 		expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("session-kit:monitors", undefined);
 	});
 
-	it("sends passive output without triggering a turn", async () => {
+	it("keeps passive output out of custom messages", async () => {
 		const f = fakePi();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
@@ -114,8 +114,11 @@ describe("monitor extension", () => {
 		await f.tools
 			.get("monitor_start")
 			.execute("1", { argv: ["node", "-e", `console.log("hi");${STAY}`], name: "w" }, undefined, undefined, ctx);
-		await waitFor(() => f.sendMessage.mock.calls.length === 1, 6000);
-		expect(f.sendMessage.mock.calls[0]?.[1]).toEqual({ triggerTurn: false });
+		await waitFor(async () => {
+			const read = await f.tools.get("monitor_read").execute("2", { id: "w" }, undefined, undefined, ctx);
+			return read.content[0].text.includes("1: hi");
+		}, 6000);
+		expect(f.sendMessage).not.toHaveBeenCalled();
 		await f.emit("session_shutdown", ctx);
 	});
 

@@ -60,6 +60,8 @@ interface Monitor {
 	coalescer: Coalescer<TaggedLine>;
 	timeoutTimer: TimerHandle;
 	stopReason: "stop" | "timeout" | undefined;
+	/** Cursor after the output the model most recently received through a wake or read. */
+	notifiedSince: number;
 	/** Resolves after the exit was fully processed (status set, pidfile removed). */
 	done: Promise<void>;
 }
@@ -109,7 +111,9 @@ export class MonitorManager {
 	read(idOrName: string, since?: number): (RingRead & { info: MonitorInfo; lastLine: number }) | undefined {
 		const m = this.find(idOrName);
 		if (!m) return undefined;
-		return { ...m.ring.read(since), info: toInfo(m), lastLine: m.ring.lastLine };
+		const lastLine = m.ring.lastLine;
+		m.notifiedSince = lastLine;
+		return { ...m.ring.read(since), info: toInfo(m), lastLine };
 	}
 
 	async start(params: StartParams, cwd: string): Promise<MonitorInfo> {
@@ -205,6 +209,7 @@ export class MonitorManager {
 			coalescer,
 			timeoutTimer,
 			stopReason: undefined,
+			notifiedSince: 0,
 			done: Promise.resolve(),
 		};
 		const m = monitor;
@@ -283,29 +288,23 @@ export class MonitorManager {
 		removePidfile(this.sessionDir, m.id);
 		const pending = m.coalescer.take();
 		if (this.disposed) return;
-		// A requested stop is already known to whoever asked, so it never wakes the agent, and says
-		// nothing at all when no output is pending. Natural exit and timeout always wake.
-		const quiet = m.stopReason === "stop";
-		if (!quiet || pending.items.length > 0 || pending.dropped > 0) {
-			this.deliver(formatMessage(toInfo(m), pending, { final: true, wake: !quiet }));
-		}
+		// A requested stop is already known to whoever asked. Passive output stays only in the ring;
+		// natural exit and timeout each emit one compact wake.
+		if (m.stopReason !== "stop") this.deliver(m, pending, { final: true, wake: true });
 		this.opts.onChange?.();
 	}
 
 	private emitBatch(m: Monitor, batch: CoalescedBatch<TaggedLine>): void {
 		if (this.disposed || (batch.items.length === 0 && batch.dropped === 0)) return;
-		this.deliver(
-			formatMessage(toInfo(m), batch, {
-				final: false,
-				wake: m.wake || batch.droppedMatched || batch.items.some((l) => l.matched),
-			}),
-		);
+		const wake = m.wake || batch.droppedMatched || batch.items.some((l) => l.matched);
+		if (wake) this.deliver(m, batch, { final: false, wake });
 	}
 
 	/** A failed delivery must never leave a monitor un-reaped, so it is swallowed here. */
-	private deliver(message: MonitorMessage): void {
+	private deliver(m: Monitor, batch: CoalescedBatch<TaggedLine>, opts: { final: boolean; wake: boolean }): void {
 		try {
-			this.opts.send(message);
+			this.opts.send(formatMessage(toInfo(m), batch, { ...opts, since: m.notifiedSince }));
+			m.notifiedSince = m.ring.lastLine;
 		} catch {
 			// the output stays readable through monitor_read
 		}
@@ -329,6 +328,7 @@ function toInfo(m: Monitor): MonitorInfo {
 		exitCode: m.exit.exitCode,
 		signal: m.exit.signal,
 		lines: m.ring.lastLine,
+		lastLine: m.ring.lastText,
 		wake: m.wake,
 		match: m.matchSource,
 		timeoutMs: m.timeoutMs,
