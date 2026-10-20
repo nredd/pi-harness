@@ -194,28 +194,113 @@ def test_descriptor_rejects_workspace_escape_and_missing_native_artifact(
         )
 
 
-def test_generalized_runner_rejects_descriptor_contract_without_a_subject(repo: Path, tmp_path: Path) -> None:
-    """A descriptor contract absent from the supplied runner set never reaches stock Pi.
+@pytest.mark.parametrize(
+    ("pattern", "relative", "expected"),
+    [
+        ("prebuilt/*", "prebuilt/helper", True),
+        ("prebuilt/*", "prebuilt/macos/helper", False),
+        ("prebuilt/**/helper", "prebuilt/helper", True),
+        ("prebuilt/**/helper", "prebuilt/macos/helper", True),
+        ("prebuilt/helper?", "prebuilt/helper1", True),
+        ("prebuilt/helper?", "prebuilt/helper/one", False),
+        ("prebuilt/[mh]elper", "prebuilt/helper", True),
+        ("prebuilt/[mh]elper", "prebuilt/zelper", False),
+    ],
+)
+def test_native_artifact_patterns_match_full_relative_paths(
+    pattern: str, relative: str, expected: bool
+) -> None:
+    """Native artifact patterns use segment-confined ``PurePosixPath.full_match`` semantics.
 
     Parameters:
-        repo (Path): Disposable descriptor repository.
-        tmp_path (Path): Empty runner scratch directory.
+        pattern (str): Descriptor-native artifact pattern.
+        relative (str): Candidate package-relative path.
+        expected (bool): Expected full-match result.
 
     Returns:
-        None: An unselected subject is refused before tool setup.
+        None: The shared matcher accepts exactly the declared paths.
+    """
+    assert nr.matches_native_artifact(PurePosixPath(pattern), PurePosixPath(relative)) is expected
+
+
+@pytest.mark.parametrize(
+    ("pattern", "relative", "expected"),
+    [
+        ("prebuilt/*", "prebuilt/helper", True),
+        ("prebuilt/*", "prebuilt/macos/helper", False),
+        ("prebuilt/**/helper", "prebuilt/helper", True),
+        ("prebuilt/**/helper", "prebuilt/macos/helper", True),
+        ("prebuilt/helper?", "prebuilt/helper1", True),
+        ("prebuilt/helper?", "prebuilt/helper/one", False),
+    ],
+)
+def test_native_tarball_patterns_match_full_relative_paths(
+    tmp_path: Path, pattern: str, relative: str, expected: bool
+) -> None:
+    """Tarball native-artifact checks use the same full-path glob semantics as source checks.
+
+    Parameters:
+        tmp_path (Path): Disposable tarball directory.
+        pattern (str): Descriptor-native artifact pattern.
+        relative (str): Packed package-relative path.
+        expected (bool): Whether the tarball should satisfy the pattern.
+
+    Returns:
+        None: Matching and non-matching packed paths are distinguished.
     """
     descriptor = rd.descriptor_for("@nredd/pi-session-kit")
     assert descriptor is not None
-    unmatched = replace(descriptor, contract=replace(descriptor.contract, directory="not-registered"))
-    with pytest.raises(pc.ContractError, match="No release contract matches"):
-        pc.run_gate(
-            tmp_path,
-            tmp_path,
-            [unmatched.contract.directory],
-            {unmatched.contract.directory: tmp_path / "subject.tgz"},
-            contracts=(),
-            scenarios={},
-        )
+    tarball = tmp_path / "candidate.tgz"
+    with tarfile.open(tarball, "w:gz") as archive:
+        data = b"native helper"
+        member = tarfile.TarInfo(f"package/{relative}")
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    native = replace(descriptor, native_artifacts=(PurePosixPath(pattern),))
+    if expected:
+        nr.validate_native_tarball(tarball, native)
+    else:
+        with pytest.raises(nr.ReleaseError, match="Packed tarball omits"):
+            nr.validate_native_tarball(tarball, native)
+
+
+def test_stock_contract_refuses_missing_gate_and_unselected_subject(tmp_path: Path) -> None:
+    """The real release chain rejects bad descriptor gates and supplied subjects before tool setup.
+
+    Parameters:
+        tmp_path (Path): Empty runner scratch directory.
+
+    Returns:
+        None: Neither invalid descriptor reaches stock-Pi discovery.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    with pytest.raises(nr.ReleaseError, match="No executable stock gate"):
+        nr.run_stock_contract(tmp_path, tmp_path, replace(descriptor, stock_gate=None), {})
+    with pytest.raises(pc.ContractError, match="no selected release contract"):
+        nr.run_stock_contract(tmp_path, tmp_path, descriptor, {"wrong": tmp_path / "subject.tgz"})
+
+
+def test_native_matches_skip_external_symlinks(tmp_path: Path) -> None:
+    """Source native-artifact discovery never follows a symlink outside its package workspace.
+
+    Parameters:
+        tmp_path (Path): Disposable package and external helper root.
+
+    Returns:
+        None: The outside helper cannot satisfy a descriptor artifact requirement.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    workspace = tmp_path / "package"
+    workspace.mkdir()
+    outside = tmp_path / "outside-helper"
+    outside.write_text("native")
+    (workspace / "prebuilt").mkdir()
+    (workspace / "prebuilt/helper").symlink_to(outside)
+    native = replace(descriptor, native_artifacts=(PurePosixPath("prebuilt/helper"),))
+    with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
+        nr.validate_native_sources(workspace, native)
 
 
 def test_preflight_ancestry_and_existing_version(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -405,6 +490,7 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
         *,
         contracts: tuple[pc.PackageContract, ...],
         scenarios: dict[str, object],
+        siblings: tuple[pc.PackageContract, ...],
     ) -> SimpleNamespace:
         """Assert the stock gate receives precisely the already-packed candidate bytes.
 
@@ -413,6 +499,9 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
             _stock (Path): Unused Pi install directory.
             only (list[str]): Selected package directories.
             supplied (dict[str, Path]): Candidate tarball paths.
+            contracts (tuple[pc.PackageContract, ...]): Selected descriptor contract.
+            scenarios (dict[str, object]): Executable descriptor scenario by directory.
+            siblings (tuple[pc.PackageContract, ...]): Full descriptor peer contract set.
 
         Returns:
             SimpleNamespace: Synthetic gate evidence without running Pi.
@@ -422,6 +511,7 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
         assert supplied["session-kit"].is_file()
         assert [contract.directory for contract in contracts] == ["session-kit"]
         assert set(scenarios) == {"session-kit"}
+        assert siblings == tuple(candidate.contract for candidate in rd.DESCRIPTORS)
         return SimpleNamespace(
             packages={"@nredd/pi-session-kit": SimpleNamespace(evidence={"subject": "session-kit"})},
             model_dump_json=lambda: '{"test": "Pi exercise substituted"}',
@@ -731,7 +821,10 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
         _stock: Path,
         _only: list[str],
         supplied: dict[str, Path],
-        **kwargs: object,
+        *,
+        contracts: tuple[pc.PackageContract, ...],
+        scenarios: dict[str, object],
+        siblings: tuple[pc.PackageContract, ...],
     ) -> SimpleNamespace:
         """Assert the descriptor passes its contract and executable subject gate.
 
@@ -740,15 +833,16 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
             _stock (Path): Unused stock Pi directory.
             _only (list[str]): Selected contract directory.
             supplied (dict[str, Path]): Packed candidate bytes.
-            **kwargs (object): Generalized contracts and scenario mapping.
+            contracts (tuple[pc.PackageContract, ...]): Selected release contract.
+            scenarios (dict[str, object]): Selected executable gate by contract directory.
+            siblings (tuple[pc.PackageContract, ...]): All descriptor contracts for context peers.
 
         Returns:
             SimpleNamespace: Synthetic per-subject evidence report.
         """
-        assert kwargs["contracts"] == (contract,)
-        scenarios = kwargs["scenarios"]
-        assert isinstance(scenarios, dict)
+        assert contracts == (contract,)
         assert set(scenarios) == {contract.directory}
+        assert siblings == tuple(candidate.contract for candidate in rd.DESCRIPTORS)
         return gate("stock", supplied)
 
     monkeypatch.setattr(nr, "command", command)

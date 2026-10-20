@@ -45,8 +45,9 @@ ReleaseDescriptor(
 ```
 
 `@nredd/pi-computer-use` will additionally declare `native_artifacts=(PurePosixPath("prebuilt/macos/*"),)`.
-That requirement checks both the source workspace and the packed tarball, but the helper build and macOS
-native suites belong to its later import PR. No extension descriptor is added by this change.
+Patterns use `PurePosixPath.full_match`: `*` and `?` stay within one path segment, while `**` matches zero
+or more segments. Requirements check both the source workspace and packed tarball, but the helper build
+and macOS native suites belong to its later import PR. No extension descriptor is added by this change.
 
 1. Bump the package version and root lockfile in a reviewed PR, pass CI, and merge to `main`.
 2. Select the merged `main` SHA whose package version equals the intended version. Create a signed tag:
