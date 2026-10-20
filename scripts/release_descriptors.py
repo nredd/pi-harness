@@ -29,8 +29,9 @@ class ReleaseDescriptor:
         contract (pc.PackageContract): Packed-artifact contract exercised after packing.
         contract_gates (tuple[Literal["stock", "fork"], ...]): Contract gates consuming the tarball.
         stock_gate (Callable[[pc.Context], pc.ScenarioEvidence] | None): Executable stock-Pi gate.
-        native_artifacts (tuple[PurePosixPath, ...]): Required package-relative glob patterns that must exist
-            before packing and appear in the accepted tarball.
+        native_artifacts (tuple[PurePosixPath, ...]): Required package-relative
+            ``PurePosixPath.full_match`` glob patterns that must exist before packing and appear in the
+            accepted tarball. ``*`` and ``?`` remain within one segment; ``**`` spans zero or more.
     """
 
     name: str

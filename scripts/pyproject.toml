@@ -2,7 +2,7 @@
 # with the pinned ruff/ty/pytest from the `integration` uv environment.
 [tool.ruff]
 line-length = 110
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PL", "PT", "C4", "PTH", "RET"]
@@ -16,7 +16,7 @@ ignore = [
 per-file-ignores = { "tests/**" = ["E402"] }
 
 [tool.ty.environment]
-python-version = "3.12"
+python-version = "3.13"
 root = ["."]
 
 [tool.ty.terminal]
