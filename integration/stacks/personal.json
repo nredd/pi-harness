@@ -12,7 +12,7 @@
     "npm:@quintinshaw/pi-dynamic-workflows@3.14.0",
     "npm:pi-memory@0.4.2",
     "git:github.com/nredd/pi-computer-use@v0.5.1-nredd.2",
-    "npm:@nredd/pi-session-kit@0.4.0"
+    "npm:@nredd/pi-session-kit@0.5.0"
   ],
   "settings": {"quietStartup": true, "fullscreen": true},
   "disabled_extensions": {
