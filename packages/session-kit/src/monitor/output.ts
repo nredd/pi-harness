@@ -18,6 +18,8 @@ export interface Bounded {
 /** Room reserved for the truncation notice inside the limits. */
 const NOTICE_BYTES = 256;
 const NOTICE_LINES = 2;
+/** Prefix preceding the spilled-file path when model-visible output is truncated. */
+export const OUTPUT_TRUNCATED_PREFIX = "[output truncated at the start; full text in ";
 
 let spillDir: Promise<string> | undefined;
 let spillSeq = 0;
@@ -34,7 +36,7 @@ export async function boundTail(text: string, label: string): Promise<Bounded> {
 	const fullOutputPath = join(dir, `${label}-${spillSeq}.txt`);
 	await writeFile(fullOutputPath, text, { encoding: "utf8", mode: 0o600 });
 	return {
-		text: `${result.content}\n[output truncated at the start; full text in ${fullOutputPath}]`,
+		text: `${result.content}\n${OUTPUT_TRUNCATED_PREFIX}${fullOutputPath}]`,
 		truncated: true,
 		fullOutputPath,
 	};

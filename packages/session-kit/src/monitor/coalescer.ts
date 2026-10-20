@@ -5,6 +5,8 @@ export interface CoalescedBatch<T> {
 	items: T[];
 	dropped: number;
 	droppedMatched: boolean;
+	/** First and newest dropped matches, retained independently of passive batch storage. */
+	droppedMatches: T[];
 }
 
 export class Coalescer<T> {
@@ -12,6 +14,7 @@ export class Coalescer<T> {
 	private bytes = 0;
 	private dropped = 0;
 	private droppedMatched = false;
+	private droppedMatches: T[] = [];
 	private timer: TimerHandle | undefined;
 
 	constructor(
@@ -32,7 +35,11 @@ export class Coalescer<T> {
 		const maxBytes = this.options.maxBytes ?? 64 * 1024;
 		if (this.items.length >= maxItems || this.bytes + size > maxBytes) {
 			this.dropped++;
-			this.droppedMatched ||= this.options.matched?.(item) ?? false;
+			if (this.options.matched?.(item)) {
+				this.droppedMatched = true;
+				if (this.droppedMatches.length < 2) this.droppedMatches.push(item);
+				else this.droppedMatches[1] = item;
+			}
 		} else {
 			this.items.push(item);
 			this.bytes += size;
@@ -63,14 +70,21 @@ export class Coalescer<T> {
 		this.bytes = 0;
 		this.dropped = 0;
 		this.droppedMatched = false;
+		this.droppedMatches = [];
 	}
 
 	private takeBatch(): CoalescedBatch<T> {
-		const batch = { items: this.items, dropped: this.dropped, droppedMatched: this.droppedMatched };
+		const batch = {
+			items: this.items,
+			dropped: this.dropped,
+			droppedMatched: this.droppedMatched,
+			droppedMatches: this.droppedMatches,
+		};
 		this.items = [];
 		this.bytes = 0;
 		this.dropped = 0;
 		this.droppedMatched = false;
+		this.droppedMatches = [];
 		return batch;
 	}
 }
