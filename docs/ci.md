@@ -9,8 +9,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 | --- | --- | --- |
 | `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Biome, tsc and each package's unit suite (Vitest; preset `node --test`), `bun test` on each package's `test/scenarios/` where it has one (`test:bun`; a notice names every package without one, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts`, `make check-fork-package-contracts` | Packed tarballs alone on exact stock Pi 1.3.0, and the packed preset + dev-tools through the Gitlinked `pi-subagents`. JSON reports uploaded as artifacts |
-| `stack (ubuntu-24.04, macos-14; personal, local)` | Fetch exact Gitlinked core release with formula-equivalent npm + tui replacement, real `pi install` of explicit `integration/stacks/*.json`, `D` startup/transport/lifetime/output/tool surfaces and `E` tmux resize | The released Node bundle and declared stack work together without owner config; binary version, stack SHA-256, installed package versions and JUnit/failure artifacts are retained. A reasoned headless exclusion installs but never loads the computer-use helper |
-| `standalone (ubuntu-24.04, macos-14)` | Build Gitlinked core once per OS with pinned Bun, then run the same D/E selection sequentially for `personal` and `local` | Source-built linux-x64 and darwin-arm64 standalones, real `pi install`, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per stack explicitly skip, the missing-preload refusal still runs. JUnit, stack identities and failure artifacts retained; binary/archive SHA-256 printed |
+| `stack (ubuntu-24.04, macos-14; personal, local)` | Fetch exact Gitlinked core release with formula-equivalent npm + tui replacement, real `pi install`, D/E scenarios on Node. Each OS's existing `personal` job additionally builds Gitlinked core once with pinned Bun and runs D/E on that standalone for both `personal` and `local` | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 | `bench (not run)` | a notice and a step summary | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
 
 `.github/workflows/forks.yml`, when `forks/**`, `.gitmodules` or the workflow changes, plus manual dispatch:
@@ -85,7 +84,7 @@ The thirteen `DOTFILES` rows moved out to the item-7 doctor, not a distribution 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
 A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
 `stack` still tests the released Homebrew-shaped Node bundle. Fork release `v1.3.0-nredd.6`
-publishes only four npm tarballs, no standalone assets. `standalone` instead builds the exact
+publishes only four npm tarballs, no standalone assets. Each OS's existing `stack (..., personal)` job also builds the exact
 Gitlinked source using `.bun-version` (1.3.14), the official `scripts/build-binaries.sh`, and frozen
 release model data with `build:offline`. It does not depend on a future standalone release, commit
 binaries, or test a Node wrapper in place of the compiled executable.
@@ -108,12 +107,14 @@ Bun scope:
   hosted by the standalone, quiet-runner benchmarks, live credentials, REA and desktop/TCC helpers.
   Source-built D/E coverage is not published-binary acceptance or a completed Bun checklist
 
-Capacity: two extra jobs per PR, not six build/test fan-out jobs. Each OS builds once and runs both
-stacks serially with two pytest workers. Budget approximately 10-20 runner minutes per OS (20-40
-additional runner minutes total), bounded by two 40-minute timeouts; these are estimates until CI
-provides measurements, not promised runtimes. Linux ARM64 is omitted to avoid another build and two
-stack installs while first establishing both existing OS targets. No branch protection changes;
-these new checks are not added to the required-check list above.
+Capacity: ZERO added jobs, including zero new macOS jobs. Full CI still requests four macOS jobs,
+not six. The existing `stack (..., personal)` runner builds once and runs both standalone stacks
+serially with two pytest workers; `stack (..., local)` adds no work. No build producer, artifact
+transfer or extra queue admission. Budget an additional 7-12 minutes on macOS personal and 5-9 minutes
+on Ubuntu personal (12-21 added runner minutes total); local cells add zero. These are estimates until
+CI measurements, not promised runtimes. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid
+another build and two stack installs while establishing both current OS targets. Branch protection
+is unchanged; Bun failures now fail the existing personal stack check, not a new required context.
 
 `.github/workflows/publish.yml`, pushes of tags matching `@nredd/*@*`:
 
