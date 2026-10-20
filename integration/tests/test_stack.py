@@ -83,7 +83,9 @@ def test_supplied_stacks_are_pinned_and_exclusion_is_explicit() -> None:
     assert "../../packages/preset" in local.sources
     assert len(personal.disabled_extensions) == len(local.disabled_extensions) == 1
     assert "pi-computer-use" in next(iter(personal.disabled_extensions))
-    assert len([s for s in personal.sources if s.startswith("git:")]) == 5
+    assert personal.sources[0] == local.sources[0] == "npm:@gotgenes/pi-anthropic-auth@3.4.3"
+    assert not any("pi-claude-auth" in source for stack in (personal, local) for source in stack.sources)
+    assert len([s for s in personal.sources if s.startswith("git:")]) == 4
 
 
 def test_no_pi_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:

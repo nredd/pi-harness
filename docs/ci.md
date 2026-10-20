@@ -83,6 +83,14 @@ Flake policy (migration plan section 7):
   core `chord`/`durable` 5 s timeouts. They were green alone and flaky on a loaded laptop
 - Never rerun until green, never relabel NOT RUN as a pass
 
+Both assembled stacks use `npm:@gotgenes/pi-anthropic-auth@3.4.3`, not the retained auth Gitlink.
+`test_auth_transport.py` records direct Anthropic and `router/default` OAuth requests: native bearer
+and Pi user agent, exact versioned billing block, section-shaped system prompt retained in `system[]`
+and unchanged first user text. API-key and unconfigured custom-provider requests stay unshaped.
+Refresh persistence/refusal and the missing-Node-preload fail-closed branch remain covered. No live
+subscription is used. Explicit pi-ai compat dispatch and legacy loops without `streamFn` bypass the
+provider wrapper; compaction/modelRegistry coverage is upstream-documented, not asserted here.
+
 The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
 `integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
 No unported non-boundary Python scenarios remain. Package-native suites and `integration/inprocess/`

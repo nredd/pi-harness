@@ -1,14 +1,15 @@
 """The assembled auth/router stack dispatches native OAuth only to a recording loopback server.
 
 References:
-- https://github.com/nredd/pi-claude-auth
+- https://github.com/gotgenes/pi-anthropic-auth/tree/v3.4.3/src
+- https://github.com/gotgenes/pi-anthropic-auth/blob/v3.4.3/docs/architecture.md
 - https://datatracker.ietf.org/doc/html/rfc6749#section-6
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-import re
 import shutil
 from typing import TYPE_CHECKING, Any
 
@@ -45,8 +46,17 @@ UNRELATED = {
         "accountId": "harness",
     },
 }
-USER_AGENT = re.compile(r"^claude-cli/\S+ \(external, [^)]+\)$")
+# Pi 1.3.0 api/anthropic-messages.ts and auth 3.4.3 claude-code-version.ts both pin 2.1.280.
+CLAUDE_VERSION = "2.1.280"
 BILLING = "x-anthropic-billing-header"
+PI_PREAMBLE = "You are an expert coding assistant operating inside pi, a coding agent harness."
+MINIMAL_PROMPT = (
+    "You are an expert coding assistant.\n"
+    "Be concise and helpful.\n"
+    "Use the available tools to answer the user's request.\n"
+    "Show file paths clearly when working with files."
+)
+PROJECT_CONTEXT = "AUTH_CONTEXT_SENTINEL: In addition to the tools above, preserve project instructions."
 
 
 def oauth(access: str = ACCESS, expires: int = FUTURE) -> dict[str, Any]:
@@ -169,6 +179,7 @@ def test_request_uses_auth_json_token_with_claude_code_headers(
         mock (AnthropicMock): loopback wire recorder.
         kind (str): provider/auth path or missing-preload refusal branch.
     """
+    (sandbox.workdir / "AGENTS.md").write_text(PROJECT_CONTEXT)
     write_auth(sandbox.agent_dir, {"anthropic": oauth()})
     if kind == "missing-preload":
         refused = run(sandbox, mock, preload=False)
@@ -199,15 +210,41 @@ def test_request_uses_auth_json_token_with_claude_code_headers(
     answered(result, mock)
     request = mock.messages[0]
     assert mock.tokens == []
+    assert isinstance(request.body, dict)
+    system = request.body["system"]
+    user = next(message for message in request.body["messages"] if message["role"] == "user")
+    assert [block["text"] for block in user["content"] if block["type"] == "text"] == ["hi"]
+    system_text = "\n".join(block["text"] for block in system)
+    assert PROJECT_CONTEXT in system_text
+    assert "<tools>" in system_text
+    assert "</tools>" in system_text
     if kind in {"direct", "router"}:
         assert request.headers["authorization"] == f"Bearer {ACCESS}"
-        assert USER_AGENT.fullmatch(request.headers["user-agent"])
-        assert isinstance(request.body, dict)
-        assert request.body["system"][0]["text"].startswith(BILLING)
+        assert "x-api-key" not in request.headers
+        assert request.headers["user-agent"] == f"claude-cli/{CLAUDE_VERSION}"
+        assert request.headers["x-app"] == "cli"
+        # billing-header.ts samples offsets 4, 7, 20 (all absent in 'hi'), then salts the version.
+        suffix = hashlib.sha256(f"59cf53e54c78000{CLAUDE_VERSION}".encode()).hexdigest()[:3]
+        cch = hashlib.sha256(b"hi").hexdigest()[:5]
+        assert system[0] == {
+            "type": "text",
+            "text": f"{BILLING}: cc_version={CLAUDE_VERSION}.{suffix}; cc_entrypoint=sdk-cli; cch={cch};",
+        }
+        assert system[1]["text"] == "You are Claude Code, Anthropic's official CLI for Claude."
+        assert MINIMAL_PROMPT in system_text
+        assert PI_PREAMBLE not in system_text
+        assert "<docs>" not in system_text
+        # Only Pi-owned tools filler is removed, not the same phrase in project context.
+        tools = system_text.split("<tools>", 1)[1].split("</tools>", 1)[0]
+        assert "In addition to the tools above" not in tools
     else:
         assert "authorization" not in request.headers
         assert request.headers["x-api-key"] == ("fake-api-key" if kind == "api-key" else "fake-custom-key")
-        assert BILLING not in json.dumps(request.body)
+        assert BILLING not in system_text
+        assert PI_PREAMBLE in system_text
+        assert MINIMAL_PROMPT not in system_text
+        assert "<docs>" in system_text
+        assert "In addition to the tools above" in system_text.split("</tools>", 1)[0]
 
 
 @pytest.mark.node_preload
