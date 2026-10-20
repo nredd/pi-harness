@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   owned:
+    if: github.head_ref != 'probe/type3-diagnostics'
     name: owned (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -67,6 +68,7 @@ jobs:
         run: echo "::notice title=check-benchmark not run::macOS only, its native_runtime test needs Seatbelt"
 
   contracts:
+    if: github.head_ref != 'probe/type3-diagnostics'
     name: contracts (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -103,6 +105,7 @@ jobs:
           if-no-files-found: ignore
 
   stack:
+    if: github.head_ref != 'probe/type3-diagnostics' || (matrix.os == 'ubuntu-24.04' && matrix.stack == 'personal')
     name: stack (${{ matrix.os }}, ${{ matrix.stack }})
     strategy:
       fail-fast: false
@@ -180,6 +183,13 @@ jobs:
         working-directory: integration
         run: |
           if [ -d artifacts ]; then mv artifacts artifacts-node; fi
+      - name: Apply Type3 loader diagnostic (probe only)
+        if: ${{ github.head_ref == 'probe/type3-diagnostics' && matrix.os == 'ubuntu-24.04' && matrix.stack == 'personal' }}
+        working-directory: forks/pi
+        run: |
+          mkdir -p "$RUNNER_TEMP/type3-diagnostics"
+          echo "TYPE3_DIAGNOSTIC_DIR=$RUNNER_TEMP/type3-diagnostics" >>"$GITHUB_ENV"
+          node ../../integration/type3-loader-probe.mjs packages/coding-agent/src/core/extensions/loader.ts
       - name: Build standalone once for both stacks
         id: build
         if: ${{ !cancelled() && matrix.stack == 'personal' && steps.workspace.outcome == 'success' }}
@@ -211,6 +221,13 @@ jobs:
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
             --stack stacks/personal.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-personal.xml
+      - name: Standalone D and E (old auth diagnostic)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && github.head_ref == 'probe/type3-diagnostics' }}
+        working-directory: integration
+        run: |
+          uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
+            --stack stacks/type3-old-auth.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
+            --log-cli-level=INFO --junitxml=artifacts/standalone-type3-old-auth.xml
       - name: Preserve personal failure artifacts before local runs
         if: ${{ always() && matrix.stack == 'personal' }}
         working-directory: integration
@@ -235,6 +252,7 @@ jobs:
           path: |
             integration/artifacts/
             integration/artifacts-personal/
+            ${{ runner.temp }}/type3-diagnostics/
           if-no-files-found: ignore
 
   bench:

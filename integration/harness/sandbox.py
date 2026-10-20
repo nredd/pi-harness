@@ -12,14 +12,13 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from harness.paths import pi_command
 from harness.stack import load_stack, package_directory, stack_digest
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from harness.stack import Stack
 
 LOGGER = logging.getLogger(__name__)
@@ -265,6 +264,21 @@ def _record_stack(box: Sandbox, stack: Stack, stack_path: Path, sources: list[st
             indent=2,
         )
     )
+    if diagnostic_dir := os.environ.get("TYPE3_DIAGNOSTIC_DIR"):
+        installed_packages = []
+        for manifest_path in sorted((box.agent_dir / "npm" / "node_modules").rglob("package.json")):
+            manifest = json.loads(manifest_path.read_text())
+            installed_packages.append(
+                {
+                    "name": manifest["name"],
+                    "version": manifest["version"],
+                    "path": str(manifest_path.parent.relative_to(box.agent_dir)),
+                }
+            )
+        Path(diagnostic_dir).mkdir(parents=True, exist_ok=True)
+        (Path(diagnostic_dir) / f"{stack.name}-installed-node-modules.json").write_text(
+            json.dumps(installed_packages, indent=2)
+        )
 
 
 def _configure_fixture_policy(box: Sandbox) -> None:
