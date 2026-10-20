@@ -73,7 +73,7 @@ instead allowlist those packages. No fork change or unsupported fifth resource f
 
 ## Local gate evidence
 
-- `npm run check -w @nredd/pi-preset`, pinned Bun 1.4.3 on PATH: Biome/strict tsc clean,
+- `npm run check -w @nredd/pi-preset` with the pinned Bun 1.3.14 (`.bun-version`) on PATH: Biome/strict tsc clean,
   126 Vitest tests and 126 Bun tests passed. This includes all preserved helper assertions,
   real-host footer scenarios, the new renderer contracts and resource-filter discovery.
 - `make check-ts`: passed across every workspace, including 62 Vitest and 62 Bun in-process
