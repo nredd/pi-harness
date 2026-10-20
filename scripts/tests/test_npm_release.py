@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -478,6 +479,48 @@ def test_artifact_destination_checked_before_install(
     monkeypatch.setattr(nr, "command", forbid)
     with pytest.raises(nr.ReleaseError, match="new and outside"):
         nr.verify(repo, nr.resolve_target(repo, TAG), output)
+
+
+@pytest.mark.parametrize("suffix", ["", "/"], ids=["exact", "trailing-slash"])
+def test_commands_run_outside_the_uv_run_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    """Child tools never see the venv `uv run --project integration` activated for this script.
+
+    Parameters:
+        tmp_path (Path): Holds a fake activated venv with a tool found nowhere else.
+        monkeypatch (pytest.MonkeyPatch): Simulates the `uv run` activation.
+        suffix (str): `PATH` spelling of the venv's `bin` entry.
+
+    Returns:
+        None: The real child sees neither `VIRTUAL_ENV` nor the venv's tools.
+    """
+    scripts = tmp_path / "venv" / "bin"
+    scripts.mkdir(parents=True)
+    tool = scripts / "harness-only-tool"
+    tool.write_text("#!/bin/sh\necho leaked\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("VIRTUAL_ENV", str(scripts.parent))
+    monkeypatch.setenv("PATH", os.pathsep.join([f"{scripts}{suffix}", os.environ["PATH"]]))
+    # A real child reports what it can see; the lookup logic stays in Python, not a shell string.
+    probe = (
+        "import json, os, shutil; "
+        "print(json.dumps([shutil.which('harness-only-tool'), os.environ.get('VIRTUAL_ENV')]))"
+    )
+    assert json.loads(nr.command(tmp_path, "python3", "-c", probe)) == [None, None]
+
+
+def test_host_environment_without_activation_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outside `uv run` (e.g. a direct local invocation) the environment passes through as is.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Removes any real activation from this test process.
+
+    Returns:
+        None: No `PATH` entry is dropped when no venv is active.
+    """
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    assert nr.host_environment() == dict(os.environ)
 
 
 def test_workflow_permissions_and_immutable_transfer() -> None:
