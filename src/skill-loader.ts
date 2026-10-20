@@ -15,11 +15,14 @@
  * Recursion skips dotfile entries and node_modules. A directory that itself contains
  * SKILL.md is a skill — we don't descend into it (Pi: skills don't nest).
  *
- * Symlinks are rejected for security (deviation from Pi, which follows them).
+ * Project roots reject symlinks at every layer: a cloned repository must not be able to
+ * point a skill at files outside it (deviation from Pi). User roots belong to the user and
+ * follow symlinks like Pi does — that is how skill installers and dotfile managers link
+ * skills in — skipping broken links and directory cycles.
  */
 
 import type { Dirent } from "node:fs";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -38,35 +41,58 @@ function loadSkillContent(name: string, cwd: string): string {
   if (isUnsafeName(name)) {
     return `(Skill "${name}" skipped: name contains path traversal characters)`;
   }
+  // `trusted`: user-owned root, symlinks followed. Project roots stay strict.
   const roots = [
-    join(cwd, ".pi", "skills"), // project — Pi standard
-    join(cwd, ".agents", "skills"), // project — Agent Skills spec
-    join(getAgentDir(), "skills"), // user — Pi standard
-    join(homedir(), ".agents", "skills"), // user — Agent Skills spec
-    join(homedir(), ".pi", "skills"), // legacy global, pre-Pi
+    { path: join(cwd, ".pi", "skills"), trusted: false }, // project — Pi standard
+    { path: join(cwd, ".agents", "skills"), trusted: false }, // project — Agent Skills spec
+    { path: join(getAgentDir(), "skills"), trusted: true }, // user — Pi standard
+    { path: join(homedir(), ".agents", "skills"), trusted: true }, // user — Agent Skills spec
+    { path: join(homedir(), ".pi", "skills"), trusted: true }, // legacy global, pre-Pi
   ];
   for (const root of roots) {
-    const content = findInRoot(root, name);
+    const content = findInRoot(root.path, name, root.trusted);
     if (content !== undefined) return content;
   }
   return `(Skill "${name}" not found in .pi/skills/, .agents/skills/, or global skill locations)`;
 }
 
-function findInRoot(root: string, name: string): string | undefined {
-  if (isSymlink(root)) return undefined; // reject symlinked roots entirely
-  const flat = safeReadFile(join(root, `${name}.md`))?.trim();
+function findInRoot(root: string, name: string, trusted: boolean): string | undefined {
+  if (!trusted && isSymlink(root)) return undefined; // reject symlinked project roots entirely
+  const flat = readSkillFile(join(root, `${name}.md`), trusted)?.trim();
   if (flat !== undefined) return flat;
-  return findSkillDirectory(root, name);
+  return findSkillDirectory(root, name, trusted);
+}
+
+/** A regular file's text; `trusted` also follows a symlink to one, else symlinks are refused. */
+function readSkillFile(path: string, trusted: boolean): string | undefined {
+  if (!trusted) return safeReadFile(path);
+  try {
+    return statSync(path).isFile() ? readFileSync(path, "utf-8") : undefined;
+  } catch {
+    return undefined; // missing or broken link
+  }
 }
 
 /** BFS under `root` for a directory named `name` containing `SKILL.md`. Pi-conforming filters. */
-function findSkillDirectory(root: string, name: string): string | undefined {
+function findSkillDirectory(root: string, name: string, trusted: boolean): string | undefined {
   if (!existsSync(root)) return undefined;
   const queue: string[] = [root];
+  // Canonical paths already queued: a followed link back to an ancestor cannot loop.
+  const seen = new Set<string>();
 
   while (queue.length > 0) {
     const current = queue.shift();
     if (current === undefined) continue;
+    if (trusted) {
+      let real: string;
+      try {
+        real = realpathSync(current);
+      } catch {
+        continue;
+      }
+      if (seen.has(real)) continue;
+      seen.add(real);
+    }
 
     let entries: Dirent<string>[];
     try {
@@ -79,17 +105,17 @@ function findSkillDirectory(root: string, name: string): string | undefined {
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-
-      // Symlinked dirs already filtered by entry.isDirectory() — Dirent uses lstat semantics.
       const path = join(current, entry.name);
+      // Dirent uses lstat semantics, so a symlinked dir is not `isDirectory()`: refused unless trusted.
+      if (!entry.isDirectory() && !(trusted && entry.isSymbolicLink() && isDirectoryTarget(path))) continue;
+
       const skillMd = join(path, "SKILL.md");
       const isSkillDir = existsSync(skillMd);
 
       if (isSkillDir) {
         if (entry.name === name) {
-          const content = safeReadFile(skillMd)?.trim();
+          const content = readSkillFile(skillMd, trusted)?.trim();
           if (content !== undefined) return content;
         }
         continue; // Pi rule: skills don't nest — don't descend into a skill dir
@@ -99,4 +125,12 @@ function findSkillDirectory(root: string, name: string): string | undefined {
     }
   }
   return undefined;
+}
+
+function isDirectoryTarget(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false; // broken link
+  }
 }

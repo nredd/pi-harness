@@ -1140,7 +1140,7 @@ skills: api-conventions, error-handling
 
 Recursion skips dotfile directories and `node_modules`. A directory that itself contains a `SKILL.md` is treated as a single skill — we don't descend into it. Traversal is byte-order sorted for deterministic resolution across filesystems.
 
-**Security:** symlinks are rejected at every layer (root, flat file, skill directory, `SKILL.md` inside a skill directory) — intentional deviation from Pi, which follows symlinks. Skill names with path-traversal characters (`..`, `/`, `\`, spaces, leading dot, >128 chars) are rejected.
+**Security:** project roots reject symlinks at every layer (root, flat file, skill directory, `SKILL.md` inside a skill directory), so a cloned repository cannot point a skill at files outside it — intentional deviation from Pi. User roots belong to you and follow symlinks like Pi (linked roots, directories and files; broken links and directory cycles are skipped), so skills linked into `~/.agents/skills/` by an installer or dotfile manager load. Skill names with path-traversal characters (`..`, `/`, `\`, spaces, leading dot, >128 chars) are rejected.
 
 ## Tool Denylist
 

@@ -234,4 +234,90 @@ describe("preloadSkills", () => {
     expect(result[0].content).toContain("not found");
     expect(result[0].content).not.toContain("TOP SECRET");
   });
+
+  describe("user roots follow symlinks like Pi", () => {
+    let originalHome: string | undefined;
+    const home = () => join(tmpDir, "home");
+    const userAgentsRoot = () => join(home(), ".agents", "skills");
+    /** A real skill dir outside every root, the way installers keep vendored skills. */
+    const vendor = (name: string, content: string) => {
+      writeSkillDir(join(tmpDir, "vendor"), name, content);
+      return join(tmpDir, "vendor", name);
+    };
+
+    beforeEach(() => {
+      originalHome = process.env.HOME;
+      process.env.HOME = home();
+    });
+
+    afterEach(() => {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    });
+
+    it("loads a symlinked skill directory from getAgentDir()/skills", () => {
+      mkdirSync(globalRoot(), { recursive: true });
+      symlinkSync(vendor("linked", "LINKED"), join(globalRoot(), "linked"));
+      expect(preloadSkills(["linked"], tmpDir)[0].content).toBe("LINKED");
+    });
+
+    it("loads a symlinked skill directory from ~/.agents/skills, also when cwd is home", () => {
+      mkdirSync(userAgentsRoot(), { recursive: true });
+      symlinkSync(vendor("codebase-design", "VOCAB"), join(userAgentsRoot(), "codebase-design"));
+      expect(preloadSkills(["codebase-design"], tmpDir)[0].content).toBe("VOCAB");
+      // cwd == home makes <cwd>/.agents/skills the same directory: the strict project pass
+      // refuses the link, the user pass still loads it.
+      expect(preloadSkills(["codebase-design"], home())[0].content).toBe("VOCAB");
+    });
+
+    it("follows a symlinked user root, symlinked intermediate dirs and symlinked files", () => {
+      const realRoot = join(tmpDir, "dotfiles-skills");
+      writeFlat(realRoot, "flat-real", "FLAT");
+      writeSkillDir(join(realRoot, "group"), "nested", "NESTED");
+      mkdirSync(join(home(), ".agents"), { recursive: true });
+      symlinkSync(realRoot, userAgentsRoot());
+      mkdirSync(globalRoot(), { recursive: true });
+      symlinkSync(join(realRoot, "flat-real.md"), join(globalRoot(), "flat-link.md"));
+      symlinkSync(join(realRoot, "group"), join(globalRoot(), "linked-group"));
+      const inner = vendor("inner", "unused");
+      rmSync(join(inner, "SKILL.md"));
+      symlinkSync(join(realRoot, "flat-real.md"), join(inner, "SKILL.md"));
+      symlinkSync(inner, join(globalRoot(), "inner"));
+
+      const [flat, nested, flatLink, inSkill] = preloadSkills(["flat-real", "nested", "flat-link", "inner"], tmpDir);
+      expect(flat.content).toBe("FLAT");
+      expect(nested.content).toBe("NESTED");
+      expect(flatLink.content).toBe("FLAT");
+      expect(inSkill.content).toBe("FLAT");
+    });
+
+    it("skips broken links and directory cycles, still finding real skills", () => {
+      mkdirSync(globalRoot(), { recursive: true });
+      // Two links back to the root: unguarded BFS would double its queue on every level.
+      symlinkSync(globalRoot(), join(globalRoot(), "loop-a"));
+      symlinkSync(globalRoot(), join(globalRoot(), "loop-b"));
+      symlinkSync(join(tmpDir, "nowhere"), join(globalRoot(), "broken"));
+      symlinkSync(join(tmpDir, "nowhere.md"), join(globalRoot(), "broken-flat.md"));
+      writeSkillDir(join(globalRoot(), "zz"), "deep", "DEEP");
+
+      const [missing, broken, brokenFlat, deep] = preloadSkills(["missing", "broken", "broken-flat", "deep"], tmpDir);
+      expect(missing.content).toContain("not found");
+      expect(broken.content).toContain("not found");
+      expect(brokenFlat.content).toContain("not found");
+      expect(deep.content).toBe("DEEP");
+    });
+
+    it("keeps project roots strict when the same name is linked there", () => {
+      mkdirSync(projectRoot(), { recursive: true });
+      const secret = join(tmpDir, "secret-skill");
+      mkdirSync(secret, { recursive: true });
+      writeFileSync(join(secret, "SKILL.md"), "TOP SECRET");
+      symlinkSync(secret, join(projectRoot(), "shared"));
+      mkdirSync(globalRoot(), { recursive: true });
+      symlinkSync(vendor("shared", "USER COPY"), join(globalRoot(), "shared"));
+      const content = preloadSkills(["shared"], tmpDir)[0].content;
+      expect(content).toBe("USER COPY");
+      expect(content).not.toContain("TOP SECRET");
+    });
+  });
 });
