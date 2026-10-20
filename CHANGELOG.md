@@ -9,12 +9,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Run the complete split-package suite standalone with pinned dependencies, lockfile, vendored upstream test helpers, Biome and strict TypeScript. All 253 stock upstream tests and the fork's existing tests run under Vitest; native interactive regressions also run on Bun 1.3.14.
 - Keep clickable headings, wheel scrolling over every task, atomic `ops` batches, whole-list counts, and duplicate-of-plan-item guards.
 - Seed verbatim approved Plan tasks, require completion evidence and deferral reasons, and remind once before wrapping up with open Plan work.
 - Collapse the Todos panel on resume by default, configurable with `collapseOnResume`.
 
 ### Fixed
 
+- Invalidate cached settled update/delete rows when their live-store fallback changes. Foreground mutation, replay, eviction and pointer changes notify weak renderer subscriptions; probes do not subscribe and valid historical result snapshots stay immutable. Real core interactive regressions fail before the fix and pass after it under Vitest and Bun.
 - Preserve evidence only across unambiguous, unchanged Plan work with versioned heading scope and provenance. Preserve prose, code-only work, shared context, and fence boundaries.
 - Render settled rows from validated historical snapshots after reload and resize; report batch mutations from their own immutable outcomes.
 - Suspend implementation reminders during replanning, preserve foreground ownership across stale child shutdowns, and skip malformed snapshots.

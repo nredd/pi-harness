@@ -10,6 +10,28 @@ import { EMPTY_STATE, type TaskState } from "./state.ts";
  */
 const sessions = new Map<string, TaskState>();
 
+/** Weak observers do not keep discarded transcript rows or their TUI alive. */
+export interface RenderStateObserver {
+	onRenderStateChange?: () => void;
+}
+const renderObservers = new Set<WeakRef<RenderStateObserver>>();
+let observedRows = new WeakSet<RenderStateObserver>();
+
+/** Subscribe once per shared renderer state, never from a throwaway probe. */
+export function watchRenderState(observer: RenderStateObserver): void {
+	if (observedRows.has(observer)) return;
+	observedRows.add(observer);
+	renderObservers.add(new WeakRef(observer));
+}
+
+function invalidateRenderState(): void {
+	for (const ref of renderObservers) {
+		const observer = ref.deref();
+		if (observer) observer.onRenderStateChange?.();
+		else renderObservers.delete(ref);
+	}
+}
+
 /**
  * Ctx-less render pointer: which slot do the ctx-free readers (the overlay's
  * `getSnapshot()`, the tool's `renderCall()`) render? Set when the first UI
@@ -65,6 +87,7 @@ export function getState(sessionId: string): TaskState {
  */
 export function replaceState(sessionId: string, next: TaskState): void {
 	sessions.set(sessionId, next);
+	if (sessionId === activeRenderSession) invalidateRenderState();
 }
 
 /**
@@ -73,12 +96,13 @@ export function replaceState(sessionId: string, next: TaskState): void {
  * `/todos`, `renderCall`), keyed to the calling session.
  */
 export function commitState(sessionId: string, next: TaskState): void {
-	sessions.set(sessionId, next);
+	replaceState(sessionId, next);
 }
 
 /** Drop a session's slot on `session_shutdown`. No-op if the slot is absent. */
 export function evictSession(sessionId: string): void {
 	sessions.delete(sessionId);
+	if (sessionId === activeRenderSession) invalidateRenderState();
 }
 
 /**
@@ -92,7 +116,9 @@ export function getRenderState(): TaskState {
 
 /** Set the ctx-less render pointer when the first UI session claims foreground. */
 export function setActiveRenderSession(sessionId: string): void {
+	if (activeRenderSession === sessionId) return;
 	activeRenderSession = sessionId;
+	invalidateRenderState();
 }
 
 /**
@@ -110,7 +136,7 @@ export function getActiveRenderSession(): string {
  * pointer to "" so the next `hasUI` session_start reclaims the foreground.
  */
 export function clearActiveRenderSession(): void {
-	activeRenderSession = "";
+	setActiveRenderSession("");
 }
 
 /**
@@ -120,6 +146,8 @@ export function clearActiveRenderSession(): void {
  * pointer so filesystem/detect resets start from a clean state.
  */
 export function __resetState(): void {
+	renderObservers.clear();
+	observedRows = new WeakSet();
 	sessions.clear();
 	activeRenderSession = "";
 }

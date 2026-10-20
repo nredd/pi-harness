@@ -19,7 +19,14 @@ import { isTaskDetails } from "./state/replay.ts";
 import { selectTasksByStatus, selectVisibleTasks } from "./state/selectors.ts";
 import type { TaskState } from "./state/state.ts";
 import { applyTaskCall, changesState } from "./state/state-reducer.ts";
-import { commitState, getRenderState, getState, sid } from "./state/store.ts";
+import {
+	commitState,
+	getRenderState,
+	getState,
+	type RenderStateObserver,
+	sid,
+	watchRenderState,
+} from "./state/store.ts";
 import { buildToolResult } from "./tool/response-envelope.ts";
 import { sanitizeTerminalText } from "./tool/sanitize.ts";
 import {
@@ -103,8 +110,17 @@ export function registerTodoTool(pi: ExtensionAPI): void {
 		// holds the result snapshot -- never search another session because ids can
 		// collide between foreground and child task slots.
 		renderCall(args, theme, context) {
-			const snapshot = (context?.state as { taskSnapshot?: TaskState } | undefined)?.taskSnapshot;
-			return renderTodoCall(args as never, theme, snapshot ?? getRenderState());
+			const state = context?.state as ({ taskSnapshot?: TaskState } & RenderStateObserver) | undefined;
+			// Legacy/error rows without a result snapshot still read the live store.
+			// A repaint alone cannot refresh Pi's settled-row cache. Subscribe weakly
+			// instead of polling forever; valid historical snapshots remain immutable.
+			if (state && !state.taskSnapshot && !context?.probe && context?.invalidate) {
+				state.onRenderStateChange = () => {
+					if (!state.taskSnapshot) context.invalidate();
+				};
+				watchRenderState(state);
+			}
+			return renderTodoCall(args as never, theme, state?.taskSnapshot ?? getRenderState());
 		},
 
 		renderResult(result, opts, theme, context) {
