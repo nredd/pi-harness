@@ -6,7 +6,8 @@ benchmarks, and exact-stack release tooling. Upstream forks retain their histori
 - Owned npm packages ship through `publish.yml`; core ships through `nredd/tap/pi-coding-agent`.
 - Dotfiles selects pins and applies them with `chezmoi update --upgrade`; require `pi-profile doctor`
   after activation. There is no staging/activation transaction or standalone distribution installer.
-- Standalone Bun verification is NOT RUN in CI yet. Native Bun suites are not standalone evidence.
+- CI builds the Bun standalone from the Gitlinked core and runs the stack D/E scenarios on it on darwin-arm64 and
+  linux-x64; seven auth-interception cases are explicit skips. linux-arm64 is NOT RUN. Details [here](docs/bun-prerequisite.md).
 
 Current status is [here](PLAN.md); the original migration plan and its superseded requirements are
 [here](docs/migration-plan.md).
@@ -117,7 +118,7 @@ forces, cleans, or discards. Exit 2 is a git or usage error.
 Distribution policy:
 
 - Publish reusable plugins independently; gate pin promotion with the matching CI `stack` jobs.
-- Standalone Bun verification on macOS ARM64 and Linux ARM64/x64 remains unfulfilled, NOT RUN in CI.
+- Standalone Bun verification: macOS ARM64 and Linux x64 run in CI (stack D/E, minus auth interception); Linux ARM64 is NOT RUN.
 - Keep credentials, enterprise endpoints, and machine policy outside public artifacts.
 - Activate managed pins with `chezmoi update --upgrade`, then require `pi-profile doctor` and restart
   Pi sessions. Updates do not stage a separate runtime for later transactional activation.
