@@ -33,7 +33,7 @@ async function hourlyTabs(): Promise<void> {
 	layout(fixture);
 	await fixture.key("\t");
 	await fixture.key("k".repeat(60));
-	expect(layout(fixture)).toContain("Total tokens:");
+	expect(layout(fixture)).toContain("Total tokens ");
 }
 
 it("combined snapshots remain available in Plan mode", async () => {
@@ -67,7 +67,7 @@ it("combined snapshots remain available in Plan mode", async () => {
 	expect(host.viewport().join("\n")).toMatch(/plan/i);
 	await fixture.open("/stats", true);
 	const shown = layout(fixture);
-	expect(shown).toMatch(/Total tokens: 624\b/);
+	expect(shown).toMatch(/Total tokens +624\b/);
 	expect(shown).toMatch(/\b3 machines\b/);
 	expect(shown).toMatch(/last remote sync|remote sync|last sync/i);
 	expect(shown).not.toMatch(/local.only|never.synced/i);
@@ -79,8 +79,8 @@ it("combined snapshots remain available in Plan mode", async () => {
 		if (total === undefined) throw new Error("Missing total");
 		await selectTotal(fixture, total);
 		if (total !== 624) await hourlyTabs();
-		expect(await selectFilter(fixture, "anthropic")).toMatch(new RegExp(`Total tokens: ${anthropic}\\b`));
-		expect(await selectFilter(fixture, "openai-codex")).toMatch(new RegExp(`Total tokens: ${codex}\\b`));
+		expect(await selectFilter(fixture, "anthropic")).toMatch(new RegExp(`Total tokens +${anthropic}\\b`));
+		expect(await selectFilter(fixture, "openai-codex")).toMatch(new RegExp(`Total tokens +${codex}\\b`));
 		await selectFilter(fixture, "All models");
 	}
 	await selectTotal(fixture, 156);
@@ -94,7 +94,7 @@ it("combined snapshots remain available in Plan mode", async () => {
 	footer(fixture);
 	expect(host.viewport().join("\n")).toMatch(/plan/i);
 	await fixture.open("/stats", true);
-	expect(layout(fixture)).toMatch(/Total tokens: 624\b/);
+	expect(layout(fixture)).toMatch(/Total tokens +624\b/);
 	await fixture.close();
 	footer(fixture);
 	expect(

@@ -2,8 +2,9 @@ import { type Color, colorToRgb, parseColor, visibleWidth } from "@earendil-work
 import { describe, expect, it, vi } from "vitest";
 import { filterCycle } from "../../src/stats/aggregate.ts";
 import { GUTTER, TICKS } from "../../src/stats/chart.ts";
-import { CONTENT_SHARE, chartHeight, contentWidth, StatsView, summary } from "../../src/stats/component.ts";
+import { chartHeight, contentWidth, StatsView, summary } from "../../src/stats/component.ts";
 import { addDays } from "../../src/stats/days.ts";
+import { DAY_LABEL_WIDTH, MAX_WEEKS } from "../../src/stats/heatmap.ts";
 import type { Call } from "../../src/stats/load.ts";
 import { at, call } from "./fixtures.ts";
 import { danglingPorts } from "./ports.ts";
@@ -50,21 +51,23 @@ it("hourly views preserve total/filter scope, partial and repeated-hour labels a
 			const lines = view.render(width);
 			const text = strip(lines.join("\n"));
 			expect(text).toContain("Tokens per hour");
-			expect(text).toContain("Total tokens: 300");
+			expect(text).toMatch(/Total tokens +300/);
 			expect(text).toContain("partial");
 			expect(text).toContain("01:00 UTC-04:00");
 			expect(text).toContain("01:00 UTC-05:00");
 			expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 		}
 		view.handleInput("\t");
-		expect(strip(view.render(120).join("\n"))).toContain("In: 300");
+		expect(strip(view.render(120).join("\n"))).toMatch(
+			/Tokens +Share +In +Out[^\n]*\n[^\n]*\n[^\n]*300 +100\.0% +300 /,
+		);
 	} finally {
 		if (saved === undefined) delete process.env.TZ;
 		else process.env.TZ = saved;
 	}
 });
 /** Plot rows of a rendered screen: the axis column (after the 1-col pad and the labels) is drawn. */
-const plotRows = (lines: readonly string[]) => lines.filter((l) => /^[┤│┼]$/.test([...l][GUTTER] ?? ""));
+const plotRows = (lines: readonly string[]) => lines.filter((l) => /^[┤│]$/.test([...l][GUTTER] ?? ""));
 
 function sampleCalls(): Call[] {
 	const out: Call[] = [];
@@ -131,8 +134,8 @@ describe("StatsView", () => {
 		const text = make(60).view.render(120).map(strip).join("\n");
 		expect(text).toContain("Mon ");
 		expect(text).toContain("Less ░ ▒ ▓ █ More");
-		expect(text).toContain("Favorite model: anthropic/claude-opus-5-5");
-		expect(text).toMatch(/Active days: \d+\/60/);
+		expect(text).toMatch(/Favorite model +anthropic\/claude-opus-5-5/);
+		expect(text).toMatch(/Active days +\d+\/60/);
 		// 60 days into a 75%-wide plot at 120 columns: one column per day
 		expect(text).toContain("Tokens per day  (in + out + cache) · by provider");
 		expect(text).toMatch(/total: peak \S+ on \w{3} \d+ · avg \S+\/day/);
@@ -140,25 +143,28 @@ describe("StatsView", () => {
 		expect(text).toContain("! 2 unreadable lines");
 	});
 
-	it("Tab switches to Models: chart, provider headers and two-up model entries", () => {
+	it("Tab switches to Models: chart, then a provider/model table from 100 columns", () => {
 		const { view, requestRender } = make(60);
 		view.handleInput("\t");
 		expect(view.state.tab).toBe("Models");
 		expect(requestRender).toHaveBeenCalled();
 		const lines = view.render(120).map(strip);
-		const text = lines.join("\n");
-		expect(text).toMatch(/• anthropic {2}\S+ \(\d+\.\d%\)/);
-		expect(text).toContain("In: ");
-		expect(text).toMatch(/Cache: \S+ read · \S+ write · \$\d+\.\d\d notional/);
-		// two models side by side on one line at 120 columns
-		expect(lines.some((l) => (l.match(/• claude-/g) ?? []).length === 2)).toBe(true);
-		// one per line under 80
-		expect(
-			view
-				.render(70)
-				.map(strip)
-				.some((l) => (l.match(/• claude-/g) ?? []).length === 2),
-		).toBe(false);
+		const header = lines.find((l) => l.includes("Cache read")) ?? "";
+		expect(header).toMatch(/Tokens +Share +In +Out +Cache read +Cache write +Cost \(notional\)/);
+		// provider subtotal, then its models, one aligned line each, every column ending on the same edge
+		const provider = lines.find((l) => /• anthropic /.test(l)) ?? "";
+		const model = lines.find((l) => l.includes("claude-opus-5-5") && /\d%/.test(l)) ?? "";
+		expect(provider).toMatch(/• anthropic +\S+M +\d+\.\d% /);
+		expect(model).toMatch(/claude-opus-5-5 +\S+M +\d+\.\d% /);
+		expect(model).toMatch(/\$\d+\.\d\d$/);
+		expect(visibleWidth(model)).toBe(visibleWidth(provider));
+		expect(visibleWidth(model)).toBe(visibleWidth(header));
+		// three-line cards under the table's width
+		const cards = view.render(70).map(strip);
+		expect(cards.join("\n")).toMatch(/• anthropic {2}\S+ \(\d+\.\d%\)/);
+		expect(cards.join("\n")).toContain("In: ");
+		expect(cards.join("\n")).toMatch(/Cache: \S+ read · \S+ write · \$\d+\.\d\d notional/);
+		expect(cards.some((l) => l.includes("Cache read"))).toBe(false);
 	});
 
 	it("r cycles All -> 7d -> 30d -> 5h -> 24h -> All", () => {
@@ -166,7 +172,7 @@ describe("StatsView", () => {
 		expect(view.state.range).toBe("all");
 		view.handleInput("r");
 		expect(view.state.range).toBe("7d");
-		expect(strip(view.render(120).join("\n"))).toMatch(/Active days: \d\/7/);
+		expect(strip(view.render(120).join("\n"))).toMatch(/Active days +\d\/7/);
 		view.handleInput("r");
 		expect(view.state.range).toBe("30d");
 		view.handleInput("r");
@@ -249,50 +255,87 @@ describe("StatsView", () => {
 			[200, 60],
 		] as const) {
 			const lines = make(rows).view.render(width).map(strip);
-			const legend = lines.findIndex((l) => l.includes("● anthropic"));
-			expect(legend, lines.join("\n")).toBeGreaterThan(0);
-			// rows between the legend and the help row: under one tick step of slack
-			const blank = lines.slice(legend + 1, -1).filter((l) => l.trim() === "").length;
-			expect(blank, `${width}x${rows}\n${lines.join("\n")}`).toBeLessThan(5);
+			const caption = lines.findIndex((l) => l.includes("total: peak"));
+			expect(caption, lines.join("\n")).toBeGreaterThan(0);
+			// rows between the caption and the help row: the spacer plus under one tick step of slack
+			const blank = lines.slice(caption + 1, -1).filter((l) => l.trim() === "").length;
+			// ... unless the chart is already at its 40-row cap
+			if (plotRows(lines).length < 41) expect(blank, `${width}x${rows}\n${lines.join("\n")}`).toBeLessThan(6);
+			else expect(plotRows(lines)).toHaveLength(41);
 			const body = plotRows(lines).map((l) => [...l].slice(1 + GUTTER).join(""));
 			expect(body.length).toBeGreaterThan(TICKS + 1);
 			expect(danglingPorts(body), `${width}x${rows}\n${lines.join("\n")}`).toEqual([]);
 		}
-		// 130x38 is the pane from the bug report: 5 rows above zero before, 10 now
-		expect(plotRows(make(38).view.render(130).map(strip))).toHaveLength(10 + 1);
+		// 130x38 is the pane from the bug report: 5 rows above zero before, 15 now that the numbers sit beside the heatmap
+		expect(plotRows(make(38).view.render(130).map(strip))).toHaveLength(15 + 1);
 	});
 
-	it("spans 75% of the pane, never under a year of heatmap when it fits (regression: stuck at 56 cols)", () => {
-		expect([12, 40, 57, 60, 80, 130, 200, 320].map(contentWidth)).toEqual([11, 39, 56, 56, 59, 97, 149, 239]);
-		for (const width of [80, 130, 200, 320]) {
+	it("spans the whole pane: blocks run to the right margin, and the heatmap stops at two years", () => {
+		expect([12, 40, 57, 60, 80, 130, 200, 320].map(contentWidth)).toEqual([11, 39, 56, 59, 79, 129, 199, 319]);
+		for (const width of [40, 80, 130, 200, 320]) {
 			const lines = make(80).view.render(width).map(strip);
+			const zero = lines.find((l) => /^ +0 ┤/.test(l)) ?? "";
+			const base = lines.find((l) => /^ +└/.test(l)) ?? "";
+			expect(visibleWidth(zero), `${width}`).toBe(width);
+			expect(visibleWidth(base), `${width}`).toBe(width);
 			const mon = lines.find((l) => l.startsWith(" Mon ")) ?? "";
-			const zero = lines.find((l) => /^ +0 ┼/.test(l)) ?? "";
-			const share = (visibleWidth(mon) - 1) / (width - 1);
-			expect(share, `${width}`).toBeCloseTo(CONTENT_SHARE, 1);
-			expect(visibleWidth(zero)).toBe(visibleWidth(mon));
+			expect(visibleWidth(mon.trimEnd()), `${width}`).toBeLessThanOrEqual(width);
 		}
+		const mon = (width: number) =>
+			make(80)
+				.view.render(width)
+				.map(strip)
+				.find((l) => l.startsWith(" Mon "))
+				?.split("  ")[0] ?? "";
+		expect(visibleWidth(mon(320))).toBeLessThanOrEqual(1 + DAY_LABEL_WIDTH + MAX_WEEKS);
 	});
 
-	it("draws the chart exactly as wide as the heatmap above it (regression: chart ran to the pane edge)", () => {
-		for (const width of [12, 20, 25, 29, 40, 60, 80, 100, 130, 200, 320]) {
-			const lines = make(80).view.render(width).map(strip);
-			const mon = lines.find((l) => l.startsWith(" Mon "));
-			const zero = lines.find((l) => /^ +0 ┼/.test(l));
-			expect(mon, `${width}`).toBeDefined();
-			expect(zero, `${width}`).toBeDefined();
-			expect(visibleWidth(zero ?? ""), `${width}\n${mon}\n${zero}`).toBe(visibleWidth(mon ?? ""));
-		}
-		// The pane clips at its edge, so equal widths alone could hide an overflowing chart: on the
-		// 7-day range the x axis must end with today's full date inside the heatmap's width.
-		for (const width of [20, 25, 29, 40, 80, 130]) {
+	it("puts the numbers beside the heatmap once a year of it still fits next to them, else under it", () => {
+		const beside = make(60).view.render(160).map(strip);
+		const favorite = beside.findIndex((l) => l.includes("Favorite model"));
+		expect(beside[favorite]).toContain("Nov"); // shares the heatmap's month row
+		expect(beside.findIndex((l) => l.includes("Mon "))).toBeGreaterThan(favorite);
+		const stacked = make(60).view.render(100).map(strip);
+		expect(stacked.findIndex((l) => l.includes("Favorite model"))).toBeGreaterThan(
+			stacked.findIndex((l) => l.includes("Less ░")),
+		);
+		// one column of cells, labels and values aligned
+		const values = beside.filter((l) => /Total tokens|Sessions|Notional cost/.test(l)).map((l) => l.search(/\S+$/));
+		expect(values.length).toBe(3);
+	});
+
+	it("never cuts a stat row it chose to lay out in several columns", () => {
+		// Labels are padded to their column's longest, so a short label with a long value (`Favorite
+		// model`) next to a long label with a short value must still fit the width the grid budgeted.
+		const LABELS = ["Favorite model", "Total tokens", "Sessions", "Longest session", "Active days"];
+		const LABELS2 = ["Longest streak", "Most active day", "Current streak", "Cache tokens", "Notional cost"];
+		const { view } = make(60);
+		for (let range = 0; range < 5; range++, view.handleInput("r"))
+			for (let width = 40; width <= 200; width++) {
+				const rows = view
+					.render(width)
+					.map(strip)
+					.filter((l) => [...LABELS, ...LABELS2].filter((label) => l.includes(label)).length > 1);
+				for (const row of rows) expect(row, `range ${range}, ${width} cols`).not.toContain("…");
+			}
+	});
+
+	it("aligns the x axis to the chart: baseline marks over the labels, today's end inside the plot", () => {
+		for (const width of [30, 40, 60, 80, 130]) {
 			const { view } = make(80);
 			view.handleInput("r");
 			const lines = view.render(width).map(strip);
-			const mon = lines.find((l) => l.startsWith(" Mon ")) ?? "";
-			const axis = lines.find((l) => /\d\s*$/.test(l) && /^ {9}/.test(l) && /[A-Z][a-z]{2} \d/.test(l)) ?? "";
-			expect(axis.trimEnd(), `${width}\n${lines.join("\n")}`).toMatch(/Oct 13$/);
-			expect(visibleWidth(axis.trimEnd())).toBeLessThanOrEqual(visibleWidth(mon));
+			const base = lines.find((l) => /^ +└/.test(l)) ?? "";
+			const names = lines[lines.indexOf(base) + 1] ?? "";
+			expect(names.trim().length, `${width}\n${lines.join("\n")}`).toBeGreaterThan(0);
+			expect(visibleWidth(names)).toBeLessThanOrEqual(visibleWidth(base));
+			// each label has a baseline mark inside the span it covers
+			for (const m of names.matchAll(/\S+( \d+)?/g)) {
+				const span = base.slice(m.index, m.index + m[0].length);
+				expect(span, `${width}: ${m[0]}`).toContain("┬");
+			}
+			// 7d is Wed 7 .. Tue 13: today's label is the last one, whole
+			expect(names.trimEnd()).toMatch(/(Tue( 13)?|Oct 13)$/);
 		}
 	});
 
@@ -306,7 +349,7 @@ describe("StatsView", () => {
 			// only the plot rows: the legend must not vouch for itself
 			const plotColors = new Set(
 				raw
-					.filter((l) => /^[┤│┼]$/.test([...strip(l)][GUTTER] ?? ""))
+					.filter((l) => /^[┤│]$/.test([...strip(l)][GUTTER] ?? ""))
 					.flatMap((l) => [...l.matchAll(SERIES_SGR)].map((m) => m[1])),
 			);
 			for (const color of legendColors) expect(plotColors.has(color), `${color} not drawn`).toBe(true);
@@ -323,26 +366,29 @@ describe("StatsView", () => {
 		check(view, 1);
 	});
 
-	it("gives the Models chart about half the pane", () => {
+	it("gives the Models chart half the pane, or what a short list leaves it", () => {
+		// 55 rows of room, 9 table lines: the list leaves 46, minus 7 lines of furniture -> 35 rows
 		const { view } = make(60);
 		view.handleInput("\t");
-		const lines = view.render(130).map(strip);
-		// 56 rows of room: half is 28, minus the chart's 5 lines of furniture -> 20 rows above zero
-		expect(plotRows(lines)).toHaveLength(chartHeight(28 - 5) + 1);
-		expect(chartHeight(28 - 5)).toBe(20);
+		expect(plotRows(view.render(130).map(strip))).toHaveLength(chartHeight(55 - 9 - 7) + 1);
+		expect(chartHeight(55 - 9 - 7)).toBe(35);
+		// cards: 20 lines (2 headers, 6 models x 3), so 55 - 20 - 7 -> 25 rows
+		expect(plotRows(view.render(60).map(strip))).toHaveLength(chartHeight(55 - 20 - 7) + 1);
+		expect(chartHeight(55 - 20 - 7)).toBe(25);
 	});
 
-	it("goes two-up at exactly 80 columns, one-up at 79", () => {
-		const twoUp = (width: number) => {
+	it("shows the table at 100 columns and cards one column narrower", () => {
+		const table = (width: number) => {
 			const { view } = make(120);
 			view.handleInput("\t");
 			return view
 				.render(width)
 				.map(strip)
-				.some((l) => (l.match(/• (claude|gpt)-/g) ?? []).length === 2);
+				.some((l) => l.includes("Cache write"));
 		};
-		expect(twoUp(80)).toBe(true);
-		expect(twoUp(79)).toBe(false);
+		expect(table(110)).toBe(true);
+		expect(table(100)).toBe(true);
+		expect(table(84)).toBe(false);
 	});
 
 	it("q, Escape and Ctrl+C close; other keys are ignored", () => {

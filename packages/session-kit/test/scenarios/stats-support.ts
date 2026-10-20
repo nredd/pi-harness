@@ -144,7 +144,7 @@ export function chart(shown: string): void {
 	expect(shown).toMatch(/Tokens per (hour|day|\d+ days|week)/);
 	expect(shown.split("\n").filter((row) => /^\s*\d+(\.\d)?[kMB]? ┤/.test(row)).length, shown).toBeGreaterThanOrEqual(2);
 	expect(
-		shown.split("\n").some((row) => /^\s*0 ┼/.test(row)),
+		shown.split("\n").some((row) => /^\s*0 ┤/.test(row)),
 		shown,
 	).toBe(true);
 }
@@ -153,7 +153,7 @@ export function chart(shown: string): void {
 export async function selectTotal(fixture: TerminalFixture, tokens: number): Promise<void> {
 	for (let range = 0; range < 6; range++) {
 		await fixture.key("k".repeat(60));
-		if (new RegExp(`Total tokens: ${tokens}(?![\\d.,kMB])`).test(layout(fixture))) return;
+		if (new RegExp(`Total tokens +${tokens}(?![\\d.,kMB])`).test(layout(fixture))) return;
 		await fixture.key("r");
 	}
 	throw new Error(`No range reports exactly ${tokens} tokens\n${layout(fixture)}`);
@@ -202,12 +202,4 @@ export function danglingPorts(rows: string[]): string[] {
 				if (!(ports[rows[y + dy]?.[x + dx] ?? ""] ?? "").includes(need)) out.push(`${y}:${x} ${ch} ${port}`);
 			}
 	return out;
-}
-
-/** Future weekdays have trimmed blank cells: the widest weekday is the actual heatmap extent. */
-export function widestHeatmapRow(rows: string[]): string {
-	const weekday = rows.filter((row) => row.length > 5 && /^[·░▒▓█ ]+$/.test(row.slice(5)));
-	const widest = weekday.sort((a, b) => b.length - a.length)[0];
-	if (!widest) throw new Error("Missing heatmap weekdays");
-	return widest;
 }

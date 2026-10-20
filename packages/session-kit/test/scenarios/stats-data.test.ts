@@ -21,8 +21,8 @@ it("stats reopening uses versioned cache with unchanged totals", async () => {
 	footer(fixture);
 	await fixture.open("/stats");
 	const second = layout(fixture);
-	const before = first.match(/Total tokens: \S+/)?.[0];
-	const after = second.match(/Total tokens: \S+/)?.[0];
+	const before = first.match(/Total tokens +\S+/)?.[0];
+	const after = second.match(/Total tokens +\S+/)?.[0];
 	expect(before, first).toBeDefined();
 	expect(after, second).toBeDefined();
 	expect(after).toBe(before);
@@ -68,7 +68,7 @@ it("corrupt import retains remote totals and fresh local usage", async () => {
 	await start(fixture, 160, 50);
 	await fixture.open("/stats");
 	const shown = layout(fixture);
-	expect(shown).toMatch(/Total tokens: 676\b/);
+	expect(shown).toMatch(/Total tokens +676\b/);
 	expect(shown).toMatch(/incomplete/i);
 	expect(shown).toMatch(/last remote sync|remote sync|last sync/i);
 	await fixture.close();

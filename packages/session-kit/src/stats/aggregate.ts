@@ -34,6 +34,8 @@ export interface ModelTotals {
 
 export interface DayPoint {
 	day: string;
+	/** Bucket start instant; hourly series only. */
+	ms?: number;
 	/** Tokens per series key (provider, or `provider/model`). */
 	byKey: Map<string, number>;
 	total: number;
@@ -210,6 +212,7 @@ export function hourlySeries(
 	const points: DayPoint[] = [];
 	for (let ms = from; ms <= to; ms += HOUR_MS)
 		points.push({
+			ms,
 			day: `${hourLabel(ms)}${ms < start || ms + HOUR_MS > now ? " (partial)" : ""}`,
 			byKey: new Map(),
 			total: 0,

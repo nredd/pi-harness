@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUCKET_SIZES, bucketize, GUTTER, niceStep, plot, stretch, xAxis } from "../../src/stats/chart.ts";
+import { BUCKET_SIZES, bucketize, GUTTER, niceStep, plot, stretch } from "../../src/stats/chart.ts";
 import { addDays, daysBetween } from "../../src/stats/days.ts";
 import { axisLabel, duration, formatTokens, money, percent } from "../../src/stats/format.ts";
 import { danglingPorts } from "./ports.ts";
@@ -127,7 +127,7 @@ describe("plot", () => {
 			"     3 ┤╭╯  ╰╮",
 			"     2 ┤│    │",
 			"     1 ┤│    │",
-			"     0 ┼╯    ╰",
+			"     0 ┤╯    ╰",
 		]);
 	});
 
@@ -148,7 +148,7 @@ describe("plot", () => {
 			"     3 ┤  <C>╭╯",
 			"     2 ┤<B>─┬┴─",
 			"     1 ┤<C>╭╯  ",
-			"     0 ┼<C>╯   ",
+			"     0 ┤<C>╯   ",
 		]);
 	});
 
@@ -157,7 +157,7 @@ describe("plot", () => {
 		expect(ten.lines).toHaveLength(11);
 		expect(ten.lines[0]).toMatch(/^ {3}10M ┤/);
 		expect(ten.lines[1]).toMatch(/^ {7}│/);
-		expect(ten.lines[10]).toMatch(/^ {5}0 ┼/);
+		expect(ten.lines[10]).toMatch(/^ {5}0 ┤/);
 		for (const line of ten.lines) expect([...line].length).toBe(GUTTER + 10);
 	});
 });
@@ -234,28 +234,5 @@ describe("plot connectivity (regression: crossing series left broken joins like 
 			const dangling = danglingPorts(body(p.lines));
 			expect(dangling, `round ${round}\n${p.lines.join("\n")}`).toEqual([]);
 		}
-	});
-});
-
-describe("xAxis", () => {
-	const buckets = (n: number) => Array.from({ length: n }, (_, i) => ({ start: addDays("2026-01-01", i), values: [] }));
-
-	it.each([20, 40, 80, 113, 120])(
-		"puts 2-5 labels, first and last included, never overlapping, inside %d columns",
-		(width) => {
-			const line = xAxis(buckets(365), width, GUTTER);
-			const labels = line.trim().split(/ {2,}/);
-			expect(labels.length).toBeGreaterThanOrEqual(2);
-			expect(labels.length).toBeLessThanOrEqual(5);
-			expect(labels[0]).toBe("Jan 1");
-			expect(labels[labels.length - 1]).toBe("Dec 31");
-			expect(line.length).toBeLessThanOrEqual(GUTTER + width);
-			expect(line.slice(0, GUTTER).trim()).toBe("");
-		},
-	);
-
-	it("handles a single bucket and an empty plot", () => {
-		expect(xAxis(buckets(1), 40, 2).trim()).toBe("Jan 1");
-		expect(xAxis([], 40, 2)).toBe("");
 	});
 });
