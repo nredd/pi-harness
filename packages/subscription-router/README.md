@@ -1,6 +1,6 @@
 # pi-subscription-router
 
-Published to npm as `@nredd/pi-subscription-router` (public), version `0.3.0`; see `releases/2026-10-18-npm-publication.json` for the tarball digest.
+Published to npm as `@nredd/pi-subscription-router` (public). From `0.4.0`, each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-subscription-router@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`); earlier versions were published manually without provenance. `0.4.0` adds `createSubscriptionRouter(options)` (explicit `config` and `usage`, injectable `tracker` and `now`; the default export is unchanged).
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install
 below describes legacy deployment, not installation or candidate verification of this package.
 
@@ -16,7 +16,7 @@ to remaining capacity and reset timing, without adding network reads or changing
 Install:
 
 ```sh
-pi install git:github.com/nredd/pi-subscription-router@v0.3.0
+pi install npm:@nredd/pi-subscription-router@0.4.0
 ```
 
 Config lives in `<agentDir>/subscription-router.json` (`~/.pi/agent/` by default). No file means
