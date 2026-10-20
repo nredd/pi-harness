@@ -1,11 +1,8 @@
-/** Formats coalesced monitor output and lifecycle events as one custom-message body. */
+/** Formats compact monitor wake and lifecycle custom messages. */
 
 import type { CoalescedBatch } from "./coalescer.ts";
 import type { NumberedLine } from "./ring.ts";
 import type { MonitorInfo, MonitorMessage } from "./types.ts";
-
-export const MAX_MESSAGE_LINES = 40;
-export const MAX_MESSAGE_BYTES = 8 * 1024;
 
 export type TaggedLine = NumberedLine & { matched: boolean };
 
@@ -21,72 +18,52 @@ function exitNote(info: MonitorInfo): string {
 	const took = formatDuration((info.endedAt ?? Date.now()) - info.startedAt);
 	switch (info.status) {
 		case "timeout":
-			return `timed out after ${took} and was killed; ${info.lines} lines total`;
+			return `timed out after ${took} and was killed`;
 		case "stopped":
-			return `stopped after ${took}; ${info.lines} lines total`;
+			return `stopped after ${took}`;
 		default:
 			return info.signal
-				? `died from ${info.signal} after ${took}; ${info.lines} lines total`
-				: `exited with code ${info.exitCode ?? "?"} after ${took}; ${info.lines} lines total`;
+				? `died from ${info.signal} after ${took}`
+				: `exited with code ${info.exitCode ?? "?"} after ${took}`;
 	}
 }
 
-/** Keep the newest lines that fit both caps; returns them and how many older ones were dropped. */
-function bound(lines: TaggedLine[]): { kept: TaggedLine[]; omitted: number } {
-	let kept = lines.slice(-MAX_MESSAGE_LINES);
-	let bytes = 0;
-	let from = kept.length;
-	while (from > 0) {
-		const next = bytes + Buffer.byteLength(kept[from - 1]?.text ?? "") + 8;
-		if (next > MAX_MESSAGE_BYTES && from < kept.length) break;
-		bytes = next;
-		from--;
-	}
-	kept = kept.slice(from);
-	return { kept, omitted: lines.length - kept.length };
-}
-
+/** A wake names its event and cursor without replaying passive buffered output. */
 export function formatMessage(
 	info: MonitorInfo,
 	input: CoalescedBatch<TaggedLine> | TaggedLine[],
-	opts: { final: boolean; wake: boolean },
+	opts: { final: boolean; wake: boolean; since?: number },
 ): MonitorMessage {
-	const batch = Array.isArray(input) ? { items: input, dropped: 0, droppedMatched: false } : input;
+	const batch = Array.isArray(input) ? { items: input, dropped: 0, droppedMatched: false, droppedMatches: [] } : input;
+	const matched = [...batch.items.filter((line) => line.matched), ...batch.droppedMatches].sort((a, b) => a.n - b.n);
+	const firstLine = (batch.items[0]?.n ?? info.lines + 1) - batch.dropped;
+	const lastLine = batch.items.at(-1)?.n ?? info.lines;
+	const readSince = Math.max(0, opts.since ?? 0);
 	const head = `[monitor ${info.id} "${info.name}"]`;
-	const parts: string[] = [];
-	const matched = batch.items.filter((l) => l.matched).map((l) => l.n);
-	if (batch.items.length > 0 || batch.dropped > 0) {
-		const { kept, omitted } = bound(batch.items);
-		const first = (batch.items[0]?.n ?? info.lines + 1) - batch.dropped;
-		const last = batch.items.at(-1)?.n ?? info.lines;
-		const total = batch.items.length + batch.dropped;
-		const tag =
-			matched.length > 0
-				? `; match on ${matched.slice(0, 5).join(", ")}${matched.length > 5 ? ", ..." : ""}`
-				: batch.droppedMatched
-					? "; match"
-					: "";
-		parts.push(`${head} lines ${first}-${last} (${total} new${tag})`);
-		if (batch.dropped > 0)
-			parts.push(
-				`... ${batch.dropped} lines dropped from the pending 2s batch; monitor_read {"id":"${info.id}","since":${first - 1}} has them`,
-			);
-		if (omitted > 0)
-			parts.push(
-				`... ${omitted} earlier lines omitted; monitor_read {"id":"${info.id}","since":${first - 1}} has them`,
-			);
-		for (const l of kept) parts.push(`${l.n}: ${l.text}`);
+	const parts = [head];
+	if (matched.length > 0) {
+		const first = matched[0];
+		const last = matched.at(-1);
+		parts.push(
+			first === last
+				? `matched line ${first?.n}: ${first?.text}`
+				: `matched lines ${first?.n}: ${first?.text}; ${last?.n}: ${last?.text}`,
+		);
+	} else if (!opts.final && batch.items.length > 0) {
+		const line = batch.items.at(-1);
+		parts.push(`output line ${line?.n}: ${line?.text}`);
 	}
-	if (opts.final) parts.push(`${head} ${exitNote(info)}`);
+	if (opts.final) parts.push(exitNote(info));
+	parts.push(`monitor_read {"id":"${info.id}","since":${readSince}}`);
 	return {
 		text: parts.join("\n"),
 		wake: opts.wake,
 		details: {
 			id: info.id,
 			name: info.name,
-			firstLine: (batch.items[0]?.n ?? info.lines + 1) - batch.dropped,
-			lastLine: batch.items.at(-1)?.n ?? info.lines,
-			matched,
+			firstLine,
+			lastLine,
+			matched: matched.map((line) => line.n),
 			status: info.status,
 		},
 	};

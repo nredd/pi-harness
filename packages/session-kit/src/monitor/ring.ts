@@ -35,6 +35,11 @@ export class RingBuffer {
 		return this.total;
 	}
 
+	/** Text of the newest line, undefined when nothing was ever pushed. */
+	get lastText(): string | undefined {
+		return this.total === 0 ? undefined : this.slots[(this.total - 1) % this.capacity];
+	}
+
 	/** Number of the oldest retained line, `lastLine + 1` when empty. */
 	get firstLine(): number {
 		return Math.max(1, this.total - this.capacity + 1);
