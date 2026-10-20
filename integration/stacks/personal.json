@@ -4,7 +4,7 @@
     "git:github.com/nredd/pi-claude-auth@v0.1.3-nredd.1",
     "npm:pi-web-access@0.36.0",
     "git:github.com/nredd/rpiv-todo@v2.13.9-nredd.1",
-    "git:github.com/nredd/pi-subagents@v0.22.0-nredd.4",
+    "git:github.com/nredd/pi-subagents@v0.22.0-nredd.5",
     "npm:@nredd/pi-subscription-router@0.4.0",
     "git:github.com/nredd/pi-plan-mode@v0.59.3-nredd.1",
     "npm:@nredd/pi-dev-tools@0.5.1",

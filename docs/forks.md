@@ -52,7 +52,7 @@ Upstream candidates in the core patch queue:
 pi-subagents patch queue:
 
 - Base: tintinweb master `ca93a5247e72e7053fcd10bea7125d6c4205f949`, five unreleased commits after
-  `v0.22.0`; release branch `nredd/v0.22.0-ca93a52`, selected tag `v0.22.0-nredd.4` (nredd/pi-subagents#5/#6).
+  `v0.22.0`; release branch `nredd/v0.22.0-ca93a52`, selected tag `v0.22.0-nredd.5` (nredd/pi-subagents#5/#6/#7).
   The upstream audit confirms nicobailon/pi-subagents is an independent project, not our upstream
 - Retain explicit/model-map/enterprise alias precedence and newest-enabled fuzzy resolution, router admission,
   quota parking/re-admission/refusal, session-scoped detached delivery, bounded tool-free final reports,
@@ -64,6 +64,9 @@ pi-subagents patch queue:
   row/fleet/viewer timers, alongside scheduling/outbox. Defaults keep native time; render probes do not start
   tickers. Sixteen B rows plus absent-router admission are native in
   `test/{worktree-isolation-e2e,session-scenarios,fleet-session,viewer-session}.test.ts`, under Vitest and Bun
+- `skills:` preload follows symlinks in the three user roots like Pi core (installers and dotfiles link vendored
+  skills there), with a canonical-path cycle guard; project roots still refuse links at every layer, now including
+  a linked `.pi/` or `.agents/` dir (nredd/pi-subagents#7). Upstream rejects links everywhere; keep the split
 
 pi-plan-mode patch queue:
 
