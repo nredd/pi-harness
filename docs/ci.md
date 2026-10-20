@@ -163,3 +163,5 @@ recovery are documented [here](releases.md#owned-npm-packages). Only a real tag-
 can prove the external OIDC binding, automatic provenance and registry acceptance end to end.
 
 Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI).
+
+<!-- Temporary docs-only CI admission proof. -->
