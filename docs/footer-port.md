@@ -60,8 +60,12 @@ instead allowlist those packages. No fork change or unsupported fifth resource f
    this workflow has not yet been demonstrated for preset.
 2. Publish `@nredd/pi-preset@0.2.0` through the existing release workflow and verify registry
    integrity/provenance. No publication is performed by this change.
-3. Replace the dotfiles placeholder pin and inventory version, then update the assembled selection
-   and root planning docs through the owner's separate pin work. Require the matching CI gates.
+3. Replace the dotfiles placeholder pin and inventory version. Land the separate personal-stack
+   promotion commit/PR only AFTER npm publication: filtered preset first, version `0.2.0`, matching
+   dotfiles' package position, plus CI assertions. Before publication, `stack (personal)` remains
+   on its published twelve-source selection. Do not skip installation failures or silently test
+   a local preset in its place. A promotion branch containing the unpublished pin fails normally
+   until publication. The owner still updates root planning docs. Require the matching CI gates.
 4. Apply dotfiles only AFTER publication: resource filters, package-agent gate and explicit chezmoi
    retirement of the three old footer files land together. Tests move, user configuration stays.
    Restart Pi and require `pi-profile doctor` green. Do not activate both implementations.
