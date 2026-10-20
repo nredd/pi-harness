@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-subscription-router",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publishConfig": {"access": "public"},
   "description": "Pi virtual models that route across included subscription quota: Anthropic and ChatGPT Codex usage collectors, confirmed per-family exhaustion, and mid-run quota recovery.",
   "author": "nredd",
