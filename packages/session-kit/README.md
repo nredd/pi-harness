@@ -119,12 +119,14 @@ each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
   into the rows it has left, Models gives it what a short list leaves, at least half.
 - X axis: a baseline with a mark under every tick, labels centred on their bucket's column (the first and
   last clamp to the plot edges). Ticks are evenly spaced, at most 13, never overlap and are never cut; the
-  finest set whose labels fit wins, so a wider pane gets more of them. 5h and 24h label hours on the clock
-  (`09:00`, or `9a` / `12p` when narrow; every hour, 2, 3, 4, 6, 12 or 24 hours apart) with a row of dates
-  under the first bucket and every midnight. Day buckets: a week of single days gets `Wed 7` (or `Wed`),
-  longer ranges get dates on every day, 2 or 3 days, every Monday or every other Monday (counted back from
-  today for multi-day buckets), then month names, quarters, half years and years, with `'26` only where the
-  ticks span more than one year. A pane too narrow for any label draws the baseline alone.
+  finest set whose labels fit wins, so a wider pane gets more of them. 5h and 24h label hours starting on
+  the clock (`09:00`, or `9a` / `12p` when narrow; every hour, 2, 3, 4, 6, 12 or 24 hours apart; across a
+  DST change they stay evenly spaced, so later labels shift by the hour) with a row of dates where they
+  fit: each new local day first, then the first bucket. Day buckets: a week of single days gets `Wed 7`
+  (or `Wed`), longer ranges get dates on every day, 2 or 3 days, every Monday or every other Monday
+  (counted back from today for multi-day buckets), then month names, quarters, half years and years, with
+  `'26` only where the ticks span more than one year. A pane too narrow for any label draws the baseline
+  alone.
 - Rolling 5h/24h use the original call timestamps in zero-filled one-hour UTC buckets, with
   partial edges labeled. Labels use viewer-local time and UTC offsets, including repeated DST
   hours. The same rolling filter feeds chart/model/overview totals; future calls are ignored in
