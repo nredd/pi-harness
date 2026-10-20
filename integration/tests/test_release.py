@@ -544,6 +544,55 @@ def test_legacy_fetch_verifies_exactly_the_recorded_assets(
     assert sorted(seen) == sorted(recorded)
 
 
+@pytest.mark.parametrize("tag", sorted(release.LEGACY_RELEASE_TAGS))
+def test_legacy_fetch_rejects_a_wrong_asset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tag: str
+) -> None:
+    """Serve wrong bytes for the last recorded asset; `fetch_release` must abort before npm.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): serve per-asset bytes and trap installation.
+        tmp_path (Path): isolated prefix.
+        tag (str): legacy release.
+    """
+    recorded = list(release_checksums(tag))
+    payloads = {url: url.encode() for url in recorded}
+
+    def download(url: str, **_kwargs: Any) -> io.BytesIO:
+        """Serve the asset's bytes, corrupting the last one.
+
+        Parameters:
+            url (str): asset URL.
+            **_kwargs (Any): network options.
+
+        Returns:
+            io.BytesIO: the asset's bytes, or wrong bytes for the last asset.
+        """
+        return io.BytesIO(b"wrong" if url == recorded[-1] else payloads[url])
+
+    def install(*_args: Any, **_kwargs: Any) -> None:
+        """Fail the test if installation is reached.
+
+        Parameters:
+            *_args (Any): ignored.
+            **_kwargs (Any): ignored.
+        """
+        pytest.fail("npm install reached despite a checksum mismatch")
+
+    npm_bin = tmp_path / "npm"
+    npm_bin.touch()
+    monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
+    monkeypatch.setattr(
+        release,
+        "release_checksums",
+        lambda _tag: {url: hashlib.sha256(data).hexdigest() for url, data in payloads.items()},
+    )
+    monkeypatch.setattr(release, "urlopen", download)
+    monkeypatch.setattr(release.subprocess, "check_output", install)
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        fetch_release(tag, tmp_path / "prefix")
+
+
 class _Installed(Exception):
     """Raised by the stubbed installer once every asset verified."""
 
