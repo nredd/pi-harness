@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from harness.paths import pi_command
-from harness.stack import load_stack, package_directory, stack_digest
+from harness.stack import PackageSource, load_stack, package_directory, source_string, stack_digest
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -209,8 +209,9 @@ def _install_sources(box: Sandbox, stack: Stack, sources: list[str]) -> None:
     for original, source in zip(stack.sources, sources, strict=True):
         LOGGER.info(f"pi install '{source}'")
         extra = {"PI_OFFLINE": "0"}
-        if original in stack.disabled_extensions:
-            LOGGER.warning(f"NO INSTALL SCRIPTS '{source}': {stack.disabled_extensions[original]}")
+        identity = source_string(original)
+        if identity in stack.disabled_extensions:
+            LOGGER.warning(f"NO INSTALL SCRIPTS '{source}': {stack.disabled_extensions[identity]}")
             extra["npm_config_ignore_scripts"] = "true"
         try:
             subprocess.check_output(
@@ -246,12 +247,21 @@ def _record_stack(box: Sandbox, stack: Stack, stack_path: Path, sources: list[st
             raise ValueError(f"Installed npm version differs from '{resolved}': '{manifest['version']}'")
         identities.append({"name": manifest["name"], "version": manifest["version"], "source": resolved})
         LOGGER.info(f"Installed {manifest['name']}@{manifest['version']} from '{resolved}'")
-        disabled = original in stack.disabled_extensions
+        identity = source_string(original)
+        disabled = identity in stack.disabled_extensions
         if disabled:
-            LOGGER.warning(f"NOT LOADED '{resolved}': {stack.disabled_extensions[original]}")
-        # Pi can save local sources relative to its agent directory. The stack's deliberate
-        # absolute inputs and exclusions must survive copying that tree to another HOME.
-        packages.append({"source": resolved, "extensions": []} if disabled else resolved)
+            LOGGER.warning(f"NOT LOADED '{resolved}': {stack.disabled_extensions[identity]}")
+        # `pi install` accepts a source string and persists its own declaration. Restore
+        # the stack's exact object afterward: Pi, not this installer, interprets filters.
+        # exclude_unset preserves omitted (inherit) versus [] (disable) resource kinds.
+        package: str | dict[str, Any] = (
+            original.model_dump(exclude_unset=True) | {"source": resolved}
+            if isinstance(original, PackageSource)
+            else resolved
+        )
+        if disabled:
+            package = (package if isinstance(package, dict) else {"source": package}) | {"extensions": []}
+        packages.append(package)
     box.patch_json("settings.json", stack.settings | {"packages": packages})
     (box.agent_dir / "stack-name").write_text(stack.name)
     (box.agent_dir / "stack-evidence.json").write_text(
@@ -260,6 +270,7 @@ def _record_stack(box: Sandbox, stack: Stack, stack_path: Path, sources: list[st
                 "stack": stack.name,
                 "sha256": stack_digest(stack_path),
                 "packages": identities,
+                "configured_packages": packages,
                 "disabled_extensions": stack.disabled_extensions,
             },
             indent=2,
