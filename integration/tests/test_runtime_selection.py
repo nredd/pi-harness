@@ -84,7 +84,7 @@ def test_real_auth_scenarios_collect_exact_skips(runtime: str, tmp_path: Path) -
         tmp_path (Path): holds the collection-recording plugin.
     """
     (tmp_path / "record_skips.py").write_text(RECORDER)
-    done = subprocess.run(
+    output = subprocess.check_output(
         [
             sys.executable,
             "-m",
@@ -100,14 +100,12 @@ def test_real_auth_scenarios_collect_exact_skips(runtime: str, tmp_path: Path) -
             runtime,
         ],
         cwd=INTEGRATION,
-        env={**os.environ, "PYTHONPATH": str(tmp_path)},
-        capture_output=True,
+        env=os.environ | {"PYTHONPATH": str(tmp_path)},
         text=True,
+        stderr=subprocess.STDOUT,
         timeout=120,
-        check=False,
     )
-    assert done.returncode == 0, done.stdout + done.stderr
-    states = dict(line.split()[1:] for line in done.stdout.splitlines() if line.startswith("ITEM "))
+    states = dict(line.split()[1:] for line in output.splitlines() if line.startswith("ITEM "))
     assert "test_request_uses_auth_json_token_with_claude_code_headers[missing-preload]" in states
     skipped = {name for name, state in states.items() if state == "SKIP"}
     assert skipped == (STANDALONE_SKIPS if runtime == "bun-standalone" else set())
