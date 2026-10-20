@@ -84,13 +84,13 @@ pi-plan-mode patch queue:
 rpiv-todo patch queue:
 
 - Base: `@juicesharp/rpiv-todo@2.13.9` from `juicesharp/rpiv-mono` (release `54df50ee`), split `7903c76b`;
-  release branch `nredd/v2.13.9`, selected tag `v2.13.9-nredd.1` (nredd/rpiv-todo#1)
+  release branch `nredd/v2.13.9`, selected tag `v2.13.9-nredd.2` (nredd/rpiv-todo#1/#2)
 - Adopt upstream's per-call `rpiv-todo-state` persistence and `.ts` import specifiers. Legacy fork sessions
   (a Plan snapshot followed by tool-result-only updates) replay chronologically until the first authoritative
   persistence marker, so a completed task never rolls back to its approved snapshot; regression covers the
   audit's replay probe. Retain clickable heading, Plan seeding/evidence/reminders, wheel/atomic batches/counts,
   resume collapse/config and the historical-result/replanning fix
-- Candidate branch `fix/verification-suite` adds standalone scripts, dev dependencies/lockfile, Vitest config
+- nredd/rpiv-todo#2 adds standalone scripts, dev dependencies/lockfile, Vitest config
   and upstream mock helpers vendored from release `54df50ee`. No upstream assertions change: all 253 stock
   tests (21 files) run; the selected fork's baseline is 377 tests (26 files), rising to 382 (28 files) with
   rendering regressions. Biome/strict TypeScript and two native Bun 1.3.14 interactive regressions share
@@ -100,9 +100,7 @@ rpiv-todo patch queue:
   eviction and foreground switches without polling or probe side effects. Valid historical snapshots stay
   immutable. Both update/delete regressions use the real interactive harness and VirtualTerminal and fail
   before the fix on the stale subject
-- `forks.yml` now runs the fork gate at its Gitlink, not a scratch monorepo or the parent stack suite.
-  The Gitlink deliberately remains `v2.13.9-nredd.1` pending the candidate probe; that old commit lacks
-  the standalone gate, so this workflow must land with the eventual probed Gitlink update. The four
+- `forks.yml` runs the fork gate at its Gitlink, not a scratch monorepo or the parent stack suite. The four
   real Plan/todo rows in `integration/inprocess/plan-todos.test.ts` remain separate stack coverage
 
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
