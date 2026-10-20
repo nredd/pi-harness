@@ -145,16 +145,38 @@ jobs:
       - run: pnpm build
       - run: pnpm test
 
+  rpiv-todo:
+    name: rpiv-todo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: forks/rpiv-todo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize the fork at its Gitlink
+        working-directory: .
+        run: git submodule update --init forks/rpiv-todo
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+
   not-run:
-    name: rpiv-todo, pi-computer-use (not run)
+    name: pi-computer-use (not run)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Report
         run: |
-          echo "::notice title=rpiv-todo not run::its gate needs the upstream rpiv-mono checkout at the release commit (fork runbook)"
           echo "::notice title=pi-computer-use not run::its native helper and desktop suites need macOS TCC grants"
           {
-            echo "### rpiv-todo, pi-computer-use: NOT RUN"
-            echo "rpiv-todo gates inside an upstream rpiv-mono clone; pi-computer-use needs macOS TCC. This is not a pass."
+            echo "### pi-computer-use: NOT RUN"
+            echo "pi-computer-use needs macOS TCC. This is not a pass."
           } >>"$GITHUB_STEP_SUMMARY"

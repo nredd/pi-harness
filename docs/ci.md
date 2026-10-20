@@ -20,7 +20,11 @@ The publish job alone requests a short-lived npm OIDC identity.
 | `pi-subagents` | Pinned Bun, `npm ci`, `npm run check` (full Vitest suite and Bun session scenarios) |
 | `pi-plan-mode` | Pinned Bun, `npm ci`, `npm run check` (Bun session scenarios), `npm test` (full Vitest suite) |
 | `pi-claude-auth` | pnpm at the fork's `packageManager`, `pnpm install --frozen-lockfile`, lint, build, test |
-| `rpiv-todo, pi-computer-use (not run)` | a notice: rpiv-todo gates inside an upstream `rpiv-mono` clone, pi-computer-use needs macOS TCC |
+| `rpiv-todo` | Pinned Bun, `npm ci --ignore-scripts`, `npm run check` (Biome, strict TypeScript, full standalone Vitest suite and native Bun settled-row regressions) at the Gitlinked commit |
+| `pi-computer-use (not run)` | a notice: pi-computer-use needs macOS TCC |
+
+The rpiv-todo job needs the standalone gate that `v2.13.9-nredd.2` (nredd/rpiv-todo#2) added; an older
+Gitlink has no lockfile or `check` script, so the job fails rather than reporting a false pass.
 
 `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
 
@@ -36,8 +40,9 @@ The publish job alone requests a short-lived npm OIDC identity.
 - Root workspace dependencies supply `croner` `10.0.1`, `nanoid` `5.1.16`, `pi-tui-kit` `0.65.5`
   from the forks' lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
   `3.x` and leaves the fork's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
-  split has no lockfile: `rpiv-config` and optional peer
-  `rpiv-i18n` are pinned to its release `2.12.0`, recorded in the root lockfile
+  split's own lockfile serves only its `forks.yml` gate; the stack workspace never installs fork-local
+  dependencies, so `rpiv-config` and optional peer `rpiv-i18n` are pinned here to the fork's `2.13.9`,
+  with the same integrity as its lockfile
 - `isolateStackHome()` isolates `HOME`, `PI_CODING_AGENT_DIR`, XDG config before loading entries.
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.

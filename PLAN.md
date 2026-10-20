@@ -26,14 +26,14 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 - `nredd/pi` main `bd6444a`; released selection is `v1.3.0-nredd.6` at `9351a78` on `nredd/v1.3.0`.
 - `nredd/pi-subagents` has no main; master `927cf03`. Released selection is `v0.22.0-nredd.5` at `526fa2d` (nredd/pi-subagents#7: user skill roots follow symlinks), rebased onto tintinweb master `ca93a524`, on `nredd/v0.22.0-ca93a52`.
 - `nredd/pi-plan-mode` main `cb9b7c1`; default branch remains `nredd/v0.59.2` at `d91bb2b`. Released selection is `v0.59.3-nredd.1` at `4c2bfc3` on `nredd/v0.59.3`.
-- `nredd/rpiv-todo` main `0f46ed9`; released selection is `v2.13.9-nredd.1` at `3c62a0b`.
+- `nredd/rpiv-todo` main `0f46ed9`; released selection is `v2.13.9-nredd.2` at `9a4e2e8` (nredd/rpiv-todo#2: standalone suite, live-row refresh).
 - Archived on GitHub: `nredd/pi-dev-tools`, `nredd/pi-session-kit`, `nredd/pi-subscription-router`, `nredd/pi-harness-benchmark`, `nredd/pi-harness-e2e`. Their open follow-ups moved to dotfiles issues [here](https://github.com/nredd/dotfiles/issues). Do not revive standalone harness ownership.
 - `~/code/pi-harness-builds/` holds historical evidence and pinned tools, not source ownership. Read `~/.pi/agent/README.md` before changing Pi config or pins.
 
 Live selection / promotion state:
 
 - Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selected `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`; #16 selected `@nredd/pi-session-kit@0.5.0`. Dotfiles #17 selected pi-subagents `v0.22.0-nredd.5` after #55's four `stack` jobs passed.
-- Compare `integration/stacks/personal.json` with dotfiles `origin/main`'s `third_party/pi-agent-settings.base.json`; they select the same twelve package sources, including pi-subagents `v0.22.0-nredd.5`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
+- Compare `integration/stacks/personal.json` with dotfiles `origin/main`'s `third_party/pi-agent-settings.base.json`; they select the same twelve package sources once dotfiles#19 promotes rpiv-todo `v2.13.9-nredd.2`; until then dotfiles still pins `v2.13.9-nredd.1`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
 - Exact third-party npm pins: `pi-web-access@0.36.0`, `pi-deferred-context-engine@0.5.0`, `@quintinshaw/pi-dynamic-workflows@3.14.0`, `pi-memory@0.4.2`.
 - Other fork pins: `pi-claude-auth v0.1.3-nredd.1`, `pi-computer-use v0.5.1-nredd.2`. The stack installs but never loads computer-use in headless CI.
 - Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, promoted by dotfiles#14), `@nredd/pi-session-kit@0.5.0` (gated by #53 `stack`, promoted by dotfiles#16). preset carries unreleased changes; cut it through `publish.yml` when needed.
@@ -42,7 +42,7 @@ Live selection / promotion state:
 Verification layers now implemented:
 
 - Package-native Vitest + pinned Bun suites own package behavior, including interactive host / `VirtualTerminal` tests and injectable clocks.
-- `integration/inprocess/` owns A-stack tests with real extension factories and one host identity. It also hosts the four single-fork rpiv-todo B rows; that is not a claim that the split fork's native suite runs.
+- `integration/inprocess/` owns A-stack tests with real extension factories and one host identity. It also hosts the four single-fork rpiv-todo B rows; the split fork's own suite runs separately in `forks.yml`.
 - `.github/workflows/forks.yml` runs applicable full fork suites. Before tagging a fork, use a temporary CI probe PR selecting the candidate Gitlink, fetch its SHA for reviews, wait for full fork CI, then close the probe without merging. Receipts: #37, #39.
 - `contracts` owns packed artifact identity, installation/discovery/trust and stock-host compatibility. See `docs/package-contracts.md`; do not confuse it with assembled-stack coverage.
 - `stack` D/E jobs use a formula-shaped released Node binary plus explicit `integration/stacks/personal.json` / `integration/stacks/local.json` in throwaway agent dirs, on both OSes. No chezmoi, Brewfile or live install input. D owns process boundaries; E owns the real tmux resize seam.
@@ -96,7 +96,6 @@ Historical, not the current deployment inventory:
    - linux-arm64 execution/acceptance, not just cross-building.
    - Quiet bench runner; F stays NOT RUN until provisioned and baselined with evidence.
    - GitHub App / promotion automation #57. Dual review receipts remain PR comments, not CI statuses.
-   - Scratchpad: rpiv-todo `renderCall` reads the live task subject without `context.invalidate()`; a collapsed update/delete row can retain the subject from settlement. Diagnose at the fork seam before changing it.
 
 ## Where to start
 
