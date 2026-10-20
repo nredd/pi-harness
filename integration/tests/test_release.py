@@ -134,40 +134,57 @@ def test_source_only_snapshot_keeps_recorded_asset_checksums(tmp_path: Path, sna
     with pytest.raises(ValueError, match="No recorded release checksum"):
         verify_asset(tmp_path / "unrecorded.tgz", url + "missing", manifest_checksums(tag, tmp_path))
     (tmp_path / "release.json").unlink()
-    with pytest.raises(ValueError, match="No recorded release checksums"):
-        fetch_release(tag, tmp_path / "prefix", tmp_path)
-    assert not (tmp_path / "prefix").exists()
+    checksums = release_checksums(tag, tmp_path)
+    assert len(checksums) == 2
+    assert all(digest != "a" * 64 for digest in checksums.values())
 
 
-@pytest.mark.parametrize("exists", [False, True])
-def test_missing_manifest_refuses_installation_before_network(tmp_path: Path, exists: bool) -> None:
-    """Refuse missing or empty manifest directories before creating an install prefix.
-
-    Parameters:
-        tmp_path (Path): isolated installation paths.
-        exists (bool): create the directory without a manifest when true.
-    """
-    manifests = tmp_path / "manifests"
-    if exists:
-        manifests.mkdir()
-    prefix = tmp_path / "prefix"
-    with pytest.raises(ValueError, match="No recorded release checksums"):
-        fetch_release("v1.3.0-nredd.6", prefix, manifests)
-    assert not prefix.exists()
-
-
-def test_manifest_without_requested_tag_refuses_installation(tmp_path: Path) -> None:
-    """Refuse a recorded release unrelated to the requested tag.
+def test_legacy_checksums_do_not_depend_on_manifests(tmp_path: Path) -> None:
+    """Read the hard-coded legacy release identities without a manifest directory.
 
     Parameters:
-        tmp_path (Path): private manifest and installation paths.
+        tmp_path (Path): absent manifest directory.
     """
-    (tmp_path / "other.json").write_text(
-        json.dumps({"forks": [{"path": "forks/pi", "tag": "v1.3.0-nredd.4"}], "artifacts": []})
+    tag = "v1.3.0-nredd.6"
+    checksums = release_checksums(tag, tmp_path / "manifests")
+    assert checksums == {
+        f"https://github.com/nredd/pi/releases/download/{tag}/{name}": digest
+        for name, digest in release.LEGACY_CHECKSUMS[tag].items()
+    }
+    assert release.LEGACY_CHECKSUMS[tag][release.CODING_AGENT_TARBALL] == (
+        "0c1b9549cfed58c19f03b642cb259bf52f83beb1a339f154e5616c9b28c939b8"
     )
-    with pytest.raises(ValueError, match="No recorded release checksums"):
-        fetch_release("v1.3.0-nredd.6", tmp_path / "prefix", tmp_path)
-    assert not (tmp_path / "prefix").exists()
+    assert release.LEGACY_CHECKSUMS[tag][release.TUI_TARBALL] == (
+        "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0"
+    )
+
+
+def test_unknown_release_never_falls_back_to_manifests(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fetch unknown-tag checksums only from the release `SHA256SUMS` asset.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace the remote checksum fetch.
+        tmp_path (Path): contradictory legacy-looking manifest directory.
+    """
+    tag = "v1.3.0-nredd.8"
+    (tmp_path / "other.json").write_text(
+        json.dumps(
+            {
+                "artifacts": [
+                    {
+                        "url": f"https://github.com/nredd/pi/releases/download/{tag}/core.tgz",
+                        "sha256": "b" * 64,
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"c" * 64 + b"  core.tgz\n"))
+    assert release_checksums(tag, tmp_path) == {
+        f"https://github.com/nredd/pi/releases/download/{tag}/core.tgz": "c" * 64
+    }
 
 
 def test_conflicting_manifests_are_not_ignored(tmp_path: Path) -> None:
@@ -234,12 +251,14 @@ def test_provenance_verification_pins_workflow_and_tag(
         assert kwargs["timeout"] == 120
         return "verified"
 
-    monkeypatch.setattr(release.shutil, "which", lambda name: "/explicit/gh")
+    gh_bin = tmp_path / "gh"
+    gh_bin.touch()
+    monkeypatch.setattr(release, "GH_BIN", str(gh_bin))
     monkeypatch.setattr(subprocess, "check_output", gh)
     verify_provenance(artifact, "v1.3.0-nredd.8")
     assert calls == [
         [
-            "/explicit/gh",
+            str(gh_bin),
             "attestation",
             "verify",
             str(artifact),
@@ -252,6 +271,62 @@ def test_provenance_verification_pins_workflow_and_tag(
             "--deny-self-hosted-runners",
         ]
     ]
+
+
+@pytest.mark.parametrize("missing_gh", [True, False])
+def test_fetch_aborts_when_provenance_cannot_verify(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, missing_gh: bool
+) -> None:
+    """Stop new-release installation before npm when provenance verification fails.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace checksum, download, and CLI operations.
+        tmp_path (Path): isolated release prefix and binaries.
+        missing_gh (bool): simulate an absent CLI or a failed verification command.
+    """
+    tag = "v1.3.0-nredd.8"
+    contents = b"core release bytes"
+    base = f"https://github.com/nredd/pi/releases/download/{tag}/"
+    checksums = {
+        base + f"earendil-works-{package}-1.3.0.tgz": hashlib.sha256(contents).hexdigest()
+        for package in ("pi-coding-agent", "pi-tui")
+    }
+    monkeypatch.setattr(release, "release_checksums", lambda *_: checksums)
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(contents))
+    if missing_gh:
+        monkeypatch.setattr(release, "GH_BIN", str(tmp_path / "missing-gh"))
+        error = FileNotFoundError
+    else:
+        gh_bin = tmp_path / "gh"
+        gh_bin.touch()
+        monkeypatch.setattr(release, "GH_BIN", str(gh_bin))
+        monkeypatch.setattr(
+            subprocess,
+            "check_output",
+            lambda argv, **_kwargs: (_ for _ in ()).throw(
+                subprocess.CalledProcessError(1, argv, output="bad provenance")
+            ),
+        )
+        error = RuntimeError
+    with pytest.raises(error, match=r"provenance|requires `gh`"):
+        fetch_release(tag, tmp_path / "prefix", tmp_path / "manifests")
+
+
+def test_legacy_fetch_enforces_checksum_without_provenance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reject bad legacy bytes before attempting provenance verification.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): serve wrong release bytes and record provenance calls.
+        tmp_path (Path): isolated release prefix.
+    """
+    provenance: list[tuple[Path, str]] = []
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"wrong bytes"))
+    monkeypatch.setattr(release, "verify_provenance", lambda path, tag: provenance.append((path, tag)))
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        fetch_release("v1.3.0-nredd.7", tmp_path / "prefix", tmp_path / "manifests")
+    assert provenance == []
 
 
 def test_prune_matches_formula_platform_spellings(tmp_path: Path) -> None:
@@ -329,28 +404,31 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
         (destination / "stale").write_text("registry copy must go away")
         return "installed"
 
+    tag = "v1.3.0-nredd.8"
+    base = f"https://github.com/nredd/pi/releases/download/{tag}/"
+    checksums = {
+        base + f"earendil-works-{package}-1.3.0.tgz": hashlib.sha256(tarball).hexdigest()
+        for package in ("pi-coding-agent", "pi-tui")
+    }
+    provenance: list[tuple[Path, str]] = []
+    npm_bin = tmp_path / "npm"
+    npm_bin.touch()
     monkeypatch.setattr(release, "urlopen", download)
-    monkeypatch.setattr(release.shutil, "which", lambda _: "/explicit/npm")
+    monkeypatch.setattr(release, "release_checksums", lambda *_: checksums)
+    monkeypatch.setattr(
+        release, "verify_provenance", lambda path, release_tag: provenance.append((path, release_tag))
+    )
+    monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
     monkeypatch.setattr(subprocess, "check_output", npm)
     manifests = tmp_path / "manifests"
     manifests.mkdir()
-    base = "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.4/"
-    (manifests / "release.json").write_text(
-        json.dumps(
-            {
-                "artifacts": [
-                    {
-                        "url": base + f"earendil-works-{package}-1.3.0.tgz",
-                        "sha256": hashlib.sha256(tarball).hexdigest(),
-                    }
-                    for package in ("pi-coding-agent", "pi-tui")
-                ]
-            }
-        )
-    )
-    binary = fetch_release("v1.3.0-nredd.4", prefix, manifests)
+    binary = fetch_release(tag, prefix, manifests)
     assert binary == prefix / "bin/pi"
     assert len(urls) == 2
+    assert provenance == [
+        (prefix / "earendil-works-pi-coding-agent-1.3.0.tgz", tag),
+        (prefix / "earendil-works-pi-tui-1.3.0.tgz", tag),
+    ]
     assert urls[0].endswith("/earendil-works-pi-coding-agent-1.3.0.tgz")
     assert urls[1].endswith("/earendil-works-pi-tui-1.3.0.tgz")
     assert commands[0][1:6] == ["install", "--global", "--prefix", str(prefix), "--min-release-age=0"]
