@@ -77,8 +77,9 @@ pi-plan-mode patch queue:
   one-line Plan tool/proposed-plan rows and `pi-plan-mode:plan-approved` delivery. Keep the standalone
   vendored harness and rebuilt `dist/` for git installs
 - Seven B rows are native in `test/{confirmation,decline,policy,transcript}-session.test.ts`, under Vitest
-  and Bun. Both forks' test hosts now use exact core `v1.3.0-nredd.6` coding-agent/TUI/AI/agent-core tarballs,
-  not stock npm host copies. Full suites passed the parent [CI probe #37](https://github.com/nredd/pi-harness/pull/37)
+  and Bun. Both forks' native test dependencies still pin core `v1.3.0-nredd.6` tarballs until their next
+  releases, not stock npm host copies; `pi-harness`'s in-process host (`integration/inprocess`) uses `v1.3.0-nredd.7`
+  `coding-agent`/`tui` tarballs plus the unchanged `v1.3.0-nredd.6` `ai`/`agent-core` tarballs. Full suites passed the parent [CI probe #37](https://github.com/nredd/pi-harness/pull/37)
 
 rpiv-todo patch queue:
 
@@ -93,7 +94,7 @@ rpiv-todo patch queue:
   and upstream mock helpers vendored from release `54df50ee`. No upstream assertions change: all 253 stock
   tests (21 files) run; the selected fork's baseline is 377 tests (26 files), rising to 382 (28 files) with
   rendering regressions. Biome/strict TypeScript and two native Bun 1.3.14 interactive regressions share
-  `npm run check`; the host pins core `v1.3.0-nredd.6` tarballs like the other forks
+  `npm run check`; the host pins core `v1.3.0-nredd.6` tarballs like the other forks until the next fork release
 - Invalidate core's cached settled call rows on foreground store changes when they still use the live
   fallback (legacy/error results without a valid snapshot). Weak subscriptions cover mutations, replay,
   eviction and foreground switches without polling or probe side effects. Valid historical snapshots stay
