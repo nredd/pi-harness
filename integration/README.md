@@ -37,12 +37,13 @@ Boundary inventory:
 - Landed A-stack ports and the four single-fork `B:rpiv-todo` interactive rows run in `integration/inprocess/`, documented [here](inprocess/README.md); their old Python rows are removed, not resurrected by this gate
 - `F`: `scenarios/bench/`, serial and quiet-runner only. Existing baselines are historical, not re-recorded on hosted runners. CI visibly reports NOT RUN until a quiet runner and one evidenced rebaseline exist
 - `G`: `scenarios/live/`, never CI, opt-in with `HARNESS_LIVE=1` and explicit `HARNESS_AUTH_FILE=/absolute/auth.json`. Credentials are linked only from that supplied path; refresh writes through. The shared cost cap remains $0.50
-- No unported non-boundary functions remain in the Python scenarios. CI selects only the five root `test_*.py` files and `tui/test_footer_resize.py`, all marked `stack`; bench/live remain explicitly excluded
+- `D`: `scenarios/test_extension_coverage.py` adds installed memory write/read/path rejection, workflow registry/search/list/missing-run handling, raw web fetch refused-loopback tool error and a surviving faux reply. A test-only registry observer checks registered tools/commands separately from the active-schema golden. Computer-use must have installed extension entries and an evidenced `extensions: []` exclusion, no desktop tools and no GUI app. Sources/pins come only from the selected stack. qmd is a failing fixture shim; web requests use only loopback, not live providers
+- No unported non-boundary functions remain in the Python scenarios. CI selects only the six root `test_*.py` files and `tui/test_footer_resize.py`, all marked `stack`; bench/live remain explicitly excluded
 - Thirteen machine-specific static rows and their schema/pin/Brew parser/discovery units are removed.
   Dotfiles implements their replacement in `pi-profile doctor`, with a warn-only after-apply hook.
   Its assertion ledger and recovery runbook are [here](https://github.com/nredd/dotfiles/blob/main/docs/pi-profile-doctor.md)
 
-Excluded scenario files (paths below are relative to `scenarios/`; the six `stack` files above are the only CI-selected Python scenarios):
+Excluded scenario files (paths below are relative to `scenarios/`; the seven `stack` files above are the only CI-selected Python scenarios):
 
 | Files | Reason excluded from `stack` |
 | --- | --- |
@@ -56,6 +57,11 @@ The goal/quota/loop ports in #33 remain native; their three deleted Python files
 Native preset footer receipts are in `packages/preset/test/scenarios/footer-{quota,cache,headless}.test.ts` (Vitest + Bun); the three legacy Python files are deleted. The live footer is still the separately tested dotfiles copy; adopting the preset footer remains profile split #21.
 
 Native stats receipts remain in `packages/session-kit/test/scenarios/{stats-view,stats-data}.test.ts`; `inprocess/stats-plan.test.ts` adds three-machine dedup/freshness and Plan mode on native export/import. Packed standalone privacy, stable UUID and repeated import stay in `scripts/package_contracts.py::exercise_stats_artifact`, CI `contracts` only. `inprocess/diff-plan.test.ts` and `transcript.test.ts` replace the remaining command/Plan and composed-row processes. The two latency-probe functions moved into multisession calibration/readiness/sample assertions; bench remains NOT RUN.
+
+Extension-by-extension coverage and headless/live limits are recorded [here](../docs/verification-rebuild.md#shipped-extension-coverage-audit).
+`inprocess/memory-deferred-kit.test.ts` additionally drives real memory/context-engine/kit
+factories: system-context refresh, session-lifetime tool promotion and successful controlled
+monitor start/read through faux model calls, with an invalid-date error and no fetches.
 
 Infrastructure:
 
