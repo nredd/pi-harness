@@ -13,6 +13,7 @@ import json
 import subprocess
 import tarfile
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -28,6 +29,24 @@ from harness.release import (
     verify_asset,
     verify_provenance,
 )
+
+# sha256 (frozen in `LEGACY_CHECKSUMS`) -> npm SRI sha512 of the same downloaded legacy tarball.
+# Re-derive both from one download: `gh release download <tag> --repo nredd/pi -p <asset>`, then
+# `shasum -a 256 <asset>` and `printf 'sha512-%s' "$(openssl dgst -sha512 -binary <asset> | base64)"`.
+LOCK_INTEGRITY = {
+    "16479a0cb393c7820d8b1fbcdc5c941ceb5a271dc64ecb4b8be6574df3a2e617": (
+        "sha512-M7jiF/SqKQdUOlogM7SqXzNVNNtTCpF3CxA8/tWnvCv0sHT48SEbagIyj8oriBRglz4Q5lZMrjDgt6QJDky3Tg=="
+    ),
+    "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0": (
+        "sha512-5eGojgZgCgakNg8GR19x+FS7PXGb0GLUllZEFJto9lUhKFXv5Z0u15UpWkvOyJmDiQ0EZXMyM2Xh75uA5a5FFw=="
+    ),
+    "e08bbd6b348a00eb97250ebfa33a722c70323b55a2d1e6f5b446513fcb5dad35": (
+        "sha512-zXQEUNTFyIt1a7uus/b1TY/VRWh+P8IjupnqKda2v4TZC6WrbuYZ+3JosZWhOqbh6RP38aYhRH9kb4qn2EbMJQ=="
+    ),
+    "1b7ed741d704e0e288056630c1abc1a71eaec83eac148689c1d9b152361085b7": (
+        "sha512-shL6PmzE7Dyb1dwGJ73leWPVu6zHis5lTs3o1NBaf5Z09oiG2VOYuIdBs0es66GxMAJ4z3mKILNogWx3+lRCWA=="
+    ),
+}
 
 
 def checksums_for(tag: str, contents: bytes) -> dict[str, str]:
@@ -114,10 +133,8 @@ def test_verify_asset_fails_closed(tmp_path: Path) -> None:
 
 def test_legacy_checksums_are_frozen_and_complete() -> None:
     """Freeze the legacy map and record every asset each legacy release shipped."""
-    with pytest.raises(TypeError):
-        release.LEGACY_CHECKSUMS["v1.3.0-nredd.9"] = {}  # ty: ignore[invalid-assignment]
-    with pytest.raises(TypeError):
-        release.LEGACY_CHECKSUMS["v1.3.0-nredd.4"][release.AI_TARBALL] = "0" * 64  # ty: ignore[invalid-assignment]
+    assert isinstance(release.LEGACY_CHECKSUMS, MappingProxyType)
+    assert all(isinstance(assets, MappingProxyType) for assets in release.LEGACY_CHECKSUMS.values())
     core_only = {release.CODING_AGENT_TARBALL, release.TUI_TARBALL}
     for tag, assets in release.LEGACY_CHECKSUMS.items():
         expected = (
@@ -472,61 +489,63 @@ def test_new_release_must_publish_every_consumed_asset(
         fetch_release(tag, tmp_path / "prefix")
 
 
-@pytest.mark.parametrize(
-    ("tag", "count"),
-    [("v1.3.0-nredd.3", 2), ("v1.3.0-nredd.4", 4), ("v1.3.0-nredd.6", 4), ("v1.3.0-nredd.7", 2)],
-)
+@pytest.mark.parametrize("tag", sorted(release.LEGACY_RELEASE_TAGS))
 def test_legacy_fetch_verifies_exactly_the_recorded_assets(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tag: str, count: int
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tag: str
 ) -> None:
-    """Download and checksum every recorded legacy asset, no more.
+    """Download and checksum every recorded legacy asset, and nothing else.
 
     Parameters:
-        monkeypatch (pytest.MonkeyPatch): serve wrong bytes and record requested assets.
+        monkeypatch (pytest.MonkeyPatch): serve per-asset bytes and stub installation.
         tmp_path (Path): isolated prefix.
         tag (str): legacy release.
-        count (int): assets that legacy release shipped.
     """
+    recorded = release_checksums(tag)
+    payloads = {url: url.encode() for url in recorded}
     seen: list[str] = []
 
     def download(url: str, **_kwargs: Any) -> io.BytesIO:
-        """Record the request, then serve bytes that cannot match.
+        """Record the request and serve that asset's bytes.
 
         Parameters:
             url (str): asset URL.
             **_kwargs (Any): network options.
 
         Returns:
-            io.BytesIO: wrong bytes.
+            io.BytesIO: the asset's bytes.
         """
         seen.append(url)
-        return io.BytesIO(b"wrong")
+        return io.BytesIO(payloads[url])
 
+    def install(*_args: Any, **_kwargs: Any) -> None:
+        """Stop after verification; installation is covered elsewhere.
+
+        Parameters:
+            *_args (Any): ignored.
+            **_kwargs (Any): ignored.
+
+        Raises:
+            _Installed: always.
+        """
+        raise _Installed
+
+    monkeypatch.setattr(
+        release,
+        "release_checksums",
+        lambda _tag: {url: hashlib.sha256(data).hexdigest() for url, data in payloads.items()},
+    )
     npm_bin = tmp_path / "npm"
     npm_bin.touch()
     monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
     monkeypatch.setattr(release, "urlopen", download)
-    with pytest.raises(ValueError, match="checksum mismatch"):
+    monkeypatch.setattr(release.subprocess, "check_output", install)
+    with pytest.raises(_Installed):
         fetch_release(tag, tmp_path / "prefix")
-    assert seen == [next(iter(release_checksums(tag)))]
-    assert len(release_checksums(tag)) == count
+    assert sorted(seen) == sorted(recorded)
 
 
-# sha256 (frozen in `LEGACY_CHECKSUMS`) -> npm SRI sha512 of the same downloaded legacy tarball.
-LOCK_INTEGRITY = {
-    "16479a0cb393c7820d8b1fbcdc5c941ceb5a271dc64ecb4b8be6574df3a2e617": (
-        "sha512-M7jiF/SqKQdUOlogM7SqXzNVNNtTCpF3CxA8/tWnvCv0sHT48SEbagIyj8oriBRglz4Q5lZMrjDgt6QJDky3Tg=="
-    ),
-    "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0": (
-        "sha512-5eGojgZgCgakNg8GR19x+FS7PXGb0GLUllZEFJto9lUhKFXv5Z0u15UpWkvOyJmDiQ0EZXMyM2Xh75uA5a5FFw=="
-    ),
-    "e08bbd6b348a00eb97250ebfa33a722c70323b55a2d1e6f5b446513fcb5dad35": (
-        "sha512-zXQEUNTFyIt1a7uus/b1TY/VRWh+P8IjupnqKda2v4TZC6WrbuYZ+3JosZWhOqbh6RP38aYhRH9kb4qn2EbMJQ=="
-    ),
-    "1b7ed741d704e0e288056630c1abc1a71eaec83eac148689c1d9b152361085b7": (
-        "sha512-shL6PmzE7Dyb1dwGJ73leWPVu6zHis5lTs3o1NBaf5Z09oiG2VOYuIdBs0es66GxMAJ4z3mKILNogWx3+lRCWA=="
-    ),
-}
+class _Installed(Exception):
+    """Raised by the stubbed installer once every asset verified."""
 
 
 def test_root_overrides_stay_tied_to_verified_legacy_releases() -> None:
@@ -547,6 +566,7 @@ def test_root_overrides_stay_tied_to_verified_legacy_releases() -> None:
     for name, url in pinned.items():
         tag, asset = url.removeprefix(prefix).split("/")
         assert tag in release.LEGACY_RELEASE_TAGS, f"{name} moved to {tag}: verify it before changing"
+        assert asset in release.LEGACY_CHECKSUMS[tag], f"{name}: {tag} never shipped {asset}"
         sha256 = release.LEGACY_CHECKSUMS[tag][asset]
         entry = lock[f"node_modules/{name}"]
         assert entry["resolved"] == url
