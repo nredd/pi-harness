@@ -20,10 +20,33 @@ PINNED_NPM = re.compile(r"^npm:(?:@[^/\s]+/)?[^@/\s]+@\d+\.\d+\.\d+(?:-[\w.-]+)?
 PINNED_GIT = re.compile(r"^git:github\.com/[^/\s]+/[^@/\s]+@[^\s]+$")
 
 
+class PackageSource(BaseModel):
+    """Pi object source; omitted filters inherit the manifest, empty filters disable a kind."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    source: str = Field(min_length=1, description="Exact npm/git source or explicit local path")
+    extensions: list[str] = Field(default_factory=list, description="Pi extension filters, if supplied")
+    skills: list[str] = Field(default_factory=list, description="Pi skill filters, if supplied")
+    prompts: list[str] = Field(default_factory=list, description="Pi prompt filters, if supplied")
+    themes: list[str] = Field(default_factory=list, description="Pi theme filters, if supplied")
+
+
+def source_string(package: str | PackageSource) -> str:
+    """Return the identity used for installation, uniqueness and exclusions.
+
+    Parameters:
+        package (str | PackageSource): validated stack entry.
+
+    Returns:
+        str: Pi install source, without interpreting resource filters.
+    """
+    return package if isinstance(package, str) else package.source
+
+
 class Stack(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$", description="Evidence/golden identity")
-    sources: list[str] = Field(
+    sources: list[str | PackageSource] = Field(
         min_length=1, description="Exact npm/git sources or stack-relative local paths"
     )
     settings: dict[str, Any] = Field(
@@ -43,9 +66,10 @@ class Stack(BaseModel):
         Raises:
             ValueError: an input is ambiguous or could replace the installed package set.
         """
-        if len(self.sources) != len(set(self.sources)):
-            raise ValueError("`sources` must be unique")
-        for source in self.sources:
+        sources = [source_string(package) for package in self.sources]
+        if len(sources) != len(set(sources)):
+            raise ValueError("`sources` must be unique by source string")
+        for source in sources:
             if not (
                 PINNED_NPM.fullmatch(source)
                 or PINNED_GIT.fullmatch(source)
@@ -54,8 +78,8 @@ class Stack(BaseModel):
                 raise ValueError(f"Source must be pinned or an explicit local path: '{source}'")
         if "packages" in self.settings:
             raise ValueError("`settings` cannot override `packages`")
-        if not self.disabled_extensions.keys() <= set(self.sources) or not all(
-            self.disabled_extensions.values()
+        if not self.disabled_extensions.keys() <= set(sources) or not all(
+            reason.strip() for reason in self.disabled_extensions.values()
         ):
             raise ValueError("`disabled_extensions` needs a reason for a declared source")
         return self
@@ -73,7 +97,8 @@ class Stack(BaseModel):
             FileNotFoundError: a local package has no manifest.
         """
         resolved = []
-        for source in self.sources:
+        for package in self.sources:
+            source = source_string(package)
             if source.startswith(("npm:", "git:")):
                 resolved.append(source)
                 continue

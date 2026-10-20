@@ -18,7 +18,15 @@ from pydantic import ValidationError
 
 from harness import sandbox
 from harness.paths import pi_command
-from harness.stack import Stack, find_package, load_stack, package_directory, stack_digest
+from harness.stack import (
+    PackageSource,
+    Stack,
+    find_package,
+    load_stack,
+    package_directory,
+    source_string,
+    stack_digest,
+)
 
 
 @pytest.mark.parametrize(
@@ -32,11 +40,26 @@ from harness.stack import Stack, find_package, load_stack, package_directory, st
         {"sources": ["git:github.com/x/y"]},
         {"sources": ["~/code/pkg"]},
         {"sources": ["./pkg", "./pkg"]},
+        {"sources": ["./pkg", {"source": "./pkg", "skills": []}]},
+        {"sources": [{"source": "./pkg"}, {"source": "./pkg", "themes": []}]},
+        {"sources": [{"source": "npm:pkg@latest"}]},
+        {"sources": [{"source": "~/pkg"}]},
+        {"sources": [{"source": ""}]},
+        {"sources": [{"source": 12}]},
+        {"sources": [{"skills": []}]},
+        {"sources": [{"source": "./pkg", "agents": []}]},
+        {"sources": [{"source": "./pkg", "autoload": False}]},
+        {"sources": [{"source": "./pkg", "extensions": None}]},
+        {"sources": [{"source": "./pkg", "skills": "skills/*"}]},
+        {"sources": [{"source": "./pkg", "prompts": [False]}]},
+        {"sources": [{"source": "./pkg", "themes": [1]}]},
+        {"sources": [{"source": "./pkg", "extensions": {}}]},
         {"settings": {"packages": []}},
         {"unknown": True},
         {"name": 123},
         {"disabled_extensions": {"./missing": "unlisted"}},
         {"disabled_extensions": {"./pkg": ""}},
+        {"disabled_extensions": {"./pkg": "   "}},
     ],
 )
 def test_stack_rejects_implicit_or_ambiguous_inputs(change: dict[str, Any]) -> None:
@@ -79,12 +102,12 @@ def test_supplied_stacks_are_pinned_and_exclusion_is_explicit() -> None:
     assert len(local.sources) == 13
     assert "git:github.com/nredd/pi-subagents@v0.22.0-nredd.5" in personal.sources
     assert "git:github.com/nredd/pi-plan-mode@v0.59.3-nredd.1" in personal.sources
-    assert not any("pi-preset" in source for source in personal.sources)
+    assert not any("pi-preset" in source_string(source) for source in personal.sources)
     assert "../../packages/preset" in local.sources
     assert len(personal.disabled_extensions) == len(local.disabled_extensions) == 1
     assert "pi-computer-use" in next(iter(personal.disabled_extensions))
     assert personal.sources[0] == local.sources[0] == "npm:@gotgenes/pi-anthropic-auth@3.4.3"
-    assert len([s for s in personal.sources if s.startswith("git:")]) == 4
+    assert len([source for source in personal.sources if source_string(source).startswith("git:")]) == 4
 
 
 def test_no_pi_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -172,6 +195,83 @@ def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch,
     assert not (package_directory("npm:one@1.2.3", box.agent_dir) / "sentinel").exists()
     assert other.env()["TMPDIR"] != box.env()["TMPDIR"]
     assert other.env()["XDG_CONFIG_HOME"] != box.env()["XDG_CONFIG_HOME"]
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_installer_preserves_object_filters_and_omissions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, disabled: bool
+) -> None:
+    """Install string identities, then restore exact filters for Pi's loader to interpret.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace process execution, never launch Pi.
+        tmp_path (Path): private local package and agent directories.
+        disabled (bool): headless exclusion overrides only the extension filter.
+    """
+    local = tmp_path / "pkg"
+    local.mkdir()
+    (local / "package.json").write_text('{"name":"local","version":"1.2.3"}')
+    filters = ["extensions/*.ts", "!extensions/old.ts", "+extensions/exact.ts", "-extensions/off.ts"]
+    entries: list[Any] = [
+        {"source": "./pkg", "extensions": filters, "skills": [], "prompts": ["prompts/review.md"]},
+        {"source": "npm:@scope/pkg@1.2.3", "themes": []},
+        "git:github.com/x/y@v1",
+    ]
+    stack_path = tmp_path / "stack.json"
+    stack_path.write_text(
+        json.dumps(
+            {
+                "name": "filtered",
+                "sources": entries,
+                "disabled_extensions": {"./pkg": "headless only"} if disabled else {},
+            }
+        )
+    )
+    calls: list[str] = []
+    monkeypatch.setenv("PI_BIN", "/explicit/pi")
+
+    def fake_install(argv: list[str], **kwargs: Any) -> str:
+        """Simulate installed manifests and deliberately discard installer-written settings.
+
+        Parameters:
+            argv (list[str]): source-string installation command.
+            **kwargs (Any): subprocess arguments including the private install environment.
+
+        Returns:
+            str: installer output.
+        """
+        source = argv[-1]
+        calls.append(source)
+        env = kwargs["env"]
+        assert env.get("npm_config_ignore_scripts") == ("true" if disabled and source == str(local) else None)
+        agent = Path(env["PI_CODING_AGENT_DIR"])
+        if source != str(local):
+            directory = agent / (
+                "npm/node_modules/@scope/pkg" if source.startswith("npm:") else "git/github.com/x/y"
+            )
+            directory.mkdir(parents=True)
+            (directory / "package.json").write_text('{"name":"fixture","version":"1.2.3"}')
+        (agent / "settings.json").write_text('{"packages":["installer-written-string"]}')
+        return "installed"
+
+    monkeypatch.setattr(subprocess, "check_output", fake_install)
+    box = sandbox.install_stack(tmp_path / "install", stack_path)
+    assert calls == [str(local), entries[1]["source"], entries[2]]
+    expected = [
+        {**entries[0], "source": str(local), "extensions": [] if disabled else filters},
+        entries[1],
+        entries[2],
+    ]
+    assert box.settings()["packages"] == expected
+    # Missing themes/extensions MUST remain missing, not become [] during model serialization.
+    assert "themes" not in expected[0]
+    assert "extensions" not in expected[1]
+    evidence = json.loads((box.agent_dir / "stack-evidence.json").read_text())
+    assert evidence["configured_packages"] == expected
+    assert find_package("local", box.settings()["packages"], box.agent_dir) == local
+    assert isinstance(load_stack(stack_path).sources[0], PackageSource)
+    copied = sandbox.build_sandbox(tmp_path / "copy", box.home)
+    assert copied.settings()["packages"] == expected
 
 
 def test_package_lookup_does_not_guess_an_owner_checkout(tmp_path: Path) -> None:
