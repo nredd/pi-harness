@@ -28,7 +28,12 @@ class ClassificationError(RuntimeError):
 
 @dataclass(frozen=True)
 class ChangeClassification:
-    """The paths changed by a comparison and their CI classification."""
+    """The paths changed by a comparison and their CI classification.
+
+    Parameters:
+        paths (tuple[str, ...]): Changed paths relative to the repository root.
+        docs_only (bool): Whether every changed path is safe documentation.
+    """
 
     paths: tuple[str, ...]
     docs_only: bool
@@ -85,11 +90,27 @@ def changed_paths(repo: Path, base: str, head: str) -> tuple[str, ...]:
         tuple[str, ...]: Sorted, duplicate-free paths relative to `repo`.
 
     Raises:
-        ClassificationError: The repository or revisions cannot be compared.
+        ClassificationError: The repository or revisions cannot be compared, or a Gitlink changed.
     """
     root = repo_root(repo)
-    output = run_git(root, "diff", "--no-renames", "--name-only", "--diff-filter=ACDMRTUXB", base, head)
-    return tuple(sorted(path for path in output.splitlines() if path))
+    output = run_git(root, "diff", "--raw", "--no-renames", "-z", "--diff-filter=ACDMRTUXB", base, head)
+    fields = output.split("\0")
+    if fields[-1]:
+        raise ClassificationError("`git diff --raw -z` returned an unterminated record")
+    entries = fields[:-1]
+    if len(entries) % 2:
+        raise ClassificationError("`git diff --raw -z` returned an incomplete record")
+
+    paths: set[str] = set()
+    for metadata, path in zip(entries[::2], entries[1::2], strict=True):
+        parts = metadata.split()
+        if len(parts) != 5 or not parts[0].startswith(":"):
+            raise ClassificationError(f"`git diff --raw -z` returned malformed metadata: '{metadata}'")
+        old_mode, new_mode = parts[0][1:], parts[1]
+        if old_mode == "160000" or new_mode == "160000":
+            raise ClassificationError(f"Gitlink changed at '{path}'")
+        paths.add(path)
+    return tuple(sorted(paths))
 
 
 def is_documentation_path(path: str) -> bool:
