@@ -20,10 +20,12 @@ from harness.anthropic_mock import (
     REPLY_TEXT,
     AnthropicMock,
     anthropic_env,
+    expected_billing_version,
     install_recording_shims,
     shim_calls,
 )
 from harness.headless import RunResult, run_headless
+from harness.stack import find_package
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -46,8 +48,6 @@ UNRELATED = {
         "accountId": "harness",
     },
 }
-# Pi 1.3.0 api/anthropic-messages.ts and auth 3.4.3 claude-code-version.ts both pin 2.1.280.
-CLAUDE_VERSION = "2.1.280"
 BILLING = "x-anthropic-billing-header"
 PI_PREAMBLE = "You are an expert coding assistant operating inside pi, a coding agent harness."
 MINIMAL_PROMPT = (
@@ -221,14 +221,17 @@ def test_request_uses_auth_json_token_with_claude_code_headers(
     if kind in {"direct", "router"}:
         assert request.headers["authorization"] == f"Bearer {ACCESS}"
         assert "x-api-key" not in request.headers
-        assert request.headers["user-agent"] == f"claude-cli/{CLAUDE_VERSION}"
+        package = find_package(
+            "@gotgenes/pi-anthropic-auth", sandbox.settings()["packages"], sandbox.agent_dir
+        )
+        version = expected_billing_version(request.headers["user-agent"], package)
         assert request.headers["x-app"] == "cli"
         # billing-header.ts samples offsets 4, 7, 20 (all absent in 'hi'), then salts the version.
-        suffix = hashlib.sha256(f"59cf53e54c78000{CLAUDE_VERSION}".encode()).hexdigest()[:3]
+        suffix = hashlib.sha256(f"59cf53e54c78000{version}".encode()).hexdigest()[:3]
         cch = hashlib.sha256(b"hi").hexdigest()[:5]
         assert system[0] == {
             "type": "text",
-            "text": f"{BILLING}: cc_version={CLAUDE_VERSION}.{suffix}; cc_entrypoint=sdk-cli; cch={cch};",
+            "text": f"{BILLING}: cc_version={version}.{suffix}; cc_entrypoint=sdk-cli; cch={cch};",
         }
         assert system[1]["text"] == "You are Claude Code, Anthropic's official CLI for Claude."
         assert MINIMAL_PROMPT in system_text

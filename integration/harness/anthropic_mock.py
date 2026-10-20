@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 import threading
 from dataclasses import dataclass, field
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
     from harness.sandbox import Sandbox
 
 LOGGER = logging.getLogger(__name__)
+NATIVE_USER_AGENT = re.compile(r"claude-cli/(\d+\.\d+\.\d+)")
+BILLING_VERSION_FLOOR = re.compile(r'export const CLAUDE_CODE_VERSION = "(\d+\.\d+\.\d+)";')
 
 REDIRECT_PRELOAD = PROVIDERS_DIR / "redirect_anthropic.mjs"
 AUTH_GUARD_EXTENSION = PROVIDERS_DIR / "auth_guard.mjs"
@@ -279,6 +282,29 @@ def shim_calls(box: Sandbox) -> list[str]:
     """
     log = shim_log(box)
     return log.read_text().splitlines() if log.is_file() else []
+
+
+def expected_billing_version(user_agent: str, package: Path) -> str:
+    """Match billing-version-sync.ts using the wire user agent and installed package floor.
+
+    Parameters:
+        user_agent (str): recorded native Claude CLI user agent, without the retired fork suffix.
+        package (Path): installed pi-anthropic-auth package in the sandbox.
+
+    Returns:
+        str: numeric maximum of Pi's reported version and the extension's bundled floor.
+
+    Raises:
+        ValueError: the native user agent or installed floor declaration has changed shape.
+    """
+    native = NATIVE_USER_AGENT.fullmatch(user_agent)
+    if native is None:
+        raise ValueError(f"Unexpected native `user-agent`: '{user_agent}'")
+    source = package / "src/claude-code-version.ts"
+    floor = BILLING_VERSION_FLOOR.search(source.read_text())
+    if floor is None:
+        raise ValueError(f"Missing `CLAUDE_CODE_VERSION` floor in '{source}'")
+    return max((native[1], floor[1]), key=lambda version: tuple(map(int, version.split("."))))
 
 
 def anthropic_env(mock: AnthropicMock, box: Sandbox) -> dict[str, str]:
