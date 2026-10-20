@@ -79,8 +79,8 @@ pi-plan-mode patch queue:
   vendored harness and rebuilt `dist/` for git installs
 - Seven B rows are native in `test/{confirmation,decline,policy,transcript}-session.test.ts`, under Vitest
   and Bun. Both forks' native test dependencies still pin core `v1.3.0-nredd.6` tarballs until their next
-  releases, not stock npm host copies; pi-harness's in-process host (`integration/inprocess`) uses `v1.3.0-nredd.7`
-  coding-agent/TUI tarballs plus the unchanged nredd.6 AI/agent-core tarballs. Full suites passed the parent [CI probe #37](https://github.com/nredd/pi-harness/pull/37)
+  releases, not stock npm host copies; `pi-harness`'s in-process host (`integration/inprocess`) uses `v1.3.0-nredd.7`
+  `coding-agent`/`tui` tarballs plus the unchanged `v1.3.0-nredd.6` `ai`/`agent-core` tarballs. Full suites passed the parent [CI probe #37](https://github.com/nredd/pi-harness/pull/37)
 
 rpiv-todo patch queue:
 
