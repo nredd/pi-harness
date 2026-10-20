@@ -224,6 +224,22 @@ describe("preloadSkills", () => {
     expect(dirResult).not.toContain("TOP SECRET");
   });
 
+  it.each([".pi", ".agents"])("rejects a project root reached through a symlinked %s", (dir) => {
+    // <cwd>/<dir> \u2192 a directory outside the project holding a real `skills/` tree.
+    const outside = join(tmpDir, "outside");
+    writeFlat(join(outside, "skills"), "leaked-flat", "TOP SECRET FLAT");
+    writeSkillDir(join(outside, "skills"), "leaked-dir", "TOP SECRET DIR");
+    const project = join(tmpDir, "project");
+    mkdirSync(project, { recursive: true });
+    symlinkSync(outside, join(project, dir));
+
+    for (const name of ["leaked-flat", "leaked-dir"]) {
+      const content = preloadSkills([name], project)[0].content;
+      expect(content).toContain("not found");
+      expect(content).not.toContain("TOP SECRET");
+    }
+  });
+
   it("rejects symlinked SKILL.md inside a real skill directory", () => {
     const skillDir = join(projectRoot(), "evil-inner");
     mkdirSync(skillDir, { recursive: true });

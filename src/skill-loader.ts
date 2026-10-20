@@ -24,7 +24,7 @@
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isSymlink, isUnsafeName, safeReadFile } from "./memory.js";
 
@@ -57,7 +57,8 @@ function loadSkillContent(name: string, cwd: string): string {
 }
 
 function findInRoot(root: string, name: string, trusted: boolean): string | undefined {
-  if (!trusted && isSymlink(root)) return undefined; // reject symlinked project roots entirely
+  // Reject a project root that is, or sits in, a link: `<cwd>/.pi -> /elsewhere` counts too.
+  if (!trusted && (isSymlink(root) || isSymlink(dirname(root)))) return undefined;
   const flat = readSkillFile(join(root, `${name}.md`), trusted)?.trim();
   if (flat !== undefined) return flat;
   return findSkillDirectory(root, name, trusted);
