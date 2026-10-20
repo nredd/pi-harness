@@ -184,6 +184,45 @@ def test_provenance_requires_actual_dsse_statement(identity: nr.Identity, case: 
         nr.verify_provenance(identity, encoded)
 
 
+def write_signature_install_tree(project: Path, identity: nr.Identity, case: str) -> None:
+    """Create a realistic installed subject with optional unrelated nested dependencies.
+
+    Parameters:
+        project (Path): Disposable npm installation root.
+        identity (nr.Identity): Expected release identity.
+        case (str): Test case selecting malformed or unrelated dependency state.
+
+    Returns:
+        None: Lock and installed package trees are written.
+    """
+    subject_key = f"node_modules/{identity.target.name}"
+    entry = {
+        "version": "other" if case == "wrong-version" else identity.target.version,
+        "integrity": "wrong" if case == "wrong-integrity" else identity.integrity,
+    }
+    packages = {"": {}, subject_key: entry}
+    if case in {"runtime-dependency", "unattested-subject"}:
+        packages["node_modules/attested-dependency"] = {"version": "4.5.6", "integrity": identity.integrity}
+        packages["node_modules/attested-dependency/node_modules/nested"] = {
+            "version": "7.8.9",
+            "integrity": identity.integrity,
+        }
+    (project / "package-lock.json").write_text(json.dumps({"packages": packages}))
+    installed = project / subject_key
+    installed.mkdir(parents=True)
+    (installed / "package.json").write_text(
+        json.dumps({"name": identity.target.name, "version": identity.target.version})
+    )
+    (installed / "index.js").write_text("export {};\n")
+    if case in {"runtime-dependency", "unattested-subject"}:
+        dependency = project / "node_modules/attested-dependency"
+        dependency.mkdir()
+        (dependency / "package.json").write_text('{"name":"attested-dependency","version":"4.5.6"}')
+        nested = dependency / "node_modules/nested"
+        nested.mkdir(parents=True)
+        (nested / "package.json").write_text('{"name":"nested","version":"7.8.9"}')
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -194,6 +233,8 @@ def test_provenance_requires_actual_dsse_statement(identity: nr.Identity, case: 
         "wrong-integrity",
         "wrong-version",
         "runtime-dependency",
+        "unattested-subject",
+        "altered-root-bytes",
     ],
 )
 def test_npm_signature_audit_fails_closed(
@@ -246,17 +287,7 @@ def test_npm_signature_audit_fails_closed(
                 "--prefer-online",
                 "--registry=https://registry.npmjs.org",
             )
-            entry = {
-                "version": "other" if case == "wrong-version" else identity.target.version,
-                "integrity": "wrong" if case == "wrong-integrity" else identity.integrity,
-            }
-            packages = {"": {}, f"node_modules/{identity.target.name}": entry}
-            if case == "runtime-dependency":
-                packages["node_modules/other"] = entry
-            (project / "package-lock.json").write_text(json.dumps({"packages": packages}))
-            installed = project / f"node_modules/{identity.target.name}"
-            installed.mkdir(parents=True)
-            (installed / "package.json").write_text("{}")
+            write_signature_install_tree(project, identity, case)
             return "installed release"
         assert args == (
             "audit",
@@ -265,11 +296,23 @@ def test_npm_signature_audit_fails_closed(
             "--prefer-online",
             "--registry=https://registry.npmjs.org",
         )
+        assert project.name == "subject"
+        subject_key = f"node_modules/{identity.target.name}"
+        lock = json.loads((project / "package-lock.json").read_text())
+        assert set(lock["packages"]) == {"", subject_key}
+        assert {path.relative_to(project).as_posix() for path in project.rglob("*") if path.is_file()} == {
+            "package.json",
+            "package-lock.json",
+            f"{subject_key}/package.json",
+            f"{subject_key}/index.js",
+        }
+        if case == "altered-root-bytes":
+            (project / "package.json").write_text('{"private":false}\n')
         if case == "audit-failed":
             raise subprocess.CalledProcessError(1, ["npm", *args], "invalid attestation signature")
         if case == "signature-missing":
             return "1 package has a verified attestation"
-        if case == "attestation-missing":
+        if case in {"attestation-missing", "unattested-subject"}:
             return "1 package has a verified registry signature"
         return VERIFIED_REPORT
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fnmatch
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -231,8 +232,8 @@ def resolve_target(repo: Path, tag: str) -> Target:
     """Resolve a descriptor-backed tag, refusing unknown, private or skewed packages.
 
     Parameters:
-        repo: Tagged checkout.
-        tag: GitHub ref name.
+        repo (Path): Tagged checkout.
+        tag (str): GitHub ref name.
 
     Returns:
         Target: Validated release identity.
@@ -270,8 +271,8 @@ def release_workspace(repo: Path, descriptor: rd.ReleaseDescriptor) -> Path:
     """Resolve a registered workspace and require its package manifest.
 
     Parameters:
-        repo: Repository root.
-        descriptor: Package release data.
+        repo (Path): Repository root.
+        descriptor (rd.ReleaseDescriptor): Package release data.
 
     Returns:
         Path: Existing package workspace within ``repo``.
@@ -292,8 +293,8 @@ def native_matches(workspace: Path, descriptor: rd.ReleaseDescriptor) -> tuple[P
     """Expand descriptor-native artifacts without allowing path traversal.
 
     Parameters:
-        workspace: Validated package source directory.
-        descriptor: Package release data.
+        workspace (Path): Validated package source directory.
+        descriptor (rd.ReleaseDescriptor): Package release data.
 
     Returns:
         tuple[Path, ...]: Required regular files in deterministic order.
@@ -305,7 +306,12 @@ def native_matches(workspace: Path, descriptor: rd.ReleaseDescriptor) -> tuple[P
     for pattern in descriptor.native_artifacts:
         if pattern.is_absolute() or any(part in {"", ".", ".."} for part in pattern.parts):
             raise ReleaseError(f"Release descriptor has unsafe native artifact: '{pattern}'")
-        found = sorted(path for path in workspace.glob(pattern.as_posix()) if path.is_file())
+        found = sorted(
+            path
+            for path in workspace.rglob("*")
+            if path.is_file()
+            and matches_native_artifact(pattern, PurePosixPath(path.relative_to(workspace).as_posix()))
+        )
         if not found:
             raise ReleaseError(f"Missing native artifact: '{pattern}'")
         matches.extend(found)
@@ -316,8 +322,8 @@ def validate_native_sources(workspace: Path, descriptor: rd.ReleaseDescriptor) -
     """Require every descriptor-native artifact before packing.
 
     Parameters:
-        workspace: Validated package source directory.
-        descriptor: Package release data.
+        workspace (Path): Validated package source directory.
+        descriptor (rd.ReleaseDescriptor): Package release data.
 
     Returns:
         None: Required source artifacts exist.
@@ -325,12 +331,25 @@ def validate_native_sources(workspace: Path, descriptor: rd.ReleaseDescriptor) -
     native_matches(workspace, descriptor)
 
 
+def matches_native_artifact(pattern: PurePosixPath, relative: PurePosixPath) -> bool:
+    """Match one safe package-relative path using ``fnmatch`` glob language.
+
+    Parameters:
+        pattern (PurePosixPath): Descriptor pattern, supporting `*`, `?`, classes and `**`.
+        relative (PurePosixPath): Candidate regular-file path relative to the package root.
+
+    Returns:
+        bool: Whether the full relative path matches.
+    """
+    return fnmatch.fnmatchcase(relative.as_posix(), pattern.as_posix())
+
+
 def validate_native_tarball(tarball: Path, descriptor: rd.ReleaseDescriptor) -> None:
     """Require descriptor-native artifacts in the accepted packed bytes.
 
     Parameters:
-        tarball: One npm package tarball.
-        descriptor: Package release data.
+        tarball (Path): One npm package tarball.
+        descriptor (rd.ReleaseDescriptor): Package release data.
 
     Returns:
         None: Required native files are present beneath npm's ``package/`` root.
@@ -343,9 +362,51 @@ def validate_native_tarball(tarball: Path, descriptor: rd.ReleaseDescriptor) -> 
     with tarfile.open(tarball, "r:gz") as archive:
         entries = {member.name for member in archive.getmembers() if member.isfile()}
     for pattern in descriptor.native_artifacts:
-        expression = re.compile("^package/" + re.escape(pattern.as_posix()).replace(r"\*", "[^/]*") + "$")
-        if not any(expression.fullmatch(entry) for entry in entries):
+        packed = (
+            PurePosixPath(entry).relative_to("package")
+            for entry in entries
+            if PurePosixPath(entry).parts[:1] == ("package",)
+        )
+        if not any(matches_native_artifact(pattern, entry) for entry in packed):
             raise ReleaseError(f"Packed tarball omits native artifact: '{pattern}'")
+
+
+def run_stock_contract(
+    work: Path,
+    stock: Path,
+    descriptor: rd.ReleaseDescriptor,
+    supplied: dict[str, Path],
+) -> pc.ContractReport:
+    """Run one descriptor-selected stock contract and require its subject evidence.
+
+    Parameters:
+        work (Path): Empty release scratch directory.
+        stock (Path): Reusable stock Pi installation directory.
+        descriptor (rd.ReleaseDescriptor): Selected package release data.
+        supplied (dict[str, Path]): The one packed release artifact by contract directory.
+
+    Returns:
+        pc.ContractReport: Validated report containing exactly the release subject.
+
+    Raises:
+        ReleaseError: If the descriptor lacks an executable gate or subject evidence.
+        pc.ContractError: If the tarball or executable contract gate fails.
+    """
+    if descriptor.stock_gate is None:
+        raise ReleaseError(f"No executable stock gate for '{descriptor.name}'")
+    report = pc.run_gate(
+        work,
+        stock,
+        [descriptor.contract.directory],
+        supplied,
+        contracts=(descriptor.contract,),
+        scenarios={descriptor.contract.directory: descriptor.stock_gate},
+    )
+    if set(report.packages) != {descriptor.name}:
+        raise ReleaseError(f"Stock contract did not report the release subject '{descriptor.name}'")
+    if not report.packages[descriptor.name].evidence:
+        raise ReleaseError(f"Stock contract has empty subject evidence for '{descriptor.name}'")
+    return report
 
 
 def registry_dist(repo: Path, target: Target) -> Distribution | None:
@@ -468,7 +529,7 @@ def verify(repo: Path, target: Target, output: Path) -> Identity:
         if "stock" in descriptor.contract_gates:
             gate = work / "standalone"
             gate.mkdir()
-            report = pc.run_gate(gate, stock, [target.directory], supplied)
+            report = run_stock_contract(gate, stock, descriptor, supplied)
             evidence["stock_contract"] = report.model_dump_json()
         if "fork" in descriptor.contract_gates:
             gate = work / "fork-contract"
@@ -607,7 +668,7 @@ def verify_signatures(identity: Identity) -> None:
     satisfy. Provenance subject/source binding remains a separate DSSE check.
 
     Parameters:
-        identity: Exact released version and verified tarball integrity.
+        identity (Identity): Exact released version and verified tarball integrity.
 
     Returns:
         None: npm has verified the selected package signature and attestation.
@@ -675,6 +736,9 @@ def verify_signatures(identity: Identity) -> None:
             )
             + "\n"
         )
+        subject_root_bytes = {
+            path: path.read_bytes() for path in (subject / "package.json", subject / "package-lock.json")
+        }
         report = command(
             subject,
             "npm",
@@ -684,6 +748,8 @@ def verify_signatures(identity: Identity) -> None:
             "--prefer-online",
             "--registry=https://registry.npmjs.org",
         )
+        if any(path.read_bytes() != expected for path, expected in subject_root_bytes.items()):
+            raise ReleaseError("Signature audit altered subject root bytes")
         LOGGER.info(report)
         required = {"1 package has a verified registry signature", "1 package has a verified attestation"}
         if not required <= set(report.splitlines()):

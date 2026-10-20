@@ -2005,6 +2005,9 @@ def run_gate(
     stock_prefix: Path,
     only: Sequence[str] | None,
     supplied: Mapping[str, Path] | None = None,
+    *,
+    contracts: Sequence[PackageContract] = CONTRACTS,
+    scenarios: Mapping[str, Callable[[Context], ScenarioEvidence]] = SCENARIOS,
 ) -> ContractReport:
     """Run the whole contract gate and build the identity/evidence report.
 
@@ -2013,6 +2016,8 @@ def run_gate(
         stock_prefix (Path): Reusable stock Pi install directory.
         only (Sequence[str] | None): Package directories to restrict to; `None` runs all.
         supplied (Mapping[str, Path] | None): Existing tarballs by package directory; never repacked.
+        contracts (Sequence[PackageContract]): Contracts eligible for this invocation.
+        scenarios (Mapping[str, Callable[[Context], ScenarioEvidence]]): Executable gate per directory.
 
     Returns:
         ContractReport: Validated report.
@@ -2020,11 +2025,22 @@ def run_gate(
     Raises:
         ContractError: On the first violated contract or a malformed report, after all static audits ran.
     """
+    selected = [contract for contract in contracts if only is None or contract.directory in only]
+    if not selected:
+        raise ContractError("No release contract matches the requested subject")
+    missing_gates = [contract.directory for contract in selected if contract.directory not in scenarios]
+    if missing_gates:
+        raise ContractError(f"No executable stock gate for: {', '.join(missing_gates)}")
+    selected_directories = {contract.directory for contract in selected}
+    extra_subjects = set(supplied or {}) - selected_directories
+    if extra_subjects:
+        raise ContractError(
+            f"Supplied tarballs have no selected release contract: {', '.join(sorted(extra_subjects))}"
+        )
     tools = locate_tools()
     root_license = (REPO_ROOT / "LICENSE").read_bytes()
     base = Sandbox(work / "base", tools)
     pi_bin = ensure_stock_pi(stock_prefix, base)
-    selected = [c for c in CONTRACTS if only is None or c.directory in only]
     tarballs = work / "tarballs"
     tarballs.mkdir()
     artifacts = [select_artifact(contract, tarballs, base, supplied or {}) for contract in selected]
@@ -2042,11 +2058,13 @@ def run_gate(
         installed = install_alone(artifact, sandbox, sandbox.root / "project")
         scratch = sandbox.root / "scenario"
         scratch.mkdir()
-        siblings = tuple(c for c in CONTRACTS if c is not contract)
+        siblings = tuple(candidate for candidate in contracts if candidate is not contract)
         LOGGER.info(f"Exercising '{contract.name}' through stock Pi {STOCK_PI_VERSION}")
-        evidence = SCENARIOS[contract.directory](
+        evidence = scenarios[contract.directory](
             Context(pi_bin, sandbox, installed, artifact, scratch, siblings)
         )
+        if not dict(evidence):
+            raise ContractError(f"Stock gate produced empty subject evidence for '{contract.name}'")
         packages[contract.name] = {
             "version": artifact.version,
             "tarball": artifact.path.name,
