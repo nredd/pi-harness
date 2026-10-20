@@ -2,7 +2,7 @@
   "name": "local",
   "sources": [
     "npm:@gotgenes/pi-anthropic-auth@3.4.3",
-    "npm:pi-web-access@0.36.0",
+    "npm:pi-web-access@0.43.0",
     "../../forks/rpiv-todo",
     "../../forks/pi-subagents",
     "../../packages/subscription-router",

@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "release": {
+    "id": "2026-10-20-anthropic-auth-web-access-0.43",
+    "created_at": "2026-10-20T18:01:50.963650Z",
+    "commit": "827777b8b1858136032b87d2a06eb32fb487ce94",
+    "dirty": false
+  },
+  "forks": [
+    {
+      "path": "forks/pi",
+      "commit": "9351a7853c96a684442492902cd8805a4c13092f",
+      "remote_url": "https://github.com/nredd/pi.git",
+      "initialized": true,
+      "tag": "v1.3.0-nredd.6",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-claude-auth",
+      "commit": "f78a407c72f0c384e3ac5fc4e171d61975e89767",
+      "remote_url": "https://github.com/nredd/pi-claude-auth.git",
+      "initialized": true,
+      "tag": "v0.1.3-nredd.1",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-computer-use",
+      "commit": "3fd2fe39b702558c86491e488019ac9c80f7583e",
+      "remote_url": "https://github.com/nredd/pi-computer-use.git",
+      "initialized": true,
+      "tag": "v0.5.1-nredd.2",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-plan-mode",
+      "commit": "4c2bfc3459b07b294efab62e9a8a01849f67a831",
+      "remote_url": "https://github.com/nredd/pi-plan-mode.git",
+      "initialized": true,
+      "tag": "v0.59.3-nredd.1",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/pi-subagents",
+      "commit": "526fa2df76ba85df31bd14a843fae370e8efe78a",
+      "remote_url": "https://github.com/nredd/pi-subagents.git",
+      "initialized": true,
+      "tag": "v0.22.0-nredd.5",
+      "fetched_tag_object": null
+    },
+    {
+      "path": "forks/rpiv-todo",
+      "commit": "9a4e2e817bcfef12f0b41b37d89efdba98a45b17",
+      "remote_url": "https://github.com/nredd/rpiv-todo.git",
+      "initialized": true,
+      "tag": "v2.13.9-nredd.2",
+      "fetched_tag_object": null
+    }
+  ],
+  "owned_packages": [
+    {
+      "name": "@nredd/pi-dev-tools",
+      "version": "0.5.1",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-session-kit",
+      "version": "0.5.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-subscription-router",
+      "version": "0.4.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-preset",
+      "version": "0.1.0",
+      "private": false,
+      "tarball_sha256": null
+    }
+  ],
+  "third_party": {
+    "package_lock_lockfile_version": 3,
+    "files": [
+      {
+        "path": "package-lock.json",
+        "sha256": "b29642a30841a2e497786199977698922b2155eeeb70d54307a0d8dcc11a44e8"
+      },
+      {
+        "path": "integration/uv.lock",
+        "sha256": "66f3e46e37b50f8334aff383687cb164afc645b6e81f1e1436ba3a6f9b34ee04"
+      }
+    ]
+  },
+  "artifacts": [],
+  "evidence": {
+    "scope": "Gitlink-only,no-new-artifacts",
+    "auth_swap_review": "https://github.com/nredd/pi-harness/pull/63",
+    "auth_swap_ci": "https://github.com/nredd/pi-harness/actions/runs/39459224228",
+    "web_access_review": "https://github.com/nredd/pi-harness/pull/70",
+    "web_access_ci": "https://github.com/nredd/pi-harness/actions/runs/39467695168"
+  }
+}
