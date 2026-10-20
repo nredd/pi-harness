@@ -3,10 +3,13 @@
 Development home for independently versioned Pi plugins, an optional preset, integration tests,
 benchmarks, and exact-stack release tooling. Upstream forks retain their histories as submodules.
 
-Migration is in progress. There is no supported release or installer yet. The existing installation
-remains authoritative until the standalone Bun stack passes verification and is explicitly activated.
+- Owned npm packages ship through `publish.yml`; core ships through `nredd/tap/pi-coding-agent`.
+- Dotfiles selects pins and applies them with `chezmoi update --upgrade`; require `pi-profile doctor`
+  after activation. There is no staging/activation transaction or standalone distribution installer.
+- Standalone Bun verification is NOT RUN in CI yet. Native Bun suites are not standalone evidence.
 
-See [the migration plan](docs/migration-plan.md) for scope, acceptance criteria, and rollout policy.
+Current status is [here](PLAN.md); the original migration plan and its superseded requirements are
+[here](docs/migration-plan.md).
 Every migration PR requires separate Standards and Spec reviewer subagents against its final HEAD,
 including documentation, fork, dotfiles, and automated promotion changes.
 
@@ -16,7 +19,8 @@ Layout:
 - `forks/`: exact upstream-fork source commits (submodules), with their native build systems. See
   [fork ownership](docs/forks.md).
 - `integration/inprocess/`: private `A-stack` scenarios on core's real harness, Vitest + Bun: Plan/todos, goals/loops, subagent delivery, router quota/admission. Assertion destinations and clock boundaries: [here](docs/verification-rebuild.md).
-- `integration/scenarios/`: remaining E2E scenarios, including the existing performance gates.
+- `integration/scenarios/`: retained process/terminal boundaries, opt-in live checks and benchmarks.
+  CI runs D/E; bench F is NOT RUN and live G is never CI. No unported non-boundary scenarios remain.
 - `benchmarks/comparison/`: historical comparison experiments and annotated results.
 - `scripts/`: build, release, and chezmoi integration implementation.
 - `docs/`: development, source provenance, release, and recovery documentation.
@@ -112,10 +116,10 @@ forces, cleans, or discards. Exit 2 is a git or usage error.
 
 Distribution policy:
 
-- Publish reusable plugins separately from tested stack releases.
-- Require standalone Bun verification on macOS ARM64 and Linux ARM64/x64.
+- Publish reusable plugins independently; gate pin promotion with the matching CI `stack` jobs.
+- Standalone Bun verification on macOS ARM64 and Linux ARM64/x64 remains unfulfilled, NOT RUN in CI.
 - Keep credentials, enterprise endpoints, and machine policy outside public artifacts.
-- Make `chezmoi update` stage only; activate explicitly through chezmoi after closing Pi sessions.
-- Preserve auth, sessions, memory, trust state, local manifests, and modified user resources.
-
-These are migration requirements, not claims that the distribution already implements them.
+- Activate managed pins with `chezmoi update --upgrade`, then require `pi-profile doctor` and restart
+  Pi sessions. Updates do not stage a separate runtime for later transactional activation.
+- The original staging, rollback and state-preservation acceptance requirements are not implemented
+  as a distribution transaction. Current scope and deferred work are [here](PLAN.md).
