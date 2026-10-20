@@ -7,7 +7,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 
 | Job | Runs | Proves |
 | --- | --- | --- |
-| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Biome, tsc and each package's unit suite (Vitest; preset `node --test`), `bun test` on each package's `test/scenarios/` where it has one (`test:bun`; a notice names every package without one, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN |
+| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (preset runs all of `test/`; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts`, `make check-fork-package-contracts` | Packed tarballs alone on exact stock Pi 1.3.0, and the packed preset + dev-tools through the Gitlinked `pi-subagents`. JSON reports uploaded as artifacts |
 | `stack (ubuntu-24.04, macos-14; personal, local)` | Fetch exact Gitlinked core release with formula-equivalent npm + tui replacement, real `pi install` of explicit `integration/stacks/*.json`, `D` startup/transport/lifetime/output/tool surfaces and `E` tmux resize | The released Node bundle and declared stack work together without owner config; binary version, stack SHA-256, installed package versions and JUnit/failure artifacts are retained. A reasoned headless exclusion installs but never loads the computer-use helper |
 | `bench (not run)` | a notice and a step summary | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
@@ -61,15 +61,18 @@ Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-
 
 Required checks on `main`:
 
-- `migration-review/standards` and `migration-review/spec` stay manual: the orchestrator posts them with
-  `gh api -X POST repos/nredd/pi-harness/statuses/<FULL sha>` after both reviews pass on that exact
-  HEAD. No review bot exists. A PR cannot set them itself
 - `owned (ubuntu-24.04)` and `owned (macos-14)`
 - `contracts (ubuntu-24.04)` and `contracts (macos-14)`
 - `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
 
-These are the configured protection checks. `forks.yml` jobs are path-filtered and cannot be required;
-when triggered, every applicable fork job must still pass before merging.
+These eight jobs are the configured protection checks. `migration-review/standards` and
+`migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
+
+- Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
+- `~/code/pi-harness-builds/merge-pr.sh` checks that HEAD, both transcripts and green CI, then posts
+  the review receipt as a PR comment and merges. It does not post commit statuses
+- `forks.yml` jobs are path-filtered, not required protection checks; when triggered, every applicable
+  fork job must still pass before merging
 
 Flake policy (migration plan section 7):
 
@@ -82,8 +85,9 @@ Flake policy (migration plan section 7):
 
 The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
 `integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
-Unported `A`/`A-stack`/`B` scenarios stay in the legacy subdirectories, excluded from this process gate.
-The thirteen `DOTFILES` rows moved out to the item-7 doctor, not a distribution check. See
+No unported non-boundary Python scenarios remain. Package-native suites and `integration/inprocess/`
+own the ported assertions; the destination ledger is [here](verification-rebuild.md).
+The thirteen `DOTFILES` rows moved to dotfiles' implemented `pi-profile doctor`, not a distribution check. See
 [here](../integration/README.md) for inputs, package sets and deliberate headless exclusions.
 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
