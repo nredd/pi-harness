@@ -10,6 +10,7 @@ References:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -22,12 +23,13 @@ class ReleaseDescriptor:
     """Package-specific inputs consumed by the generic release stages.
 
     Parameters:
-        name: Public npm package name.
-        workspace: Package source directory relative to the repository root.
-        verify_commands: Checked commands, expressed without a shell.
-        contract: Packed-artifact contract exercised after packing.
-        contract_gates: Contract gates that consume the one packed tarball.
-        native_artifacts: Required package-relative glob patterns that must exist
+        name (str): Public npm package name.
+        workspace (PurePosixPath): Package source directory relative to the repository root.
+        verify_commands (tuple[tuple[str, ...], ...]): Checked commands, expressed without a shell.
+        contract (pc.PackageContract): Packed-artifact contract exercised after packing.
+        contract_gates (tuple[Literal["stock", "fork"], ...]): Contract gates consuming the tarball.
+        stock_gate (Callable[[pc.Context], pc.ScenarioEvidence] | None): Executable stock-Pi gate.
+        native_artifacts (tuple[PurePosixPath, ...]): Required package-relative glob patterns that must exist
             before packing and appear in the accepted tarball.
     """
 
@@ -36,6 +38,7 @@ class ReleaseDescriptor:
     verify_commands: tuple[tuple[str, ...], ...]
     contract: pc.PackageContract
     contract_gates: tuple[Literal["stock", "fork"], ...]
+    stock_gate: Callable[[pc.Context], pc.ScenarioEvidence] | None = None
     native_artifacts: tuple[PurePosixPath, ...] = ()
 
 
@@ -51,6 +54,7 @@ DESCRIPTORS = (
         ),
         contract=pc.CONTRACTS[0],
         contract_gates=("stock", "fork"),
+        stock_gate=pc.SCENARIOS["dev-tools"],
     ),
     ReleaseDescriptor(
         name="@nredd/pi-session-kit",
@@ -61,6 +65,7 @@ DESCRIPTORS = (
         ),
         contract=pc.CONTRACTS[1],
         contract_gates=("stock",),
+        stock_gate=pc.SCENARIOS["session-kit"],
     ),
     ReleaseDescriptor(
         name="@nredd/pi-subscription-router",
@@ -71,6 +76,7 @@ DESCRIPTORS = (
         ),
         contract=pc.CONTRACTS[2],
         contract_gates=("stock",),
+        stock_gate=pc.SCENARIOS["subscription-router"],
     ),
     ReleaseDescriptor(
         name="@nredd/pi-preset",
@@ -89,8 +95,8 @@ def resolve_workspace(repo: Path, descriptor: ReleaseDescriptor) -> Path:
     """Return a descriptor workspace only when it remains inside ``repo``.
 
     Parameters:
-        repo: Repository root.
-        descriptor: Data-only release target.
+        repo (Path): Repository root.
+        descriptor (ReleaseDescriptor): Data-only release target.
 
     Returns:
         Path: Resolved package workspace.
@@ -113,7 +119,7 @@ def descriptor_for(name: str) -> ReleaseDescriptor | None:
     """Find one public release descriptor by npm name.
 
     Parameters:
-        name: Public npm package name.
+        name (str): Public npm package name.
 
     Returns:
         ReleaseDescriptor | None: The one registered descriptor, if any.

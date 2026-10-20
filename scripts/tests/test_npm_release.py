@@ -6,10 +6,12 @@ References:
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
+import tarfile
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -83,6 +85,31 @@ def test_resolve_all_owned_names(repo: Path) -> None:
         assert (target.name, target.directory, target.version) == (contract.name, contract.directory, "1.2.3")
 
 
+@pytest.mark.parametrize("packages", [{}, {"@nredd/pi-session-kit": SimpleNamespace(evidence={})}])
+def test_stock_contract_requires_subject_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packages: dict[str, SimpleNamespace]
+) -> None:
+    """A descriptor release fails when its executable gate omits evidence for the subject.
+
+    Parameters:
+        tmp_path (Path): Empty runner scratch directory.
+        monkeypatch (pytest.MonkeyPatch): Replaces the stock runner without starting Pi.
+        packages (dict[str, SimpleNamespace]): Missing or empty synthetic subject evidence.
+
+    Returns:
+        None: The publisher rejects incomplete evidence.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    monkeypatch.setattr(
+        pc,
+        "run_gate",
+        lambda *_args, **_kwargs: SimpleNamespace(packages=packages, model_dump_json=lambda: "{}"),
+    )
+    with pytest.raises(nr.ReleaseError, match=r"subject|empty"):
+        nr.run_stock_contract(tmp_path, tmp_path, descriptor, {"session-kit": tmp_path / "subject.tgz"})
+
+
 @pytest.mark.parametrize(
     "tag",
     [
@@ -145,9 +172,50 @@ def test_descriptor_rejects_workspace_escape_and_missing_native_artifact(
     monkeypatch.setattr(rd, "DESCRIPTORS", (outside,))
     with pytest.raises(nr.ReleaseError, match="unsafe workspace"):
         nr.resolve_target(repo, TAG)
-    native = replace(descriptor, native_artifacts=(PurePosixPath("prebuilt/macos/*"),))
+    native = replace(descriptor, native_artifacts=(PurePosixPath("prebuilt/**/helper?"),))
+    workspace = repo / "packages/session-kit"
+    helper = workspace / "prebuilt/macos/helper1"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("native helper")
+    nr.validate_native_sources(workspace, native)
+    tarball = repo.parent / "candidate.tgz"
+    with tarfile.open(tarball, "w:gz") as archive:
+        data = b"native helper"
+        member = tarfile.TarInfo("package/prebuilt/macos/helper1")
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    nr.validate_native_tarball(tarball, native)
+    helper.unlink()
     with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
-        nr.validate_native_sources(repo / "packages/session-kit", native)
+        nr.validate_native_sources(workspace, native)
+    with pytest.raises(nr.ReleaseError, match="Packed tarball omits"):
+        nr.validate_native_tarball(
+            tarball, replace(native, native_artifacts=(PurePosixPath("prebuilt/macos/missing"),))
+        )
+
+
+def test_generalized_runner_rejects_descriptor_contract_without_a_subject(repo: Path, tmp_path: Path) -> None:
+    """A descriptor contract absent from the supplied runner set never reaches stock Pi.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+        tmp_path (Path): Empty runner scratch directory.
+
+    Returns:
+        None: An unselected subject is refused before tool setup.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    unmatched = replace(descriptor, contract=replace(descriptor.contract, directory="not-registered"))
+    with pytest.raises(pc.ContractError, match="No release contract matches"):
+        pc.run_gate(
+            tmp_path,
+            tmp_path,
+            [unmatched.contract.directory],
+            {unmatched.contract.directory: tmp_path / "subject.tgz"},
+            contracts=(),
+            scenarios={},
+        )
 
 
 def test_preflight_ancestry_and_existing_version(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,7 +397,15 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
         tuple[Path, Identity]: Artifact directory and verified identity.
     """
 
-    def exercise(_work: Path, _stock: Path, only: list[str], supplied: dict[str, Path]) -> SimpleNamespace:
+    def exercise(
+        _work: Path,
+        _stock: Path,
+        only: list[str],
+        supplied: dict[str, Path],
+        *,
+        contracts: tuple[pc.PackageContract, ...],
+        scenarios: dict[str, object],
+    ) -> SimpleNamespace:
         """Assert the stock gate receives precisely the already-packed candidate bytes.
 
         Parameters:
@@ -344,7 +420,12 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
         assert only == ["session-kit"]
         assert set(supplied) == {"session-kit"}
         assert supplied["session-kit"].is_file()
-        return SimpleNamespace(model_dump_json=lambda: '{"test": "Pi exercise substituted"}')
+        assert [contract.directory for contract in contracts] == ["session-kit"]
+        assert set(scenarios) == {"session-kit"}
+        return SimpleNamespace(
+            packages={"@nredd/pi-session-kit": SimpleNamespace(evidence={"subject": "session-kit"})},
+            model_dump_json=lambda: '{"test": "Pi exercise substituted"}',
+        )
 
     monkeypatch.setattr(pc, "run_gate", exercise)
     original_command = nr.command
@@ -640,11 +721,39 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
         assert supplied == {contract.directory: candidate[0]}
         assert pc.load_tarball(contract, candidate[0]).version == "1.2.3"
         events.append(kind)
-        return SimpleNamespace(model_dump_json=lambda: '{"test": "Pi substituted"}')
+        return SimpleNamespace(
+            packages={contract.name: SimpleNamespace(evidence={"subject": contract.directory})},
+            model_dump_json=lambda: '{"test": "Pi substituted"}',
+        )
+
+    def stock_gate(
+        _work: Path,
+        _stock: Path,
+        _only: list[str],
+        supplied: dict[str, Path],
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        """Assert the descriptor passes its contract and executable subject gate.
+
+        Parameters:
+            _work (Path): Unused release scratch directory.
+            _stock (Path): Unused stock Pi directory.
+            _only (list[str]): Selected contract directory.
+            supplied (dict[str, Path]): Packed candidate bytes.
+            **kwargs (object): Generalized contracts and scenario mapping.
+
+        Returns:
+            SimpleNamespace: Synthetic per-subject evidence report.
+        """
+        assert kwargs["contracts"] == (contract,)
+        scenarios = kwargs["scenarios"]
+        assert isinstance(scenarios, dict)
+        assert set(scenarios) == {contract.directory}
+        return gate("stock", supplied)
 
     monkeypatch.setattr(nr, "command", command)
     monkeypatch.setattr(pc, "pack", pack)
-    monkeypatch.setattr(pc, "run_gate", lambda _w, _s, _only, supplied: gate("stock", supplied))
+    monkeypatch.setattr(pc, "run_gate", stock_gate)
     monkeypatch.setattr(nr.fork, "run_fork_gate", lambda _w, _s, _r, supplied: gate("fork", supplied))
     target = nr.resolve_target(repo, f"{contract.name}@1.2.3")
     nr.verify(repo, target, tmp_path / "candidate")

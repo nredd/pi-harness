@@ -40,6 +40,7 @@ ReleaseDescriptor(
     verify_commands=(("npm", "ci", "--ignore-scripts"), ("npm", "run", "check", "--workspace", "@nredd/pi-todo")),
     contract=TODO_CONTRACT,
     contract_gates=("stock",),
+    stock_gate=todo_stock_gate,
 )
 ```
 
@@ -81,8 +82,8 @@ failed a one-minute poll and passed on a failed-jobs rerun that skipped re-publi
   integrity; runtime dependencies are allowed.
 - Copy only that installed subject and its exact lock entry into a second throwaway audit project, then
   run `npm audit signatures` there. npm verifies registry signatures and Sigstore attestations for exactly
-  one named subject, so aggregate verification counts from dependencies cannot satisfy the release. No
-  custom cryptography is implemented.
+  one named subject, so aggregate verification counts from dependencies cannot satisfy the release. The
+  audit may not mutate either subject-root manifest. No custom cryptography is implemented.
 - Fetch `https://registry.npmjs.org/-/npm/v1/attestations/<name>@<version>` directly. Decode the SLSA
   bundle's DSSE in-toto statement, not merely `dist.attestations` metadata. Require the package URL
   `pkg:npm/<name>@<version>` (including npm's percent-encoded scope form), the recorded tarball SHA-512
