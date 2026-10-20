@@ -46,7 +46,7 @@ Verification layers now implemented:
 - `.github/workflows/forks.yml` runs applicable full fork suites. Before tagging a fork, use a temporary CI probe PR selecting the candidate Gitlink, fetch its SHA for reviews, wait for full fork CI, then close the probe without merging. Receipts: #37, #39.
 - `contracts` owns packed artifact identity, installation/discovery/trust and stock-host compatibility. See `docs/package-contracts.md`; do not confuse it with assembled-stack coverage.
 - `stack` D/E jobs use a formula-shaped released Node binary plus explicit `integration/stacks/personal.json` / `integration/stacks/local.json` in throwaway agent dirs, on both OSes. No chezmoi, Brewfile or live install input. D owns process boundaries; E owns the real tmux resize seam.
-- Bun standalone D/E is NOT RUN: nredd.6 has no standalone asset. Package-native Bun passes are not standalone evidence.
+- Bun standalone D/E runs in CI: the `stack (..., personal)` jobs build it from the Gitlinked core and run both stacks on it on darwin-arm64 and linux-x64 (#56); seven auth-interception cases are explicit skips (adapter #14). linux-arm64 is NOT RUN.
 - Bench F is visibly NOT RUN until a quiet runner exists. G remains explicit live-provider opt-in, never CI.
 - `pi-profile doctor` belongs to dotfiles, checks machine-specific render/pins/install consistency, and runs warn-only after apply. It is not a package gate.
 - `docs/verification-rebuild.md` is the destination ledger. No unported non-boundary Python scenarios remain; old progress paragraphs retain their historical port-base context.
@@ -85,14 +85,14 @@ Historical, not the current deployment inventory:
 1. DONE -- export the core session harness and interactive/terminal testing APIs. Parent #18, #19, #28; fork nredd/pi#4, #5, #6. Selected core nredd.6; nredd.5 was released but never selected after full-suite regressions.
 2. DONE -- audit each scenario at its smallest owning boundary. Ledger #17, finalized by #45. Migration inventory: 191 functions -> 20 real-process survivors; the new fatal-startup boundary adds one, for 21 D/E/F/G functions. No non-boundary scenario remains unported.
 3. DONE -- native package, A-stack and fork ports. #20, #22, #23, #26, #27, #31, #32, #33, #36, #40, #41, #42, #43, #45. Process-output regression fixed by #38.
-4. DONE -- explicit assembled-stack gate without chezmoi. #30, host-sleep fix #34. Formula-shaped Node release, both stacks/OSes, nine D functions and one E seam. Standalone Bun and F remain NOT RUN, not hidden passes.
+4. DONE -- explicit assembled-stack gate without chezmoi. #30, host-sleep fix #34. Formula-shaped Node release, both stacks/OSes, nine D functions and one E seam; the Bun standalone runs the same scenarios since #56. F remains NOT RUN, not a hidden pass.
 5. DONE -- hosted owned/contracts/forks/stack gates and OIDC publication. #21, #30, #35; first version/release #44, registry-wait fix #46. See `docs/ci.md` for protections and the one fresh whole-job rerun policy. Bench provisioning and review/promotion automation remain deferred.
 6. DONE -- archive all five standalone repos after the replacement gate landed. GitHub reports `archived: true` for each; final archive-pointer heads: dev-tools `91656c2`, session-kit `75fc5a6`, subscription-router `eaee3ed`, benchmark `d4b9896`, e2e `5d078a7`. Replacement PR receipts: #21, #30; follow-ups now in dotfiles. GitHub archival is a repository operation, not a pi-harness PR; local checkout deletion is not assumed.
 7. DONE -- machine-specific checks moved to dotfiles `pi-profile doctor` and its apply hook/runbook. dotfiles#3, activation pins #4, rebased forks #10; matching harness stack receipt #30. No package gate consumes the owner's config.
 8. OPEN -- resume deferred work on the rebuilt stack:
    - Profiles/model roles and preset footer adoption (migration plan #21); do not replace the live dotfiles footer implicitly.
    - Work-profile switch and enterprise WSL acceptance.
-   - Bun standalone checklist #26-31 and compiled-runtime adapter #58; auth transport interception remains a runtime boundary, native timer tests no longer need preloads.
+   - Bun: linux-arm64 execution and the auth-interception adapter (#14); standalone D/E itself runs in CI since #56.
    - linux-arm64 execution/acceptance, not just cross-building.
    - Quiet bench runner; F stays NOT RUN until provisioned and baselined with evidence.
    - GitHub App / promotion automation #57. Dual review receipts remain PR comments, not CI statuses.
