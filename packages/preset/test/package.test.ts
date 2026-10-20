@@ -34,13 +34,15 @@ const EXPECTED_FILES = [
 ].sort();
 const HOST_PEERS = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"];
 const HOST_PACKAGES = ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core", ...HOST_PEERS, "typebox"];
+/** Require a domain TLD so pinned npm specs are not mistaken for addresses. */
+const EMAIL_PATTERN = /[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b/i;
 const HOST_RELEASE_TARBALL =
 	/^https:\/\/github\.com\/nredd\/pi\/releases\/download\/v1\.3\.0-nredd\.\d+\/earendil-works-pi-[a-z-]+-1\.3\.0\.tgz$/;
 
 test("metadata: public, versioned, correctly attributed", () => {
 	const pkg = manifest();
 	assert.equal(pkg.name, "@nredd/pi-preset");
-	assert.equal(pkg.version, "0.1.0");
+	assert.equal(pkg.version, "0.2.0");
 	assert.ok(!("private" in pkg));
 	assert.deepEqual(pkg.publishConfig, { access: "public" });
 	assert.deepEqual(pkg.repository, {
@@ -102,6 +104,12 @@ test("npm pack ships exactly the allowlist", () => {
 		);
 });
 
+test("privacy email scan distinguishes addresses from exact npm pins", () => {
+	for (const address of ["person@example.invalid", "first.last+tag@sub.example.invalid"])
+		assert.ok(EMAIL_PATTERN.test(address));
+	assert.ok(!EMAIL_PATTERN.test("npm:@nredd/pi-preset@0.2.0"));
+});
+
 test("shipped files contain no machine, network, account, or credential details", () => {
 	const FORBIDDEN: [RegExp, string][] = [
 		[/\/Users\/[^/\s]+/, "macOS home path"],
@@ -116,7 +124,7 @@ test("shipped files contain no machine, network, account, or credential details"
 			"token",
 		],
 		[/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "private key"],
-		[/[\w.+-]+@[\w-]+\.[\w.-]+/, "e-mail address"],
+		[EMAIL_PATTERN, "e-mail address"],
 		[/enterprise\.local|personal\.local|auth\.json|\.ssh\/|id_ed25519/i, "local manifest or credential file"],
 		[/\bKeychron\b|Karabiner|MX Master|MonitorControl/i, "hardware"],
 	];
@@ -154,8 +162,11 @@ test("nothing from global, machine, or private configuration ships", () => {
 test("README states public publication and keeps the pending work explicit", () => {
 	const readme = readText("README.md");
 	for (const needle of [
-		"Published to npm as `@nredd/pi-preset` (public), version `0.1.0`; see `releases/2026-10-18-npm-publication.json` for the tarball digest.",
-		"Not a supported release",
+		"Published to npm as `@nredd/pi-preset` (public)",
+		"not a supported release",
+		"npm:@nredd/pi-preset@0.2.0",
+		'"packageAgents": false',
+		"test/footer-render.test.ts",
 		"no installer, no profile resolver, no activation path",
 		"No `role:` references are introduced",
 		"**Pending.**",
