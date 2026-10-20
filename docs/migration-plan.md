@@ -7,7 +7,9 @@
   not a CI gate. The current required checks are [here](ci.md).
 - Never built: sections 6-8's dotfiles release-manifest consumption/runtime-tree distribution,
   section 8's staging/activation/rollback transaction, section 7's GitHub App promotion, and
-  section 5's three-platform standalone Bun acceptance. Standalone Bun is NOT RUN in CI yet.
+  section 5's three-platform standalone Bun acceptance. CI runs the stack D/E scenarios on a Bun standalone
+  built from the Gitlinked core on darwin-arm64 and linux-x64, minus seven auth-interception skips; linux-arm64
+  is NOT RUN.
 - Owned packages ship via `publish.yml`, core via the Homebrew tap, and dotfiles activates pins with
   `chezmoi update --upgrade` plus `pi-profile doctor`. The plan body below is unchanged.
 
