@@ -21,11 +21,13 @@ PINNED_GIT = re.compile(r"^git:github\.com/[^/\s]+/[^@/\s]+@[^\s]+$")
 
 
 class PackageSource(BaseModel):
-    """Pi object source; omitted filters inherit the manifest, empty filters disable a kind."""
-
+    # An omitted filter inherits the package manifest; an explicit empty list disables that kind.
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     source: str = Field(min_length=1, description="Exact npm/git source or explicit local path")
-    extensions: list[str] = Field(default_factory=list, description="Pi extension filters, if supplied")
+    extensions: list[str] = Field(
+        default_factory=list,
+        description="Pi extension filters; omitted inherits the manifest, empty disables",
+    )
     skills: list[str] = Field(default_factory=list, description="Pi skill filters, if supplied")
     prompts: list[str] = Field(default_factory=list, description="Pi prompt filters, if supplied")
     themes: list[str] = Field(default_factory=list, description="Pi theme filters, if supplied")
