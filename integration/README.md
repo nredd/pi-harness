@@ -58,8 +58,7 @@ Native preset footer receipts are in `packages/preset/test/scenarios/footer-{quo
 
 Native stats receipts remain in `packages/session-kit/test/scenarios/{stats-view,stats-data}.test.ts`; `inprocess/stats-plan.test.ts` adds three-machine dedup/freshness and Plan mode on native export/import. Packed standalone privacy, stable UUID and repeated import stay in `scripts/package_contracts.py::exercise_stats_artifact`, CI `contracts` only. `inprocess/diff-plan.test.ts` and `transcript.test.ts` replace the remaining command/Plan and composed-row processes. The two latency-probe functions moved into multisession calibration/readiness/sample assertions; bench remains NOT RUN.
 
-Extension-by-extension coverage and headless/live limits are recorded in
-[the matrix](../docs/verification-rebuild.md#shipped-extension-coverage-audit).
+Extension-by-extension coverage and headless/live limits are recorded [here](../docs/verification-rebuild.md#shipped-extension-coverage-audit).
 `inprocess/memory-deferred-kit.test.ts` additionally drives real memory/context-engine/kit
 factories: system-context refresh, session-lifetime tool promotion and successful controlled
 monitor start/read through faux model calls, with an invalid-date error and no fetches.

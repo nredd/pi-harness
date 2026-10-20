@@ -25,7 +25,7 @@ of the historical 191-function migration totals below.
 | `@nredd/pi-subscription-router` | A: `packages/subscription-router/test/scenarios/{balanced,recovery}.test.ts`, actual virtual-model dispatch, quota/fallback/hysteresis/retry failures. A-stack: `integration/inprocess/{router-admission,quota-admission,quota-goal}.test.ts`, child park/refuse/cap and kit continuation ownership. C: `scripts/package_contracts.py`, packed virtual dispatch. D: `test_auth_transport.py`, routed OAuth request reaches recording loopback server, plus shared startup. | Already behavioral; live subscription interoperability remains opt-in G, not fake-credential coverage. |
 | `pi-subagents` | B: `.github/workflows/forks.yml` runs its full Vitest/Bun `check`; `forks/pi-subagents/test/{session-scenarios,fleet-session,worktree-isolation-e2e}.test.ts` exercise real children, steering, TTL, model selection, restore/reload and failures. A-stack: `integration/inprocess/{specialists,nesting,turn-cap,fleet-plan}.test.ts`, real scoped children and policy/Plan/deferral interactions. C: `scripts/fork_package_contracts.py`, archived fork executes packed preset/dev-tools child. Shared D discovery/schema. | Already behavioral. Native fork job is path-filtered, not run on every harness-only PR. |
 | `pi-plan-mode` | B: `.github/workflows/forks.yml`, full Vitest + Bun session suites; `forks/pi-plan-mode/test/{confirmation,decline,policy,transcript}-session.test.ts`, real command/tool approval/decline/headless errors and policy tables. A-stack: `integration/inprocess/{plan-todos,annotated-tools,diff-plan,stats-plan}.test.ts`, actual cross-extension events/commands/tool refusals. Shared D startup/schema. | Already behavioral; no new fork changes. |
-| `rpiv-todo` | B hosted: `integration/inprocess/todo-{widget-session,history-session,host-disclosure}.test.ts`, actual todo calls, raw UI input, history/reload and batch disclosure. A-stack: `plan-todos.test.ts` / `goal-todos.test.ts`, evidence/atomic batches and reminder arbitration. Shared D startup/schema. Own split-repo suite is explicitly NOT RUN by `forks.yml`. | Unchanged here as requested; hosted coverage is not a claim that its native suite ran. |
+| `rpiv-todo` | B hosted: `integration/inprocess/todo-{widget-session,history-session,host-disclosure}.test.ts`, actual todo calls, raw UI input, history/reload and batch disclosure. A-stack: `plan-todos.test.ts` / `goal-todos.test.ts`, evidence/atomic batches and reminder arbitration. Shared D startup/schema. Native: `forks.yml` `rpiv-todo` runs the split's own `npm run check` at the Gitlink (Biome, tsc, Vitest 382 incl. all 253 stock upstream tests, Bun settled-row regressions) since `v2.13.9-nredd.2` (#59); path-filtered to `forks/**`, `.gitmodules` and the workflow. | Unchanged here; hosted coverage and the native suite are separate layers. |
 | `pi-claude-auth` | B: `.github/workflows/forks.yml`, pnpm lint/build/test. D: `integration/scenarios/test_auth_transport.py`, actual direct/routed OAuth headers/billing, API-key/custom exclusions, fake token refresh persistence/refusal/logout, no credential import or forbidden subprocess. Shared quiet startup. No tool or slash-command surface is expected from this transport hook. | Already behavioral; real login/subscription remains opt-in G. |
 | `pi-computer-use` | D installer `harness/sandbox.py::_install_sources/_record_stack` disables lifecycle scripts and records a reasoned `extensions: []` exclusion; shared startup checks no GUI app. `forks.yml` explicitly NOT RUN, no native/helper behavioral claim. | New D `test_extension_coverage.py::test_computer_use_headless_exclusion`: installed manifest declares extensions, evidence retains reason/source, settings forbid loading, actual registry lacks desktop capabilities, no app created, faux session survives. GUI helper remains NOT RUN; see requirements below. |
 | `pi-web-access` | Shared D registers four tools in model golden. A-stack `integration/inprocess/specialists.test.ts` loads real package, scopes researcher tools, asserts zero fetches; it did NOT call web tools. No owned native/B/C suite. | New D `test_installed_extension_behavior`: registry has all four tools, real `fetch_content(mode=raw)` against bound non-listening loopback port returns `isError`, includes target, then next faux reply succeeds, with no startup warnings/noise. No public network or browser/cookie/API-key success claim. |
@@ -45,9 +45,19 @@ install in a disposable agent directory, Accessibility/Screen Recording TCC gran
 native helper, then screenshot and input against a disposable app/fixture (including
 root/window targeting and helper restart). Existing fork-owned opt-in desktop tests should
 run there. A hosted headless exclusion cannot verify pixel content, TCC, or input delivery.
-Web provider credentials/browser success, qmd semantic search, live subscription calls,
-Bun standalone and quiet-runner benchmarks remain outside this offline gate. Exclusion and
-clean offline failures must never be reported as successful GUI/network coverage.
+NOT RUN, with what each would need:
+
+- `pi-web-access` network success: live search/fetch against real providers, needing provider
+  credentials in `web-search.json`/env, outbound network and an opt-in live tier (`G`), never CI
+- `pi-memory` qmd semantic search: a real `qmd` install with an indexed collection fixture and its
+  embedding model; the stack ships a failing `qmd` shim, so only search-disabled paths run
+- Live subscription calls (Anthropic/OpenAI OAuth through the router and auth shaping): real
+  credentials and the opt-in live tier `G`; CI asserts wire shape against a mock only
+- Quiet-runner benchmarks (`F`): a quiet self-hosted runner
+
+The Bun standalone runs these scenarios too (`ci.yml` standalone pass globs `scenarios/test_*.py`);
+only the seven Node-preload auth cases are skipped there. Exclusion and clean offline failures must
+never be reported as successful GUI/network coverage.
 
 ## Historical migration inventory
 
