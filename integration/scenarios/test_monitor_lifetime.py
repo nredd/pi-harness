@@ -220,7 +220,9 @@ def test_next_session_sweeps_only_dead_owners(
             ]
             assert len(started) == 1, owner.events
             assert not started[0]["isError"], started
-            wait_until(lambda tag=tag: bool(alive(tag)), f"monitor descendants for {tag} to start: {started}")
+            wait_until(
+                lambda tag=tag: bool(alive(tag)), f"monitor descendants for '{tag}' to start: {started}"
+            )
         wait_until(
             lambda: len(list(shared_tmp.glob("pi-monitors-*/*/*.json"))) == 2,
             f"two owner pidfiles under '{shared_tmp}', current files: {list(shared_tmp.rglob('*.json'))}",
