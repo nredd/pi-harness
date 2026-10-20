@@ -101,7 +101,8 @@ rpiv-todo patch queue:
   immutable. Both update/delete regressions use the real interactive harness and VirtualTerminal and fail
   before the fix on the stale subject
 - `forks.yml` runs the fork gate at its Gitlink, not a scratch monorepo or the parent stack suite. The four
-  real Plan/todo rows in `integration/inprocess/plan-todos.test.ts` remain separate stack coverage
+  hosted single-fork rows (`integration/inprocess/todo-{history,widget,host}-*.test.ts`) and the
+  Plan/todo pair in `plan-todos.test.ts` remain separate stack coverage
 
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
