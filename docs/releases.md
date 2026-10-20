@@ -14,6 +14,7 @@
 - `@nredd/pi-session-kit@0.4.0` (`718b033`): first publication through `publish.yml` with npm trusted publishing (OIDC, no token) and SLSA provenance; GitHub release carries the tarball, `SHA256SUMS`, `identity.json` and `manifest.json`. Attempt 1 published but failed the one-minute registry poll; the failed-jobs rerun skipped re-publication on matching integrity, then verified signatures, attestations and source binding
 - `@nredd/pi-subscription-router@0.4.0` (`3cf77bc`): published by `publish.yml` in one attempt (npm served it after ~3.5 min of the ten-minute poll); release carries the four assets
 - `@nredd/pi-dev-tools@0.5.0` (signed tag at `3cf77bc`): NEVER PUBLISHED. `verify` failed one dev-tools test (run [here](https://github.com/nredd/pi-harness/actions/runs/39370449677)): it ran the package check inside the `uv run --project integration` venv, so `uv run pytest` in a pytest-less fixture project found the harness's `pytest`. CI's `owned` job never activates that venv. `scripts/npm_release.py` now strips the activation from every child command; the tag stays where it is and the release moves to `0.5.1`
+- `@nredd/pi-dev-tools@0.5.1` (`90538d7`, #50): the `0.5.0` content, published by `publish.yml` in one attempt (run [here](https://github.com/nredd/pi-harness/actions/runs/39373169935)); release carries the four assets. `integration/stacks/personal.json` pins it with router `0.4.0` (#51)
 
 ## Owned npm packages
 
