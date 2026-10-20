@@ -109,8 +109,13 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-14]
         stack: [personal, local]
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: macos-14
+            platform: darwin-arm64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -132,6 +137,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install tmux
       - name: Install workspace and harness dependencies
+        id: workspace
         run: |
           npm ci --ignore-scripts
           cd integration && uv sync --locked --python "$(tr -d '\n' < ../.python-version)"
@@ -141,18 +147,6 @@ jobs:
           git -C ../forks/pi fetch --tags origin
           uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$RUNNER_TEMP/pi-release"
           echo "PI_BIN=$RUNNER_TEMP/pi-release/bin/pi" >>"$GITHUB_ENV"
-      - name: Report Bun standalone as NOT RUN
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag=$(git -C forks/pi describe --tags --exact-match)
-          assets=$(gh release view "$tag" --repo nredd/pi --json assets --jq '.assets[].name')
-          if printf '%s\n' "$assets" | grep -Eq '^pi-(darwin|linux|windows)-.*\.(tar\.gz|zip)$'; then
-            echo "::error::Bun standalone asset exists in $tag but this gate has no runtime adapter (#58); refusing to claim coverage"
-            exit 1
-          fi
-          echo "Bun standalone: not run (no standalone asset in $tag)"
-          echo "Bun standalone: not run (no standalone asset in $tag)" >>"$GITHUB_STEP_SUMMARY"
       - name: Report binary identity
         run: |
           mkdir -p "$RUNNER_TEMP/version-home" "$RUNNER_TEMP/version-agent"
@@ -174,6 +168,73 @@ jobs:
         with:
           name: stack-${{ matrix.os }}-${{ matrix.stack }}
           path: integration/artifacts/
+          if-no-files-found: ignore
+      # Reuse the existing personal runner for BOTH standalone stacks. No extra jobs or
+      # artifact-transfer queue admissions, and no duplicate build in the local runner.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: ${{ !cancelled() && matrix.stack == 'personal' && steps.workspace.outcome == 'success' }}
+        with:
+          bun-version-file: .bun-version
+      - name: Preserve Node failure artifacts before standalone runs
+        if: ${{ always() && matrix.stack == 'personal' }}
+        working-directory: integration
+        run: |
+          if [ -d artifacts ]; then mv artifacts artifacts-node; fi
+      - name: Build standalone once for both stacks
+        id: build
+        if: ${{ !cancelled() && matrix.stack == 'personal' && steps.workspace.outcome == 'success' }}
+        working-directory: forks/pi
+        run: |
+          npm ci --ignore-scripts
+          # Same frozen data as forks.yml, never the live model fetch.
+          version=$(node -p 'require("./packages/ai/package.json").version')
+          mkdir -p "$RUNNER_TEMP/model-data"
+          npm pack "@earendil-works/pi-ai@$version" --pack-destination "$RUNNER_TEMP/model-data"
+          tar -xzf "$RUNNER_TEMP/model-data/earendil-works-pi-ai-$version.tgz" -C "$RUNNER_TEMP/model-data"
+          rm -rf packages/ai/src/providers/data
+          cp -R "$RUNNER_TEMP/model-data/package/dist/providers/data" packages/ai/src/providers/data
+          ./scripts/build-binaries.sh --skip-install --offline-model-data \
+            --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone"
+          echo "PI_BIN=$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" >>"$GITHUB_ENV"
+      - name: Report standalone binary and source identity
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/version-home" "$RUNNER_TEMP/version-agent"
+          HOME="$RUNNER_TEMP/version-home" PI_CODING_AGENT_DIR="$RUNNER_TEMP/version-agent" "$PI_BIN" --version
+          git -C forks/pi rev-parse HEAD
+          bun --version
+          shasum -a 256 "$PI_BIN" "$RUNNER_TEMP/pi-standalone/pi-${{ matrix.platform }}.tar.gz"
+      - name: Standalone D and E (personal)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: integration
+        run: |
+          uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
+            --stack stacks/personal.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
+            --log-cli-level=INFO --junitxml=artifacts/standalone-personal.xml
+      - name: Preserve personal failure artifacts before local runs
+        if: ${{ always() && matrix.stack == 'personal' }}
+        working-directory: integration
+        run: |
+          if [ -d artifacts ]; then mv artifacts artifacts-personal; fi
+      - name: Standalone D and E (local)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: integration
+        run: |
+          uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
+            --stack stacks/local.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
+            --log-cli-level=INFO --junitxml=artifacts/standalone-local.xml
+      - name: Report coverage exclusions
+        if: ${{ always() && matrix.stack == 'personal' }}
+        run: |
+          echo "Bun standalone: seven auth dispatch/refresh cases per stack NOT RUN: Node preload interception required (#14). Missing-preload refusal runs." >>"$GITHUB_STEP_SUMMARY"
+          echo "linux-arm64, packed contracts under standalone, bench, live credentials and desktop helpers: NOT RUN." >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() && matrix.stack == 'personal' }}
+        with:
+          name: standalone-${{ matrix.platform }}
+          path: |
+            integration/artifacts/
+            integration/artifacts-personal/
           if-no-files-found: ignore
 
   bench:

@@ -9,7 +9,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 | --- | --- | --- |
 | `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (preset runs all of `test/`; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts`, `make check-fork-package-contracts` | Packed tarballs alone on exact stock Pi 1.3.0, and the packed preset + dev-tools through the Gitlinked `pi-subagents`. JSON reports uploaded as artifacts |
-| `stack (ubuntu-24.04, macos-14; personal, local)` | Fetch exact Gitlinked core release with formula-equivalent npm + tui replacement, real `pi install` of explicit `integration/stacks/*.json`, `D` startup/transport/lifetime/output/tool surfaces and `E` tmux resize | The released Node bundle and declared stack work together without owner config; binary version, stack SHA-256, installed package versions and JUnit/failure artifacts are retained. A reasoned headless exclusion installs but never loads the computer-use helper |
+| `stack (ubuntu-24.04, macos-14; personal, local)` | Fetch exact Gitlinked core release with formula-equivalent npm + tui replacement, real `pi install`, D/E scenarios on Node. Each OS's existing `personal` job additionally builds Gitlinked core once with pinned Bun and runs D/E on that standalone for both `personal` and `local` | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 | `bench (not run)` | a notice and a step summary | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
 
 `.github/workflows/forks.yml`, when `forks/**`, `.gitmodules` or the workflow changes, plus manual dispatch:
@@ -20,7 +20,11 @@ The publish job alone requests a short-lived npm OIDC identity.
 | `pi-subagents` | Pinned Bun, `npm ci`, `npm run check` (full Vitest suite and Bun session scenarios) |
 | `pi-plan-mode` | Pinned Bun, `npm ci`, `npm run check` (Bun session scenarios), `npm test` (full Vitest suite) |
 | `pi-claude-auth` | pnpm at the fork's `packageManager`, `pnpm install --frozen-lockfile`, lint, build, test |
-| `rpiv-todo, pi-computer-use (not run)` | a notice: rpiv-todo gates inside an upstream `rpiv-mono` clone, pi-computer-use needs macOS TCC |
+| `rpiv-todo` | Pinned Bun, `npm ci --ignore-scripts`, `npm run check` (Biome, strict TypeScript, full standalone Vitest suite and native Bun settled-row regressions) at the Gitlinked commit |
+| `pi-computer-use (not run)` | a notice: pi-computer-use needs macOS TCC |
+
+The rpiv-todo job needs the standalone gate that `v2.13.9-nredd.2` (nredd/rpiv-todo#2) added; an older
+Gitlink has no lockfile or `check` script, so the job fails rather than reporting a false pass.
 
 `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
 
@@ -36,8 +40,9 @@ The publish job alone requests a short-lived npm OIDC identity.
 - Root workspace dependencies supply `croner` `10.0.1`, `nanoid` `5.1.16`, `pi-tui-kit` `0.65.5`
   from the forks' lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
   `3.x` and leaves the fork's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
-  split has no lockfile: `rpiv-config` and optional peer
-  `rpiv-i18n` are pinned to its release `2.12.0`, recorded in the root lockfile
+  split's own lockfile serves only its `forks.yml` gate; the stack workspace never installs fork-local
+  dependencies, so `rpiv-config` and optional peer `rpiv-i18n` are pinned here to the fork's `2.13.9`,
+  with the same integrity as its lockfile
 - `isolateStackHome()` isolates `HOME`, `PI_CODING_AGENT_DIR`, XDG config before loading entries.
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
@@ -99,12 +104,38 @@ The thirteen `DOTFILES` rows moved to dotfiles' implemented `pi-profile doctor`,
 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
 A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
-`stack` tests the Homebrew-shaped Node bundle, not a Bun standalone. Fork release
-`v1.3.0-nredd.6` publishes only npm tarballs. Each stack job checks the selected release's assets and
-prints `Bun standalone: not run (no standalone asset in <tag>)` when absent; a standalone asset makes
-the job refuse unsupported coverage rather than silently ignoring it. No Bun binary is built.
-Bun standalone validation is deferred with the Bun checklist (#26-31), blocked on runtime adapter
-#58 (Bun ignores `NODE_OPTIONS --import`). This is NOT RUN, never a Bun pass.
+`stack` still tests the released Homebrew-shaped Node bundle. Fork release `v1.3.0-nredd.6`
+publishes only four npm tarballs, no standalone assets. Each OS's existing `stack (..., personal)` job also builds the exact
+Gitlinked source using `.bun-version` (1.3.14), the official `scripts/build-binaries.sh`, and frozen
+release model data with `build:offline`. It does not depend on a future standalone release, commit
+binaries, or test a Node wrapper in place of the compiled executable.
+
+Bun scope:
+
+- Native execution on `macos-14` (darwin-arm64) and `ubuntu-24.04` (baseline linux-x64).
+  Each job reuses one extracted official archive for both stacks, with independent installations
+- `--runtime bun-standalone` skips only the seven marked auth dispatch/refresh cases from
+  `integration/scenarios/test_auth_transport.py`: Bun ignores the `NODE_OPTIONS --import` redirect
+  and egress/readiness preload in `harness/anthropic_mock.py`. The missing-preload refusal case runs
+  on both runtimes. Skip reasons appear in pytest and JUnit before fake auth fixtures can dispatch
+- No other selected D/E case uses preloads, scaled timers or `--expose-gc`. Clock-driven behavior
+  moved to native suites. `providers/fast_timers.mjs` is no longer used by selected D/E scenarios;
+  `harness/probe.py`'s `--expose-gc` is used only by excluded `scenarios/bench/test_render.py`
+- The adapter blocker is [here](https://github.com/nredd/pi-harness/issues/14). Previous references
+  to #58 are stale: no such issue exists in this repository. The timer migration removed one
+  dependency, not the remaining auth transport interception requirement
+- NOT RUN: linux-arm64 (no `ubuntu-24.04-arm` job added), darwin-x64, Windows, packed contracts
+  hosted by the standalone, quiet-runner benchmarks, live credentials, REA and desktop/TCC helpers.
+  Source-built D/E coverage is not published-binary acceptance or a completed Bun checklist
+
+Capacity: ZERO added jobs, including zero new macOS jobs. Full CI still requests four macOS jobs,
+not six. The existing `stack (..., personal)` runner builds once and runs both standalone stacks
+serially with two pytest workers; `stack (..., local)` adds no work. No build producer, artifact
+transfer or extra queue admission. Budget an additional 7-12 minutes on macOS personal and 5-9 minutes
+on Ubuntu personal (12-21 added runner minutes total); local cells add zero. These are estimates until
+CI measurements, not promised runtimes. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid
+another build and two stack installs while establishing both current OS targets. Branch protection
+is unchanged; Bun failures now fail the existing personal stack check, not a new required context.
 
 `.github/workflows/publish.yml`, pushes of tags matching `@nredd/*@*`:
 
