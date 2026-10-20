@@ -268,10 +268,14 @@ def _record_stack(box: Sandbox, stack: Stack, stack_path: Path, sources: list[st
         installed_packages = []
         for manifest_path in sorted((box.agent_dir / "npm" / "node_modules").rglob("package.json")):
             manifest = json.loads(manifest_path.read_text())
+            name = manifest.get("name")
+            version = manifest.get("version")
+            if not isinstance(name, str) or not isinstance(version, str):
+                continue
             installed_packages.append(
                 {
-                    "name": manifest["name"],
-                    "version": manifest["version"],
+                    "name": name,
+                    "version": version,
                     "path": str(manifest_path.parent.relative_to(box.agent_dir)),
                 }
             )
