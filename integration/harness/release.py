@@ -23,20 +23,36 @@ import tarfile
 from pathlib import Path
 from urllib.request import urlopen
 
-from harness.paths import GIT_BIN, REPO_ROOT
+from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
 
 LOGGER = logging.getLogger(__name__)
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
-LEGACY_RELEASE_TAGS = frozenset(
-    {
-        "v1.3.0-nredd.3",
-        "v1.3.0-nredd.4",
-        "v1.3.0-nredd.5",
-        "v1.3.0-nredd.6",
-        "v1.3.0-nredd.7",
-    }
-)
+CODING_AGENT_TARBALL = "earendil-works-pi-coding-agent-1.3.0.tgz"
+TUI_TARBALL = "earendil-works-pi-tui-1.3.0.tgz"
+LEGACY_CHECKSUMS = {
+    "v1.3.0-nredd.3": {
+        CODING_AGENT_TARBALL: "753efe6fcb54da651e1dc02f6cc56dda029d55e5a40f833bdf9308dae88babd5",
+        TUI_TARBALL: "ccd8f2d2aa8e99fed96394cc5ade43c13597bcdd2472552dab5957d038a5afbd",
+    },
+    "v1.3.0-nredd.4": {
+        CODING_AGENT_TARBALL: "0042ebdca83a8cf92f406f097ec5f05dd131c859761c954e3f2feae0fef3cf87",
+        TUI_TARBALL: "ccd8f2d2aa8e99fed96394cc5ade43c13597bcdd2472552dab5957d038a5afbd",
+    },
+    "v1.3.0-nredd.5": {
+        CODING_AGENT_TARBALL: "84f1c4b5075efca538a8f7b65334dba8dff265525d7b1f1f69bb0c1d677ac644",
+        TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
+    },
+    "v1.3.0-nredd.6": {
+        CODING_AGENT_TARBALL: "0c1b9549cfed58c19f03b642cb259bf52f83beb1a339f154e5616c9b28c939b8",
+        TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
+    },
+    "v1.3.0-nredd.7": {
+        CODING_AGENT_TARBALL: "16479a0cb393c7820d8b1fbcdc5c941ceb5a271dc64ecb4b8be6574df3a2e617",
+        TUI_TARBALL: "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0",
+    },
+}
+LEGACY_RELEASE_TAGS = frozenset(LEGACY_CHECKSUMS)
 ATTESTATION_WORKFLOW = "nredd/pi/.github/workflows/fork-release.yml"
 
 
@@ -115,9 +131,9 @@ def release_checksums(tag: str, manifests: Path) -> dict[str, str]:
     Raises:
         ValueError: malformed, incomplete, or unrecognized release identities.
     """
-    if tag in LEGACY_RELEASE_TAGS:
-        return manifest_checksums(tag, manifests)
     base = f"https://github.com/nredd/pi/releases/download/{tag}/"
+    if tag in LEGACY_RELEASE_TAGS:
+        return {f"{base}{name}": digest for name, digest in LEGACY_CHECKSUMS[tag].items()}
     try:
         with urlopen(f"{base}SHA256SUMS", timeout=120) as response:
             contents = response.read().decode("utf-8")
@@ -151,13 +167,12 @@ def verify_provenance(path: Path, tag: str) -> None:
         FileNotFoundError: GitHub CLI is unavailable.
         RuntimeError: the artifact lacks the required provenance identity.
     """
-    gh = shutil.which("gh")
-    if gh is None:
-        raise FileNotFoundError("Core release verification requires `gh`")
+    if not Path(GH_BIN).is_file():
+        raise FileNotFoundError(f"Core release verification requires `gh` at '{GH_BIN}'")
     try:
         subprocess.check_output(
             [
-                gh,
+                GH_BIN,
                 "attestation",
                 "verify",
                 str(path),
@@ -173,9 +188,10 @@ def verify_provenance(path: Path, tag: str) -> None:
             stderr=subprocess.STDOUT,
             timeout=120,
         )
-    except subprocess.CalledProcessError as error:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        output = getattr(error, "output", "") or ""
         raise RuntimeError(
-            f"Core release provenance verification failed for '{path}': {error.output[-6000:]}"
+            f"Core release provenance verification failed for '{path}': {output[-6000:]}"
         ) from error
 
 
@@ -246,9 +262,8 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
     for url in urls:
         if url not in checksums:
             raise ValueError(f"No recorded release checksum for '{url}'")
-    npm = shutil.which("npm")
-    if npm is None:
-        raise FileNotFoundError("Release installation requires `npm`")
+    if not Path(NPM_BIN).is_file():
+        raise FileNotFoundError(f"Release installation requires `npm` at '{NPM_BIN}'")
     prefix.mkdir(parents=True, exist_ok=True)
     home = prefix / "fetch-home"
     home.mkdir()
@@ -274,7 +289,7 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
     try:
         subprocess.check_output(
             [
-                npm,
+                NPM_BIN,
                 "install",
                 "--global",
                 "--prefix",
@@ -291,8 +306,9 @@ def fetch_release(tag: str, prefix: Path, manifests: Path) -> Path:
             stderr=subprocess.STDOUT,
             timeout=600,
         )
-    except subprocess.CalledProcessError as error:
-        raise RuntimeError(f"Core release npm installation failed: {error.output[-6000:]}") from error
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        output = getattr(error, "output", "") or ""
+        raise RuntimeError(f"Core release npm installation failed: {output[-6000:]}") from error
     modules = prefix / "lib/node_modules/@earendil-works/pi-coding-agent/node_modules"
     destination = modules / "@earendil-works/pi-tui"
     if destination.exists():
