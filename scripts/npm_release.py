@@ -18,7 +18,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
+import tarfile
 import tempfile
 import time
 import urllib.parse
@@ -31,10 +33,13 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 import fork_package_contracts as fork
 import package_contracts as pc
+import release_descriptors as rd
 import release_manifest as rm
 
 LOGGER = logging.getLogger(__name__)
-CONTRACTS = (*pc.CONTRACTS, pc.PRESET_CONTRACT)
+# Compatibility export for the existing four-package contract tests. Release selection
+# itself is driven exclusively by ``release_descriptors.DESCRIPTORS``.
+CONTRACTS = tuple(descriptor.contract for descriptor in rd.DESCRIPTORS)
 # npm versions must be canonical SemVer, not ranges, aliases, leading zeroes or shell syntax.
 NUMBER = r"(?:0|[1-9][0-9]*)"
 PRE_ID = rf"(?:{NUMBER}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
@@ -204,40 +209,143 @@ def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
     ).strip()
 
 
-def resolve_target(repo: Path, tag: str) -> Target:
-    """Resolve an exact tag by workspace manifest name, refusing unknown/private/version-skewed packages.
+def descriptor_for(target: Target) -> rd.ReleaseDescriptor:
+    """Return the registered descriptor for a resolved target.
 
     Parameters:
-        repo (Path): Tagged checkout.
-        tag (str): GitHub ref name.
+        target: Tag-derived release identity.
 
     Returns:
-        Target: Validated owned workspace identity.
+        ReleaseDescriptor: The matching package data.
 
     Raises:
-        ReleaseError: If the tag or selected workspace is not publishable.
+        ReleaseError: If the package has no unique descriptor.
+    """
+    descriptor = rd.descriptor_for(target.name)
+    if descriptor is None:
+        raise ReleaseError(f"No release descriptor for '{target.name}'")
+    return descriptor
+
+
+def resolve_target(repo: Path, tag: str) -> Target:
+    """Resolve a descriptor-backed tag, refusing unknown, private or skewed packages.
+
+    Parameters:
+        repo: Tagged checkout.
+        tag: GitHub ref name.
+
+    Returns:
+        Target: Validated release identity.
+
+    Raises:
+        ReleaseError: If descriptor, workspace or package identity validation fails.
     """
     match = TAG.fullmatch(tag)
     if match is None:
         raise ReleaseError(f"Invalid release tag: '{tag}'")
-    matches = [p for p in rm.owned_packages(repo) if p.name == match["name"]]
-    if len(matches) != 1 or matches[0].private:
-        raise ReleaseError(f"Tag must name one public owned workspace: '{tag}'")
-    package = matches[0]
-    if package.version != match["version"]:
-        raise ReleaseError(
-            f"Tag version '{match['version']}' differs from package version '{package.version}'"
-        )
-    contract = next((c for c in CONTRACTS if c.name == package.name), None)
-    if contract is None:
-        raise ReleaseError(f"No package contract for '{package.name}'")
-    # Also check that the contract's source directory is the name-selected workspace.
-    manifest = pc.PackedManifestIdentity.model_validate_json(
-        (repo / "packages" / contract.directory / "package.json").read_text()
+    descriptor = rd.descriptor_for(match["name"])
+    if descriptor is None:
+        raise ReleaseError(f"No release descriptor for '{match['name']}'")
+    try:
+        workspace = rd.resolve_workspace(repo, descriptor)
+        raw = json.loads((workspace / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        raise ReleaseError(f"Cannot resolve release workspace for '{match['name']}': {e}") from e
+    if not isinstance(raw, dict) or raw.get("private", False) is True:
+        raise ReleaseError(f"Tag must name one public descriptor workspace: '{tag}'")
+    try:
+        manifest = pc.PackedManifestIdentity.model_validate(raw)
+    except ValueError as e:
+        raise ReleaseError(f"Invalid descriptor package manifest for '{match['name']}': {e}") from e
+    if manifest.name != descriptor.name or manifest.version != match["version"]:
+        raise ReleaseError(f"Tag version/name differs from descriptor workspace for '{match['name']}'")
+    if descriptor.contract.name != descriptor.name:
+        raise ReleaseError(f"Descriptor contract disagrees with package name: '{match['name']}'")
+    return Target(
+        tag=tag, name=manifest.name, version=manifest.version, directory=descriptor.contract.directory
     )
-    if (manifest.name, manifest.version) != (package.name, package.version):
-        raise ReleaseError(f"Workspace directory disagrees with contract for '{package.name}'")
-    return Target(tag=tag, name=package.name, version=package.version, directory=contract.directory)
+
+
+def release_workspace(repo: Path, descriptor: rd.ReleaseDescriptor) -> Path:
+    """Resolve a registered workspace and require its package manifest.
+
+    Parameters:
+        repo: Repository root.
+        descriptor: Package release data.
+
+    Returns:
+        Path: Existing package workspace within ``repo``.
+
+    Raises:
+        ReleaseError: If the descriptor workspace is unsafe or incomplete.
+    """
+    try:
+        workspace = rd.resolve_workspace(repo, descriptor)
+    except ValueError as e:
+        raise ReleaseError(str(e)) from e
+    if not workspace.is_dir() or not (workspace / "package.json").is_file():
+        raise ReleaseError(f"Release workspace is not a package: '{descriptor.workspace}'")
+    return workspace
+
+
+def native_matches(workspace: Path, descriptor: rd.ReleaseDescriptor) -> tuple[Path, ...]:
+    """Expand descriptor-native artifacts without allowing path traversal.
+
+    Parameters:
+        workspace: Validated package source directory.
+        descriptor: Package release data.
+
+    Returns:
+        tuple[Path, ...]: Required regular files in deterministic order.
+
+    Raises:
+        ReleaseError: If a native-artifact pattern is unsafe or has no files.
+    """
+    matches: list[Path] = []
+    for pattern in descriptor.native_artifacts:
+        if pattern.is_absolute() or any(part in {"", ".", ".."} for part in pattern.parts):
+            raise ReleaseError(f"Release descriptor has unsafe native artifact: '{pattern}'")
+        found = sorted(path for path in workspace.glob(pattern.as_posix()) if path.is_file())
+        if not found:
+            raise ReleaseError(f"Missing native artifact: '{pattern}'")
+        matches.extend(found)
+    return tuple(matches)
+
+
+def validate_native_sources(workspace: Path, descriptor: rd.ReleaseDescriptor) -> None:
+    """Require every descriptor-native artifact before packing.
+
+    Parameters:
+        workspace: Validated package source directory.
+        descriptor: Package release data.
+
+    Returns:
+        None: Required source artifacts exist.
+    """
+    native_matches(workspace, descriptor)
+
+
+def validate_native_tarball(tarball: Path, descriptor: rd.ReleaseDescriptor) -> None:
+    """Require descriptor-native artifacts in the accepted packed bytes.
+
+    Parameters:
+        tarball: One npm package tarball.
+        descriptor: Package release data.
+
+    Returns:
+        None: Required native files are present beneath npm's ``package/`` root.
+
+    Raises:
+        ReleaseError: If packed bytes omit a required native artifact.
+    """
+    if not descriptor.native_artifacts:
+        return
+    with tarfile.open(tarball, "r:gz") as archive:
+        entries = {member.name for member in archive.getmembers() if member.isfile()}
+    for pattern in descriptor.native_artifacts:
+        expression = re.compile("^package/" + re.escape(pattern.as_posix()).replace(r"\*", "[^/]*") + "$")
+        if not any(expression.fullmatch(entry) for entry in entries):
+            raise ReleaseError(f"Packed tarball omits native artifact: '{pattern}'")
 
 
 def registry_dist(repo: Path, target: Target) -> Distribution | None:
@@ -340,25 +448,29 @@ def verify(repo: Path, target: Target, output: Path) -> Identity:
     """
     if output.exists() or output.is_relative_to(repo):
         raise ReleaseError(f"Artifact directory must be new and outside the checkout: '{output}'")
-    LOGGER.info(command(repo, "npm", "ci", "--ignore-scripts"))
-    LOGGER.info(command(repo, "npm", "run", "check", "--workspace", target.name, timeout=1200))
+    descriptor = descriptor_for(target)
+    for verify_command in descriptor.verify_commands:
+        LOGGER.info(command(repo, verify_command[0], *verify_command[1:], timeout=1200))
+    workspace = release_workspace(repo, descriptor)
+    validate_native_sources(workspace, descriptor)
     output.mkdir(parents=True)
-    contract = next(c for c in CONTRACTS if c.name == target.name)
+    contract = descriptor.contract
     with tempfile.TemporaryDirectory(prefix="npm-release-") as temporary:
         work = Path(temporary)
         sandbox = pc.Sandbox(work / "pack", pc.locate_tools())
-        artifact = pc.pack(contract, output, sandbox, repo / "packages" / target.directory)
+        artifact = pc.pack(contract, output, sandbox, workspace)
         if artifact.version != target.version:
             raise ReleaseError("Packed version differs from release tag")
+        validate_native_tarball(artifact.path, descriptor)
         supplied = {target.directory: artifact.path}
         stock = work / "stock"
         evidence: dict[str, str] = {}
-        if contract in pc.CONTRACTS:
+        if "stock" in descriptor.contract_gates:
             gate = work / "standalone"
             gate.mkdir()
             report = pc.run_gate(gate, stock, [target.directory], supplied)
             evidence["stock_contract"] = report.model_dump_json()
-        if contract in (fork.DEV_TOOLS_CONTRACT, pc.PRESET_CONTRACT):
+        if "fork" in descriptor.contract_gates:
             gate = work / "fork-contract"
             gate.mkdir()
             report_fork = fork.run_fork_gate(gate, stock, repo, supplied)
@@ -396,8 +508,9 @@ def check_artifact(repo: Path, tag: str, output: Path) -> Identity:
         raise ReleaseError("Artifact target differs from release tag")
     if identity.commit != command(repo, "git", "rev-parse", "HEAD"):
         raise ReleaseError("Artifact source commit differs from checkout")
-    contract = next(c for c in CONTRACTS if c.name == identity.target.name)
-    artifact = pc.load_tarball(contract, output / identity.tarball)
+    descriptor = descriptor_for(identity.target)
+    artifact = pc.load_tarball(descriptor.contract, output / identity.tarball)
+    validate_native_tarball(artifact.path, descriptor)
     checksum = f"{identity.sha256}  {identity.tarball}\n"
     if (
         (output / "SHA256SUMS").read_text() != checksum
@@ -485,16 +598,22 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
 
 
 def verify_signatures(identity: Identity) -> None:
-    """Delegate registry signature and Sigstore attestation verification to npm in an isolated project.
+    """Use npm to verify the release subject even when it has runtime dependencies.
+
+    The ordinary install keeps the dependency closure intact and proves the selected
+    lock entry has the expected version and integrity. A second, subject-only audit
+    project copies only that installed package and its exact lock entry. npm then
+    verifies one named package rather than an aggregate which a dependency could
+    satisfy. Provenance subject/source binding remains a separate DSSE check.
 
     Parameters:
-        identity (Identity): Exact released version and verified tarball integrity.
+        identity: Exact released version and verified tarball integrity.
 
     Returns:
-        None: Only after npm reports both verified signatures and verified attestations.
+        None: npm has verified the selected package signature and attestation.
 
     Raises:
-        ReleaseError: If the installed tree or npm's verification report is incomplete.
+        ReleaseError: If the installed subject or npm verification report is incomplete.
         subprocess.CalledProcessError: If npm installation or cryptographic verification fails.
     """
     with tempfile.TemporaryDirectory(prefix="npm-signatures-") as temporary:
@@ -514,17 +633,50 @@ def verify_signatures(identity: Identity) -> None:
                 "--registry=https://registry.npmjs.org",
             )
         )
-        # Owned packages have no runtime dependencies. With peers suppressed, a one-package tree
-        # makes npm's verified counts unambiguously about the selected release, not a dependency.
-        lock = pc.read_lockfile(project / "package-lock.json")
+        lock_path = project / "package-lock.json"
+        lock = pc.read_lockfile(lock_path)
         key = f"node_modules/{identity.target.name}"
-        if set(lock.packages) != {"", key}:
-            raise ReleaseError("Signature audit must install only the released package")
-        installed = lock.packages[key]
-        if installed.version != identity.target.version or installed.integrity != identity.integrity:
+        installed = lock.packages.get(key)
+        if (
+            installed is None
+            or installed.version != identity.target.version
+            or installed.integrity != identity.integrity
+        ):
             raise ReleaseError("Signature audit installed bytes differ from the verified tarball")
+        raw_lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        raw_entry = raw_lock.get("packages", {}).get(key) if isinstance(raw_lock, dict) else None
+        if not isinstance(raw_entry, dict):
+            raise ReleaseError("Signature audit lock lacks the selected package entry")
+        subject = project / "subject"
+        package = subject / key
+        package.parent.mkdir(parents=True)
+        shutil.copytree(project / key, package)
+        (subject / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "release-signature-subject",
+                    "private": True,
+                    "dependencies": {identity.target.name: identity.target.version},
+                }
+            )
+            + "\n"
+        )
+        (subject / "package-lock.json").write_text(
+            json.dumps(
+                {
+                    "name": "release-signature-subject",
+                    "lockfileVersion": 3,
+                    "requires": True,
+                    "packages": {
+                        "": {"dependencies": {identity.target.name: identity.target.version}},
+                        key: raw_entry,
+                    },
+                }
+            )
+            + "\n"
+        )
         report = command(
-            project,
+            subject,
             "npm",
             "audit",
             "signatures",
@@ -535,9 +687,7 @@ def verify_signatures(identity: Identity) -> None:
         LOGGER.info(report)
         required = {"1 package has a verified registry signature", "1 package has a verified attestation"}
         if not required <= set(report.splitlines()):
-            raise ReleaseError(
-                "npm must report verified registry signatures AND attestations for the release"
-            )
+            raise ReleaseError("npm must verify the selected release signature AND attestation")
 
 
 def fetch_attestations(target: Target) -> bytes:
@@ -638,7 +788,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.stage == "preflight":
             target = preflight(repo, args.tag)
-            emit_outputs(workspace=target.name, directory=target.directory)
+            descriptor = descriptor_for(target)
+            emit_outputs(
+                workspace=target.name,
+                directory=target.directory,
+                needs_fork_contract=str("fork" in descriptor.contract_gates).lower(),
+            )
             return 0
         if args.artifact_dir is None:
             raise ReleaseError("This stage requires `--artifact-dir`")

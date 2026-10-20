@@ -10,7 +10,8 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import npm_release as nr
 import package_contracts as pc
+import release_descriptors as rd
 
 TAG = "@nredd/pi-session-kit@1.2.3"
 
@@ -109,24 +111,43 @@ def test_resolve_rejects_bad_tags(repo: Path, tag: str) -> None:
         nr.resolve_target(repo, tag)
 
 
-def test_private_and_duplicate_names_refused(repo: Path) -> None:
-    """Private or ambiguous workspace identities must never be publishable.
+def test_private_descriptor_workspace_is_refused(repo: Path) -> None:
+    """A descriptor cannot publish a package explicitly marked private.
 
     Parameters:
-        repo (Path): Test repository.
+        repo: Disposable descriptor repository.
 
     Returns:
-        None: Both unsafe workspace shapes are refused.
+        None: The package identity is refused.
     """
     path = repo / "packages/session-kit/package.json"
     value = json.loads(path.read_text())
     path.write_text(json.dumps(value | {"private": True}))
-    with pytest.raises(nr.ReleaseError, match="public owned"):
+    with pytest.raises(nr.ReleaseError, match="public descriptor"):
         nr.resolve_target(repo, TAG)
-    path.write_text(json.dumps(value))
-    (repo / "packages/preset/package.json").write_text(json.dumps(value))
-    with pytest.raises(nr.ReleaseError, match="public owned"):
+
+
+def test_descriptor_rejects_workspace_escape_and_missing_native_artifact(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Descriptor paths and declared native package bytes fail closed before release work.
+
+    Parameters:
+        repo: Disposable descriptor repository.
+        monkeypatch: Replaces the immutable descriptor registry for this test only.
+
+    Returns:
+        None: Escapes and absent native helper patterns are refused.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    outside = replace(descriptor, workspace=PurePosixPath("../outside"))
+    monkeypatch.setattr(rd, "DESCRIPTORS", (outside,))
+    with pytest.raises(nr.ReleaseError, match="unsafe workspace"):
         nr.resolve_target(repo, TAG)
+    native = replace(descriptor, native_artifacts=(PurePosixPath("prebuilt/macos/*"),))
+    with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
+        nr.validate_native_sources(repo / "packages/session-kit", native)
 
 
 def test_preflight_ancestry_and_existing_version(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -543,6 +564,8 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     assert "package-manager-cache: false" in workflow
     assert workflow.count("npm publish ") == 1
     assert "npm pack" not in workflow  # Packing and release checks live in the tested Python module.
+    assert "needs_fork_contract" in workflow
+    assert "directory == 'preset'" not in workflow
 
 
 @pytest.mark.parametrize("contract", nr.CONTRACTS, ids=lambda c: c.directory)
