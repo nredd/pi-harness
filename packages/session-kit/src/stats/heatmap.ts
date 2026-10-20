@@ -8,6 +8,10 @@ import { addDays, keyDate, monthName } from "./days.ts";
 
 /** A year: the heatmap shows at least this many weeks whenever the pane fits them. */
 export const YEAR_WEEKS = 52;
+/** Two years: older weeks are dead space, so wide panes stop here. */
+export const MAX_WEEKS = 104;
+/** Columns the newest month's name can run past the last week: callers leave this much room. */
+export const MONTH_OVERFLOW = 2;
 export const DAY_LABEL_WIDTH = 4;
 const LEVEL_CHARS = ["·", "░", "▒", "▓", "█"] as const;
 
@@ -50,9 +54,12 @@ export function monthRow(start: string, weeks: number): string {
 	return row.join("").trimEnd();
 }
 
-/** How many week columns fit `width`: one per column after the day labels, so wider shows more history. */
+/**
+ * How many week columns fit `width`: one per column after the day labels and the room the newest
+ * month's name may run into, up to `MAX_WEEKS`.
+ */
 export function weeksFor(width: number): number {
-	return Math.max(1, width - DAY_LABEL_WIDTH);
+	return Math.min(MAX_WEEKS, Math.max(1, width - DAY_LABEL_WIDTH - MONTH_OVERFLOW));
 }
 
 /**

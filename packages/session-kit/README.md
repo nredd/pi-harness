@@ -96,21 +96,35 @@ non-triggering display message. The overlay is TUI-only and works in Plan mode.
 `/stats` is Claude Code's `/stats` pane over fresh local sessions plus imported machine snapshots,
 split by provider and model. It NEVER performs network I/O. Machine coverage and the last successful
 remote import are shown; unsynced machines show `local-only` / `never synced`. Invalid or missing
-snapshots retain last-good data and show `incomplete coverage`. Overview: an activity heatmap (one column per week), headline numbers (favorite model, total tokens,
-sessions, longest session, active days, streaks, cache tokens, notional cost) and the token chart.
-Models: the chart, then every model grouped under its provider with in/out/cache/cost, two-up from
-80 columns. Tab switches tabs, `r` cycles All / 7d / 30d / 5h / 24h (default All), `m`/`M` cycle the filter
-(All, each provider, each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
+snapshots retain last-good data and show `incomplete coverage`.
+
+Pinned header: tabs and the coverage note, then the date ranges and the model filter, then a rule.
+Overview: an activity heatmap (one column per week) with the headline numbers (favorite model,
+total tokens, sessions, longest session, active days, streaks, cache tokens, notional cost) beside
+it from about 105 columns and under it below that, then the token chart. Models: the chart, then every
+model grouped under its provider. From about 100 columns that is a table (tokens, share, in, out, cache
+read, cache write, notional cost; a subtotal line per provider), else three-line cards. Tab switches
+tabs, `r` cycles All / 7d / 30d / 5h / 24h (default All), `m`/`M` cycle the filter (All, each provider,
+each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
 
 - The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All, else the top
   three models. Where lines overlap they merge into junctions (`┴┬├┤┼`) so every line stays
   connected; the larger series keeps the colour. Line colours start at the theme's `accent` hue,
   saturated, with hues spread evenly over the lines drawn (two providers get opposite hues), so
-  muted themes still separate them. The heatmap and the chart span 75% of the pane, with the same right edge; the heatmap shows as
-  many weeks as fit, never less than a year when the pane allows. Days sum into 1/2/3/7/14/30-day buckets (longer
-  when needed) so the range fits the width; short ranges are interpolated, not stepped. Y ticks land
-  on round values with little headroom. Height follows the pane in whole tick steps (5 to 40 rows):
-  Overview grows the chart into the rows it has left, Models gives it about half.
+  muted themes still separate them. The title row carries the legend on its right (it wraps under the
+  title on narrow panes). Every block spans the whole pane, except the heatmap, which shows as many
+  weeks as fit up to two years. Days sum into 1/2/3/7/14/30-day buckets (longer when needed) so the
+  range fits the width; short ranges are interpolated, not stepped. Y ticks land on round values with
+  little headroom. Height follows the pane in whole tick steps (5 to 40 rows): Overview grows the chart
+  into the rows it has left, Models gives it what a short list leaves, at least half.
+- X axis: a baseline with a mark under every tick, labels centred on their bucket's column (the first and
+  last clamp to the plot edges). Ticks are evenly spaced, at most 13, never overlap and are never cut; the
+  finest set whose labels fit wins, so a wider pane gets more of them. 5h and 24h label hours on the clock
+  (`09:00`, or `9a` / `12p` when narrow; every hour, 2, 3, 4, 6, 12 or 24 hours apart) with a row of dates
+  under the first bucket and every midnight. Day buckets: a week of single days gets `Wed 7` (or `Wed`),
+  longer ranges get dates on every day, 2 or 3 days, every Monday or every other Monday (counted back from
+  today for multi-day buckets), then month names, quarters, half years and years, with `'26` only where the
+  ticks span more than one year. A pane too narrow for any label draws the baseline alone.
 - Rolling 5h/24h use the original call timestamps in zero-filled one-hour UTC buckets, with
   partial edges labeled. Labels use viewer-local time and UTC offsets, including repeated DST
   hours. The same rolling filter feeds chart/model/overview totals; future calls are ignored in
