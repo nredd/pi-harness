@@ -12,7 +12,6 @@ import {
 	selectFilter,
 	selectTotal,
 	start,
-	widestHeatmapRow,
 } from "./stats-support.ts";
 import { RESIZES, TerminalFixture, WIDTHS } from "./support.ts";
 
@@ -38,7 +37,7 @@ it.each(WIDTHS)(
 		await fixture.open("/stats");
 		let shown = layout(fixture);
 		expect(shown).toContain("Less ░ ▒ ▓ █ More");
-		expect(shown).toContain("Favorite model: anthropic/claude-opus-5-5");
+		expect(shown).toMatch(/Favorite model +anthropic\/claude-opus-5-5/);
 		for (const excluded of ["unreadable", "faux", "router"]) expect(shown).not.toContain(excluded);
 		await fixture.key("j".repeat(30));
 		chart(layout(fixture));
@@ -116,14 +115,14 @@ it(
 				expect(layout(fixture)).toContain("• anthropic ");
 			}
 			const rows = fixture.requireHost().viewport();
-			const plot = rows.filter((row) => "┤│┼".includes(row[AXIS_COLUMN] ?? " "));
+			const plot = rows.filter((row) => "┤│".includes(row[AXIS_COLUMN] ?? " "));
 			expect(plot.length, rows.join("\n")).toBeGreaterThanOrEqual(6);
 			expect(danglingPorts(plot.map((row) => row.slice(AXIS_COLUMN + 1))), tab).toEqual([]);
 			if (tab === "Overview") {
-				expect(plot).toHaveLength(11);
-				const legend = rows.findIndex((row) => row.includes("● anthropic"));
-				expect(legend).toBeGreaterThan(-1);
-				expect(rows.slice(legend + 1, -1).filter((row) => !row.trim()).length).toBeLessThan(5);
+				expect(plot).toHaveLength(16);
+				const caption = rows.findIndex((row) => row.includes("total: peak"));
+				expect(caption).toBeGreaterThan(-1);
+				expect(rows.slice(caption + 1, -1).filter((row) => !row.trim()).length).toBeLessThan(5);
 			}
 		}
 		await fixture.close();
@@ -171,7 +170,7 @@ async function hourlyTabs(fixture: TerminalFixture): Promise<void> {
 	layout(fixture);
 	await fixture.key("\t");
 	await fixture.key("k".repeat(60));
-	expect(layout(fixture)).toContain("Total tokens:");
+	expect(layout(fixture)).toMatch(/Total tokens +\d/);
 }
 
 it.each(WIDTHS)(
@@ -181,7 +180,7 @@ it.each(WIDTHS)(
 		await start(fixture, width);
 		await fixture.open("/stats");
 		const shown = layout(fixture);
-		expect(shown).toMatch(/Total tokens: 546\b/);
+		expect(shown).toMatch(/Total tokens +546\b/);
 		expect(shown).toMatch(/local.only|never.synced/i);
 		for (const [total, anthropic, codex] of [
 			[78, 26, 52],
@@ -191,8 +190,8 @@ it.each(WIDTHS)(
 			if (total === undefined) throw new Error("Missing range total");
 			await selectTotal(fixture, total);
 			if (total !== 546) await hourlyTabs(fixture);
-			expect(await selectFilter(fixture, "anthropic")).toMatch(new RegExp(`Total tokens: ${anthropic}\\b`));
-			expect(await selectFilter(fixture, "openai-codex")).toMatch(new RegExp(`Total tokens: ${codex}\\b`));
+			expect(await selectFilter(fixture, "anthropic")).toMatch(new RegExp(`Total tokens +${anthropic}\\b`));
+			expect(await selectFilter(fixture, "openai-codex")).toMatch(new RegExp(`Total tokens +${codex}\\b`));
 			await selectFilter(fixture, "All models");
 		}
 		await fixture.close("\x1b");
@@ -201,19 +200,15 @@ it.each(WIDTHS)(
 );
 
 it(
-	"chart matches heatmap extent with contrasting providers",
+	"chart spans the pane with contrasting providers",
 	statsTest(async (fixture) => {
 		seed(fixture);
 		await start(fixture, 130, 38);
 		await fixture.open("/stats");
 		const host = fixture.requireHost();
 		const rows = host.viewport();
-		const weekday = widestHeatmapRow(rows);
-		const plot = rows.filter((row) => "┤│┼".includes(row[AXIS_COLUMN] ?? " "));
-		const widest = Math.max(...plot.map((row) => row.length));
-		expect(weekday.length - 1).toBe(Math.round(0.75 * (host.terminal.columns - 1)));
-		expect(widest).toBeLessThanOrEqual(weekday.length);
-		expect(widest).toBeGreaterThanOrEqual(weekday.length - 1);
+		const baseline = rows.find((row) => row[AXIS_COLUMN] === "└") ?? "";
+		expect(baseline.length).toBe(host.terminal.columns);
 		const legend = rows.findIndex((row) => row.includes("anthropic") && row.includes("●"));
 		expect(legend).toBeGreaterThan(-1);
 		const bullets = host.terminal.getStyledLine(legend).filter((cell) => cell.text === "●");
