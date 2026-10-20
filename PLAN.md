@@ -26,14 +26,14 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 - `nredd/pi` main `bd6444a`; released selection is `v1.3.0-nredd.6` at `9351a78` on `nredd/v1.3.0`.
 - `nredd/pi-subagents` has no main; master `927cf03`. Released selection is `v0.22.0-nredd.5` at `526fa2d` (nredd/pi-subagents#7: user skill roots follow symlinks), rebased onto tintinweb master `ca93a524`, on `nredd/v0.22.0-ca93a52`.
 - `nredd/pi-plan-mode` main `cb9b7c1`; default branch remains `nredd/v0.59.2` at `d91bb2b`. Released selection is `v0.59.3-nredd.1` at `4c2bfc3` on `nredd/v0.59.3`.
-- `nredd/rpiv-todo` main `0f46ed9`; released selection is `v2.13.9-nredd.1` at `3c62a0b`.
+- `nredd/rpiv-todo` main `0f46ed9`; released selection is `v2.13.9-nredd.2` at `9a4e2e8` (nredd/rpiv-todo#2: standalone suite, live-row refresh).
 - Archived on GitHub: `nredd/pi-dev-tools`, `nredd/pi-session-kit`, `nredd/pi-subscription-router`, `nredd/pi-harness-benchmark`, `nredd/pi-harness-e2e`. Their open follow-ups moved to dotfiles issues [here](https://github.com/nredd/dotfiles/issues). Do not revive standalone harness ownership.
 - `~/code/pi-harness-builds/` holds historical evidence and pinned tools, not source ownership. Read `~/.pi/agent/README.md` before changing Pi config or pins.
 
 Live selection / promotion state:
 
 - Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selected `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`; #16 selected `@nredd/pi-session-kit@0.5.0`. Dotfiles #17 selected pi-subagents `v0.22.0-nredd.5` after #55's four `stack` jobs passed.
-- Compare `integration/stacks/personal.json` with dotfiles `origin/main`'s `third_party/pi-agent-settings.base.json`; they select the same twelve package sources, including pi-subagents `v0.22.0-nredd.5`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
+- Compare `integration/stacks/personal.json` with dotfiles `origin/main`'s `third_party/pi-agent-settings.base.json`; they select the same twelve package sources once dotfiles#19 promotes rpiv-todo `v2.13.9-nredd.2`; until then dotfiles still pins `v2.13.9-nredd.1`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
 - Exact third-party npm pins: `pi-web-access@0.36.0`, `pi-deferred-context-engine@0.5.0`, `@quintinshaw/pi-dynamic-workflows@3.14.0`, `pi-memory@0.4.2`.
 - Other fork pins: `pi-claude-auth v0.1.3-nredd.1`, `pi-computer-use v0.5.1-nredd.2`. The stack installs but never loads computer-use in headless CI.
 - Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, promoted by dotfiles#14), `@nredd/pi-session-kit@0.5.0` (gated by #53 `stack`, promoted by dotfiles#16). preset carries unreleased changes; cut it through `publish.yml` when needed.
@@ -42,11 +42,11 @@ Live selection / promotion state:
 Verification layers now implemented:
 
 - Package-native Vitest + pinned Bun suites own package behavior, including interactive host / `VirtualTerminal` tests and injectable clocks.
-- `integration/inprocess/` owns A-stack tests with real extension factories and one host identity. It also hosts the four single-fork rpiv-todo B rows; that is not a claim that the split fork's native suite runs.
+- `integration/inprocess/` owns A-stack tests with real extension factories and one host identity. It also hosts the four single-fork rpiv-todo B rows; the split fork's own suite runs separately in `forks.yml`.
 - `.github/workflows/forks.yml` runs applicable full fork suites. Before tagging a fork, use a temporary CI probe PR selecting the candidate Gitlink, fetch its SHA for reviews, wait for full fork CI, then close the probe without merging. Receipts: #37, #39.
 - `contracts` owns packed artifact identity, installation/discovery/trust and stock-host compatibility. See `docs/package-contracts.md`; do not confuse it with assembled-stack coverage.
 - `stack` D/E jobs use a formula-shaped released Node binary plus explicit `integration/stacks/personal.json` / `integration/stacks/local.json` in throwaway agent dirs, on both OSes. No chezmoi, Brewfile or live install input. D owns process boundaries; E owns the real tmux resize seam.
-- Bun standalone D/E is NOT RUN: nredd.6 has no standalone asset. Package-native Bun passes are not standalone evidence.
+- Bun standalone D/E runs in CI: the `stack (..., personal)` jobs build it from the Gitlinked core and run both stacks on it on darwin-arm64 and linux-x64 (#56); seven auth-interception cases are explicit skips (adapter #14). linux-arm64 is NOT RUN.
 - Bench F is visibly NOT RUN until a quiet runner exists. G remains explicit live-provider opt-in, never CI.
 - `pi-profile doctor` belongs to dotfiles, checks machine-specific render/pins/install consistency, and runs warn-only after apply. It is not a package gate.
 - `docs/verification-rebuild.md` is the destination ledger. No unported non-boundary Python scenarios remain; old progress paragraphs retain their historical port-base context.
@@ -85,18 +85,17 @@ Historical, not the current deployment inventory:
 1. DONE -- export the core session harness and interactive/terminal testing APIs. Parent #18, #19, #28; fork nredd/pi#4, #5, #6. Selected core nredd.6; nredd.5 was released but never selected after full-suite regressions.
 2. DONE -- audit each scenario at its smallest owning boundary. Ledger #17, finalized by #45. Migration inventory: 191 functions -> 20 real-process survivors; the new fatal-startup boundary adds one, for 21 D/E/F/G functions. No non-boundary scenario remains unported.
 3. DONE -- native package, A-stack and fork ports. #20, #22, #23, #26, #27, #31, #32, #33, #36, #40, #41, #42, #43, #45. Process-output regression fixed by #38.
-4. DONE -- explicit assembled-stack gate without chezmoi. #30, host-sleep fix #34. Formula-shaped Node release, both stacks/OSes, nine D functions and one E seam. Standalone Bun and F remain NOT RUN, not hidden passes.
+4. DONE -- explicit assembled-stack gate without chezmoi. #30, host-sleep fix #34. Formula-shaped Node release, both stacks/OSes, nine D functions and one E seam; the Bun standalone runs the same scenarios since #56. F remains NOT RUN, not a hidden pass.
 5. DONE -- hosted owned/contracts/forks/stack gates and OIDC publication. #21, #30, #35; first version/release #44, registry-wait fix #46. See `docs/ci.md` for protections and the one fresh whole-job rerun policy. Bench provisioning and review/promotion automation remain deferred.
 6. DONE -- archive all five standalone repos after the replacement gate landed. GitHub reports `archived: true` for each; final archive-pointer heads: dev-tools `91656c2`, session-kit `75fc5a6`, subscription-router `eaee3ed`, benchmark `d4b9896`, e2e `5d078a7`. Replacement PR receipts: #21, #30; follow-ups now in dotfiles. GitHub archival is a repository operation, not a pi-harness PR; local checkout deletion is not assumed.
 7. DONE -- machine-specific checks moved to dotfiles `pi-profile doctor` and its apply hook/runbook. dotfiles#3, activation pins #4, rebased forks #10; matching harness stack receipt #30. No package gate consumes the owner's config.
 8. OPEN -- resume deferred work on the rebuilt stack:
    - Profiles/model roles and preset footer adoption (migration plan #21); do not replace the live dotfiles footer implicitly.
    - Work-profile switch and enterprise WSL acceptance.
-   - Bun standalone checklist #26-31 and compiled-runtime adapter #58; auth transport interception remains a runtime boundary, native timer tests no longer need preloads.
+   - Bun: linux-arm64 execution and the auth-interception adapter (#14); standalone D/E itself runs in CI since #56.
    - linux-arm64 execution/acceptance, not just cross-building.
    - Quiet bench runner; F stays NOT RUN until provisioned and baselined with evidence.
    - GitHub App / promotion automation #57. Dual review receipts remain PR comments, not CI statuses.
-   - Scratchpad: rpiv-todo `renderCall` reads the live task subject without `context.invalidate()`; a collapsed update/delete row can retain the subject from settlement. Diagnose at the fork seam before changing it.
 
 ## Where to start
 
