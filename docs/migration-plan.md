@@ -36,14 +36,14 @@ Use this structure:
 
 ```text
 packages/                  independently versioned owned plugins and optional preset
-forks/                     six upstream-fork submodules
+forks/                     five upstream-fork submodules
 integration/               existing E2E harness, fixtures, probes, and baselines
 benchmarks/comparison/      historical matched-harness benchmark
 scripts/                   build, release, and chezmoi integration implementation
 docs/                      ownership, development, fork, release, and recovery documentation
 ```
 
-The six submodules are core Pi, pi-subagents, pi-plan-mode, rpiv-todo, pi-claude-auth, and pi-computer-use. Preserve their upstream relationships and native build systems. Gitlinks select source revisions; bootstrap must refuse destructive updates to dirty fork checkouts. Fork commits must be published before parent releases reference them.
+The five submodules are core Pi, pi-subagents, pi-plan-mode, rpiv-todo and pi-computer-use. Preserve their upstream relationships and native build systems. Gitlinks select source revisions; bootstrap must refuse destructive updates to dirty fork checkouts. Fork commits must be published before parent releases reference them.
 
 Use npm workspaces for owned TypeScript packages, uv for Python projects, and a root Makefile as the development entrypoint. Preserve separate fork lockfiles and necessary npm/pnpm/native tooling. Pin the initially validated toolchain rather than combining consolidation with unrelated tool upgrades. Do not introduce Nx, Turborepo, a container requirement, or a new package-manager migration.
 
