@@ -122,7 +122,7 @@ export async function isolateStackHome(): Promise<{ root: string; cleanup(): Pro
 
 /**
  * Keep the real web/memory entries inert before either parent imports or child discovery.
- * Web 0.36.0 registers locally; session_start only resets/restores local caches. Eager
+ * Web 0.43.0 registers locally; session_start only resets/restores local caches. Eager
  * activation preserves every registered schema, cookies/browser UI are disabled, and
  * tests never execute its network tools (a fetch spy in specialists.test.ts enforces this).
  * PI_CODING_AGENT_DIR comes from isolateStackHome; the cache override also stays temporary.

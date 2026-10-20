@@ -2,7 +2,7 @@
   "name": "personal",
   "sources": [
     "npm:@gotgenes/pi-anthropic-auth@3.4.3",
-    "npm:pi-web-access@0.36.0",
+    "npm:pi-web-access@0.43.0",
     "git:github.com/nredd/rpiv-todo@v2.13.9-nredd.2",
     "git:github.com/nredd/pi-subagents@v0.22.0-nredd.5",
     "npm:@nredd/pi-subscription-router@0.4.0",
