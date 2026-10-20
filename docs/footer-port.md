@@ -57,8 +57,8 @@ instead allowlist those packages. No fork change or unsupported fifth resource f
 
 1. Review/merge this branch and pass package/TypeScript and release CI. Configure the existing npm
    package's trusted publisher for this repository's `publish.yml` if not already configured:
-   `0.1.0` was published manually. Existing package ownership is sufficient; publication through
-   this workflow has not yet been demonstrated for preset.
+   `0.1.0` was published manually. DONE: the trusted publisher was already configured, and item 2
+   proved publication through this workflow.
 2. DONE: `@nredd/pi-preset@0.2.0` published through `publish.yml` (run 39506908135) from signed tag
    `@nredd/pi-preset@0.2.0` at `e18831a`; registry integrity equals `identity.json`, with SLSA provenance.
 3. DONE, this PR: the personal stack pins the published filtered preset `0.2.0` first, matching
@@ -76,8 +76,9 @@ do not skip them or substitute local code.
 
 `local.json` stays full/unfiltered to cover the whole preset. It should not mirror the personal
 filter: both selections need CI evidence. The fixture policy sets `packageAgents: false` whenever a stack
-contains a filtered object source (`sandbox.subagents_policy`), matching dotfiles; it is derived
-from content, not the stack name. `scenarios/test_stack.py::test_preset_resource_selection` checks the exact first
+contains a filtered object source (`sandbox.subagents_policy`), derived from content, not the stack
+name. For personal this matches dotfiles, which sets it unconditionally on every profile; `local`
+intentionally keeps package agents to cover the full preset. `scenarios/test_stack.py::test_preset_resource_selection` checks the exact first
 personal entry and actual host resource resolution, with no preset skills/prompts/themes; the
 registered Agent schema must expose only built-in types, not preset specialists. Local must
 expose all preset resources and specialist types. Tool-name goldens do not change (no footer tools).
