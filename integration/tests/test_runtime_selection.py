@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from textwrap import dedent
 from unittest.mock import Mock
 
 import pytest
@@ -27,12 +28,22 @@ STANDALONE_SKIPS = {
     "test_refresh_failure_sends_nothing_and_keeps_credentials[refresh-refusal]",
     "test_refresh_failure_sends_nothing_and_keeps_credentials[logout-relogin]",
 }
-RECORDER = """
-def pytest_collection_finish(session):
-    for item in session.items:
-        state = "SKIP" if item.get_closest_marker("skip") else "RUN"
-        print("ITEM", item.nodeid.split("::", 1)[1], state)
-"""
+RECORDER = dedent(
+    """
+    import pytest
+
+
+    def pytest_collection_finish(session: pytest.Session) -> None:
+        '''Print each collected scenario's id and whether collection marked it skipped.
+
+        Parameters:
+            session (pytest.Session): finished collection.
+        '''
+        for item in session.items:
+            state = "SKIP" if item.get_closest_marker("skip") else "RUN"
+            print("ITEM", item.nodeid.split("::", 1)[1], state)
+    """
+)
 
 
 @pytest.mark.parametrize("runtime", ["node", "bun-standalone"])
