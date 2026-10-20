@@ -16,6 +16,28 @@ agent is doing now, what it finished, and what is queued. The list is rebuilt
 from the conversation itself, so it survives `/reload` and compaction — useful
 on long research → design → implement sessions.
 
+## Fork verification
+
+The split repository runs its own gate, without an rpiv-mono checkout:
+
+```sh
+npm ci --ignore-scripts
+# Put Bun 1.3.14 (see .bun-version) on PATH.
+npm run check
+```
+
+`check` runs Biome, strict TypeScript, all 382 Vitest tests (including every
+upstream test), and two native Bun interactive-row regressions. The test host
+pins core `v1.3.0-nredd.6` release tarballs. Unpublished upstream mock helpers
+are vendored under `.test-support/`; provenance and test counts are documented
+[here](.test-support/README.md). Tests isolate HOME and use faux providers, never
+a pi process or credentials.
+
+Settled update/delete rows with a valid result snapshot retain that historical
+subject. Legacy/error rows without one still read the live store and now call
+`context.invalidate()` on foreground state changes, including replay and eviction.
+Weak subscriptions avoid retaining discarded rows; render probes have no effects.
+
 ## Install
 
 ```sh
