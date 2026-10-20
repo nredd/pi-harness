@@ -20,7 +20,12 @@ The publish job alone requests a short-lived npm OIDC identity.
 | `pi-subagents` | Pinned Bun, `npm ci`, `npm run check` (full Vitest suite and Bun session scenarios) |
 | `pi-plan-mode` | Pinned Bun, `npm ci`, `npm run check` (Bun session scenarios), `npm test` (full Vitest suite) |
 | `pi-claude-auth` | pnpm at the fork's `packageManager`, `pnpm install --frozen-lockfile`, lint, build, test |
-| `rpiv-todo, pi-computer-use (not run)` | a notice: rpiv-todo gates inside an upstream `rpiv-mono` clone, pi-computer-use needs macOS TCC |
+| `rpiv-todo` | Pinned Bun, `npm ci --ignore-scripts`, `npm run check` (Biome, strict TypeScript, full standalone Vitest suite and native Bun settled-row regressions) at the Gitlinked commit |
+| `pi-computer-use (not run)` | a notice: pi-computer-use needs macOS TCC |
+
+The rpiv-todo job requires the fork's standalone-suite patch. This workflow change deliberately
+leaves the Gitlink unchanged; probe the candidate fork commit before advancing it. Until then,
+the old Gitlink has no lockfile/check script and the job fails rather than reporting a false pass.
 
 `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
 
