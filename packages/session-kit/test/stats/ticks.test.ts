@@ -19,6 +19,19 @@ const days = (count: number, size = 1): number[] =>
 	Array.from({ length: count }, (_, i) => keyDate(addDays("2026-10-13", -(count - 1 - i) * size)).getTime());
 
 const HOUR: Timescale = { kind: "hour" };
+/** 25 hourly buckets one UTC hour apart from `iso`, as the hourly series produces them. */
+const utcHours = (iso: string): number[] => Array.from({ length: 25 }, (_, i) => Date.parse(iso) + i * 3_600_000);
+/** Run with the process time zone set to `zone`, restoring it after. */
+function inZone(zone: string, run: () => void): void {
+	const before = process.env.TZ;
+	try {
+		process.env.TZ = zone;
+		run();
+	} finally {
+		if (before === undefined) delete process.env.TZ;
+		else process.env.TZ = before;
+	}
+}
 const labels = (ticks: readonly Tick[]) => ticks.map((t) => t.label);
 
 /** Every property the axis promises, whatever the scale and width. */
@@ -102,6 +115,23 @@ describe("hourly ticks", () => {
 	});
 });
 
+describe("hourly ticks across DST", () => {
+	it.each([
+		["fall back, 01:00 repeats", "2026-11-01T00:00:00Z"],
+		["spring forward, 02:00 skipped", "2026-03-08T00:00:00Z"],
+	])("%s: ticks stay evenly spaced, starting on the clock", (_, iso) =>
+		inZone("America/New_York", () => {
+			const starts = utcHours(iso);
+			for (const width of [60, 100, 160]) {
+				const ticks = chooseTicks(starts, HOUR, width);
+				expect(ticks.length).toBeGreaterThanOrEqual(3);
+				expectWellFormed(ticks, starts.length, width);
+				expect(new Date(starts[ticks[0]?.bucket ?? 0] ?? 0).getMinutes()).toBe(0);
+			}
+		}),
+	);
+});
+
 describe("daily ticks", () => {
 	const day = (size: number): Timescale => ({ kind: "day", size });
 
@@ -173,6 +203,30 @@ describe("daily ticks", () => {
 		}
 	});
 
+	it("a partial first bucket does not claim the next bucket's month", () => {
+		// Weekly buckets after a one-day partial bucket on Jan 31: February starts in bucket 1, not 0,
+		// so a wide pane still gets every month instead of falling back to every other one.
+		const weekly = Array.from({ length: 52 }, (_, i) => keyDate(addDays("2026-02-01", i * 7)).getTime());
+		const starts = [keyDate("2026-01-31").getTime(), ...weekly];
+		const ticks = chooseTicks(starts, { kind: "day", size: 7 }, 160);
+		expect(labels(ticks)).toEqual([
+			"Feb '26",
+			"Mar",
+			"Apr",
+			"May",
+			"Jun",
+			"Jul",
+			"Aug",
+			"Sep",
+			"Oct",
+			"Nov",
+			"Dec",
+			"Jan '27",
+		]);
+		expect(ticks[0]?.bucket).toBe(1);
+		expectWellFormed(ticks, starts.length, 160, false);
+	});
+
 	it("handles one bucket and one that cannot fit a label", () => {
 		expect(labels(chooseTicks(days(1), day(1), 40))).toEqual(["Oct 13"]);
 		expect(chooseTicks(days(1), day(1), 4)).toEqual([]);
@@ -202,6 +256,29 @@ describe("timeAxis", () => {
 		expect(timeAxis(hours(6), HOUR, 60, 8).lines[2]?.trim()).toBe("Oct 13");
 		expect(timeAxis(days(7), { kind: "day", size: 1 }, 60, 8).lines).toHaveLength(2);
 	});
+
+	it("dates every new local day in half-hour zones, where no bucket starts at midnight", () =>
+		inZone("Asia/Kolkata", () => {
+			// 05:30 Oct 12 to 05:30 Oct 13 IST: the day changes at the 00:30 bucket.
+			const dates = timeAxis(utcHours("2026-10-12T00:00:00Z"), HOUR, 100, 8).lines[2] ?? "";
+			expect(dates).toContain("Oct 12");
+			expect(dates).toContain("Oct 13");
+		}));
+
+	it("keeps every date whole and apart at any width, dropping the ones that do not fit", () =>
+		inZone("America/New_York", () => {
+			// 23:00 Mar 7 to 01:00 Mar 9 EDT: two day changes across the spring-forward day.
+			const starts = utcHours("2026-03-08T04:00:00Z");
+			for (let width = 4; width <= 120; width++) {
+				const dates = timeAxis(starts, HOUR, width, 8).lines[2]?.slice(8) ?? "";
+				expect(dates.length, `${width}`).toBeLessThanOrEqual(width);
+				expect(dates.trim().split(/ {2,}/).filter(Boolean), `${width}`).toEqual(dates.match(/Mar \d+/g) ?? []);
+			}
+			// Mar 8 starts one bucket in, so it wins over the first bucket's Mar 7.
+			const wide = timeAxis(starts, HOUR, 100, 8).lines[2] ?? "";
+			expect(wide).toMatch(/Mar 8 .*Mar 9/);
+			expect(wide).not.toContain("Mar 7");
+		}));
 
 	it("is just a baseline when nothing fits", () => {
 		const axis = timeAxis(hours(6), HOUR, 3, 8);
