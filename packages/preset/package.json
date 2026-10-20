@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-preset",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publishConfig": {"access": "public"},
   "description": "Optional, opinionated Pi preset: specialist agents, reusable workflow skills, expanded footer, themes, and public-safe settings defaults.",
   "author": "nredd",
