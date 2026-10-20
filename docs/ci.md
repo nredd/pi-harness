@@ -24,6 +24,8 @@ The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s
 
 `main` protection remains `strict: true`. Strict means that advancing `main` invalidates a PR's previous green result and requires an update-branch rerun before merge. That cost is intentional for combined-result safety; docs-only bypasses make documentation updates cheaper without weakening it.
 
+<!-- Temporary docs-only CI proof branch: this line is intentionally not retained. -->
+
 `.github/workflows/forks.yml`, when `forks/**`, `.gitmodules` or the workflow changes, plus manual dispatch:
 
 | Job | Runs |
