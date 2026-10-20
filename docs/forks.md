@@ -9,7 +9,7 @@ second list of release pins here.
 | `forks/pi` | `earendil-works/pi` | Core npm workspace, standalone Bun build, native helpers |
 | `forks/pi-subagents` | `tintinweb/pi-subagents` | Fork npm check/test gate |
 | `forks/pi-plan-mode` | `narumiruna/pi-extensions`, `packages/pi-plan-mode` | Standalone vendored build/test harness |
-| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package, upstream monorepo gate |
+| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate in candidate patch |
 | `forks/pi-claude-auth` | `pankajudhas81/pi-claude-auth` | Fork pnpm lint/build/test gate |
 | `forks/pi-computer-use` | `injaneity/pi-computer-use` | Fork tests and native-helper build |
 
@@ -90,9 +90,20 @@ rpiv-todo patch queue:
   persistence marker, so a completed task never rolls back to its approved snapshot; regression covers the
   audit's replay probe. Retain clickable heading, Plan seeding/evidence/reminders, wheel/atomic batches/counts,
   resume collapse/config and the historical-result/replanning fix
-- The package gate runs in an rpiv-mono clone at the release commit with scratch-only Pi 1.1.0 sibling pins
-  (the untouched release graph fails on stock upstream too). The 4 real-session rows stay hosted in
-  `integration/inprocess/todo-*.test.ts`, green on this Gitlink
+- Candidate branch `fix/verification-suite` adds standalone scripts, dev dependencies/lockfile, Vitest config
+  and upstream mock helpers vendored from release `54df50ee`. No upstream assertions change: all 253 stock
+  tests (21 files) run; the selected fork's baseline is 377 tests (26 files), rising to 382 (28 files) with
+  rendering regressions. Biome/strict TypeScript and two native Bun 1.3.14 interactive regressions share
+  `npm run check`; the host pins core `v1.3.0-nredd.6` tarballs like the other forks
+- Invalidate core's cached settled call rows on foreground store changes when they still use the live
+  fallback (legacy/error results without a valid snapshot). Weak subscriptions cover mutations, replay,
+  eviction and foreground switches without polling or probe side effects. Valid historical snapshots stay
+  immutable. Both update/delete regressions use the real interactive harness and VirtualTerminal and fail
+  before the fix on the stale subject
+- `forks.yml` now runs the fork gate at its Gitlink, not a scratch monorepo or the parent stack suite.
+  The Gitlink deliberately remains `v2.13.9-nredd.1` pending the candidate probe; that old commit lacks
+  the standalone gate, so this workflow must land with the eventual probed Gitlink update. The four
+  real Plan/todo rows in `integration/inprocess/plan-todos.test.ts` remain separate stack coverage
 
 Core dependency audit (2026-10-17, `npm audit --omit=dev` on `nredd/pi` `v1.3.0-nredd.3`): the only
 findings are `node-forge` <= 1.4.0 (GHSA-86w9-cpqp-85rv, no patched version published) reached
