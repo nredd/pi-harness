@@ -5,7 +5,7 @@ Current CI scope (2026-10-20):
 - Previously `.github/workflows/ci.yml` ran only the release-tarball Node bundle for D/E, across
   two OSes and two stacks. `owned`'s Bun package/in-process tests were not standalone coverage.
   The release API for `v1.3.0-nredd.6` confirms four npm tarballs and no standalone archive
-- The new `standalone` jobs build Gitlink `9351a7853c96a684442492902cd8805a4c13092f`
+- Each existing `stack (..., personal)` job builds Gitlink `9351a7853c96a684442492902cd8805a4c13092f`
   (`v1.3.0-nredd.6`) using root `.bun-version` (1.3.14); the core has no `.bun-version` file.
   They restore npm release model data, run the official `forks/pi/scripts/build-binaries.sh`
   with `--offline-model-data`, and execute the native archive on macOS ARM64 and Linux x64.
@@ -23,7 +23,7 @@ Current CI scope (2026-10-20):
   packed contracts under standalone, benchmarks, live credentials, REA and desktop/TCC helpers.
   This is a source-build D/E gate, not full Bun acceptance or a published-artifact gate
 - CI results, run IDs and measured runner cost belong in the draft PR; job definitions alone are
-  not evidence that these new runs pass. See [here](ci.md) for the two-job capacity budget
+  not evidence that these new runs pass. See [here](ci.md) for the zero-added-job capacity budget
 
 Historical local evidence below predates the rebuilt integration gate. Do not treat the old
 `pi-harness-e2e` failures or smoke results as execution evidence for the new Gitlink/CI jobs.
