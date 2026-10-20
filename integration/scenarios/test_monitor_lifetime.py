@@ -144,7 +144,8 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[in
                 wait_until(lambda: not alive(tag), "explicit stop to reap descendants")
                 assert not list((sandbox.root / "tmp").glob("pi-monitors-*/*/*.json"))
             else:
-                assert alive(tag), "monitor must exist before graceful EOF"
+                # `monitor_start` returns once `sh` is spawned; its `sleep` children appear asynchronously.
+                wait_until(lambda: bool(alive(tag)), "monitor descendants to start before graceful EOF")
         assert rpc.process.returncode == 0, "".join(rpc.stderr)
     wait_until(lambda: not alive(tag), "shutdown to reap monitor group")
     assert not list((sandbox.root / "tmp").glob("pi-monitors-*/*/*.json"))
@@ -219,7 +220,9 @@ def test_next_session_sweeps_only_dead_owners(
             ]
             assert len(started) == 1, owner.events
             assert not started[0]["isError"], started
-            assert alive(tag), started
+            wait_until(
+                lambda tag=tag: bool(alive(tag)), f"monitor descendants for '{tag}' to start: {started}"
+            )
         wait_until(
             lambda: len(list(shared_tmp.glob("pi-monitors-*/*/*.json"))) == 2,
             f"two owner pidfiles under '{shared_tmp}', current files: {list(shared_tmp.rglob('*.json'))}",
