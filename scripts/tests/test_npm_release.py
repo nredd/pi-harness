@@ -6,11 +6,14 @@ References:
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
-from pathlib import Path
+import tarfile
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -19,8 +22,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import npm_release as nr
 import package_contracts as pc
+import release_descriptors as rd
 
 TAG = "@nredd/pi-session-kit@1.2.3"
+NATIVE_ARTIFACT_CASES = (
+    ("prebuilt/*", "prebuilt/helper", True),
+    ("prebuilt/*", "prebuilt/macos/helper", False),
+    ("prebuilt/**/helper", "prebuilt/helper", True),
+    ("prebuilt/**/helper", "prebuilt/macos/helper", True),
+    ("prebuilt/helper?", "prebuilt/helper1", True),
+    ("prebuilt/helper?", "prebuilt/helper/one", False),
+    ("prebuilt/[mh]elper", "prebuilt/helper", True),
+    ("prebuilt/[mh]elper", "prebuilt/zelper", False),
+)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -81,6 +95,31 @@ def test_resolve_all_owned_names(repo: Path) -> None:
         assert (target.name, target.directory, target.version) == (contract.name, contract.directory, "1.2.3")
 
 
+@pytest.mark.parametrize("packages", [{}, {"@nredd/pi-session-kit": SimpleNamespace(evidence={})}])
+def test_stock_contract_requires_subject_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packages: dict[str, SimpleNamespace]
+) -> None:
+    """A descriptor release fails when its executable gate omits evidence for the subject.
+
+    Parameters:
+        tmp_path (Path): Empty runner scratch directory.
+        monkeypatch (pytest.MonkeyPatch): Replaces the stock runner without starting Pi.
+        packages (dict[str, SimpleNamespace]): Missing or empty synthetic subject evidence.
+
+    Returns:
+        None: The publisher rejects incomplete evidence.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    monkeypatch.setattr(
+        pc,
+        "run_gate",
+        lambda *_args, **_kwargs: SimpleNamespace(packages=packages, model_dump_json=lambda: "{}"),
+    )
+    with pytest.raises(nr.ReleaseError, match=r"subject|empty"):
+        nr.run_stock_contract(tmp_path, tmp_path, descriptor, {"session-kit": tmp_path / "subject.tgz"})
+
+
 @pytest.mark.parametrize(
     "tag",
     [
@@ -109,24 +148,305 @@ def test_resolve_rejects_bad_tags(repo: Path, tag: str) -> None:
         nr.resolve_target(repo, tag)
 
 
-def test_private_and_duplicate_names_refused(repo: Path) -> None:
-    """Private or ambiguous workspace identities must never be publishable.
+def test_private_descriptor_workspace_is_refused(repo: Path) -> None:
+    """A descriptor cannot publish a package explicitly marked private.
 
     Parameters:
-        repo (Path): Test repository.
+        repo: Disposable descriptor repository.
 
     Returns:
-        None: Both unsafe workspace shapes are refused.
+        None: The package identity is refused.
     """
     path = repo / "packages/session-kit/package.json"
     value = json.loads(path.read_text())
     path.write_text(json.dumps(value | {"private": True}))
-    with pytest.raises(nr.ReleaseError, match="public owned"):
+    with pytest.raises(nr.ReleaseError, match="public descriptor"):
         nr.resolve_target(repo, TAG)
-    path.write_text(json.dumps(value))
-    (repo / "packages/preset/package.json").write_text(json.dumps(value))
-    with pytest.raises(nr.ReleaseError, match="public owned"):
+
+
+def test_descriptor_rejects_workspace_escape_and_missing_native_artifact(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Descriptor paths and declared native package bytes fail closed before release work.
+
+    Parameters:
+        repo: Disposable descriptor repository.
+        monkeypatch: Replaces the immutable descriptor registry for this test only.
+
+    Returns:
+        None: Escapes and absent native helper patterns are refused.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    outside = replace(descriptor, workspace=PurePosixPath("../outside"))
+    monkeypatch.setattr(rd, "DESCRIPTORS", (outside,))
+    with pytest.raises(nr.ReleaseError, match="unsafe workspace"):
         nr.resolve_target(repo, TAG)
+    native = replace(descriptor, native_artifacts=(PurePosixPath("prebuilt/**/helper?"),))
+    workspace = repo / "packages/session-kit"
+    helper = workspace / "prebuilt/macos/helper1"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("native helper")
+    nr.validate_native_sources(workspace, native)
+    tarball = repo.parent / "candidate.tgz"
+    with tarfile.open(tarball, "w:gz") as archive:
+        data = b"native helper"
+        member = tarfile.TarInfo("package/prebuilt/macos/helper1")
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    nr.validate_native_tarball(tarball, native)
+    helper.unlink()
+    with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
+        nr.validate_native_sources(workspace, native)
+    with pytest.raises(nr.ReleaseError, match="Packed tarball omits"):
+        nr.validate_native_tarball(
+            tarball, replace(native, native_artifacts=(PurePosixPath("prebuilt/macos/missing"),))
+        )
+
+
+@pytest.mark.parametrize(("pattern", "relative", "expected"), NATIVE_ARTIFACT_CASES)
+def test_native_artifact_patterns_match_full_relative_paths(
+    pattern: str, relative: str, expected: bool
+) -> None:
+    """Native artifact patterns use segment-confined ``PurePosixPath.full_match`` semantics.
+
+    Parameters:
+        pattern (str): Descriptor-native artifact pattern.
+        relative (str): Candidate package-relative path.
+        expected (bool): Expected full-match result.
+
+    Returns:
+        None: The shared matcher accepts exactly the declared paths.
+    """
+    assert nr.matches_native_artifact(PurePosixPath(pattern), PurePosixPath(relative)) is expected
+
+
+@pytest.mark.parametrize(("pattern", "relative", "expected"), NATIVE_ARTIFACT_CASES)
+def test_native_tarball_patterns_match_full_relative_paths(
+    tmp_path: Path, pattern: str, relative: str, expected: bool
+) -> None:
+    """Tarball native-artifact checks use the same full-path glob semantics as source checks.
+
+    Parameters:
+        tmp_path (Path): Disposable tarball directory.
+        pattern (str): Descriptor-native artifact pattern.
+        relative (str): Packed package-relative path.
+        expected (bool): Whether the tarball should satisfy the pattern.
+
+    Returns:
+        None: Matching and non-matching packed paths are distinguished.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    tarball = tmp_path / "candidate.tgz"
+    with tarfile.open(tarball, "w:gz") as archive:
+        data = b"native helper"
+        member = tarfile.TarInfo(f"package/{relative}")
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    native = replace(descriptor, native_artifacts=(PurePosixPath(pattern),))
+    if expected:
+        nr.validate_native_tarball(tarball, native)
+    else:
+        with pytest.raises(nr.ReleaseError, match="Packed tarball omits"):
+            nr.validate_native_tarball(tarball, native)
+
+
+def test_stock_contract_refuses_missing_gate_and_unselected_subject(tmp_path: Path) -> None:
+    """The real release chain rejects bad descriptor gates and supplied subjects before tool setup.
+
+    Parameters:
+        tmp_path (Path): Empty runner scratch directory.
+
+    Returns:
+        None: Neither invalid descriptor reaches stock-Pi discovery.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    with pytest.raises(nr.ReleaseError, match="No executable stock gate"):
+        nr.run_stock_contract(tmp_path, tmp_path, replace(descriptor, stock_gate=None), {})
+    with pytest.raises(pc.ContractError, match="no selected release contract"):
+        nr.run_stock_contract(tmp_path, tmp_path, descriptor, {"wrong": tmp_path / "subject.tgz"})
+
+
+def test_native_matches_skip_external_symlinked_directory(tmp_path: Path) -> None:
+    """Source native-artifact discovery never follows a directory symlink outside its workspace.
+
+    Parameters:
+        tmp_path (Path): Disposable package and external helper root.
+
+    Returns:
+        None: The outside helper cannot satisfy a descriptor artifact requirement.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    workspace = tmp_path / "package"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "helper").write_text("native")
+    (workspace / "prebuilt").symlink_to(outside, target_is_directory=True)
+    native = replace(descriptor, native_artifacts=(PurePosixPath("prebuilt/helper"),))
+    with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
+        nr.validate_native_sources(workspace, native)
+
+
+def test_native_matches_skip_non_symlink_path_resolved_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native-artifact discovery rejects a non-symlink candidate whose resolved path escapes.
+
+    Parameters:
+        tmp_path (Path): Disposable package and external helper root.
+        monkeypatch (pytest.MonkeyPatch): Supplies a traversal-shaped candidate from the workspace walk.
+
+    Returns:
+        None: The resolved outside file cannot satisfy the native-artifact requirement.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    workspace = tmp_path / "package"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.write_text("native")
+    candidate = workspace / "prebuilt" / ".." / ".." / "outside"
+
+    def rglob(path: Path, _pattern: str) -> tuple[Path, ...]:
+        """Return the crafted traversal candidate from this workspace only.
+
+        Parameters:
+            path (Path): Path receiving the recursive-glob call.
+            _pattern (str): Unused glob pattern.
+
+        Returns:
+            tuple[Path, ...]: One non-symlink path resolving outside the workspace.
+        """
+        assert path == workspace
+        return (candidate,)
+
+    native = replace(descriptor, native_artifacts=(PurePosixPath("prebuilt/helper"),))
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "rglob", rglob)
+        with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
+            nr.validate_native_sources(workspace, native)
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [descriptor for descriptor in rd.DESCRIPTORS if descriptor.stock_gate is not None],
+    ids=lambda descriptor: descriptor.contract.directory,
+)
+def test_release_contract_gives_each_stock_descriptor_all_other_siblings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subject: rd.ReleaseDescriptor
+) -> None:
+    """The release path supplies every descriptor peer to each executable stock scenario.
+
+    Parameters:
+        tmp_path (Path): Disposable contract-gate workspace.
+        monkeypatch (pytest.MonkeyPatch): Replaces pack, install and stock-Pi boundaries only.
+        subject (rd.ReleaseDescriptor): Descriptor whose stock scenario is captured.
+
+    Returns:
+        None: Context sibling contracts and sibling-tool rejection remain complete.
+    """
+    tools = pc.Tools(node=Path("/bin/true"), npm=Path("/bin/true"), git=Path("/bin/true"))
+    artifact = pc.PackedArtifact(
+        subject.contract,
+        tmp_path / f"{subject.contract.directory}.tgz",
+        "1.2.3",
+        "sha512-placeholder",
+        "0" * 40,
+        1,
+        ("package.json",),
+    )
+
+    def select(
+        contract: pc.PackageContract, _dest: Path, _sandbox: pc.Sandbox, _supplied: dict[str, Path]
+    ) -> pc.PackedArtifact:
+        """Return the subject artifact without packing or reading a tarball.
+
+        Parameters:
+            contract (pc.PackageContract): Selected contract.
+            _dest (Path): Unused tarball directory.
+            _sandbox (pc.Sandbox): Unused base sandbox.
+            _supplied (dict[str, Path]): Unused supplied-artifact mapping.
+
+        Returns:
+            pc.PackedArtifact: Stub artifact for the selected subject.
+        """
+        assert contract is subject.contract
+        return artifact
+
+    def install(_artifact: pc.PackedArtifact, _sandbox: pc.Sandbox, project: Path) -> Path:
+        """Create a fake installed package directory without invoking npm.
+
+        Parameters:
+            _artifact (pc.PackedArtifact): Unused selected tarball.
+            _sandbox (pc.Sandbox): Unused package sandbox.
+            project (Path): Installation project root.
+
+        Returns:
+            Path: Empty fake installed package directory.
+        """
+        installed = project / "node_modules" / "@nredd" / subject.contract.directory
+        installed.mkdir(parents=True)
+        return installed
+
+    def scenario(ctx: pc.Context) -> pc.ScenarioEvidence:
+        """Capture the real context passed by ``run_gate``.
+
+        Parameters:
+            ctx (pc.Context): Scenario context assembled by the unpatched runner.
+
+        Returns:
+            pc.ScenarioEvidence: Nonempty synthetic evidence.
+        """
+        assert ctx.siblings == tuple(
+            descriptor.contract for descriptor in rd.DESCRIPTORS if descriptor is not subject
+        )
+        return {"tool": "git_status", "untracked": ["fixture"], "failure_path": "substituted"}
+
+    monkeypatch.setattr(pc, "locate_tools", lambda: tools)
+    monkeypatch.setattr(pc, "ensure_stock_pi", lambda *_: tmp_path / "pi")
+    monkeypatch.setattr(pc, "select_artifact", select)
+    monkeypatch.setattr(pc, "audit_tarball", lambda *_: [])
+    monkeypatch.setattr(pc, "install_alone", install)
+    monkeypatch.setattr(
+        pc,
+        "run",
+        lambda args, **_: subprocess.CompletedProcess(args, 0, stdout="v22.0.0\n", stderr=""),
+    )
+    monkeypatch.setattr(
+        pc,
+        "validate_report",
+        lambda _report: SimpleNamespace(
+            packages={subject.name: SimpleNamespace(evidence={"subject": subject.name})}
+        ),
+    )
+    nr.run_stock_contract(
+        tmp_path / "gate",
+        tmp_path / "stock",
+        replace(subject, stock_gate=scenario),
+        {subject.contract.directory: artifact.path},
+    )
+
+
+def test_require_tools_rejects_a_sibling_tool_on_the_release_path() -> None:
+    """A session-kit release refuses dev-tools' ``git_status`` on the isolated package path.
+
+    Returns:
+        None: Sibling tools cannot leak into the subject scenario.
+    """
+    session_kit = next(
+        descriptor.contract for descriptor in rd.DESCRIPTORS if descriptor.name.endswith("session-kit")
+    )
+    dev_tools = next(
+        descriptor.contract for descriptor in rd.DESCRIPTORS if descriptor.name.endswith("dev-tools")
+    )
+    result = pc.PiRun(returncode=0, events=(), stdout="", stderr="")
+    request = pc.RecordedRequest(model="m", roles=(), tools=("monitor_start", "git_status"))
+    with pytest.raises(pc.ContractError, match="sibling tools present"):
+        pc.require_tools(result, session_kit, (dev_tools,), [request])
 
 
 def test_preflight_ancestry_and_existing_version(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -308,7 +628,16 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
         tuple[Path, Identity]: Artifact directory and verified identity.
     """
 
-    def exercise(_work: Path, _stock: Path, only: list[str], supplied: dict[str, Path]) -> SimpleNamespace:
+    def exercise(
+        _work: Path,
+        _stock: Path,
+        only: list[str],
+        supplied: dict[str, Path],
+        *,
+        contracts: tuple[pc.PackageContract, ...],
+        scenarios: dict[str, object],
+        siblings: tuple[pc.PackageContract, ...],
+    ) -> SimpleNamespace:
         """Assert the stock gate receives precisely the already-packed candidate bytes.
 
         Parameters:
@@ -316,6 +645,9 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
             _stock (Path): Unused Pi install directory.
             only (list[str]): Selected package directories.
             supplied (dict[str, Path]): Candidate tarball paths.
+            contracts (tuple[pc.PackageContract, ...]): Selected descriptor contract.
+            scenarios (dict[str, object]): Executable descriptor scenario by directory.
+            siblings (tuple[pc.PackageContract, ...]): Full descriptor peer contract set.
 
         Returns:
             SimpleNamespace: Synthetic gate evidence without running Pi.
@@ -323,7 +655,13 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
         assert only == ["session-kit"]
         assert set(supplied) == {"session-kit"}
         assert supplied["session-kit"].is_file()
-        return SimpleNamespace(model_dump_json=lambda: '{"test": "Pi exercise substituted"}')
+        assert [contract.directory for contract in contracts] == ["session-kit"]
+        assert set(scenarios) == {"session-kit"}
+        assert siblings == tuple(candidate.contract for candidate in rd.DESCRIPTORS)
+        return SimpleNamespace(
+            packages={"@nredd/pi-session-kit": SimpleNamespace(evidence={"subject": "session-kit"})},
+            model_dump_json=lambda: '{"test": "Pi exercise substituted"}',
+        )
 
     monkeypatch.setattr(pc, "run_gate", exercise)
     original_command = nr.command
@@ -543,6 +881,8 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     assert "package-manager-cache: false" in workflow
     assert workflow.count("npm publish ") == 1
     assert "npm pack" not in workflow  # Packing and release checks live in the tested Python module.
+    assert "needs_fork_contract" in workflow
+    assert "directory == 'preset'" not in workflow
 
 
 @pytest.mark.parametrize("contract", nr.CONTRACTS, ids=lambda c: c.directory)
@@ -617,11 +957,43 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
         assert supplied == {contract.directory: candidate[0]}
         assert pc.load_tarball(contract, candidate[0]).version == "1.2.3"
         events.append(kind)
-        return SimpleNamespace(model_dump_json=lambda: '{"test": "Pi substituted"}')
+        return SimpleNamespace(
+            packages={contract.name: SimpleNamespace(evidence={"subject": contract.directory})},
+            model_dump_json=lambda: '{"test": "Pi substituted"}',
+        )
+
+    def stock_gate(
+        _work: Path,
+        _stock: Path,
+        _only: list[str],
+        supplied: dict[str, Path],
+        *,
+        contracts: tuple[pc.PackageContract, ...],
+        scenarios: dict[str, object],
+        siblings: tuple[pc.PackageContract, ...],
+    ) -> SimpleNamespace:
+        """Assert the descriptor passes its contract and executable subject gate.
+
+        Parameters:
+            _work (Path): Unused release scratch directory.
+            _stock (Path): Unused stock Pi directory.
+            _only (list[str]): Selected contract directory.
+            supplied (dict[str, Path]): Packed candidate bytes.
+            contracts (tuple[pc.PackageContract, ...]): Selected release contract.
+            scenarios (dict[str, object]): Selected executable gate by contract directory.
+            siblings (tuple[pc.PackageContract, ...]): All descriptor contracts for context peers.
+
+        Returns:
+            SimpleNamespace: Synthetic per-subject evidence report.
+        """
+        assert contracts == (contract,)
+        assert set(scenarios) == {contract.directory}
+        assert siblings == tuple(candidate.contract for candidate in rd.DESCRIPTORS)
+        return gate("stock", supplied)
 
     monkeypatch.setattr(nr, "command", command)
     monkeypatch.setattr(pc, "pack", pack)
-    monkeypatch.setattr(pc, "run_gate", lambda _w, _s, _only, supplied: gate("stock", supplied))
+    monkeypatch.setattr(pc, "run_gate", stock_gate)
     monkeypatch.setattr(nr.fork, "run_fork_gate", lambda _w, _s, _r, supplied: gate("fork", supplied))
     target = nr.resolve_target(repo, f"{contract.name}@1.2.3")
     nr.verify(repo, target, tmp_path / "candidate")
