@@ -24,7 +24,7 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 - `nredd/dotfiles` main `fea75d5`: machine configuration, activation and doctor. Local checkout `~/code/dotfiles`; chezmoi source `~/.local/share/chezmoi`.
 - `nredd/homebrew-tap` main `66e9289`: core nredd.6 formula, #1.
 - `nredd/pi` main `bd6444a`; released selection is `v1.3.0-nredd.6` at `9351a78` on `nredd/v1.3.0`.
-- `nredd/pi-subagents` has no main; master `927cf03`. Released selection is `v0.22.0-nredd.4` at `a4116d3`, rebased onto tintinweb master `ca93a524`, on `nredd/v0.22.0-ca93a52`.
+- `nredd/pi-subagents` has no main; master `927cf03`. Released selection is `v0.22.0-nredd.5` at `526fa2d` (nredd/pi-subagents#7: user skill roots follow symlinks), rebased onto tintinweb master `ca93a524`, on `nredd/v0.22.0-ca93a52`.
 - `nredd/pi-plan-mode` main `cb9b7c1`; default branch remains `nredd/v0.59.2` at `d91bb2b`. Released selection is `v0.59.3-nredd.1` at `4c2bfc3` on `nredd/v0.59.3`.
 - `nredd/rpiv-todo` main `0f46ed9`; released selection is `v2.13.9-nredd.1` at `3c62a0b`.
 - Archived on GitHub: `nredd/pi-dev-tools`, `nredd/pi-session-kit`, `nredd/pi-subscription-router`, `nredd/pi-harness-benchmark`, `nredd/pi-harness-e2e`. Their open follow-ups moved to dotfiles issues [here](https://github.com/nredd/dotfiles/issues). Do not revive standalone harness ownership.
@@ -32,11 +32,11 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 
 Live selection / promotion state:
 
-- Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selected `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`. PENDING: dotfiles#16 promotes `@nredd/pi-session-kit@0.5.0` after #53's `stack` passes.
-- Compare `integration/stacks/personal.json` with `~/code/dotfiles` main's `third_party/pi-agent-settings.base.json`; they select the same twelve package sources once dotfiles#16 merges; until then dotfiles still pins session-kit `0.4.0`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
+- Tap formula selects core `v1.3.0-nredd.6`. Dotfiles #4 selected it and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selected `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`; #16 selected `@nredd/pi-session-kit@0.5.0`. PENDING: dotfiles#17 promotes pi-subagents `v0.22.0-nredd.5` after #55's `stack` passes.
+- Compare `integration/stacks/personal.json` with `~/code/dotfiles` main's `third_party/pi-agent-settings.base.json`; they select the same twelve package sources once dotfiles#17 merges; until then dotfiles still pins pi-subagents `v0.22.0-nredd.4`. Git/gh verifies the committed selections, not whether a particular machine has applied them.
 - Exact third-party npm pins: `pi-web-access@0.36.0`, `pi-deferred-context-engine@0.5.0`, `@quintinshaw/pi-dynamic-workflows@3.14.0`, `pi-memory@0.4.2`.
 - Other fork pins: `pi-claude-auth v0.1.3-nredd.1`, `pi-computer-use v0.5.1-nredd.2`. The stack installs but never loads computer-use in headless CI.
-- Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, promoted by dotfiles#14), `@nredd/pi-session-kit@0.5.0` (gated by #53 `stack`, dotfiles#16 promotion pending). preset carries unreleased changes; cut it through `publish.yml` when needed.
+- Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, promoted by dotfiles#14), `@nredd/pi-session-kit@0.5.0` (gated by #53 `stack`, promoted by dotfiles#16). preset carries unreleased changes; cut it through `publish.yml` when needed.
 - `@nredd/pi-preset@0.1.0` is published, not adopted live. The live footer remains dotfiles-owned until profiles/preset adoption.
 
 Verification layers now implemented:
