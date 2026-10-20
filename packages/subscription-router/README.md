@@ -1,6 +1,6 @@
 # pi-subscription-router
 
-Published to npm as `@nredd/pi-subscription-router` (public). Each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-subscription-router@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`). `0.4.0` adds `createSubscriptionRouter(options)` (explicit `config` and `usage`, injectable `tracker` and `now`; the default export is unchanged).
+Published to npm as `@nredd/pi-subscription-router` (public). From `0.4.0`, each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-subscription-router@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`); earlier versions were published manually without provenance. `0.4.0` adds `createSubscriptionRouter(options)` (explicit `config` and `usage`, injectable `tracker` and `now`; the default export is unchanged).
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install
 below describes legacy deployment, not installation or candidate verification of this package.
 
