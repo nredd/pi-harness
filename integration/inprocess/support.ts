@@ -197,10 +197,25 @@ function resolveHost(name: string, parent: URL): string {
 }
 
 /** Import the declared real entry, not a copy or a test implementation. */
-async function loadFactory(url: URL): Promise<ExtensionFactory> {
+async function loadFactory(url: URL, resetMemory = false): Promise<ExtensionFactory> {
 	const loaded: unknown = await import(/* @vite-ignore */ url.href);
 	if (!loaded || typeof loaded !== "object" || !("default" in loaded) || typeof loaded.default !== "function") {
 		throw new Error(`Extension '${url.href}' has no default factory`);
+	}
+	if (resetMemory) {
+		// Bun caches npm modules across test files, including import-time paths and qmd
+		// probes. Use the package's own reset seams before binding a new private home.
+		for (const key of [
+			"_resetBaseDir",
+			"_clearQmdStatusCaches",
+			"_resetQmdJsResolutionForTest",
+			"_resetMemorySnapshot",
+		]) {
+			if (!(key in loaded) || typeof Reflect.get(loaded, key) !== "function") {
+				throw new Error(`Memory isolation requires ${key} in '${url.href}'`);
+			}
+			Reflect.apply(Reflect.get(loaded, key), undefined, []);
+		}
 	}
 	return loaded.default as ExtensionFactory;
 }
@@ -224,7 +239,7 @@ export async function loadThirdParty(name: "workflow" | "deferred" | "web" | "me
 		web: () => new URL("dist/index.js", import.meta.resolve("pi-web-access/package.json")),
 		memory: () => new URL(import.meta.resolve("pi-memory")),
 	};
-	return loadFactory(entries[name]());
+	return loadFactory(entries[name](), name === "memory");
 }
 
 export interface StackOptions {
