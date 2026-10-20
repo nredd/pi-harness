@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, formatMessage, MAX_MESSAGE_LINES } from "../../src/monitor/messages.ts";
+import { formatDuration, formatMessage } from "../../src/monitor/messages.ts";
 import type { MonitorInfo } from "../../src/monitor/types.ts";
 
 const info = (over: Partial<MonitorInfo> = {}): MonitorInfo => ({
@@ -19,37 +19,36 @@ const info = (over: Partial<MonitorInfo> = {}): MonitorInfo => ({
 const line = (n: number, text = `l${n}`, matched = false) => ({ n, text, matched });
 
 describe("formatMessage", () => {
-	it("numbers lines, flags matches and carries wake through", () => {
-		const m = formatMessage(info(), [line(1), line(2, "boom", true)], { final: false, wake: true });
-		expect(m.text).toBe('[monitor m1 "build"] lines 1-2 (2 new; match on 2)\n1: l1\n2: boom');
-		expect(m.wake).toBe(true);
-		expect(m.details).toMatchObject({ id: "m1", firstLine: 1, lastLine: 2, matched: [2], status: "running" });
+	it("reports the matched line and cursor without replaying its passive batch", () => {
+		const message = formatMessage(info(), [line(1), line(2, "boom", true)], { final: false, wake: true });
+		expect(message.text).toBe('[monitor m1 "build"]\nmatched line 2: boom\nmonitor_read {"id":"m1","since":0}');
+		expect(message.wake).toBe(true);
+		expect(message.details).toMatchObject({ id: "m1", firstLine: 1, lastLine: 2, matched: [2], status: "running" });
 	});
 
-	it("keeps only the newest lines and says how to get the rest", () => {
-		const many = Array.from({ length: 100 }, (_, i) => line(i + 1));
-		const m = formatMessage(info({ lines: 100 }), many, { final: false, wake: false });
-		expect(m.text.split("\n")).toHaveLength(1 + 1 + MAX_MESSAGE_LINES);
-		expect(m.text).toContain('60 earlier lines omitted; monitor_read {"id":"m1","since":0}');
-		expect(m.text).toContain("100: l100");
-		expect(m.text).not.toContain("\n1: l1\n");
+	it("reports a final lifecycle event and cursor without buffered output", () => {
+		const message = formatMessage(info({ endedAt: 65_000, status: "exited", exitCode: 2 }), [line(1, "quiet")], {
+			final: true,
+			wake: true,
+		});
+		expect(message.text).toContain("exited with code 2 after 1m05s");
+		expect(message.text).toContain('monitor_read {"id":"m1","since":0}');
+		expect(message.text).not.toContain("quiet");
 	});
 
-	it("bounds bytes but always keeps the newest line", () => {
-		const big = "x".repeat(6000);
-		const m = formatMessage(info(), [line(1, big), line(2, big), line(3, big)], { final: false, wake: false });
-		expect(m.text).toContain("3: ");
-		expect(Buffer.byteLength(m.text)).toBeLessThan(16 * 1024);
-		expect(m.text).toContain("earlier lines omitted");
-	});
-
-	it("appends an exit note for each end state", () => {
-		const done = (over: Partial<MonitorInfo>) =>
-			formatMessage(info({ endedAt: 65_000, ...over }), [], { final: true, wake: true }).text;
-		expect(done({ status: "exited", exitCode: 2 })).toContain("exited with code 2 after 1m05s; 3 lines total");
-		expect(done({ status: "exited", signal: "SIGSEGV" })).toContain("died from SIGSEGV");
-		expect(done({ status: "timeout" })).toContain("timed out");
-		expect(done({ status: "stopped" })).toContain("stopped after");
+	it("keeps dropped matched-line evidence in the wake", () => {
+		const message = formatMessage(
+			info({ lines: 250 }),
+			{
+				items: [line(1, "unrelated")],
+				dropped: 249,
+				droppedMatched: true,
+				droppedMatches: [line(201, "MATCH lost", true)],
+			},
+			{ final: false, wake: true },
+		);
+		expect(message.text).toContain("matched line 201: MATCH lost");
+		expect(message.details.matched).toEqual([201]);
 	});
 });
 
