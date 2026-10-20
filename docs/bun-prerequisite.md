@@ -1,4 +1,34 @@
-# Initial Bun prerequisite evidence
+# Bun standalone evidence
+
+Current CI scope (2026-10-20):
+
+- Previously `.github/workflows/ci.yml` ran only the release-tarball Node bundle for D/E, across
+  two OSes and two stacks. `owned`'s Bun package/in-process tests were not standalone coverage.
+  The release API for `v1.3.0-nredd.6` confirms four npm tarballs and no standalone archive
+- The new `standalone` jobs build Gitlink `9351a7853c96a684442492902cd8805a4c13092f`
+  (`v1.3.0-nredd.6`) using root `.bun-version` (1.3.14); the core has no `.bun-version` file.
+  They restore npm release model data, run the official `forks/pi/scripts/build-binaries.sh`
+  with `--offline-model-data`, and execute the native archive on macOS ARM64 and Linux x64.
+  Each build is reused for both explicit stacks. No binaries are committed or published
+- Only seven auth dispatch/refresh cases are skipped per stack, with an explicit reason in the
+  test markers/collection policy and JUnit: `NODE_OPTIONS --import` interception is unavailable.
+  `test_request_uses_auth_json_token_with_claude_code_headers[missing-preload]` still exercises
+  fail-closed startup on standalone. `integration/harness/anthropic_mock.py::anthropic_env`,
+  `providers/redirect_anthropic.mjs` and `providers/auth_guard.mjs` implement this dependency
+- None of the remaining selected D/E scenarios uses `fast_timers.mjs` or `--expose-gc`.
+  Injected-clock behavior is native; GC instrumentation is confined to excluded render benches
+  (`integration/harness/probe.py`, `scenarios/bench/test_render.py`). The actual adapter issue is
+  [here](https://github.com/nredd/pi-harness/issues/14), not the nonexistent repository issue #58
+- NOT RUN: Linux ARM64 (no `ubuntu-24.04-arm` job), other architectures/Windows, auth interception,
+  packed contracts under standalone, benchmarks, live credentials, REA and desktop/TCC helpers.
+  This is a source-build D/E gate, not full Bun acceptance or a published-artifact gate
+- CI results, run IDs and measured runner cost belong in the draft PR; job definitions alone are
+  not evidence that these new runs pass. See [here](ci.md) for the two-job capacity budget
+
+Historical local evidence below predates the rebuilt integration gate. Do not treat the old
+`pi-harness-e2e` failures or smoke results as execution evidence for the new Gitlink/CI jobs.
+
+## Initial prerequisite checkpoint
 
 This is a local macOS ARM64 build/smoke and Linux cross-build checkpoint, **not** full-stack or release acceptance.
 No live installation, tap, pin, auth store, or desktop state was changed.
@@ -49,8 +79,9 @@ scratch-probe observations, not yet portable checked-in regression coverage.
 
 The compiled executable ignores `NODE_OPTIONS` preloads. A scratch `BUN_OPTIONS --preload` adapter
 with a readiness handshake redirected fetch and blocked `node:child_process`, but direct
-`Bun.spawn*` bypassed that guard. Do not run the auth harness under the compiled binary until its
-runtime adapter is integrated and fails closed. Do not mistake a probe adapter for a sandbox.
+`Bun.spawn*` bypassed that guard. Do not run the auth dispatch/refresh harness under the compiled binary until its
+runtime adapter is integrated and fails closed. The new CI explicitly skips those branches;
+only the existing missing-preload refusal is exercised without interception. Do not mistake a probe adapter for a sandbox.
 
 Still required: integrated interception readiness, packed plugins, model-role behavior, subagents,
 Plan mode, full monitor/process cleanup, TUI scenarios, native helpers, REA, full integration and

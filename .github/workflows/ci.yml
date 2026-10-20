@@ -141,18 +141,6 @@ jobs:
           git -C ../forks/pi fetch --tags origin
           uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$RUNNER_TEMP/pi-release"
           echo "PI_BIN=$RUNNER_TEMP/pi-release/bin/pi" >>"$GITHUB_ENV"
-      - name: Report Bun standalone as NOT RUN
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag=$(git -C forks/pi describe --tags --exact-match)
-          assets=$(gh release view "$tag" --repo nredd/pi --json assets --jq '.assets[].name')
-          if printf '%s\n' "$assets" | grep -Eq '^pi-(darwin|linux|windows)-.*\.(tar\.gz|zip)$'; then
-            echo "::error::Bun standalone asset exists in $tag but this gate has no runtime adapter (#58); refusing to claim coverage"
-            exit 1
-          fi
-          echo "Bun standalone: not run (no standalone asset in $tag)"
-          echo "Bun standalone: not run (no standalone asset in $tag)" >>"$GITHUB_STEP_SUMMARY"
       - name: Report binary identity
         run: |
           mkdir -p "$RUNNER_TEMP/version-home" "$RUNNER_TEMP/version-agent"
@@ -174,6 +162,104 @@ jobs:
         with:
           name: stack-${{ matrix.os }}-${{ matrix.stack }}
           path: integration/artifacts/
+          if-no-files-found: ignore
+
+  standalone:
+    name: standalone (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: macos-14
+            platform: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Pin npm to packageManager
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Install tmux (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes tmux
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
+      - name: Install workspace and harness dependencies
+        run: |
+          npm ci --ignore-scripts
+          cd integration && uv sync --locked --python "$(tr -d '\n' < ../.python-version)"
+      - name: Install Gitlinked core build dependencies
+        working-directory: forks/pi
+        run: npm ci --ignore-scripts
+      - name: Restore the release's model data
+        working-directory: forks/pi
+        run: |
+          # Same frozen data as forks.yml, never the live model fetch.
+          version=$(node -p 'require("./packages/ai/package.json").version')
+          mkdir -p "$RUNNER_TEMP/model-data"
+          npm pack "@earendil-works/pi-ai@$version" --pack-destination "$RUNNER_TEMP/model-data"
+          tar -xzf "$RUNNER_TEMP/model-data/earendil-works-pi-ai-$version.tgz" -C "$RUNNER_TEMP/model-data"
+          rm -rf packages/ai/src/providers/data
+          cp -R "$RUNNER_TEMP/model-data/package/dist/providers/data" packages/ai/src/providers/data
+      - name: Build standalone once for both stacks
+        id: build
+        working-directory: forks/pi
+        run: |
+          ./scripts/build-binaries.sh --skip-install --offline-model-data \
+            --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone"
+          echo "PI_BIN=$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" >>"$GITHUB_ENV"
+      - name: Report binary and source identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/version-home" "$RUNNER_TEMP/version-agent"
+          HOME="$RUNNER_TEMP/version-home" PI_CODING_AGENT_DIR="$RUNNER_TEMP/version-agent" "$PI_BIN" --version
+          git -C forks/pi rev-parse HEAD
+          bun --version
+          shasum -a 256 "$PI_BIN" "$RUNNER_TEMP/pi-standalone/pi-${{ matrix.platform }}.tar.gz"
+      - name: Standalone D and E (personal)
+        working-directory: integration
+        run: |
+          uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
+            --stack stacks/personal.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
+            --log-cli-level=INFO --junitxml=artifacts/standalone-personal.xml
+      - name: Preserve personal failure artifacts before local runs
+        if: always()
+        working-directory: integration
+        run: |
+          if [ -d artifacts ]; then mv artifacts artifacts-personal; fi
+      - name: Standalone D and E (local)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: integration
+        run: |
+          uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
+            --stack stacks/local.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
+            --log-cli-level=INFO --junitxml=artifacts/standalone-local.xml
+      - name: Report coverage exclusions
+        if: always()
+        run: |
+          echo "Bun standalone: seven auth dispatch/refresh cases per stack NOT RUN: Node preload interception required (#14). Missing-preload refusal runs." >>"$GITHUB_STEP_SUMMARY"
+          echo "linux-arm64, packed contracts under standalone, bench, live credentials and desktop helpers: NOT RUN." >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: standalone-${{ matrix.platform }}
+          path: |
+            integration/artifacts/
+            integration/artifacts-personal/
           if-no-files-found: ignore
 
   bench:
