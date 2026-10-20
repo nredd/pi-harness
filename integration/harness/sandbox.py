@@ -337,8 +337,9 @@ def subagents_policy(stack: Stack) -> dict[str, bool]:
     """Return the pi-subagents fixture policy derived from the stack's content.
 
     Pi's four source filters do not control pi-subagents' separate package-agent loader, so any
-    filtered (object) source needs `packageAgents: false` or its agents leak back in. This mirrors
-    dotfiles' base settings; an unfiltered stack (e.g. local) keeps full-preset agent discovery.
+    filtered (object) source needs `packageAgents: false` or its agents leak back in. For the
+    footer-only personal selection this matches dotfiles, which sets it unconditionally; an
+    unfiltered stack (e.g. local) keeps full-preset agent discovery on purpose.
 
     Parameters:
         stack (Stack): validated stack document.
