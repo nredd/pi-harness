@@ -73,10 +73,10 @@ instead allowlist those packages. No fork change or unsupported fifth resource f
 
 ## Local gate evidence
 
-- `npm run check -w @nredd/pi-preset`, pinned Bun 1.3.14 on PATH: Biome/strict tsc clean,
+- `npm run check -w @nredd/pi-preset`, pinned Bun 1.4.3 on PATH: Biome/strict tsc clean,
   126 Vitest tests and 126 Bun tests passed. This includes all preserved helper assertions,
   real-host footer scenarios, the new renderer contracts and resource-filter discovery.
-- `make check-ts`: passed across every workspace, including 61 Vitest and 61 Bun in-process
+- `make check-ts`: passed across every workspace, including 62 Vitest and 62 Bun in-process
   stack tests. The first attempt failed because the fresh worktree had no fork files; initializing
   pi-subagents, pi-plan-mode and rpiv-todo at their unchanged Gitlinks fixed it. No fork edits.
 - Dotfiles `node --test tests/*.test.mjs`: 157 passed, 0 failed, 3 existing platform skips
