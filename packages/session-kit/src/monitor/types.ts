@@ -14,7 +14,7 @@ export interface MonitorMessageDetails {
 export interface MonitorMessage {
 	text: string;
 	details: MonitorMessageDetails;
-	/** Trigger an agent turn (match, exit, timeout, or `wake: true`); otherwise passive context. */
+	/** Trigger an agent turn (match, exit, timeout, or `wake: true`). */
 	wake: boolean;
 }
 
@@ -29,6 +29,8 @@ export interface MonitorInfo {
 	exitCode: number | null;
 	signal: NodeJS.Signals | null;
 	lines: number;
+	/** Newest buffered output, for the compact TUI summary only. */
+	lastLine?: string;
 	wake: boolean;
 	match?: string;
 	timeoutMs: number;

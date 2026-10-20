@@ -37,14 +37,14 @@ describe("Coalescer", () => {
 	});
 
 	it("bounds a flood and retains whether a dropped item matched", () => {
-		const batches: Array<{ items: number[]; dropped: number; droppedMatched: boolean }> = [];
+		const batches: Array<{ items: number[]; dropped: number; droppedMatched: boolean; droppedMatches: number[] }> = [];
 		const c = new Coalescer<number>(2000, (batch) => batches.push(batch), {
 			maxItems: 2,
 			matched: (item) => item === 4,
 		});
 		for (let item = 1; item <= 5; item++) c.add(item);
 		vi.advanceTimersByTime(2000);
-		expect(batches).toEqual([{ items: [1, 2], dropped: 3, droppedMatched: true }]);
+		expect(batches).toEqual([{ items: [1, 2], dropped: 3, droppedMatched: true, droppedMatches: [4] }]);
 	});
 
 	it("never holds the process open", () => {

@@ -33,11 +33,10 @@ afterEach(async () => {
 });
 
 describe("MonitorManager", () => {
-	it("coalesces output into one passive message and keeps it readable", async () => {
+	it("keeps passive output only in the readable ring buffer", async () => {
 		const info = await mgr.start({ argv: node(`console.log("one");console.log("two");${STAY}`), name: "w" }, tmp.dir);
-		await waitFor(() => sent.length === 1);
-		expect(sent[0]).toMatchObject({ wake: false });
-		expect(sent[0]?.text).toContain("1: one\n2: two");
+		await waitFor(() => (mgr.read(info.id)?.lines.length ?? 0) === 2);
+		expect(sent).toEqual([]);
 		const read = mgr.read(info.id, 1);
 		expect(read?.lines).toEqual([{ n: 2, text: "two" }]);
 		expect(read?.lastLine).toBe(2);
@@ -65,9 +64,9 @@ describe("MonitorManager", () => {
 			},
 			tmp.dir,
 		);
-		await waitFor(() => sent.length === 2, 4000);
-		expect(sent.map((m) => m.wake)).toEqual([false, true]);
-		expect(sent[1]?.details.matched).toEqual([2]);
+		await waitFor(() => sent.length === 1, 4000);
+		expect(sent[0]?.wake).toBe(true);
+		expect(sent[0]?.details.matched).toEqual([2]);
 	});
 
 	it("keeps the event loop and shutdown responsive during pathological matching", async () => {
@@ -118,8 +117,9 @@ describe("MonitorManager", () => {
 		await waitFor(() => mgr.info(info.id)?.status === "exited");
 		expect(sent).toHaveLength(1);
 		expect(sent[0]).toMatchObject({ wake: true });
-		expect(sent[0]?.text).toContain("1: bye");
+		expect(sent[0]?.text).not.toContain("1: bye");
 		expect(sent[0]?.text).toContain("exited with code 3");
+		expect(sent[0]?.text).toContain('monitor_read {"id":"m1","since":0}');
 		expect(mgr.info(info.id)).toMatchObject({ exitCode: 3 });
 		expect(mgr.running()).toHaveLength(0);
 	});
@@ -132,7 +132,8 @@ describe("MonitorManager", () => {
 		await waitFor(() => mgr.info(info.id)?.status === "exited");
 		expect(sent).toHaveLength(1);
 		expect(sent[0]?.details.matched).toEqual([2]);
-		expect(sent[0]?.text).toContain("1: fine\n2: ERROR bad");
+		expect(sent[0]?.text).toContain("2: ERROR bad");
+		expect(sent[0]?.text).not.toContain("1: fine");
 	});
 
 	it("reports a death by signal", async () => {
