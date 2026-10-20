@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness.headless import run_headless
-from harness.stack import find_package
+from harness.stack import find_package, load_stack
 
 if TYPE_CHECKING:
     from harness.sandbox import Sandbox
@@ -152,7 +152,14 @@ def test_computer_use_headless_exclusion(sandbox: Sandbox) -> None:
     evidence = json.loads((sandbox.agent_dir / "stack-evidence.json").read_text())
     installed = next(item for item in evidence["packages"] if item["name"].endswith("pi-computer-use"))
     source = installed["source"]
-    assert evidence["disabled_extensions"].get(source), evidence
+    stack_path = Path(__file__).resolve().parents[1] / "stacks" / f"{evidence['stack']}.json"
+    stack = load_stack(stack_path)
+    original = next(
+        declared
+        for declared, resolved in zip(stack.sources, stack.resolved_sources(stack_path), strict=True)
+        if resolved == source
+    )
+    assert evidence["disabled_extensions"].get(original), evidence
     assert {"source": source, "extensions": []} in packages
     sandbox.patch_json("deferred-tools.json", {"alwaysActive": ["harness_extension_inventory"]})
     script = {
