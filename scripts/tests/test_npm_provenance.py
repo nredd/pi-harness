@@ -193,7 +193,7 @@ def test_provenance_requires_actual_dsse_statement(identity: nr.Identity, case: 
         "audit-failed",
         "wrong-integrity",
         "wrong-version",
-        "extra-package",
+        "runtime-dependency",
     ],
 )
 def test_npm_signature_audit_fails_closed(
@@ -201,7 +201,7 @@ def test_npm_signature_audit_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     case: str,
 ) -> None:
-    """Require a one-package install with matching bytes and npm's two successful verification reports.
+    """Verify the exact subject after accepting an install with runtime dependencies.
 
     Parameters:
         identity (Identity): Expected release.
@@ -251,9 +251,12 @@ def test_npm_signature_audit_fails_closed(
                 "integrity": "wrong" if case == "wrong-integrity" else identity.integrity,
             }
             packages = {"": {}, f"node_modules/{identity.target.name}": entry}
-            if case == "extra-package":
+            if case == "runtime-dependency":
                 packages["node_modules/other"] = entry
             (project / "package-lock.json").write_text(json.dumps({"packages": packages}))
+            installed = project / f"node_modules/{identity.target.name}"
+            installed.mkdir(parents=True)
+            (installed / "package.json").write_text("{}")
             return "installed release"
         assert args == (
             "audit",
@@ -271,14 +274,12 @@ def test_npm_signature_audit_fails_closed(
         return VERIFIED_REPORT
 
     monkeypatch.setattr(nr, "command", command)
-    if case == "valid":
+    if case in {"valid", "runtime-dependency"}:
         nr.verify_signatures(identity)
     else:
         with pytest.raises((nr.ReleaseError, subprocess.CalledProcessError)):
             nr.verify_signatures(identity)
-    assert calls == (
-        ["install"] if case in {"wrong-integrity", "wrong-version", "extra-package"} else ["install", "audit"]
-    )
+    assert calls == (["install"] if case in {"wrong-integrity", "wrong-version"} else ["install", "audit"])
     assert all(not project.exists() for project in projects)
 
 

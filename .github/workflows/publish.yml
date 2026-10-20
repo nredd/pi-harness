@@ -45,7 +45,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: uv run --locked --project integration python scripts/npm_release.py preflight --tag "$RELEASE_TAG"
       - name: Initialize contract fork at its Gitlink
-        if: steps.target.outputs.directory == 'preset' || steps.target.outputs.directory == 'dev-tools'
+        if: steps.target.outputs.needs_fork_contract == 'true'
         run: git submodule update --init forks/pi-subagents
       - name: Install, check package, pack once, exercise tarball and generate manifest
         env:

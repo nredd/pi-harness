@@ -26,6 +26,27 @@
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-dev-tools`,
 `@nredd/pi-session-kit`, `@nredd/pi-subscription-router` and `@nredd/pi-preset`.
 
+`scripts/release_descriptors.py` is the publisher's data registry. Each entry supplies a package name,
+repository-relative workspace, shell-free verify commands, packed-artifact contract gates, and optional
+native-artifact glob requirements. The publisher rejects unknown tags, a workspace outside the checkout,
+package/tag skew, or missing native files before it packs. Adding a package means adding its descriptor
+and package contract, not another name-specific workflow or Python branch. For example, the future todo
+import will add an entry shaped like:
+
+```python
+ReleaseDescriptor(
+    name="@nredd/pi-todo",
+    workspace=PurePosixPath("packages/rpiv-todo"),
+    verify_commands=(("npm", "ci", "--ignore-scripts"), ("npm", "run", "check", "--workspace", "@nredd/pi-todo")),
+    contract=TODO_CONTRACT,
+    contract_gates=("stock",),
+)
+```
+
+`@nredd/pi-computer-use` will additionally declare `native_artifacts=(PurePosixPath("prebuilt/macos/*"),)`.
+That requirement checks both the source workspace and the packed tarball, but the helper build and macOS
+native suites belong to its later import PR. No extension descriptor is added by this change.
+
 1. Bump the package version and root lockfile in a reviewed PR, pass CI, and merge to `main`.
 2. Select the merged `main` SHA whose package version equals the intended version. Create a signed tag:
    `git tag -s '@nredd/<pkg>@<v>' <main sha>` (e.g. `@nredd/pi-session-kit@0.3.1`).
@@ -56,10 +77,12 @@ The job polls npm every 15 s for up to ten minutes for matching integrity and pr
 failed a one-minute poll and passed on a failed-jobs rerun that skipped re-publication), then:
 
 - Install the exact `<name>@<version>` into a throwaway npm project with scripts and peer installation
-  disabled. Require a one-package lockfile with the recorded version and SHA-512 integrity.
-- Run `npm audit signatures` there. npm verifies registry signatures and Sigstore attestations; both
-  verified reports must name one package (the only installed dependency), or the job fails. No custom
-  cryptography is implemented.
+  disabled. Require the selected package's exact lock entry to match the recorded version and SHA-512
+  integrity; runtime dependencies are allowed.
+- Copy only that installed subject and its exact lock entry into a second throwaway audit project, then
+  run `npm audit signatures` there. npm verifies registry signatures and Sigstore attestations for exactly
+  one named subject, so aggregate verification counts from dependencies cannot satisfy the release. No
+  custom cryptography is implemented.
 - Fetch `https://registry.npmjs.org/-/npm/v1/attestations/<name>@<version>` directly. Decode the SLSA
   bundle's DSSE in-toto statement, not merely `dist.attestations` metadata. Require the package URL
   `pkg:npm/<name>@<version>` (including npm's percent-encoded scope form), the recorded tarball SHA-512
