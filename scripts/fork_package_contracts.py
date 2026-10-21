@@ -70,6 +70,7 @@ from package_contracts import (
     PRESET_CONTRACT,
     PROTOCOL_MODEL,
     PROVIDER,
+    REGISTRY_ENV,
     STOCK_PI_INTEGRITY,
     STOCK_PI_PACKAGE,
     STOCK_PI_VERSION,
@@ -454,7 +455,7 @@ def install_fork_dependencies(fork_dir: Path, sandbox: Sandbox) -> ForkInstall:
             "--no-audit",
             "--no-fund",
         ],
-        env=sandbox.env() | {"HTTP_PROXY": "", "HTTPS_PROXY": ""},
+        env=sandbox.env() | REGISTRY_ENV,
         cwd=fork_dir,
         timeout=NPM_TIMEOUT_S,
     )

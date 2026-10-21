@@ -14,9 +14,11 @@ import json
 import shutil
 import sys
 import tarfile
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -61,7 +63,9 @@ def sandbox(tmp_path: Path) -> pc.Sandbox:
     return pc.Sandbox(tmp_path / "sandbox", pc.locate_tools())
 
 
-@pytest.mark.parametrize("contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT], ids=lambda c: c.directory)
+@pytest.mark.parametrize(
+    "contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT], ids=lambda c: c.directory
+)
 def test_supplied_tarball_is_never_repacked(
     tmp_path: Path,
     sandbox: pc.Sandbox,
@@ -478,7 +482,7 @@ def test_audit_manifest_accepts_good() -> None:
         ({"publishConfig": {"access": "restricted"}}, "`publishConfig.access` must be `public`"),
         ({"publishConfig": {}}, "`publishConfig.access` must be `public`"),
         ({"license": "ISC"}, "`license`"),
-        ({"dependencies": {"typebox": "1.0.0"}}, "`dependencies` must be empty"),
+        ({"dependencies": {"typebox": "1.0.0"}}, "not a declared runtime dependency"),
         ({"optionalDependencies": {"@nredd/pi-session-kit": "*"}}, "`optionalDependencies`"),
         ({"peerDependencies": {"@nredd/pi-session-kit": "*"}}, "not a host module"),
         ({"peerDependencies": {"typebox": ">=1"}}, "must use the range '*'"),
@@ -577,7 +581,9 @@ def test_audit_tarball_reports_unparseable_manifest(tmp_path: Path) -> None:
     assert any("`package.json` is not valid JSON" in problem for problem in problems), problems
 
 
-@pytest.mark.parametrize("contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT], ids=lambda c: c.directory)
+@pytest.mark.parametrize(
+    "contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT], ids=lambda c: c.directory
+)
 def test_real_workspace_tarballs_pass_audit(
     contract: pc.PackageContract, tmp_path: Path, sandbox: pc.Sandbox
 ) -> None:
@@ -1342,6 +1348,108 @@ def test_preset_contract_accounts_for_separately_licensed_assets() -> None:
     assert any("`license` must be 'MIT'" in problem for problem in leaked), leaked
 
 
+def subagents_manifest() -> dict[str, Any]:
+    """Return the real workspace manifest, which the contract must accept as published.
+
+    Returns:
+        dict[str, Any]: Parsed `packages/subagents/package.json`.
+    """
+    return json.loads((pc.REPO_ROOT / "packages" / "subagents" / "package.json").read_text())
+
+
+def test_subagents_contract_declares_its_runtime_dependencies_and_peer_floor() -> None:
+    """Real dependencies and the fork's `>=1.1.0` peer floor are explicit allowances, not silent."""
+    files = ["src/index.ts"]
+    contract = pc.SUBAGENTS_CONTRACT
+    assert pc.audit_manifest(contract, subagents_manifest(), files) == []
+    # The plugin default still rejects the same manifest: the allowance is per contract.
+    plugin = pc.audit_manifest(DEV_TOOLS, subagents_manifest() | {"name": DEV_TOOLS.name}, files)
+    assert any("dependency 'croner' is not a declared" in problem for problem in plugin), plugin
+    assert any("peer '@earendil-works/pi-ai' must use the range '*'" in problem for problem in plugin), plugin
+    manifest = subagents_manifest()
+    undeclared = pc.audit_manifest(
+        contract, manifest | {"dependencies": {**manifest["dependencies"], "left-pad": "^1.0.0"}}, files
+    )
+    assert any("dependency 'left-pad' is not a declared" in problem for problem in undeclared), undeclared
+    drifted = pc.audit_manifest(contract, manifest | {"dependencies": {"croner": "^9.0.0"}}, files)
+    assert any("'croner' must use the range '^10.0.1'" in problem for problem in drifted), drifted
+    assert any("runtime dependency 'nanoid' is missing" in problem for problem in drifted), drifted
+    star = {**manifest["peerDependencies"], "@earendil-works/pi-tui": "*"}
+    loose = pc.audit_manifest(contract, manifest | {"peerDependencies": star}, files)
+    assert any("must use the range '>=1.1.0'" in problem for problem in loose), loose
+
+
+def test_declared_dependencies_may_be_imported_and_nothing_else() -> None:
+    """The import audit admits a contract's declared dependencies, and only those."""
+    found = pc.FileImports(specifiers=["croner", "nanoid", "left-pad", "croner/sub"], diagnostics=[])
+    problems = pc.classify_imports(
+        "src/a.ts", found, ["src/a.ts"], [name for name, _ in pc.SUBAGENTS_CONTRACT.runtime_dependencies]
+    )
+    assert len(problems) == 1, problems
+    assert "left-pad" in problems[0]
+    assert len(pc.classify_imports("src/a.ts", found, ["src/a.ts"])) == 4
+
+
+def licensed_artifact(
+    tmp_path: Path, contract: pc.PackageContract, license_bytes: bytes
+) -> pc.PackedArtifact:
+    """Build a tarball whose only content of interest is its `LICENSE`.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        contract (pc.PackageContract): Contract the artifact claims.
+        license_bytes (bytes): Packed `LICENSE`.
+
+    Returns:
+        pc.PackedArtifact: Artifact over that tarball.
+    """
+    tarball = make_tarball(tmp_path / "pkg.tgz", {"LICENSE": license_bytes, "package.json": b"{}"})
+    return pc.PackedArtifact(contract, tarball, "1.0.0", "sha512-x", "0" * 40, 1, ("LICENSE", "package.json"))
+
+
+def test_audit_tarball_license_source_follows_own_license(tmp_path: Path) -> None:
+    """`own_license` swaps the expected `LICENSE` to the workspace's; a plugin still wants the root one.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    own = (pc.REPO_ROOT / "packages" / "subagents" / "LICENSE").read_bytes()
+    assert own != ROOT_LICENSE
+    assert b"tintinweb" in own
+    with_root = licensed_artifact(tmp_path, pc.SUBAGENTS_CONTRACT, ROOT_LICENSE)
+    assert any("differs from the expected" in p for p in pc.audit_tarball(with_root, ROOT_LICENSE))
+    with_own = licensed_artifact(tmp_path, pc.SUBAGENTS_CONTRACT, own)
+    assert not any("`LICENSE`" in p for p in pc.audit_tarball(with_own, ROOT_LICENSE))
+    plugin_own = licensed_artifact(tmp_path, DEV_TOOLS, own)
+    assert any("differs from the expected" in p for p in pc.audit_tarball(plugin_own, ROOT_LICENSE))
+    plugin_root = licensed_artifact(tmp_path, DEV_TOOLS, ROOT_LICENSE)
+    assert not any("`LICENSE`" in p for p in pc.audit_tarball(plugin_root, ROOT_LICENSE))
+
+
+def test_subagents_pack_matches_contract(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """`npm pack` of the workspace ships exactly what the contract enumerates, nothing more.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    contract = pc.SUBAGENTS_CONTRACT
+    artifact = pc.pack(contract, tmp_path, sandbox)
+    assert set(contract.required) <= set(artifact.files)
+    assert pc.audit_files(contract, artifact.files) == []
+    source = pc.REPO_ROOT / "packages" / "subagents"
+    on_disk = {path.relative_to(source).as_posix() for path in (source / "src").rglob("*") if path.is_file()}
+    assert {name for name in artifact.files if name.startswith("src/")} == on_disk
+    assert set(artifact.files) - on_disk == {"LICENSE", "README.md", "package.json"}
+    assert not any(name.startswith(("test/", "docs/", "examples/", "media/")) for name in artifact.files)
+
+
+def test_subagents_is_a_registry_dependent_contract_outside_the_hermetic_set() -> None:
+    """The hermetic `CONTRACTS` target must not try to install it offline; the release gate does."""
+    assert pc.SUBAGENTS_CONTRACT not in pc.CONTRACTS
+    assert "subagents" not in pc.SCENARIOS
+
+
 def test_preset_is_not_a_standalone_plugin_contract() -> None:
     """The standalone gate keeps exactly its three plugins; the preset is consumed by the fork gate."""
     assert [c.directory for c in pc.CONTRACTS] == ["dev-tools", "session-kit", "subscription-router"]
@@ -1507,3 +1615,217 @@ def test_faux_provider_records_system_and_developer_text() -> None:
             },
         )
     assert provider.requests[0].system == "D\nS"
+
+
+def test_contracts_are_hashable() -> None:
+    """Dependency allowances are tuples, so every contract can key a set or dict."""
+    assert len({*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT}) == 5
+
+
+# --- scenario_subagents and the registry branch of install_alone ------------------------------------
+
+ALL_SUBAGENT_TOOLS = sorted(pc.SUBAGENTS_CONTRACT.exposes_tools)
+
+
+class StubProvider:
+    """Stand-in for `FauxProvider` that records nothing and reports fixed requests."""
+
+    def __init__(self, tools: list[str]) -> None:
+        """Record one fake model request offering `tools`, or none.
+
+        Parameters:
+            tools (list[str]): tool names the fake request offers; empty means no request.
+        """
+        self.requests = [fp.RecordedRequest("m", ("user",), tuple(tools), "", route=None)] if tools else []
+
+    def __enter__(self) -> StubProvider:
+        """Enter the context like `FauxProvider`.
+
+        Returns:
+            StubProvider: this stub.
+        """
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Exit the context like `FauxProvider`, suppressing nothing.
+
+        Parameters:
+            *exc (object): exception type, value and traceback, ignored.
+        """
+
+
+def agent_record(text: str, *, is_error: bool = False) -> dict[str, Any]:
+    """Build a `tool_execution_end` event for `Agent`.
+
+    Parameters:
+        text (str): Result text.
+        is_error (bool): Mark the result as an error.
+
+    Returns:
+        dict[str, Any]: The event.
+    """
+    return {
+        "type": "tool_execution_end",
+        "toolName": "Agent",
+        "isError": is_error,
+        "result": {"content": [{"type": "text", "text": text}]},
+    }
+
+
+def run_subagents_scenario(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    tools: list[str],
+    result: pc.PiRun,
+) -> pc.SubagentsEvidence:
+    """Run `scenario_subagents` against a faked Pi and provider.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Patches `run_pi` and the context's provider.
+        tools (list[str]): Tools the parent request declares.
+        result (pc.PiRun): What the faked `pi` run returns.
+
+    Returns:
+        pc.SubagentsEvidence: The scenario's evidence.
+    """
+    monkeypatch.setattr(pc, "run_pi", lambda *args, **kwargs: result)
+    root = Path(tempfile.mkdtemp(dir=tmp_path))
+    ctx = pc.Context(
+        Path("pi"),
+        pc.Sandbox(root / "sandbox", pc.locate_tools()),
+        root / "installed",
+        pc.PackedArtifact(pc.SUBAGENTS_CONTRACT, root / "x.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ()),
+        root / "work",
+        (),
+    )
+    ctx.work.mkdir()
+    monkeypatch.setattr(pc.Context, "provider_session", lambda self, script, routes=(): StubProvider(tools))
+    return pc.scenario_subagents(ctx)
+
+
+def good_run(text: str = pc.SUBAGENTS_CHILD_TEXT) -> pc.PiRun:
+    """Return a clean faked Pi run whose `Agent` call answered `text`.
+
+    Parameters:
+        text (str): the child agent's answer.
+
+    Returns:
+        pc.PiRun: exit 0 with one `Agent` tool record.
+    """
+    return pc.PiRun(0, (agent_record(text),), "", "")
+
+
+def test_scenario_subagents_passes_with_every_tool_and_an_agent_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Happy path: evidence names the tools and the child's answer."""
+    evidence = run_subagents_scenario(tmp_path, monkeypatch, tools=ALL_SUBAGENT_TOOLS, result=good_run())
+    assert evidence == {"tools": ALL_SUBAGENT_TOOLS, "child_text": pc.SUBAGENTS_CHILD_TEXT}
+
+
+def test_scenario_subagents_names_the_missing_tool_and_tools_seen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool absent from the first request fails with the missing name and what was seen."""
+    seen = [t for t in ALL_SUBAGENT_TOOLS if t != "SubagentWorkflow"]
+    with pytest.raises(pc.ContractError, match="SubagentWorkflow") as excinfo:
+        run_subagents_scenario(tmp_path, monkeypatch, tools=seen, result=good_run())
+    assert "Agent" in str(excinfo.value)
+    assert "tools not offered" in str(excinfo.value)
+
+
+def test_scenario_subagents_reports_load_failure_with_stderr_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing load (e.g. an unresolved dependency) surfaces the exit code and stderr."""
+    broken = pc.PiRun(1, (), "", "Error: Cannot find module 'croner'")
+    with pytest.raises(pc.ContractError, match="pi exited 1") as excinfo:
+        run_subagents_scenario(tmp_path, monkeypatch, tools=ALL_SUBAGENT_TOOLS, result=broken)
+    assert "Cannot find module 'croner'" in str(excinfo.value)
+
+
+def test_scenario_subagents_rejects_missing_request_and_bad_agent_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No request, an erroring `Agent`, and a result without the child's answer all fail."""
+    with pytest.raises(pc.ContractError, match="received no request"):
+        run_subagents_scenario(tmp_path, monkeypatch, tools=[], result=good_run())
+    errored = pc.PiRun(0, (agent_record("boom", is_error=True),), "", "")
+    with pytest.raises(pc.ContractError, match="`Agent` failed"):
+        run_subagents_scenario(tmp_path, monkeypatch, tools=ALL_SUBAGENT_TOOLS, result=errored)
+    with pytest.raises(pc.ContractError, match="lacks the child's answer"):
+        run_subagents_scenario(tmp_path, monkeypatch, tools=ALL_SUBAGENT_TOOLS, result=good_run("other"))
+
+
+def stub_npm_install(
+    monkeypatch: pytest.MonkeyPatch, modules: list[str], calls: list[list[str]], envs: list[dict[str, str]]
+) -> None:
+    """Replace `run` with an `npm install` that materializes `modules` and a matching lockfile.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Patches `pc.run`.
+        modules (list[str]): `node_modules` entries to create, e.g. `@nredd/pi-dev-tools`.
+        calls (list[list[str]]): Receives each argument vector.
+        envs (list[dict[str, str]]): Receives each environment.
+    """
+
+    def fake_run(cmd: Any, *, env: dict[str, str], cwd: Path, **_: Any) -> None:
+        """Record the npm call and lay out `node_modules` plus a lockfile for `modules`.
+
+        Parameters:
+            cmd (Any): npm argv.
+            env (dict[str, str]): subprocess environment.
+            cwd (Path): install directory.
+            **_ (Any): other `run` options, ignored.
+        """
+        calls.append([str(part) for part in cmd])
+        envs.append(env)
+        packages: dict[str, dict[str, str]] = {"": {}}
+        for module in modules:
+            (cwd / "node_modules" / module).mkdir(parents=True)
+            packages[f"node_modules/{module}"] = {}
+        (cwd / "package-lock.json").write_text(json.dumps({"packages": packages}))
+
+    monkeypatch.setattr(pc, "run", fake_run)
+
+
+@pytest.mark.parametrize(
+    ("contract", "modules", "offline"),
+    [
+        (pc.SUBAGENTS_CONTRACT, ["@nredd/pi-subagents", "croner", "nanoid"], False),
+        (DEV_TOOLS, ["@nredd/pi-dev-tools"], True),
+    ],
+    ids=["registry", "offline"],
+)
+def test_install_alone_offline_flag_follows_runtime_dependencies(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    contract: pc.PackageContract,
+    modules: list[str],
+    offline: bool,
+) -> None:
+    """Only a contract with declared runtime dependencies may touch the registry."""
+    calls: list[list[str]] = []
+    envs: list[dict[str, str]] = []
+    stub_npm_install(monkeypatch, modules, calls, envs)
+    artifact = pc.PackedArtifact(contract, tmp_path / "x.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ())
+    installed = pc.install_alone(artifact, sandbox, tmp_path / "project")
+    assert installed == tmp_path / "project" / "node_modules" / contract.name
+    assert ("--offline" in calls[0]) is offline
+    assert (envs[0].get("HTTP_PROXY") == "") is (not offline)
+
+
+def test_install_alone_rejects_an_undeclared_module(
+    tmp_path: Path, sandbox: pc.Sandbox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A module that is not a declared dependency fails the install even on the registry branch."""
+    stub_npm_install(monkeypatch, ["@nredd/pi-subagents", "croner", "nanoid", "left-pad"], [], [])
+    artifact = pc.PackedArtifact(
+        pc.SUBAGENTS_CONTRACT, tmp_path / "x.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ()
+    )
+    with pytest.raises(pc.ContractError, match="pulled extra modules"):
+        pc.install_alone(artifact, sandbox, tmp_path / "project")
