@@ -163,6 +163,23 @@ class Stack(BaseModel):
         default_factory=dict, description="Source -> documented headless exclusion; still installed"
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_noncanonical_input(cls, data: Any) -> Any:
+        """Reject JSON a JS consumer cannot reproduce, at every depth and before any normalization.
+
+        Parameters:
+            data (Any): raw stack document as parsed, before field coercion.
+
+        Returns:
+            Any: `data`, unchanged.
+
+        Raises:
+            ValueError: a float, unsafe integer, non-string key or lone surrogate anywhere in it.
+        """
+        reject_noncanonical_numbers(data)
+        return data
+
     @model_validator(mode="after")
     def validate_sources(self) -> Self:
         """Reject floating, duplicate and implicit-home inputs before installation.
@@ -179,7 +196,6 @@ class Stack(BaseModel):
         for source in sources:
             if not (PINNED_NPM.fullmatch(source) or PINNED_GIT.fullmatch(source) or is_local_source(source)):
                 raise ValueError(f"Source must be pinned or an explicit local path: '{source}'")
-        reject_noncanonical_numbers(self.settings, "$.settings")
         if SETTINGS_PACKAGES_KEY in self.settings:
             raise ValueError(f"`settings` cannot override `{SETTINGS_PACKAGES_KEY}`")
         if not self.disabled_extensions.keys() <= set(sources) or not all(

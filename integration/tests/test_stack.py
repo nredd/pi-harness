@@ -163,6 +163,24 @@ def test_stack_rejects_lone_surrogates_before_pydantic_normalizes_them(settings:
         Stack.model_validate(stack_document(settings=settings))
 
 
+@pytest.mark.parametrize(
+    ("change", "pattern"),
+    [
+        (
+            {"sources": [{"source": "./pkg", "extensions": ["\ud800"]}]},
+            r"`\$\.sources\[0\]\.extensions\[0\]`",
+        ),
+        ({"name": "unit\ud800"}, r"`\$\.name`"),
+        ({"disabled_extensions": {"./pkg": "why\ud800"}}, r"`\$\.disabled_extensions\[\"\./pkg\"\]`"),
+        ({"schema_version": 1.0}, r"`\$\.schema_version`"),
+    ],
+)
+def test_stack_rejects_noncanonical_values_outside_settings(change: dict[str, Any], pattern: str) -> None:
+    """Apply the canonical-JSON guard to every field, not only `settings`."""
+    with pytest.raises(ValidationError, match=pattern):
+        Stack.model_validate(stack_document(**change))
+
+
 def test_stack_rejects_non_string_nested_object_keys_before_json_normalizes_them() -> None:
     """Reject nested keys that could collide after a JSON serializer stringifies them."""
     for settings in (
