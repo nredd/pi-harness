@@ -881,7 +881,7 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     assert "environment: npm" in workflow
     assert "secrets." not in workflow
     assert "NODE_AUTH_TOKEN" not in workflow
-    assert 'npm publish "$RUNNER_TEMP/npm-release/$TARBALL" --access public' in workflow
+    assert 'npm publish "$RUNNER_TEMP/npm-release/$TARBALL" --access public --tag latest' in workflow
     assert "if: steps.candidate.outputs.publish == 'true'" in workflow
     assert 'gh release create "$RELEASE_TAG" --verify-tag' in workflow
     assert "package-manager-cache: false" in workflow

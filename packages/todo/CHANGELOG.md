@@ -7,6 +7,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- First CI-attested release; no code change.
+
 ### Added
 
 - Call out in-progress tasks in the Todos heading, e.g. `Todos (8 open, 6 in progress)` (also the `/todos` header), as a subset of open in the warning color; omitted at zero. Reuses the translated `status.in_progress` label, so no new locale key.

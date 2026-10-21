@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-plan-mode",
-  "version": "0.59.3-nredd.1",
+  "version": "0.59.3-nredd.2",
   "description": "Pi extension that adds a Codex-like read-only /plan collaboration mode.",
   "type": "module",
   "license": "MIT",
