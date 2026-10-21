@@ -65,7 +65,8 @@ What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
   `CHANGELOG.md` (router), `dist/pi-stats-export.mjs` + `docs/stats-snapshots.md` (session-kit) and
-  `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`).
+  `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`). computer-use is
+  also pinned by exact `packed_files` (45 paths).
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
   none of the tarballs had a `LICENSE` and all shipped `test/` plus dev config
 - Packed `LICENSE` is byte-identical to the root `LICENSE`, except imported packages marked `own_license`,
