@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -256,46 +257,105 @@ def jobs_fixture() -> dict[str, dict[str, Any]]:
     return {str(FIXTURE_RUN): fixture("github-run-jobs.json")}
 
 
+def artifacts_fixture() -> dict[str, Any]:
+    """Load the recorded `actions/runs/<id>/artifacts` pages keyed by run ID.
+
+    Returns:
+        dict[str, Any]: run ID -> slurped artifact pages.
+    """
+    return {str(FIXTURE_RUN): fixture("github-run-artifacts.json")}
+
+
 def test_stack_runs_match_real_recorded_run() -> None:
-    """The real step name (with its suffix) is recognized."""
+    """The recorded run has a successful personal job and a live `stack-ubuntu-24.04-personal` artifact."""
     runs = fixture("github-runs.json")
-    assert registry_stack_runs(runs, jobs_fixture(), FIXTURE_SHA) == [FIXTURE_RUN]
+    assert registry_stack_runs(runs, jobs_fixture(), artifacts_fixture(), FIXTURE_SHA) == [FIXTURE_RUN]
 
 
-def test_stack_run_step_name_still_exists_in_ci() -> None:
-    """Drift guard: the matched step prefix must still head a step name in `ci.yml`."""
-    assert f"- name: {promotion.ASSEMBLED_STACK_STEP_PREFIX}" in CI_WORKFLOW.read_text()
+def stack_job_block() -> str:
+    """Return the `stack:` job text from `ci.yml`.
+
+    Returns:
+        str: the job's lines up to the next top-level job.
+    """
+    text = CI_WORKFLOW.read_text()
+    start = text.index("\n  stack:\n")
+    match = re.search(r"\n  [a-z-]+:\n", text[start + 1 :])
+    assert match
+    return text[start : start + 1 + match.start()]
+
+
+def test_stack_signal_still_comes_from_ci() -> None:
+    """Drift guard: the job name and artifact templates render the names the verifier requires."""
+    block = stack_job_block()
+    assert "name: stack (${{ matrix.os }}, ${{ matrix.stack }})" in block
+    job = "stack (ubuntu-24.04, personal)"
+    assert promotion.PERSONAL_STACK_JOB.fullmatch(job)
+    upload = block.index("name: stack-${{ matrix.os }}-${{ matrix.stack }}")
+    step = block[block.rindex("- uses:", 0, upload) : upload]
+    assert "actions/upload-artifact@" in step
+    assert "steps.plan.outputs.run == 'true'" in step  # a docs-only or smoke cell never uploads
+    assert promotion.PERSONAL_STACK_ARTIFACT == "stack-ubuntu-24.04-personal"
+
+
+def test_recorded_run_proves_job_success_alone_is_not_evidence() -> None:
+    """The real macOS personal cell is `success` on a main push although it skipped every step."""
+    jobs = {job["name"]: job["conclusion"] for job in fixture("github-run-jobs.json")["jobs"]}
+    assert jobs["stack (macos-14, personal)"] == "success"
+    artifacts = {item["name"] for page in fixture("github-run-artifacts.json") for item in page["artifacts"]}
+    assert "stack-macos-14-personal" not in artifacts
 
 
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda run, jobs: run.update(event="pull_request"),
-        lambda run, jobs: run.update(headBranch="topic"),
-        lambda run, jobs: run.update(conclusion="failure"),
-        lambda run, jobs: run.update(headSha="b" * 40),
-        lambda run, jobs: jobs.clear(),
+        lambda run, jobs, artifacts: run.update(event="pull_request"),
+        lambda run, jobs, artifacts: run.update(headBranch="topic"),
+        lambda run, jobs, artifacts: run.update(conclusion="failure"),
+        lambda run, jobs, artifacts: run.update(headSha="b" * 40),
+        lambda run, jobs, artifacts: jobs.clear(),
+        lambda run, jobs, artifacts: artifacts.clear(),
+        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"].clear(),
+        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(expired=True),
+        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(
+            name="stack-macos-14-personal"
+        ),
+        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(
+            head_sha="b" * 40
+        ),
+        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(
+            id=1
+        ),
     ],
 )
-def test_stack_runs_reject_wrong_event_branch_or_missing_jobs(mutate: Any) -> None:
-    """Only successful push/main runs of the selected SHA with job data qualify."""
+def test_stack_runs_reject_absent_expired_or_mismatched_evidence(mutate: Any) -> None:
+    """Only successful push/main runs with job data and a live matching artifact qualify."""
     runs = copy.deepcopy(fixture("github-runs.json"))
     jobs = copy.deepcopy(jobs_fixture())
-    mutate(runs[0], jobs)
+    artifacts = copy.deepcopy(artifacts_fixture())
+    assert artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["name"] == promotion.PERSONAL_STACK_ARTIFACT
+    mutate(runs[0], jobs, artifacts)
     with pytest.raises(ValueError, match="docs-only"):
-        registry_stack_runs(runs, jobs, FIXTURE_SHA)
+        registry_stack_runs(runs, jobs, artifacts, FIXTURE_SHA)
 
 
-def test_stack_runs_reject_skipped_assembled_step() -> None:
-    """A skipped assembled step (the stack job gated off) is not evidence."""
+def test_stack_runs_reject_failed_personal_job_despite_artifact() -> None:
+    """`ci.yml` uploads the artifact even on failure, so the job conclusion must still be `success`."""
     jobs = copy.deepcopy(jobs_fixture())
     for job in jobs[str(FIXTURE_RUN)]["jobs"]:
-        if job["name"] == promotion.PERSONAL_STACK_JOB:
-            for step in job["steps"]:
-                if step["name"].startswith(promotion.ASSEMBLED_STACK_STEP_PREFIX):
-                    step["conclusion"] = "skipped"
+        if promotion.PERSONAL_STACK_JOB.fullmatch(job["name"]):
+            job["conclusion"] = "failure"
     with pytest.raises(ValueError, match="docs-only"):
-        registry_stack_runs(fixture("github-runs.json"), jobs, FIXTURE_SHA)
+        registry_stack_runs(fixture("github-runs.json"), jobs, artifacts_fixture(), FIXTURE_SHA)
+
+
+@pytest.mark.parametrize("pages", ["x", [1], [{"artifacts": {}}]])
+def test_stack_runs_reject_malformed_artifact_pages(pages: Any) -> None:
+    """A malformed artifact response is a `ValueError`, not a traceback."""
+    with pytest.raises(ValueError, match="rtifact"):
+        registry_stack_runs(
+            fixture("github-runs.json"), jobs_fixture(), {str(FIXTURE_RUN): pages}, FIXTURE_SHA
+        )
 
 
 def test_owned_tags_and_gates_require_exact_owned_evidence(tmp_path: Path) -> None:
@@ -425,10 +485,20 @@ def test_cli_checks_and_stack_runs_against_recorded_fixtures(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The `checks` and `stack-runs` CLI stages read the real recorded API responses."""
-    jobs = tmp_path / f"run-{FIXTURE_RUN}.json"
-    jobs.write_text((FIXTURES / "github-run-jobs.json").read_text())
+    jobs = tmp_path / "jobs"
+    jobs.mkdir()
+    (jobs / f"run-{FIXTURE_RUN}.json").write_text((FIXTURES / "github-run-jobs.json").read_text())
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / f"run-{FIXTURE_RUN}.json").write_text((FIXTURES / "github-run-artifacts.json").read_text())
     args = ["--source-sha", FIXTURE_SHA]
-    runs = ["stack-runs", "--runs", str(FIXTURES / "github-runs.json"), "--jobs-dir", str(tmp_path), *args]
+    runs = [
+        "stack-runs",
+        "--runs", str(FIXTURES / "github-runs.json"),
+        "--jobs-dir", str(jobs),
+        "--artifacts-dir", str(artifacts),
+        *args,
+    ]  # fmt: skip
     assert promotion.main(runs) == 0
     assert json.loads(capsys.readouterr().out) == [FIXTURE_RUN]
     checks = [
