@@ -10,8 +10,7 @@
 		"computer-use",
 		"macos",
 		"desktop-automation",
-		"accessibility",
-		"linux"
+		"accessibility"
 	],
 	"license": "MIT",
 	"repository": {
@@ -40,12 +39,9 @@
 		"native/windows/bridge-rs/src",
 		"native/windows/bridge-rs/tests",
 		"prebuilt/macos",
-		"prebuilt/windows",
 		"assets/reference/img.jpg",
 		"README.md",
 		"LICENSE",
-		"native/linux/bridge-rs",
-		"prebuilt/linux",
 		"docs/*.md"
 	],
 	"pi": {

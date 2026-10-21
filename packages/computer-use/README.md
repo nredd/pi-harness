@@ -6,7 +6,7 @@
 
 `pi-computer-use` lets AI agents use desktop apps on macOS, Windows, and Linux.
 
-The macOS helper requires macOS 14 or newer.
+The macOS helper requires macOS 14 or newer. Only the macOS helper ships in the npm package: the Windows and Linux helpers are not packed, and `desktop_screenshot`/`desktop_input` are registered on macOS only.
 
 An agent can look at an app window, understand the buttons and text inside it, and perform actions like clicking, typing, scrolling, and waiting for something to change. This is useful when the agent needs to work with a normal desktop app instead of an API, a terminal command, or a file.
 

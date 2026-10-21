@@ -41,7 +41,7 @@ import sys
 import tarfile
 import tempfile
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self, TypedDict
 
@@ -200,15 +200,6 @@ PRESET_CONTRACT = PackageContract(
     license="MIT AND Apache-2.0 AND CC-BY-SA-4.0",
 )
 
-# `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` is hermetic
-# (`npm install --offline`, nothing but the tarball), while this package has real runtime dependencies
-# that must come from the registry. It is audited, installed and run through stock Pi by the release
-# `verify` stage (descriptor `stock_gate`), by CI's `make check-subagents-package-contract` and by the
-# pack-vs-contract test, not by that target. The
-# `files` allowlist in `packages/subagents/package.json` and `allowed`/`required` below must enumerate
-# the same set; `test_subagents_pack_matches_contract` enforces it. Peers keep the fork's `>=1.1.0`
-# floor (it needs 1.x host APIs) rather than `*`. `SubagentWorkflow` is registered unless the
-# `workflowsEnabled` setting is off, which a clean sandbox never sets.
 COMPUTER_USE_CONTRACT = PackageContract(
     name="@nredd/pi-computer-use",
     directory="computer-use",
@@ -223,6 +214,10 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "prebuilt/macos/arm64/bridge",
         "prebuilt/macos/x64/bridge",
     ),
+    # Only macOS ships: the arm64/x64 prebuilts below are the sole helper binaries, so no `prebuilt/linux`
+    # or `prebuilt/windows` pattern exists. The `src/platform` and Windows crate patterns are source
+    # the TypeScript backends and the build script reference. `scenario_computer_use`
+    # additionally parses each prebuilt's Mach-O header and mode from the tarball.
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
         re.compile(r"^assets/reference/img\.jpg$"),
@@ -234,7 +229,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         re.compile(r"^scripts/(?:build-native|setup-helper)\.mjs$"),
         re.compile(r"^native/macos/bridge\.swift$"),
         re.compile(
-            r"^native/(?:linux|windows)/bridge-rs/(?:Cargo\.(?:lock|toml)|src/[a-z0-9_-]+\.rs|tests/[a-z0-9_-]+\.rs)$"
+            r"^native/windows/bridge-rs/(?:Cargo\.(?:lock|toml)|src/[a-z0-9_-]+\.rs|tests/[a-z0-9_-]+\.rs)$"
         ),
         re.compile(r"^prebuilt/macos/(?:arm64|x64)/bridge$"),
     ),
@@ -258,7 +253,15 @@ COMPUTER_USE_CONTRACT = PackageContract(
     own_license=True,
 )
 
-
+# `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` is hermetic
+# (`npm install --offline`, nothing but the tarball), while this package has real runtime dependencies
+# that must come from the registry. It is audited, installed and run through stock Pi by the release
+# `verify` stage (descriptor `stock_gate`), by CI's `make check-subagents-package-contract` and by the
+# pack-vs-contract test, not by that target. The
+# `files` allowlist in `packages/subagents/package.json` and `allowed`/`required` below must enumerate
+# the same set; `test_subagents_pack_matches_contract` enforces it. Peers keep the fork's `>=1.1.0`
+# floor (it needs 1.x host APIs) rather than `*`. `SubagentWorkflow` is registered unless the
+# `workflowsEnabled` setting is off, which a clean sandbox never sets.
 SUBAGENTS_CONTRACT = PackageContract(
     name="@nredd/pi-subagents",
     directory="subagents",
@@ -554,7 +557,11 @@ class SubagentsEvidence(TypedDict):
 class ComputerUseEvidence(TypedDict):
     """Stock-Pi declaration evidence, explicitly excluding native desktop execution."""
 
+    platform: str
     tools: list[str]
+    helpers: dict[str, str]
+    postinstall: Literal["NOT RUN"]
+    postinstall_reason: str
     native_desktop: Literal["NOT RUN"]
     native_desktop_reason: str
 
@@ -596,7 +603,13 @@ class SubagentsEvidenceModel(BaseModel):
 
 class ComputerUseEvidenceModel(BaseModel):
     model_config = STRICT_MODEL
-    tools: list[NonEmptyText] = Field(min_length=1, description="Tools the model was offered by the package")
+    platform: NonEmptyText = Field(description="Host `sys.platform` that selected the expected tool set")
+    tools: list[NonEmptyText] = Field(min_length=1, description="Exact tool set the model was offered")
+    helpers: dict[str, NonEmptyText] = Field(
+        min_length=1, description="Packed Mach-O check per prebuilt arch"
+    )
+    postinstall: Literal["NOT RUN"] = Field(description="`setup-helper.mjs` was not exercised")
+    postinstall_reason: NonEmptyText = Field(description="Why the postinstall was not exercised")
     native_desktop: Literal["NOT RUN"] = Field(description="Native desktop behavior was not exercised")
     native_desktop_reason: NonEmptyText = Field(description="Why native desktop behavior was not exercised")
 
@@ -1923,12 +1936,93 @@ def scenario_subagents(ctx: Context) -> SubagentsEvidence:
     return {"tools": sorted(ctx.artifact.contract.exposes_tools), "child_text": SUBAGENTS_CHILD_TEXT}
 
 
-def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
-    """Load packed computer-use and prove its full model-visible tool surface only.
+COMPUTER_USE_DESKTOP_TOOLS = frozenset({"desktop_screenshot", "desktop_input"})
+MACHO_CPU_TYPES = {"arm64": 0x0100000C, "x64": 0x01000007}
+MACHO_MAGIC_64 = b"\xcf\xfa\xed\xfe"
 
-    The helper needs an interactive macOS desktop with Accessibility and Screen Recording TCC grants.
-    This isolated stock-Pi run deliberately invokes no desktop tool and records that limit as ``NOT RUN``.
+
+def host_platform() -> str:
+    """Return the platform whose tool set stock Pi will see (a seam for tests).
+
+    Returns:
+        str: `sys.platform`.
     """
+    return sys.platform
+
+
+def computer_use_expected_tools(platform: str) -> frozenset[str]:
+    """Return the exact tools `extensions/computer-use.ts` registers on `platform`.
+
+    `desktop_screenshot` and `desktop_input` are registered on darwin only, so non-darwin hosts
+    (CI's ubuntu-24.04 cell) must see the other 11 and neither desktop tool.
+
+    Parameters:
+        platform (str): `sys.platform` value.
+
+    Returns:
+        frozenset[str]: Expected tool names.
+    """
+    tools = COMPUTER_USE_CONTRACT.exposes_tools
+    return tools if platform == "darwin" else tools - COMPUTER_USE_DESKTOP_TOOLS
+
+
+def check_macos_helper(tarball: Path, arch: str) -> str:
+    """Require a packed `prebuilt/macos/<arch>/bridge` to be a thin 64-bit Mach-O of `arch`, mode 0755.
+
+    The header is parsed here (little-endian magic then `cputype`), so it works on any host.
+
+    Parameters:
+        tarball (Path): Packed tarball.
+        arch (str): `arm64` or `x64`.
+
+    Returns:
+        str: Human-readable summary recorded as evidence.
+
+    Raises:
+        ContractError: If the member is absent, not a Mach-O of that arch, or not mode 0755.
+    """
+    name = f"prebuilt/macos/{arch}/bridge"
+    with tarfile.open(tarball) as tar:
+        try:
+            mode = tar.getmember(f"package/{name}").mode & 0o7777
+        except KeyError as e:
+            raise ContractError(f"'{tarball.name}' has no '{name}'") from e
+    header = read_member(tarball, name)[:8]
+    require(
+        header[:4] == MACHO_MAGIC_64,
+        f"{name} is not a 64-bit little-endian Mach-O (magic {header[:4].hex()})",
+    )
+    cpu = int.from_bytes(header[4:8], "little")
+    require(
+        cpu == MACHO_CPU_TYPES[arch],
+        f"{name} has cputype {cpu:#x}, expected {MACHO_CPU_TYPES[arch]:#x} for {arch}",
+    )
+    require(mode == 0o755, f"{name} has mode {mode:04o}, expected 0755")
+    return f"Mach-O {arch} cputype {cpu:#x} mode {mode:04o}"
+
+
+def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
+    """Load packed computer-use, prove its platform's exact tool set and audit the shipped helpers.
+
+    The tool set is platform-aware: 13 on darwin, 11 elsewhere (no desktop tools). Each packed
+    macOS helper is checked as a Mach-O of the right arch with mode 0755. Not exercised, and recorded
+    as `NOT RUN`: the `postinstall` (`setup-helper.mjs`; the stock install uses `--ignore-scripts`),
+    because it creates a keychain signing identity, `pkill`s any running helper and registers the app
+    with LaunchServices, which an isolated contract must not do to the host; and any desktop tool,
+    which needs an interactive macOS desktop with Accessibility/Screen Recording TCC grants.
+
+    Parameters:
+        ctx (Context): Scenario context.
+
+    Returns:
+        ComputerUseEvidence: Evidence recorded in the report.
+
+    Raises:
+        ContractError: If a helper is malformed, the extension fails to load or the tool set is wrong.
+    """
+    platform = host_platform()
+    expected = computer_use_expected_tools(platform)
+    helpers = {arch: check_macos_helper(ctx.artifact.path, arch) for arch in MACHO_CPU_TYPES}
     project = ctx.work / "project"
     project.mkdir()
     with ctx.provider_session([TextStep("loaded")]) as provider:
@@ -1939,10 +2033,26 @@ def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
             project,
             ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
         )
-    require_clean_run(result, "computer-use extension load")
-    require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
+    require_clean_run(result, f"computer-use extension load ({platform})")
+    require_tools(
+        result,
+        replace(ctx.artifact.contract, exposes_tools=expected),
+        ctx.siblings,
+        provider.requests,
+        all_tools=True,
+    )
+    offered = set(provider.requests[0].tools)
+    leaked = (COMPUTER_USE_CONTRACT.exposes_tools - expected) & offered
+    require(not leaked, f"computer-use on {platform} must not offer {sorted(leaked)}; got {sorted(offered)}")
     return {
-        "tools": sorted(ctx.artifact.contract.exposes_tools),
+        "platform": platform,
+        "tools": sorted(expected),
+        "helpers": helpers,
+        "postinstall": "NOT RUN",
+        "postinstall_reason": (
+            "stock install uses --ignore-scripts; setup-helper.mjs would create a keychain signing "
+            "identity, pkill a running helper and register the app with LaunchServices"
+        ),
         "native_desktop": "NOT RUN",
         "native_desktop_reason": (
             "requires an interactive macOS desktop and Accessibility/Screen Recording TCC grants"

@@ -29,8 +29,9 @@ assert.match(waylandSource, /pub async fn probe/);
 assert.doesNotMatch(waylandSource, /start_remote_desktop|ActivePortalSession|NotifyPointer/);
 assert.doesNotMatch(nativeSource, /x11_window\.unwrap_or\(root\.pid/);
 assert.match(nativeSource, /"readText": \{"requested":read_text,"executed":false\}/);
-assert.ok(pkg.files.includes("native/linux/bridge-rs"));
-assert.ok(pkg.files.includes("prebuilt/linux"));
+// Only macOS helpers ship in the npm package; the Linux crate and prebuilts stay source-only.
+assert.ok(!pkg.files.includes("native/linux/bridge-rs"));
+assert.ok(!pkg.files.includes("prebuilt/linux"));
 assert.equal(pkg.scripts["build:linux"], "node scripts/build-native.mjs --platform linux");
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-scripts-"));
