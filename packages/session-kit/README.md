@@ -27,7 +27,7 @@ Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
   "rules": { "enabled": true },
   "goal": { "enabled": true },
   "loop": { "enabled": true },
-  "monitor": { "enabled": true },
+  "monitor": { "enabled": true, "collapseKey": "ctrl+shift+m", "maxWidgetLines": 12 },
   "diff": { "enabled": true },
   "stats": { "enabled": true }
 }
@@ -79,6 +79,23 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
   possibly reused group, so its record is kept, not signalled. Within that window a later-born member
   in a reused group is indistinguishable; the dead leader, matching group and session, and no prior
   members bound that case, they do not exclude it.
+- Widget: while any monitor runs, a Todos/subagents-style panel sits above the editor. Heading
+  `▾ ● Monitors (2 running · 1 failed · 1 done)`; one row per retained monitor (running monitors
+  plus up to ten finished ones) with a bullet by state (green running, yellow matched, red
+  failed = non-zero exit, signal or timeout, dim exited/stopped), the name and last line truncated,
+  and `elapsed · N lines` flush right. It is display only: the quiet rules above are unchanged, and
+  a repaint never adds anything to the transcript or model context. Clicking the heading or
+  pressing `monitor.collapseKey` collapses it to the heading plus a `ctrl+shift+m to expand` hint
+  (`▸`). `monitor.maxWidgetLines` caps content rows (heading included, default 12, integer >= 4,
+  else the default), excluding the one trailing spacer row. It is a constant-height window:
+  `↑ N more` / `↓ N more` take a row each, so it never resizes while you scroll with the mouse
+  wheel. Pi's tool-output expansion shows every row.
+  `collapseKey` takes the same grammar as rpiv-todo's `collapseKey` (trimmed, lowercased; distinct
+  `ctrl`/`shift`/`alt`/`super` modifiers plus one printable key or a named key; `"off"` removes the
+  binding; anything else falls back to the default). It is bound once per runtime, so a change needs
+  `/reload`. The default `ctrl+shift+m` is unused by pi core, Todos (`ctrl+shift+t`), subagents and
+  Plan mode (no default key). Like Todos' key it needs a terminal with the kitty keyboard protocol.
+  There is no `collapseOnResume`: monitors never survive a resume, so there is nothing to collapse.
 - Plan mode admits only `monitor_read`; start and stop are mutating tools. Ordinary tool hooks apply
   to the tool call, but a custom argv tool does not automatically inherit Bash-specific policies.
 
