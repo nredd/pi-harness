@@ -6,7 +6,7 @@ on:
     inputs:
       source_sha:
         description: Exact 40-character main SHA
-        required: false
+        required: true
         type: string
       operation:
         description: Verify only, or verify and promote
