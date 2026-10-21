@@ -22,7 +22,7 @@ The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s
 
 `main` still validates the merged result: both `owned` and `contracts` OS cells plus `stack (ubuntu-24.04, personal)` run. The other three stack cells report the selective smoke rather than repeating work that a strict PR head already ran. This keeps one end-to-end merged-tree check while removing the most redundant post-merge macOS demand. The same measurement found six explicit update-branch CI runs plus one Forks run used 180.07 assigned runner-minutes; full main-push workflows used 599.13 assigned runner-minutes, including 334.02 macOS minutes. Those are upper bounds, not promised savings, and this policy preserves the higher-value merged-result coverage.
 
-`main` protection remains `strict: true`. Strict means that advancing `main` invalidates a PR's previous green result and requires an update-branch rerun before merge. That cost is intentional for combined-result safety; docs-only bypasses make documentation updates cheaper without weakening it.
+The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), which remains `strict`. Strict means that advancing `main` invalidates a PR's previous green result and requires an update-branch rerun before merge. That cost is intentional for combined-result safety; docs-only bypasses make documentation updates cheaper without weakening it.
 
 `.github/workflows/forks.yml`, when `forks/**`, `.gitmodules` or the workflow changes, plus manual dispatch:
 
@@ -88,7 +88,7 @@ Required checks on `main`:
 - `contracts (ubuntu-24.04)` and `contracts (macos-14)`
 - `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
 
-These eight jobs are the configured protection checks. `migration-review/standards` and
+These eight jobs are the required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`. `migration-review/standards` and
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
@@ -153,8 +153,8 @@ serially with two pytest workers; `stack (..., local)` adds no work. No build pr
 transfer or extra queue admission. Budget an additional 7-12 minutes on macOS personal and 5-9 minutes
 on Ubuntu personal (12-21 added runner minutes total); local cells add zero. These are estimates until
 CI measurements, not promised runtimes. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid
-another build and two stack installs while establishing both current OS targets. Branch protection
-is unchanged; Bun failures now fail the existing personal stack check, not a new required context.
+another build and two stack installs while establishing both current OS targets. The ruleset's required
+checks are unchanged; Bun failures now fail the existing personal stack check, not a new required context.
 
 `.github/workflows/publish.yml`, pushes of tags matching `@nredd/*@*`:
 

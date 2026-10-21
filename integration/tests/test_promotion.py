@@ -20,13 +20,14 @@ from harness.promotion import (
     CoreEvidence,
     GateEvidence,
     OwnedPackageEvidence,
+    RequiredCheck,
     StackSnapshot,
     build_gates,
     build_snapshot,
     flatten_pages,
     owned_tags,
     registry_stack_runs,
-    required_check_names,
+    required_checks,
     select_source_sha,
     stack_bytes,
     verify_required_checks,
@@ -162,39 +163,57 @@ def fixture(name: str) -> Any:
 RULESET = [
     {
         "type": "required_status_checks",
-        "parameters": {"required_status_checks": [{"context": "owned (ubuntu-24.04)"}]},
+        "parameters": {
+            "required_status_checks": [{"context": "owned (ubuntu-24.04)", "integration_id": 15368}]
+        },
     }
 ]
+APP = 15368
 
 
-def test_required_checks_from_real_protection_and_rules() -> None:
-    """The real rules API is empty today, so the protection response supplies the checks."""
-    rules = flatten_pages(fixture("github-rules-main.json"))
-    assert rules == []
-    protection = fixture("github-branch-protection-checks.json")
-    names = required_check_names(rules, protection)
+def test_required_checks_from_real_ruleset() -> None:
+    """The recorded `rules/branches/main` response lists all eight checks with their app."""
+    checks = required_checks(flatten_pages(fixture("github-rules-main.json")))
+    names = [check.context for check in checks]
+    assert len(names) == 8
     assert "stack (ubuntu-24.04, personal)" in names
     assert names == sorted(set(names))
-    assert required_check_names(flatten_pages([RULESET]), None) == ["owned (ubuntu-24.04)"]
-    both = required_check_names(RULESET, {"checks": [{"context": "contracts (macos-14)"}]})
-    assert both == ["contracts (macos-14)", "owned (ubuntu-24.04)"]
+    assert {check.integration_id for check in checks} == {APP}
+    assert required_checks(RULESET) == [RequiredCheck("owned (ubuntu-24.04)", APP)]
 
 
-def test_unreadable_required_checks_is_explicit() -> None:
-    """No readable source names the token the owner must add."""
-    with pytest.raises(ValueError, match="STACK_PROMOTION_RULES_TOKEN"):
-        required_check_names([], None)
-    with pytest.raises(ValueError, match="malformed"):
-        required_check_names([{"type": "required_status_checks", "parameters": {}}], None)
-    with pytest.raises(ValueError, match="invalid"):
-        required_check_names([], {"checks": [{"app_id": 1}]})
+@pytest.mark.parametrize(
+    ("rules", "message"),
+    [
+        ([], "no required status checks"),
+        ([{"type": "deletion"}], "no required status checks"),
+        ([{"type": "required_status_checks", "parameters": {}}], "malformed"),
+        (
+            [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"app_id": 1}]}}],
+            "invalid `context`",
+        ),
+        (
+            [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": "a", "integration_id": "x"}]},
+                }
+            ],
+            "invalid `integration_id`",
+        ),
+    ],
+)
+def test_required_checks_fail_closed(rules: list[Any], message: str) -> None:
+    """An empty, absent or malformed rules response never yields a check list."""
+    with pytest.raises(ValueError, match=message):
+        required_checks(rules)
 
 
 def test_checks_against_real_check_runs() -> None:
-    """Every real configured check succeeded on the recorded main SHA; a wrong SHA or failure refuses."""
-    required = required_check_names([], fixture("github-branch-protection-checks.json"))
+    """Every real configured check succeeded on the recorded main SHA; a wrong SHA, failure or app refuses."""
+    required = required_checks(flatten_pages(fixture("github-rules-main.json")))
     pages = fixture("github-check-runs.json")
-    assert verify_required_checks(required, pages, FIXTURE_SHA) == required
+    assert verify_required_checks(required, pages, FIXTURE_SHA) == [check.context for check in required]
     with pytest.raises(ValueError, match="did not succeed"):
         verify_required_checks(required, pages, "b" * 40)
     failed = copy.deepcopy(pages)
@@ -202,7 +221,30 @@ def test_checks_against_real_check_runs() -> None:
     with pytest.raises(ValueError, match="did not succeed"):
         verify_required_checks(required, failed, FIXTURE_SHA)
     with pytest.raises(ValueError, match="did not succeed"):
-        verify_required_checks([*required, "absent"], pages, FIXTURE_SHA)
+        verify_required_checks([*required, RequiredCheck("absent", None)], pages, FIXTURE_SHA)
+
+
+def test_checks_require_the_configured_app() -> None:
+    """A same-named check from another app does not satisfy a rule that names `integration_id`."""
+    pages = copy.deepcopy(fixture("github-check-runs.json"))
+    for run in pages[0]["check_runs"]:
+        run["app"]["id"] = 1
+    required = required_checks(flatten_pages(fixture("github-rules-main.json")))
+    with pytest.raises(ValueError, match="did not succeed"):
+        verify_required_checks(required, pages, FIXTURE_SHA)
+    unpinned = [RequiredCheck(check.context, None) for check in required]
+    assert verify_required_checks(unpinned, pages, FIXTURE_SHA)
+    for run in pages[0]["check_runs"]:
+        del run["app"]
+    with pytest.raises(ValueError, match="did not succeed"):
+        verify_required_checks(required, pages, FIXTURE_SHA)
+
+
+@pytest.mark.parametrize("pages", [[[]], ["x"], [{"check_runs": {}}]])
+def test_checks_reject_malformed_pages(pages: list[Any]) -> None:
+    """A malformed API page is a `ValueError`, not a traceback."""
+    with pytest.raises(ValueError, match="check_runs"):
+        verify_required_checks([RequiredCheck("a", None)], pages, FIXTURE_SHA)
 
 
 def jobs_fixture() -> dict[str, dict[str, Any]]:
@@ -395,8 +437,9 @@ def test_cli_checks_and_stack_runs_against_recorded_fixtures(
         "--check-pages", str(FIXTURES / "github-check-runs.json"),
         *args,
     ]  # fmt: skip
-    assert promotion.main(checks) == 1
-    assert "STACK_PROMOTION_RULES_TOKEN" in capsys.readouterr().err
-    protection = ["--protection", str(FIXTURES / "github-branch-protection-checks.json")]
-    assert promotion.main([*checks, *protection]) == 0
+    assert promotion.main(checks) == 0
     assert "stack (ubuntu-24.04, personal)" in capsys.readouterr().out
+    empty = tmp_path / "empty-rules.json"
+    empty.write_text("[[]]")
+    assert promotion.main([*checks[:2], str(empty), *checks[3:]]) == 1
+    assert "no required status checks" in capsys.readouterr().err
