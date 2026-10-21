@@ -32,7 +32,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-import fork_package_contracts as fork
 import package_contracts as pc
 import release_descriptors as rd
 import release_manifest as rm
@@ -520,7 +519,7 @@ def verify(repo: Path, target: Target, output: Path) -> Identity:
     """Install, check, pack once, exercise those bytes, and record checksums plus a release manifest.
 
     Parameters:
-        repo (Path): Clean tagged checkout, with the pinned Bun and optional contract fork installed.
+        repo (Path): Clean tagged checkout, with the pinned Bun installed.
         target (Target): Preflighted release.
         output (Path): New artifact directory OUTSIDE the checkout.
 
@@ -551,11 +550,11 @@ def verify(repo: Path, target: Target, output: Path) -> Identity:
             gate.mkdir()
             report = run_stock_contract(gate, stock, descriptor, supplied)
             evidence["stock_contract"] = report.model_dump_json()
-        if "fork" in descriptor.contract_gates:
-            gate = work / "fork-contract"
+        if "audit" in descriptor.contract_gates:
+            gate = work / "audit"
             gate.mkdir()
-            report_fork = fork.run_fork_gate(gate, stock, repo, supplied)
-            evidence["fork_contract"] = report_fork.model_dump_json()
+            audit = pc.run_audit_gate(gate, descriptor.contract, supplied)
+            evidence["audit_contract"] = json.dumps(audit, sort_keys=True)
         identity = Identity(
             target=target,
             commit=command(repo, "git", "rev-parse", "HEAD"),
@@ -902,11 +901,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.stage == "preflight":
             target = preflight(repo, args.tag)
-            descriptor = descriptor_for(target)
             emit_outputs(
                 workspace=target.name,
                 directory=target.directory,
-                needs_fork_contract=str("fork" in descriptor.contract_gates).lower(),
             )
             return 0
         if args.stage == "stack-check":

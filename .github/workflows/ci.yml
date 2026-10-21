@@ -104,9 +104,9 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         with:
           tool: cargo-nextest
-      - name: Initialize stack forks at their Gitlinks
+      - name: Initialize the core fork at its Gitlink
         if: steps.plan.outputs.run == 'true'
-        run: git submodule update --init forks/pi forks/pi-subagents forks/pi-plan-mode forks/rpiv-todo
+        run: git submodule update --init forks/pi
       - name: Install
         if: steps.plan.outputs.run == 'true'
         run: make install
@@ -166,9 +166,6 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         with:
           persist-credentials: false
-      - name: Initialize the pi-subagents fork at its Gitlink
-        if: steps.plan.outputs.run == 'true'
-        run: git submodule update --init forks/pi-subagents
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.plan.outputs.run == 'true'
         with:
@@ -184,12 +181,9 @@ jobs:
       - name: Install
         if: steps.plan.outputs.run == 'true'
         run: make install
-      - name: Packed plugins alone on exact stock Pi
+      - name: Packed plugins alone on exact stock Pi, plus packed preset audit
         if: steps.plan.outputs.run == 'true'
         run: make check-package-contracts REPORT="$RUNNER_TEMP/package-contracts.json"
-      - name: Packed preset and dev-tools through the pi-subagents fork
-        if: steps.plan.outputs.run == 'true'
-        run: make check-fork-package-contracts REPORT="$RUNNER_TEMP/fork-package-contracts.json"
       - name: Packed pi-plan-mode with its registry dependency on exact stock Pi
         if: steps.plan.outputs.run == 'true'
         run: make check-plan-mode-package-contract REPORT="$RUNNER_TEMP/plan-mode-package-contracts.json"
@@ -206,7 +200,7 @@ jobs:
         if: always() && steps.plan.outputs.run == 'true'
         with:
           name: contract-reports-${{ matrix.os }}
-          path: ${{ runner.temp }}/*contracts.json
+          path: ${{ runner.temp }}/*contracts*.json
           if-no-files-found: ignore
 
   stack:
@@ -254,7 +248,9 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         with:
           persist-credentials: false
-          submodules: true
+      - name: Initialize the core fork at its Gitlink
+        if: steps.plan.outputs.run == 'true'
+        run: git submodule update --init forks/pi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.plan.outputs.run == 'true'
         with:

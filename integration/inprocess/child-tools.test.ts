@@ -28,7 +28,7 @@ it.each([false, true])(
 		(globalThis as Record<symbol, unknown>)[OPTIONS] = kitOptions;
 		const kit = createSessionKit(kitOptions);
 		const kitPackage = fileURLToPath(new URL("fixtures/pi-session-kit", import.meta.url));
-		const subagentsPackage = join(ROOT, "forks/pi-subagents");
+		const subagentsPackage = join(ROOT, "packages/subagents");
 		const packages = kitFirst ? [kitPackage, subagentsPackage] : [subagentsPackage, kitPackage];
 		jsonFile(join(home.root, "agent/deferred-tools.json"), {
 			alwaysActive: ["Agent", "session_kit_child_scope_probe", "monitor_read"],
