@@ -20,21 +20,23 @@ on long research → design → implement sessions.
 
 Imported from [`juicesharp/rpiv-mono`](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-todo)
 `packages/rpiv-todo` at fork commit `9a4e2e8` (`nredd/rpiv-todo`). Source, tests and docs are
-byte-identical to the fork except this README and `package.json`. Deliberate deltas:
+byte-identical to the fork except this README, `package.json` and comments in
+`state/i18n-bridge.ts`. Deliberate deltas:
 
 - Renamed to `@nredd/pi-todo`; `repository`, `homepage`, `bugs` and the doc/license links point at
   `nredd/pi-harness/packages/todo`. Links that credit upstream stay on `juicesharp/rpiv-mono`
 - `author` dropped from `package.json`; the retained upstream MIT `LICENSE` carries attribution
 - `@juicesharp/rpiv-i18n` is a hard `dependency` (`^2.13.9`), not an optional peer, and
   `peerDependenciesMeta` is removed. The English-only fallback in `state/i18n-bridge.ts` is kept
-  but unreachable in a normal install
+  but unreachable in a normal install; only its comments changed to say so
 - `pi.image` points at `docs/cover.png` in this repository. The file is not packed
   (`!docs/*.png`); the URL resolves once the package is on `main`
 - The persisted config path stays `~/.config/rpiv-todo/` and the i18n namespace stays
   `@juicesharp/rpiv-todo`, for compatibility with existing configs and sessions
 - The nested `package-lock.json` is the fork's, kept as in `packages/plan-mode`. The root npm
-  workspace (`npm ci --ignore-scripts`) and the packed-contract install use the root lock; only a
-  standalone `npm ci` inside this directory reads the nested one
+  workspace (`npm ci --ignore-scripts`) uses the root lock; only a standalone `npm ci` inside this
+  directory reads the nested one. The packed contract uses neither: it `npm install`s the tarball
+  into an empty consumer, resolving from the registry, and audits that fresh install
 
 ## Verification
 
