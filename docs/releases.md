@@ -56,7 +56,7 @@ its full lockfile closure is verified.
 Computer-use platform notes:
 
 - `npm run check --workspace @nredd/pi-computer-use` runs the Swift/native suites only on macOS: `test:macos-native` exits 0 with "skipped (not macOS)" elsewhere, and `test:macos-live` additionally needs `PI_COMPUTER_USE_LIVE=1` and skips cleanly otherwise (it restarts the shared helper daemon). On Linux those two report skipped, not passed.
-- The imported `packages/computer-use/.github/` (its own `ci.yml`, `npm-audit.yml`, `publish-npm.yml`, dependabot) is dormant: GitHub only reads the repository-root `.github`, so those files never run here. Publication goes through `publish.yml` above. The nested `package-lock.json` was removed; the root workspace lockfile owns resolution, as for `packages/subagents`.
+- The imported `packages/computer-use/.github/` (its own `ci.yml`, `npm-audit.yml`, `publish-npm.yml`, dependabot) is dormant: GitHub only reads the repository-root `.github`, so those files never run here. Publication goes through `publish.yml` above. The nested `package-lock.json` was removed; the root workspace lockfile owns resolution, as for `packages/subagents`. The nested locks in `packages/todo` and `packages/plan-mode` were removed too; the root lock governs.
 - `scripts/setup-helper.mjs` still falls back to downloading from `injaneity/pi-computer-use` releases and uses the `com.injaneity.pi-computer-use` bundle id. See [forks](forks.md).
 Patterns use `PurePosixPath.full_match`: `*` and `?` stay within one path segment, while `**` matches zero
 or more segments. Requirements check both the source workspace and packed tarball.
@@ -76,9 +76,8 @@ or more segments. Requirements check both the source workspace and packed tarbal
 only the selected package's `npm run check` with pinned Bun, and packs once. Child commands run without
 the integration venv `uv run` activated for the script (`VIRTUAL_ENV` and its `bin` on `PATH`), matching
 CI's `owned` job. The stock package contract
-consumes that tarball for each standalone plugin; dev-tools also runs the fork contract, and preset
-runs the fork contract instead of a standalone contract. The fork contract packs only the companion
-package from the same checkout. Existing tarballs enter the gates via `supplied` (CLI equivalent:
+consumes that tarball for each standalone plugin; preset runs `run_audit_gate` (tarball audit plus a
+clean install) instead of a standalone contract. Existing tarballs enter the gates via `supplied` (CLI equivalent:
 `--tarball DIRECTORY=PATH`); the candidate is never repacked.
 
 The artifact contains the candidate `.tgz`, `SHA256SUMS`, `identity.json` (source commit, tag, SHA-256
