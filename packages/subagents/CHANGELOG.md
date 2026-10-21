@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0-nredd.6] - 2026-10-21
+
 > **⚠️ Breaking: `strictAgentFiles: true` now requires a pi host that exports `ExtensionStartupError`.** On an older supported host, activation refuses before reading agent files. Upgrade pi or set `strictAgentFiles: false`.
 
 ### Fixed
@@ -47,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`agentModels` setting.** Global/enterprise-only map of agent `type` (or `"*"`) to model. Precedence: `Agent({ model })` > `agentModels[type]` > `agentModels["*"]` > the definition's `model:` > the parent's model. Applied on the top-level, nested and workflow `agent()` paths; a project `.pi/subagents.json` value is ignored with a warning.
 
 ### Changed
+- First CI-attested release (OIDC trusted publishing with provenance); no code change since the `0.22.0-nredd.5` owner bootstrap.
 - **Finished-agent retention depends on whether anyone read the result.** A consumed record is evicted 10 minutes after it was consumed; an unread one is kept 60 minutes from completion (it used to be 10 minutes from completion for both). After eviction `get_subagent_result` and `steer_subagent` answer `completed, evicted after N min; transcript: <path>` rather than `Agent not found`, from an in-memory note cleared at session boundaries.
 - **No background work inside a subagent.** A nested `Agent` call with `run_in_background: true` now returns an explanatory error instead of detaching a child whose completion would be delivered to a session that is gone, and a frontmatter `run_in_background: true` on the nested type runs foreground. Calling a `workflow` / `Workflow` / `SubagentWorkflow` tool (ours or another extension's) from a subagent returns an error saying why. Foreground nested `Agent` is unchanged.
 - **Fuzzy model names resolve to the newest version.** `"opus"` resolved to `claude-opus-5` because the shortest id won. Exact ids and aliases still win first; otherwise candidates are narrowed to pi's `enabledModels` (when any is in it), then ranked by parsed version descending (`claude-<family>-<n>[-<n>]`, `gpt-<n>[.<n>]-<variant>`), then by score.
