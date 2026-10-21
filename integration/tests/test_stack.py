@@ -358,7 +358,7 @@ def test_local_descriptor_and_personal_file_fail_closed(tmp_path: Path) -> None:
     [
         ("npm:@nredd/pi-session-kit@0.6.0", "../../packages/session-kit"),
         ("npm:@nredd/pi-preset@0.2.0", "../../packages/preset"),
-        ("npm:@nredd/pi-subagents@0.22.0-nredd.5", "../../packages/subagents"),
+        ("npm:@nredd/pi-subagents@0.22.0-nredd.6", "../../packages/subagents"),
         ("npm:@nredd/pi-todo@2.13.10", "../../packages/todo"),
         ("npm:@nredd/pi-plan-mode@0.59.3-nredd.2", "../../packages/plan-mode"),
         ("npm:@nredd/pi-computer-use@0.5.2", "../../packages/computer-use"),
