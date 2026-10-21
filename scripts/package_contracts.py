@@ -2241,7 +2241,9 @@ def scenario_subagents(ctx: Context) -> SubagentsEvidence:
     record = result.single_tool_result("Agent")
     require(not tool_is_error(record), f"subagents `Agent` failed: {record.get('result')}")
     text = tool_text(record)
-    require(SUBAGENTS_CHILD_TEXT in text, f"subagents `Agent` result lacks the child's answer: '{text[-300:]}'")
+    require(
+        SUBAGENTS_CHILD_TEXT in text, f"subagents `Agent` result lacks the child's answer: '{text[-300:]}'"
+    )
     return {"tools": sorted(ctx.artifact.contract.exposes_tools), "child_text": SUBAGENTS_CHILD_TEXT}
 
 
