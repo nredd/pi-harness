@@ -998,11 +998,20 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
     target = nr.resolve_target(repo, f"{contract.name}@1.2.3")
     nr.verify(repo, target, tmp_path / "candidate")
     expected = ["ci", "run", "pack"]
-    if contract in pc.CONTRACTS:
+    descriptor = rd.descriptor_for(contract.name)
+    assert descriptor is not None
+    if "stock" in descriptor.contract_gates:
         expected.append("stock")
-    if contract in (nr.fork.DEV_TOOLS_CONTRACT, pc.PRESET_CONTRACT):
+    if "fork" in descriptor.contract_gates:
         expected.append("fork")
     assert events == expected
+
+
+def test_every_standalone_descriptor_has_a_packed_artifact_gate() -> None:
+    """No descriptor may ship without a gate that audits its real packed bytes."""
+    for descriptor in rd.DESCRIPTORS:
+        assert descriptor.contract_gates, descriptor.name
+        assert ("stock" in descriptor.contract_gates) == (descriptor.stock_gate is not None), descriptor.name
 
 
 @pytest.mark.parametrize("failure", ["ci", "run"])
