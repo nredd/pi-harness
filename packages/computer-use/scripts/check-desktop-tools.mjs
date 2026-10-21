@@ -29,6 +29,7 @@ for (const good of [
 	{ action: "readClipboard" },
 	{ action: "writeClipboard", text: "x" },
 ]) assert.doesNotThrow(() => validateDesktopInput(good));
+assert.throws(() => validateDesktopInput({ action: "scroll", x: 1, y: 1, scrollY: 0.5 }), /whole-number/);
 
 if (process.platform === "darwin") {
 	const sent = [];
@@ -78,8 +79,6 @@ if (process.platform === "darwin") {
 	delete process.env.PI_COMPUTER_USE_HEADLESS;
 	loadComputerUseConfig(process.cwd());
 	assert.equal(sent.length, before, "gated calls must not reach the helper");
-	assert.throws(() => validateDesktopInput({ action: "scroll", x: 1, y: 1, scrollY: 0.5 }), /whole-number/);
-
 } else {
 	// Execution is darwin-only by design; prove it refuses, then report what this host cannot check.
 	await assert.rejects(executeDesktopInput("x", { action: "click", x: 1, y: 1 }), /only implemented on macOS/);
@@ -105,4 +104,8 @@ await slow;
 await assert.rejects(queued, /aborted/);
 assert.deepEqual(ran, ["slow"]);
 
-console.log("desktop tool checks passed");
+console.log(
+	process.platform === "darwin"
+		? "desktop tool checks passed"
+		: "desktop tool validation and lock checks passed (wire mapping and gating NOT RUN)",
+);
