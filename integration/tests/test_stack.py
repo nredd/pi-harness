@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from harness import sandbox
 from harness.paths import pi_command
-from harness.release import gitlink_tag, release_checksums
+from harness.release import gitlink_tag, release_asset_url, release_checksums
 from harness.stack import (
     PRESET_IDENTITY,
     LocalStackDocument,
@@ -150,13 +150,14 @@ def test_shipped_stack_is_semantically_valid_and_matches_the_core_gitlink() -> N
     assert release_checksums(personal.core.tag)
     # Local is personal with each owned npm package and each nredd fork tag swapped for its
     # workspace path, in order, except the footer-only preset: local moves the full unfiltered
-    # preset last. PR #90 proved this equal to the hand-written local.json it replaced.
+    # preset last.
     localized = [localize_source(source_string(source)) for source in personal.sources]
     preset = localize_source(f"npm:{PRESET_IDENTITY}@0.0.0")
     expected = [source for source in localized if source != preset] + [preset]
     assert [source_string(source) for source in local.sources] == expected, (
         f"local derivation diverged from personal: {expected}"
     )
+    assert len(local.sources) == len(personal.sources)
     assert local.settings == personal.settings
     assert local.disabled_extensions == {
         localize_source(key): reason for key, reason in (personal.disabled_extensions or {}).items()
@@ -233,6 +234,28 @@ def test_local_descriptor_and_personal_file_fail_closed(tmp_path: Path) -> None:
         load_stack(descriptor)
 
 
+@pytest.mark.parametrize(
+    ("source", "local"),
+    [
+        ("npm:@nredd/pi-session-kit@0.6.0", "../../packages/session-kit"),
+        ("npm:@nredd/pi-preset@0.2.0", "../../packages/preset"),
+        ("git:github.com/nredd/pi-subagents@v0.22.0-nredd.5", "../../forks/pi-subagents"),
+        ("git:github.com/nredd/pi-computer-use@v0.5.1-nredd.2", "../../forks/pi-computer-use"),
+        ("npm:pi-memory@0.4.2", "npm:pi-memory@0.4.2"),
+        ("npm:@gotgenes/pi-anthropic-auth@3.4.3", "npm:@gotgenes/pi-anthropic-auth@3.4.3"),
+        ("git:github.com/someone/pi-subagents@v1.0.0", "git:github.com/someone/pi-subagents@v1.0.0"),
+    ],
+)
+def test_localize_source_maps_only_owned_identities(source: str, local: str) -> None:
+    """Pin the owned-package and fork mappings with literal inputs, independent of the stacks.
+
+    Parameters:
+        source (str): personal stack source.
+        local (str): expected local development source.
+    """
+    assert localize_source(source) == local
+
+
 def test_semantic_validators_reject_tampered_stack_documents() -> None:
     """Exercise the shipped and release validators without literal package pin tables."""
     personal = Stack.model_validate(stack_document(name="personal", sources=["npm:@nredd/pi-preset@0.2.0"]))
@@ -240,7 +263,7 @@ def test_semantic_validators_reject_tampered_stack_documents() -> None:
         validate_shipped_stack(Stack.model_validate(stack_document(name="personal")))
     with pytest.raises(ValueError, match="does not match Gitlink tag"):
         validate_release_identity(personal, "v1.3.0-nredd.6", {})
-    wrong = {"https://github.com/nredd/pi/releases/download/v1.3.0-nredd.7/good.tgz": "0" * 64}
+    wrong = {release_asset_url("v1.3.0-nredd.7", "good.tgz"): "0" * 64}
     with pytest.raises(ValueError, match="integrity does not match"):
         validate_release_identity(personal, "v1.3.0-nredd.7", wrong)
 
