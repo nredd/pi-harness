@@ -230,8 +230,10 @@ it("25-column quota stays one row", async () => {
 	const quota = quotaRow(host);
 	expect(quota).toMatch(/^Left:/);
 	for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(25);
-	for (const fragment of ["OAI", "7d", "Anth"]) {
-		for (const row of rows.filter((line) => line.includes(fragment))) expect(row).toBe(quota);
+	// Whole-token matches: the cwd row is a random mkdtemp path (`pi-footer-XXXXXX`), and a bare
+	// substring check failed whenever that suffix contained e.g. "7d" (`m7d58N`, `Rj7dVK`).
+	for (const fragment of [/\bOAI\b/, /\b7d\b/, /\bAnth\b/]) {
+		for (const row of rows.filter((line) => fragment.test(line))) expect(row).toBe(quota);
 	}
 	host.resize(120, 40);
 	await host.settle();
