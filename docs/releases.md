@@ -76,9 +76,8 @@ or more segments. Requirements check both the source workspace and packed tarbal
 only the selected package's `npm run check` with pinned Bun, and packs once. Child commands run without
 the integration venv `uv run` activated for the script (`VIRTUAL_ENV` and its `bin` on `PATH`), matching
 CI's `owned` job. The stock package contract
-consumes that tarball for each standalone plugin; dev-tools also runs the fork contract, and preset
-runs the fork contract instead of a standalone contract. The fork contract packs only the companion
-package from the same checkout. Existing tarballs enter the gates via `supplied` (CLI equivalent:
+consumes that tarball for each standalone plugin; preset runs `run_audit_gate` (tarball audit plus a
+clean install) instead of a standalone contract. Existing tarballs enter the gates via `supplied` (CLI equivalent:
 `--tarball DIRECTORY=PATH`); the candidate is never repacked.
 
 The artifact contains the candidate `.tgz`, `SHA256SUMS`, `identity.json` (source commit, tag, SHA-256

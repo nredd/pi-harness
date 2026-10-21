@@ -127,7 +127,7 @@ export class GoalStack {
 	 */
 	async subagents(): Promise<ExtensionFactory> {
 		assertHostIdentity("pi-subagents");
-		const url = new URL("../../forks/pi-subagents/src/index.ts", import.meta.url);
+		const url = new URL("../../packages/subagents/src/index.ts", import.meta.url);
 		const { createSubagentsExtension } = (await import(/* @vite-ignore */ url.href)) as {
 			createSubagentsExtension(options: { clock: FakeClock }): ExtensionFactory;
 		};

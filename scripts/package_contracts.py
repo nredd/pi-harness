@@ -176,7 +176,7 @@ CONTRACTS = (
 
 # The preset is audited and packed like the plugins but is deliberately NOT in `CONTRACTS`: it is not
 # a standalone plugin (it relies on the forked pi-subagents and `@nredd/pi-dev-tools` for its agents),
-# so `make check-package-contracts` does not run it. `fork_package_contracts.py` consumes it. Its
+# so the stock gate does not run it; `run_audit_gate` audits and installs it alone instead. Its
 # themes are separately licensed, so the manifest must declare the full expression, and the license
 # texts plus `NOTICE.md` are required content rather than optional extras.
 PRESET_CONTRACT = PackageContract(
@@ -3266,6 +3266,48 @@ def run_gate(
     )
 
 
+def run_audit_gate(
+    work: Path, contract: PackageContract, supplied: Mapping[str, Path] | None = None
+) -> dict[str, object]:
+    """Audit and install one packed package that has no standalone Pi behavior.
+
+    The preset ships agents and themes only, so there is nothing to execute through stock Pi alone.
+    Its packed bytes still get the full tarball audit (files, manifest, license expression) and the
+    clean-install closure check. Agent behavior in real children lives in the in-process suite.
+
+    Parameters:
+        work (Path): Empty scratch directory.
+        contract (PackageContract): Package to pack or load, audit and install.
+        supplied (Mapping[str, Path] | None): Existing tarballs by directory, never repacked.
+
+    Returns:
+        dict[str, object]: Artifact identity and file list.
+
+    Raises:
+        ContractError: If the tarball audit or the clean install fails.
+    """
+    tools = locate_tools()
+    sandbox = Sandbox(work / "base", tools)
+    tarballs = work / "tarballs"
+    tarballs.mkdir()
+    artifact = select_artifact(contract, tarballs, sandbox, supplied or {})
+    problems = audit_tarball(artifact, (REPO_ROOT / "LICENSE").read_bytes(), tools.node)
+    if problems:
+        raise ContractError(
+            f"Tarball audit failed for '{contract.name}':\n" + "\n".join(f"  - {p}" for p in problems)
+        )
+    install_alone(artifact, sandbox, work / "install")
+    return {
+        "name": contract.name,
+        "version": artifact.version,
+        "tarball": artifact.path.name,
+        "integrity": artifact.integrity,
+        "shasum": artifact.shasum,
+        "size": artifact.size,
+        "files": list(artifact.files),
+    }
+
+
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     """Parse the command line.
 
@@ -3288,6 +3330,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--package", action="append", choices=[c.directory for c in CONTRACTS], help="Restrict to one package"
     )
+    parser.add_argument(
+        "--audit-preset", action="store_true", help="Only audit and install the packed `@nredd/pi-preset`"
+    )
     return parser.parse_args(argv)
 
 
@@ -3308,6 +3353,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     work = args.work_dir or Path(tempfile.mkdtemp(prefix="pi-package-contracts-"))
     work.mkdir(parents=True, exist_ok=True)
     try:
+        if args.audit_preset:
+            evidence = run_audit_gate(work.resolve(), PRESET_CONTRACT)
+            text = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+            if args.report:
+                args.report.write_text(text)
+            sys.stdout.write(text)
+            LOGGER.info("preset package audit: passed")
+            return 0
         supplied = parse_tarballs(args.tarball, CONTRACTS)
         only = args.package or (list(supplied) if supplied else None)
         if supplied and only is not None and set(supplied) - set(only):

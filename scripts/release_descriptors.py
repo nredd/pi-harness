@@ -27,7 +27,7 @@ class ReleaseDescriptor:
         workspace (PurePosixPath): Package source directory relative to the repository root.
         verify_commands (tuple[tuple[str, ...], ...]): Checked commands, expressed without a shell.
         contract (pc.PackageContract): Packed-artifact contract exercised after packing.
-        contract_gates (tuple[Literal["stock", "fork"], ...]): Contract gates consuming the tarball.
+        contract_gates (tuple[Literal["stock", "audit"], ...]): Contract gates consuming the tarball.
         stock_gate (Callable[[pc.Context], pc.ScenarioEvidence] | None): Executable stock-Pi gate.
         native_artifacts (tuple[PurePosixPath, ...]): Required package-relative
             ``PurePosixPath.full_match`` glob patterns that must exist before packing and appear in the
@@ -38,7 +38,7 @@ class ReleaseDescriptor:
     workspace: PurePosixPath
     verify_commands: tuple[tuple[str, ...], ...]
     contract: pc.PackageContract
-    contract_gates: tuple[Literal["stock", "fork"], ...]
+    contract_gates: tuple[Literal["stock", "audit"], ...]
     stock_gate: Callable[[pc.Context], pc.ScenarioEvidence] | None = None
     native_artifacts: tuple[PurePosixPath, ...] = ()
 
@@ -69,7 +69,7 @@ DESCRIPTORS = (
             ("npm", "run", "check", "--workspace", "@nredd/pi-dev-tools"),
         ),
         contract=pc.CONTRACTS[0],
-        contract_gates=("stock", "fork"),
+        contract_gates=("stock",),
         stock_gate=pc.SCENARIOS["dev-tools"],
     ),
     ReleaseDescriptor(
@@ -135,7 +135,7 @@ DESCRIPTORS = (
             ("npm", "run", "check", "--workspace", "@nredd/pi-preset"),
         ),
         contract=pc.PRESET_CONTRACT,
-        contract_gates=("fork",),
+        contract_gates=("audit",),
     ),
 )
 
