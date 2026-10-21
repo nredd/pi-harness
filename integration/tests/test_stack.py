@@ -20,44 +20,20 @@ from harness import sandbox
 from harness.paths import pi_command
 from harness.release import gitlink_tag, release_checksums
 from harness.stack import (
+    PRESET_IDENTITY,
     LocalStackDocument,
     PackageSource,
     Stack,
     derive_local_stack,
     find_package,
     load_stack,
+    localize_source,
     package_directory,
     source_string,
     stack_digest,
-    validate_local_derivation,
     validate_release_identity,
     validate_shipped_stack,
 )
-
-ORIGIN_MAIN_LOCAL = {
-    "sources": [
-        "npm:@gotgenes/pi-anthropic-auth@3.4.3",
-        "npm:pi-web-access@0.43.0",
-        "../../forks/rpiv-todo",
-        "../../forks/pi-subagents",
-        "../../packages/subscription-router",
-        "../../forks/pi-plan-mode",
-        "../../packages/dev-tools",
-        "npm:pi-deferred-context-engine@0.5.0",
-        "npm:@quintinshaw/pi-dynamic-workflows@3.14.0",
-        "npm:pi-memory@0.4.2",
-        "../../forks/pi-computer-use",
-        "../../packages/session-kit",
-        "../../packages/preset",
-    ],
-    "settings": {"quietStartup": True, "fullscreen": True},
-    "disabled_extensions": {
-        "../../forks/pi-computer-use": (
-            "Installed on both OSes, never loaded: macOS helper needs GUI/TCC; Linux has no supported "
-            "helper. Fork-owned desktop tests remain opt-in."
-        )
-    },
-}
 
 CORE = {
     "tag": "v1.3.0-nredd.7",
@@ -172,9 +148,24 @@ def test_shipped_stack_is_semantically_valid_and_matches_the_core_gitlink() -> N
         release_checksums(personal.core.tag),
     )
     assert release_checksums(personal.core.tag)
-    assert [source_string(source) for source in local.sources] == ORIGIN_MAIN_LOCAL["sources"]
-    assert local.settings == ORIGIN_MAIN_LOCAL["settings"]
-    assert local.disabled_extensions == ORIGIN_MAIN_LOCAL["disabled_extensions"]
+    # Local is personal with each owned npm package and each nredd fork tag swapped for its
+    # workspace path, in order, except the footer-only preset: local moves the full unfiltered
+    # preset last. PR #90 proved this equal to the hand-written local.json it replaced.
+    localized = [localize_source(source_string(source)) for source in personal.sources]
+    preset = localize_source(f"npm:{PRESET_IDENTITY}@0.0.0")
+    expected = [source for source in localized if source != preset] + [preset]
+    assert [source_string(source) for source in local.sources] == expected, (
+        f"local derivation diverged from personal: {expected}"
+    )
+    assert local.settings == personal.settings
+    assert local.disabled_extensions == {
+        localize_source(key): reason for key, reason in (personal.disabled_extensions or {}).items()
+    }
+    for stack in (personal, local):
+        sources = {source_string(source) for source in stack.sources}
+        for key, reason in (stack.disabled_extensions or {}).items():
+            assert key in sources, f"{stack.name}: exclusion '{key}' names no source"
+            assert reason.strip(), f"{stack.name}: exclusion '{key}' has no reason"
     assert isinstance(personal.sources[0], PackageSource)
     assert local.sources[-1] == "../../packages/preset"
     local_sources = [source_string(source) for source in local.sources]
@@ -243,13 +234,10 @@ def test_local_descriptor_and_personal_file_fail_closed(tmp_path: Path) -> None:
 
 
 def test_semantic_validators_reject_tampered_stack_documents() -> None:
-    """Exercise shipped, derivation and release validators without literal package pin tables."""
+    """Exercise the shipped and release validators without literal package pin tables."""
     personal = Stack.model_validate(stack_document(name="personal", sources=["npm:@nredd/pi-preset@0.2.0"]))
-    local = Stack.model_validate(stack_document(name="local", sources=["../../packages/dev-tools"]))
     with pytest.raises(ValueError, match="local path"):
         validate_shipped_stack(Stack.model_validate(stack_document(name="personal")))
-    with pytest.raises(ValueError, match="does not match the personal-stack derivation"):
-        validate_local_derivation(personal, local)
     with pytest.raises(ValueError, match="does not match Gitlink tag"):
         validate_release_identity(personal, "v1.3.0-nredd.6", {})
     wrong = {"https://github.com/nredd/pi/releases/download/v1.3.0-nredd.7/good.tgz": "0" * 64}
