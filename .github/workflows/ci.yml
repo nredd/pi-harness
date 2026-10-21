@@ -193,6 +193,9 @@ jobs:
       - name: Packed pi-plan-mode with its registry dependency on exact stock Pi
         if: steps.plan.outputs.run == 'true'
         run: make check-plan-mode-package-contract REPORT="$RUNNER_TEMP/plan-mode-package-contracts.json"
+      - name: Packed pi-computer-use on exact stock Pi (native desktop not run)
+        if: steps.plan.outputs.run == 'true'
+        run: make check-computer-use-package-contract REPORT="$RUNNER_TEMP/computer-use-package-contracts.json"
       - name: Packed pi-subagents with its registry dependencies on exact stock Pi
         if: steps.plan.outputs.run == 'true'
         run: make check-subagents-package-contract REPORT="$RUNNER_TEMP/subagents-package-contracts.json"
