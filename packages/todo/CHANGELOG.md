@@ -7,6 +7,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- First CI-attested release; no code change.
+
 ### Added
 
 - Run the complete split-package suite standalone with pinned dependencies, lockfile, vendored upstream test helpers, Biome and strict TypeScript. All 253 stock upstream tests and the fork's existing tests run under Vitest; native interactive regressions also run on Bun 1.3.14.
