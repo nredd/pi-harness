@@ -26,17 +26,26 @@
 ## Owned npm packages
 
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-dev-tools`,
-`@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-plan-mode` and `@nredd/pi-preset`.
+`@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-subagents` and `@nredd/pi-preset`.
 
 `scripts/release_descriptors.py` is the publisher's data registry. Each entry supplies a package name,
 repository-relative workspace, shell-free verify commands, packed-artifact contract gates, and optional
 native-artifact glob requirements. The publisher rejects unknown tags, a workspace outside the checkout,
 package/tag skew, or missing native files before it packs. Adding a package means adding its descriptor
-and package contract, not another name-specific workflow or Python branch. `@nredd/pi-plan-mode` runs its
-native check plus Vitest, packs `dist/` because `pi.extensions` loads `./dist/index.ts`, declares
-`@narumitw/pi-tui-kit` explicitly, and proves the packed extension registers both Plan tools on stock Pi.
-For example, the future todo
-import will add an entry shaped like:
+and package contract, not another name-specific workflow or Python branch. `@nredd/pi-subagents`
+uses `packages/subagents` and its native `npm run check` (Biome, TypeScript, Vitest and pinned-Bun
+session tests). The `verify` stage then packs it once and runs the `stock` gate on those exact bytes:
+the file allowlist (`files` in its `package.json` and `SUBAGENTS_CONTRACT.allowed` enumerate the same
+set, checked by `test_subagents_pack_matches_contract`), its own `LICENSE`, the manifest audit with
+declared allowances (runtime dependencies `croner` and `nanoid`, the fork's `>=1.1.0` peer floor), the
+import audit, an install of the tarball plus those dependencies from the registry, and a stock Pi 1.3.0
+run that must offer `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow`. The contract
+sits outside `package_contracts.CONTRACTS` because `make check-package-contracts` installs offline and
+never runs it, but CI's `contracts` job runs the same gate on every
+non-docs PR as `make check-subagents-package-contract` (registry install plus a stock Pi run with one
+faux `Agent` call). The retained
+`forks.yml` job still covers the Gitlink source, not the tarball.
+For example, the future todo import will add an entry shaped like:
 
 ```python
 ReleaseDescriptor(
@@ -102,9 +111,15 @@ GitHub release with `gh release create <tag> --verify-tag` and attach those same
 The parser fixture is trimmed from the real public `vite@7.1.3` provenance bundle; it tests bindings,
 not signature validity. npm performs signature verification against the live registry.
 
+Bootstrap a new npm name before its first release:
+
+- The owner publishes the exact pre-verified tarball using npm's owner-authenticated 2FA flow.
+- Configure trusted publishing for `nredd/pi-harness`, `.github/workflows/publish.yml`, environment `npm`; require 2FA and disallow tokens.
+- Push a later signed package tag to run a real OIDC publication and prove its provenance.
+
 External configuration, already configured (not managed by this repository):
 
-- Each of the four npm packages trusts repository `nredd/pi-harness`, workflow filename `publish.yml`,
+- Each owned npm package trusts repository `nredd/pi-harness`, workflow filename `publish.yml`,
   environment `npm`, with direct publishing allowed. Publishing access requires 2FA and disallows tokens;
   CI uses OIDC only. No npm secret or `NODE_AUTH_TOKEN` is configured.
 - GitHub environment `npm` permits deployments only from tags matching `@nredd/*@*`.
