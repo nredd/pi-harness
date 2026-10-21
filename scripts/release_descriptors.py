@@ -80,6 +80,17 @@ DESCRIPTORS = (
         stock_gate=pc.SCENARIOS["subscription-router"],
     ),
     ReleaseDescriptor(
+        name="@nredd/pi-subagents",
+        workspace=PurePosixPath("packages/subagents"),
+        verify_commands=(
+            ("npm", "ci", "--ignore-scripts"),
+            ("npm", "run", "check", "--workspace", "@nredd/pi-subagents"),
+        ),
+        contract=pc.SUBAGENTS_CONTRACT,
+        contract_gates=("stock",),
+        stock_gate=pc.scenario_subagents,
+    ),
+    ReleaseDescriptor(
         name="@nredd/pi-preset",
         workspace=PurePosixPath("packages/preset"),
         verify_commands=(

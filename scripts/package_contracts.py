@@ -40,7 +40,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self, TypedDict
@@ -55,7 +55,7 @@ from pydantic import (
     model_validator,
 )
 
-from faux_provider import FauxProvider, RecordedRequest, Step, TextStep, ToolStep, models_json
+from faux_provider import FauxProvider, RecordedRequest, Route, Step, TextStep, ToolStep, models_json
 
 LOGGER = logging.getLogger(__name__)
 
@@ -85,6 +85,10 @@ CODE_SUFFIXES = (".ts", ".mts", ".js", ".mjs")
 NO_PROXY_VALUE = "127.0.0.1,localhost"
 # Defense in depth for clients honoring proxy variables; this is not a network sandbox.
 DEAD_PROXY = "http://127.0.0.1:9"
+# Overrides that let one npm invocation reach the registry; every other install stays offline or dead-proxied.
+SUBAGENTS_CHILD_MARKER = "pi-harness-subagents-child"
+SUBAGENTS_CHILD_TEXT = "subagents child ok"
+REGISTRY_ENV = {"HTTP_PROXY": "", "HTTPS_PROXY": ""}
 
 IMPORT_AUDIT = Path(__file__).with_name("import_audit.ts")
 IMPORT_AUDIT_TIMEOUT_S = 120
@@ -108,6 +112,14 @@ class PackageContract:
         allowed (tuple[re.Pattern[str], ...]): Every tarball path must match one of these.
         exposes_tools (frozenset[str]): Tool names unique to this package.
         license (str): Exact SPDX expression the packed manifest must declare.
+        runtime_dependencies (tuple[tuple[str, str], ...]): The EXACT `dependencies` the packed manifest
+            must declare, as (name, range) pairs (tuples keep the contract hashable). Empty for plugins,
+            which depend on nothing but host modules; a package that genuinely needs a library must list
+            it here, never have it accepted silently.
+        peer_ranges (tuple[tuple[str, str], ...]): (name, range) peer ranges that deliberately differ from
+            the default `*`.
+        own_license (bool): The package retains an upstream copyright notice, so its packed `LICENSE`
+            must equal the workspace's own `LICENSE` instead of the repository root one.
     """
 
     name: str
@@ -116,6 +128,9 @@ class PackageContract:
     allowed: tuple[re.Pattern[str], ...]
     exposes_tools: frozenset[str]
     license: str = "MIT"
+    runtime_dependencies: tuple[tuple[str, str], ...] = ()
+    peer_ranges: tuple[tuple[str, str], ...] = ()
+    own_license: bool = False
 
 
 CONTRACTS = (
@@ -183,6 +198,30 @@ PRESET_CONTRACT = PackageContract(
     ),
     exposes_tools=frozenset(),
     license="MIT AND Apache-2.0 AND CC-BY-SA-4.0",
+)
+
+# `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` is hermetic
+# (`npm install --offline`, nothing but the tarball), while this package has real runtime dependencies
+# that must come from the registry. It is audited, installed and run through stock Pi by the release
+# `verify` stage (descriptor `stock_gate`), by CI's `make check-subagents-package-contract` and by the
+# pack-vs-contract test, not by that target. The
+# `files` allowlist in `packages/subagents/package.json` and `allowed`/`required` below must enumerate
+# the same set; `test_subagents_pack_matches_contract` enforces it. Peers keep the fork's `>=1.1.0`
+# floor (it needs 1.x host APIs) rather than `*`. `SubagentWorkflow` is registered unless the
+# `workflowsEnabled` setting is off, which a clean sandbox never sets.
+SUBAGENTS_CONTRACT = PackageContract(
+    name="@nredd/pi-subagents",
+    directory="subagents",
+    required=("LICENSE", "README.md", "package.json", "src/index.ts"),
+    allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^src/.+\.ts$")),
+    exposes_tools=frozenset({"Agent", "get_subagent_result", "steer_subagent", "SubagentWorkflow"}),
+    runtime_dependencies=(("croner", "^10.0.1"), ("nanoid", "^5.1.16")),
+    own_license=True,  # Imported with upstream's `Copyright (c) tintinweb` notice, which MIT requires.
+    peer_ranges=(
+        ("@earendil-works/pi-ai", ">=1.1.0"),
+        ("@earendil-works/pi-coding-agent", ">=1.1.0"),
+        ("@earendil-works/pi-tui", ">=1.1.0"),
+    ),
 )
 
 
@@ -455,7 +494,14 @@ class RouterEvidence(TypedDict):
     dispatched: str
 
 
-ScenarioEvidence = DevToolsEvidence | SessionKitEvidence | RouterEvidence
+class SubagentsEvidence(TypedDict):
+    """Return shape of `scenario_subagents`."""
+
+    tools: list[str]
+    child_text: str
+
+
+ScenarioEvidence = DevToolsEvidence | SessionKitEvidence | RouterEvidence | SubagentsEvidence
 
 
 class DevToolsEvidenceModel(BaseModel):
@@ -482,7 +528,14 @@ class RouterEvidenceModel(BaseModel):
     )
 
 
+class SubagentsEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    tools: list[NonEmptyText] = Field(min_length=1, description="Tools the model was offered by the package")
+    child_text: NonEmptyText = Field(description="Answer the foreground `Agent` call returned from its child")
+
+
 EVIDENCE_MODELS: dict[str, type[BaseModel]] = {
+    "@nredd/pi-subagents": SubagentsEvidenceModel,
     "@nredd/pi-dev-tools": DevToolsEvidenceModel,
     "@nredd/pi-session-kit": SessionKitEvidenceModel,
     "@nredd/pi-subscription-router": RouterEvidenceModel,
@@ -519,9 +572,9 @@ class PackageReport(BaseModel):
     shasum: Sha1Hex = Field(description="SHA-1 of the tarball")
     size: int = Field(gt=0, description="Tarball size in bytes")
     files: list[NonEmptyText] = Field(min_length=1, description="Files in the packed tarball")
-    evidence: DevToolsEvidenceModel | SessionKitEvidenceModel | RouterEvidenceModel = Field(
-        description="Scenario evidence for this package"
-    )
+    evidence: (
+        DevToolsEvidenceModel | SessionKitEvidenceModel | RouterEvidenceModel | SubagentsEvidenceModel
+    ) = Field(description="Scenario evidence for this package")
 
 
 class ContractReport(BaseModel):
@@ -813,7 +866,7 @@ def ensure_stock_pi(prefix: Path, sandbox: Sandbox) -> Path:
         LOGGER.info(f"Installing {STOCK_PI_PACKAGE}@{STOCK_PI_VERSION} into '{prefix}'")
         run(
             [sandbox.tools.npm, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", prefix],
-            env=sandbox.env() | {"HTTP_PROXY": "", "HTTPS_PROXY": ""},
+            env=sandbox.env() | REGISTRY_ENV,
             cwd=prefix,
             timeout=NPM_TIMEOUT_S,
         )
@@ -1054,12 +1107,13 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
     return problems
 
 
-def audit_license(tarball: Path, root_license: bytes) -> list[str]:
-    """Require the packed `LICENSE` to equal the repository root license byte for byte.
+def audit_license(tarball: Path, expected_license: bytes) -> list[str]:
+    """Require the packed `LICENSE` to equal the expected license byte for byte.
 
     Parameters:
         tarball (Path): Tarball path.
-        root_license (bytes): Content of the repository `LICENSE`.
+        expected_license (bytes): Expected content: the repository `LICENSE`, or the workspace's own for a
+            contract with `own_license`.
 
     Returns:
         list[str]: Violations; empty when identical.
@@ -1068,7 +1122,7 @@ def audit_license(tarball: Path, root_license: bytes) -> list[str]:
         packed = read_member(tarball, "LICENSE")
     except ContractError as e:
         return [str(e)]
-    return [] if packed == root_license else ["packed `LICENSE` differs from the repository root `LICENSE`"]
+    return [] if packed == expected_license else ["packed `LICENSE` differs from the expected `LICENSE`"]
 
 
 def audit_manifest(contract: PackageContract, manifest: object, expected_files: Sequence[str]) -> list[str]:
@@ -1103,7 +1157,6 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
     if parsed.license != contract.license:
         problems.append(f"`license` must be '{contract.license}'")
     declared = {
-        "dependencies": parsed.dependencies,
         "optionalDependencies": parsed.optionalDependencies,
         "bundledDependencies": parsed.bundledDependencies,
         "bundleDependencies": parsed.bundleDependencies,
@@ -1113,11 +1166,29 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
         for key, value in declared.items()
         if value
     ]
+    allowed_dependencies = dict(contract.runtime_dependencies)
+    problems += [
+        f"dependency '{name}' is not a declared runtime dependency of '{contract.name}'"
+        for name in parsed.dependencies
+        if name not in allowed_dependencies
+    ]
+    problems += [
+        f"dependency '{name}' must use the range '{allowed_dependencies[name]}', "
+        f"not '{parsed.dependencies[name]}'"
+        for name in parsed.dependencies
+        if name in allowed_dependencies and parsed.dependencies[name] != allowed_dependencies[name]
+    ]
+    problems += [
+        f"declared runtime dependency '{name}' is missing"
+        for name in allowed_dependencies
+        if name not in parsed.dependencies
+    ]
     peers = parsed.peerDependencies
     problems += [f"peer '{name}' is not a host module" for name in peers if name not in HOST_MODULES]
-    problems += [
-        f"peer '{name}' must use the range '*', not '{peers[name]}'" for name in peers if peers[name] != "*"
-    ]
+    for name, declared_range in peers.items():
+        expected_range = dict(contract.peer_ranges).get(name, "*")
+        if declared_range != expected_range:
+            problems.append(f"peer '{name}' must use the range '{expected_range}', not '{declared_range}'")
     extensions = parsed.pi.extensions
     if not extensions:
         problems.append("`pi.extensions` is empty")
@@ -1187,18 +1258,22 @@ def scan_imports(sources: Mapping[str, str], node: Path) -> dict[str, FileImport
     return found
 
 
-def classify_imports(path: str, found: FileImports, files: Sequence[str]) -> list[str]:
+def classify_imports(
+    path: str, found: FileImports, files: Sequence[str], dependencies: Collection[str] = ()
+) -> list[str]:
     """Classify the parsed imports of one packed source file.
 
-    Allowed: Node builtins (`node:` prefix), host-provided Pi modules, and relative paths that stay
-    inside the package. Everything else, including any `@nredd/` sibling and any specifier the parser
-    could not resolve to a literal, is a violation. The bundled stats artifact (`dist/`) may import
-    `node:` builtins only; relative imports are forbidden too, because it is copied alone.
+    Allowed: Node builtins (`node:` prefix), host-provided Pi modules, the contract's declared runtime
+    dependencies, and relative paths that stay inside the package. Everything else, including any
+    `@nredd/` sibling and any specifier the parser could not resolve to a literal, is a violation.
+    The bundled stats artifact (`dist/`) may import `node:` builtins only; relative imports are
+    forbidden too, because it is copied alone.
 
     Parameters:
         path (str): File path relative to the package root.
         found (FileImports): Parser output for the file.
         files (Sequence[str]): All tarball paths, to resolve relative imports.
+        dependencies (Collection[str]): Declared runtime dependency names that may be imported.
 
     Returns:
         list[str]: Violations; empty when every import is acceptable.
@@ -1221,8 +1296,13 @@ def classify_imports(path: str, found: FileImports, files: Sequence[str]) -> lis
                 f == target or PurePosixPath(f).with_suffix("").as_posix() == stem for f in files
             ):
                 problems.append(f"{path}: relative import '{spec}' leaves the package or is missing")
-        elif spec not in HOST_MODULES and not any(spec.startswith(f"{host}/") for host in HOST_MODULES):
-            problems.append(f"{path}: imports '{spec}', which is neither a Node builtin nor a host module")
+        elif spec not in {*HOST_MODULES, *dependencies} and not any(
+            spec.startswith(f"{module}/") for module in (*HOST_MODULES, *dependencies)
+        ):
+            problems.append(
+                f"{path}: imports '{spec}', which is neither a Node builtin nor a host module "
+                "(or declared dependency)"
+            )
     return problems
 
 
@@ -1255,7 +1335,12 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
     """
     contract = artifact.contract
     problems = audit_files(contract, artifact.files)
-    problems += audit_license(artifact.path, root_license)
+    expected_license = (
+        (REPO_ROOT / "packages" / contract.directory / "LICENSE").read_bytes()
+        if contract.own_license
+        else root_license
+    )
+    problems += audit_license(artifact.path, expected_license)
     try:
         manifest = json.loads(read_member(artifact.path, "package.json"))
     except (ContractError, ValueError) as e:
@@ -1269,7 +1354,9 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
     }
     scanned = scan_imports(sources, node or locate_executable("node"))
     for name, found in scanned.items():
-        problems += classify_imports(name, found, artifact.files)
+        problems += classify_imports(
+            name, found, artifact.files, [name for name, _ in contract.runtime_dependencies]
+        )
     return problems
 
 
@@ -1278,6 +1365,9 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
 
 def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> Path:
     """Install one tarball into an empty project and prove no host or sibling copy came along.
+
+    Only the contract's declared `runtime_dependencies` (which must themselves be dependency-free)
+    may accompany the package; they are installed from the registry, everything else stays offline.
 
     Parameters:
         artifact (PackedArtifact): Tarball to install.
@@ -1288,41 +1378,54 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
         Path: The installed package directory.
 
     Raises:
-        ContractError: If anything besides the package landed in `node_modules` or the lockfile.
+        ContractError: If anything besides the package and its declared dependencies landed in
+            `node_modules` or the lockfile.
     """
     project.mkdir(parents=True)
     (project / "package.json").write_text('{"name": "contract-consumer", "private": true}\n')
+    dependencies = {name for name, _ in artifact.contract.runtime_dependencies}
+    env = sandbox.env()
+    offline = ["--offline"]
+    if dependencies:
+        # Declared runtime dependencies come from the registry; plugins stay fully offline.
+        env = env | REGISTRY_ENV
+        offline = []
     run(
         [
             sandbox.tools.npm,
             "install",
             "--ignore-scripts",
             "--legacy-peer-deps",
-            "--offline",
+            *offline,
             "--no-audit",
             "--no-fund",
             artifact.path,
         ],
-        env=sandbox.env(),
+        env=env,
         cwd=project,
         timeout=NPM_TIMEOUT_S,
     )
     installed = project / "node_modules" / artifact.contract.name
-    entries = sorted(
+    scoped = sorted(
         p.relative_to(project / "node_modules").as_posix()
-        for p in (project / "node_modules").glob("*/*")
+        for p in (project / "node_modules").glob("@*/*")
         if p.is_dir()
     )
     top = sorted(
         p.name for p in (project / "node_modules").iterdir() if p.name not in {".package-lock.json", ".bin"}
     )
-    if entries != [artifact.contract.name] or top != [SIBLING_SCOPE.rstrip("/")]:
-        raise ContractError(f"'{artifact.contract.name}' install pulled extra modules: {top} / {entries}")
+    if scoped != [artifact.contract.name] or top != sorted({SIBLING_SCOPE.rstrip("/"), *dependencies}):
+        raise ContractError(f"'{artifact.contract.name}' install pulled extra modules: {top} / {scoped}")
     nested = [p for p in installed.rglob("node_modules") if p.is_dir()]
     if nested:
         raise ContractError(f"'{artifact.contract.name}' ships a nested `node_modules`: {nested}")
     lock = read_lockfile(project / "package-lock.json")
-    if set(lock.packages) != {"", f"node_modules/{artifact.contract.name}"}:
+    expected_lock = {
+        "",
+        f"node_modules/{artifact.contract.name}",
+        *(f"node_modules/{d}" for d in dependencies),
+    }
+    if set(lock.packages) != expected_lock:
         raise ContractError(
             f"Unexpected lockfile entries after installing '{artifact.contract.name}': "
             f"{sorted(lock.packages)}"
@@ -1564,6 +1667,8 @@ def require_tools(
     contract: PackageContract,
     siblings: Sequence[PackageContract],
     requests: Sequence[RecordedRequest],
+    *,
+    all_tools: bool = False,
 ) -> None:
     """Require the package's tools declared to the model and no sibling's.
 
@@ -1572,6 +1677,7 @@ def require_tools(
         contract (PackageContract): Package under test.
         siblings (Sequence[PackageContract]): Every other package.
         requests (Sequence[RecordedRequest]): Requests seen by the provider.
+        all_tools (bool): Require every tool in `contract.exposes_tools`, not just one of them.
 
     Raises:
         ContractError: If an expected tool is missing or a sibling's tool is present.
@@ -1582,6 +1688,12 @@ def require_tools(
     require(
         bool(present),
         f"{contract.name}: none of {sorted(contract.exposes_tools)} declared; got {sorted(declared)}",
+    )
+    missing = contract.exposes_tools - declared
+    require(
+        not (all_tools and missing),
+        f"{contract.name}: tools not offered to the model: {sorted(missing)}; got {sorted(declared)}\n"
+        f"{result.stderr[-1000:]}",
     )
     foreign = declared & {tool for other in siblings for tool in other.exposes_tools}
     require(not foreign, f"{contract.name}: sibling tools present without the sibling: {sorted(foreign)}")
@@ -1607,16 +1719,17 @@ class Context:
     work: Path
     siblings: tuple[PackageContract, ...]
 
-    def provider_session(self, script: Sequence[Step]) -> FauxProvider:
+    def provider_session(self, script: Sequence[Step], routes: Sequence[Route] = ()) -> FauxProvider:
         """Write `models.json` for a loopback provider running `script`.
 
         Parameters:
             script (Sequence[Step]): Scripted turns.
+            routes (Sequence[Route]): Alternative scripts for conversations carrying a marker.
 
         Returns:
             FauxProvider: Provider to use as a context manager around the Pi run.
         """
-        provider = FauxProvider(script)
+        provider = FauxProvider(script, routes)
         (self.sandbox.agent_dir / "models.json").write_text(
             models_json(provider.base_url, PROVIDER, (PHYSICAL_MODEL,))
         )
@@ -1684,6 +1797,58 @@ def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
         f"git_status outside a repository must be an error result: {failed.get('result')}",
     )
     return {"tool": "git_status", "untracked": ["untracked.txt"], "failure_path": tool_text(failed)[:200]}
+
+
+def scenario_subagents(ctx: Context) -> SubagentsEvidence:
+    """The packed extension and its registry dependencies load in stock Pi, offer every tool, and run `Agent`.
+
+    One faux parent turn calls `Agent` in the foreground; a routed faux child answers. That executes the
+    spawn path, which is what imports `croner` and `nanoid` at runtime, so a dependency that fails to
+    resolve from the installed tarball fails here with the tool list and stderr tail.
+
+    Parameters:
+        ctx (Context): Scenario context.
+
+    Returns:
+        SubagentsEvidence: Evidence recorded in the report.
+
+    Raises:
+        ContractError: If the extension fails to load, a tool is not offered, or `Agent` does not answer.
+    """
+    project = ctx.work / "project"
+    project.mkdir()
+    call = ToolStep(
+        "Agent",
+        {
+            "description": "trivial task",
+            "prompt": f"{SUBAGENTS_CHILD_MARKER}: reply with one word.",
+            "subagent_type": "general-purpose",
+            "run_in_background": False,
+        },
+    )
+    routes = [Route(SUBAGENTS_CHILD_MARKER, [TextStep(SUBAGENTS_CHILD_TEXT)])]
+    with ctx.provider_session([call, TextStep("done")], routes) as provider:
+        result = run_pi(
+            ctx.pi_bin,
+            ctx.sandbox,
+            ctx.installed,
+            project,
+            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
+        )
+    seen = [sorted(request.tools) for request in provider.requests if request.route is None][:1]
+    require_clean_run(result, f"subagents load (parent tools seen: {seen})")
+    require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
+    record = result.single_tool_result("Agent")
+    require(
+        not tool_is_error(record),
+        f"subagents `Agent` failed: {record.get('result')}\ntools seen: {seen}\n{result.stderr[-1000:]}",
+    )
+    text = tool_text(record)
+    require(
+        SUBAGENTS_CHILD_TEXT in text,
+        f"subagents `Agent` result lacks the child's answer: '{text[-300:]}'\n{result.stderr[-1000:]}",
+    )
+    return {"tools": sorted(ctx.artifact.contract.exposes_tools), "child_text": SUBAGENTS_CHILD_TEXT}
 
 
 def scenario_session_kit(ctx: Context) -> SessionKitEvidence:
