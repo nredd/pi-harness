@@ -54,6 +54,13 @@ tarball, and requires
 first rebuilds and byte-compares every committed `dist/` file, so stale, missing, or extra generated
 output fails before the ordinary package build.
 
+`@nredd/pi-todo` is also a separately invoked stock contract because its imported runtime dependencies
+`@juicesharp/rpiv-config` and `@juicesharp/rpiv-i18n` are installed from the registry. `make check-todo-package-contract`
+packs the public plugin, verifies its retained upstream MIT `LICENSE`, dependency closure and narrow source
+payload, then runs stock Pi with only that package loaded. The faux provider calls `todo` to create a task and
+the contract records the subject from the tool result's `details.tasks[0]` snapshot, which the extension also
+appends to the session branch; discovery alone is not sufficient evidence.
+
 What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
