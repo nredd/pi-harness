@@ -74,6 +74,12 @@ def repo(tmp_path: Path) -> Path:
         package = root / "packages" / contract.directory
         package.mkdir(parents=True)
         (package / "package.json").write_text(json.dumps({"name": contract.name, "version": "1.2.3"}))
+        descriptor = rd.descriptor_for(contract.name)
+        assert descriptor is not None
+        for artifact in descriptor.native_artifacts:
+            path = package / artifact
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("native helper")
     git(root, "add", "packages")
     git(root, "commit", "-qm", "Initial packages")
     git(root, "tag", TAG)

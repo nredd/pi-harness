@@ -65,7 +65,8 @@ What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
   `CHANGELOG.md` (router), `dist/pi-stats-export.mjs` + `docs/stats-snapshots.md` (session-kit) and
-  `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`).
+  `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`). computer-use is
+  also pinned by exact `packed_files` (45 paths).
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
   none of the tarballs had a `LICENSE` and all shipped `test/` plus dev config
 - Packed `LICENSE` is byte-identical to the root `LICENSE`, except imported packages marked `own_license`,
@@ -179,6 +180,21 @@ is what imports `croner` and `nanoid` at runtime; failures print the tool list s
 runs that exact gate through `npm_release.run_stock_contract`, so the descriptor, siblings and scenario
 match the release `verify` run; CI's `contracts` job runs it on every non-docs PR and uploads
 `subagents-package-contracts.json`.
+
+`COMPUTER_USE_CONTRACT` (`@nredd/pi-computer-use`) is also outside the standalone three (it declares
+`own_license` and no runtime dependencies, but a `files`/`allowed` set for the macOS-only helpers:
+`prebuilt/macos/{arm64,x64}/bridge`, no linux/windows prebuilts, no `native/linux` crate).
+`scenario_computer_use` is platform-aware because `extensions/computer-use.ts` registers
+`desktop_screenshot` and `desktop_input` on darwin only: exactly 13 tools on darwin, exactly the other 11
+elsewhere (a desktop tool on non-darwin fails). It also parses each packed helper's Mach-O header in
+Python (works on Linux): 64-bit little-endian magic, `cputype` matching `arm64`/`x64`, mode `0755`. The
+evidence records `platform`, the expected `tools` and per-arch `helpers`. NOT RUN, recorded in the report:
+the `postinstall` (`setup-helper.mjs`; the stock install uses `--ignore-scripts`, and running it would
+create a keychain signing identity, `pkill` a running helper and register the app with LaunchServices)
+and every desktop tool (needs an interactive desktop with Accessibility/Screen Recording TCC grants).
+`make check-computer-use-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-computer-use`,
+needs the registry for stock Pi; postinstall and native desktop behavior are NOT RUN, as the evidence records) runs the same gate through `npm_release.run_stock_contract`; CI's `contracts` job
+runs it on every non-docs PR (ubuntu-24.04 and macos-14) and uploads `computer-use-package-contracts.json`.
 
 The run: stock Pi `--no-extensions --extension <archived fork>` (so installed packages stay out of
 the parent, which the gate asserts: no `git_*` tool in the parent request; the child's own loader
