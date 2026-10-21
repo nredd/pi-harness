@@ -43,6 +43,29 @@ GIT_WORKSPACE_PATHS = {
 }
 
 
+def reject_floats(value: Any, path: str = "$") -> None:
+    """Reject floats whose canonical JSON differs between Python and JavaScript.
+
+    Parameters:
+        value (Any): JSON-compatible value to inspect.
+        path (str): JSON path identifying `value`.
+
+    Raises:
+        ValueError: a float occurs anywhere in the supplied value.
+    """
+    if isinstance(value, float):
+        raise ValueError(
+            f"Float at `{path}` is not supported: digests are recomputed by a JS consumer, "
+            "so values must be integers, strings, bools, null, lists or objects"
+        )
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            reject_floats(nested, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            reject_floats(nested, f"{path}[{index}]")
+
+
 class PackageSource(BaseModel):
     # An omitted filter inherits the package manifest; an explicit empty list disables that kind.
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -131,6 +154,7 @@ class Stack(BaseModel):
         for source in sources:
             if not (PINNED_NPM.fullmatch(source) or PINNED_GIT.fullmatch(source) or is_local_source(source)):
                 raise ValueError(f"Source must be pinned or an explicit local path: '{source}'")
+        reject_floats(self.settings, "$.settings")
         if SETTINGS_PACKAGES_KEY in self.settings:
             raise ValueError(f"`settings` cannot override `{SETTINGS_PACKAGES_KEY}`")
         if not self.disabled_extensions.keys() <= set(sources) or not all(
