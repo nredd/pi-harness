@@ -23,7 +23,6 @@ SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 LOCAL_SOURCE_PREFIXES = ("./", "../", "/")
 PERSONAL_STACK_NAME = "personal"
 LOCAL_STACK_NAME = "local"
-PERSONAL_STACK_FILE = "personal.json"
 DERIVED_FROM_KEY = "derived_from"
 SETTINGS_PACKAGES_KEY = "packages"
 PRESET_IDENTITY = "@nredd/pi-preset"
@@ -284,21 +283,6 @@ def validate_shipped_stack(stack: Stack) -> None:
         raise ValueError(f"Shipped stack cannot declare local path '{local_sources[0]}'")
 
 
-def validate_local_derivation(personal: Stack, local: Stack) -> None:
-    """Require the checked local stack to equal the authoritative derivation.
-
-    Parameters:
-        personal (Stack): canonical personal stack.
-        local (Stack): generated local stack.
-
-    Raises:
-        ValueError: the local selection differs from the required derivation.
-    """
-    expected = derive_local_stack(personal)
-    if local != expected:
-        raise ValueError("Local stack does not match the personal-stack derivation")
-
-
 def validate_release_identity(stack: Stack, gitlink_tag: str, checksums: dict[str, str]) -> None:
     """Require the stack core identity and recorded artifact integrity to agree.
 
@@ -337,7 +321,9 @@ def load_stack(path: Path) -> Stack:
 
 
 def stack_digest(path: Path) -> str:
-    """Return the SHA-256 of the exact supplied document bytes.
+    """Return the SHA-256 of the effective stack, i.e. the canonical JSON of the loaded model.
+
+    For `local.json` that is the derived stack, not the three-key descriptor file.
 
     Parameters:
         path (Path): stack file.
