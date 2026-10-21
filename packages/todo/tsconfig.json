@@ -1,0 +1,18 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "Node16",
+		"moduleResolution": "Node16",
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		"types": ["node", "bun"],
+		"paths": {
+			"@juicesharp/rpiv-test-utils": ["./.test-support/upstream/index.ts"]
+		}
+	},
+	"include": ["*.ts", "state/**/*.ts", "tool/**/*.ts", "view/**/*.ts", ".test-support/**/*.ts"],
+	"exclude": ["node_modules"]
+}
