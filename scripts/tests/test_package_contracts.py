@@ -1825,7 +1825,7 @@ def stub_npm_install(
         """
         calls.append([str(part) for part in cmd])
         envs.append(env)
-        packages: dict[str, dict[str, str]] = {"": {}}
+        packages: dict[str, object] = {"": {}}
         for module in modules:
             (cwd / "node_modules" / module).mkdir(parents=True)
             packages[f"node_modules/{module}"] = {
