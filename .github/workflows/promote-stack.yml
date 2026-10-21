@@ -93,15 +93,10 @@ jobs:
         if: inputs.operation != 'rollback'
         env:
           GH_TOKEN: ${{ github.token }}
-          RULES_TOKEN: ${{ secrets.STACK_PROMOTION_RULES_TOKEN }}
           SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
         run: |
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/rules/branches/main" >"$PROMO/rules.json" \
             || { echo '::error::Cannot read main branch rules with GITHUB_TOKEN'; exit 1; }
-          if [ -n "$RULES_TOKEN" ]; then
-            GH_TOKEN=$RULES_TOKEN gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" >"$PROMO/protection.json" \
-              || { echo '::error::STACK_PROMOTION_RULES_TOKEN cannot read branch protection (needs read-only Administration)'; exit 1; }
-          fi
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA/check-runs?per_page=100" >"$PROMO/check-pages.json" \
             || { echo '::error::Cannot read check runs; the job needs checks read'; exit 1; }
       - name: Read CI runs
@@ -125,9 +120,7 @@ jobs:
         run: |
           promo() { uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion "$@"; }
           git show "$SOURCE_SHA:integration/stacks/personal.json" >"$PROMO/personal.json"
-          protection=()
-          if [ -f "$PROMO/protection.json" ]; then protection=(--protection "$PROMO/protection.json"); fi
-          promo checks --rules "$PROMO/rules.json" "${protection[@]}" --check-pages "$PROMO/check-pages.json" --source-sha "$SOURCE_SHA" >"$PROMO/checks.json"
+          promo checks --rules "$PROMO/rules.json" --check-pages "$PROMO/check-pages.json" --source-sha "$SOURCE_SHA" >"$PROMO/checks.json"
           promo stack-runs --runs "$PROMO/runs.json" --jobs-dir "$PROMO/jobs" --source-sha "$SOURCE_SHA" >"$PROMO/stack-runs.json"
           promo core --stack "$PROMO/personal.json" >"$PROMO/core.json"
           promo owned-tags --stack "$PROMO/personal.json" >"$PROMO/owned-tags.json"

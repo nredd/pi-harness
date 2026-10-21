@@ -2,7 +2,6 @@
 
 References:
 - https://docs.github.com/rest/repos/rules#get-rules-for-a-branch
-- https://docs.github.com/rest/branches/branch-protection#get-status-checks-protection
 - https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds
 """
 
@@ -160,21 +159,27 @@ def flatten_pages(value: object) -> list[Any]:
     return flat
 
 
-def required_check_names(rules: list[Any], protection: dict[str, Any] | None = None) -> list[str]:
-    """Union the required status-check contexts of branch rulesets and classic protection.
+@dataclass(frozen=True)
+class RequiredCheck:
+    """One required status check and the app that must report it."""
+
+    context: str
+    integration_id: int | None
+
+
+def required_checks(rules: list[Any]) -> list[RequiredCheck]:
+    """Collect the required status checks from the branch rules API.
 
     Parameters:
         rules (list[Any]): flattened `GET /rules/branches/main` rules (readable by `GITHUB_TOKEN`).
-        protection (dict[str, Any] | None): `branches/main/protection/required_status_checks`
-            (needs administration read), or `None` when no token was supplied.
 
     Returns:
-        list[str]: sorted unique required contexts.
+        list[RequiredCheck]: unique checks sorted by context.
 
     Raises:
-        ValueError: neither source yields a check, or a source is malformed.
+        ValueError: the rules yield no check, or a rule is malformed.
     """
-    contexts: list[str] = []
+    found: dict[str, RequiredCheck] = {}
     for rule in rules:
         if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
             continue
@@ -182,68 +187,96 @@ def required_check_names(rules: list[Any], protection: dict[str, Any] | None = N
         entries = parameters.get("required_status_checks") if isinstance(parameters, dict) else None
         if not isinstance(entries, list):
             raise ValueError("Required-status-checks rule has malformed parameters")
-        contexts.extend(_context(entry) for entry in entries)
-    if protection:
-        entries = protection.get("checks")
-        if not isinstance(entries, list):
-            raise ValueError("Branch protection response has no `checks` list")
-        contexts.extend(_context(entry) for entry in entries)
-    if not contexts:
+        for entry in entries:
+            check = _check(entry)
+            if found.setdefault(check.context, check) != check:
+                raise ValueError(f"Required check '{check.context}' is configured with conflicting apps")
+    if not found:
         raise ValueError(
-            "No required status checks are readable: the `main` rules API lists none and branch "
-            "protection was not read. Move the checks into a ruleset, or provide "
-            "`STACK_PROMOTION_RULES_TOKEN` (read-only Administration) for branch protection"
+            "The `main` rules API lists no required status checks; they must live in a ruleset "
+            "(`GET /repos/{owner}/{repo}/rules/branches/main`), not classic branch protection"
         )
-    return sorted(set(contexts))
+    return sorted(found.values(), key=lambda item: item.context)
 
 
-def _context(entry: object) -> str:
-    """Return one validated check context.
+def _check(entry: object) -> RequiredCheck:
+    """Return one validated required check.
 
     Parameters:
         entry (object): one `required_status_checks` entry.
 
     Returns:
-        str: the nonempty context name.
+        RequiredCheck: the nonempty context and optional app ID.
 
     Raises:
-        ValueError: the entry has no string `context`.
+        ValueError: the entry has no string `context` or a non-integer `integration_id`.
     """
-    context = entry.get("context") if isinstance(entry, dict) else None
+    if not isinstance(entry, dict):
+        raise ValueError("Required-status-checks entry has an invalid `context`")
+    context = entry.get("context")
     if not isinstance(context, str) or not context:
         raise ValueError("Required-status-checks entry has an invalid `context`")
-    return context
+    integration_id = entry.get("integration_id")
+    if integration_id is not None and (
+        not isinstance(integration_id, int) or isinstance(integration_id, bool)
+    ):
+        raise ValueError(f"Required check '{context}' has an invalid `integration_id`")
+    return RequiredCheck(context, integration_id)
 
 
-def verify_required_checks(required: list[str], check_pages: list[Any], source_sha: str) -> list[str]:
+def verify_required_checks(
+    required: list[RequiredCheck], check_pages: list[Any], source_sha: str
+) -> list[str]:
     """Require every configured check to have succeeded on the exact selected commit.
 
+    When a rule names an `integration_id`, the reporting check run's `app.id` must equal it, so
+    another app cannot satisfy the check by reusing its name.
+
     Parameters:
-        required (list[str]): configured check names.
+        required (list[RequiredCheck]): configured checks.
         check_pages (list[Any]): `commits/<sha>/check-runs` pages.
         source_sha (str): selected commit.
 
     Returns:
-        list[str]: the required names, sorted.
+        list[str]: the required contexts, sorted.
 
     Raises:
-        ValueError: a required check is missing or did not complete successfully.
+        ValueError: a required check is missing, failed, or came from the wrong app, or a page is malformed.
     """
-    runs = [run for page in check_pages for run in page.get("check_runs", []) if isinstance(run, dict)]
+    runs: list[dict[str, Any]] = []
+    for page in check_pages:
+        entries = page.get("check_runs") if isinstance(page, dict) else None
+        if not isinstance(entries, list):
+            raise ValueError("Check-runs page has no `check_runs` list")
+        runs.extend(run for run in entries if isinstance(run, dict))
     missing = [
-        name
-        for name in required
+        check.context
+        for check in required
         if not any(
-            run.get("name") == name
+            run.get("name") == check.context
             and run.get("head_sha") == source_sha
             and run.get("status") == "completed"
             and run.get("conclusion") == "success"
+            and (check.integration_id is None or _app_id(run) == check.integration_id)
             for run in runs
         )
     ]
     if missing:
         raise ValueError(f"Required checks did not succeed on '{source_sha}': {', '.join(missing)}")
-    return sorted(required)
+    return sorted(check.context for check in required)
+
+
+def _app_id(run: dict[str, Any]) -> object:
+    """Return the ID of the app that reported a check run.
+
+    Parameters:
+        run (dict[str, Any]): one check run.
+
+    Returns:
+        object: `app.id`, or `None` when absent.
+    """
+    app = run.get("app")
+    return app.get("id") if isinstance(app, dict) else None
 
 
 def registry_stack_runs(
@@ -486,7 +519,6 @@ def _parser() -> argparse.ArgumentParser:
     ancestor.add_argument("--descendant", required=True)
     checks = commands.add_parser("checks", help="Verify configured checks succeeded on the SHA")
     checks.add_argument("--rules", type=Path, required=True)
-    checks.add_argument("--protection", type=Path)
     checks.add_argument("--check-pages", type=Path, required=True)
     checks.add_argument("--source-sha", required=True)
     runs = commands.add_parser("stack-runs", help="Find push/main CI runs with the assembled step")
@@ -535,8 +567,7 @@ def _run(args: argparse.Namespace) -> None:
         if not descends_from(args.repo, args.ancestor, args.descendant):
             raise ValueError(f"'{args.ancestor}' is not an ancestor of '{args.descendant}'")
     elif command == "checks":
-        protection = _read_json(args.protection) if args.protection else None
-        required = required_check_names(flatten_pages(_read_json(args.rules)), protection)
+        required = required_checks(flatten_pages(_read_json(args.rules)))
         _emit(verify_required_checks(required, flatten_pages(_read_json(args.check_pages)), args.source_sha))
     elif command == "stack-runs":
         jobs = {path.stem.removeprefix("run-"): _read_json(path) for path in args.jobs_dir.glob("run-*.json")}

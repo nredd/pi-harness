@@ -23,7 +23,7 @@ The module rejects unknown fields, malformed SHAs, non-personal stacks, digest m
 Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` only). Every job has `if: github.ref == 'refs/heads/main'`. All gate logic lives in `python -m harness.promotion` subcommands with fixture tests; the YAML only fetches JSON and calls them.
 
 - Inputs: `select` requires `source_sha` to match `^[0-9a-f]{40}$` for `promote`/`verify-only`, and `rollback_tag` to match exactly `^stack/[0-9a-f]{40}$` (with no `source_sha`) for `rollback`. The commit must be an ancestor of `origin/main`.
-- Required checks: every context from `GET /repos/nredd/pi-harness/rules/branches/main` (readable by `GITHUB_TOKEN`) unioned with classic branch protection `required_status_checks` must be `completed`/`success` on that exact SHA. Review statuses are not required checks.
+- Required checks: every context from `GET /repos/nredd/pi-harness/rules/branches/main` (ruleset `main required checks`, readable by `GITHUB_TOKEN`) must be `completed`/`success` on that exact SHA, reported by the rule's `integration_id` app (`app.id`, 15368 for all eight). No checks from the rules API fails closed. Review statuses are not required checks.
 - Registry-stack evidence: a CI run on that SHA with `event=push`, `branch=main`, conclusion `success`, containing job `stack (ubuntu-24.04, personal)` whose step starting with `Assembled D and E boundaries` concluded `success` (not `skipped`). That job installs the explicit personal sources from the registry and the core release into a disposable tree. The step prefix is asserted against `ci.yml` by a test.
 - Docs-only SHAs cannot be promoted: CI skips the stack job for them, so no run qualifies. Promote the nearest commit where the stack job ran, or a later one.
 - Owned packages: `scripts/npm_release.py stack-check` runs per `@nredd/` source against a worktree of its exact tag: registry presence, npm `audit signatures` (signature and attestation), and the SLSA provenance binding to `publish.yml`, the tag and the commit.
@@ -35,12 +35,7 @@ The CI evidence is the only coupling to CI: run IDs are read with `gh run list/v
 
 ## Required-check visibility
 
-Today `main`'s checks live in classic branch protection, and `rules/branches/main` returns `[]`. Classic protection needs Administration read, which `GITHUB_TOKEN` cannot have. Either:
-
-- Preferred: move the eight checks into a branch ruleset `required_status_checks` rule. No token is needed.
-- Or add repository secret `STACK_PROMOTION_RULES_TOKEN`: a fine-grained token on this repository with only Repository permission Administration: read. The workflow uses it for one `gh api` call and nothing else.
-
-If neither yields a check, `verify` fails naming the token.
+The eight required checks live in ruleset `main required checks` (id `25524267`, strict), so `GET /repos/nredd/pi-harness/rules/branches/main` returns them to `GITHUB_TOKEN` with no extra token. Classic branch protection is not read: if the rules API yields no check, `checks` fails closed.
 
 ## Operations
 
@@ -60,10 +55,12 @@ Resume: if `stack/<source_sha>` already exists (the pointer push failed), the wo
 
 ## Owner touchpoints
 
-- Environment `stack-promotion` with required reviewers (the approval gate for every write), holding secret `STACK_CHANNEL_DEPLOY_KEY`.
-- Ruleset on `refs/tags/stack/**`: block update and deletion. Creation stays open: an unattested tag is unconsumable because consumers verify attestation, and `GITHUB_TOKEN` creates the tag through the release.
-- Ruleset on `refs/heads/stack-channel`: block deletion and force-push, and restrict pushes to a bypass actor. `GITHUB_TOKEN` cannot be a bypass actor, so the workflow pushes with a repository deploy key that has write access: add its public half as a deploy key with write access and as a ruleset bypass actor (Deploy keys), and store the private key as the `STACK_CHANNEL_DEPLOY_KEY` environment secret. A GitHub App with bypass would also work but would need a token-minting step; the deploy key is what the workflow uses. The workflow pins GitHub's SSH host keys from the `meta` API.
-- Optionally the read-only `STACK_PROMOTION_RULES_TOKEN` above, if checks stay in classic protection.
+Created 2026-10-20 via `gh api`; the workflow does not create or change any of them:
+
+- Ruleset `25524267` `main required checks`: the eight required checks (`integration_id` 15368, strict).
+- Environment `stack-promotion`: required reviewer the owner, deployment branches `main` only, secret `STACK_CHANNEL_DEPLOY_KEY` (write deploy key, id `167140535`). The only job in it is `attest-and-publish`.
+- Ruleset `25524297` `stack channel pointer` on `refs/heads/stack-channel`: blocks creation, update, deletion and non-fast-forward; bypass actors are the deploy key and repository admin. `GITHUB_TOKEN` cannot be a bypass actor, so the workflow pushes over SSH with the deploy key. It pins GitHub's SSH host keys from the `meta` API.
+- Ruleset `25524298` `stack snapshot tags` on `refs/tags/stack/**`: blocks update and deletion; bypass is admin. Creation stays open: an unattested tag is unconsumable because consumers verify attestation, and `GITHUB_TOKEN` creates the tag through the release.
 - Dotfiles has no CI, so nothing there is checked automatically.
 
 ## Consumer requirements
@@ -80,4 +77,4 @@ then validate it with `StackSnapshot` (`integration/harness/promotion.py`). An u
 
 ## First seed
 
-After this PR merges and the touchpoints exist, run `verify-only` on current `main`'s SHA, then `promote` with the same SHA. No prior `stack-channel` exists, so ancestry is skipped and the first run seeds the branch as an orphan containing only `stable.json`. This PR dispatches nothing and creates no tag, release, branch, ruleset, environment, or secret.
+After this PR merges, run `verify-only` on current `main`'s SHA, then `promote` with the same SHA. No prior `stack-channel` exists, so ancestry is skipped and the first run seeds the branch as an orphan containing only `stable.json`. This PR dispatches nothing and creates no tag, release, branch, ruleset, environment, or secret.
