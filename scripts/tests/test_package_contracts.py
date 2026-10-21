@@ -2079,6 +2079,99 @@ def test_shared_runner_report_records_computer_use_not_run(
     assert written["packages"]["@nredd/pi-computer-use"]["evidence"]["postinstall"] == "NOT RUN"
 
 
+def cu_report() -> pc.ContractReport:
+    """Build a computer-use-shaped report whose evidence records two NOT RUN items.
+
+    Returns:
+        pc.ContractReport: Validated report.
+    """
+    evidence = {
+        "platform": "linux",
+        "tools": ["find_roots"],
+        "helpers": {"arm64": "Mach-O arm64", "x64": "Mach-O x64"},
+        "helper_sources": ["native/macos/bridge.swift"],
+        "postinstall": "NOT RUN",
+        "postinstall_reason": "ignore-scripts",
+        "native_desktop": "NOT RUN",
+        "native_desktop_reason": "no desktop",
+    }
+    entry = GOOD_ENTRY | {"tarball": "nredd-pi-computer-use-0.3.0.tgz", "evidence": evidence}
+    return pc.validate_report(good_report({"@nredd/pi-computer-use": entry}))
+
+
+def test_shared_runner_logs_not_run_items(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """NOT RUN evidence is disclosed in the success log with its reasons."""
+    monkeypatch.setattr(nr, "run_stock_contract", lambda *args, **kwargs: cu_report())
+    with caplog.at_level("INFO"):
+        assert spc.main(["--package", "@nredd/pi-computer-use", "--stock-prefix", str(tmp_path)]) == 0
+    assert (
+        "computer-use package contract: passed; NOT RUN: postinstall (ignore-scripts), "
+        "native_desktop (no desktop)"
+    ) in caplog.text
+
+
+def test_shared_runner_plain_pass_without_not_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Evidence without NOT RUN entries logs a plain pass."""
+    report = pc.validate_report(good_report())
+    name = next(iter(report.packages))
+    monkeypatch.setattr(nr, "run_stock_contract", lambda *args, **kwargs: report)
+    with caplog.at_level("INFO"):
+        assert spc.main(["--package", name, "--stock-prefix", str(tmp_path)]) == 0
+    assert "package contract: passed" in caplog.text
+    assert "NOT RUN" not in caplog.text
+
+
+def test_computer_use_make_help_discloses_not_run() -> None:
+    """The Makefile help line for the computer-use gate says what is NOT RUN."""
+    lines = (pc.REPO_ROOT / "Makefile").read_text().splitlines()
+    (line,) = (item for item in lines if item.startswith("check-computer-use-package-contract:"))
+    assert "NOT RUN" in line
+
+
+@pytest.mark.parametrize("error", [pc.ContractError("bad"), nr.ReleaseError("bad")])
+def test_shared_runner_failure_exits_one_without_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: Exception
+) -> None:
+    """A contract or release error exits 1 and writes no report."""
+
+    def fail(*args: object, **kwargs: object) -> pc.ContractReport:
+        raise error
+
+    monkeypatch.setattr(nr, "run_stock_contract", fail)
+    path = tmp_path / "report.json"
+    argv = ["--package", "@nredd/pi-computer-use", "--stock-prefix", str(tmp_path), "--report", str(path)]
+    assert spc.main(argv) == 1
+    assert not path.exists()
+
+
+def test_shared_runner_unknown_package_exits_before_packing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An undeclared package exits 1 without running the stock contract."""
+
+    def boom(*args: object, **kwargs: object) -> pc.ContractReport:
+        raise AssertionError("must not pack")
+
+    monkeypatch.setattr(nr, "run_stock_contract", boom)
+    assert spc.main(["--package", "@nredd/nope", "--stock-prefix", str(tmp_path)]) == 1
+
+
+def test_audit_files_computer_use_exact_payload() -> None:
+    """The pinned 45 paths pass; stray, missing and duplicated paths are each reported."""
+    packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
+    assert len(packed) == 45
+    assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
+    assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
+    missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])
+    assert any("src/view.ts" in problem for problem in missing)
+    duplicated = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/view.ts"])
+    assert any("listed 2 times" in problem for problem in duplicated)
+
+
 def test_scenario_computer_use_rejects_unpacked_helper_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
