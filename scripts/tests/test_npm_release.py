@@ -1013,7 +1013,11 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
     target = nr.resolve_target(repo, f"{contract.name}@1.2.3")
     nr.verify(repo, target, tmp_path / "candidate")
     expected = ["ci", "run", *(["test"] if contract == pc.PLAN_MODE_CONTRACT else []), "pack"]
-    if contract in pc.CONTRACTS or contract in (pc.PLAN_MODE_CONTRACT, pc.SUBAGENTS_CONTRACT):
+    if contract in pc.CONTRACTS or contract in (
+        pc.PLAN_MODE_CONTRACT,
+        pc.SUBAGENTS_CONTRACT,
+        pc.TODO_CONTRACT,
+    ):
         expected.append("stock")
     if contract in (nr.fork.DEV_TOOLS_CONTRACT, pc.PRESET_CONTRACT):
         expected.append("fork")

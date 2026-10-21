@@ -26,6 +26,8 @@ Layout:
 - `scripts/`: build, release, and chezmoi integration implementation.
 - `docs/`: development, source provenance, release, and recovery documentation.
 
+`packages/todo` (`@nredd/pi-todo` `2.13.9`, unpublished) imports the maintained rpiv-todo fork as an independently releasable plugin. It registers the persistent `todo` tool, `/todos`, and task overlay; the imported source keeps its upstream license and uses the package's native check.
+
 `packages/preset` (`@nredd/pi-preset` `0.2.0`, published) is the optional opinionated
 preset with agents, skills, footer, themes, and public-safe defaults. It is a resource snapshot only: no
 installer or activation, model roles and enterprise acceptance are pending, and its themes carry
@@ -60,6 +62,7 @@ make bootstrap-forks       # init/update fork submodules; refuses if any initial
 make bootstrap-forks-check # preflight only
 make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, see docs/package-contracts.md
 make check-fork-package-contracts # explicit: real packed preset/dev-tools via the selected pi-subagents fork, same doc
+make check-todo-package-contract # explicit: packed todo tool through stock Pi 1.3.0
 ```
 
 `make check` runs, without rewriting files:
@@ -67,7 +70,7 @@ make check-fork-package-contracts # explicit: real packed preset/dev-tools via t
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
   `integration/inprocess/` stack suite under Vitest and Bun (published packages:
   `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.6.0`,
-  `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`)
+  `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-todo@2.13.9` (unpublished), `@nredd/pi-preset@0.2.0`)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, no mocks)

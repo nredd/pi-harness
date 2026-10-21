@@ -1,6 +1,6 @@
-# @juicesharp/rpiv-todo
+# @nredd/pi-todo
 
-[![npm version](https://img.shields.io/npm/v/@juicesharp/rpiv-todo.svg)](https://www.npmjs.com/package/@juicesharp/rpiv-todo)
+[![npm version](https://img.shields.io/npm/v/@nredd/pi-todo.svg)](https://www.npmjs.com/package/@nredd/pi-todo)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 <div align="center">
@@ -41,7 +41,7 @@ Weak subscriptions avoid retaining discarded rows; render probes have no effects
 ## Install
 
 ```sh
-pi install npm:@juicesharp/rpiv-todo
+pi install npm:@nredd/pi-todo
 ```
 
 Restart your Pi session.
