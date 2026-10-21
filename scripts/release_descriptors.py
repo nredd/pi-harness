@@ -80,6 +80,18 @@ DESCRIPTORS = (
         stock_gate=pc.SCENARIOS["subscription-router"],
     ),
     ReleaseDescriptor(
+        name="@nredd/pi-plan-mode",
+        workspace=PurePosixPath("packages/plan-mode"),
+        verify_commands=(
+            ("npm", "ci", "--ignore-scripts"),
+            ("npm", "run", "check", "--workspace", "@nredd/pi-plan-mode"),
+            ("npm", "test", "--workspace", "@nredd/pi-plan-mode"),
+        ),
+        contract=pc.PLAN_MODE_CONTRACT,
+        contract_gates=("stock",),
+        stock_gate=pc.scenario_plan_mode,
+    ),
+    ReleaseDescriptor(
         name="@nredd/pi-preset",
         workspace=PurePosixPath("packages/preset"),
         verify_commands=(
