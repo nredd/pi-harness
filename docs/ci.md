@@ -88,7 +88,7 @@ Required checks on `main`:
 - `contracts (ubuntu-24.04)` and `contracts (macos-14)`
 - `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
 
-These eight jobs are the required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`. `migration-review/standards` and
+These eight jobs are the required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both

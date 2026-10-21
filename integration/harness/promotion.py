@@ -34,8 +34,7 @@ GIT_SHA_LENGTH = 40
 PERSONAL_STACK_ARTIFACT = "stack-ubuntu-24.04-personal"
 # The sole CI job that produces PERSONAL_STACK_ARTIFACT. Keep this machine contract exact.
 SHA_PATTERN = re.compile(rf"[0-9a-f]{{{GIT_SHA_LENGTH}}}")
-ROLLBACK_TAG_PATTERN = re.compile(rf"stack/([0-9a-f]{{{GIT_SHA_LENGTH}}})")
-OPERATIONS = ("verify-only", "promote", "rollback")
+OPERATIONS = ("verify-only", "promote")
 GIT_BIN = "/usr/bin/git"
 STACK_CHECK_TIMEOUT = 900
 ASSET_TIMEOUT = 120
@@ -597,31 +596,23 @@ def verify_core(stack: Stack, workdir: Path) -> CoreEvidence:
     return CoreEvidence(tag=stack.core.tag, integrity=dict(stack.core.integrity))
 
 
-def select_source_sha(operation: str, requested_sha: str, rollback_tag: str) -> str:
+def select_source_sha(operation: str, requested_sha: str) -> str:
     """Validate dispatch inputs and return the selected source SHA.
 
     Parameters:
-        operation (str): `verify-only`, `promote` or `rollback`.
-        requested_sha (str): `source_sha` input, required unless rolling back.
-        rollback_tag (str): `rollback_tag` input, required only when rolling back.
+        operation (str): `verify-only` or `promote`.
+        requested_sha (str): `source_sha` input.
 
     Returns:
         str: the 40-character lowercase source SHA.
 
     Raises:
-        ValueError: unknown operation or inputs that do not exactly fit the operation.
+        ValueError: unknown operation or a malformed SHA.
     """
     if operation not in OPERATIONS:
         raise ValueError(f"Unknown operation '{operation}'")
-    if operation == "rollback":
-        match = ROLLBACK_TAG_PATTERN.fullmatch(rollback_tag)
-        if match is None or requested_sha:
-            raise ValueError(
-                "Rollback needs `rollback_tag` exactly `stack/<40 lowercase hex>` and no `source_sha`"
-            )
-        return match[1]
-    if rollback_tag or SHA_PATTERN.fullmatch(requested_sha) is None:
-        raise ValueError("`source_sha` must be 40 lowercase hex characters and `rollback_tag` empty")
+    if SHA_PATTERN.fullmatch(requested_sha) is None:
+        raise ValueError("`source_sha` must be 40 lowercase hex characters")
     return requested_sha
 
 
@@ -679,44 +670,6 @@ def descends_from(repo: Path, ancestor: str, descendant: str) -> bool:
     if result.returncode not in {0, 1}:
         raise GitError(f"Could not compare '{ancestor}' with '{descendant}': {result.stderr.strip()}")
     return result.returncode == 0
-
-
-def verify_successor(
-    candidate: StackSnapshot, stable: StackSnapshot | None, descends_from_stable: bool
-) -> None:
-    """Refuse a stale, duplicate, or rollback candidate in normal promotion mode.
-
-    Parameters:
-        candidate (StackSnapshot): the rebuilt snapshot.
-        stable (StackSnapshot | None): the attested current pointer, or `None` for the first seed.
-        descends_from_stable (bool): whether the candidate SHA is a strict descendant of stable's.
-
-    Raises:
-        ValueError: the candidate is the stable commit or not a descendant of it.
-    """
-    if stable is None:
-        return
-    if candidate.source_sha == stable.source_sha:
-        raise ValueError("Candidate already is the stable snapshot")
-    if not descends_from_stable:
-        raise ValueError("Candidate source SHA does not descend from stable source SHA")
-
-
-def channel_exists(refs: object) -> bool:
-    """Report whether the `stack-channel` branch exists.
-
-    Parameters:
-        refs (object): slurped `git/matching-refs/heads/stack-channel` pages.
-
-    Returns:
-        bool: whether `refs/heads/stack-channel` itself is listed (not merely a longer prefix match).
-
-    Raises:
-        ValueError: the response is malformed.
-    """
-    return any(
-        isinstance(ref, dict) and ref.get("ref") == "refs/heads/stack-channel" for ref in flatten_pages(refs)
-    )
 
 
 StackCheck = Callable[[str, Path], OwnedPackageEvidence]

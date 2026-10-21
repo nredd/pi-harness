@@ -4,12 +4,9 @@ The workflow passes every input through `env:` and runs `python -m harness.promo
 all fetching and every `git`/`gh` call happens here, so the YAML carries no shell logic.
 
 Environment:
-- `OPERATION`, `REQUESTED_SHA`, `ROLLBACK_TAG`: the dispatch inputs.
+- `OPERATION`, `REQUESTED_SHA`: the dispatch inputs.
 - `GITHUB_REPOSITORY`, `GITHUB_WORKSPACE`, `GITHUB_OUTPUT`, `RUNNER_TEMP`: runner context.
 - `PROMO`: directory for the evidence files and the candidate `stack-snapshot.json`.
-
-References:
-- https://cli.github.com/manual/gh_attestation_verify
 """
 
 from __future__ import annotations
@@ -28,11 +25,9 @@ from harness.promotion import (
     GateEvidence,
     GitError,
     PromotionError,
-    StackSnapshot,
     build_gates,
     build_snapshot,
     candidate_run_ids,
-    channel_exists,
     collect_owned_evidence,
     descends_from,
     flatten_pages,
@@ -42,16 +37,13 @@ from harness.promotion import (
     select_source_sha,
     verify_core,
     verify_required_checks,
-    verify_successor,
 )
 from harness.stack import Stack
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-STABLE_FILE = "stable.json"
 SNAPSHOT_FILE = "stack-snapshot.json"
-SIGNER_WORKFLOW = ".github/workflows/promote-stack.yml"
 
 
 @dataclass(frozen=True)
@@ -59,9 +51,8 @@ class VerifyContext:
     """Resolved runner context for one verification.
 
     Parameters:
-        operation (str): `verify-only`, `promote` or `rollback`.
+        operation (str): `verify-only` or `promote`.
         requested_sha (str): `source_sha` input.
-        rollback_tag (str): `rollback_tag` input.
         repo (str): GitHub owner/repository.
         workspace (Path): checkout of `main`.
         github_output (Path): `$GITHUB_OUTPUT` file.
@@ -71,7 +62,6 @@ class VerifyContext:
 
     operation: str
     requested_sha: str
-    rollback_tag: str
     repo: str
     workspace: Path
     github_output: Path
@@ -101,7 +91,6 @@ class VerifyContext:
         return cls(
             operation=env["OPERATION"],
             requested_sha=env.get("REQUESTED_SHA", ""),
-            rollback_tag=env.get("ROLLBACK_TAG", ""),
             repo=env["GITHUB_REPOSITORY"],
             workspace=Path(env["GITHUB_WORKSPACE"]),
             github_output=Path(env["GITHUB_OUTPUT"]),
@@ -126,62 +115,6 @@ def gh_json(path: str) -> object:
         return json.loads(run_command("gh", "api", "--paginate", "--slurp", path).stdout)
     except json.JSONDecodeError as error:
         raise EvidenceError(f"Unreadable response from gh api {path}: {error}") from error
-
-
-def attest(path: Path, ctx: VerifyContext) -> None:
-    """Verify a file's attestation from this repository's promotion workflow on `main`.
-
-    Parameters:
-        path (Path): file to verify.
-        ctx (VerifyContext): runner context.
-
-    Raises:
-        EvidenceError: attestation verification failed.
-    """
-    run_command(
-        "gh",
-        "attestation",
-        "verify",
-        str(path),
-        "--repo",
-        ctx.repo,
-        "--signer-workflow",
-        f"{ctx.repo}/{SIGNER_WORKFLOW}",
-        "--source-ref",
-        "refs/heads/main",
-        "--deny-self-hosted-runners",
-    )
-
-
-def verify_retained_snapshot(ctx: VerifyContext, source_sha: str) -> None:
-    """Download and verify the snapshot retained for a rollback.
-
-    Parameters:
-        ctx (VerifyContext): runner context.
-        source_sha (str): commit the rollback tag names.
-
-    Raises:
-        EvidenceError: download or attestation failed.
-        ValueError: the snapshot is invalid or names another commit.
-    """
-    run_command(
-        "gh",
-        "release",
-        "download",
-        ctx.rollback_tag,
-        "--repo",
-        ctx.repo,
-        "--pattern",
-        SNAPSHOT_FILE,
-        "--dir",
-        str(ctx.promo),
-        "--clobber",
-    )
-    snapshot = ctx.promo / SNAPSHOT_FILE
-    attest(snapshot, ctx)
-    parsed = StackSnapshot.model_validate_json(snapshot.read_bytes())
-    if parsed.source_sha != source_sha:
-        raise ValueError(f"Snapshot source '{parsed.source_sha}' differs from '{source_sha}'")
 
 
 def fetch_stack_runs(ctx: VerifyContext, source_sha: str) -> list[int]:
@@ -249,34 +182,6 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
     )
 
 
-def check_successor(ctx: VerifyContext) -> None:
-    """Gate the candidate against the attested stable pointer; a missing channel is the seed.
-
-    Parameters:
-        ctx (VerifyContext): runner context.
-
-    Raises:
-        EvidenceError: GitHub or attestation failed.
-        PromotionError: Git ancestry failed.
-        ValueError: the candidate is not a successor.
-    """
-    refs = gh_json(f"repos/{ctx.repo}/git/matching-refs/heads/stack-channel")
-    candidate = StackSnapshot.model_validate_json((ctx.promo / SNAPSHOT_FILE).read_bytes())
-    stable = None
-    if channel_exists(refs):
-        stable_path = ctx.promo / STABLE_FILE
-        stable_path.write_text(
-            run_command(
-                "gh", "api", "-H", "Accept: application/vnd.github.raw+json",
-                f"repos/{ctx.repo}/contents/{STABLE_FILE}?ref=stack-channel",
-            ).stdout
-        )  # fmt: skip
-        attest(stable_path, ctx)
-        stable = StackSnapshot.model_validate_json(stable_path.read_bytes())
-    descends = stable is not None and descends_from(ctx.workspace, stable.source_sha, candidate.source_sha)
-    verify_successor(candidate, stable, descends)
-
-
 def verify(ctx: VerifyContext) -> str:
     """Run the whole read-only verification for one dispatch.
 
@@ -291,18 +196,14 @@ def verify(ctx: VerifyContext) -> str:
         ValueError: inputs or evidence are invalid.
     """
     ctx.promo.mkdir(parents=True, exist_ok=True)
-    source_sha = select_source_sha(ctx.operation, ctx.requested_sha, ctx.rollback_tag)
+    source_sha = select_source_sha(ctx.operation, ctx.requested_sha)
     with ctx.github_output.open("a") as output:
         output.write(f"source_sha={source_sha}\n")
     # The repository is public, so this credential-less fetch (`persist-credentials: false`) works.
     run_command(promotion.GIT_BIN, "-C", str(ctx.workspace), "fetch", "origin", "main", error=GitError)
     if not descends_from(ctx.workspace, source_sha, "origin/main"):
         raise ValueError(f"'{source_sha}' is not an ancestor of 'origin/main'")
-    if ctx.operation == "rollback":
-        verify_retained_snapshot(ctx, source_sha)
-        return source_sha
     build_candidate(ctx, source_sha)
-    check_successor(ctx)
     return source_sha
 
 
