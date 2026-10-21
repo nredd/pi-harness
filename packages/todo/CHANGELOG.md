@@ -7,8 +7,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- First CI-attested release; no code change.
+
 ### Added
 
+- Call out in-progress tasks in the Todos heading, e.g. `Todos (8 open, 6 in progress)` (also the `/todos` header), as a subset of open in the warning color; omitted at zero. Reuses the translated `status.in_progress` label, so no new locale key.
 - Run the complete split-package suite standalone with pinned dependencies, lockfile, vendored upstream test helpers, Biome and strict TypeScript. All 253 stock upstream tests and the fork's existing tests run under Vitest; native interactive regressions also run on Bun 1.3.14.
 - Keep clickable headings, wheel scrolling over every task, atomic `ops` batches, whole-list counts, and duplicate-of-plan-item guards.
 - Seed verbatim approved Plan tasks, require completion evidence and deferral reasons, and remind once before wrapping up with open Plan work.
