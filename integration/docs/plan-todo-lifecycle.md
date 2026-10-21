@@ -1,7 +1,7 @@
 # Plan todo lifecycle coverage
 
-`integration/inprocess/plan-todos.test.ts` runs the real Gitlinked `pi-plan-mode` and `rpiv-todo`
-entries in one core harness session, under Vitest and Bun. No extension mocks or Pi process.
+`integration/inprocess/plan-todos.test.ts` runs the real imported `packages/plan-mode` and
+`packages/todo` factories in one core harness session, under Vitest and Bun. No extension mocks or Pi process.
 
 - Approval seeds the exact plan bullets before any `todo` call
 - One evidenced/deferred `todo.ops` batch closes all three items. A file-backed reopen checks
@@ -14,7 +14,7 @@ entries in one core harness session, under Vitest and Bun. No extension mocks or
 - A premature done reply gets exactly one request-local reminder with only open items. The session
   persists only its short hidden marker, never the expanded open-item list
 
-`support.ts` checks host identity before importing each fork. Keep their `node_modules/` absent.
+`support.ts` checks host identity before importing each package workspace. Keep their `node_modules/` absent.
 `isolateStackHome()` isolates Pi and rpiv config, including legacy HOME paths. See `docs/ci.md`.
 
 `integration/inprocess/todo-history-session.test.ts` owns actual host row rendering, file-backed
