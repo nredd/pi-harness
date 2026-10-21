@@ -11,6 +11,7 @@ const info = (over: Partial<MonitorInfo> = {}): MonitorInfo => ({
 	startedAt: 0,
 	exitCode: null,
 	signal: null,
+	matches: 0,
 	lines: 3,
 	wake: false,
 	timeoutMs: 1000,
