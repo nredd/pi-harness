@@ -103,6 +103,17 @@ DESCRIPTORS = (
         stock_gate=pc.scenario_plan_mode,
     ),
     ReleaseDescriptor(
+        name="@nredd/pi-todo",
+        workspace=PurePosixPath("packages/todo"),
+        verify_commands=(
+            ("npm", "ci", "--ignore-scripts"),
+            ("npm", "run", "check", "--workspace", "@nredd/pi-todo"),
+        ),
+        contract=pc.TODO_CONTRACT,
+        contract_gates=("stock",),
+        stock_gate=pc.scenario_todo,
+    ),
+    ReleaseDescriptor(
         name="@nredd/pi-preset",
         workspace=PurePosixPath("packages/preset"),
         verify_commands=(

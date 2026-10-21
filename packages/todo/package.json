@@ -1,7 +1,7 @@
 {
-	"name": "@juicesharp/rpiv-todo",
+	"name": "@nredd/pi-todo",
 	"version": "2.13.9",
-	"description": "Pi extension. A todo list for the model, rendered as a live overlay that survives /reload and conversation compaction.",
+	"description": "Pi todo extension with a persistent overlay and plan-aware task tracking.",
 	"keywords": [
 		"pi-package",
 		"pi-extension",
@@ -10,15 +10,14 @@
 	],
 	"type": "module",
 	"license": "MIT",
-	"author": "juicesharp",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/juicesharp/rpiv-mono.git",
-		"directory": "packages/rpiv-todo"
+		"url": "git+https://github.com/nredd/pi-harness.git",
+		"directory": "packages/todo"
 	},
-	"homepage": "https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-todo#readme",
+	"homepage": "https://github.com/nredd/pi-harness/tree/main/packages/todo#readme",
 	"bugs": {
-		"url": "https://github.com/juicesharp/rpiv-mono/issues"
+		"url": "https://github.com/nredd/pi-harness/issues"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -67,16 +66,11 @@
 		"@earendil-works/pi-ai": "*",
 		"@earendil-works/pi-coding-agent": "*",
 		"@earendil-works/pi-tui": "*",
-		"@juicesharp/rpiv-i18n": "*",
 		"typebox": "*"
 	},
-	"peerDependenciesMeta": {
-		"@juicesharp/rpiv-i18n": {
-			"optional": true
-		}
-	},
 	"dependencies": {
-		"@juicesharp/rpiv-config": "^2.13.9"
+		"@juicesharp/rpiv-config": "^2.13.9",
+		"@juicesharp/rpiv-i18n": "^2.13.9"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.5",

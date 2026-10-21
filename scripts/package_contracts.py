@@ -251,6 +251,28 @@ PLAN_MODE_CONTRACT = PackageContract(
 )
 
 
+TODO_CONTRACT = PackageContract(
+    name="@nredd/pi-todo",
+    directory="todo",
+    required=("LICENSE", "README.md", "package.json", "index.ts", "todo.ts", "state/store.ts"),
+    allowed=(
+        re.compile(r"^(LICENSE|README\.md|package\.json)$"),
+        re.compile(r"^(config|index|plan-hooks|todo|todo-overlay)\.ts$"),
+        re.compile(r"^locales/[A-Za-z-]+\.json$"),
+        re.compile(r"^state/[a-z0-9-]+\.ts$"),
+        re.compile(r"^tool/[a-z-]+\.ts$"),
+        re.compile(r"^view/[a-z-]+\.ts$"),
+        re.compile(r"^docs/[a-z0-9.-]+\.md$"),
+    ),
+    exposes_tools=frozenset({"todo"}),
+    runtime_dependencies=(
+        ("@juicesharp/rpiv-config", "^2.13.9"),
+        ("@juicesharp/rpiv-i18n", "^2.13.9"),
+    ),
+    own_license=True,
+)
+
+
 PRESET_CONTRACT = PackageContract(
     name="@nredd/pi-preset",
     directory="preset",
@@ -566,8 +588,20 @@ class PlanModeEvidence(TypedDict):
     question_result: str
 
 
+class TodoEvidence(TypedDict):
+    """Return shape of `scenario_todo`."""
+
+    tools: list[str]
+    subject: str
+
+
 ScenarioEvidence = (
-    DevToolsEvidence | SessionKitEvidence | RouterEvidence | SubagentsEvidence | PlanModeEvidence
+    DevToolsEvidence
+    | SessionKitEvidence
+    | RouterEvidence
+    | SubagentsEvidence
+    | PlanModeEvidence
+    | TodoEvidence
 )
 
 
@@ -607,12 +641,21 @@ class PlanModeEvidenceModel(BaseModel):
     question_result: NonEmptyText = Field(description="Result of the exercised Plan question tool")
 
 
+class TodoEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    tools: list[Literal["todo"]] = Field(
+        min_length=1, description="Todo tool offered by the packed extension"
+    )
+    subject: NonEmptyText = Field(description="Subject persisted by the exercised todo call")
+
+
 EVIDENCE_MODELS: dict[str, type[BaseModel]] = {
     "@nredd/pi-subagents": SubagentsEvidenceModel,
     "@nredd/pi-dev-tools": DevToolsEvidenceModel,
     "@nredd/pi-session-kit": SessionKitEvidenceModel,
     "@nredd/pi-subscription-router": RouterEvidenceModel,
     "@nredd/pi-plan-mode": PlanModeEvidenceModel,
+    "@nredd/pi-todo": TodoEvidenceModel,
 }
 
 
@@ -652,6 +695,7 @@ class PackageReport(BaseModel):
         | RouterEvidenceModel
         | SubagentsEvidenceModel
         | PlanModeEvidenceModel
+        | TodoEvidenceModel
     ) = Field(description="Scenario evidence for this package")
 
 
@@ -2252,6 +2296,39 @@ def scenario_subagents(ctx: Context) -> SubagentsEvidence:
         SUBAGENTS_CHILD_TEXT in text, f"subagents `Agent` result lacks the child's answer: '{text[-300:]}'"
     )
     return {"tools": sorted(ctx.artifact.contract.exposes_tools), "child_text": SUBAGENTS_CHILD_TEXT}
+
+
+def scenario_todo(ctx: Context) -> TodoEvidence:
+    """Load the packed extension and create one todo through stock Pi.
+
+    Parameters:
+        ctx (Context): Scenario context.
+
+    Returns:
+        TodoEvidence: Registered tool and persisted task subject.
+
+    Raises:
+        ContractError: If the tool is absent or does not create the requested task.
+    """
+    subject = "stock contract task"
+    project = ctx.work / "project"
+    project.mkdir(exist_ok=True)
+    with ctx.provider_session(
+        [ToolStep("todo", {"action": "create", "subject": subject}), TextStep("done")]
+    ) as provider:
+        result = run_pi(
+            ctx.pi_bin,
+            ctx.sandbox,
+            ctx.installed,
+            project,
+            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
+        )
+    require_clean_run(result, "todo create")
+    require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
+    record = result.single_tool_result("todo")
+    require(not tool_is_error(record), f"todo create failed: {tool_text(record)}")
+    require(subject in tool_text(record), f"todo result omitted '{subject}': {record.get('result')}")
+    return {"tools": ["todo"], "subject": subject}
 
 
 def scenario_plan_mode(ctx: Context) -> PlanModeEvidence:

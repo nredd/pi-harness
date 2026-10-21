@@ -48,6 +48,12 @@ required and packed because its extension manifest targets `./dist/index.ts`; `s
 by the source package. Its native `npm run check` first rebuilds and byte-compares every committed `dist/` file,
 so stale, missing, or extra generated output fails before the ordinary package build.
 
+`@nredd/pi-todo` is also a separately invoked stock contract because its imported runtime dependencies
+`@juicesharp/rpiv-config` and `@juicesharp/rpiv-i18n` are installed from the registry. `make check-todo-package-contract`
+packs the public plugin, verifies its retained upstream MIT `LICENSE`, dependency closure and narrow source
+payload, then runs stock Pi with only that package loaded. The faux provider calls `todo` to create a task and
+the contract records the persisted subject; discovery alone is not sufficient evidence.
+
 What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
