@@ -39,15 +39,22 @@ Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
     `tools[].function.name`). Tool payloads inside `structuredContent` stay opaque until the one
     scenario that reads them (`git_status.untracked`). Not modelled: the rest of Pi's event stream
 
+`@nredd/pi-plan-mode` is a separately invoked stock contract because it has the explicit runtime
+`@narumitw/pi-tui-kit` dependency. `make check-plan-mode-package-contract` packs it, verifies its own
+upstream MIT `LICENSE`, exact manifest dependency and exact `files`/allowlist, installs the tarball, and
+requires `plan_mode_question` and `plan_mode_complete` from stock Pi. `dist/` is required and packed because
+its extension manifest targets `./dist/index.ts`; `src/` stays packed as declared by the source package.
+
 What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
   `CHANGELOG.md` (router) and `dist/pi-stats-export.mjs` + `docs/stats-snapshots.md` (session-kit).
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
   none of the tarballs had a `LICENSE` and all shipped `test/` plus dev config
-- Packed `LICENSE` is byte-identical to the root `LICENSE`
-- Manifest: `private` absent or `false`, `publishConfig.access: public`, `MIT`, no
-  `dependencies`/optional/bundled, peers only from the Pi host set (`@earendil-works/pi-ai`,
+- Packed `LICENSE` is byte-identical to the root `LICENSE`, except imported packages marked `own_license`,
+  whose upstream MIT copyright text must be byte-identical to their workspace `LICENSE`
+- Manifest: `private` absent or `false`, `publishConfig.access: public`, `MIT`, no optional/bundled
+  dependencies, peers only from the Pi host set (`@earendil-works/pi-ai`,
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
 - Every import is a `node:` builtin, a host module, or a relative path inside the package. No
   `@nredd/*` sibling. The stats artifact (`dist/`) may import only `node:` builtins: the standalone

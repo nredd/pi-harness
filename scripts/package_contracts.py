@@ -40,7 +40,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self, TypedDict
@@ -116,6 +116,8 @@ class PackageContract:
     allowed: tuple[re.Pattern[str], ...]
     exposes_tools: frozenset[str]
     license: str = "MIT"
+    runtime_dependencies: tuple[tuple[str, str], ...] = ()
+    own_license: bool = False
 
 
 CONTRACTS = (
@@ -155,6 +157,22 @@ CONTRACTS = (
 # so `make check-package-contracts` does not run it. `fork_package_contracts.py` consumes it. Its
 # themes are separately licensed, so the manifest must declare the full expression, and the license
 # texts plus `NOTICE.md` are required content rather than optional extras.
+PLAN_MODE_CONTRACT = PackageContract(
+    name="@nredd/pi-plan-mode",
+    directory="plan-mode",
+    required=("LICENSE", "README.md", "package.json", "src/index.ts", "dist/index.ts"),
+    allowed=(
+        re.compile(r"^(LICENSE|README\.md|package\.json)$"),
+        re.compile(r"^src/.+\.ts$"),
+        re.compile(r"^dist/.+\.(ts|js|map)$"),
+        re.compile(r"^docs/.+\.md$"),
+    ),
+    exposes_tools=frozenset({"plan_mode_question", "plan_mode_complete"}),
+    runtime_dependencies=(("@narumitw/pi-tui-kit", "^0.65.2"),),
+    own_license=True,
+)
+
+
 PRESET_CONTRACT = PackageContract(
     name="@nredd/pi-preset",
     directory="preset",
@@ -455,7 +473,13 @@ class RouterEvidence(TypedDict):
     dispatched: str
 
 
-ScenarioEvidence = DevToolsEvidence | SessionKitEvidence | RouterEvidence
+class PlanModeEvidence(TypedDict):
+    """Return shape of `scenario_plan_mode`."""
+
+    tools: list[str]
+
+
+ScenarioEvidence = DevToolsEvidence | SessionKitEvidence | RouterEvidence | PlanModeEvidence
 
 
 class DevToolsEvidenceModel(BaseModel):
@@ -482,10 +506,16 @@ class RouterEvidenceModel(BaseModel):
     )
 
 
+class PlanModeEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    tools: list[str] = Field(min_length=2, description="Plan tools offered by the packed extension")
+
+
 EVIDENCE_MODELS: dict[str, type[BaseModel]] = {
     "@nredd/pi-dev-tools": DevToolsEvidenceModel,
     "@nredd/pi-session-kit": SessionKitEvidenceModel,
     "@nredd/pi-subscription-router": RouterEvidenceModel,
+    "@nredd/pi-plan-mode": PlanModeEvidenceModel,
 }
 
 
@@ -519,9 +549,9 @@ class PackageReport(BaseModel):
     shasum: Sha1Hex = Field(description="SHA-1 of the tarball")
     size: int = Field(gt=0, description="Tarball size in bytes")
     files: list[NonEmptyText] = Field(min_length=1, description="Files in the packed tarball")
-    evidence: DevToolsEvidenceModel | SessionKitEvidenceModel | RouterEvidenceModel = Field(
-        description="Scenario evidence for this package"
-    )
+    evidence: (
+        DevToolsEvidenceModel | SessionKitEvidenceModel | RouterEvidenceModel | PlanModeEvidenceModel
+    ) = Field(description="Scenario evidence for this package")
 
 
 class ContractReport(BaseModel):
@@ -1054,12 +1084,12 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
     return problems
 
 
-def audit_license(tarball: Path, root_license: bytes) -> list[str]:
-    """Require the packed `LICENSE` to equal the repository root license byte for byte.
+def audit_license(tarball: Path, expected_license: bytes) -> list[str]:
+    """Require the packed `LICENSE` to equal the contract's expected bytes.
 
     Parameters:
         tarball (Path): Tarball path.
-        root_license (bytes): Content of the repository `LICENSE`.
+        expected_license (bytes): Content of the repository or workspace `LICENSE`.
 
     Returns:
         list[str]: Violations; empty when identical.
@@ -1068,7 +1098,7 @@ def audit_license(tarball: Path, root_license: bytes) -> list[str]:
         packed = read_member(tarball, "LICENSE")
     except ContractError as e:
         return [str(e)]
-    return [] if packed == root_license else ["packed `LICENSE` differs from the repository root `LICENSE`"]
+    return [] if packed == expected_license else ["packed `LICENSE` differs from the expected `LICENSE`"]
 
 
 def audit_manifest(contract: PackageContract, manifest: object, expected_files: Sequence[str]) -> list[str]:
@@ -1103,7 +1133,6 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
     if parsed.license != contract.license:
         problems.append(f"`license` must be '{contract.license}'")
     declared = {
-        "dependencies": parsed.dependencies,
         "optionalDependencies": parsed.optionalDependencies,
         "bundledDependencies": parsed.bundledDependencies,
         "bundleDependencies": parsed.bundleDependencies,
@@ -1112,6 +1141,26 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
         f"`{key}` must be empty: host modules are peers and plugins are independent"
         for key, value in declared.items()
         if value
+    ]
+    expected_dependencies = dict(contract.runtime_dependencies)
+    problems += [
+        (
+            f"dependency '{name}' is not a declared runtime dependency of '{contract.name}'"
+            if expected_dependencies
+            else "`dependencies` must be empty: host modules are peers and plugins are independent"
+        )
+        for name in parsed.dependencies
+        if name not in expected_dependencies
+    ]
+    problems += [
+        f"dependency '{name}' must use the range '{expected_dependencies[name]}', not '{version}'"
+        for name, version in parsed.dependencies.items()
+        if name in expected_dependencies and version != expected_dependencies[name]
+    ]
+    problems += [
+        f"declared runtime dependency '{name}' is missing"
+        for name in expected_dependencies
+        if name not in parsed.dependencies
     ]
     peers = parsed.peerDependencies
     problems += [f"peer '{name}' is not a host module" for name in peers if name not in HOST_MODULES]
@@ -1187,7 +1236,9 @@ def scan_imports(sources: Mapping[str, str], node: Path) -> dict[str, FileImport
     return found
 
 
-def classify_imports(path: str, found: FileImports, files: Sequence[str]) -> list[str]:
+def classify_imports(
+    path: str, found: FileImports, files: Sequence[str], dependencies: Collection[str] = ()
+) -> list[str]:
     """Classify the parsed imports of one packed source file.
 
     Allowed: Node builtins (`node:` prefix), host-provided Pi modules, and relative paths that stay
@@ -1204,7 +1255,9 @@ def classify_imports(path: str, found: FileImports, files: Sequence[str]) -> lis
         list[str]: Violations; empty when every import is acceptable.
     """
     problems = list(found.diagnostics)
-    standalone = path.startswith("dist/")
+    standalone = (
+        path.startswith("dist/") and path not in {"dist/index.ts"} and not path.startswith("dist/chunks/")
+    )
     for spec in found.specifiers:
         if spec.startswith("node:"):
             continue
@@ -1221,8 +1274,13 @@ def classify_imports(path: str, found: FileImports, files: Sequence[str]) -> lis
                 f == target or PurePosixPath(f).with_suffix("").as_posix() == stem for f in files
             ):
                 problems.append(f"{path}: relative import '{spec}' leaves the package or is missing")
-        elif spec not in HOST_MODULES and not any(spec.startswith(f"{host}/") for host in HOST_MODULES):
-            problems.append(f"{path}: imports '{spec}', which is neither a Node builtin nor a host module")
+        elif spec not in {*HOST_MODULES, *dependencies} and not any(
+            spec.startswith(f"{module}/") for module in (*HOST_MODULES, *dependencies)
+        ):
+            problems.append(
+                f"{path}: imports '{spec}', which is neither a Node builtin nor a host module "
+                "(or declared dependency)"
+            )
     return problems
 
 
@@ -1255,7 +1313,12 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
     """
     contract = artifact.contract
     problems = audit_files(contract, artifact.files)
-    problems += audit_license(artifact.path, root_license)
+    expected_license = (
+        (REPO_ROOT / "packages" / contract.directory / "LICENSE").read_bytes()
+        if contract.own_license
+        else root_license
+    )
+    problems += audit_license(artifact.path, expected_license)
     try:
         manifest = json.loads(read_member(artifact.path, "package.json"))
     except (ContractError, ValueError) as e:
@@ -1269,7 +1332,7 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
     }
     scanned = scan_imports(sources, node or locate_executable("node"))
     for name, found in scanned.items():
-        problems += classify_imports(name, found, artifact.files)
+        problems += classify_imports(name, found, artifact.files, dict(contract.runtime_dependencies))
     return problems
 
 
@@ -1292,18 +1355,24 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
     """
     project.mkdir(parents=True)
     (project / "package.json").write_text('{"name": "contract-consumer", "private": true}\n')
+    dependencies = {name for name, _ in artifact.contract.runtime_dependencies}
+    env = sandbox.env()
+    offline = ["--offline"]
+    if dependencies:
+        env |= {"HTTP_PROXY": "", "HTTPS_PROXY": ""}
+        offline = []
     run(
         [
             sandbox.tools.npm,
             "install",
             "--ignore-scripts",
             "--legacy-peer-deps",
-            "--offline",
+            *offline,
             "--no-audit",
             "--no-fund",
             artifact.path,
         ],
-        env=sandbox.env(),
+        env=env,
         cwd=project,
         timeout=NPM_TIMEOUT_S,
     )
@@ -1316,16 +1385,25 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
     top = sorted(
         p.name for p in (project / "node_modules").iterdir() if p.name not in {".package-lock.json", ".bin"}
     )
-    if entries != [artifact.contract.name] or top != [SIBLING_SCOPE.rstrip("/")]:
-        raise ContractError(f"'{artifact.contract.name}' install pulled extra modules: {top} / {entries}")
+    hosts = set(HOST_MODULES)
+    unexpected_hosts = [name for name in [*entries, *top] if name in hosts]
+    if unexpected_hosts:
+        raise ContractError(
+            f"'{artifact.contract.name}' install pulled host modules: {sorted(unexpected_hosts)} / "
+            f"{top} / {entries}"
+        )
     nested = [p for p in installed.rglob("node_modules") if p.is_dir()]
     if nested:
         raise ContractError(f"'{artifact.contract.name}' ships a nested `node_modules`: {nested}")
     lock = read_lockfile(project / "package-lock.json")
-    if set(lock.packages) != {"", f"node_modules/{artifact.contract.name}"}:
+    expected_direct = {
+        f"node_modules/{artifact.contract.name}",
+        *(f"node_modules/{name}" for name in dependencies),
+    }
+    if not expected_direct <= set(lock.packages):
         raise ContractError(
-            f"Unexpected lockfile entries after installing '{artifact.contract.name}': "
-            f"{sorted(lock.packages)}"
+            f"Missing direct lockfile entries after installing '{artifact.contract.name}': "
+            f"{sorted(expected_direct - set(lock.packages))}"
         )
     return installed
 
@@ -1564,6 +1642,8 @@ def require_tools(
     contract: PackageContract,
     siblings: Sequence[PackageContract],
     requests: Sequence[RecordedRequest],
+    *,
+    all_tools: bool = False,
 ) -> None:
     """Require the package's tools declared to the model and no sibling's.
 
@@ -1582,6 +1662,11 @@ def require_tools(
     require(
         bool(present),
         f"{contract.name}: none of {sorted(contract.exposes_tools)} declared; got {sorted(declared)}",
+    )
+    missing = contract.exposes_tools - declared
+    require(
+        not (all_tools and missing),
+        f"{contract.name}: tools not offered to the model: {sorted(missing)}; got {sorted(declared)}",
     )
     foreign = declared & {tool for other in siblings for tool in other.exposes_tools}
     require(not foreign, f"{contract.name}: sibling tools present without the sibling: {sorted(foreign)}")
@@ -1988,6 +2073,33 @@ def scenario_router(ctx: Context) -> RouterEvidence:
         f"rejected config registered models:\n{rejected.stdout}",
     )
     return {"virtual_model": "router/default", "dispatched": f"{PROVIDER}/{PHYSICAL_MODEL}"}
+
+
+def scenario_plan_mode(ctx: Context) -> PlanModeEvidence:
+    """Load the packed Plan extension and require its complete public tool surface.
+
+    Parameters:
+        ctx (Context): Scenario context.
+
+    Returns:
+        PlanModeEvidence: Registered Plan tools.
+
+    Raises:
+        ContractError: If loading fails or a Plan tool is absent.
+    """
+    project = ctx.work / "project"
+    project.mkdir(exist_ok=True)
+    with ctx.provider_session([TextStep("loaded")]) as provider:
+        result = run_pi(
+            ctx.pi_bin,
+            ctx.sandbox,
+            ctx.installed,
+            project,
+            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
+        )
+    require_clean_run(result, "plan-mode load")
+    require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
+    return {"tools": sorted(ctx.artifact.contract.exposes_tools)}
 
 
 SCENARIOS: dict[str, Callable[[Context], ScenarioEvidence]] = {

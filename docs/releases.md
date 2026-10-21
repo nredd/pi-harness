@@ -26,13 +26,16 @@
 ## Owned npm packages
 
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-dev-tools`,
-`@nredd/pi-session-kit`, `@nredd/pi-subscription-router` and `@nredd/pi-preset`.
+`@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-plan-mode` and `@nredd/pi-preset`.
 
 `scripts/release_descriptors.py` is the publisher's data registry. Each entry supplies a package name,
 repository-relative workspace, shell-free verify commands, packed-artifact contract gates, and optional
 native-artifact glob requirements. The publisher rejects unknown tags, a workspace outside the checkout,
 package/tag skew, or missing native files before it packs. Adding a package means adding its descriptor
-and package contract, not another name-specific workflow or Python branch. For example, the future todo
+and package contract, not another name-specific workflow or Python branch. `@nredd/pi-plan-mode` runs its
+native check plus Vitest, packs `dist/` because `pi.extensions` loads `./dist/index.ts`, declares
+`@narumitw/pi-tui-kit` explicitly, and proves the packed extension registers both Plan tools on stock Pi.
+For example, the future todo
 import will add an entry shaped like:
 
 ```python

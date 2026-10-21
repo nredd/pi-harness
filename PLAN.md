@@ -90,6 +90,7 @@ Historical, not the current deployment inventory:
 6. DONE -- archive all five standalone repos after the replacement gate landed. GitHub reports `archived: true` for each; final archive-pointer heads: dev-tools `91656c2`, session-kit `75fc5a6`, subscription-router `eaee3ed`, benchmark `d4b9896`, e2e `5d078a7`. Replacement PR receipts: #21, #30; follow-ups now in dotfiles. GitHub archival is a repository operation, not a pi-harness PR; local checkout deletion is not assumed.
 7. DONE -- machine-specific checks moved to dotfiles `pi-profile doctor` and its apply hook/runbook. dotfiles#3, activation pins #4, rebased forks #10; matching harness stack receipt #30. No package gate consumes the owner's config.
 8. OPEN -- resume deferred work on the rebuilt stack:
+   - Import `pi-plan-mode` as `packages/plan-mode` / `@nredd/pi-plan-mode` from `v0.59.3-nredd.1`, retaining its Gitlink and fork gate until shipped selection changes the stack to npm.
    - The versioned `integration/stacks/personal.json` is the authoritative package selection. The generated `local.json` development view replaces owned package sources with workspace paths and restores the full preset; it is not a machine default.
    - Follow-up: promote gated snapshots, then have dotfiles adopt the latest promoted snapshot automatically. Core remains the attested `nredd/pi` fork release.
    - Profiles/model roles and full preset adoption (migration plan #21); the footer-only source is separate, see `docs/footer-port.md`.

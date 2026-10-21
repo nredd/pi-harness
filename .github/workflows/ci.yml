@@ -190,6 +190,9 @@ jobs:
       - name: Packed preset and dev-tools through the pi-subagents fork
         if: steps.plan.outputs.run == 'true'
         run: make check-fork-package-contracts REPORT="$RUNNER_TEMP/fork-package-contracts.json"
+      - name: Packed pi-plan-mode with its registry dependency on exact stock Pi
+        if: steps.plan.outputs.run == 'true'
+        run: make check-plan-mode-package-contract REPORT="$RUNNER_TEMP/plan-mode-package-contracts.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.plan.outputs.run == 'true'
         with:

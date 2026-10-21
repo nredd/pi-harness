@@ -18,6 +18,10 @@ licenses, source histories, and build procedures remain owned by their respectiv
 The selected `forks/pi-subagents` commit is additionally exercised with the real packed preset and
 dev-tools by `make check-fork-package-contracts` ([details](package-contracts.md)); it refuses a missing,
 dirty or Gitlink-mismatched fork and never bootstraps or installs into it.
+`packages/plan-mode` imports `nredd/pi-plan-mode` commit
+`4c2bfc3459b07b294efab62e9a8a01849f67a831` (`v0.59.3-nredd.1`) with its history; its Gitlink and
+`forks.yml` job remain until the shipped-selection PR changes the stack to npm. Its packed-tarball stock
+contract is `make check-plan-mode-package-contract` ([details](package-contracts.md)).
 A normal clone has the fork as `origin`; add the upstream remote explicitly when maintaining a patch
 queue. Follow each fork's contributor instructions before making changes.
 
