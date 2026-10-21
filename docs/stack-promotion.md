@@ -20,7 +20,7 @@ The module rejects unknown fields, malformed SHAs, non-personal stacks, digest m
 
 ## What gets verified
 
-Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` only). Every job has `if: github.ref == 'refs/heads/main'`. All gate logic lives in `python -m harness.promotion` subcommands with fixture tests; the YAML only fetches JSON and calls them.
+Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` only). Every job has `if: github.ref == 'refs/heads/main'`. All gate logic lives in `python -m harness.promotion` subcommands (and, for the write-privileged job, stdlib-only `harness.publish_gate`) with fixture tests. The YAML only fetches JSON and calls them: `select`, `ancestor`, `checks`, `candidate-runs`, `stack-runs`, `owned-evidence` (worktree per owned tag plus `stack-check`), `core`, `gates`, `build`, `channel-exists`, `successor`, `release-state` and `tag-target`. Evidence failures and Git failures print `FAILED: ...`, never a traceback.
 
 - Inputs: `select` requires `source_sha` to match `^[0-9a-f]{40}$` for `promote`/`verify-only`, and `rollback_tag` to match exactly `^stack/[0-9a-f]{40}$` (with no `source_sha`) for `rollback`. The commit must be an ancestor of `origin/main`.
 - Required checks: every context from `GET /repos/nredd/pi-harness/rules/branches/main` (ruleset `main required checks`, readable by `GITHUB_TOKEN`) must be `completed`/`success` on that exact SHA, reported by the rule's `integration_id` app (`app.id`, 15368 for all eight). No checks from the rules API fails closed. Review statuses are not required checks.
@@ -30,7 +30,7 @@ Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` onl
 - Owned packages: `scripts/npm_release.py stack-check` runs per `@nredd/` source against a worktree of its exact tag: registry presence, npm `audit signatures` (signature and attestation), and the SLSA provenance binding to `publish.yml`, the tag and the commit.
 - Core: asset digests are compared with the release's `SHA256SUMS`. The CI stack job additionally fetched that release with `gh attestation verify` against `nredd/pi`.
 - Stable pointer: the current `stable.json` is verified with `gh attestation verify --repo nredd/pi-harness --signer-workflow .../promote-stack.yml --source-ref refs/heads/main` before it is used for ancestry.
-- Ancestry: the candidate `source_sha` must differ from stable's and be a descendant of it (`git merge-base --is-ancestor stable candidate`). A duplicate, stale, or diverged candidate fails before anything is written. The first seed has no stable and skips this.
+- Ancestry: whether `stack-channel` exists comes from `channel-exists` over `git/matching-refs` (exact ref, not a prefix). If it exists, `stable.json` must be readable and attested or the run fails; only a missing channel is a seed. The candidate `source_sha` must differ from stable's and be a descendant of it (`git merge-base --is-ancestor stable candidate`). A duplicate, stale, or diverged candidate fails before anything is written. The first seed has no stable and skips this.
 
 The CI evidence is the only coupling to CI: run IDs are read with `gh run list/view`, the `actions: read` and `checks: read` permissions are granted, and an unreadable response fails with an explicit error.
 
@@ -46,13 +46,13 @@ Dispatch `Promote stack` with `operation`:
 - `promote`: `verify-only` plus attestation and publication.
 - `rollback`: dispatch with `rollback_tag=stack/<source_sha>` and no `source_sha`. The retained release asset is downloaded, its attestation and schema are verified, and only `stack-channel` is advanced. The immutable release is untouched. Rollback is the only way the pointer moves to a non-descendant.
 
-Privilege split: the `verify` job runs only `main` code plus data from the selected commit, holds `contents`/`actions`/`checks` read only, and runs no `npm ci` or `uv sync` from the selected commit. The `attest-and-publish` job holds `id-token`/`attestations`/`contents` write, installs nothing, and only downloads the verified artifact, attests, and publishes.
+Privilege split: the `verify` job runs only `main` code plus data from the selected commit, holds `contents`/`actions`/`checks` read only, and runs no `npm ci` or `uv sync` from the selected commit. The `attest-and-publish` job holds `id-token`/`attestations`/`contents` write, installs nothing, and only downloads the verified artifact, runs `harness.publish_gate` (standard library only, from `main`, asserted by a test), attests, and publishes.
 
 ## Release and pointer
 
 `promote` attests `stack-snapshot.json` (`actions/attest-build-provenance`), creates release/tag `stack/<source_sha>` containing it, confirms the tag points at `source_sha`, then pushes a commit containing only `stable.json` (byte-identical to the snapshot) to `stack-channel`. The tag namespace deliberately does not overlap package tags (`@nredd/<package>@<version>`).
 
-Resume: if `stack/<source_sha>` already exists (the pointer push failed), the workflow downloads that release's snapshot, verifies its attestation, requires it to be byte-equal to the rebuilt snapshot, and then advances only the pointer. Evidence is deterministic (sorted checks, earliest qualifying run), but if the required-check set changed in between, equality fails closed; investigate or roll back to the retained snapshot.
+Resume: if `stack/<source_sha>` already exists (the pointer push failed), the workflow downloads that release's snapshot, `release-state` requires it to be byte-equal to the rebuilt snapshot (`resume`; no asset means `create`), its attestation is verified, and only the pointer advances. `tag-target` then requires the tag to resolve to `source_sha`. Evidence is deterministic (sorted checks, earliest qualifying run), but if the required-check set changed in between, equality fails closed; investigate or roll back to the retained snapshot.
 
 ## Owner touchpoints
 
