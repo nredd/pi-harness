@@ -25,8 +25,8 @@ from harness.stack import Stack, validate_release_identity
 SNAPSHOT_SCHEMA_VERSION = 1
 SHA256_HEX_LENGTH = 64
 GIT_SHA_LENGTH = 40
-PERSONAL_STACK_JOB = "stack (ubuntu-24.04, personal)"
-ASSEMBLED_STACK_STEP_PREFIX = "Assembled D and E boundaries"
+PERSONAL_STACK_JOB = re.compile(r"stack \(.+, personal\)")
+PERSONAL_STACK_ARTIFACT = "stack-ubuntu-24.04-personal"
 SHA_PATTERN = re.compile(rf"[0-9a-f]{{{GIT_SHA_LENGTH}}}")
 ROLLBACK_TAG_PATTERN = re.compile(rf"stack/([0-9a-f]{{{GIT_SHA_LENGTH}}})")
 OPERATIONS = ("verify-only", "promote", "rollback")
@@ -279,25 +279,65 @@ def _app_id(run: dict[str, Any]) -> object:
     return app.get("id") if isinstance(app, dict) else None
 
 
-def registry_stack_runs(
-    runs: list[dict[str, Any]], jobs_by_run: dict[str, dict[str, Any]], source_sha: str
-) -> list[int]:
-    """Return successful push/main CI runs whose personal stack job ran the assembled step.
+def _has_live_stack_artifact(pages: object, run_id: int, source_sha: str) -> bool:
+    """Report whether a run uploaded the personal stack artifact and it is still downloadable.
 
-    Only `event=push`, `branch=main` runs count, so docs-only SHAs (where the stack job is
-    skipped) and PR runs are never promotable. The signal is the job name plus a step whose
-    name starts with `ASSEMBLED_STACK_STEP_PREFIX` concluding `success` (not `skipped`).
+    Parameters:
+        pages (object): `actions/runs/<id>/artifacts` slurped pages.
+        run_id (int): the run being checked.
+        source_sha (str): selected commit.
+
+    Returns:
+        bool: whether a non-expired `PERSONAL_STACK_ARTIFACT` from this run and commit exists.
+
+    Raises:
+        ValueError: the artifact pages are malformed.
+    """
+    if not isinstance(pages, list):
+        raise ValueError("Artifact response must be a list of API pages")
+    for page in pages:
+        entries = page.get("artifacts") if isinstance(page, dict) else None
+        if not isinstance(entries, list):
+            raise ValueError("Artifact page has no `artifacts` list")
+        for artifact in entries:
+            origin = artifact.get("workflow_run") if isinstance(artifact, dict) else None
+            if (
+                isinstance(origin, dict)
+                and artifact.get("name") == PERSONAL_STACK_ARTIFACT
+                and artifact.get("expired") is False
+                and origin.get("id") == run_id
+                and origin.get("head_sha") == source_sha
+            ):
+                return True
+    return False
+
+
+def registry_stack_runs(
+    runs: list[dict[str, Any]],
+    jobs_by_run: dict[str, dict[str, Any]],
+    artifacts_by_run: dict[str, Any],
+    source_sha: str,
+) -> list[int]:
+    """Return successful push/main CI runs that really executed the personal stack scenario.
+
+    Only `event=push`, `branch=main` runs count. Job conclusions alone prove nothing: a docs-only
+    or main-push-smoke cell still reports its job as `success` after skipping every step. The
+    machine signal is the `PERSONAL_STACK_ARTIFACT` upload, which `ci.yml` makes only when the
+    scenario ran (`steps.plan.outputs.run == 'true'`), plus a successful job matching
+    `PERSONAL_STACK_JOB` so a scenario failure still disqualifies the run. No step or job
+    display text beyond the matrix name pattern is used.
 
     Parameters:
         runs (list[dict[str, Any]]): `gh run list --json` entries.
         jobs_by_run (dict[str, dict[str, Any]]): run ID -> `gh run view --json jobs` output.
+        artifacts_by_run (dict[str, Any]): run ID -> slurped `actions/runs/<id>/artifacts` pages.
         source_sha (str): selected commit.
 
     Returns:
         list[int]: sorted qualifying run IDs.
 
     Raises:
-        ValueError: no run qualifies.
+        ValueError: no run qualifies, or an artifact response is malformed.
     """
     verified: list[int] = []
     for run in runs:
@@ -311,21 +351,21 @@ def registry_stack_runs(
         ):
             continue
         jobs = jobs_by_run.get(str(run_id), {}).get("jobs", [])
-        job = next((item for item in jobs if item.get("name") == PERSONAL_STACK_JOB), None)
-        if not isinstance(job, dict) or job.get("conclusion") != "success":
-            continue
-        if any(
-            isinstance(step, dict)
-            and str(step.get("name", "")).startswith(ASSEMBLED_STACK_STEP_PREFIX)
-            and step.get("status") == "completed"
-            and step.get("conclusion") == "success"
-            for step in job.get("steps", [])
+        if not any(
+            isinstance(job, dict)
+            and PERSONAL_STACK_JOB.fullmatch(str(job.get("name", "")))
+            and job.get("status") == "completed"
+            and job.get("conclusion") == "success"
+            for job in jobs
         ):
+            continue
+        if _has_live_stack_artifact(artifacts_by_run.get(str(run_id), []), run_id, source_sha):
             verified.append(run_id)
     if not verified:
         raise ValueError(
-            f"No successful push/main CI run with a passing '{PERSONAL_STACK_JOB}' assembled step "
-            f"found for '{source_sha}'; docs-only SHAs cannot be promoted"
+            f"No successful push/main CI run with a passing personal stack job and a live "
+            f"'{PERSONAL_STACK_ARTIFACT}' artifact found for '{source_sha}'; docs-only SHAs and "
+            "runs whose artifacts expired cannot be promoted"
         )
     return sorted(verified)
 
@@ -521,9 +561,12 @@ def _parser() -> argparse.ArgumentParser:
     checks.add_argument("--rules", type=Path, required=True)
     checks.add_argument("--check-pages", type=Path, required=True)
     checks.add_argument("--source-sha", required=True)
-    runs = commands.add_parser("stack-runs", help="Find push/main CI runs with the assembled step")
+    runs = commands.add_parser(
+        "stack-runs", help="Find push/main CI runs that ran the personal stack scenario"
+    )
     runs.add_argument("--runs", type=Path, required=True)
     runs.add_argument("--jobs-dir", type=Path, required=True)
+    runs.add_argument("--artifacts-dir", type=Path, required=True)
     runs.add_argument("--source-sha", required=True)
     owned = commands.add_parser("owned-tags", help="Print the stack's owned package release tags")
     owned.add_argument("--stack", type=Path, required=True)
@@ -571,7 +614,10 @@ def _run(args: argparse.Namespace) -> None:
         _emit(verify_required_checks(required, flatten_pages(_read_json(args.check_pages)), args.source_sha))
     elif command == "stack-runs":
         jobs = {path.stem.removeprefix("run-"): _read_json(path) for path in args.jobs_dir.glob("run-*.json")}
-        _emit(registry_stack_runs(flatten_pages([_read_json(args.runs)]), jobs, args.source_sha))
+        artifacts = {
+            path.stem.removeprefix("run-"): _read_json(path) for path in args.artifacts_dir.glob("run-*.json")
+        }
+        _emit(registry_stack_runs(flatten_pages([_read_json(args.runs)]), jobs, artifacts, args.source_sha))
     elif command == "owned-tags":
         _emit(owned_tags(Stack.model_validate_json(args.stack.read_bytes())))
     elif command == "core":

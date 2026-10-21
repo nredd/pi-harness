@@ -105,12 +105,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
         run: |
-          mkdir -p "$PROMO/jobs"
+          mkdir -p "$PROMO/jobs" "$PROMO/artifacts"
           gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SOURCE_SHA" --limit 100 \
             --json databaseId,status,conclusion,event,headBranch,headSha >"$PROMO/runs.json" \
             || { echo '::error::Cannot read workflow runs; the job needs actions read'; exit 1; }
           for run in $(jq -r '.[].databaseId' "$PROMO/runs.json"); do
             gh run view "$run" --repo "$GITHUB_REPOSITORY" --json jobs >"$PROMO/jobs/run-$run.json"
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" >"$PROMO/artifacts/run-$run.json"
           done
       - name: Verify gates and build candidate snapshot
         if: inputs.operation != 'rollback'
@@ -121,7 +122,7 @@ jobs:
           promo() { uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion "$@"; }
           git show "$SOURCE_SHA:integration/stacks/personal.json" >"$PROMO/personal.json"
           promo checks --rules "$PROMO/rules.json" --check-pages "$PROMO/check-pages.json" --source-sha "$SOURCE_SHA" >"$PROMO/checks.json"
-          promo stack-runs --runs "$PROMO/runs.json" --jobs-dir "$PROMO/jobs" --source-sha "$SOURCE_SHA" >"$PROMO/stack-runs.json"
+          promo stack-runs --runs "$PROMO/runs.json" --jobs-dir "$PROMO/jobs" --artifacts-dir "$PROMO/artifacts" --source-sha "$SOURCE_SHA" >"$PROMO/stack-runs.json"
           promo core --stack "$PROMO/personal.json" >"$PROMO/core.json"
           promo owned-tags --stack "$PROMO/personal.json" >"$PROMO/owned-tags.json"
           mkdir -p "$PROMO/owned"
