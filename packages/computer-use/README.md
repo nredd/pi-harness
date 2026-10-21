@@ -79,7 +79,7 @@ See [docs/usage.md](./docs/usage.md) for the full tool reference.
 - [Usage](./docs/usage.md)
 - [Architecture](./docs/architecture.md)
 - [Configuration](./docs/configuration.md)
-- [Development](./docs/development.md)
+- [Development](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/docs/development.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 - [Linux support](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/docs/linux.md)
 - [Contributing](./CONTRIBUTING.md)

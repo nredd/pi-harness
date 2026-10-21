@@ -1,8 +1,6 @@
-"""Run the packed `@nredd/pi-computer-use` stock contract outside a release.
-
-The contract proves tarball independence and extension discovery against exact stock Pi. Native
-macOS desktop behavior requires an interactive TCC-granted session and is explicitly reported as
-``NOT RUN`` rather than treated as a passing desktop test.
+"""Run the packed `@nredd/pi-computer-use` stock contract outside a release; it proves tarball
+independence and extension discovery against exact stock Pi, while postinstall and native desktop
+behavior are NOT RUN because they require host mutation or an interactive TCC-granted macOS session.
 """
 
 from __future__ import annotations

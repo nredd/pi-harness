@@ -2009,9 +2009,46 @@ def check_macos_helper(tarball: Path, arch: MACHO_ARCH) -> str:
     return f"Mach-O {arch} cputype {cpu:#x} mode {mode:04o}"
 
 
-HELPER_SOURCE_LISTS = re.compile(
-    r"\b(?:helperSourcePaths|macosSourcePaths)\s*=\s*\[(.*?)\]\s*\.map", re.DOTALL
+HELPER_SOURCE_LIST_DECLARATIONS = {
+    "scripts/setup-helper.mjs": "helperSourcePaths",
+    "scripts/build-native.mjs": "macosSourcePaths",
+}
+HELPER_SOURCE_LITERAL = re.compile(
+    r"\s*(?P<quote>['\"])(?P<value>(?:\\.|(?!\1).)*)(?P=quote)\s*(?:,|$)", re.DOTALL
 )
+
+
+def parse_helper_source_list(script: str, source: str) -> list[str]:
+    """Parse one packed script's complete literal Swift-source declaration.
+
+    Raises:
+        ContractError: If the expected declaration is absent or contains a non-literal token.
+    """
+    expected = HELPER_SOURCE_LIST_DECLARATIONS[script]
+    declaration = re.compile(rf"\b{re.escape(expected)}\s*=\s*\[(?P<items>.*?)\]\s*\.map\b", re.DOTALL)
+    match = declaration.search(source)
+    require(match is not None, f"{script} has no '{expected}' helper source list")
+    assert match is not None
+    items = match.group("items")
+    names: list[str] = []
+    offset = 0
+    while offset < len(items):
+        if not items[offset:].strip():
+            break
+        literal = HELPER_SOURCE_LITERAL.match(items, offset)
+        require(
+            literal is not None,
+            f"{script} helper source list has unsupported token: {items[offset:].strip()!r}",
+        )
+        assert literal is not None
+        names.append(literal.group("value"))
+        offset = literal.end()
+    require(bool(names), f"{script} helper source list names no .swift files")
+    require(
+        all(name.endswith(".swift") for name in names),
+        f"{script} helper source list has unsupported non-Swift source",
+    )
+    return names
 
 
 def check_helper_sources_packed(tarball: Path) -> list[str]:
@@ -2031,12 +2068,8 @@ def check_helper_sources_packed(tarball: Path) -> list[str]:
         ContractError: If a script lacks the list or a listed source is not packed.
     """
     sources: set[str] = set()
-    for script in ("scripts/setup-helper.mjs", "scripts/build-native.mjs"):
-        match = HELPER_SOURCE_LISTS.search(read_member(tarball, script).decode())
-        require(match is not None, f"{script} has no helper source list to verify against the tarball")
-        assert match is not None
-        names = re.findall(r'"([^"]+\.swift)"', match.group(1))
-        require(bool(names), f"{script} helper source list names no .swift files")
+    for script in HELPER_SOURCE_LIST_DECLARATIONS:
+        names = parse_helper_source_list(script, read_member(tarball, script).decode())
         sources.update(f"native/macos/{name}" for name in names)
     for source in sorted(sources):
         read_member(tarball, source)
