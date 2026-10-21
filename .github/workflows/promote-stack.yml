@@ -23,8 +23,10 @@ defaults:
   run:
     shell: bash -euo pipefail {0}
 
+# One queue per selected commit: dispatches for different commits never replace each other, and
+# `advance-channel --operation promote` refuses a stale candidate that reaches the write job late.
 concurrency:
-  group: stack-promotion
+  group: stack-promotion-${{ inputs.source_sha || inputs.rollback_tag }}
   cancel-in-progress: false
 
 permissions: {}
@@ -57,77 +59,15 @@ jobs:
         with:
           version: "0.13.1"
       - name: Install harness
-        run: cd integration && uv sync --locked
+        run: uv sync --locked --directory integration
       - id: target
-        name: Validate inputs and ancestry
+        name: Verify the selected commit and build the candidate snapshot
         env:
+          GH_TOKEN: ${{ github.token }}
           OPERATION: ${{ inputs.operation }}
           REQUESTED_SHA: ${{ inputs.source_sha }}
           ROLLBACK_TAG: ${{ inputs.rollback_tag }}
-        run: |
-          mkdir -p "$PROMO"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion select --operation "$OPERATION" --source-sha "$REQUESTED_SHA" --rollback-tag "$ROLLBACK_TAG" --github-output "$GITHUB_OUTPUT"
-          git fetch origin main
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion ancestor --repo "$GITHUB_WORKSPACE" --ancestor "${{ steps.target.outputs.source_sha }}" --descendant origin/main
-
-      - name: Verify retained snapshot
-        if: inputs.operation == 'rollback'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
-          SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
-        run: |
-          gh release download "$ROLLBACK_TAG" --repo "$GITHUB_REPOSITORY" --pattern stack-snapshot.json --dir "$PROMO" --clobber
-          gh attestation verify "$PROMO/stack-snapshot.json" --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion verify --snapshot "$PROMO/stack-snapshot.json" --source-sha "$SOURCE_SHA"
-
-      - name: Read required checks
-        if: inputs.operation != 'rollback'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
-        run: |
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/rules/branches/main" >"$PROMO/rules.json"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA/check-runs?per_page=100" >"$PROMO/check-pages.json"
-      - name: Read CI artifacts
-        if: inputs.operation != 'rollback'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
-        run: |
-          mkdir -p "$PROMO/artifacts"
-          gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SOURCE_SHA" --limit 100 --json databaseId,status,conclusion,event,headBranch,headSha >"$PROMO/runs.json"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion fetch-artifacts --runs "$PROMO/runs.json" --source-sha "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --output-dir "$PROMO/artifacts"
-      - name: Verify gates and build candidate snapshot
-        if: inputs.operation != 'rollback'
-        env:
-          SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
-        run: |
-          git show "$SOURCE_SHA:integration/stacks/personal.json" >"$PROMO/personal.json"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion checks --rules "$PROMO/rules.json" --check-pages "$PROMO/check-pages.json" --source-sha "$SOURCE_SHA" >"$PROMO/checks.json"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion stack-runs --runs "$PROMO/runs.json" --artifacts-dir "$PROMO/artifacts" --source-sha "$SOURCE_SHA" >"$PROMO/stack-runs.json"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion core --stack "$PROMO/personal.json" --workdir "$RUNNER_TEMP/core" >"$PROMO/core.json"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion owned-evidence --stack "$PROMO/personal.json" --repo "$GITHUB_WORKSPACE" --workdir "$RUNNER_TEMP/packages" --output "$PROMO/owned.json"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion gates --stack "$PROMO/personal.json" --checks "$PROMO/checks.json" --stack-runs "$PROMO/stack-runs.json" --owned "$PROMO/owned.json" --core "$PROMO/core.json" --output "$PROMO/gates.json"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion build --stack "$PROMO/personal.json" --source-sha "$SOURCE_SHA" --gates "$PROMO/gates.json" --output "$PROMO/stack-snapshot.json"
-      - id: channel
-        name: Read stack-channel state
-        if: inputs.operation == 'promote' || inputs.operation == 'verify-only'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/stack-channel" >"$PROMO/refs.json"
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion channel-exists --refs "$PROMO/refs.json" --github-output "$GITHUB_OUTPUT"
-      - name: Fetch and attest the stable pointer
-        if: (inputs.operation == 'promote' || inputs.operation == 'verify-only') && steps.channel.outputs.channel_exists == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/stable.json?ref=stack-channel" >"$PROMO/stable.json"
-          gh attestation verify "$PROMO/stable.json" --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
-      - name: Verify successor of the attested stable pointer
-        if: inputs.operation == 'promote' || inputs.operation == 'verify-only'
-        run: uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion successor --candidate "$PROMO/stack-snapshot.json" --refs "$PROMO/refs.json" --stable "$PROMO/stable.json" --repo "$GITHUB_WORKSPACE"
+        run: uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion_verify
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: inputs.operation != 'verify-only'
         with:
@@ -148,7 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -181,11 +121,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/stack/$SOURCE_SHA" >"$RUNNER_TEMP/tag-ref.json"
-          PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate tag-target --ref "$RUNNER_TEMP/tag-ref.json" --source-sha "$SOURCE_SHA"
+        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate tag-target --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
       - name: Advance the stack-channel pointer
         env:
+          GH_TOKEN: ${{ github.token }}
           DEPLOY_KEY: ${{ secrets.STACK_CHANNEL_DEPLOY_KEY }}
+          OPERATION: ${{ inputs.operation }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate advance-channel --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --snapshot promotion/stack-snapshot.json --deploy-key-env DEPLOY_KEY --temp-dir "$RUNNER_TEMP"
+        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate advance-channel --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --snapshot promotion/stack-snapshot.json --deploy-key-env DEPLOY_KEY --temp-dir "$RUNNER_TEMP" --operation "$OPERATION"

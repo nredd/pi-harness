@@ -5,7 +5,7 @@ dependencies, so everything it runs lives here and imports nothing outside the s
 library (and stays compatible with the runner's system Python).
 
 References:
-- https://docs.github.com/rest/git/refs#get-a-reference
+- https://docs.github.com/rest/git/refs#list-matching-references
 - https://docs.github.com/rest/releases/releases#get-a-release-by-tag-name
 """
 
@@ -49,19 +49,25 @@ def release_state(existing: Path, rebuilt: Path) -> Literal["create", "resume"]:
 
 
 def verify_tag_target(ref: object, source_sha: str) -> None:
-    """Require the snapshot tag to point at the selected commit.
+    """Require the snapshot tag to point directly at the selected commit.
+
+    Annotated tags are rejected rather than dereferenced: `gh release create --target <sha>` only
+    ever makes a lightweight tag, so an annotated `stack/<sha>` was made by hand, and following
+    it would need an extra trusted API hop for a state the workflow never produces.
 
     Parameters:
-        ref (object): `git/ref/tags/stack/<sha>` response.
+        ref (object): a git ref object from `git/ref/tags/...` or one `git/matching-refs` entry.
         source_sha (str): selected commit.
 
     Raises:
-        ValueError: the tag response is malformed or points elsewhere.
+        ValueError: the response is malformed, an annotated tag, or points elsewhere.
     """
     target = ref.get("object") if isinstance(ref, dict) else None
     tagged = target.get("sha") if isinstance(target, dict) else None
-    if not isinstance(tagged, str):
+    if not isinstance(target, dict) or not isinstance(tagged, str):
         raise ValueError("Tag ref response has no `object.sha`")
+    if target.get("type") == "tag":
+        raise ValueError("Tag is annotated; snapshot tags must be lightweight tags on the commit")
     if tagged != source_sha:
         raise ValueError(f"Tag points at '{tagged}', not '{source_sha}'")
 
@@ -93,6 +99,53 @@ def _command(
         raise PublishError(f"Command failed: {' '.join(args[:2])}: {detail}") from error
 
 
+def _json(*args: str) -> object:
+    """Run one `gh` command and decode its JSON; any failure is an error, never "absent".
+
+    Parameters:
+        *args (str): literal executable and arguments.
+
+    Returns:
+        object: decoded stdout.
+
+    Raises:
+        PublishError: the command failed (404, 403, 5xx and rate limits alike) or printed non-JSON.
+    """
+    result = _command(*args)
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise PublishError(f"Unreadable response from {' '.join(args[:3])}: {error}") from error
+
+
+def _tag_refs(repo: str, tag: str) -> list[dict[str, object]]:
+    """List the refs named exactly `refs/tags/<tag>`.
+
+    `matching-refs` answers 200 with an empty list for an absent ref (a prefix match, so the
+    exact name is filtered), unlike `git/ref`, which answers 404 and cannot be told apart from
+    other failures by exit code alone.
+
+    Parameters:
+        repo (str): GitHub owner/repository.
+        tag (str): tag name.
+
+    Returns:
+        list[dict[str, object]]: zero or one exact ref entries.
+
+    Raises:
+        PublishError: GitHub could not answer.
+    """
+    refs = _json("gh", "api", "--paginate", "--slurp", f"repos/{repo}/git/matching-refs/tags/{tag}")
+    entries = (
+        [entry for page in refs if isinstance(page, list) for entry in page]
+        if isinstance(refs, list)
+        else None
+    )
+    if entries is None:
+        raise PublishError(f"Malformed matching-refs response for '{tag}'")
+    return [entry for entry in entries if isinstance(entry, dict) and entry.get("ref") == f"refs/tags/{tag}"]
+
+
 def prepare_release(
     repo: str, source_sha: str, rebuilt: Path, existing_dir: Path
 ) -> Literal["create", "resume"]:
@@ -108,33 +161,120 @@ def prepare_release(
         Literal["create", "resume"]: whether publication creates or resumes the immutable release.
 
     Raises:
-        PublishError: GitHub cannot answer about the tag or release asset.
-        ValueError: an existing tag points at another commit or its asset differs.
+        PublishError: GitHub could not answer, or the tag exists without a snapshot release asset.
+        ValueError: an existing tag is annotated or points at another commit, or its asset differs.
     """
     tag = f"stack/{source_sha}"
-    ref = _command("gh", "api", f"repos/{repo}/git/ref/tags/{tag}", check=False)
-    if ref.returncode == 0:
-        verify_tag_target(json.loads(ref.stdout), source_sha)
-        existing_dir.mkdir(parents=True, exist_ok=True)
-        _command(
-            "gh",
-            "release",
-            "download",
-            tag,
-            "--repo",
-            repo,
-            "--pattern",
-            "stack-snapshot.json",
-            "--dir",
-            str(existing_dir),
-            "--clobber",
-        )
-    elif ref.returncode != 1:
-        raise PublishError(f"Could not read snapshot tag '{tag}': {ref.stderr.strip()}")
+    exact = _tag_refs(repo, tag)
+    if not exact:
+        return "create"
+    verify_tag_target(exact[0], source_sha)
+    release = _json("gh", "api", f"repos/{repo}/releases/tags/{tag}")
+    assets = release.get("assets") if isinstance(release, dict) else None
+    if not isinstance(assets, list) or not any(
+        isinstance(asset, dict) and asset.get("name") == "stack-snapshot.json" for asset in assets
+    ):
+        raise PublishError(f"Tag '{tag}' exists but its release has no stack-snapshot.json asset; refusing")
+    existing_dir.mkdir(parents=True, exist_ok=True)
+    _command(
+        "gh", "release", "download", tag,
+        "--repo", repo,
+        "--pattern", "stack-snapshot.json",
+        "--dir", str(existing_dir),
+        "--clobber",
+    )  # fmt: skip
     return release_state(existing_dir / "stack-snapshot.json", rebuilt)
 
 
-def advance_channel(repo: str, source_sha: str, snapshot: Path, deploy_key: str, temp_dir: Path) -> None:
+def confirm_tag(repo: str, source_sha: str) -> None:
+    """Fail unless the published snapshot tag exists and points directly at the selected commit.
+
+    Parameters:
+        repo (str): GitHub owner/repository.
+        source_sha (str): selected commit.
+
+    Raises:
+        PublishError: GitHub could not answer or the tag is absent.
+        ValueError: the tag is annotated or points elsewhere.
+    """
+    exact = _tag_refs(repo, f"stack/{source_sha}")
+    if not exact:
+        raise PublishError(f"Tag 'stack/{source_sha}' does not exist after publication")
+    verify_tag_target(exact[0], source_sha)
+
+
+def verify_channel_successor(tip_bytes: bytes, snapshot_bytes: bytes, source_sha: str) -> bool:
+    """Decide whether the candidate may replace the channel's current `stable.json`.
+
+    Closes the window between the read-only verification and the push: a manual push in between
+    must not be silently overwritten by an older or diverged candidate.
+
+    Parameters:
+        tip_bytes (bytes): `stable.json` at the current `stack-channel` tip.
+        snapshot_bytes (bytes): the candidate snapshot.
+        source_sha (str): the candidate commit.
+
+    Returns:
+        bool: `True` when the tip already is the candidate (nothing to push), `False` when
+            ancestry against the tip's `source_sha` must still be checked by the caller.
+
+    Raises:
+        PublishError: the tip is unreadable, or is the candidate commit with different bytes.
+    """
+    try:
+        tip = json.loads(tip_bytes)
+        current = tip["source_sha"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise PublishError(f"Current stack-channel stable.json is unreadable: {error}") from error
+    if current != source_sha:
+        return False
+    if tip_bytes != snapshot_bytes:
+        raise PublishError("stack-channel already names this commit with different bytes; refusing")
+    return True
+
+
+def _current_source_sha(tip_bytes: bytes) -> str:
+    """Return the `source_sha` recorded in a stable pointer.
+
+    Parameters:
+        tip_bytes (bytes): `stable.json` contents.
+
+    Returns:
+        str: its `source_sha`.
+    """
+    return str(json.loads(tip_bytes)["source_sha"])
+
+
+def _require_descendant(tip_bytes: bytes, source_sha: str, env: dict[str, str]) -> None:
+    """Fail unless the candidate commit strictly descends from the channel tip's commit.
+
+    Parameters:
+        tip_bytes (bytes): `stable.json` at the current tip.
+        source_sha (str): candidate commit.
+        env (dict[str, str]): command environment.
+
+    Raises:
+        PublishError: Git could not compare the commits.
+        ValueError: the candidate does not descend from the tip.
+    """
+    current = _current_source_sha(tip_bytes)
+    result = _command("git", "merge-base", "--is-ancestor", current, source_sha, env=env, check=False)
+    if result.returncode == 1:
+        raise ValueError(f"Candidate '{source_sha}' does not descend from the current stable '{current}'")
+    if result.returncode != 0:
+        raise PublishError(f"Could not compare '{current}' with '{source_sha}': {result.stderr.strip()}")
+
+
+def advance_channel(
+    repo: str,
+    source_sha: str,
+    snapshot: Path,
+    deploy_key: str,
+    temp_dir: Path,
+    *,
+    require_successor: bool = False,
+    remote: str | None = None,
+) -> None:
     """Commit the verified snapshot as the sole `stack-channel` file and push it over SSH.
 
     Parameters:
@@ -143,9 +283,13 @@ def advance_channel(repo: str, source_sha: str, snapshot: Path, deploy_key: str,
         snapshot (Path): verified snapshot to copy to `stable.json`.
         deploy_key (str): ruleset-bypassing deploy private key.
         temp_dir (Path): runner temporary directory.
+        require_successor (bool): re-check against the live tip that the candidate descends from it
+            (promotion); rollback leaves this off because it may move to a non-descendant.
+        remote (str | None): remote URL override; defaults to the repository's SSH URL.
 
     Raises:
         PublishError: the key is absent or an SSH/Git operation fails.
+        ValueError: `require_successor` and the live tip is not an ancestor of the candidate.
     """
     if not deploy_key:
         raise PublishError("STACK_CHANNEL_DEPLOY_KEY (write deploy key, ruleset bypass actor) is required")
@@ -160,16 +304,24 @@ def advance_channel(repo: str, source_sha: str, snapshot: Path, deploy_key: str,
             "-o StrictHostKeyChecking=yes"
         )
         env = os.environ | {"GIT_SSH_COMMAND": ssh}
-        remote = f"git@github.com:{repo}.git"
-        listed = subprocess.run(
-            ["git", "ls-remote", "--exit-code", "--heads", remote, "stack-channel"],
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
+        remote = remote or f"git@github.com:{repo}.git"
+        listed = _command(
+            "git", "ls-remote", "--exit-code", "--heads", remote, "stack-channel", env=env, check=False
         )
         if listed.returncode == 0:
-            _command("git", "fetch", remote, "stack-channel:refs/remotes/origin/stack-channel", env=env)
+            _command(
+                "git",
+                "fetch",
+                "--no-prune",
+                remote,
+                "stack-channel:refs/remotes/origin/stack-channel",
+                env=env,
+            )
+            if require_successor:
+                tip = _command("git", "show", "refs/remotes/origin/stack-channel:stable.json", env=env).stdout
+                if verify_channel_successor(tip.encode(), snapshot.read_bytes(), source_sha):
+                    return
+                _require_descendant(tip.encode(), source_sha, env)
             _command("git", "switch", "-C", "stack-channel-next", "origin/stack-channel", env=env)
         elif listed.returncode == 2:
             _command("git", "switch", "--orphan", "stack-channel-next", env=env)
@@ -178,7 +330,7 @@ def advance_channel(repo: str, source_sha: str, snapshot: Path, deploy_key: str,
         _command("git", "rm", "-rf", "--ignore-unmatch", ".", env=env)
         Path("stable.json").write_bytes(snapshot.read_bytes())
         _command("git", "add", "stable.json", env=env)
-        changed = subprocess.run(["git", "diff", "--cached", "--quiet"], env=env, check=False)
+        changed = _command("git", "diff", "--cached", "--quiet", env=env, check=False)
         if changed.returncode == 0:
             return
         if changed.returncode != 1:
@@ -211,7 +363,7 @@ def _parser() -> argparse.ArgumentParser:
     state.add_argument("--existing", type=Path, required=True)
     state.add_argument("--rebuilt", type=Path, required=True)
     tag = commands.add_parser("tag-target", help="Fail unless the snapshot tag points at the SHA")
-    tag.add_argument("--ref", type=Path, required=True)
+    tag.add_argument("--repo", required=True)
     tag.add_argument("--source-sha", required=True)
     prepare = commands.add_parser("prepare-release", help="Validate an existing tag before attestation")
     prepare.add_argument("--repo", required=True)
@@ -225,6 +377,12 @@ def _parser() -> argparse.ArgumentParser:
     channel.add_argument("--snapshot", type=Path, required=True)
     channel.add_argument("--deploy-key-env", required=True)
     channel.add_argument("--temp-dir", type=Path, required=True)
+    channel.add_argument(
+        "--operation",
+        choices=("promote", "rollback"),
+        required=True,
+        help="`promote` refuses unless the candidate descends from the live tip; `rollback` may not",
+    )
     return parser
 
 
@@ -242,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "release-state":
             sys.stdout.write(f"{release_state(args.existing, args.rebuilt)}\n")
         elif args.command == "tag-target":
-            verify_tag_target(json.loads(args.ref.read_bytes()), args.source_sha)
+            confirm_tag(args.repo, args.source_sha)
         elif args.command == "prepare-release":
             state = prepare_release(args.repo, args.source_sha, args.rebuilt, args.existing_dir)
             args.github_output.write_text(f"state={state}\n")
@@ -253,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.snapshot,
                 os.environ.get(args.deploy_key_env, ""),
                 args.temp_dir,
+                require_successor=args.operation == "promote",
             )
     except (ValueError, OSError, PublishError, json.JSONDecodeError) as error:
         sys.stderr.write(f"FAILED: {error}\n")
