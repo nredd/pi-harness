@@ -29,8 +29,7 @@ remain NOT RUN without an interactive macOS desktop and TCC grants. Only macOS h
 Known follow-up: `packages/computer-use/scripts/setup-helper.mjs` still sets `releaseRepo` to
 `injaneity/pi-computer-use` (the fallback download source when no prebuilt helper is present) and the
 bundle id/signing identity to `com.injaneity.pi-computer-use`. An import PR does not change runtime
-behavior, so this is unchanged. Also unchanged: its build fallback names `agent_cursor*.swift`, which
-`package.json` `files` does not pack, so `--allow-build` from an installed tarball cannot work.
+behavior, so this is unchanged.
 The selected `forks/pi-subagents` commit is additionally exercised with the real packed preset and
 dev-tools by `make check-fork-package-contracts` ([details](package-contracts.md)); it refuses a missing,
 dirty or Gitlink-mismatched fork and never bootstraps or installs into it.

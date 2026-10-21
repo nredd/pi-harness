@@ -210,27 +210,26 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "extensions/computer-use.ts",
         "scripts/build-native.mjs",
         "scripts/setup-helper.mjs",
+        "native/macos/agent_cursor.swift",
+        "native/macos/agent_cursor_motion.swift",
         "native/macos/bridge.swift",
         "prebuilt/macos/arm64/bridge",
         "prebuilt/macos/x64/bridge",
     ),
     # Only macOS ships: the arm64/x64 prebuilts below are the sole helper binaries, so no `prebuilt/linux`
-    # or `prebuilt/windows` pattern exists. The `src/platform` and Windows crate patterns are source
-    # the TypeScript backends and the build script reference. `scenario_computer_use`
+    # or `prebuilt/windows` pattern exists, and no Windows crate or Windows/Linux doc is packed. The
+    # `src/platform` pattern is source the TypeScript backends reference. `scenario_computer_use`
     # additionally parses each prebuilt's Mach-O header and mode from the tarball.
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
         re.compile(r"^assets/reference/img\.jpg$"),
-        re.compile(r"^docs/[a-z-]+\.md$"),
+        re.compile(r"^docs/(?:architecture|configuration|macos-root-targeting|troubleshooting|usage)\.md$"),
         re.compile(r"^extensions/[a-z-]+\.ts$"),
         re.compile(
             r"^src/(?:[a-z0-9-]+|platform/[a-z0-9-]+|platform/(?:linux|macos|windows)/[a-z0-9-]+(?:\.d)?)\.(?:ts|mts|mjs)$"
         ),
         re.compile(r"^scripts/(?:build-native|setup-helper)\.mjs$"),
-        re.compile(r"^native/macos/bridge\.swift$"),
-        re.compile(
-            r"^native/windows/bridge-rs/(?:Cargo\.(?:lock|toml)|src/[a-z0-9_-]+\.rs|tests/[a-z0-9_-]+\.rs)$"
-        ),
+        re.compile(r"^native/macos/(?:bridge|agent_cursor|agent_cursor_motion)\.swift$"),
         re.compile(r"^prebuilt/macos/(?:arm64|x64)/bridge$"),
     ),
     exposes_tools=frozenset(
@@ -560,6 +559,7 @@ class ComputerUseEvidence(TypedDict):
     platform: str
     tools: list[str]
     helpers: dict[str, str]
+    helper_sources: list[str]
     postinstall: Literal["NOT RUN"]
     postinstall_reason: str
     native_desktop: Literal["NOT RUN"]
@@ -607,6 +607,9 @@ class ComputerUseEvidenceModel(BaseModel):
     tools: list[NonEmptyText] = Field(min_length=1, description="Exact tool set the model was offered")
     helpers: dict[str, NonEmptyText] = Field(
         min_length=1, description="Packed Mach-O check per prebuilt arch"
+    )
+    helper_sources: list[NonEmptyText] = Field(
+        min_length=1, description="Swift sources the packed build scripts compile, each verified packed"
     )
     postinstall: Literal["NOT RUN"] = Field(description="`setup-helper.mjs` was not exercised")
     postinstall_reason: NonEmptyText = Field(description="Why the postinstall was not exercised")
@@ -1937,7 +1940,8 @@ def scenario_subagents(ctx: Context) -> SubagentsEvidence:
 
 
 COMPUTER_USE_DESKTOP_TOOLS = frozenset({"desktop_screenshot", "desktop_input"})
-MACHO_CPU_TYPES = {"arm64": 0x0100000C, "x64": 0x01000007}
+MACHO_ARCH = Literal["arm64", "x64"]
+MACHO_CPU_TYPES: Mapping[MACHO_ARCH, int] = {"arm64": 0x0100000C, "x64": 0x01000007}
 MACHO_MAGIC_64 = b"\xcf\xfa\xed\xfe"
 
 
@@ -1966,14 +1970,14 @@ def computer_use_expected_tools(platform: str) -> frozenset[str]:
     return tools if platform == "darwin" else tools - COMPUTER_USE_DESKTOP_TOOLS
 
 
-def check_macos_helper(tarball: Path, arch: str) -> str:
+def check_macos_helper(tarball: Path, arch: MACHO_ARCH) -> str:
     """Require a packed `prebuilt/macos/<arch>/bridge` to be a thin 64-bit Mach-O of `arch`, mode 0755.
 
     The header is parsed here (little-endian magic then `cputype`), so it works on any host.
 
     Parameters:
         tarball (Path): Packed tarball.
-        arch (str): `arm64` or `x64`.
+        arch (MACHO_ARCH): `arm64` or `x64`.
 
     Returns:
         str: Human-readable summary recorded as evidence.
@@ -1984,10 +1988,14 @@ def check_macos_helper(tarball: Path, arch: str) -> str:
     name = f"prebuilt/macos/{arch}/bridge"
     with tarfile.open(tarball) as tar:
         try:
-            mode = tar.getmember(f"package/{name}").mode & 0o7777
+            member = tar.getmember(f"package/{name}")
         except KeyError as e:
             raise ContractError(f"'{tarball.name}' has no '{name}'") from e
-    header = read_member(tarball, name)[:8]
+        handle = tar.extractfile(member)
+        if handle is None:
+            raise ContractError(f"'{tarball.name}:{name}' is not a regular file")
+        mode = member.mode & 0o7777
+        header = handle.read(8)
     require(
         header[:4] == MACHO_MAGIC_64,
         f"{name} is not a 64-bit little-endian Mach-O (magic {header[:4].hex()})",
@@ -1999,6 +2007,40 @@ def check_macos_helper(tarball: Path, arch: str) -> str:
     )
     require(mode == 0o755, f"{name} has mode {mode:04o}, expected 0755")
     return f"Mach-O {arch} cputype {cpu:#x} mode {mode:04o}"
+
+
+HELPER_SOURCE_LISTS = re.compile(
+    r"\b(?:helperSourcePaths|macosSourcePaths)\s*=\s*\[(.*?)\]\s*\.map", re.DOTALL
+)
+
+
+def check_helper_sources_packed(tarball: Path) -> list[str]:
+    """Require every Swift source the packed build scripts compile to be in the tarball.
+
+    `setup-helper.mjs` (`helperSourcePaths`) and `build-native.mjs` (`macosSourcePaths`) name the
+    `native/macos/*.swift` files `--allow-build` and `build:native` compile. A name missing from the
+    tarball would make both fail from an install, so the lists are read from the packed scripts.
+
+    Parameters:
+        tarball (Path): Packed tarball.
+
+    Returns:
+        list[str]: Sorted `native/macos/<file>` paths verified present.
+
+    Raises:
+        ContractError: If a script lacks the list or a listed source is not packed.
+    """
+    sources: set[str] = set()
+    for script in ("scripts/setup-helper.mjs", "scripts/build-native.mjs"):
+        match = HELPER_SOURCE_LISTS.search(read_member(tarball, script).decode())
+        require(match is not None, f"{script} has no helper source list to verify against the tarball")
+        assert match is not None
+        names = re.findall(r'"([^"]+\.swift)"', match.group(1))
+        require(bool(names), f"{script} helper source list names no .swift files")
+        sources.update(f"native/macos/{name}" for name in names)
+    for source in sorted(sources):
+        read_member(tarball, source)
+    return sorted(sources)
 
 
 def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
@@ -2022,7 +2064,8 @@ def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
     """
     platform = host_platform()
     expected = computer_use_expected_tools(platform)
-    helpers = {arch: check_macos_helper(ctx.artifact.path, arch) for arch in MACHO_CPU_TYPES}
+    helpers: dict[str, str] = {arch: check_macos_helper(ctx.artifact.path, arch) for arch in MACHO_CPU_TYPES}
+    helper_sources = check_helper_sources_packed(ctx.artifact.path)
     project = ctx.work / "project"
     project.mkdir()
     with ctx.provider_session([TextStep("loaded")]) as provider:
@@ -2048,6 +2091,7 @@ def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
         "platform": platform,
         "tools": sorted(expected),
         "helpers": helpers,
+        "helper_sources": helper_sources,
         "postinstall": "NOT RUN",
         "postinstall_reason": (
             "stock install uses --ignore-scripts; setup-helper.mjs would create a keychain signing "

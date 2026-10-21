@@ -17,6 +17,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -1784,11 +1785,24 @@ def macho(cpu: int, magic: bytes = pc.MACHO_MAGIC_64) -> bytes:
     return magic + cpu.to_bytes(4, "little") + b"\0" * 16
 
 
+CU_SWIFT = ("agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift")
+CU_SETUP_SCRIPT = (
+    'const helperSourcePaths = ["agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"]\n'
+    "\t.map(f);\n"
+)
+CU_BUILD_SCRIPT = (
+    'const macosSourcePaths = [\n\t"agent_cursor.swift",\n\t"agent_cursor_motion.swift",\n'
+    '\t"bridge.swift",\n].map(f);\n'
+)
+
+
 def helper_tarball(
     path: Path,
     *,
     overrides: dict[str, tuple[bytes, int]] | None = None,
     drop: str | None = None,
+    omit_source: str | None = None,
+    setup_script: str | None = None,
 ) -> Path:
     """Write a tarball holding both macOS helpers, optionally broken.
 
@@ -1796,17 +1810,28 @@ def helper_tarball(
         path (Path): Destination.
         overrides (dict[str, tuple[bytes, int]] | None): `arch -> (content, mode)` replacements.
         drop (str | None): Arch whose helper is omitted.
+        omit_source (str | None): Swift source left out of the tarball.
+        setup_script (str | None): Replacement `setup-helper.mjs` text.
 
     Returns:
         Path: `path`.
     """
     entries = {arch: (macho(cpu), 0o755) for arch, cpu in CU_CPU.items()} | (overrides or {})
+    members = {
+        "scripts/setup-helper.mjs": (setup_script or CU_SETUP_SCRIPT).encode(),
+        "scripts/build-native.mjs": CU_BUILD_SCRIPT.encode(),
+        **{f"native/macos/{name}": b"// swift\n" for name in CU_SWIFT if name != omit_source},
+    }
     with tarfile.open(path, "w:gz") as tar:
         for arch, (data, mode) in entries.items():
             if arch == drop:
                 continue
             info = tarfile.TarInfo(f"package/prebuilt/macos/{arch}/bridge")
             info.size, info.mode = len(data), mode
+            tar.addfile(info, io.BytesIO(data))
+        for name, data in members.items():
+            info = tarfile.TarInfo(f"package/{name}")
+            info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
     return path
 
@@ -1929,7 +1954,11 @@ def test_scenario_computer_use_rejects_sibling_tools_and_no_request(
         ({"arm64": (macho(CU_CPU["arm64"]), 0o644)}, None, "mode 0644, expected 0755"),
         ({"x64": (macho(CU_CPU["x64"]), 0o775)}, None, "mode 0775, expected 0755"),
         ({"x64": (b"#!/bin/sh\n" + b"\0" * 12, 0o755)}, None, "not a 64-bit little-endian Mach-O"),
-        ({"arm64": (macho(CU_CPU["arm64"], b"\xca\xfe\xba\xbe"), 0o755)}, None, "not a 64-bit"),
+        (
+            {"arm64": (macho(CU_CPU["arm64"], b"\xca\xfe\xba\xbe"), 0o755)},
+            None,
+            "not a 64-bit little-endian Mach-O.*cafebabe",
+        ),
         ({}, "x64", "has no 'prebuilt/macos/x64/bridge'"),
     ],
 )
@@ -1955,20 +1984,86 @@ def test_computer_use_expected_tools_split_by_platform() -> None:
     assert not pc.computer_use_expected_tools("linux") & pc.COMPUTER_USE_DESKTOP_TOOLS
 
 
-def test_computer_use_wrapper_main_returns_one_on_contract_error(
+def raiser(error: Exception) -> Callable[..., pc.ContractReport]:
+    """Build a stand-in for `run_stock_contract` that raises `error`.
+
+    Parameters:
+        error (Exception): Exception to raise.
+
+    Returns:
+        Callable[..., pc.ContractReport]: Function accepting any arguments.
+    """
+
+    def raise_error(*args: object, **kwargs: object) -> pc.ContractReport:
+        raise error
+
+    return raise_error
+
+
+@pytest.mark.parametrize("error", [pc.ContractError("helper broke"), nr.ReleaseError("x")])
+def test_computer_use_wrapper_main_returns_one_on_stock_run_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: Exception
+) -> None:
+    """A `ContractError` or `ReleaseError` from the stock run exits 1 and writes no report."""
+    monkeypatch.setattr(nr, "run_stock_contract", raiser(error))
+    report = tmp_path / "report.json"
+    assert cu.main(["--stock-prefix", str(tmp_path), "--report", str(report)]) == 1
+    assert not report.exists()
+
+
+def test_computer_use_wrapper_main_returns_one_without_descriptor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A `ContractError` or `ReleaseError` from the stock run exits 1; a missing descriptor does too."""
-
-    def boom(*args: object, **kwargs: object) -> pc.ContractReport:
-        raise pc.ContractError("helper broke")
-
-    monkeypatch.setattr(nr, "run_stock_contract", boom)
-    assert cu.main(["--stock-prefix", str(tmp_path)]) == 1
-    monkeypatch.setattr(nr, "run_stock_contract", lambda *a, **k: (_ for _ in ()).throw(nr.ReleaseError("x")))
-    assert cu.main(["--stock-prefix", str(tmp_path)]) == 1
+    """A missing release descriptor exits 1 before any packing."""
     monkeypatch.setattr(rd, "descriptor_for", lambda name: None)
+    monkeypatch.setattr(nr, "run_stock_contract", raiser(AssertionError("must not run")))
     assert cu.main(["--stock-prefix", str(tmp_path)]) == 1
+
+
+def test_computer_use_wrapper_main_writes_report_with_postinstall_not_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Success writes `--report` and prints the same JSON, both recording `postinstall` NOT RUN."""
+    evidence = {
+        "platform": "linux",
+        "tools": ["find_roots"],
+        "helpers": {"arm64": "Mach-O arm64", "x64": "Mach-O x64"},
+        "helper_sources": ["native/macos/bridge.swift"],
+        "postinstall": "NOT RUN",
+        "postinstall_reason": "ignore-scripts",
+        "native_desktop": "NOT RUN",
+        "native_desktop_reason": "no desktop",
+    }
+    entry = GOOD_ENTRY | {"tarball": "nredd-pi-computer-use-0.3.0.tgz", "evidence": evidence}
+    report = pc.validate_report(good_report({"@nredd/pi-computer-use": entry}))
+    monkeypatch.setattr(nr, "run_stock_contract", lambda *args, **kwargs: report)
+    path = tmp_path / "report.json"
+    assert cu.main(["--stock-prefix", str(tmp_path), "--report", str(path)]) == 0
+    written = json.loads(path.read_text())
+    assert written == json.loads(capsys.readouterr().out)
+    assert written["packages"]["@nredd/pi-computer-use"]["evidence"]["postinstall"] == "NOT RUN"
+
+
+def test_scenario_computer_use_rejects_unpacked_helper_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source the packed build scripts compile but the tarball lacks fails by name."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", omit_source="agent_cursor_motion.swift")
+    with pytest.raises(pc.ContractError, match=r"no 'native/macos/agent_cursor_motion\.swift'"):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+        )
+
+
+def test_scenario_computer_use_rejects_script_without_source_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A packed script whose source list cannot be found is a contract error, not a silent pass."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", setup_script="// no list\n")
+    with pytest.raises(pc.ContractError, match="has no helper source list"):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+        )
 
 
 def stub_npm_install(

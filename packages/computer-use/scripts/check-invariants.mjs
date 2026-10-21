@@ -271,7 +271,12 @@ check("INV-20 bounded broad root discovery", () => {
 	assert(swift.includes("recentCompletedRequestIds"), "helper diagnostics cannot establish abandoned-request completion");
 });
 
-check("INV-8 swift typecheck", () => {
+function checkMacosOnly(name, fn) {
+	if (process.platform === "darwin") return check(name, fn);
+	console.log(`NOT RUN ${name} (requires macOS xcrun)`);
+}
+
+checkMacosOnly("INV-8 swift typecheck", () => {
 	const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
 	execFileSync("xcrun", [
 		"swiftc", "-target", triple, "-parse-as-library",
@@ -288,7 +293,7 @@ check("INV-8 swift typecheck", () => {
 	], { cwd: root, stdio: "pipe" });
 });
 
-check("INV-17 macOS agent cursor lifecycle", () => {
+checkMacosOnly("INV-17 macOS agent cursor lifecycle", () => {
 	const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
 	const binary = path.join(os.tmpdir(), `pi-computer-use-cursor-tests-${process.pid}`);
 	try {

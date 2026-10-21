@@ -9,6 +9,9 @@ const execFileAsync = promisify(execFile);
 // payloads at install time. The upstream release workflow also produces a signed
 // universal app, but that release-only artifact is not source-controlled.
 const expected = [
+	"package/native/macos/agent_cursor.swift",
+	"package/native/macos/agent_cursor_motion.swift",
+	"package/native/macos/bridge.swift",
 	"package/prebuilt/macos/arm64/bridge",
 	"package/prebuilt/macos/x64/bridge",
 ];

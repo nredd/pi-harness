@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 if (process.platform !== "darwin") {
-	console.log("macos native pure checks skipped (not macOS)");
+	console.log("NOT RUN macos native pure checks (requires macOS swiftc)");
 	process.exit(0);
 }
 const source = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
