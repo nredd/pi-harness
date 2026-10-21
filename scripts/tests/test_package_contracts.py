@@ -26,11 +26,10 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import computer_use_package_contract as cu
 import faux_provider as fp
 import npm_release as nr
 import package_contracts as pc
-import release_descriptors as rd
+import stock_package_contract as spc
 
 DEV_TOOLS = pc.CONTRACTS[0]
 ROOT_LICENSE = (pc.REPO_ROOT / "LICENSE").read_bytes()
@@ -182,6 +181,28 @@ def test_load_tarball_refuses_invalid_candidate(tmp_path: Path, case: str) -> No
         if case == "filename":
             path = path.rename(tmp_path / "wrong.tgz")
     with pytest.raises(pc.ContractError):
+        pc.load_tarball(DEV_TOOLS, path)
+
+
+@pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE], ids=["symlink", "hardlink"])
+def test_load_tarball_rejects_special_members(tmp_path: Path, kind: bytes) -> None:
+    """Audited tarballs cannot hide files behind links.
+
+    Parameters:
+        tmp_path (Path): Disposable destination.
+        kind (bytes): Tar member type to inject.
+    """
+    path = tmp_path / "nredd-pi-dev-tools-1.0.0.tgz"
+    with tarfile.open(path, "w:gz") as tar:
+        data = json.dumps({"name": DEV_TOOLS.name, "version": "1.0.0"}).encode()
+        manifest = tarfile.TarInfo("package/package.json")
+        manifest.size = len(data)
+        tar.addfile(manifest, io.BytesIO(data))
+        member = tarfile.TarInfo("package/linked")
+        member.type = kind
+        member.linkname = "package/package.json"
+        tar.addfile(member)
+    with pytest.raises(pc.ContractError, match="non-regular member"):
         pc.load_tarball(DEV_TOOLS, path)
 
 
@@ -413,7 +434,12 @@ def test_audit_imports_rejects(path: str, source: str, needle: str) -> None:
         source (str): File text.
         needle (str): Substring the violation must contain.
     """
-    problems = pc.audit_imports(path, source, ["src/a.ts", "src/b.ts", "dist/cli.mjs"])
+    problems = pc.audit_imports(
+        path,
+        source,
+        ["src/a.ts", "src/b.ts", "dist/cli.mjs"],
+        standalone_artifacts=("dist/cli.mjs",),
+    )
     assert len(problems) == 1
     assert needle in problems[0]
 
@@ -650,6 +676,44 @@ def test_install_alone_has_no_host_copy(tmp_path: Path, sandbox: pc.Sandbox) -> 
     assert (installed / "src" / "index.ts").is_file()
     assert not (tmp_path / "project" / "node_modules" / "@earendil-works").exists()
     assert not (tmp_path / "project" / "node_modules" / "typebox").exists()
+
+
+def test_install_alone_rejects_extra_lockfile_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dependency-free packages reject any extra install closure member.
+
+    Parameters:
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+    artifact = pc.PackedArtifact(DEV_TOOLS, tmp_path / "package.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ())
+
+    def fake_run(_cmd: list[object], *, cwd: Path, **_kwargs: object) -> None:
+        """Write an install with an unrelated package.
+
+        Parameters:
+            _cmd (list[object]): Ignored subprocess command.
+            cwd (Path): Consumer project root.
+            **_kwargs (object): Ignored subprocess keyword arguments.
+        """
+        for name in ("@nredd/pi-dev-tools", "left-pad"):
+            (cwd / "node_modules" / name).mkdir(parents=True, exist_ok=True)
+        (cwd / "package-lock.json").write_text(
+            json.dumps(
+                {
+                    "packages": {
+                        "": {},
+                        "node_modules/@nredd/pi-dev-tools": {"dependencies": {"left-pad": "1.0.0"}},
+                        "node_modules/left-pad": {},
+                    }
+                }
+            )
+        )
+
+    monkeypatch.setattr(pc, "run", fake_run)
+    with pytest.raises(pc.ContractError, match="dependencies differ"):
+        pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
 
 
 def test_parse_events() -> None:
@@ -1986,43 +2050,7 @@ def test_computer_use_expected_tools_split_by_platform() -> None:
     assert not pc.computer_use_expected_tools("linux") & pc.COMPUTER_USE_DESKTOP_TOOLS
 
 
-def raiser(error: Exception) -> Callable[..., pc.ContractReport]:
-    """Build a stand-in for `run_stock_contract` that raises `error`.
-
-    Parameters:
-        error (Exception): Exception to raise.
-
-    Returns:
-        Callable[..., pc.ContractReport]: Function accepting any arguments.
-    """
-
-    def raise_error(*args: object, **kwargs: object) -> pc.ContractReport:
-        raise error
-
-    return raise_error
-
-
-@pytest.mark.parametrize("error", [pc.ContractError("helper broke"), nr.ReleaseError("x")])
-def test_computer_use_wrapper_main_returns_one_on_stock_run_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: Exception
-) -> None:
-    """A `ContractError` or `ReleaseError` from the stock run exits 1 and writes no report."""
-    monkeypatch.setattr(nr, "run_stock_contract", raiser(error))
-    report = tmp_path / "report.json"
-    assert cu.main(["--stock-prefix", str(tmp_path), "--report", str(report)]) == 1
-    assert not report.exists()
-
-
-def test_computer_use_wrapper_main_returns_one_without_descriptor(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A missing release descriptor exits 1 before any packing."""
-    monkeypatch.setattr(rd, "descriptor_for", lambda name: None)
-    monkeypatch.setattr(nr, "run_stock_contract", raiser(AssertionError("must not run")))
-    assert cu.main(["--stock-prefix", str(tmp_path)]) == 1
-
-
-def test_computer_use_wrapper_main_writes_report_with_postinstall_not_run(
+def test_shared_runner_report_records_computer_use_not_run(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Success writes `--report` and prints the same JSON, both recording `postinstall` NOT RUN."""
@@ -2040,7 +2068,12 @@ def test_computer_use_wrapper_main_writes_report_with_postinstall_not_run(
     report = pc.validate_report(good_report({"@nredd/pi-computer-use": entry}))
     monkeypatch.setattr(nr, "run_stock_contract", lambda *args, **kwargs: report)
     path = tmp_path / "report.json"
-    assert cu.main(["--stock-prefix", str(tmp_path), "--report", str(path)]) == 0
+    assert (
+        spc.main(
+            ["--package", "@nredd/pi-computer-use", "--stock-prefix", str(tmp_path), "--report", str(path)]
+        )
+        == 0
+    )
     written = json.loads(path.read_text())
     assert written == json.loads(capsys.readouterr().out)
     assert written["packages"]["@nredd/pi-computer-use"]["evidence"]["postinstall"] == "NOT RUN"
@@ -2107,13 +2140,6 @@ def test_scenario_computer_use_rejects_unsupported_or_wrong_helper_source_declar
         )
 
 
-def test_computer_use_wrapper_help_discloses_not_run_boundaries(capsys: pytest.CaptureFixture[str]) -> None:
-    """The argparse description exposes both excluded native behaviors."""
-    with pytest.raises(SystemExit, match="0"):
-        cu.main(["--help"])
-    assert "postinstall and native desktop behavior are NOT RUN" in " ".join(capsys.readouterr().out.split())
-
-
 def stub_npm_install(
     monkeypatch: pytest.MonkeyPatch, modules: list[str], calls: list[list[str]], envs: list[dict[str, str]]
 ) -> None:
@@ -2126,22 +2152,43 @@ def stub_npm_install(
         envs (list[dict[str, str]]): Receives each environment.
     """
 
-    def fake_run(cmd: Any, *, env: dict[str, str], cwd: Path, **_: Any) -> None:
+    real_run = pc.run
+
+    def fake_run(cmd: Any, *, env: dict[str, str], cwd: Path, **kwargs: Any) -> Any:
         """Record the npm call and lay out `node_modules` plus a lockfile for `modules`.
+
+        `node` (the real semver range check) passes through.
 
         Parameters:
             cmd (Any): npm argv.
             env (dict[str, str]): subprocess environment.
             cwd (Path): install directory.
-            **_ (Any): other `run` options, ignored.
+            **kwargs (Any): other `run` options.
+
+        Returns:
+            Any: The real result for `node`, else `None`.
         """
+        if Path(cmd[0]).name == "node":
+            return real_run(cmd, env=env, cwd=cwd, **kwargs)
         calls.append([str(part) for part in cmd])
         envs.append(env)
-        packages: dict[str, dict[str, str]] = {"": {}}
+        packages: dict[str, object] = {"": {}}
+        versions = {name: spec.lstrip("^") for name, spec in pc.SUBAGENTS_CONTRACT.runtime_dependencies}
         for module in modules:
+            dependencies = (
+                dict(pc.SUBAGENTS_CONTRACT.runtime_dependencies)
+                if module == pc.SUBAGENTS_CONTRACT.name
+                else {}
+            )
             (cwd / "node_modules" / module).mkdir(parents=True)
-            packages[f"node_modules/{module}"] = {}
+            (cwd / "node_modules" / module / "package.json").write_text(
+                json.dumps(
+                    {"name": module, "version": versions.get(module, "1.0.0"), "dependencies": dependencies}
+                )
+            )
+            packages[f"node_modules/{module}"] = {"dependencies": dependencies}
         (cwd / "package-lock.json").write_text(json.dumps({"packages": packages}))
+        return None
 
     monkeypatch.setattr(pc, "run", fake_run)
 
@@ -2182,5 +2229,96 @@ def test_install_alone_rejects_an_undeclared_module(
     artifact = pc.PackedArtifact(
         pc.SUBAGENTS_CONTRACT, tmp_path / "x.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ()
     )
-    with pytest.raises(pc.ContractError, match="pulled extra modules"):
+    with pytest.raises(pc.ContractError, match="lockfile paths differ"):
         pc.install_alone(artifact, sandbox, tmp_path / "project")
+
+
+def plan_mode_files(chunk: str = "AAAAAAA1", ui: str = "BBBBBBB2") -> list[str]:
+    """Return a conforming Plan-mode tarball listing with the given chunk hashes.
+
+    Parameters:
+        chunk (str): Hash of the shared chunk.
+        ui (str): Hash of the interactive UI chunk.
+
+    Returns:
+        list[str]: Packed paths.
+    """
+    return [
+        *pc.PLAN_MODE_CONTRACT.packed_files,
+        f"dist/chunks/chunk-{chunk}.ts",
+        f"dist/chunks/chunk-{chunk}.ts.map",
+        f"dist/chunks/interactive-ui-{ui}.ts",
+        f"dist/chunks/interactive-ui-{ui}.ts.map",
+    ]
+
+
+def test_audit_files_accepts_rebuilt_chunk_hashes() -> None:
+    """Any 8-character hash passes: a rebuild is fine."""
+    assert pc.audit_files(pc.PLAN_MODE_CONTRACT, plan_mode_files()) == []
+    assert pc.audit_files(pc.PLAN_MODE_CONTRACT, plan_mode_files("Z9Z9Z9Z9", "0A0A0A0A")) == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda f: [n for n in f if not n.startswith("dist/chunks/chunk-")], "expected 1 packed file"),
+        (lambda f: [*f, "dist/chunks/chunk-CCCCCCC3.ts"], "expected 1 packed file"),
+        (lambda f: [*f, "dist/chunks/x.ts"], "'dist/chunks/x.ts' is not in the"),
+        (lambda f: [n for n in f if n != "src/state.ts"], "'src/state.ts' required by"),
+        (lambda f: [*f, "src/state.ts"], "'src/state.ts' is listed 2 times"),
+        (lambda f: [*f, f[-1]], "is listed 2 times"),
+        (lambda f: [n for n in f if n != "dist/chunks/chunk-AAAAAAA1.ts"], "has no 'dist/chunks/chunk-"),
+        (lambda f: [n.replace("AAAAAAA1", "SHORT") for n in f], "expected 1 packed file"),
+    ],
+    ids=["count-0", "count-2", "stray", "missing", "dup-fixed", "dup-pattern", "map-unpaired", "hash-width"],
+)
+def test_audit_files_rejects_plan_mode_payload_drift(
+    mutate: Callable[[list[str]], list[str]], message: str
+) -> None:
+    """Each packed-payload violation is reported.
+
+    Parameters:
+        mutate (Callable[[list[str]], list[str]]): Edits a conforming listing.
+        message (str): Expected problem fragment.
+    """
+    problems = pc.audit_files(pc.PLAN_MODE_CONTRACT, mutate(plan_mode_files()))
+    assert any(message in problem for problem in problems), problems
+
+
+def test_audit_chunk_graph_requires_reachability_from_index() -> None:
+    """A hash-shaped but unreferenced chunk is an orphan; reachable ones pass, transitively."""
+    files = plan_mode_files()
+    imports = {
+        "dist/index.ts": pc.FileImports(
+            specifiers=["./chunks/chunk-AAAAAAA1.ts", "./chunks/interactive-ui-BBBBBBB2.ts"], diagnostics=[]
+        ),
+        "dist/chunks/interactive-ui-BBBBBBB2.ts": pc.FileImports(
+            specifiers=["./chunk-AAAAAAA1.ts"], diagnostics=[]
+        ),
+    }
+    assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, files, imports) == []
+    orphan = {
+        "dist/index.ts": imports["dist/index.ts"].model_copy(
+            update={"specifiers": ["./chunks/chunk-AAAAAAA1.ts"]}
+        )
+    }
+    problems = pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, files, orphan)
+    assert problems == [
+        "packed chunk 'dist/chunks/interactive-ui-BBBBBBB2.ts' is not reachable from 'dist/index.ts' "
+        "by relative imports"
+    ]
+    transitive = {
+        **imports,
+        "dist/index.ts": orphan["dist/index.ts"].model_copy(
+            update={"specifiers": ["./chunks/interactive-ui-BBBBBBB2.ts"]}
+        ),
+    }
+    assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, files, transitive) == []
+    through_non_chunk = {
+        "dist/index.ts": pc.FileImports(specifiers=["./loader.ts"], diagnostics=[]),
+        "dist/loader.ts": pc.FileImports(specifiers=["./chunks/chunk-AAAAAAA1.ts"], diagnostics=[]),
+        "dist/chunks/chunk-AAAAAAA1.ts": pc.FileImports(
+            specifiers=["./interactive-ui-BBBBBBB2.ts"], diagnostics=[]
+        ),
+    }
+    assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, [*files, "dist/loader.ts"], through_non_chunk) == []

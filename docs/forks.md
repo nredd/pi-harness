@@ -9,7 +9,7 @@ second list of release pins here.
 | `forks/pi` | `earendil-works/pi` | Core npm workspace, standalone Bun build, native helpers |
 | `forks/pi-subagents` | `tintinweb/pi-subagents` | Source Gitlink retained while `packages/subagents` is the imported `@nredd/pi-subagents` workspace |
 | `forks/pi-plan-mode` | `narumiruna/pi-extensions`, `packages/pi-plan-mode` | Standalone vendored build/test harness |
-| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate since `v2.13.9-nredd.2` |
+| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate since `v2.13.9-nredd.2`. Imported as `packages/todo` (subtree `ff7bb03` from fork `9a4e2e8`); the Gitlink remains the native-gate source until the shipped-selection PR |
 | `forks/pi-computer-use` | `injaneity/pi-computer-use` | Fork tests and native-helper build |
 
 The initial Gitlinks select published fork tags already used by the existing installation. Adding
@@ -33,6 +33,10 @@ behavior, so this is unchanged.
 The selected `forks/pi-subagents` commit is additionally exercised with the real packed preset and
 dev-tools by `make check-fork-package-contracts` ([details](package-contracts.md)); it refuses a missing,
 dirty or Gitlink-mismatched fork and never bootstraps or installs into it.
+`packages/plan-mode` imports `nredd/pi-plan-mode` commit
+`4c2bfc3459b07b294efab62e9a8a01849f67a831` (`v0.59.3-nredd.1`) with its history; its Gitlink and
+`forks.yml` job remain until the shipped-selection PR changes the stack to npm. Its packed-tarball stock
+contract is `make check-plan-mode-package-contract` ([details](package-contracts.md)).
 A normal clone has the fork as `origin`; add the upstream remote explicitly when maintaining a patch
 queue. Follow each fork's contributor instructions before making changes.
 

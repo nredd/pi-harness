@@ -1,0 +1,95 @@
+{
+	"name": "@nredd/pi-todo",
+	"version": "2.13.9",
+	"description": "Pi todo extension with a persistent overlay and plan-aware task tracking.",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"rpiv",
+		"todo"
+	],
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nredd/pi-harness.git",
+		"directory": "packages/todo"
+	},
+	"homepage": "https://github.com/nredd/pi-harness/tree/main/packages/todo#readme",
+	"bugs": {
+		"url": "https://github.com/nredd/pi-harness/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"test": "vitest run --config .vitest.config.ts",
+		"lint": "biome check --error-on-warnings .",
+		"typecheck": "tsc --noEmit",
+		"check": "npm run lint && npm run typecheck && npm test && npm run test:bun",
+		"test:bun": "bun test ./.test-support/settled-row.bun.test.ts"
+	},
+	"files": [
+		"config.ts",
+		"index.ts",
+		"locales/",
+		"plan-hooks.ts",
+		"todo.ts",
+		"todo-overlay.ts",
+		"LICENSE",
+		"docs/",
+		"!docs/*.png",
+		"!docs/*.jpg",
+		"!docs/*.svg",
+		"README.md",
+		"state/invariants.ts",
+		"state/i18n-bridge.ts",
+		"state/plan.ts",
+		"state/replay.ts",
+		"state/selectors.ts",
+		"state/state-reducer.ts",
+		"state/state.ts",
+		"state/store.ts",
+		"state/task-graph.ts",
+		"tool/response-envelope.ts",
+		"tool/sanitize.ts",
+		"tool/types.ts",
+		"view/format.ts"
+	],
+	"pi": {
+		"image": "https://raw.githubusercontent.com/nredd/pi-harness/main/packages/todo/docs/cover.png",
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
+	},
+	"dependencies": {
+		"@juicesharp/rpiv-config": "^2.13.9",
+		"@juicesharp/rpiv-i18n": "^2.13.9"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.5",
+		"@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-ai-1.3.0.tgz",
+		"@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-coding-agent-1.3.0.tgz",
+		"@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-tui-1.3.0.tgz",
+		"@juicesharp/rpiv-i18n": "2.13.9",
+		"@juicesharp/rpiv-workflow": "2.13.9",
+		"@types/bun": "1.3.14",
+		"@types/node": "22.20.1",
+		"@xterm/headless": "5.5.0",
+		"typebox": "1.3.27",
+		"typescript": "6.0.3",
+		"vitest": "4.1.12"
+	},
+	"overrides": {
+		"@earendil-works/pi-ai": "$@earendil-works/pi-ai",
+		"@earendil-works/pi-coding-agent": "$@earendil-works/pi-coding-agent",
+		"@earendil-works/pi-tui": "$@earendil-works/pi-tui",
+		"@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-agent-core-1.3.0.tgz"
+	}
+}

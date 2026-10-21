@@ -26,7 +26,8 @@
 ## Owned npm packages
 
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-computer-use`,
-`@nredd/pi-dev-tools`, `@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-subagents` and `@nredd/pi-preset`.
+`@nredd/pi-dev-tools`, `@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-subagents`,
+`@nredd/pi-todo` and `@nredd/pi-preset`.
 
 `scripts/release_descriptors.py` is the publisher's data registry. Each entry supplies a package name,
 repository-relative workspace, shell-free verify commands, packed-artifact contract gates, and optional
@@ -45,18 +46,10 @@ never runs it, but CI's `contracts` job runs the same gate on every
 non-docs PR as `make check-subagents-package-contract` (registry install plus a stock Pi run with one
 faux `Agent` call). The retained
 `forks.yml` job still covers the Gitlink source, not the tarball.
-For example, the future todo import will add an entry shaped like:
-
-```python
-ReleaseDescriptor(
-    name="@nredd/pi-todo",
-    workspace=PurePosixPath("packages/rpiv-todo"),
-    verify_commands=(("npm", "ci", "--ignore-scripts"), ("npm", "run", "check", "--workspace", "@nredd/pi-todo")),
-    contract=TODO_CONTRACT,
-    contract_gates=("stock",),
-    stock_gate=todo_stock_gate,
-)
-```
+`@nredd/pi-todo` uses `packages/todo`, retains the imported package's MIT `LICENSE`, and runs its native
+`npm run check` before the stock contract. Its descriptor's stock gate packs the selected bytes and calls the
+real `todo` tool through stock Pi; its two declared runtime dependencies are installed from the registry and
+its full lockfile closure is verified.
 
 `@nredd/pi-computer-use` is macOS-only for shipped helpers (`files` lists no `prebuilt/windows`, `prebuilt/linux` or `native/linux/bridge-rs`) and declares the two source-controlled per-architecture helper payloads: `prebuilt/macos/arm64/bridge` and `prebuilt/macos/x64/bridge`. The macOS helper binaries were built on the owner's laptop and imported as committed prebuilts; CI checks and packs them, but npm provenance does not attest their native compilation or source-to-binary correspondence. Building them in CI is tracked in [#106](https://github.com/nredd/pi-harness/issues/106). Its stock contract proves packing, auditing, standalone install, extension loading, and the platform-aware model-visible tool surface (exactly 13 on darwin, 11 elsewhere: `desktop_screenshot`/`desktop_input` register on darwin only) and that each packed `prebuilt/macos/{arm64,x64}/bridge` is a Mach-O of the right arch with mode 0755, while recording the `postinstall` (`setup-helper.mjs`, helper app install and codesign; the stock install uses `--ignore-scripts`) and native desktop behavior as `NOT RUN`: CI cannot supply an interactive desktop or Accessibility/Screen Recording TCC grants. `npm run check` runs the fork's portable suite, including macOS Swift pure checks and the packed-payload check; `npm run build:native` remains a separately invoked macOS build gate, and the live helper script remains opt-in.
 
