@@ -20,12 +20,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
 import urllib.parse
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
@@ -67,13 +68,16 @@ class Target(BaseModel):
     directory: str = Field(description="Owned workspace directory under packages/")
 
 
-class Identity(BaseModel):
+class PublishedIdentity(BaseModel):
     model_config = STRICT
     target: Target = Field(description="Selected release")
     commit: rm.GitCommit = Field(description="Tagged source commit")
+    integrity: pc.Sha512Integrity = Field(description="npm SHA-512 integrity of the published bytes")
+
+
+class Identity(PublishedIdentity):
     tarball: pc.TarballName = Field(description="Verified artifact basename")
     sha256: pc.Sha256Hex = Field(description="SHA-256 of verified tarball bytes")
-    integrity: pc.Sha512Integrity = Field(description="npm SHA-512 integrity of the same bytes")
 
 
 class Provenance(BaseModel):
@@ -186,7 +190,9 @@ def host_environment() -> dict[str, str]:
     return env
 
 
-def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
+def command(
+    repo: Path, executable: str, *args: str, timeout: int = 300, env: Mapping[str, str] | None = None
+) -> str:
     """Run a bounded, absolute-path tool command outside the `uv run` venv, preserving diagnostics.
 
     Parameters:
@@ -194,6 +200,7 @@ def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
         executable (str): Tool resolved once before invocation.
         *args (str): Literal arguments.
         timeout (int): Maximum command duration in seconds.
+        env (Mapping[str, str] | None): Variables overriding the host environment.
 
     Returns:
         str: Combined output with trailing whitespace removed.
@@ -201,7 +208,7 @@ def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
     return subprocess.check_output(
         [str(pc.locate_executable(executable)), *args],
         cwd=repo,
-        env=host_environment(),
+        env={**host_environment(), **(env or {})},
         text=True,
         stderr=subprocess.STDOUT,
         timeout=timeout,
@@ -418,8 +425,12 @@ def run_stock_contract(
 def registry_dist(repo: Path, target: Target) -> Distribution | None:
     """Read exact-version npm metadata; only an explicit E404 means absent.
 
+    The query runs in a fresh empty directory with no user `.npmrc`, never in `repo`: a selected
+    tag's tree could carry a `.npmrc` that steers the registry or injects credentials, and the
+    explicit registry flag alone does not cover every npm setting.
+
     Parameters:
-        repo (Path): Working directory.
+        repo (Path): Checkout the package belongs to; deliberately not used as the working directory.
         target (Target): Exact package version.
 
     Returns:
@@ -429,17 +440,19 @@ def registry_dist(repo: Path, target: Target) -> Distribution | None:
         ReleaseError: On registry errors other than E404.
     """
     try:
-        output = command(
-            repo,
-            "npm",
-            "view",
-            f"{target.name}@{target.version}",
-            "dist",
-            "--json",
-            "--loglevel=silent",  # Keep npm's stderr diagnostics out of the JSON error body.
-            "--prefer-online",  # Do not reuse cached pre-publication metadata during recovery.
-            "--registry=https://registry.npmjs.org",
-        )
+        with tempfile.TemporaryDirectory(prefix="npm-view-") as neutral:
+            output = command(
+                Path(neutral),
+                "npm",
+                "view",
+                f"{target.name}@{target.version}",
+                "dist",
+                "--json",
+                "--loglevel=silent",  # Keep npm's stderr diagnostics out of the JSON error body.
+                "--prefer-online",  # Do not reuse cached pre-publication metadata during recovery.
+                "--registry=https://registry.npmjs.org",
+                env={"NPM_CONFIG_USERCONFIG": os.devnull},
+            )
     except subprocess.CalledProcessError as e:
         try:
             error = json.loads(e.output)
@@ -664,7 +677,7 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
             time.sleep(REGISTRY_POLL_INTERVAL_S)
 
 
-def verify_signatures(identity: Identity) -> None:
+def verify_signatures(identity: PublishedIdentity) -> None:
     """Use npm to verify the release subject even when it has runtime dependencies.
 
     The ordinary install keeps the dependency closure intact and proves the selected
@@ -674,7 +687,7 @@ def verify_signatures(identity: Identity) -> None:
     satisfy. Provenance subject/source binding remains a separate DSSE check.
 
     Parameters:
-        identity (Identity): Exact released version and verified tarball integrity.
+        identity (PublishedIdentity): Exact released version and verified tarball integrity.
 
     Returns:
         None: npm has verified the selected package signature and attestation.
@@ -784,13 +797,13 @@ def fetch_attestations(target: Target) -> bytes:
     return content
 
 
-def verify_provenance(identity: Identity, content: bytes) -> None:
+def verify_provenance(identity: PublishedIdentity, content: bytes) -> None:
     """Bind the actual DSSE statement to the published bytes, workflow, tag and source commit.
 
     Signature verification belongs to npm, not this parser. Call after `verify_signatures` succeeds.
 
     Parameters:
-        identity (Identity): Contract-tested tarball and tagged source identity.
+        identity (PublishedIdentity): Contract-tested published bytes and tagged source identity.
         content (bytes): Actual npm attestation endpoint response.
 
     Returns:
@@ -824,6 +837,32 @@ def verify_provenance(identity: Identity, content: bytes) -> None:
         raise ReleaseError("Provenance source commit differs from the tagged release")
 
 
+def verify_selected_published(repo: Path, tag: str) -> PublishedIdentity:
+    """Verify a selected owned package without rebuilding its accepted tarball.
+
+    Parameters:
+        repo (Path): clean checkout containing the signed package tag.
+        tag (str): exact `@nredd/<package>@<version>` release tag.
+
+    Returns:
+        PublishedIdentity: only after npm verifies the selected subject and its SLSA source
+            binding; carries the registry's real SHA-512 integrity.
+
+    Raises:
+        ReleaseError: the tag, registry metadata, signature, or provenance is invalid.
+    """
+    target = resolve_target(repo, tag)
+    integrity = registry_dist(repo, target)
+    if integrity is None:
+        raise ReleaseError(f"Selected package '{tag}' is absent from the npm registry")
+    commit = command(repo, "git", "rev-list", "-n", "1", tag)
+    identity = PublishedIdentity(target=target, commit=commit, integrity=integrity.integrity)
+    verify_signatures(identity)
+    verify_provenance(identity, fetch_attestations(target))
+    LOGGER.info(f"Verified selected npm package '{tag}'")
+    return identity
+
+
 def verify_published(repo: Path, identity: Identity) -> None:
     """Require registry visibility, npm cryptographic verification and actual provenance binding.
 
@@ -851,7 +890,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["preflight", "verify", "publish-check", "registry-check"])
+    parser.add_argument(
+        "stage", choices=["preflight", "verify", "publish-check", "registry-check", "stack-check"]
+    )
     parser.add_argument("--tag", required=True)
     parser.add_argument("--repo-root", type=Path, default=pc.REPO_ROOT)
     parser.add_argument("--artifact-dir", type=Path)
@@ -864,6 +905,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workspace=target.name,
                 directory=target.directory,
             )
+            return 0
+        if args.stage == "stack-check":
+            published = verify_selected_published(repo, args.tag)
+            evidence = {
+                "package": f"{published.target.name}@{published.target.version}",
+                "integrity": published.integrity,
+            }
+            sys.stdout.write(json.dumps(evidence) + "\n")
             return 0
         if args.artifact_dir is None:
             raise ReleaseError("This stage requires `--artifact-dir`")

@@ -92,7 +92,8 @@ Historical, not the current deployment inventory:
 8. OPEN -- resume deferred work on the rebuilt stack:
    - Import `pi-subagents` as `packages/subagents` / `@nredd/pi-subagents` from `v0.22.0-nredd.5`, retaining its Gitlink and fork gate until shipped selection changes the stack to npm.
    - The versioned `integration/stacks/personal.json` is the authoritative package selection. The generated `local.json` development view replaces owned package sources with workspace paths and restores the full preset; it is not a machine default.
-   - Follow-up: promote gated snapshots, then have dotfiles adopt the latest promoted snapshot automatically. Core remains the attested `nredd/pi` fork release.
+   - Promotion export: `Promote stack` explicitly verifies a selected `main` SHA, required checks, registry-byte stack evidence, owned npm provenance and the attested `nredd/pi` core release, then attests `stack-snapshot.json` and publishes it as the `stack/<sha>` release. There is no moving pointer: dotfiles pins an exact `source_sha`, and rollback is re-pinning a retained older `stack/<sha>`. See `docs/stack-promotion.md`. Owner infrastructure: ruleset `25524267` and environment `stack-promotion`; the first step after merge is dispatching `verify-only` on a `main` SHA, then `promote`. One-time cleanup after merge: delete ruleset `25524297` and deploy key `167140535`, and remove the `STACK_CHANNEL_DEPLOY_KEY` env secret.
+   - Follow-up: dotfiles pins a promoted `stack/<sha>` and verifies its attestation (nredd/dotfiles#30). Core remains the attested `nredd/pi` fork release.
    - Profiles/model roles and full preset adoption (migration plan #21); the footer-only source is separate, see `docs/footer-port.md`.
    - Work-profile switch and enterprise WSL acceptance.
    - Bun: linux-arm64 execution and the auth-interception adapter (#14); standalone D/E itself runs in CI since #56.

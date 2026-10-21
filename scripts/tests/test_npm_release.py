@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tarfile
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -480,6 +481,135 @@ def test_preflight_ancestry_and_existing_version(repo: Path, monkeypatch: pytest
         nr.preflight(repo, tag)
 
 
+def test_selected_release_verifies_the_exact_registry_subject(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reuse the publisher verifier for a selected already-published stack package.
+
+    Parameters:
+        repo (Path): Disposable tagged package checkout.
+        monkeypatch (pytest.MonkeyPatch): Replaces registry and cryptographic boundaries.
+
+    Returns:
+        None.
+    """
+    captured: list[nr.PublishedIdentity] = []
+    integrity = "sha512-" + "A" * 86 + "=="
+    monkeypatch.setattr(nr, "registry_dist", lambda *_: nr.Distribution(integrity=integrity))
+    monkeypatch.setattr(nr, "verify_signatures", captured.append)
+    monkeypatch.setattr(nr, "fetch_attestations", lambda _: b"attestation")
+    monkeypatch.setattr(
+        nr,
+        "verify_provenance",
+        lambda identity, content: captured.append(identity) if content == b"attestation" else None,
+    )
+
+    result = nr.verify_selected_published(repo, TAG)
+
+    assert result == captured[0]
+    assert len(captured) == 2
+    assert captured[0] == captured[1]
+    assert captured[0].target.tag == TAG
+    assert captured[0].integrity == integrity
+    assert captured[0].commit == git(repo, "rev-list", "-n", "1", TAG)
+
+
+def test_selected_published_rejects_absent_registry(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A selected package missing from npm is a hard failure, never skipped.
+
+    Parameters:
+        repo (Path): Disposable tagged package checkout.
+        monkeypatch (pytest.MonkeyPatch): Reports an explicit registry miss.
+
+    Returns:
+        None.
+    """
+    monkeypatch.setattr(nr, "registry_dist", lambda *_: None)
+    with pytest.raises(nr.ReleaseError, match="absent from the npm registry"):
+        nr.verify_selected_published(repo, TAG)
+
+
+def test_selected_published_propagates_signature_failure(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Signature failure must stop before provenance is even fetched.
+
+    Parameters:
+        repo (Path): Disposable tagged package checkout.
+        monkeypatch (pytest.MonkeyPatch): Replaces registry and signature boundaries.
+
+    Returns:
+        None.
+    """
+    monkeypatch.setattr(
+        nr, "registry_dist", lambda *_: nr.Distribution(integrity="sha512-" + "A" * 86 + "==")
+    )
+
+    def fail(_identity: nr.PublishedIdentity) -> None:
+        """Simulate npm refusing the signature.
+
+        Parameters:
+            _identity (nr.PublishedIdentity): Unused verified identity.
+
+        Raises:
+            nr.ReleaseError: Always, as npm would.
+        """
+        raise nr.ReleaseError("npm must verify the selected release signature AND attestation")
+
+    monkeypatch.setattr(nr, "verify_signatures", fail)
+    monkeypatch.setattr(
+        nr, "fetch_attestations", lambda _: pytest.fail("provenance fetched after signature failure")
+    )
+    with pytest.raises(nr.ReleaseError, match="signature"):
+        nr.verify_selected_published(repo, TAG)
+
+
+def test_selected_published_propagates_provenance_mismatch(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provenance binding mismatch fails the selected package.
+
+    Parameters:
+        repo (Path): Disposable tagged package checkout.
+        monkeypatch (pytest.MonkeyPatch): Replaces registry and attestation boundaries.
+
+    Returns:
+        None.
+    """
+    monkeypatch.setattr(
+        nr, "registry_dist", lambda *_: nr.Distribution(integrity="sha512-" + "A" * 86 + "==")
+    )
+    monkeypatch.setattr(nr, "verify_signatures", lambda _: None)
+    monkeypatch.setattr(nr, "fetch_attestations", lambda _: b"{}")
+    with pytest.raises(ValueError, match="attestations"):
+        nr.verify_selected_published(repo, TAG)
+
+
+def test_stack_check_stage_prints_real_integrity_and_fails_closed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The `stack-check` CLI emits exact evidence on success and exits 1 on refusal.
+
+    Parameters:
+        repo (Path): Disposable tagged package checkout.
+        monkeypatch (pytest.MonkeyPatch): Replaces registry and cryptographic boundaries.
+        capsys (pytest.CaptureFixture[str]): Captures stdout evidence.
+
+    Returns:
+        None.
+    """
+    integrity = "sha512-" + "B" * 86 + "=="
+    monkeypatch.setattr(nr, "registry_dist", lambda *_: nr.Distribution(integrity=integrity))
+    monkeypatch.setattr(nr, "verify_signatures", lambda _: None)
+    monkeypatch.setattr(nr, "fetch_attestations", lambda _: b"x")
+    monkeypatch.setattr(nr, "verify_provenance", lambda *_: None)
+    assert nr.main(["stack-check", "--tag", TAG, "--repo-root", str(repo)]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "package": "@nredd/pi-session-kit@1.2.3",
+        "integrity": integrity,
+    }
+    monkeypatch.setattr(nr, "registry_dist", lambda *_: None)
+    assert nr.main(["stack-check", "--tag", TAG, "--repo-root", str(repo)]) == 1
+
+
 @pytest.mark.parametrize(("code", "absent"), [("E404", True), ("E500", False), ("E401", False)])
 def test_registry_only_404_is_absence(
     repo: Path,
@@ -499,13 +629,14 @@ def test_registry_only_404_is_absence(
         None: Only an explicit registry miss permits publishing.
     """
 
-    def fail(_repo: Path, tool: str, *args: str) -> str:
-        """Keep merged-stream JSON parseable and force fresh registry metadata.
+    def fail(cwd: Path, tool: str, *args: str, env: Mapping[str, str] | None = None) -> str:
+        """Keep merged-stream JSON parseable, force fresh metadata, and isolate npm from the checkout.
 
         Parameters:
-            _repo (Path): Unused checkout.
+            cwd (Path): Working directory; must not be the selected checkout.
             tool (str): Expected npm command.
             *args (str): Registry query arguments.
+            env (Mapping[str, str] | None): Environment overrides; must disable the user `.npmrc`.
 
         Returns:
             str: Never returned; this simulates an npm failure.
@@ -514,6 +645,9 @@ def test_registry_only_404_is_absence(
             subprocess.CalledProcessError: The selected npm error.
         """
         assert tool == "npm"
+        assert cwd != repo
+        assert not cwd.is_relative_to(repo)
+        assert env == {"NPM_CONFIG_USERCONFIG": os.devnull}
         assert args == (
             "view",
             "@nredd/pi-session-kit@1.2.3",
@@ -1162,3 +1296,17 @@ def test_registry_propagation_is_bounded(
             nr.wait_for_registry(repo, identity)
     assert len(reads) == len(responses)
     assert sleeps == [nr.REGISTRY_POLL_INTERVAL_S] * (len(responses) - 1)
+
+
+def test_command_overlays_environment_overrides(tmp_path: Path) -> None:
+    """Overrides win over the host environment without leaking into it.
+
+    Parameters:
+        tmp_path (Path): Private working directory.
+
+    Returns:
+        None.
+    """
+    output = nr.command(tmp_path, "env", env={"NPM_CONFIG_USERCONFIG": os.devnull})
+    assert f"NPM_CONFIG_USERCONFIG={os.devnull}" in output.splitlines()
+    assert os.environ.get("NPM_CONFIG_USERCONFIG") != os.devnull
