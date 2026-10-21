@@ -1,9 +1,4 @@
-"""Run the packed `@nredd/pi-subagents` stock contract outside a release.
-
-`make check-package-contracts` installs offline, so it cannot cover this package's registry
-dependencies. This entry point runs the exact gate the release `verify` stage runs
-(`npm_release.run_stock_contract`: same contract, scenario and sibling set) on a freshly packed
-tarball, so CI executes it before a tag does. Needs the npm registry.
+"""Run one packed package contract against stock Pi outside a release.
 
 References:
     https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
@@ -26,28 +21,28 @@ import package_contracts as pc
 import release_descriptors as rd
 
 LOGGER = logging.getLogger(__name__)
-SUBJECT = "@nredd/pi-subagents"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Pack, audit, install from the registry and exercise `@nredd/pi-subagents`.
+    """Pack, audit, install, and exercise one declared package through stock Pi.
 
     Parameters:
         argv (Sequence[str] | None): Arguments, or `None` for `sys.argv`.
 
     Returns:
-        int: 0 when the contract holds, 1 on a violation.
+        int: Zero after a successful contract; one after a contract violation.
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else None)
+    parser.add_argument("--package", required=True, dest="package", help="Declared npm package name")
     parser.add_argument("--stock-prefix", type=Path, default=pc.DEFAULT_STOCK_PREFIX)
     parser.add_argument("--report", type=Path, help="Write the JSON identity/evidence report here")
     args = parser.parse_args(argv)
-    descriptor = rd.descriptor_for(SUBJECT)
+    descriptor = rd.descriptor_for(args.package)
     if descriptor is None:
-        LOGGER.error(f"FAILED: no release descriptor for '{SUBJECT}'")
+        LOGGER.error(f"FAILED: no release descriptor for '{args.package}'")
         return 1
-    work = Path(tempfile.mkdtemp(prefix="pi-subagents-contract-"))
+    work = Path(tempfile.mkdtemp(prefix=f"{descriptor.workspace.name}-contract-"))
     try:
         report = nr.run_stock_contract(work, args.stock_prefix.resolve(), descriptor, {})
     except (pc.ContractError, nr.ReleaseError) as e:
@@ -59,7 +54,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.report:
         args.report.write_text(text)
     sys.stdout.write(text)
-    LOGGER.info("subagents package contract: passed")
+    LOGGER.info(f"{descriptor.workspace.name} package contract: passed")
     return 0
 
 
