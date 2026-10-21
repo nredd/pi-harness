@@ -178,18 +178,53 @@ PLAN_MODE_CONTRACT = PackageContract(
     runtime_dependencies=(("@narumitw/pi-tui-kit", "^0.65.2"),),
     own_license=True,
     packed_files=(
-        "LICENSE", "README.md", "dist/chunks/chunk-WIDWMEV5.ts", "dist/chunks/chunk-WIDWMEV5.ts.map",
-        "dist/chunks/interactive-ui-U4E4Q2VB.ts", "dist/chunks/interactive-ui-U4E4Q2VB.ts.map", "dist/index.ts",
-        "dist/index.ts.map", "docs/command-workflows.md", "docs/settings.md", "package.json",
-        "src/active-implementation-menu.ts", "src/command.ts", "src/completion-tool.ts", "src/decline-contract.ts",
-        "src/extension-runtime.ts", "src/finalization-request.ts", "src/fresh-implementation.ts", "src/headless-turn.ts",
-        "src/implementation-models.ts", "src/implementation-retention.ts", "src/index.ts", "src/interactive-ui.ts",
-        "src/message-transform.ts", "src/mode-contract.ts", "src/plan-action-controller.ts", "src/plan-action-menus.ts",
-        "src/plan-approval.ts", "src/plan-export-controller.ts", "src/plan-export-screen.ts", "src/plan-export.ts",
-        "src/plan-launch-menu.ts", "src/plan-mode.ts", "src/presentation.ts", "src/prompt.ts", "src/question-tool.ts",
-        "src/ready-plan-chooser.ts", "src/required-tools.ts", "src/saved-plan-menu.ts", "src/saved-plan-preflight.ts",
-        "src/settings-menu.ts", "src/settings.ts", "src/state.ts", "src/tool-availability.ts", "src/tool-policy.ts",
-        "src/tool-selection.ts", "src/workflow-mutex.ts",
+        "LICENSE",
+        "README.md",
+        "dist/chunks/chunk-WIDWMEV5.ts",
+        "dist/chunks/chunk-WIDWMEV5.ts.map",
+        "dist/chunks/interactive-ui-U4E4Q2VB.ts",
+        "dist/chunks/interactive-ui-U4E4Q2VB.ts.map",
+        "dist/index.ts",
+        "dist/index.ts.map",
+        "docs/command-workflows.md",
+        "docs/settings.md",
+        "package.json",
+        "src/active-implementation-menu.ts",
+        "src/command.ts",
+        "src/completion-tool.ts",
+        "src/decline-contract.ts",
+        "src/extension-runtime.ts",
+        "src/finalization-request.ts",
+        "src/fresh-implementation.ts",
+        "src/headless-turn.ts",
+        "src/implementation-models.ts",
+        "src/implementation-retention.ts",
+        "src/index.ts",
+        "src/interactive-ui.ts",
+        "src/message-transform.ts",
+        "src/mode-contract.ts",
+        "src/plan-action-controller.ts",
+        "src/plan-action-menus.ts",
+        "src/plan-approval.ts",
+        "src/plan-export-controller.ts",
+        "src/plan-export-screen.ts",
+        "src/plan-export.ts",
+        "src/plan-launch-menu.ts",
+        "src/plan-mode.ts",
+        "src/presentation.ts",
+        "src/prompt.ts",
+        "src/question-tool.ts",
+        "src/ready-plan-chooser.ts",
+        "src/required-tools.ts",
+        "src/saved-plan-menu.ts",
+        "src/saved-plan-preflight.ts",
+        "src/settings-menu.ts",
+        "src/settings.ts",
+        "src/state.ts",
+        "src/tool-availability.ts",
+        "src/tool-policy.ts",
+        "src/tool-selection.ts",
+        "src/workflow-mutex.ts",
     ),
 )
 
@@ -1456,9 +1491,13 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
             f"'{artifact.contract.name}' install lockfile entries differ from its dependency closure: "
             f"expected {sorted(expected_paths)}, got {sorted(actual_paths)}"
         )
-    expected_top = sorted({path.removeprefix("node_modules/").split("/")[0] for path in expected_paths if path})
+    expected_top = sorted(
+        {path.removeprefix("node_modules/").split("/")[0] for path in expected_paths if path}
+    )
     if top != expected_top:
-        raise ContractError(f"'{artifact.contract.name}' install entries differ: expected {expected_top}, got {top}")
+        raise ContractError(
+            f"'{artifact.contract.name}' install entries differ: expected {expected_top}, got {top}"
+        )
     return installed
 
 

@@ -643,6 +643,44 @@ def test_install_alone_has_no_host_copy(tmp_path: Path, sandbox: pc.Sandbox) -> 
     assert not (tmp_path / "project" / "node_modules" / "typebox").exists()
 
 
+def test_install_alone_rejects_extra_lockfile_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dependency-free packages reject any extra install closure member.
+
+    Parameters:
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+    artifact = pc.PackedArtifact(DEV_TOOLS, tmp_path / "package.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ())
+
+    def fake_run(_cmd: list[object], *, cwd: Path, **_kwargs: object) -> None:
+        """Write an install with an unrelated package.
+
+        Parameters:
+            _cmd (list[object]): Ignored subprocess command.
+            cwd (Path): Consumer project root.
+            **_kwargs (object): Ignored subprocess keyword arguments.
+        """
+        for name in ("@nredd/pi-dev-tools", "left-pad"):
+            (cwd / "node_modules" / name).mkdir(parents=True, exist_ok=True)
+        (cwd / "package-lock.json").write_text(
+            json.dumps(
+                {
+                    "packages": {
+                        "": {},
+                        "node_modules/@nredd/pi-dev-tools": {},
+                        "node_modules/left-pad": {},
+                    }
+                }
+            )
+        )
+
+    monkeypatch.setattr(pc, "run", fake_run)
+    with pytest.raises(pc.ContractError, match="dependency closure"):
+        pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
+
+
 def test_parse_events() -> None:
     """Strict JSONL framing: blank lines skipped, junk and non-objects rejected."""
     assert pc.parse_events('{"a": 1}\n\n{"b": 2}\n') == ({"a": 1}, {"b": 2})
