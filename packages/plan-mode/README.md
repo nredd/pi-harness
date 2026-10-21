@@ -2,7 +2,7 @@
 
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Maintained fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT). Imported into [`nredd/pi-harness`](https://github.com/nredd/pi-harness) from [`nredd/pi-plan-mode`](https://github.com/nredd/pi-plan-mode) commit [`4c2bfc3459b07b294efab62e9a8a01849f67a831`](https://github.com/nredd/pi-plan-mode/commit/4c2bfc3459b07b294efab62e9a8a01849f67a831), retaining its history, authorship and MIT license. The source fork rebases the patch queue onto upstream `@narumitw/pi-plan-mode@0.59.3` (release commit `9b8befda`), with the core fork's `v1.3.0-nredd.6` development host. The latest released fork remains `v0.59.2-nredd.4`; the install examples below deliberately use that tag, not this review branch. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
+Maintained fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT). Imported into [`nredd/pi-harness`](https://github.com/nredd/pi-harness) from [`nredd/pi-plan-mode`](https://github.com/nredd/pi-plan-mode) commit [`4c2bfc3459b07b294efab62e9a8a01849f67a831`](https://github.com/nredd/pi-plan-mode/commit/4c2bfc3459b07b294efab62e9a8a01849f67a831), retaining its history, authorship and MIT license. The source fork rebases the patch queue onto upstream `@narumitw/pi-plan-mode@0.59.3` (release commit `9b8befda`), with the core fork's `v1.3.0-nredd.6` development host. Install the published npm package; `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the npm package.
 
 Differences from upstream. The presentational ones come first; the ready-plan flow, decline gate, and bash policy changes follow:
 
@@ -49,13 +49,13 @@ This release requires Pi 0.80.6 or newer.
 Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
 
 ```bash
-pi install git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.4
+pi install npm:@nredd/pi-plan-mode@0.59.3-nredd.2
 ```
 
 Try without installing permanently:
 
 ```bash
-pi -e git:github.com/nredd/pi-plan-mode@v0.59.2-nredd.4
+pi -e npm:@nredd/pi-plan-mode@0.59.3-nredd.2
 ```
 
 Build and try this package locally from the repository root:
