@@ -1,7 +1,7 @@
 # Pi harness
 
 Development home for independently versioned Pi plugins, an optional preset, integration tests,
-benchmarks, and exact-stack release tooling. Upstream forks retain their histories as submodules.
+benchmarks, and exact-stack release tooling. The Pi core retains its upstream history as a submodule; extension packages are imported workspaces.
 
 - Owned npm packages ship through `publish.yml`; core ships through `nredd/tap/pi-coding-agent`.
 - Dotfiles selects pins and applies them with `chezmoi update --upgrade`; require `pi-profile doctor`
@@ -17,7 +17,7 @@ including documentation, fork, dotfiles, and automated promotion changes.
 Layout:
 
 - `packages/`: independently versioned plugins and optional preset, including imported `@nredd/pi-computer-use`. Its packed contract proves stock-Pi loading and the model-visible tool surface; native desktop behavior is explicitly NOT RUN without an interactive macOS TCC-granted session.
-- `forks/`: exact upstream-fork source commits (submodules), with their native build systems. See
+- `forks/pi`: exact upstream core source commit (submodule), with its native build system. See
   [fork ownership](docs/forks.md).
 - `integration/inprocess/`: private `A-stack` scenarios on core's real harness, Vitest + Bun: Plan/todos, goals/loops, subagent delivery, router quota/admission. Assertion destinations and clock boundaries: [here](docs/verification-rebuild.md).
 - `integration/scenarios/`: retained process/terminal boundaries, opt-in live checks and benchmarks.
@@ -57,8 +57,6 @@ Development (Node with npm workspaces, `uv`, Git, macOS or Linux; the benchmark 
 ```sh
 make install               # npm ci --ignore-scripts; uv sync --locked (integration, benchmark)
 make check                 # owned-code gates, see below
-make bootstrap-forks       # init/update fork submodules; refuses if any initialized fork is dirty
-make bootstrap-forks-check # preflight only
 make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, see docs/package-contracts.md
 make check-todo-package-contract # explicit: packed todo tool through stock Pi 1.3.0
 ```
@@ -104,11 +102,6 @@ throwaway HOME/agent directories, D boundaries and the one E tmux resize seam. I
 `pi-harness-e2e make verify`; no owner config or installed package state is read. Inputs and
 headless exclusions are documented [here](integration/README.md). Bench remains visibly NOT RUN
 until a quiet runner exists, and Bun auth interception remains unfinished.
-
-`bootstrap-forks` discovers submodules from the index and checks every initialized one (nested
-included) for tracked, staged, and untracked changes before running
-`git submodule update --init --recursive`. On any dirt it exits 1 having changed nothing; it never
-forces, cleans, or discards. Exit 2 is a git or usage error.
 
 Distribution policy:
 

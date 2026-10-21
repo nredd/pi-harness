@@ -36,11 +36,11 @@ OWNED_WORKSPACE_PATHS = {
     "@nredd/pi-subscription-router": "../../packages/subscription-router",
     PRESET_IDENTITY: "../../packages/preset",
 }
-GIT_WORKSPACE_PATHS = {
-    "nredd/rpiv-todo": "../../packages/todo",
-    "nredd/pi-subagents": "../../packages/subagents",
-    "nredd/pi-plan-mode": "../../packages/plan-mode",
-    "nredd/pi-computer-use": "../../packages/computer-use",
+OWNED_WORKSPACE_PATHS |= {
+    "@nredd/pi-todo": "../../packages/todo",
+    "@nredd/pi-subagents": "../../packages/subagents",
+    "@nredd/pi-plan-mode": "../../packages/plan-mode",
+    "@nredd/pi-computer-use": "../../packages/computer-use",
 }
 
 
@@ -264,20 +264,6 @@ def npm_identity(source: str) -> str | None:
     return source.removeprefix("npm:").rsplit("@", 1)[0]
 
 
-def git_identity(source: str) -> str | None:
-    """Return a GitHub owner/repository identity without its exact tag.
-
-    Parameters:
-        source (str): validated source string.
-
-    Returns:
-        str | None: GitHub owner/repository identity, or `None` for non-git sources.
-    """
-    if not source.startswith("git:github.com/"):
-        return None
-    return source.removeprefix("git:github.com/").rsplit("@", 1)[0]
-
-
 def localize_source(source: str) -> str:
     """Replace owned package identities with their local development paths.
 
@@ -287,10 +273,7 @@ def localize_source(source: str) -> str:
     Returns:
         str: workspace or package path for owned sources, otherwise the original source.
     """
-    return OWNED_WORKSPACE_PATHS.get(
-        npm_identity(source) or "",
-        GIT_WORKSPACE_PATHS.get(git_identity(source) or "", source),
-    )
+    return OWNED_WORKSPACE_PATHS.get(npm_identity(source) or "", source)
 
 
 def derive_local_stack(personal: Stack) -> Stack:
