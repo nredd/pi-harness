@@ -1,0 +1,94 @@
+{
+	"name": "@nredd/pi-computer-use",
+	"version": "0.5.1",
+	"description": "Pi extension that lets AI agents observe and control macOS apps.",
+	"type": "module",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"computer-use",
+		"macos",
+		"desktop-automation",
+		"accessibility"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nredd/pi-harness.git",
+		"directory": "packages/computer-use"
+	},
+	"bugs": {
+		"url": "https://github.com/nredd/pi-harness/issues"
+	},
+	"homepage": "https://github.com/nredd/pi-harness/tree/main/packages/computer-use#readme",
+	"publishConfig": {
+		"access": "public"
+	},
+	"engines": {
+		"node": ">=20.6.0"
+	},
+	"files": [
+		"extensions",
+		"src",
+		"scripts/build-native.mjs",
+		"scripts/setup-helper.mjs",
+		"native/macos/agent_cursor.swift",
+		"native/macos/agent_cursor_motion.swift",
+		"native/macos/bridge.swift",
+		"prebuilt/macos",
+		"assets/reference/img.jpg",
+		"README.md",
+		"LICENSE",
+		"docs/architecture.md",
+		"docs/configuration.md",
+		"docs/macos-root-targeting.md",
+		"docs/troubleshooting.md",
+		"docs/usage.md"
+	],
+	"pi": {
+		"extensions": [
+			"./extensions/computer-use.ts"
+		],
+		"image": "./assets/reference/img.jpg"
+	},
+	"scripts": {
+		"postinstall": "node scripts/setup-helper.mjs --postinstall",
+		"typecheck": "tsc -p tsconfig.json",
+		"test:schema": "tsx scripts/check-tool-schemas.mjs",
+		"test:invariants": "node scripts/check-invariants.mjs",
+		"test:lifecycle": "tsx scripts/check-session-lifecycle.mjs",
+		"test:runtime": "tsx scripts/check-runtime-concurrency.mjs",
+		"test:output": "tsx scripts/check-bounded-output.mjs",
+		"test:commits": "node scripts/check-commit-messages.mjs",
+		"test:platform": "tsx scripts/check-platform-windows.mjs",
+		"test:windows-scripts": "node scripts/check-windows-build-scripts.mjs",
+		"test:package-assets": "node scripts/check-package-assets.mjs",
+		"test:signing": "node scripts/check-local-signing.mjs",
+		"test:macos-path": "node scripts/check-macos-helper-path.mjs",
+		"test:macos-target": "tsx scripts/check-macos-observe-target.mjs",
+		"test:macos-native": "node scripts/check-macos-native-pure.mjs",
+		"test:act-outcomes": "tsx scripts/check-act-outcomes.mjs",
+		"test:desktop": "tsx scripts/check-desktop-tools.mjs",
+		"test:unpaired": "tsx scripts/check-unpaired-act.mjs",
+		"test:macos-live": "tsx scripts/check-macos-helper-live.mjs",
+		"check": "npm test && npm run test:package-assets",
+		"test": "npm run typecheck && npm run test:schema && npm run test:output && npm run test:lifecycle && npm run test:runtime && npm run test:invariants && npm run test:platform && npm run test:linux && npm run test:linux-scripts && npm run test:signing && npm run test:macos-path && npm run test:macos-target && npm run test:macos-native && npm run test:act-outcomes && npm run test:desktop && npm run test:unpaired && npm run test:macos-live",
+		"build:native": "node scripts/build-native.mjs",
+		"build:windows": "node scripts/build-native.mjs --platform windows",
+		"build:linux": "node scripts/build-native.mjs --platform linux",
+		"test:linux": "tsx scripts/check-platform-linux.mjs",
+		"test:linux-scripts": "node scripts/check-linux-build-scripts.mjs",
+		"test:linux-live": "PI_CU_LIVE=1 tsx scripts/check-linux-live.mjs"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	},
+	"devDependencies": {
+		"@types/node": "^26.1.1",
+		"tsx": "^4.23.1",
+		"typescript": "^7.0.2"
+	}
+}
