@@ -499,6 +499,7 @@ class PlanModeEvidence(TypedDict):
     """Return shape of `scenario_plan_mode`."""
 
     tools: list[str]
+    question_result: str
 
 
 ScenarioEvidence = DevToolsEvidence | SessionKitEvidence | RouterEvidence | PlanModeEvidence
@@ -531,6 +532,7 @@ class RouterEvidenceModel(BaseModel):
 class PlanModeEvidenceModel(BaseModel):
     model_config = STRICT_MODEL
     tools: list[str] = Field(min_length=2, description="Plan tools offered by the packed extension")
+    question_result: NonEmptyText = Field(description="Result of the exercised Plan question tool")
 
 
 EVIDENCE_MODELS: dict[str, type[BaseModel]] = {
@@ -2141,7 +2143,23 @@ def scenario_plan_mode(ctx: Context) -> PlanModeEvidence:
     """
     project = ctx.work / "project"
     project.mkdir(exist_ok=True)
-    with ctx.provider_session([TextStep("loaded")]) as provider:
+    question = ToolStep(
+        "plan_mode_question",
+        {
+            "questions": [
+                {
+                    "id": "contract_scope",
+                    "header": "Scope",
+                    "question": "Exercise the packed Plan-mode question tool?",
+                    "options": [
+                        {"label": "Yes", "description": "Record the expected headless result."},
+                        {"label": "No", "description": "The contract should still reject inactive use."},
+                    ],
+                }
+            ]
+        },
+    )
+    with ctx.provider_session([question, TextStep("loaded")]) as provider:
         result = run_pi(
             ctx.pi_bin,
             ctx.sandbox,
@@ -2151,7 +2169,9 @@ def scenario_plan_mode(ctx: Context) -> PlanModeEvidence:
         )
     require_clean_run(result, "plan-mode load")
     require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
-    return {"tools": sorted(ctx.artifact.contract.exposes_tools)}
+    question_result = tool_text(result.single_tool_result("plan_mode_question"))
+    require("plan_mode_inactive" in question_result, f"unexpected Plan question result: {question_result}")
+    return {"tools": sorted(ctx.artifact.contract.exposes_tools), "question_result": question_result}
 
 
 SCENARIOS: dict[str, Callable[[Context], ScenarioEvidence]] = {
