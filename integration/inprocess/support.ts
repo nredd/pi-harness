@@ -10,10 +10,11 @@ import type { ExtensionFactory, ExtensionUIContext } from "@earendil-works/pi-co
 import { createHarness, type Harness, type HarnessOptions } from "@earendil-works/pi-coding-agent/testing";
 
 const ROOT = new URL("../../", import.meta.url);
+/** Imported fork -> `packages/<dir>` workspace and its declared `pi.extensions` entry. */
 const FORK_ENTRIES = {
-	"pi-plan-mode": "dist/index.ts",
-	"rpiv-todo": "index.ts",
-	"pi-subagents": "src/index.ts",
+	"pi-plan-mode": { dir: "plan-mode", entry: "dist/index.ts" },
+	"rpiv-todo": { dir: "todo", entry: "index.ts" },
+	"pi-subagents": { dir: "subagents", entry: "src/index.ts" },
 } as const;
 const OWNED_ENTRIES = {
 	"@nredd/pi-dev-tools": "dev-tools",
@@ -166,9 +167,9 @@ export function isolateResearchPackages(root: string): () => void {
 	};
 }
 
-/** Refuse fork-local host copies before importing any extension code. */
+/** Refuse package-local host copies before importing any extension code. */
 export function assertHostIdentity(fork: ForkName): void {
-	const directory = new URL(`forks/${fork}/`, ROOT);
+	const directory = new URL(`packages/${FORK_ENTRIES[fork].dir}/`, ROOT);
 	const parent = new URL("package.json", directory);
 	for (const name of HOSTS) {
 		const remove = fileURLToPath(new URL("node_modules/", directory));
@@ -220,10 +221,10 @@ async function loadFactory(url: URL, resetMemory = false): Promise<ExtensionFact
 	return loaded.default as ExtensionFactory;
 }
 
-/** Load a Gitlinked fork without installing anything in its checkout. */
+/** Load an imported fork package from `packages/` without installing anything in it. */
 export async function loadFork(fork: ForkName): Promise<ExtensionFactory> {
 	assertHostIdentity(fork);
-	return loadFactory(new URL(`forks/${fork}/${FORK_ENTRIES[fork]}`, ROOT));
+	return loadFactory(new URL(`packages/${FORK_ENTRIES[fork].dir}/${FORK_ENTRIES[fork].entry}`, ROOT));
 }
 
 /** Load an owned workspace's real source entry; callers may also pass its createXxx factory directly. */
