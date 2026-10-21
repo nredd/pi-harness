@@ -19,6 +19,6 @@ entries in one core harness session, under Vitest and Bun. No extension mocks or
 
 `integration/inprocess/todo-history-session.test.ts` owns actual host row rendering, file-backed
 history, resource-loader reload and resize under Vitest and Bun.
-`forks/pi-plan-mode/test/confirmation-session.test.ts` now owns restored canonical confirmation
+`packages/plan-mode/test/confirmation-session.test.ts` now owns restored canonical confirmation
 through a real session with RPC chooser doubles; core owns RPC protocol serialization. The fork's
 native suite also owns custom-TUI keyboard/layout, fresh handoff and tree routing.

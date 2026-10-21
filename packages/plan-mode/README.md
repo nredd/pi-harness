@@ -455,6 +455,9 @@ Fork maintenance follows the split/diff-replay queue, never unreleased upstream 
 
 Pi extension, Pi coding agent, plan mode, Codex-like plan mode, AI coding workflow, read-only planning, implementation plan.
 
+Lockfile: there is no nested `package-lock.json`; the root workspace lock governs
+(`npm ci --ignore-scripts` at the repository root).
+
 ## 📄 License
 
 MIT.

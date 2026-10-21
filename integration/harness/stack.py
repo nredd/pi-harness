@@ -37,10 +37,10 @@ OWNED_WORKSPACE_PATHS = {
     PRESET_IDENTITY: "../../packages/preset",
 }
 GIT_WORKSPACE_PATHS = {
-    "nredd/rpiv-todo": "../../forks/rpiv-todo",
-    "nredd/pi-subagents": "../../forks/pi-subagents",
-    "nredd/pi-plan-mode": "../../forks/pi-plan-mode",
-    "nredd/pi-computer-use": "../../forks/pi-computer-use",
+    "nredd/rpiv-todo": "../../packages/todo",
+    "nredd/pi-subagents": "../../packages/subagents",
+    "nredd/pi-plan-mode": "../../packages/plan-mode",
+    "nredd/pi-computer-use": "../../packages/computer-use",
 }
 
 
@@ -285,7 +285,7 @@ def localize_source(source: str) -> str:
         source (str): exact personal stack source.
 
     Returns:
-        str: workspace or fork path for owned sources, otherwise the original source.
+        str: workspace or package path for owned sources, otherwise the original source.
     """
     return OWNED_WORKSPACE_PATHS.get(
         npm_identity(source) or "",
