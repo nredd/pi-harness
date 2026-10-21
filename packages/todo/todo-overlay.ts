@@ -162,11 +162,16 @@ export class TodoOverlay {
 		const headingColor = hasActive ? "accent" : "dim";
 		const headingIcon = hasActive ? "●" : "○";
 		// Counts come from the full state, so every todo is accounted for.
-		const headingText = `${t("overlay.heading", OVERLAY_HEADING)} (${formatProgress(state)})`;
+		// Only the in-progress segment takes the warning color (same as its `◐` marker).
+		const paint = (kind: "base" | "warning", text: string): string =>
+			theme.fg(kind === "warning" ? "warning" : headingColor, text);
+		const headingText = [
+			paint("base", `${t("overlay.heading", OVERLAY_HEADING)} (`),
+			formatProgress(state, paint),
+			paint("base", ")"),
+		].join("");
 		const disclosure = this.collapsed ? "▸" : "▾";
-		const heading = truncate(
-			`${theme.fg("dim", disclosure)} ${theme.fg(headingColor, headingIcon)} ${theme.fg(headingColor, headingText)}`,
-		);
+		const heading = truncate(`${theme.fg("dim", disclosure)} ${theme.fg(headingColor, headingIcon)} ${headingText}`);
 
 		// Collapsed view: just the heading + a dim "└─" expand hint, then the
 		// trailing spacer. The hint splices the resolved key into the {key}

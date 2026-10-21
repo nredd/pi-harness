@@ -116,7 +116,7 @@ describe("/todos command — grouped output", () => {
 		expect(out).toContain("1 done");
 	});
 
-	it("emits the header as 'done, deferred, open' counts that sum to the total", async () => {
+	it("emits the header as 'done, deferred, open, in progress' counts (in progress is a subset of open)", async () => {
 		const { tool, cmd } = setup();
 		await seed(tool, [
 			{ action: "create", subject: "p" },
@@ -129,7 +129,7 @@ describe("/todos command — grouped output", () => {
 		]);
 		const ctx = createMockCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
-		expect(grabOutput(ctx).split("\n")[0]).toBe("1 done, 1 deferred, 2 open");
+		expect(grabOutput(ctx).split("\n")[0]).toBe("1 done, 1 deferred, 2 open, 1 in progress");
 	});
 
 	it("appends '⛓ #deps' suffix for tasks with blockedBy", async () => {
