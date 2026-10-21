@@ -102,6 +102,19 @@ def gitlink_tag(directory: Path) -> str:
         ) from error
 
 
+def release_asset_url(tag: str, name: str) -> str:
+    """Return the GitHub release download URL of one core fork asset.
+
+    Parameters:
+        tag (str): core fork release tag, e.g. `v1.3.0-nredd.7`.
+        name (str): asset file name.
+
+    Returns:
+        str: download URL.
+    """
+    return f"https://github.com/nredd/pi/releases/download/{tag}/{name}"
+
+
 def release_checksums(tag: str) -> dict[str, str]:
     """Read a release checksum file, preserving named pre-attestation releases.
 
@@ -114,11 +127,10 @@ def release_checksums(tag: str) -> dict[str, str]:
     Raises:
         ValueError: malformed, incomplete, or unrecognized release identities.
     """
-    base = f"https://github.com/nredd/pi/releases/download/{tag}/"
     if tag in LEGACY_RELEASE_TAGS:
-        return {f"{base}{name}": digest for name, digest in LEGACY_CHECKSUMS[tag].items()}
+        return {release_asset_url(tag, name): digest for name, digest in LEGACY_CHECKSUMS[tag].items()}
     try:
-        with urlopen(f"{base}SHA256SUMS", timeout=120) as response:
+        with urlopen(release_asset_url(tag, "SHA256SUMS"), timeout=120) as response:
             contents = response.read().decode("utf-8")
     except OSError as error:
         raise ValueError(f"Could not download release checksums for '{tag}'") from error
@@ -130,7 +142,7 @@ def release_checksums(tag: str) -> dict[str, str]:
         digest, name = fields
         if not SHA256_HEX.fullmatch(digest) or "/" in name or name.startswith("*"):
             raise ValueError(f"Invalid release checksum line for '{tag}': '{line}'")
-        url = f"{base}{name}"
+        url = release_asset_url(tag, name)
         if url in checksums:
             raise ValueError(f"Duplicate release checksum for '{url}'")
         checksums[url] = digest
@@ -257,10 +269,7 @@ def fetch_release(tag: str, prefix: Path) -> Path:
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
     checksums = release_checksums(tag)
     version = match["version"]
-    urls = [
-        f"https://github.com/nredd/pi/releases/download/{tag}/earendil-works-{package}-{version}.tgz"
-        for package in RELEASE_PACKAGES
-    ]
+    urls = [release_asset_url(tag, f"earendil-works-{package}-{version}.tgz") for package in RELEASE_PACKAGES]
     if tag in LEGACY_RELEASE_TAGS:
         urls = [url for url in urls if url in checksums]
     for url in urls:

@@ -11,9 +11,11 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from harness.release import release_asset_url
 
 LOGGER = logging.getLogger(__name__)
 PINNED_NPM = re.compile(r"^npm:(?:@[^/\s]+/)?[^@/\s]+@\d+\.\d+\.\d+(?:-[\w.-]+)?$")
@@ -22,7 +24,8 @@ CORE_TAG = re.compile(r"^v\d+\.\d+\.\d+-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 LOCAL_SOURCE_PREFIXES = ("./", "../", "/")
 PERSONAL_STACK_NAME = "personal"
-LOCAL_STACK_NAME = "local"
+LocalStackName = Literal["local"]
+LOCAL_STACK_NAME: str = get_args(LocalStackName)[0]
 DERIVED_FROM_KEY = "derived_from"
 SETTINGS_PACKAGES_KEY = "packages"
 PRESET_IDENTITY = "@nredd/pi-preset"
@@ -164,7 +167,7 @@ class Stack(BaseModel):
 class LocalStackDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     schema_version: Literal[1] = Field(description="Version of the local derivation descriptor schema")
-    name: Literal["local"] = Field(description="Fixed identity for the generated development stack")
+    name: LocalStackName = Field(description="Fixed identity for the generated development stack")
     derived_from: Literal["personal.json"] = Field(
         description="Adjacent authoritative personal stack used for local derivation"
     )
@@ -296,9 +299,8 @@ def validate_release_identity(stack: Stack, gitlink_tag: str, checksums: dict[st
     """
     if stack.core.tag != gitlink_tag:
         raise ValueError(f"Stack core tag '{stack.core.tag}' does not match Gitlink tag '{gitlink_tag}'")
-    base = f"https://github.com/nredd/pi/releases/download/{stack.core.tag}/"
     for name, digest in stack.core.integrity.items():
-        if checksums.get(f"{base}{name}") != digest:
+        if checksums.get(release_asset_url(stack.core.tag, name)) != digest:
             raise ValueError(f"Stack core integrity does not match release asset '{name}'")
 
 
