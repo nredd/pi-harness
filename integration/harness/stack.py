@@ -23,6 +23,7 @@ PINNED_GIT = re.compile(r"^git:github\.com/[^/\s]+/[^@/\s]+@v\d+\.\d+\.\d+(?:-[\
 CORE_TAG = re.compile(r"^v\d+\.\d+\.\d+-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 LOCAL_SOURCE_PREFIXES = ("./", "../", "/")
+JS_SAFE_INTEGER = 2**53 - 1
 PERSONAL_STACK_NAME = "personal"
 LocalStackName = Literal["local"]
 LOCAL_STACK_NAME: str = get_args(LocalStackName)[0]
@@ -43,27 +44,32 @@ GIT_WORKSPACE_PATHS = {
 }
 
 
-def reject_floats(value: Any, path: str = "$") -> None:
-    """Reject floats whose canonical JSON differs between Python and JavaScript.
+def reject_noncanonical_numbers(value: Any, path: str = "$") -> None:
+    """Reject numbers the JavaScript consumer cannot reproduce exactly.
 
     Parameters:
         value (Any): JSON-compatible value to inspect.
         path (str): JSON path identifying `value`.
 
     Raises:
-        ValueError: a float occurs anywhere in the supplied value.
+        ValueError: a float or unsafe integer occurs anywhere in the supplied value.
     """
     if isinstance(value, float):
         raise ValueError(
             f"Float at `{path}` is not supported: digests are recomputed by a JS consumer, "
             "so values must be integers, strings, bools, null, lists or objects"
         )
+    if not isinstance(value, bool) and isinstance(value, int) and abs(value) > JS_SAFE_INTEGER:
+        raise ValueError(
+            f"Integer at `{path}` is outside the JavaScript safe-integer range "
+            f"[-{JS_SAFE_INTEGER}, {JS_SAFE_INTEGER}]"
+        )
     if isinstance(value, dict):
         for key, nested in value.items():
-            reject_floats(nested, f"{path}.{key}")
+            reject_noncanonical_numbers(nested, f"{path}.{key}")
     elif isinstance(value, list):
         for index, nested in enumerate(value):
-            reject_floats(nested, f"{path}[{index}]")
+            reject_noncanonical_numbers(nested, f"{path}[{index}]")
 
 
 class PackageSource(BaseModel):
@@ -154,7 +160,7 @@ class Stack(BaseModel):
         for source in sources:
             if not (PINNED_NPM.fullmatch(source) or PINNED_GIT.fullmatch(source) or is_local_source(source)):
                 raise ValueError(f"Source must be pinned or an explicit local path: '{source}'")
-        reject_floats(self.settings, "$.settings")
+        reject_noncanonical_numbers(self.settings, "$.settings")
         if SETTINGS_PACKAGES_KEY in self.settings:
             raise ValueError(f"`settings` cannot override `{SETTINGS_PACKAGES_KEY}`")
         if not self.disabled_extensions.keys() <= set(sources) or not all(

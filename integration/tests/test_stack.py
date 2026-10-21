@@ -110,6 +110,9 @@ def test_stack_rejects_implicit_or_ambiguous_inputs(change: dict[str, Any]) -> N
     [
         ({"temperature": 1.0}, "$.settings.temperature"),
         ({"model": {"temperature": [1.0]}}, "$.settings.model.temperature[0]"),
+        ({"number": float("nan")}, "$.settings.number"),
+        ({"number": float("inf")}, "$.settings.number"),
+        ({"number": float("-inf")}, "$.settings.number"),
     ],
 )
 def test_stack_rejects_floats_in_settings(settings: dict[str, Any], path: str) -> None:
@@ -121,6 +124,38 @@ def test_stack_rejects_floats_in_settings(settings: dict[str, Any], path: str) -
     """
     with pytest.raises(ValidationError, match=rf"Float at `{re.escape(path)}` is not supported"):
         Stack.model_validate(stack_document(settings=settings))
+
+
+@pytest.mark.parametrize(
+    ("value", "path"),
+    [
+        (2**53, "$.settings.number"),
+        (-(2**53), "$.settings.number"),
+        ({"nested": {"number": [2**53]}}, "$.settings.nested.number[0]"),
+        ({"nested": {"number": [-(2**53)]}}, "$.settings.nested.number[0]"),
+    ],
+)
+def test_stack_rejects_unsafe_integers_in_settings(value: Any, path: str) -> None:
+    """Reject integers JavaScript cannot parse and reproduce exactly.
+
+    Parameters:
+        value (Any): unsafe integer or nested container containing one.
+        path (str): expected JSON path in the validation error.
+    """
+    settings = value if isinstance(value, dict) else {"number": value}
+    with pytest.raises(ValidationError, match=rf"Integer at `{re.escape(path)}` is outside"):
+        Stack.model_validate(stack_document(settings=settings))
+
+
+def test_stack_accepts_canonical_scalar_and_nested_settings() -> None:
+    """Accept JSON values whose Python and JavaScript encodings agree."""
+    settings = {
+        "false": False,
+        "negative": -(2**53 - 1),
+        "null": None,
+        "nested": [True, 0, 2**53 - 1, {"value": 1}],
+    }
+    assert Stack.model_validate(stack_document(settings=settings)).settings == settings
 
 
 def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> None:
