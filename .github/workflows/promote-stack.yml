@@ -34,8 +34,6 @@ env:
   ATTEST_WORKFLOW: ${{ github.repository }}/.github/workflows/promote-stack.yml
 
 jobs:
-  # Read-only: runs only trusted `main` code plus data from the selected commit. It never holds
-  # `id-token`, `attestations` or a credential that can write.
   verify:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -67,14 +65,11 @@ jobs:
           REQUESTED_SHA: ${{ inputs.source_sha }}
           ROLLBACK_TAG: ${{ inputs.rollback_tag }}
         run: |
-          promo() { uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion "$@"; }
           mkdir -p "$PROMO"
-          sha=$(promo select --operation "$OPERATION" --source-sha "$REQUESTED_SHA" --rollback-tag "$ROLLBACK_TAG")
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion select --operation "$OPERATION" --source-sha "$REQUESTED_SHA" --rollback-tag "$ROLLBACK_TAG" --github-output "$GITHUB_OUTPUT"
           git fetch origin main
-          promo ancestor --repo "$GITHUB_WORKSPACE" --ancestor "$sha" --descendant origin/main
-          echo "source_sha=$sha" >>"$GITHUB_OUTPUT"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion ancestor --repo "$GITHUB_WORKSPACE" --ancestor "${{ steps.target.outputs.source_sha }}" --descendant origin/main
 
-      # Rollback: re-verify a retained, attested snapshot.
       - name: Verify retained snapshot
         if: inputs.operation == 'rollback'
         env:
@@ -82,65 +77,57 @@ jobs:
           ROLLBACK_TAG: ${{ inputs.rollback_tag }}
           SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
         run: |
-          promo() { uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion "$@"; }
           gh release download "$ROLLBACK_TAG" --repo "$GITHUB_REPOSITORY" --pattern stack-snapshot.json --dir "$PROMO" --clobber
           gh attestation verify "$PROMO/stack-snapshot.json" --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
-          promo verify --snapshot "$PROMO/stack-snapshot.json" --source-sha "$SOURCE_SHA"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion verify --snapshot "$PROMO/stack-snapshot.json" --source-sha "$SOURCE_SHA"
 
-      # Promote / verify-only: gather evidence for the exact selected SHA.
       - name: Read required checks
         if: inputs.operation != 'rollback'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
         run: |
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/rules/branches/main" >"$PROMO/rules.json" \
-            || { echo '::error::Cannot read main branch rules with GITHUB_TOKEN'; exit 1; }
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA/check-runs?per_page=100" >"$PROMO/check-pages.json" \
-            || { echo '::error::Cannot read check runs; the job needs checks read'; exit 1; }
-      - name: Read CI runs
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/rules/branches/main" >"$PROMO/rules.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA/check-runs?per_page=100" >"$PROMO/check-pages.json"
+      - name: Read CI artifacts
         if: inputs.operation != 'rollback'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
         run: |
-          promo() { uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion "$@"; }
-          mkdir -p "$PROMO/jobs" "$PROMO/artifacts"
-          gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SOURCE_SHA" --limit 100 \
-            --json databaseId,status,conclusion,event,headBranch,headSha >"$PROMO/runs.json" \
-            || { echo '::error::Cannot read workflow runs; the job needs actions read'; exit 1; }
-          promo candidate-runs --runs "$PROMO/runs.json" --source-sha "$SOURCE_SHA" >"$PROMO/candidates.txt"
-          while read -r run; do
-            gh run view "$run" --repo "$GITHUB_REPOSITORY" --json jobs >"$PROMO/jobs/run-$run.json"
-            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" >"$PROMO/artifacts/run-$run.json"
-          done <"$PROMO/candidates.txt"
+          mkdir -p "$PROMO/artifacts"
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SOURCE_SHA" --limit 100 --json databaseId,status,conclusion,event,headBranch,headSha >"$PROMO/runs.json"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion fetch-artifacts --runs "$PROMO/runs.json" --source-sha "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --output-dir "$PROMO/artifacts"
       - name: Verify gates and build candidate snapshot
         if: inputs.operation != 'rollback'
         env:
-          GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
         run: |
-          promo() { uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion "$@"; }
           git show "$SOURCE_SHA:integration/stacks/personal.json" >"$PROMO/personal.json"
-          promo checks --rules "$PROMO/rules.json" --check-pages "$PROMO/check-pages.json" --source-sha "$SOURCE_SHA" >"$PROMO/checks.json"
-          promo stack-runs --runs "$PROMO/runs.json" --jobs-dir "$PROMO/jobs" --artifacts-dir "$PROMO/artifacts" --source-sha "$SOURCE_SHA" >"$PROMO/stack-runs.json"
-          promo core --stack "$PROMO/personal.json" --workdir "$RUNNER_TEMP/core" >"$PROMO/core.json"
-          promo owned-evidence --stack "$PROMO/personal.json" --repo "$GITHUB_WORKSPACE" --workdir "$RUNNER_TEMP/packages" --output "$PROMO/owned.json"
-          promo gates --stack "$PROMO/personal.json" --checks "$PROMO/checks.json" --stack-runs "$PROMO/stack-runs.json" --owned "$PROMO/owned.json" --core "$PROMO/core.json" --output "$PROMO/gates.json"
-          promo build --stack "$PROMO/personal.json" --source-sha "$SOURCE_SHA" --gates "$PROMO/gates.json" --output "$PROMO/stack-snapshot.json"
-      - name: Verify successor of the attested stable pointer
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion checks --rules "$PROMO/rules.json" --check-pages "$PROMO/check-pages.json" --source-sha "$SOURCE_SHA" >"$PROMO/checks.json"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion stack-runs --runs "$PROMO/runs.json" --artifacts-dir "$PROMO/artifacts" --source-sha "$SOURCE_SHA" >"$PROMO/stack-runs.json"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion core --stack "$PROMO/personal.json" --workdir "$RUNNER_TEMP/core" >"$PROMO/core.json"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion owned-evidence --stack "$PROMO/personal.json" --repo "$GITHUB_WORKSPACE" --workdir "$RUNNER_TEMP/packages" --output "$PROMO/owned.json"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion gates --stack "$PROMO/personal.json" --checks "$PROMO/checks.json" --stack-runs "$PROMO/stack-runs.json" --owned "$PROMO/owned.json" --core "$PROMO/core.json" --output "$PROMO/gates.json"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion build --stack "$PROMO/personal.json" --source-sha "$SOURCE_SHA" --gates "$PROMO/gates.json" --output "$PROMO/stack-snapshot.json"
+      - id: channel
+        name: Read stack-channel state
         if: inputs.operation == 'promote' || inputs.operation == 'verify-only'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          promo() { uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion "$@"; }
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/stack-channel" >"$PROMO/refs.json"
-          exists=$(promo channel-exists --refs "$PROMO/refs.json")
-          if [ "$exists" = true ]; then
-            gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/stable.json?ref=stack-channel" >"$PROMO/stable.json"
-            gh attestation verify "$PROMO/stable.json" --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
-          fi
-          promo successor --candidate "$PROMO/stack-snapshot.json" --refs "$PROMO/refs.json" --stable "$PROMO/stable.json" --repo "$GITHUB_WORKSPACE"
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion channel-exists --refs "$PROMO/refs.json" --github-output "$GITHUB_OUTPUT"
+      - name: Fetch and attest the stable pointer
+        if: (inputs.operation == 'promote' || inputs.operation == 'verify-only') && steps.channel.outputs.channel_exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/stable.json?ref=stack-channel" >"$PROMO/stable.json"
+          gh attestation verify "$PROMO/stable.json" --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
+      - name: Verify successor of the attested stable pointer
+        if: inputs.operation == 'promote' || inputs.operation == 'verify-only'
+        run: uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion successor --candidate "$PROMO/stack-snapshot.json" --refs "$PROMO/refs.json" --stable "$PROMO/stable.json" --repo "$GITHUB_WORKSPACE"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: inputs.operation != 'verify-only'
         with:
@@ -148,9 +135,6 @@ jobs:
           path: promotion/stack-snapshot.json
           if-no-files-found: error
 
-  # Holds the write credentials but runs no code from the selected commit and installs no
-  # dependencies: it downloads the verified artifact, runs stdlib-only `harness.publish_gate`
-  # from `main`, attests, and publishes.
   attest-and-publish:
     if: github.ref == 'refs/heads/main' && inputs.operation != 'verify-only'
     needs: verify
@@ -171,20 +155,12 @@ jobs:
           name: stack-snapshot-${{ needs.verify.outputs.source_sha }}
           path: promotion
       - id: release
-        name: Look for an existing snapshot release
+        name: Validate existing snapshot release and tag
         if: inputs.operation == 'promote'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: |
-          gate() { PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate "$@"; }
-          mkdir -p existing
-          if gh release view "stack/$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release download "stack/$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --pattern stack-snapshot.json --dir existing --clobber
-          fi
-          state=$(gate release-state --existing existing/stack-snapshot.json --rebuilt promotion/stack-snapshot.json)
-          echo "state=$state" >>"$GITHUB_OUTPUT"
-      # Resume: only the pointer push failed. The existing snapshot is byte-equal to the rebuilt one.
+        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate prepare-release --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --rebuilt promotion/stack-snapshot.json --existing-dir existing --github-output "$GITHUB_OUTPUT"
       - name: Verify the existing snapshot attestation
         if: inputs.operation == 'promote' && steps.release.outputs.state == 'resume'
         env:
@@ -206,38 +182,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         run: |
-          gate() { PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate "$@"; }
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/stack/$SOURCE_SHA" >"$RUNNER_TEMP/tag-ref.json"
-          gate tag-target --ref "$RUNNER_TEMP/tag-ref.json" --source-sha "$SOURCE_SHA"
+          PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate tag-target --ref "$RUNNER_TEMP/tag-ref.json" --source-sha "$SOURCE_SHA"
       - name: Advance the stack-channel pointer
         env:
-          GH_TOKEN: ${{ github.token }}
           DEPLOY_KEY: ${{ secrets.STACK_CHANNEL_DEPLOY_KEY }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: |
-          test -n "$DEPLOY_KEY" || { echo '::error::STACK_CHANNEL_DEPLOY_KEY (write deploy key, ruleset bypass actor) is required to push stack-channel'; exit 1; }
-          key="$RUNNER_TEMP/stack-channel-key"
-          trap 'rm -f "$key"' EXIT
-          (umask 077 && printf '%s\n' "$DEPLOY_KEY" >"$key")
-          gh api meta --jq '.ssh_keys[] | "github.com " + .' >"$RUNNER_TEMP/known_hosts"
-          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes"
-          remote="git@github.com:$GITHUB_REPOSITORY.git"
-          rc=0
-          git ls-remote --exit-code --heads "$remote" stack-channel >/dev/null || rc=$?
-          if [ "$rc" -eq 0 ]; then
-            git fetch "$remote" stack-channel:refs/remotes/origin/stack-channel
-            git switch -C stack-channel-next origin/stack-channel
-          elif [ "$rc" -eq 2 ]; then
-            git switch --orphan stack-channel-next
-          else
-            echo '::error::Could not list stack-channel over SSH'; exit 1
-          fi
-          git rm -rf --ignore-unmatch . >/dev/null
-          cp promotion/stack-snapshot.json stable.json
-          git add stable.json
-          if git diff --cached --quiet; then
-            echo 'stack-channel already points at this snapshot'
-            exit 0
-          fi
-          git -c user.name=stack-promotion -c user.email=stack-promotion@users.noreply.github.com commit -m "Advance stable stack to $SOURCE_SHA"
-          git push "$remote" HEAD:refs/heads/stack-channel
+        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate advance-channel --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --snapshot promotion/stack-snapshot.json --deploy-key-env DEPLOY_KEY --temp-dir "$RUNNER_TEMP"

@@ -32,8 +32,9 @@ from harness.stack import Stack, validate_release_identity
 SNAPSHOT_SCHEMA_VERSION = 1
 SHA256_HEX_LENGTH = 64
 GIT_SHA_LENGTH = 40
-PERSONAL_STACK_JOB = re.compile(r"stack \(.+, personal\)")
 PERSONAL_STACK_ARTIFACT = "stack-ubuntu-24.04-personal"
+# The sole CI job that produces PERSONAL_STACK_ARTIFACT. Keep this machine contract exact.
+PERSONAL_STACK_JOB = re.compile(r"stack \(ubuntu-24\.04, personal\)")
 SHA_PATTERN = re.compile(rf"[0-9a-f]{{{GIT_SHA_LENGTH}}}")
 ROLLBACK_TAG_PATTERN = re.compile(rf"stack/([0-9a-f]{{{GIT_SHA_LENGTH}}})")
 OPERATIONS = ("verify-only", "promote", "rollback")
@@ -429,18 +430,16 @@ def registry_stack_runs(
     artifacts_by_run: dict[str, Any],
     source_sha: str,
 ) -> list[int]:
-    """Return successful push/main CI runs that really executed the personal stack scenario.
+    """Return successful push/main CI runs with the personal-stack machine evidence.
 
-    Only `event=push`, `branch=main` runs count. Job conclusions alone prove nothing: a docs-only
-    or main-push-smoke cell still reports its job as `success` after skipping every step. The
-    machine signal is the `PERSONAL_STACK_ARTIFACT` upload, which `ci.yml` makes only when the
-    scenario ran (`steps.plan.outputs.run == 'true'`), plus a successful job matching
-    `PERSONAL_STACK_JOB` so a scenario failure still disqualifies the run. No step or job
-    display text beyond the matrix name pattern is used.
+    A successful job matching the exact Linux personal matrix cell establishes the artifact's
+    producer. The artifact is the machine evidence: its API provenance binds it to the exact run
+    and source SHA, and `ci.yml` uploads it only after the registry stack scenario ran. A skipped
+    docs-only or main-push-smoke cell cannot qualify.
 
     Parameters:
         runs (list[dict[str, Any]]): `gh run list --json` entries.
-        jobs_by_run (dict[str, dict[str, Any]]): run ID -> `gh run view --json jobs` output.
+        jobs_by_run (dict[str, dict[str, Any]]): run ID -> `gh run view --json jobs` response.
         artifacts_by_run (dict[str, Any]): run ID -> slurped `actions/runs/<id>/artifacts` pages.
         source_sha (str): selected commit.
 
@@ -453,21 +452,22 @@ def registry_stack_runs(
     verified: list[int] = []
     for run_id in candidate_run_ids(runs, source_sha):
         jobs = jobs_by_run.get(str(run_id), {}).get("jobs", [])
-        if not any(
+        has_producer = any(
             isinstance(job, dict)
             and PERSONAL_STACK_JOB.fullmatch(str(job.get("name", "")))
             and job.get("status") == "completed"
             and job.get("conclusion") == "success"
             for job in jobs
+        )
+        if has_producer and _has_live_stack_artifact(
+            artifacts_by_run.get(str(run_id), []), run_id, source_sha
         ):
-            continue
-        if _has_live_stack_artifact(artifacts_by_run.get(str(run_id), []), run_id, source_sha):
             verified.append(run_id)
     if not verified:
         raise ValueError(
-            f"No successful push/main CI run with a passing personal stack job and a live "
-            f"'{PERSONAL_STACK_ARTIFACT}' artifact found for '{source_sha}'; docs-only SHAs and "
-            "runs whose artifacts expired cannot be promoted"
+            f"No successful push/main CI run with a passing '{PERSONAL_STACK_JOB.pattern}' job and a live "
+            f"'{PERSONAL_STACK_ARTIFACT}' artifact found for '{source_sha}'; docs-only SHAs and runs whose "
+            "artifacts expired cannot be promoted"
         )
     return sorted(verified)
 
@@ -844,6 +844,7 @@ def _add_evidence_commands(commands: Any) -> None:
     select.add_argument("--operation", required=True)
     select.add_argument("--source-sha", default="")
     select.add_argument("--rollback-tag", default="")
+    select.add_argument("--github-output", type=Path)
     ancestor = commands.add_parser("ancestor", help="Fail unless --ancestor is reachable from --descendant")
     ancestor.add_argument("--repo", type=Path, default=Path())
     ancestor.add_argument("--ancestor", required=True)
@@ -857,11 +858,17 @@ def _add_evidence_commands(commands: Any) -> None:
     )
     candidates.add_argument("--runs", type=Path, required=True)
     candidates.add_argument("--source-sha", required=True)
+    fetch = commands.add_parser(
+        "fetch-artifacts", help="Fetch every candidate run's job and artifact evidence"
+    )
+    fetch.add_argument("--runs", type=Path, required=True)
+    fetch.add_argument("--source-sha", required=True)
+    fetch.add_argument("--repo", required=True)
+    fetch.add_argument("--output-dir", type=Path, required=True)
     runs = commands.add_parser(
         "stack-runs", help="Find push/main CI runs that ran the personal stack scenario"
     )
     runs.add_argument("--runs", type=Path, required=True)
-    runs.add_argument("--jobs-dir", type=Path, required=True)
     runs.add_argument("--artifacts-dir", type=Path, required=True)
     runs.add_argument("--source-sha", required=True)
 
@@ -899,6 +906,7 @@ def _add_snapshot_commands(commands: Any) -> None:
     verify.add_argument("--source-sha")
     channel = commands.add_parser("channel-exists", help="Print true or false: does `stack-channel` exist")
     channel.add_argument("--refs", type=Path, required=True)
+    channel.add_argument("--github-output", type=Path)
     successor = commands.add_parser("successor", help="Gate a candidate against the attested stable")
     successor.add_argument("--candidate", type=Path, required=True)
     successor.add_argument("--refs", type=Path, required=True)
@@ -920,12 +928,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _cmd_select(args: argparse.Namespace) -> None:
-    """Print the validated source SHA.
+    """Print the validated source SHA and optionally export it to GitHub Actions.
 
     Parameters:
         args (argparse.Namespace): `select` arguments.
     """
-    _emit_lines([select_source_sha(args.operation, args.source_sha, args.rollback_tag)])
+    source_sha = select_source_sha(args.operation, args.source_sha, args.rollback_tag)
+    if args.github_output:
+        args.github_output.write_text(f"source_sha={source_sha}\n")
+    _emit_lines([source_sha])
 
 
 def _cmd_ancestor(args: argparse.Namespace) -> None:
@@ -960,13 +971,52 @@ def _cmd_candidate_runs(args: argparse.Namespace) -> None:
     _emit_lines(candidate_run_ids(flatten_pages([_read_json(args.runs)]), args.source_sha))
 
 
+def _cmd_fetch_artifacts(args: argparse.Namespace) -> None:
+    """Fetch job and artifact pages for every candidate run without shell control flow.
+
+    Parameters:
+        args (argparse.Namespace): `fetch-artifacts` arguments.
+
+    Raises:
+        EvidenceError: GitHub CLI could not retrieve candidate artifact evidence.
+    """
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    for run_id in candidate_run_ids(flatten_pages([_read_json(args.runs)]), args.source_sha):
+        try:
+            jobs = subprocess.run(
+                ["gh", "run", "view", str(run_id), "--repo", args.repo, "--json", "jobs"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            artifacts = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    "--paginate",
+                    "--slurp",
+                    f"repos/{args.repo}/actions/runs/{run_id}/artifacts?per_page=100",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
+            raise EvidenceError(f"Could not read CI evidence for run '{run_id}': {detail}") from error
+        (args.output_dir / f"jobs-{run_id}.json").write_text(jobs.stdout)
+        (args.output_dir / f"run-{run_id}.json").write_text(artifacts.stdout)
+
+
 def _cmd_stack_runs(args: argparse.Namespace) -> None:
-    """Print the run IDs that executed the personal stack scenario.
+    """Print the run IDs that uploaded the personal stack machine evidence.
 
     Parameters:
         args (argparse.Namespace): `stack-runs` arguments.
     """
-    jobs = {path.stem.removeprefix("run-"): _read_json(path) for path in args.jobs_dir.glob("run-*.json")}
+    jobs = {
+        path.stem.removeprefix("jobs-"): _read_json(path) for path in args.artifacts_dir.glob("jobs-*.json")
+    }
     artifacts = {
         path.stem.removeprefix("run-"): _read_json(path) for path in args.artifacts_dir.glob("run-*.json")
     }
@@ -1034,12 +1084,15 @@ def _cmd_verify(args: argparse.Namespace) -> None:
 
 
 def _cmd_channel_exists(args: argparse.Namespace) -> None:
-    """Print whether `stack-channel` exists.
+    """Print whether `stack-channel` exists and optionally export it to GitHub Actions.
 
     Parameters:
         args (argparse.Namespace): `channel-exists` arguments.
     """
-    _emit_lines([str(channel_exists(_read_json(args.refs))).lower()])
+    exists = str(channel_exists(_read_json(args.refs))).lower()
+    if args.github_output:
+        args.github_output.write_text(f"channel_exists={exists}\n")
+    _emit_lines([exists])
 
 
 def _cmd_successor(args: argparse.Namespace) -> None:
@@ -1061,6 +1114,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], None]] = {
     "ancestor": _cmd_ancestor,
     "checks": _cmd_checks,
     "candidate-runs": _cmd_candidate_runs,
+    "fetch-artifacts": _cmd_fetch_artifacts,
     "stack-runs": _cmd_stack_runs,
     "owned-evidence": _cmd_owned_evidence,
     "core": _cmd_core,

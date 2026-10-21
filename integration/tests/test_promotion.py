@@ -46,12 +46,13 @@ from harness.promotion import (
     verify_required_checks,
     verify_successor,
 )
-from harness.publish_gate import release_state, verify_tag_target
+from harness.publish_gate import PublishError, advance_channel, release_state, verify_tag_target
 from harness.release import LEGACY_CHECKSUMS
 from harness.stack import Stack
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CI_WORKFLOW = Path(__file__).parents[2] / ".github/workflows/ci.yml"
+PROMOTION_WORKFLOW = Path(__file__).parents[2] / ".github/workflows/promote-stack.yml"
 FIXTURE_SHA = "40e119a68a286cf498968605bcf9217359184e40"
 FIXTURE_RUN = 39545048647
 
@@ -329,7 +330,7 @@ def artifacts_fixture() -> dict[str, Any]:
 
 
 def test_stack_runs_match_real_recorded_run() -> None:
-    """The recorded run has a successful personal job and a live `stack-ubuntu-24.04-personal` artifact."""
+    """The recorded run has a successful personal job and live stack artifact."""
     runs = fixture("github-runs.json")
     assert registry_stack_runs(runs, jobs_fixture(), artifacts_fixture(), FIXTURE_SHA) == [FIXTURE_RUN]
 
@@ -348,11 +349,10 @@ def stack_job_block() -> str:
 
 
 def test_stack_signal_still_comes_from_ci() -> None:
-    """Drift guard: the job name and artifact templates render the names the verifier requires."""
+    """Drift guard: the exact producer job and artifact templates remain promotion contracts."""
     block = stack_job_block()
     assert "name: stack (${{ matrix.os }}, ${{ matrix.stack }})" in block
-    job = "stack (ubuntu-24.04, personal)"
-    assert promotion.PERSONAL_STACK_JOB.fullmatch(job)
+    assert promotion.PERSONAL_STACK_JOB.fullmatch("stack (ubuntu-24.04, personal)")
     upload = block.index("name: stack-${{ matrix.os }}-${{ matrix.stack }}")
     step = block[block.rindex("- uses:", 0, upload) : upload]
     assert "actions/upload-artifact@" in step
@@ -360,12 +360,13 @@ def test_stack_signal_still_comes_from_ci() -> None:
     assert promotion.PERSONAL_STACK_ARTIFACT == "stack-ubuntu-24.04-personal"
 
 
-def test_recorded_run_proves_job_success_alone_is_not_evidence() -> None:
-    """The real macOS personal cell is `success` on a main push although it skipped every step."""
-    jobs = {job["name"]: job["conclusion"] for job in fixture("github-run-jobs.json")["jobs"]}
-    assert jobs["stack (macos-14, personal)"] == "success"
-    artifacts = {item["name"] for page in fixture("github-run-artifacts.json") for item in page["artifacts"]}
-    assert "stack-macos-14-personal" not in artifacts
+def test_stack_runs_reject_job_rename_despite_machine_evidence() -> None:
+    """The artifact must come from the exact Linux personal job that produces it."""
+    jobs = jobs_fixture()
+    for job in jobs[str(FIXTURE_RUN)]["jobs"]:
+        job["name"] = f"renamed {job['name']}"
+    with pytest.raises(ValueError, match="passing"):
+        registry_stack_runs(fixture("github-runs.json"), jobs, artifacts_fixture(), FIXTURE_SHA)
 
 
 @pytest.mark.parametrize(
@@ -394,7 +395,7 @@ def test_stack_runs_reject_absent_expired_or_mismatched_evidence(mutate: Any) ->
     """Only successful push/main runs with job data and a live matching artifact qualify.
 
     Parameters:
-        mutate (Any): mutation applied to the recorded runs, jobs and artifacts
+        mutate (Any): mutation applied to the recorded runs, jobs and artifacts.
 
     Returns:
         None: None.
@@ -409,12 +410,12 @@ def test_stack_runs_reject_absent_expired_or_mismatched_evidence(mutate: Any) ->
 
 
 def test_stack_runs_reject_failed_personal_job_despite_artifact() -> None:
-    """`ci.yml` uploads the artifact even on failure, so the job conclusion must still be `success`."""
+    """The artifact cannot qualify when its exact producer job failed."""
     jobs = copy.deepcopy(jobs_fixture())
     for job in jobs[str(FIXTURE_RUN)]["jobs"]:
         if promotion.PERSONAL_STACK_JOB.fullmatch(job["name"]):
             job["conclusion"] = "failure"
-    with pytest.raises(ValueError, match="docs-only"):
+    with pytest.raises(ValueError, match="passing"):
         registry_stack_runs(fixture("github-runs.json"), jobs, artifacts_fixture(), FIXTURE_SHA)
 
 
@@ -640,17 +641,14 @@ def test_cli_checks_and_stack_runs_against_recorded_fixtures(
     Returns:
         None: None.
     """
-    jobs = tmp_path / "jobs"
-    jobs.mkdir()
-    (jobs / f"run-{FIXTURE_RUN}.json").write_text((FIXTURES / "github-run-jobs.json").read_text())
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
+    (artifacts / f"jobs-{FIXTURE_RUN}.json").write_text((FIXTURES / "github-run-jobs.json").read_text())
     (artifacts / f"run-{FIXTURE_RUN}.json").write_text((FIXTURES / "github-run-artifacts.json").read_text())
     args = ["--source-sha", FIXTURE_SHA]
     runs = [
         "stack-runs",
         "--runs", str(FIXTURES / "github-runs.json"),
-        "--jobs-dir", str(jobs),
         "--artifacts-dir", str(artifacts),
         *args,
     ]  # fmt: skip
@@ -679,7 +677,7 @@ def test_flatten_pages_flattens_lists_and_rejects_malformed_pages() -> None:
 
 
 def test_candidate_runs_print_one_id_per_line(capsys: pytest.CaptureFixture[str]) -> None:
-    """Only successful push/main runs of the SHA are fetched, printed for a shell loop.
+    """Only successful push/main runs of the SHA are fetched by `fetch-artifacts`.
 
     Parameters:
         capsys (pytest.CaptureFixture[str]): captured process output
@@ -734,6 +732,48 @@ def test_release_state_creates_resumes_or_refuses(tmp_path: Path, capsys: pytest
     existing.unlink()
     assert publish_gate.main(args) == 0
     assert capsys.readouterr().out == "create\n"
+
+
+def test_prepare_release_validates_existing_tag_before_downloading_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mismatched existing tag refuses before release download or a later attestation.
+
+    Parameters:
+        tmp_path (Path): private candidate and release paths.
+        monkeypatch (pytest.MonkeyPatch): isolated command boundary.
+
+    Returns:
+        None: None.
+    """
+    rebuilt = tmp_path / "rebuilt.json"
+    rebuilt.write_bytes(b"{}")
+    calls: list[tuple[str, ...]] = []
+
+    def command(*args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Record the tag query and return a tag targeting another commit."""
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, json.dumps({"object": {"sha": "b" * 40}}), "")
+
+    monkeypatch.setattr(publish_gate, "_command", command)
+    with pytest.raises(ValueError, match="Tag points"):
+        publish_gate.prepare_release("nredd/pi-harness", "a" * 40, rebuilt, tmp_path / "existing")
+    assert calls == [("gh", "api", "repos/nredd/pi-harness/git/ref/tags/stack/" + "a" * 40)]
+
+
+def test_advance_channel_requires_deploy_key(tmp_path: Path) -> None:
+    """The write boundary refuses before touching Git when its ruleset bypass key is absent.
+
+    Parameters:
+        tmp_path (Path): private snapshot and temporary paths.
+
+    Returns:
+        None: None.
+    """
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_bytes(b"{}")
+    with pytest.raises(PublishError, match="STACK_CHANNEL_DEPLOY_KEY"):
+        advance_channel("nredd/pi-harness", "a" * 40, snapshot, "", tmp_path)
 
 
 def test_tag_target_requires_the_selected_sha(tmp_path: Path) -> None:
@@ -1029,7 +1069,7 @@ def test_legacy_core_tags_skip_attestation(tmp_path: Path, monkeypatch: pytest.M
     write_stack(stack_path, core={"tag": tag, "integrity": dict(frozen)})
 
     def forbidden(*_args: object, **_kwargs: object) -> None:
-        """Fail when any network or provenance boundary is touched."""
+        """Fail if legacy validation touches the network or provenance verifier."""
         pytest.fail("legacy tags must not download or attest")
 
     monkeypatch.setattr(promotion, "urlopen", forbidden)
