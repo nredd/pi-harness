@@ -25,8 +25,11 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import computer_use_package_contract as cu
 import faux_provider as fp
+import npm_release as nr
 import package_contracts as pc
+import release_descriptors as rd
 
 DEV_TOOLS = pc.CONTRACTS[0]
 ROOT_LICENSE = (pc.REPO_ROOT / "LICENSE").read_bytes()
@@ -1761,6 +1764,211 @@ def test_scenario_subagents_rejects_missing_request_and_bad_agent_result(
         run_subagents_scenario(tmp_path, monkeypatch, tools=ALL_SUBAGENT_TOOLS, result=errored)
     with pytest.raises(pc.ContractError, match="lacks the child's answer"):
         run_subagents_scenario(tmp_path, monkeypatch, tools=ALL_SUBAGENT_TOOLS, result=good_run("other"))
+
+
+CU_ALL_TOOLS = sorted(pc.COMPUTER_USE_CONTRACT.exposes_tools)
+CU_NON_DARWIN_TOOLS = sorted(pc.COMPUTER_USE_CONTRACT.exposes_tools - pc.COMPUTER_USE_DESKTOP_TOOLS)
+CU_CPU = {"arm64": 0x0100000C, "x64": 0x01000007}
+
+
+def macho(cpu: int, magic: bytes = pc.MACHO_MAGIC_64) -> bytes:
+    """Build a minimal Mach-O header plus padding.
+
+    Parameters:
+        cpu (int): `cputype`.
+        magic (bytes): Four magic bytes.
+
+    Returns:
+        bytes: Header bytes.
+    """
+    return magic + cpu.to_bytes(4, "little") + b"\0" * 16
+
+
+def helper_tarball(
+    path: Path,
+    *,
+    overrides: dict[str, tuple[bytes, int]] | None = None,
+    drop: str | None = None,
+) -> Path:
+    """Write a tarball holding both macOS helpers, optionally broken.
+
+    Parameters:
+        path (Path): Destination.
+        overrides (dict[str, tuple[bytes, int]] | None): `arch -> (content, mode)` replacements.
+        drop (str | None): Arch whose helper is omitted.
+
+    Returns:
+        Path: `path`.
+    """
+    entries = {arch: (macho(cpu), 0o755) for arch, cpu in CU_CPU.items()} | (overrides or {})
+    with tarfile.open(path, "w:gz") as tar:
+        for arch, (data, mode) in entries.items():
+            if arch == drop:
+                continue
+            info = tarfile.TarInfo(f"package/prebuilt/macos/{arch}/bridge")
+            info.size, info.mode = len(data), mode
+            tar.addfile(info, io.BytesIO(data))
+    return path
+
+
+def run_computer_use_scenario(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    platform: str,
+    tools: list[str],
+    result: pc.PiRun | None = None,
+    tarball: Path | None = None,
+    siblings: tuple[pc.PackageContract, ...] = (),
+) -> pc.ComputerUseEvidence:
+    """Run `scenario_computer_use` against a faked Pi, provider and host platform.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Patches `run_pi`, `host_platform` and the provider.
+        platform (str): Simulated `sys.platform`.
+        tools (list[str]): Tools the parent request declares.
+        result (pc.PiRun | None): Faked `pi` run; defaults to a clean one.
+        tarball (Path | None): Packed tarball; defaults to a valid helper pair.
+        siblings (tuple[pc.PackageContract, ...]): Sibling contracts.
+
+    Returns:
+        pc.ComputerUseEvidence: The scenario's evidence.
+    """
+    monkeypatch.setattr(pc, "run_pi", lambda *args, **kwargs: result or pc.PiRun(0, (), "", ""))
+    monkeypatch.setattr(pc, "host_platform", lambda: platform)
+    root = Path(tempfile.mkdtemp(dir=tmp_path))
+    packed = tarball or helper_tarball(root / "x.tgz")
+    ctx = pc.Context(
+        Path("pi"),
+        pc.Sandbox(root / "sandbox", pc.locate_tools()),
+        root / "installed",
+        pc.PackedArtifact(pc.COMPUTER_USE_CONTRACT, packed, "1.0.0", "sha512-x", "0" * 40, 1, ()),
+        root / "work",
+        siblings,
+    )
+    ctx.work.mkdir()
+    monkeypatch.setattr(pc.Context, "provider_session", lambda self, script, routes=(): StubProvider(tools))
+    return pc.scenario_computer_use(ctx)
+
+
+def test_scenario_computer_use_expects_all_13_tools_on_darwin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Darwin requires the 13-tool set and records platform, helpers and both NOT RUN items."""
+    evidence = run_computer_use_scenario(tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS)
+    assert evidence["platform"] == "darwin"
+    assert evidence["tools"] == CU_ALL_TOOLS
+    assert len(evidence["tools"]) == 13
+    assert evidence["helpers"]["arm64"] == "Mach-O arm64 cputype 0x100000c mode 0755"
+    assert evidence["helpers"]["x64"] == "Mach-O x64 cputype 0x1000007 mode 0755"
+    assert evidence["postinstall"] == "NOT RUN"
+    assert evidence["native_desktop"] == "NOT RUN"
+
+
+def test_scenario_computer_use_expects_exactly_11_tools_off_darwin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linux requires the 11-tool set, and the desktop tools must NOT be offered there."""
+    evidence = run_computer_use_scenario(tmp_path, monkeypatch, platform="linux", tools=CU_NON_DARWIN_TOOLS)
+    assert evidence["platform"] == "linux"
+    assert evidence["tools"] == CU_NON_DARWIN_TOOLS
+    assert len(evidence["tools"]) == 11
+    with pytest.raises(pc.ContractError, match=r"must not offer.*desktop_input"):
+        run_computer_use_scenario(tmp_path, monkeypatch, platform="linux", tools=CU_ALL_TOOLS)
+
+
+def test_scenario_computer_use_names_the_missing_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Darwin without `desktop_input` fails naming it; Linux without `act_ui` fails naming it."""
+    with pytest.raises(pc.ContractError, match=r"tools not offered.*desktop_input"):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=[t for t in CU_ALL_TOOLS if t != "desktop_input"]
+        )
+    with pytest.raises(pc.ContractError, match=r"tools not offered.*act_ui"):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="linux", tools=[t for t in CU_NON_DARWIN_TOOLS if t != "act_ui"]
+        )
+
+
+def test_scenario_computer_use_reports_load_failure_with_stderr_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing load surfaces the exit code, the platform and the stderr tail."""
+    broken = pc.PiRun(1, (), "", "Error: Cannot find module 'typebox'")
+    with pytest.raises(pc.ContractError, match="pi exited 1") as excinfo:
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="linux", tools=CU_NON_DARWIN_TOOLS, result=broken
+        )
+    assert "Cannot find module 'typebox'" in str(excinfo.value)
+    assert "(linux)" in str(excinfo.value)
+
+
+def test_scenario_computer_use_rejects_sibling_tools_and_no_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sibling's tool in the request fails, and so does a provider that saw no request."""
+    with pytest.raises(pc.ContractError, match=r"sibling tools present.*git_status"):
+        run_computer_use_scenario(
+            tmp_path,
+            monkeypatch,
+            platform="linux",
+            tools=[*CU_NON_DARWIN_TOOLS, "git_status"],
+            siblings=(DEV_TOOLS,),
+        )
+    with pytest.raises(pc.ContractError, match="received no request"):
+        run_computer_use_scenario(tmp_path, monkeypatch, platform="linux", tools=[])
+
+
+@pytest.mark.parametrize(
+    ("overrides", "drop", "message"),
+    [
+        ({"arm64": (macho(CU_CPU["x64"]), 0o755)}, None, "arm64/bridge has cputype 0x1000007"),
+        ({"x64": (macho(CU_CPU["arm64"]), 0o755)}, None, "x64/bridge has cputype 0x100000c"),
+        ({"arm64": (macho(CU_CPU["arm64"]), 0o644)}, None, "mode 0644, expected 0755"),
+        ({"x64": (macho(CU_CPU["x64"]), 0o775)}, None, "mode 0775, expected 0755"),
+        ({"x64": (b"#!/bin/sh\n" + b"\0" * 12, 0o755)}, None, "not a 64-bit little-endian Mach-O"),
+        ({"arm64": (macho(CU_CPU["arm64"], b"\xca\xfe\xba\xbe"), 0o755)}, None, "not a 64-bit"),
+        ({}, "x64", "has no 'prebuilt/macos/x64/bridge'"),
+    ],
+)
+def test_scenario_computer_use_rejects_bad_helpers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, tuple[bytes, int]],
+    drop: str | None,
+    message: str,
+) -> None:
+    """Wrong arch, wrong mode, non-Mach-O, fat and missing helpers each fail with a specific message."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", overrides=overrides, drop=drop)
+    with pytest.raises(pc.ContractError, match=message):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+        )
+
+
+def test_computer_use_expected_tools_split_by_platform() -> None:
+    """Only darwin includes the two desktop tools."""
+    assert pc.computer_use_expected_tools("darwin") == pc.COMPUTER_USE_CONTRACT.exposes_tools
+    assert pc.computer_use_expected_tools("win32") == pc.computer_use_expected_tools("linux")
+    assert not pc.computer_use_expected_tools("linux") & pc.COMPUTER_USE_DESKTOP_TOOLS
+
+
+def test_computer_use_wrapper_main_returns_one_on_contract_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A `ContractError` or `ReleaseError` from the stock run exits 1; a missing descriptor does too."""
+
+    def boom(*args: object, **kwargs: object) -> pc.ContractReport:
+        raise pc.ContractError("helper broke")
+
+    monkeypatch.setattr(nr, "run_stock_contract", boom)
+    assert cu.main(["--stock-prefix", str(tmp_path)]) == 1
+    monkeypatch.setattr(nr, "run_stock_contract", lambda *a, **k: (_ for _ in ()).throw(nr.ReleaseError("x")))
+    assert cu.main(["--stock-prefix", str(tmp_path)]) == 1
+    monkeypatch.setattr(rd, "descriptor_for", lambda name: None)
+    assert cu.main(["--stock-prefix", str(tmp_path)]) == 1
 
 
 def stub_npm_install(

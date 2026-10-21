@@ -58,10 +58,15 @@ ReleaseDescriptor(
 )
 ```
 
-`@nredd/pi-computer-use` declares the two source-controlled per-architecture helper payloads: `prebuilt/macos/arm64/bridge` and `prebuilt/macos/x64/bridge`. Its stock contract proves packing, auditing, standalone install, extension loading, and the full model-visible tool surface, while recording native helper and desktop behavior as `NOT RUN`: CI cannot supply an interactive desktop or Accessibility/Screen Recording TCC grants. `npm run check` runs the fork's portable suite, including macOS Swift pure checks and the packed-payload check; `npm run build:native` remains a separately invoked macOS build gate, and the live helper script remains opt-in.
+`@nredd/pi-computer-use` is macOS-only for shipped helpers (`files` lists no `prebuilt/windows`, `prebuilt/linux` or `native/linux/bridge-rs`) and declares the two source-controlled per-architecture helper payloads: `prebuilt/macos/arm64/bridge` and `prebuilt/macos/x64/bridge`. Its stock contract proves packing, auditing, standalone install, extension loading, and the platform-aware model-visible tool surface (exactly 13 on darwin, 11 elsewhere: `desktop_screenshot`/`desktop_input` register on darwin only) and that each packed `prebuilt/macos/{arm64,x64}/bridge` is a Mach-O of the right arch with mode 0755, while recording the `postinstall` (`setup-helper.mjs`, helper app install and codesign; the stock install uses `--ignore-scripts`) and native desktop behavior as `NOT RUN`: CI cannot supply an interactive desktop or Accessibility/Screen Recording TCC grants. `npm run check` runs the fork's portable suite, including macOS Swift pure checks and the packed-payload check; `npm run build:native` remains a separately invoked macOS build gate, and the live helper script remains opt-in.
+
+Computer-use platform notes:
+
+- `npm run check --workspace @nredd/pi-computer-use` runs the Swift/native suites only on macOS: `test:macos-native` exits 0 with "skipped (not macOS)" elsewhere, and `test:macos-live` additionally needs `PI_COMPUTER_USE_LIVE=1` and skips cleanly otherwise (it restarts the shared helper daemon). On Linux those two report skipped, not passed.
+- The imported `packages/computer-use/.github/` (its own `ci.yml`, `npm-audit.yml`, `publish-npm.yml`, dependabot) is dormant: GitHub only reads the repository-root `.github`, so those files never run here. Publication goes through `publish.yml` above. The nested `package-lock.json` was removed; the root workspace lockfile owns resolution, as for `packages/subagents`.
+- `scripts/setup-helper.mjs` still falls back to downloading from `injaneity/pi-computer-use` releases and uses the `com.injaneity.pi-computer-use` bundle id. See [forks](forks.md).
 Patterns use `PurePosixPath.full_match`: `*` and `?` stay within one path segment, while `**` matches zero
-or more segments. Requirements check both the source workspace and packed tarball, but the helper build
-and macOS native suites belong to its later import PR. No extension descriptor is added by this change.
+or more segments. Requirements check both the source workspace and packed tarball.
 
 1. Bump the package version and root lockfile in a reviewed PR, pass CI, and merge to `main`.
 2. Select the merged `main` SHA whose package version equals the intended version. Create a signed tag:
