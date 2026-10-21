@@ -39,17 +39,42 @@ Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
     `tools[].function.name`). Tool payloads inside `structuredContent` stay opaque until the one
     scenario that reads them (`git_status.untracked`). Not modelled: the rest of Pi's event stream
 
+`@nredd/pi-plan-mode` is a separately invoked stock contract because it has the explicit runtime
+`@narumitw/pi-tui-kit` dependency. `make check-plan-mode-package-contract` packs it, verifies its own
+upstream MIT `LICENSE`, exact manifest dependency, manifest `files` list and the complete packed payload
+(`packed_files` exact paths plus `packed_patterns` for the build-hashed `dist/chunks/*.ts(.map)`, each with
+an exact count and an 8-character hash, so a rebuild is fine but a stray file is not; duplicated paths
+fail, each chunk `.map` must pair with its `.ts`, every chunk must be reachable from `dist/index.ts`
+by relative imports, and any non-regular tar member such as a symlink or hardlink fails), installs the
+tarball, and requires
+`plan_mode_question` and `plan_mode_complete` from stock Pi. The faux provider enters Plan mode with
+`/plan <prompt>`, calls `plan_mode_question`, and the scenario records its explicit headless
+`ui_unavailable` result. `dist/` is required and packed because its extension manifest targets
+`./dist/index.ts`; `src/` stays packed as declared by the source package. Its native `npm run check`
+first rebuilds and byte-compares every committed `dist/` file, so stale, missing, or extra generated
+output fails before the ordinary package build.
+
+`@nredd/pi-todo` is also a separately invoked stock contract because its imported runtime dependencies
+`@juicesharp/rpiv-config` and `@juicesharp/rpiv-i18n` are installed from the registry. `make check-todo-package-contract`
+packs the public plugin, verifies its retained upstream MIT `LICENSE`, dependency closure and narrow source
+payload, then runs stock Pi with only that package loaded. The faux provider calls `todo` to create a task and
+the contract records the subject from the tool result's `details.tasks[0]` snapshot, which the extension also
+appends to the session branch; discovery alone is not sufficient evidence.
+
 What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
-  `CHANGELOG.md` (router) and `dist/pi-stats-export.mjs` + `docs/stats-snapshots.md` (session-kit).
+  `CHANGELOG.md` (router), `dist/pi-stats-export.mjs` + `docs/stats-snapshots.md` (session-kit) and
+  `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`).
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
   none of the tarballs had a `LICENSE` and all shipped `test/` plus dev config
-- Packed `LICENSE` is byte-identical to the root `LICENSE`
-- Manifest: `private` absent or `false`, `publishConfig.access: public`, `MIT`, no
-  `dependencies`/optional/bundled, peers only from the Pi host set (`@earendil-works/pi-ai`,
+- Packed `LICENSE` is byte-identical to the root `LICENSE`, except imported packages marked `own_license`,
+  whose upstream MIT copyright text must be byte-identical to their workspace `LICENSE`
+- Manifest: `private` absent or `false`, `publishConfig.access: public`, `MIT`, no optional/bundled
+  dependencies, peers only from the Pi host set (`@earendil-works/pi-ai`,
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
-- Every import is a `node:` builtin, a host module, or a relative path inside the package. No
+- Every import is a `node:` builtin, a host module, a declared runtime dependency, or a relative path
+  inside the package. No
   `@nredd/*` sibling. The stats artifact (`dist/`) may import only `node:` builtins: the standalone
   check runs before relative-import resolution, so `../src/index.ts` is rejected even if it exists
 - Imports are read with the repository's installed TypeScript 7.0.2 parser (`scripts/import_audit.ts`
@@ -63,7 +88,18 @@ What each package must satisfy:
   `eval`, `new Function`, `createRequire()(...)` results, `import.meta.resolve` or JSDoc `@import`
   tags, and a local `require` shadow is still treated as `require`
 - Fresh install (`--ignore-scripts --legacy-peer-deps --offline`, mirroring Pi's suppressed peer
-  installs): `node_modules` and the lockfile contain only the package, so no duplicate host copy
+  installs): dependency-free packages have exactly the package in `node_modules` and the lockfile. A package
+  with declared runtime dependencies instead has exactly the closure derived from each INSTALLED
+  `node_modules/**/package.json` (`dependencies` + `optionalDependencies`, resolved npm-style by walking up
+  from the requirer's `node_modules`, so nested paths work). That closure must equal the lockfile paths,
+  every installed package path and the top-level directories; every entry under every `node_modules`
+  (manifest or not) must be a closure path, and a scope directory needs a closure child. The only
+  exemptions are npm's own: `.package-lock.json` as a regular file in the top-level `node_modules`, and
+  `.bin` as a real directory holding only files or symlinks. Any other symlinked entry, or a loop, is a
+  `ContractError`. Each installed `name` must match its path and every installed
+  dependency edge's resolved version must satisfy its declared range (the repository's `semver`). Lock-only paths are
+  allowed only when `optional: true` and an installed requirer lists them in `optionalDependencies`. A
+  missing required dependency is a `ContractError`. The lockfile is never trusted for transitive edges
 - Stock Pi, `--mode json` with `--no-extensions --extension <installed dir>` (only that package),
   `--no-mcp`, `--offline`, no skills/templates/themes/context files, `--no-approve`:
   - dev-tools: a real `git_status` result on a disposable repo (`untracked.txt`), and an error result
@@ -139,7 +175,7 @@ root one). The release `stock` gate installs the tarball plus those two dependen
 and requires `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow` in the model request.
 `scenario_subagents` then has a faux parent call `Agent` in the foreground (routed faux child), which
 is what imports `croner` and `nanoid` at runtime; failures print the tool list seen and the stderr tail.
-`make check-subagents-package-contract` (`scripts/subagents_package_contract.py`, needs the registry)
+`make check-subagents-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-subagents`, needs the registry)
 runs that exact gate through `npm_release.run_stock_contract`, so the descriptor, siblings and scenario
 match the release `verify` run; CI's `contracts` job runs it on every non-docs PR and uploads
 `subagents-package-contracts.json`.

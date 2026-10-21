@@ -24,6 +24,7 @@ const ENTER = "\r";
 const DOWN_RELEASE = "\x1b[1;1:3B";
 
 const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => `*${s}*` };
+type WidgetFactory = Exclude<Parameters<FleetUICtx["setWidget"]>[1], undefined>;
 
 /** An agent that renders as a badge — no default agent configures a color. */
 const BADGED_TYPE = "colored-reviewer";
@@ -556,13 +557,55 @@ describe("FleetList rendering", () => {
     expect(lines.some(l => l.includes("queued one"))).toBe(false);
   });
 
-  it("collapses overflow into a '↓ N more' indicator", () => {
-    const agents = Array.from({ length: 8 }, (_, i) =>
+  it("reserves row-block height for every roster size and selection", () => {
+    for (let count = 1; count <= 12; count++) {
+      const agents = Array.from({ length: count }, (_, i) =>
+        makeRecord({ id: `a${i}`, description: `report ${i}` }));
+      const h = harness(agents);
+      const expectedHeight = 4 + Math.min(count, 5); // hint, blank, main, spacer + row block
+      for (let selection = 0; selection <= count; selection++) {
+        expect(h.render(120), `${count} rows, selection ${selection}`).toHaveLength(expectedHeight);
+        h.press(DOWN);
+      }
+    }
+  });
+
+  it("keeps its height while an active roster crosses the cap", () => {
+    const agents = Array.from({ length: 5 }, (_, i) =>
       makeRecord({ id: `a${i}`, description: `report ${i}` }));
     const h = harness(agents);
-    const lines = h.render(120);
-    // 8 agents, cap 5 visible → "↓ 3 more"
-    expect(lines.some(l => l.includes("↓ 3 more"))).toBe(true);
+    h.press(DOWN); // activate main
+    for (let i = 0; i < 5; i++) h.press(DOWN); // select the last row
+    const heights = [h.render(120).length];
+
+    agents.push(makeRecord({ id: "a5", description: "report 5" }));
+    h.fleet.update();
+    heights.push(h.render(120).length);
+    expect(h.render(120).some(line => line.includes("●") && line.includes("report 4"))).toBe(true);
+
+    agents.pop();
+    h.fleet.update();
+    heights.push(h.render(120).length);
+    expect(new Set(heights)).toEqual(new Set([9]));
+  });
+
+  it("changes height one line per row below the cap", () => {
+    const agents = [makeRecord({ id: "a0", description: "report 0" })];
+    const h = harness(agents);
+    const heights = [h.render(120).length];
+    for (let i = 1; i < 5; i++) {
+      agents.push(makeRecord({ id: `a${i}`, description: `report ${i}` }));
+      h.fleet.update();
+      heights.push(h.render(120).length);
+    }
+    expect(heights.slice(1).map((height, i) => height - heights[i])).toEqual([1, 1, 1, 1]);
+
+    while (agents.length > 1) {
+      agents.pop();
+      h.fleet.update();
+      heights.push(h.render(120).length);
+    }
+    expect(heights.slice(5).map((height, i) => heights[i + 4] - height)).toEqual([1, 1, 1, 1]);
   });
 
   it("ends with a blank spacer so the last row clears pi's footer (#351)", () => {
@@ -573,7 +616,7 @@ describe("FleetList rendering", () => {
     const many = harness(Array.from({ length: 8 }, (_, i) =>
       makeRecord({ id: `a${i}`, description: `report ${i}` }))).render(120);
     expect(many.at(-1)).toBe("");
-    expect(many.at(-2)).toContain("↓ 3 more");
+    expect(many.at(-2)).toContain("↓ 5 more");
   });
 
   it("never emits a line wider than the terminal (guards wrap-induced flicker)", () => {
@@ -780,16 +823,17 @@ describe("FleetList cost display", () => {
   function row(showCost: boolean, cost: number, activity?: Map<string, AgentActivity>): string {
     const record = makeRecord({ lifetimeUsage: { input: 13100, output: 0, cacheWrite: 0, cost } });
     const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), () => showCost);
-    let factory: any;
-    fleet.setUICtx({
-      setWidget: (_k: string, c: any) => { factory = c; },
+    let factory: WidgetFactory | undefined;
+    const ui: FleetUICtx = {
+      setWidget: (_k, c) => { factory = c; },
       onTerminalInput: () => () => {},
       getEditorText: () => "",
       notify: () => {},
-      custom: (() => new Promise(() => {})) as any,
-    } as any);
+      custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+    };
+    fleet.setUICtx(ui);
     fleet.update();
-    return factory({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
+    return factory!({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
   }
 
   it("appends the cost after the token count when enabled", () => {
@@ -828,16 +872,17 @@ describe("FleetList model and activity", () => {
 
   function row(record: AgentRecord, showModel: boolean, activity?: Map<string, AgentActivity>): string {
     const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), undefined, undefined, undefined, undefined, undefined, () => showModel);
-    let factory: any;
-    fleet.setUICtx({
-      setWidget: (_k: string, c: any) => { factory = c; },
+    let factory: WidgetFactory | undefined;
+    const ui: FleetUICtx = {
+      setWidget: (_k, c) => { factory = c; },
       onTerminalInput: () => () => {},
       getEditorText: () => "",
       notify: () => {},
-      custom: (() => new Promise(() => {})) as any,
-    } as any);
+      custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+    };
+    fleet.setUICtx(ui);
     fleet.update();
-    return factory({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme).render(160).join("\n");
+    return factory!({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme).render(160).join("\n");
   }
 
   it("names the model and thinking level under showModel", () => {
@@ -850,6 +895,83 @@ describe("FleetList model and activity", () => {
     const out = row(withModel(), false);
     expect(out).not.toContain("opus 4.6");
     expect(out).not.toContain("thinking: high");
+  });
+
+  it("aligns populated tail columns with Unicode and truncation", () => {
+    // Markup-free theme: escape-less tags would otherwise count as visible cells when `left` truncates.
+    const markupFree = { fg: (_c: string, text: string) => text, bold: (text: string) => text };
+    const now = Date.now();
+    const agents = [
+      withModel({
+        id: "a1", description: "調査 🦊 with a deliberately long description", completedAt: now, startedAt: now - 1_018_000,
+        invocation: { modelName: "銀河 4.6", modelId: "acme/galaxy", thinking: "low" },
+        lifetimeUsage: { input: 13_100, output: 0, cacheWrite: 0, cost: 0.0042 },
+      }),
+      withModel({
+        id: "a2", description: "emoji model and a different long description 🧠", startedAt: now - 59_000,
+        invocation: { modelName: "🧠 opus", modelId: "acme/opus", thinking: "ultrathink" },
+        lifetimeUsage: { input: 987_654, output: 0, cacheWrite: 0, cost: 12.34 },
+      }),
+    ];
+    const activity = new Map<string, AgentActivity>([["a2", {
+      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
+      modelCall: { startedAt: now - 4_000, lastEventAt: now - 100, kind: "thinking", writtenChars: 0 },
+    }]]);
+    const fleet = new FleetList(fakeManager(agents), activity, () => true, undefined, undefined, undefined, undefined, () => true);
+    let factory: WidgetFactory | undefined;
+    const ui: FleetUICtx = {
+      setWidget: (_key, content) => { factory = content; },
+      onTerminalInput: () => () => {},
+      getEditorText: () => "",
+      notify: () => {},
+      custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+    };
+    fleet.setUICtx(ui);
+    fleet.update();
+
+    const cellStart = (line: string, text: string) => {
+      expect(line).toContain(text);
+      return visibleWidth(line.split(text, 1)[0]);
+    };
+    for (const width of [60, 80]) {
+      const lines = factory?.({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, markupFree)
+        .render(width).map(plain) ?? [];
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+
+    // Widths where the descriptions truncate but still show their prefix.
+    for (const width of [110, 120, 130]) {
+      const wide = factory?.({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, markupFree)
+        .render(width).map(plain) ?? [];
+      for (const line of wide) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      const [cjk, emoji] = ["調査", "emoji"].map(description => {
+        const found = wide.find(line => line.includes(description));
+        expect(found).toBeDefined();
+        return found!;
+      });
+      // The descriptions must really truncate at these widths.
+      expect(cjk).toContain("...");
+      expect(emoji).toContain("...");
+      expect(cjk).not.toContain("deliberately long description");
+      expect(emoji).not.toContain("different long description");
+      expect(cellStart(cjk, "thinking: low")).toBe(cellStart(emoji, "thinking: ultrathink"));
+      expect(cellStart(cjk, "tokens")).toBe(cellStart(emoji, "tokens"));
+      expect(cellStart(cjk, "~$0.0042") + visibleWidth("~$0.0042"))
+        .toBe(cellStart(emoji, "~$12.34") + visibleWidth("~$12.34"));
+      expect(visibleWidth(cjk.trimEnd())).toBe(width);
+      expect(visibleWidth(emoji.trimEnd())).toBe(width);
+    }
+
+    const lines = factory?.({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, markupFree)
+      .render(160).map(plain) ?? [];
+    const [a, b] = ["調査", "emoji"].map(description =>
+      lines.find(line => line.includes(description))!);
+    expect(cellStart(a, "~$0.0042") + visibleWidth("~$0.0042"))
+      .toBe(cellStart(b, "~$12.34") + visibleWidth("~$12.34"));
+    expect(cellStart(a, "↓ 13.1k tokens") + visibleWidth("↓ 13.1k tokens"))
+      .toBe(cellStart(b, "↓ 987.7k tokens") + visibleWidth("↓ 987.7k tokens"));
+    expect(cellStart(a, "銀河 4.6")).toBe(cellStart(b, "🧠 opus"));
+    expect(cellStart(a, "thinking: low")).toBe(cellStart(b, "thinking: ultrathink"));
   });
 
   it("copes with a record that has no invocation yet", () => {
