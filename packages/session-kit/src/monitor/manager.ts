@@ -62,6 +62,8 @@ interface Monitor {
 	stopReason: "stop" | "timeout" | undefined;
 	/** Cursor after the output the model most recently received through a wake or read. */
 	notifiedSince: number;
+	/** Lines that matched, counted as they are ingested. */
+	matches: number;
 	/** Resolves after the exit was fully processed (status set, pidfile removed). */
 	done: Promise<void>;
 }
@@ -210,6 +212,7 @@ export class MonitorManager {
 			timeoutTimer,
 			stopReason: undefined,
 			notifiedSince: 0,
+			matches: 0,
 			done: Promise.resolve(),
 		};
 		const m = monitor;
@@ -266,6 +269,7 @@ export class MonitorManager {
 		const line = m.ring.push(text);
 		return new Promise((resolve) => {
 			const add = (matched: boolean) => {
+				if (matched) m.matches++;
 				m.coalescer.add({ ...line, matched });
 				resolve();
 			};
@@ -328,6 +332,7 @@ function toInfo(m: Monitor): MonitorInfo {
 		exitCode: m.exit.exitCode,
 		signal: m.exit.signal,
 		lines: m.ring.lastLine,
+		matches: m.matches,
 		lastLine: m.ring.lastText,
 		wake: m.wake,
 		match: m.matchSource,

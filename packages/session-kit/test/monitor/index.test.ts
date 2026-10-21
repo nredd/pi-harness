@@ -12,6 +12,7 @@ function fakePi(sessionName?: string) {
 	const handlers = new Map<string, Any[]>();
 	const tools = new Map<string, Any>();
 	const commands = new Map<string, Any>();
+	const shortcuts = new Map<string, Any>();
 	const sendMessage = vi.fn();
 	let active = ["read", ...TOOL_NAMES];
 	const entries: Any[] = [];
@@ -23,6 +24,7 @@ function fakePi(sessionName?: string) {
 			if (t.exposure === "hidden") active = active.filter((name) => name !== t.name);
 		},
 		registerCommand: (n: string, c: Any) => commands.set(n, c),
+		registerShortcut: (key: string, s: Any) => shortcuts.set(key, s),
 		sendMessage,
 		getSessionName: () => sessionName,
 		getActiveTools: () => active,
@@ -33,7 +35,7 @@ function fakePi(sessionName?: string) {
 	const emit = async (e: string, ctx: Any, event: Any = { type: e }) => {
 		for (const h of handlers.get(e) ?? []) await h(event, ctx);
 	};
-	return { pi: pi as Any, tools, commands, sendMessage, emit, entries, active: () => active };
+	return { pi: pi as Any, tools, commands, shortcuts, sendMessage, emit, entries, active: () => active };
 }
 
 function fakeCtx(mode = "tui", sessionId = "sess-A", entries: Any[] = []) {
@@ -87,7 +89,9 @@ describe("monitor extension", () => {
 			);
 		expect(start.isError).toBe(false);
 		expect(start.content[0].text).toMatch(/started m1 "w"/);
-		expect(ctx.ui.setWidget).toHaveBeenCalledWith("session-kit:monitors", expect.any(Function));
+		expect(ctx.ui.setWidget).toHaveBeenCalledWith("session-kit:monitors", expect.any(Function), {
+			placement: "aboveEditor",
+		});
 
 		await waitFor(() => f.sendMessage.mock.calls.length === 1, 6000);
 		const [msg, opts] = f.sendMessage.mock.calls[0] as [Any, Any];
@@ -104,6 +108,40 @@ describe("monitor extension", () => {
 		const stop = await f.tools.get("monitor_stop").execute("4", { id: "m1" }, undefined, undefined, ctx);
 		expect(stop.content[0].text).toContain("stopped");
 		expect(ctx.ui.setWidget).toHaveBeenLastCalledWith("session-kit:monitors", undefined);
+	});
+
+	it("binds the configured collapse shortcut and toggles only a visible widget", async () => {
+		const f = fakePi();
+		const config = defaultConfig();
+		config.monitor.collapseKey = "alt+m";
+		register(f.pi, config);
+		expect([...f.shortcuts.keys()]).toEqual(["alt+m"]);
+		const ctx = fakeCtx();
+		await f.emit("session_start", ctx);
+		const handler = f.shortcuts.get("alt+m").handler;
+		await handler({ hasUI: true });
+		expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+		await f.tools
+			.get("monitor_start")
+			.execute("1", { argv: ["node", "-e", STAY], name: "w" }, undefined, undefined, ctx);
+		const requestRender = vi.fn();
+		const factory = ctx.ui.setWidget.mock.calls[0]?.[1];
+		const component = factory({ requestRender }, { fg: (_c: string, t: string) => t });
+		expect(component.render(80)).toHaveLength(3);
+		await handler({ hasUI: false });
+		expect(component.render(80)).toHaveLength(3);
+		await handler({ hasUI: true });
+		expect(requestRender).toHaveBeenLastCalledWith(true);
+		expect(component.render(80)).toHaveLength(2);
+		await f.tools.get("monitor_stop").execute("2", { id: "w" }, undefined, undefined, ctx);
+	});
+
+	it("registers no shortcut when collapseKey is off", () => {
+		const f = fakePi();
+		const config = defaultConfig();
+		config.monitor.collapseKey = "off";
+		register(f.pi, config);
+		expect(f.shortcuts.size).toBe(0);
 	});
 
 	it("keeps passive output out of custom messages", async () => {
