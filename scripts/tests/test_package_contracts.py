@@ -403,7 +403,12 @@ def test_audit_imports_rejects(path: str, source: str, needle: str) -> None:
         source (str): File text.
         needle (str): Substring the violation must contain.
     """
-    problems = pc.audit_imports(path, source, ["src/a.ts", "src/b.ts", "dist/cli.mjs"])
+    problems = pc.audit_imports(
+        path,
+        source,
+        ["src/a.ts", "src/b.ts", "dist/cli.mjs"],
+        standalone_artifacts=("dist/cli.mjs",),
+    )
     assert len(problems) == 1
     assert needle in problems[0]
 

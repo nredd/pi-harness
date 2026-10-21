@@ -108,6 +108,10 @@ class PackageContract:
         allowed (tuple[re.Pattern[str], ...]): Every tarball path must match one of these.
         exposes_tools (frozenset[str]): Tool names unique to this package.
         license (str): Exact SPDX expression the packed manifest must declare.
+        runtime_dependencies (tuple[tuple[str, str], ...]): Exact direct runtime package ranges.
+        own_license (bool): Whether the workspace license, rather than the repository license, is packed.
+        standalone_artifacts (frozenset[str]): Files that must import only Node builtins when packed.
+        packed_files (tuple[str, ...]): Exact packed paths, when the package has a fixed public payload.
     """
 
     name: str
@@ -118,6 +122,8 @@ class PackageContract:
     license: str = "MIT"
     runtime_dependencies: tuple[tuple[str, str], ...] = ()
     own_license: bool = False
+    standalone_artifacts: frozenset[str] = frozenset()
+    packed_files: tuple[str, ...] = ()
 
 
 CONTRACTS = (
@@ -139,6 +145,7 @@ CONTRACTS = (
             re.compile(r"^docs/stats-snapshots\.md$"),
         ),
         exposes_tools=frozenset({"monitor_start", "monitor_read", "monitor_stop"}),
+        standalone_artifacts=frozenset({STATS_ARTIFACT}),
     ),
     PackageContract(
         name="@nredd/pi-subscription-router",
@@ -170,6 +177,20 @@ PLAN_MODE_CONTRACT = PackageContract(
     exposes_tools=frozenset({"plan_mode_question", "plan_mode_complete"}),
     runtime_dependencies=(("@narumitw/pi-tui-kit", "^0.65.2"),),
     own_license=True,
+    packed_files=(
+        "LICENSE", "README.md", "dist/chunks/chunk-WIDWMEV5.ts", "dist/chunks/chunk-WIDWMEV5.ts.map",
+        "dist/chunks/interactive-ui-U4E4Q2VB.ts", "dist/chunks/interactive-ui-U4E4Q2VB.ts.map", "dist/index.ts",
+        "dist/index.ts.map", "docs/command-workflows.md", "docs/settings.md", "package.json",
+        "src/active-implementation-menu.ts", "src/command.ts", "src/completion-tool.ts", "src/decline-contract.ts",
+        "src/extension-runtime.ts", "src/finalization-request.ts", "src/fresh-implementation.ts", "src/headless-turn.ts",
+        "src/implementation-models.ts", "src/implementation-retention.ts", "src/index.ts", "src/interactive-ui.ts",
+        "src/message-transform.ts", "src/mode-contract.ts", "src/plan-action-controller.ts", "src/plan-action-menus.ts",
+        "src/plan-approval.ts", "src/plan-export-controller.ts", "src/plan-export-screen.ts", "src/plan-export.ts",
+        "src/plan-launch-menu.ts", "src/plan-mode.ts", "src/presentation.ts", "src/prompt.ts", "src/question-tool.ts",
+        "src/ready-plan-chooser.ts", "src/required-tools.ts", "src/saved-plan-menu.ts", "src/saved-plan-preflight.ts",
+        "src/settings-menu.ts", "src/settings.ts", "src/state.ts", "src/tool-availability.ts", "src/tool-policy.ts",
+        "src/tool-selection.ts", "src/workflow-mutex.ts",
+    ),
 )
 
 
@@ -423,6 +444,7 @@ class LockEntry(BaseModel):
     model_config = LENIENT_STRICT_MODEL
     version: str | None = Field(default=None, description="Locked version")
     integrity: str | None = Field(default=None, description="Locked registry integrity")
+    dependencies: dict[str, str] = Field(default_factory=dict, description="Direct locked dependencies")
 
 
 class LockFile(BaseModel):
@@ -1081,6 +1103,11 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
         for name in files
         if not any(pattern.match(name) for pattern in contract.allowed)
     ]
+    if contract.packed_files and tuple(files) != contract.packed_files:
+        problems.append(
+            f"packed file list differs from '{contract.name}' contract: "
+            f"expected {list(contract.packed_files)}, got {list(files)}"
+        )
     return problems
 
 
@@ -1237,7 +1264,11 @@ def scan_imports(sources: Mapping[str, str], node: Path) -> dict[str, FileImport
 
 
 def classify_imports(
-    path: str, found: FileImports, files: Sequence[str], dependencies: Collection[str] = ()
+    path: str,
+    found: FileImports,
+    files: Sequence[str],
+    dependencies: Collection[str] = (),
+    standalone_artifacts: Collection[str] = (),
 ) -> list[str]:
     """Classify the parsed imports of one packed source file.
 
@@ -1250,14 +1281,14 @@ def classify_imports(
         path (str): File path relative to the package root.
         found (FileImports): Parser output for the file.
         files (Sequence[str]): All tarball paths, to resolve relative imports.
+        dependencies (Collection[str]): Declared runtime packages permitted as bare imports.
+        standalone_artifacts (Collection[str]): Files permitted to import only `node:` builtins.
 
     Returns:
         list[str]: Violations; empty when every import is acceptable.
     """
     problems = list(found.diagnostics)
-    standalone = (
-        path.startswith("dist/") and path not in {"dist/index.ts"} and not path.startswith("dist/chunks/")
-    )
+    standalone = path in standalone_artifacts
     for spec in found.specifiers:
         if spec.startswith("node:"):
             continue
@@ -1284,7 +1315,13 @@ def classify_imports(
     return problems
 
 
-def audit_imports(path: str, source: str, files: Sequence[str], node: Path | None = None) -> list[str]:
+def audit_imports(
+    path: str,
+    source: str,
+    files: Sequence[str],
+    node: Path | None = None,
+    standalone_artifacts: Collection[str] = (),
+) -> list[str]:
     """Parse and classify the imports of one source text.
 
     Parameters:
@@ -1292,12 +1329,13 @@ def audit_imports(path: str, source: str, files: Sequence[str], node: Path | Non
         source (str): File text.
         files (Sequence[str]): All tarball paths, to resolve relative imports.
         node (Path | None): Absolute `node` path; resolved from `PATH` when `None`.
+        standalone_artifacts (Collection[str]): Files permitted to import only `node:` builtins.
 
     Returns:
         list[str]: Violations; empty when every import is acceptable.
     """
     found = scan_imports({path: source}, node or locate_executable("node"))[path]
-    return classify_imports(path, found, files)
+    return classify_imports(path, found, files, standalone_artifacts=standalone_artifacts)
 
 
 def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | None = None) -> list[str]:
@@ -1332,7 +1370,13 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
     }
     scanned = scan_imports(sources, node or locate_executable("node"))
     for name, found in scanned.items():
-        problems += classify_imports(name, found, artifact.files, dict(contract.runtime_dependencies))
+        problems += classify_imports(
+            name,
+            found,
+            artifact.files,
+            dict(contract.runtime_dependencies),
+            contract.standalone_artifacts,
+        )
     return problems
 
 
@@ -1355,10 +1399,9 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
     """
     project.mkdir(parents=True)
     (project / "package.json").write_text('{"name": "contract-consumer", "private": true}\n')
-    dependencies = {name for name, _ in artifact.contract.runtime_dependencies}
     env = sandbox.env()
     offline = ["--offline"]
-    if dependencies:
+    if artifact.contract.runtime_dependencies:
         env |= {"HTTP_PROXY": "", "HTTPS_PROXY": ""}
         offline = []
     run(
@@ -1377,34 +1420,43 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
         timeout=NPM_TIMEOUT_S,
     )
     installed = project / "node_modules" / artifact.contract.name
-    entries = sorted(
-        p.relative_to(project / "node_modules").as_posix()
-        for p in (project / "node_modules").glob("*/*")
-        if p.is_dir()
-    )
     top = sorted(
         p.name for p in (project / "node_modules").iterdir() if p.name not in {".package-lock.json", ".bin"}
     )
-    hosts = set(HOST_MODULES)
-    unexpected_hosts = [name for name in [*entries, *top] if name in hosts]
-    if unexpected_hosts:
-        raise ContractError(
-            f"'{artifact.contract.name}' install pulled host modules: {sorted(unexpected_hosts)} / "
-            f"{top} / {entries}"
-        )
     nested = [p for p in installed.rglob("node_modules") if p.is_dir()]
     if nested:
         raise ContractError(f"'{artifact.contract.name}' ships a nested `node_modules`: {nested}")
     lock = read_lockfile(project / "package-lock.json")
-    expected_direct = {
-        f"node_modules/{artifact.contract.name}",
-        *(f"node_modules/{name}" for name in dependencies),
-    }
-    if not expected_direct <= set(lock.packages):
+    package_path = f"node_modules/{artifact.contract.name}"
+    package_entry = lock.packages.get(package_path)
+    if package_entry is None:
+        raise ContractError(f"'{artifact.contract.name}' is absent from its install lockfile")
+    declared = dict(artifact.contract.runtime_dependencies)
+    if package_entry.dependencies != declared:
         raise ContractError(
-            f"Missing direct lockfile entries after installing '{artifact.contract.name}': "
-            f"{sorted(expected_direct - set(lock.packages))}"
+            f"'{artifact.contract.name}' lockfile dependencies differ from its contract: "
+            f"{package_entry.dependencies} != {declared}"
         )
+    expected_paths = {"", package_path}
+    pending = [package_path]
+    while pending:
+        parent = pending.pop()
+        for name in lock.packages[parent].dependencies:
+            child = f"node_modules/{name}"
+            if child not in lock.packages:
+                raise ContractError(f"'{parent}' lockfile dependency '{name}' is missing")
+            if child not in expected_paths:
+                expected_paths.add(child)
+                pending.append(child)
+    actual_paths = set(lock.packages)
+    if actual_paths != expected_paths:
+        raise ContractError(
+            f"'{artifact.contract.name}' install lockfile entries differ from its dependency closure: "
+            f"expected {sorted(expected_paths)}, got {sorted(actual_paths)}"
+        )
+    expected_top = sorted({path.removeprefix("node_modules/").split("/")[0] for path in expected_paths if path})
+    if top != expected_top:
+        raise ContractError(f"'{artifact.contract.name}' install entries differ: expected {expected_top}, got {top}")
     return installed
 
 

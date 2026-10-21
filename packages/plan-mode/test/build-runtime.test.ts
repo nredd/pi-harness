@@ -54,6 +54,20 @@ test("generated interactive UI stays loadable with a lazy external questionnaire
   }
 });
 
+test("committed runtime matches a fresh build", async () => {
+  const builder = await loadBuilder();
+  const output = join(packageRoot, "dist");
+  const snapshot = async () =>
+    Object.fromEntries(
+      await Promise.all(
+        (await listFiles(output)).map(async (path) => [path, await readFile(join(output, path), "base64")]),
+      ),
+    );
+  const committed = await snapshot();
+  await builder.buildRuntime();
+  assert.deepEqual(await snapshot(), committed);
+});
+
 test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));

@@ -1,4 +1,10 @@
-"""Run the packed `@nredd/pi-plan-mode` stock contract outside a release."""
+"""Run the packed `@nredd/pi-plan-mode` stock contract outside a release.
+
+References:
+    https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
+    https://docs.npmjs.com/cli/v11/commands/npm-pack
+    https://docs.npmjs.com/cli/v11/commands/npm-install
+"""
 
 from __future__ import annotations
 
