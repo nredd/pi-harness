@@ -80,22 +80,32 @@ export function formatPlanOpen(open: number, total: number): string {
 const PROGRESS_DONE = "done";
 const PROGRESS_OPEN = "open";
 
+/** Paints one heading chunk; `warning` marks the in-progress segment. */
+export type ProgressPaint = (kind: "base" | "warning", text: string) => string;
+
+const plainPaint: ProgressPaint = (_kind, text) => text;
+
 /**
- * Heading progress, e.g. `19 done, 1 deferred, 4 open`. Computed from the full
- * state (never the rows the overlay happens to show), so the numbers always sum
- * to the total. Zero buckets are omitted. With plan items AND other todos it
- * appends the plan's own `N/M plan items open`.
+ * Heading progress, e.g. `19 done, 1 deferred, 4 open, 2 in progress`. Computed
+ * from the full state (never the rows the overlay happens to show), so done +
+ * deferred + open equals the total. `open` is pending plus in-progress, and
+ * `in progress` is a subset of it, so it is not added again. Zero buckets are omitted. With plan items AND
+ * other todos it appends the plan's own `N/M plan items open`. `paint` colors
+ * the in-progress segment (and the rest as `base`); the default is plain text.
  */
-export function formatProgress(state: TaskState): string {
+export function formatProgress(state: TaskState, paint: ProgressPaint = plainPaint): string {
 	const counts = selectTodoCounts(state);
 	const parts: string[] = [];
-	if (counts.completed > 0) parts.push(`${counts.completed} ${t("overlay.done", PROGRESS_DONE)}`);
-	if (counts.deferred > 0) parts.push(`${counts.deferred} ${formatStatusLabel("deferred")}`);
+	if (counts.completed > 0) parts.push(paint("base", `${counts.completed} ${t("overlay.done", PROGRESS_DONE)}`));
+	if (counts.deferred > 0) parts.push(paint("base", `${counts.deferred} ${formatStatusLabel("deferred")}`));
 	const open = counts.pending + counts.inProgress;
-	if (open > 0) parts.push(`${open} ${t("overlay.open", PROGRESS_OPEN)}`);
-	let text = parts.join(", ");
+	if (open > 0) parts.push(paint("base", `${open} ${t("overlay.open", PROGRESS_OPEN)}`));
+	if (counts.inProgress > 0) {
+		parts.push(paint("warning", `${counts.inProgress} ${formatStatusLabel("in_progress")}`));
+	}
+	let text = parts.join(paint("base", ", "));
 	const plan = selectPlanProgress(state);
 	const planCount = state.tasks.filter((x) => x.source === "plan" && x.status !== "deleted").length;
-	if (plan && counts.total > planCount) text += ` · ${formatPlanOpen(plan.open, plan.total)}`;
+	if (plan && counts.total > planCount) text += paint("base", ` · ${formatPlanOpen(plan.open, plan.total)}`);
 	return text;
 }
