@@ -55,6 +55,8 @@ def _tool(name: str, fallback: str) -> str:
 TMUX_BIN = _tool("tmux", "/opt/homebrew/bin/tmux")
 GIT_BIN = _tool("git", "/usr/bin/git")
 NODE_BIN = _tool("node", "/opt/homebrew/bin/node")
+GH_BIN = _tool("gh", "/opt/homebrew/bin/gh")
+NPM_BIN = _tool("npm", "/opt/homebrew/bin/npm")
 
 
 def pi_command() -> list[str]:
