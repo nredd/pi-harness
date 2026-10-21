@@ -87,9 +87,9 @@ const plainPaint: ProgressPaint = (_kind, text) => text;
 
 /**
  * Heading progress, e.g. `19 done, 1 deferred, 4 open, 2 in progress`. Computed
- * from the full state (never the rows the overlay happens to show), so the
- * numbers always sum to the total. `open` is every not-done task and
- * `in progress` is a subset of it. Zero buckets are omitted. With plan items AND
+ * from the full state (never the rows the overlay happens to show), so done +
+ * deferred + open equals the total. `open` is pending plus in-progress, and
+ * `in progress` is a subset of it, so it is not added again. Zero buckets are omitted. With plan items AND
  * other todos it appends the plan's own `N/M plan items open`. `paint` colors
  * the in-progress segment (and the rest as `base`); the default is plain text.
  */

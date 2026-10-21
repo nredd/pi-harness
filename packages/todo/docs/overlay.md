@@ -36,9 +36,9 @@ snapshots are saved.
 
 - **Heading** — `▾ ● Todos (19 done, 1 deferred, 4 open, 2 in progress)` in the accent color while
   any task is `pending` or `in_progress`; dimmed with `○` once nothing is open.
-  The counts cover the whole list, never just the visible rows, and always sum to
-  the total (open = `pending` or `in_progress`; `in progress` is a subset of
-  open, shown in the warning color of the `◐` marker; zero buckets are omitted). The
+  The counts cover the whole list, never just the visible rows. Done + deferred +
+  open equals the total (open = `pending` or `in_progress`; `in progress` is a
+  subset of open and is not added again, shown in the warning color of the `◐` marker; zero buckets are omitted). The
   marker becomes `▸` while collapsed. Click anywhere on the heading to toggle it.
   When non-plan todos exist next to plan items it also ends in
   `· N/M plan items open`.
