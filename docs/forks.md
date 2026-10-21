@@ -30,9 +30,9 @@ Known follow-up: `packages/computer-use/scripts/setup-helper.mjs` still sets `re
 `injaneity/pi-computer-use` (the fallback download source when no prebuilt helper is present) and the
 bundle id/signing identity to `com.injaneity.pi-computer-use`. An import PR does not change runtime
 behavior, so this is unchanged.
-The selected `forks/pi-subagents` commit is additionally exercised with the real packed preset and
-dev-tools by `make check-fork-package-contracts` ([details](package-contracts.md)); it refuses a missing,
-dirty or Gitlink-mismatched fork and never bootstraps or installs into it.
+The in-process suite and the `local` stack load `packages/{subagents,plan-mode,todo,computer-use}`, not
+these Gitlinks; the Gitlinks and their `forks.yml` jobs stay until the shipped-selection PR flips the
+stack to npm.
 `packages/plan-mode` imports `nredd/pi-plan-mode` commit
 `4c2bfc3459b07b294efab62e9a8a01849f67a831` (`v0.59.3-nredd.1`) with its history; its Gitlink and
 `forks.yml` job remain until the shipped-selection PR changes the stack to npm. Its packed-tarball stock
