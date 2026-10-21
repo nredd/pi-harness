@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -68,13 +69,16 @@ class Target(BaseModel):
     directory: str = Field(description="Owned workspace directory under packages/")
 
 
-class Identity(BaseModel):
+class PublishedIdentity(BaseModel):
     model_config = STRICT
     target: Target = Field(description="Selected release")
     commit: rm.GitCommit = Field(description="Tagged source commit")
+    integrity: pc.Sha512Integrity = Field(description="npm SHA-512 integrity of the published bytes")
+
+
+class Identity(PublishedIdentity):
     tarball: pc.TarballName = Field(description="Verified artifact basename")
     sha256: pc.Sha256Hex = Field(description="SHA-256 of verified tarball bytes")
-    integrity: pc.Sha512Integrity = Field(description="npm SHA-512 integrity of the same bytes")
 
 
 class Provenance(BaseModel):
@@ -665,7 +669,7 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
             time.sleep(REGISTRY_POLL_INTERVAL_S)
 
 
-def verify_signatures(identity: Identity) -> None:
+def verify_signatures(identity: PublishedIdentity) -> None:
     """Use npm to verify the release subject even when it has runtime dependencies.
 
     The ordinary install keeps the dependency closure intact and proves the selected
@@ -675,7 +679,7 @@ def verify_signatures(identity: Identity) -> None:
     satisfy. Provenance subject/source binding remains a separate DSSE check.
 
     Parameters:
-        identity (Identity): Exact released version and verified tarball integrity.
+        identity (PublishedIdentity): Exact released version and verified tarball integrity.
 
     Returns:
         None: npm has verified the selected package signature and attestation.
@@ -785,13 +789,13 @@ def fetch_attestations(target: Target) -> bytes:
     return content
 
 
-def verify_provenance(identity: Identity, content: bytes) -> None:
+def verify_provenance(identity: PublishedIdentity, content: bytes) -> None:
     """Bind the actual DSSE statement to the published bytes, workflow, tag and source commit.
 
     Signature verification belongs to npm, not this parser. Call after `verify_signatures` succeeds.
 
     Parameters:
-        identity (Identity): Contract-tested tarball and tagged source identity.
+        identity (PublishedIdentity): Contract-tested published bytes and tagged source identity.
         content (bytes): Actual npm attestation endpoint response.
 
     Returns:
@@ -825,7 +829,7 @@ def verify_provenance(identity: Identity, content: bytes) -> None:
         raise ReleaseError("Provenance source commit differs from the tagged release")
 
 
-def verify_selected_published(repo: Path, tag: str) -> None:
+def verify_selected_published(repo: Path, tag: str) -> PublishedIdentity:
     """Verify a selected owned package without rebuilding its accepted tarball.
 
     Parameters:
@@ -833,7 +837,8 @@ def verify_selected_published(repo: Path, tag: str) -> None:
         tag (str): exact `@nredd/<package>@<version>` release tag.
 
     Returns:
-        None: only after npm verifies the selected subject and its SLSA source binding.
+        PublishedIdentity: only after npm verifies the selected subject and its SLSA source
+            binding; carries the registry's real SHA-512 integrity.
 
     Raises:
         ReleaseError: the tag, registry metadata, signature, or provenance is invalid.
@@ -843,16 +848,11 @@ def verify_selected_published(repo: Path, tag: str) -> None:
     if integrity is None:
         raise ReleaseError(f"Selected package '{tag}' is absent from the npm registry")
     commit = command(repo, "git", "rev-list", "-n", "1", tag)
-    identity = Identity(
-        target=target,
-        commit=commit,
-        tarball=f"{target.name.removeprefix('@nredd/').replace('/', '-')}-{target.version}.tgz",
-        sha256="0" * 64,
-        integrity=integrity.integrity,
-    )
+    identity = PublishedIdentity(target=target, commit=commit, integrity=integrity.integrity)
     verify_signatures(identity)
     verify_provenance(identity, fetch_attestations(target))
     LOGGER.info(f"Verified selected npm package '{tag}'")
+    return identity
 
 
 def verify_published(repo: Path, identity: Identity) -> None:
@@ -901,7 +901,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.stage == "stack-check":
-            verify_selected_published(repo, args.tag)
+            published = verify_selected_published(repo, args.tag)
+            evidence = {
+                "package": f"{published.target.name}@{published.target.version}",
+                "integrity": published.integrity,
+            }
+            sys.stdout.write(json.dumps(evidence) + "\n")
             return 0
         if args.artifact_dir is None:
             raise ReleaseError("This stage requires `--artifact-dir`")
