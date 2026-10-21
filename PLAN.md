@@ -42,8 +42,8 @@ Live selection / promotion state:
 Verification layers now implemented:
 
 - Package-native Vitest + pinned Bun suites own package behavior, including interactive host / `VirtualTerminal` tests and injectable clocks.
-- `integration/inprocess/` owns A-stack tests with real extension factories and one host identity. It also hosts the four single-fork rpiv-todo B rows; the split fork's own suite runs separately in `forks.yml`.
-- `.github/workflows/forks.yml` runs applicable full fork suites. Before tagging a fork, use a temporary CI probe PR selecting the candidate Gitlink, fetch its SHA for reviews, wait for full fork CI, then close the probe without merging. Receipts: #37, #39.
+- `integration/inprocess/` owns A-stack tests with real extension factories and one host identity. It also hosts the four historical rpiv-todo B rows. The imported packages' native suites run as workspace `npm run check` commands in the `owned` job.
+- `.github/workflows/forks.yml` runs the remaining core Gitlink suite only. Imported package releases use their workspace `npm run check` commands in `owned` before publishing.
 - `contracts` owns packed artifact identity, installation/discovery/trust and stock-host compatibility. See `docs/package-contracts.md`; do not confuse it with assembled-stack coverage.
 - `stack` D/E jobs use a formula-shaped released Node binary plus explicit `integration/stacks/personal.json` / `integration/stacks/local.json` in throwaway agent dirs, on both OSes. No chezmoi, Brewfile or live install input. D owns process boundaries; E owns the real tmux resize seam.
 - Bun standalone D/E runs in CI: the `stack (..., personal)` jobs build it from the Gitlinked core and run both stacks on it on darwin-arm64 and linux-x64 (#56); seven auth-interception cases are explicit skips (adapter #14). linux-arm64 is NOT RUN.

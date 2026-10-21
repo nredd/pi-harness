@@ -24,7 +24,7 @@ The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s
 
 The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), which remains `strict`. Strict means that advancing `main` invalidates a PR's previous green result and requires an update-branch rerun before merge. That cost is intentional for combined-result safety; docs-only bypasses make documentation updates cheaper without weakening it.
 
-`.github/workflows/forks.yml`, when `forks/**`, `.gitmodules` or the workflow changes, plus manual dispatch:
+`.github/workflows/forks.yml`, when the remaining `forks/pi` Gitlink, `.gitmodules` or the workflow changes, plus manual dispatch:
 
 | Job | Runs |
 | --- | --- |
@@ -37,16 +37,15 @@ The required checks live in ruleset `main required checks` (id `25524267`, not c
 - `support.ts`: `startStack({ cwd?, factories, settings?, sessionManager?, useModelRuntimeStream?, withConfiguredAuth?, mode?, ui? })` creates and
   binds core's real harness. `loadFork(name)` imports the imported package's declared entry from `packages/<dir>`; `loadOwned(name)`
   imports the owned plugin's `src/index.ts`. Direct `createXxx()` factories work too
-- Before importing a fork, resolve `pi-coding-agent`, `pi-tui`, `pi-ai`, `typebox` from both directories
+- Before importing a package workspace, resolve `pi-coding-agent`, `pi-tui`, `pi-ai`, `typebox` from both directories
   and compare real paths. A mismatch or unresolvable entry fails with the package's `node_modules/`
   deletion path. Node uses import conditions on `createRequire().resolve`; Bun uses
   `import.meta.resolve` with an explicit parent. No aliases or copied extension code
 - Root workspace dependencies supply `croner` `10.0.1`, `nanoid` `5.1.16`, `pi-tui-kit` `0.65.5`
-  from the forks' lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
-  `3.x` and leaves the fork's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
-  split's own lockfile serves only its `forks.yml` gate; the stack workspace never installs fork-local
-  dependencies, so `rpiv-config` and optional peer `rpiv-i18n` are pinned here to the fork's `2.13.9`,
-  with the same integrity as its lockfile
+  from the imported packages' historical lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
+  `3.x` and leaves the imported subagents package's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
+  source lockfile was retired with its Gitlink; the stack workspace pins `rpiv-config` and optional peer
+  `rpiv-i18n` to the imported package's `2.13.9` provenance, with the same integrity as that historical lockfile
 - `isolateStackHome()` isolates `HOME`, `PI_CODING_AGENT_DIR`, XDG config before loading entries.
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
@@ -87,7 +86,7 @@ These eight jobs are the required checks of ruleset `main required checks` (id `
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
 - `~/code/pi-harness-builds/merge-pr.sh` checks that HEAD, both transcripts and green CI, then posts
   the review receipt as a PR comment and merges. It does not post commit statuses
-- `forks.yml` is path-filtered and not a required protection check; when triggered, the core fork job must pass before merging
+- `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
 
 Flake policy (migration plan section 7):
 

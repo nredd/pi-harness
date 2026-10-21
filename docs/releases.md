@@ -5,6 +5,8 @@
 - It is generated, never a hand-edited fork-pin file. Refuse a dirty tree unless `--allow-dirty` deliberately records `release.dirty: true`. Generate it on the clean tree that already contains the generator, then commit it: the recorded `release.commit` is the manifest commit's parent, by construction.
 - Gitlink-only selections may pass no `--artifact`: the generated `artifacts: []` records source provenance, not a new core asset release. The assembled-stack checksum reader skips these snapshots and still requires every downloaded asset's digest from an artifact-bearing manifest; absent, conflicting or invalid checksums still block before installation.
 - Deliberately omitted: profiles, runtime-tree archives, and a complete third-party resolution lock. Those inputs do not exist in this minimal slice yet.
+Historical release receipts follow. They preserve their dated Gitlink and `forks.yml` provenance; current package selection uses the imported workspaces and published npm packages.
+
 - `2026-10-17-startup-trust`: core `v1.3.0-nredd.3` + `pi-subagents` `v0.22.0-nredd.2`. `2026-10-18-npm-publication`: first npm publication of the four owned packages, tarballs packed from `c1857f3` after `make check-package-contracts`, registry bytes re-downloaded and compared. Those initial versions have no provenance attestation; subsequent versions use the OIDC workflow below.
 - `2026-10-18-testing-export`: core `v1.3.0-nredd.4` (nredd/pi#4, `@earendil-works/pi-coding-agent/testing`). Ships four tarballs: `pi-coding-agent` and `pi-tui` for the CLI, `pi-agent-core` and `pi-ai` so package tests get the fork's provider gate and Responses default instead of stock npm `1.3.0`. Not pinned in the tap or chezmoi: `dist/bundle` is byte-identical to `v1.3.0-nredd.3`.
 - `2026-10-19-interactive-testing`: core `v1.3.0-nredd.6` (nredd/pi#5 + #6): `@earendil-works/pi-tui/testing`, `TUI.flushRender()`, `@earendil-works/pi-coding-agent/testing/interactive`; pi-subagents `v0.22.0-nredd.3` (nredd/pi-subagents#4, injectable clock). `v1.3.0-nredd.5` was released but never selected: the full fork suite found 6 regressions, fixed in nredd.6. `pi-tui`/`pi-agent-core`/`pi-ai` tarballs byte-identical to nredd.5. Not pinned: the CLI bundle changed, so the pin waits for the assembled-stack gate.
@@ -44,7 +46,7 @@ run that must offer `Agent`, `get_subagent_result`, `steer_subagent` and `Subage
 sits outside `package_contracts.CONTRACTS` because `make check-package-contracts` installs offline and
 never runs it, but CI's `contracts` job runs the same gate on every
 non-docs PR as `make check-subagents-package-contract` (registry install plus a stock Pi run with one
-faux `Agent` call). The package-native check and stock contract cover the imported source and packed tarball; `forks.yml` covers only the core Gitlink.
+faux `Agent` call). The package-native check and stock contract cover the imported source and packed tarball; `forks.yml` covers only the remaining core Gitlink.
 `@nredd/pi-todo` uses `packages/todo`, retains the imported package's MIT `LICENSE`, and runs its native
 `npm run check` before the stock contract. Its descriptor's stock gate packs the selected bytes and calls the
 real `todo` tool through stock Pi; its two declared runtime dependencies are installed from the registry and

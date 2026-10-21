@@ -6,9 +6,9 @@ Scope: the twelve sources in `integration/stacks/personal.json`, plus the local-
 `@nredd/pi-preset` in `integration/stacks/local.json`. Sources/versions for D come from
 those documents through `harness/sandbox.py::install_stack`, never a second scenario pin.
 This is a coverage audit, not a claim that each layer exhaustively tests each package.
-`A` = package-native, `B` = fork-native, `A-stack` = real factories on core's harness,
-`C` = packed artifact on stock Pi, `D/E` = installed released binary. Native A-stack runs
-on Vitest and pinned Bun in `owned`; D/E run only in CI on both OSes and both stacks.
+`A` = package-native, `B` = historical fork-native receipt, `A-stack` = real factories on core's harness,
+`C` = packed artifact on stock Pi, `D/E` = installed released binary. Native workspace suites run
+as each package's `npm run check` in `owned`; A-stack runs on Vitest and pinned Bun there too. D/E run only in CI on both OSes and both stacks.
 
 Shared D evidence for every enabled source is
 `integration/scenarios/test_stack.py::test_extensions_load_without_warnings`: real
@@ -43,7 +43,7 @@ not the active model surface; promotion and actual calls are separately asserted
 Computer-use GUI acceptance still needs an explicit macOS desktop session, lifecycle-enabled
 install in a disposable agent directory, Accessibility/Screen Recording TCC grants for the
 native helper, then screenshot and input against a disposable app/fixture (including
-root/window targeting and helper restart). Existing fork-owned opt-in desktop tests should
+root/window targeting and helper restart). The imported computer-use package's opt-in desktop tests should
 run there. A hosted headless exclusion cannot verify pixel content, TCC, or input delivery.
 NOT RUN, with what each would need:
 
@@ -60,6 +60,11 @@ only the seven Node-preload auth cases are skipped there. Exclusion and clean of
 never be reported as successful GUI/network coverage.
 
 ## Historical migration inventory
+
+Everything in this section is a historical migration receipt, not current source or CI
+instructions. Its `forks/...` paths name Gitlinks that existed when those rows landed; the
+current destinations are the imported `packages/{subagents,plan-mode,todo,computer-use}`
+workspaces, whose native `npm run check` suites run in `owned`.
 
 | Destination | Scenario functions |
 | --- | ---: |
@@ -87,7 +92,7 @@ never be reported as successful GUI/network coverage.
 - Read-only audit of `pi-harness-e2e/scenarios/`, not adoption of the verdicts in `docs/perf-profile.md` or `docs/verification-layers.md`. Their 181 retained scenarios defend an accidental implementation boundary. A real session is necessary for many invariants; a new Pi process is not.
 - Paths beginning `packages/`, `forks/`, `scripts/` and `integration/` are relative to `pi-harness`. Source `File` labels are relative to `pi-harness-e2e`. `write` means a replacement still needs implementing, not verified coverage. No scenarios, binaries, tmux, benchmarks or test runners were run for this document.
 - Every `A:<package>` target is under `packages/<package>/test/scenarios/`, on the exported core harness or its injected-terminal renderer. Every `A-stack` target is under `integration/inprocess/`, loading the real named extension factories together. Both run under Vitest and `bun test`; fake clocks advance production timer callbacks, not reimplementations of the decision logic. No real-clock waits or `NODE_OPTIONS` timer preloads.
-- `B:<fork>` normally stays in that fork's suite. Explicit exception: the four `B:rpiv-todo (hosted in integration/inprocess)` rows load only the real imported `packages/todo` factory through `support.ts`'s host-identity guard, on core `v1.3.0-nredd.7`. The split has no devDependencies and its native suite is NOT RUN in fork CI; `integration/inprocess` already supplies the matching host and runs under Vitest and Bun on both CI OSes. This is single-fork coverage, not multi-extension `A-stack`, and does not claim the split's native suite ran. Rows explicitly distinguish existing coverage from tests to write. Similar helper tests are seeds, not proof of a complete host sequence. `MERGE:<test>` transfers all listed assertions to the named destination; it is not permission to discard them. Delete old scenarios only when their replacement is green in its required gate.
+- Historically, `B:<fork>` stayed in that fork's suite. The four `B:rpiv-todo (hosted in integration/inprocess)` rows instead load only the real imported `packages/todo` factory through `support.ts`'s host-identity guard, on core `v1.3.0-nredd.7`. The imported package's native suite now runs as workspace `npm run check` in `owned`; `integration/inprocess` supplies the matching host and runs under Vitest and Bun on both CI OSes. This is historical single-fork coverage, not multi-extension `A-stack`. Rows explicitly distinguish existing coverage from tests to write. Similar helper tests are seeds, not proof of a complete host sequence. `MERGE:<test>` transfers all listed assertions to the named destination; it is not permission to discard them. Delete old scenarios only when their replacement is green in its required gate.
 - `C` owns packed bytes, installation, discovery and trust. `D` owns a declared package-set JSON list installed into a throwaway agent dir and actual process modes/lifetime/auth transport. `E` owns the one retained real terminal resize seam. `F` owns serial performance; `G` owns opt-in live interoperability. No package gate reads the live install, `~/.pi/agent`, `~/.local/share/chezmoi` or the Brewfile. Live `G` receives an explicit credential path, never discovers the owner's default path.
 - Existing `scripts/package_contracts.py::install_alone` uses npm installation followed by explicit `--extension`; the removed `scripts/fork_package_contracts.py` did the same. Neither proved `pi install`. Upgrade `C` to install the exact tarballs through `pi install`, then load through declared package discovery. Keep its stock-host identity/import/peer/license checks. Do not claim that improvement exists today.
 - DONE in `D`: `integration/scenarios/test_startup.py::test_fatal_startup_modes`, both OSes/both stacks in [CI](https://github.com/nredd/pi-harness/actions/runs/39207254193): ordinary/fatal factory and `session_start` failures across print text/JSON, RPC and TUI; nonzero fatal exit, no provider call, no held-message leak. This is a new boundary test, outside the corrected 191-function migration inventory. The rebuilt boundary inventory is therefore 21 functions including this addition, versus 20 surviving migration rows; parameterized modes still cause multiple launches. Core's startup race permutations stay in `B:core`, not this matrix. `D` runs Node and Bun; `E` runs once per OS terminal job, not twice to retest runtime logic.
