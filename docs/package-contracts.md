@@ -124,9 +124,8 @@ not intercepted. The only configured model is a loopback scripted provider (`fau
 registered through `models.json` with a dummy key.
 Scratch is deleted unless `--keep`.
 
-Limits: this is stock Pi only. It does not exercise `pi install npm:...`, the forked
-Plan-mode integration, the
-Bun-compiled candidate, or the full stack. Do not read a pass as candidate or fullstack acceptance.
+Limits: this is stock Pi only. It does not exercise `pi install npm:...`, the Plan-mode
+integration, the Bun-compiled candidate, or the full stack. Do not read a pass as candidate or fullstack acceptance.
 
 ## Subagents and computer-use contracts
 
@@ -156,7 +155,8 @@ the `postinstall` (`setup-helper.mjs`; the stock install uses `--ignore-scripts`
 create a keychain signing identity, `pkill` a running helper and register the app with LaunchServices)
 and every desktop tool (needs an interactive desktop with Accessibility/Screen Recording TCC grants).
 `make check-computer-use-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-computer-use`,
-needs the registry for stock Pi; postinstall and native desktop behavior are NOT RUN, as the evidence records) runs the same gate through `npm_release.run_stock_contract`; CI's `contracts` job
+needs the registry for stock Pi; postinstall and native desktop behavior are NOT RUN, as the evidence records) runs the same gate through `npm_release.run_stock_contract`; CI's `contracts` job runs it on
+both OSes and uploads its report with the other `*contracts*.json` artifacts.
 
 ## Packed preset audit (no standalone Pi behavior)
 
