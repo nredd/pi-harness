@@ -1,0 +1,4 @@
+{
+  "contents": "{\"core\":{\"integrity\":{\"pi.tgz\":\"0000000000000000000000000000000000000000000000000000000000000000\"},\"tag\":\"v1.3.0-nredd.7\"},\"disabled_extensions\":{},\"name\":\"personal\",\"schema_version\":1,\"settings\":{\"caf\\u00e9\":\"value \\ud83d\\ude00\",\"nested\":[true,null,9007199254740991,-9007199254740991,{\"array\":[false,0,\"\\ud83d\\ude00\"]}],\"\\u007f\":\"control\\u0000\\u001f\\n\\r\\t\\b\\f\",\"\\u2028\":\"line separator\",\"\\u2029\":\"paragraph separator\",\"\\ue000\":\"private-use\",\"\\uffff\":\"last-BMP-key\",\"\\ud800\\udc00\":\"astral-key\"},\"sources\":[\"npm:@nredd/pi-preset@0.2.0\"]}",
+  "sha256": "cd9eadbcd7ae585f17b86dad2af279daf83b5e83cd98f117e0fbf55b89deea61"
+}
