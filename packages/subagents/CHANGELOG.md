@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **⚠️ Breaking: `strictAgentFiles: true` now requires a pi host that exports `ExtensionStartupError`.** On an older supported host, activation refuses before reading agent files. Upgrade pi or set `strictAgentFiles: false`.
 
+### Changed
+- First CI-attested release; no code change.
+
 ### Fixed
 - **The fleet widget keeps a fixed height at and past its row cap.** When the roster overflows, it shows `MAX_AGENT_ROWS - 2` rows plus the `↑ N more` / `↓ N more` indicator slots (blank at either edge), so adding a sixth agent, scrolling, or removing it cannot shift the editor, separators or footer below.
 - **`skills:` preloads skills that the user linked into a user root.** Every symlink was refused, so a skill installed as a link in `~/.agents/skills/` (how skill installers and dotfile managers place vendored skills) silently resolved to "not found" and the agent ran without it. User roots (`$PI_CODING_AGENT_DIR/skills/`, `~/.agents/skills/`, `~/.pi/skills/`) now follow symlinks like Pi: linked roots, directories and files, skipping broken links and directory cycles. Project roots keep rejecting symlinks at every layer, now including a linked `.pi/` or `.agents/` directory, which previously let a repository serve skills from outside it.
