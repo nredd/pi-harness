@@ -2038,7 +2038,8 @@ def parse_helper_source_list(script: str, source: str) -> list[str]:
         literal = HELPER_SOURCE_LITERAL.match(items, offset)
         require(
             literal is not None,
-            f"{script} helper source list has unsupported token: {items[offset:].strip()!r}",
+            f"{script} helper source list has unsupported token (only plain string literals, no comments "
+            f"or templates): {items[offset:].strip()!r}",
         )
         assert literal is not None
         names.append(literal.group("value"))
