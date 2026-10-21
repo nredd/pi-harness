@@ -142,7 +142,7 @@ def test_plan_mode_scenario_reports_missing_tool_and_load_failure(
 def test_plan_mode_install_allows_only_declared_dependency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The registry install branch rejects an undeclared installed package.
+    """The registry install branch rejects an undeclared subject dependency.
 
     Parameters:
         tmp_path (Path): Temporary installation root.
@@ -168,7 +168,7 @@ def test_plan_mode_install_allows_only_declared_dependency(
                     "packages": {
                         "": {},
                         "node_modules/@nredd/pi-plan-mode": {
-                            "dependencies": {"@narumitw/pi-tui-kit": "^0.65.2"}
+                            "dependencies": {"@narumitw/pi-tui-kit": "^0.65.2", "left-pad": "1.0.0"}
                         },
                         "node_modules/@narumitw/pi-tui-kit": {},
                         "node_modules/@earendil-works/pi-tui": {},
@@ -178,5 +178,5 @@ def test_plan_mode_install_allows_only_declared_dependency(
         )
 
     monkeypatch.setattr(pc, "run", fake_run)
-    with pytest.raises(pc.ContractError, match="dependency closure"):
+    with pytest.raises(pc.ContractError, match="dependencies differ"):
         pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
