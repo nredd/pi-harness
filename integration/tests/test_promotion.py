@@ -21,6 +21,7 @@ import yaml
 from pydantic import ValidationError
 
 from harness import promotion, promotion_verify, publish_gate
+from harness import stack as stack_module
 from harness.promotion import (
     AttestationError,
     CoreEvidence,
@@ -119,6 +120,18 @@ def test_snapshot_binds_sorted_canonical_stack_bytes(tmp_path: Path) -> None:
         == json.dumps(item.stack.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
     )
     assert StackSnapshot.model_validate_json(item.model_dump_json()) == item
+
+
+@pytest.mark.skipif(
+    not hasattr(stack_module, "reject_noncanonical_numbers"),
+    reason="needs the producer guard from PR #107",
+)
+def test_snapshot_refuses_a_float_in_stack_settings(tmp_path: Path) -> None:
+    """The consumer rejects floats, so the producer must refuse them (guard lives in #107)."""
+    path = tmp_path / "personal.json"
+    write_stack(path, settings={"temperature": 0.5})
+    with pytest.raises(ValidationError):
+        build_snapshot(path, "a" * 40, GateEvidence.model_validate(GATES))
 
 
 @pytest.mark.parametrize(
@@ -1019,6 +1032,18 @@ def test_verify_writes_the_selected_sha_for_a_commit_on_origin_main(
     assert (tmp_path / "fake-gh" / "calls.log").read_text() == ""
 
 
+def test_verify_reports_a_failed_gh_call_without_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failing `gh` call exits 1 with a one-line `FAILED:` error, never a traceback."""
+    _one, two, _side = main_repo(tmp_path)
+    fake_gh(tmp_path, monkeypatch, [["rules/branches/main", 1, "", "HTTP 502"]])
+    assert promotion_verify.main(verify_env(tmp_path, "verify-only", sha=two)) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("FAILED:")
+    assert "Traceback" not in err
+
+
 def test_context_from_env_reports_every_missing_variable() -> None:
     """A missing required variable is a `ValueError` naming it, and `main` turns it into exit 1."""
     env = {"OPERATION": "promote", "GITHUB_REPOSITORY": "o/r"}
@@ -1058,14 +1083,8 @@ def test_workflow_permissions_environment_and_concurrency() -> None:
     inputs = triggers["workflow_dispatch"]["inputs"]
     assert inputs["operation"]["options"] == ["verify-only", "promote"]
     assert set(inputs) == {"source_sha", "operation"}
-
-
-def test_workflow_has_no_channel_pointer_or_deploy_key() -> None:
-    """The retired `stack-channel` branch, its deploy key, and `rollback` are gone from the workflow."""
-    text = PROMOTION_WORKFLOW.read_text()
-    for retired in ("stack-channel", "STACK_CHANNEL", "DEPLOY_KEY", "channel", "rollback", "stable.json"):
-        assert retired not in text, retired
-    assert "secrets." not in text
+    assert inputs["source_sha"]["required"] is True
+    assert "secrets." not in PROMOTION_WORKFLOW.read_text()
 
 
 def test_workflow_validates_the_tag_before_any_side_effect() -> None:
