@@ -21,6 +21,7 @@
 - `@nredd/pi-dev-tools@0.5.1` (`90538d7`, #50): the `0.5.0` content, published by `publish.yml` in one attempt (run [here](https://github.com/nredd/pi-harness/actions/runs/39373169935)); release carries the four assets. `integration/stacks/personal.json` pins it with router `0.4.0` (#51)
 - `@nredd/pi-session-kit@0.5.0` (`8c7c084`, #52): the `/stats` redesign with timescale-aware time axes, published by `publish.yml` in one attempt (run [here](https://github.com/nredd/pi-harness/actions/runs/39377430743)); release carries the four assets. `integration/stacks/personal.json` pins it (#53)
 - `@nredd/pi-session-kit@0.6.0` (signed tag at `7f26025`, #68): quiet passive monitor output, compact wakes with unread `since` cursors, and a summary widget, published by `publish.yml` in one attempt (run [here](https://github.com/nredd/pi-harness/actions/runs/39475730345)); release carries the four assets. `integration/stacks/personal.json` pins it
+- `@nredd/pi-preset@0.2.0` (signed tag at `e18831a`, #81): the footer port with direct renderer contracts, published by `publish.yml` (run [here](https://github.com/nredd/pi-harness/actions/runs/39506908135); verify, publish and release succeeded); release carries the four assets, npm `dist.integrity` equals `identity.json`, SLSA provenance. `integration/stacks/personal.json` pins it as a filtered footer-only source (`extensions: ["extensions/expanded-footer.ts"]`, empty `skills`/`prompts`/`themes`)
 
 ## Owned npm packages
 

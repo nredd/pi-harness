@@ -1,6 +1,13 @@
 {
   "name": "personal",
   "sources": [
+    {
+      "source": "npm:@nredd/pi-preset@0.2.0",
+      "extensions": ["extensions/expanded-footer.ts"],
+      "skills": [],
+      "prompts": [],
+      "themes": []
+    },
     "npm:@gotgenes/pi-anthropic-auth@3.4.3",
     "npm:pi-web-access@0.43.0",
     "git:github.com/nredd/rpiv-todo@v2.13.9-nredd.2",
