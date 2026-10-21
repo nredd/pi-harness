@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,24 @@ def test_stack_rejects_implicit_or_ambiguous_inputs(change: dict[str, Any]) -> N
     """
     with pytest.raises(ValidationError):
         Stack.model_validate(stack_document() | change)
+
+
+@pytest.mark.parametrize(
+    ("settings", "path"),
+    [
+        ({"temperature": 1.0}, "$.settings.temperature"),
+        ({"model": {"temperature": [1.0]}}, "$.settings.model.temperature[0]"),
+    ],
+)
+def test_stack_rejects_floats_in_settings(settings: dict[str, Any], path: str) -> None:
+    """Reject floats before Python and JavaScript can canonicalize them differently.
+
+    Parameters:
+        settings (dict[str, Any]): settings overlay containing a float.
+        path (str): expected JSON path in the validation error.
+    """
+    with pytest.raises(ValidationError, match=rf"Float at `{re.escape(path)}` is not supported"):
+        Stack.model_validate(stack_document(settings=settings))
 
 
 def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> None:
