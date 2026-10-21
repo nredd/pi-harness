@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CHILD_ENTRY, isChildSession, isChildSessionName, registerChildIdentity } from "../src/child.ts";
-import { defaultConfig, loadConfig, parseConfig } from "../src/config.ts";
+import {
+	DEFAULT_COLLAPSE_KEY,
+	DEFAULT_MAX_WIDGET_LINES,
+	defaultConfig,
+	isValidKeySpec,
+	loadConfig,
+	parseConfig,
+	resolveCollapseKey,
+} from "../src/config.ts";
 import { fakePi } from "./goal/fake-pi.ts";
 
 describe("parseConfig", () => {
@@ -22,6 +30,43 @@ describe("parseConfig", () => {
 	it("returns defaults for non-objects and a missing file", () => {
 		expect(parseConfig(null)).toEqual(defaultConfig());
 		expect(loadConfig("/nonexistent/pi-session-kit.json")).toEqual(defaultConfig());
+	});
+});
+
+describe("monitor widget config", () => {
+	it("defaults to ctrl+shift+m and 12 lines", () => {
+		expect(defaultConfig().monitor).toEqual({ collapseKey: "ctrl+shift+m", maxWidgetLines: 12 });
+		expect(DEFAULT_COLLAPSE_KEY).toBe("ctrl+shift+m");
+		expect(DEFAULT_MAX_WIDGET_LINES).toBe(12);
+	});
+	it("trims, lowercases and accepts a valid collapseKey, and `off`", () => {
+		expect(resolveCollapseKey("  Alt+O ")).toBe("alt+o");
+		expect(resolveCollapseKey("super+alt+f5")).toBe("super+alt+f5");
+		expect(resolveCollapseKey("OFF")).toBe("off");
+		expect(parseConfig({ monitor: { collapseKey: "alt+m" } }).monitor.collapseKey).toBe("alt+m");
+	});
+	it.each(["", "  ", "ctr+]", "ctrl+ctrl+m", "ctrl++m", "+m", "ctrl+", "ctrl+nope", "ctrl+shift+f13", 5, null, {}])(
+		"falls back to the default for %j",
+		(raw) => {
+			expect(resolveCollapseKey(raw)).toBe(DEFAULT_COLLAPSE_KEY);
+			expect(parseConfig({ monitor: { collapseKey: raw } }).monitor.collapseKey).toBe(DEFAULT_COLLAPSE_KEY);
+		},
+	);
+	it("validates the KeyId grammar strictly", () => {
+		expect(isValidKeySpec("ctrl+]")).toBe(true);
+		expect(isValidKeySpec("f12")).toBe(true);
+		expect(isValidKeySpec("ctrl+shift+m")).toBe(true);
+		expect(isValidKeySpec("hyper+m")).toBe(false);
+	});
+	it("takes maxWidgetLines only as an integer >= 4", () => {
+		expect(parseConfig({ monitor: { maxWidgetLines: 4 } }).monitor.maxWidgetLines).toBe(4);
+		for (const bad of [3, 0, 7.5, "9", null])
+			expect(parseConfig({ monitor: { maxWidgetLines: bad } }).monitor.maxWidgetLines).toBe(12);
+	});
+	it("keeps monitor.enabled independent of the widget keys", () => {
+		const c = parseConfig({ monitor: { enabled: false, collapseKey: "alt+m" } });
+		expect(c.features.monitor).toBe(false);
+		expect(c.monitor.collapseKey).toBe("alt+m");
 	});
 });
 

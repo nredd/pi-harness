@@ -154,7 +154,7 @@ CONTRACTS = (
         directory="session-kit",
         required=("LICENSE", "README.md", "package.json", "src/index.ts", "dist/pi-stats-export.mjs"),
         allowed=(
-            re.compile(r"^(LICENSE|README\.md|package\.json)$"),
+            re.compile(r"^(LICENSE|README\.md|CHANGELOG\.md|package\.json)$"),
             re.compile(r"^src/.+\.(ts|md)$"),
             re.compile(r"^dist/pi-stats-export\.mjs$"),
             re.compile(r"^docs/stats-snapshots\.md$"),
