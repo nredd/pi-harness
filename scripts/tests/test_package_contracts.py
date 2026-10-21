@@ -64,7 +64,9 @@ def sandbox(tmp_path: Path) -> pc.Sandbox:
 
 
 @pytest.mark.parametrize(
-    "contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT], ids=lambda c: c.directory
+    "contract",
+    [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.COMPUTER_USE_CONTRACT, pc.SUBAGENTS_CONTRACT],
+    ids=lambda c: c.directory,
 )
 def test_supplied_tarball_is_never_repacked(
     tmp_path: Path,
@@ -582,7 +584,9 @@ def test_audit_tarball_reports_unparseable_manifest(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT], ids=lambda c: c.directory
+    "contract",
+    [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.COMPUTER_USE_CONTRACT, pc.SUBAGENTS_CONTRACT],
+    ids=lambda c: c.directory,
 )
 def test_real_workspace_tarballs_pass_audit(
     contract: pc.PackageContract, tmp_path: Path, sandbox: pc.Sandbox
@@ -1619,7 +1623,7 @@ def test_faux_provider_records_system_and_developer_text() -> None:
 
 def test_contracts_are_hashable() -> None:
     """Dependency allowances are tuples, so every contract can key a set or dict."""
-    assert len({*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT}) == 5
+    assert len({*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.COMPUTER_USE_CONTRACT, pc.SUBAGENTS_CONTRACT}) == 6
 
 
 # --- scenario_subagents and the registry branch of install_alone ------------------------------------

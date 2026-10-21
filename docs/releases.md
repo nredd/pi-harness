@@ -25,8 +25,8 @@
 
 ## Owned npm packages
 
-`.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-dev-tools`,
-`@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-subagents` and `@nredd/pi-preset`.
+`.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-computer-use`,
+`@nredd/pi-dev-tools`, `@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-subagents` and `@nredd/pi-preset`.
 
 `scripts/release_descriptors.py` is the publisher's data registry. Each entry supplies a package name,
 repository-relative workspace, shell-free verify commands, packed-artifact contract gates, and optional
@@ -58,7 +58,7 @@ ReleaseDescriptor(
 )
 ```
 
-`@nredd/pi-computer-use` will additionally declare `native_artifacts=(PurePosixPath("prebuilt/macos/*"),)`.
+`@nredd/pi-computer-use` declares the two source-controlled per-architecture helper payloads: `prebuilt/macos/arm64/bridge` and `prebuilt/macos/x64/bridge`. Its stock contract proves packing, auditing, standalone install, extension loading, and the full model-visible tool surface, while recording native helper and desktop behavior as `NOT RUN`: CI cannot supply an interactive desktop or Accessibility/Screen Recording TCC grants. `npm run check` runs the fork's portable suite, including macOS Swift pure checks and the packed-payload check; `npm run build:native` remains a separately invoked macOS build gate, and the live helper script remains opt-in.
 Patterns use `PurePosixPath.full_match`: `*` and `?` stay within one path segment, while `**` matches zero
 or more segments. Requirements check both the source workspace and packed tarball, but the helper build
 and macOS native suites belong to its later import PR. No extension descriptor is added by this change.

@@ -16,7 +16,7 @@ including documentation, fork, dotfiles, and automated promotion changes.
 
 Layout:
 
-- `packages/`: independently versioned plugins and optional preset.
+- `packages/`: independently versioned plugins and optional preset, including imported `@nredd/pi-computer-use`. Its packed contract proves stock-Pi loading and the model-visible tool surface; native desktop behavior is explicitly NOT RUN without an interactive macOS TCC-granted session.
 - `forks/`: exact upstream-fork source commits (submodules), with their native build systems. See
   [fork ownership](docs/forks.md).
 - `integration/inprocess/`: private `A-stack` scenarios on core's real harness, Vitest + Bun: Plan/todos, goals/loops, subagent delivery, router quota/admission. Assertion destinations and clock boundaries: [here](docs/verification-rebuild.md).

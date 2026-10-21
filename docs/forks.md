@@ -18,6 +18,11 @@ licenses, source histories, and build procedures remain owned by their respectiv
 `packages/subagents` subtree imports `nredd/pi-subagents` commit
 `526fa2df76ba85df31bd14a843fae370e8efe78a` (`v0.22.0-nredd.5`) with its history; its Gitlink and
 `forks.yml` job remain until the shipped-selection PR changes the stack to npm.
+The `packages/computer-use` subtree imports `nredd/pi-computer-use` commit
+`3fd2fe39b702558c86491e488019ac9c80f7583e` (`v0.5.1-nredd.2`) with its history. Its Gitlink and
+`forks.yml` NOT RUN job remain until the shipped-selection PR changes the stack to npm. Its packed
+stock-Pi contract checks loading and the model-visible tools only; native helper and desktop behavior
+remain NOT RUN without an interactive macOS desktop and TCC grants.
 The selected `forks/pi-subagents` commit is additionally exercised with the real packed preset and
 dev-tools by `make check-fork-package-contracts` ([details](package-contracts.md)); it refuses a missing,
 dirty or Gitlink-mismatched fork and never bootstraps or installs into it.

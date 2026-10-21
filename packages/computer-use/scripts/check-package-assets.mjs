@@ -5,11 +5,12 @@ import { rm } from "node:fs/promises";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+// `setup-helper.mjs` builds the per-user macOS app from these arch-specific
+// payloads at install time. The upstream release workflow also produces a signed
+// universal app, but that release-only artifact is not source-controlled.
 const expected = [
-	"package/prebuilt/macos/universal/pi-computer-use.app/Contents/MacOS/bridge",
-	"package/prebuilt/windows/windows-bridge.exe",
-	"package/prebuilt/linux/x64/linux-bridge",
-	"package/prebuilt/linux/arm64/linux-bridge",
+	"package/prebuilt/macos/arm64/bridge",
+	"package/prebuilt/macos/x64/bridge",
 ];
 
 const suppliedTarball = process.argv[2];
