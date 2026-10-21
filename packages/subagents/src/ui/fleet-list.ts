@@ -24,8 +24,10 @@ import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroun
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
-/** Max agent rows shown at once; extras collapse into a "↓ N more" indicator. */
+/** Max fleet rows shown at once; extras collapse into indicator rows. */
 const MAX_AGENT_ROWS = 5;
+/** Agent rows left when overflow reserves the two indicator rows. */
+const OVERFLOW_AGENT_ROWS = Math.max(1, MAX_AGENT_ROWS - 2);
 /** Re-render cadence so elapsed/token stats tick while agents run. */
 const TICK_MS = 200;
 /** How long a finished agent lingers in the list before it drops out. */
@@ -554,16 +556,17 @@ export class FleetList {
     lines.push("");
     lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
 
-    // Window the rows so the selected one stays visible.
-    const visible = Math.min(MAX_AGENT_ROWS, rows.length);
+    // At the cap, the row block holds rows alone. Once it overflows, reserve
+    // two of those slots for indicators, keeping the block exactly cap lines
+    // tall while the selected row stays in the agent window.
+    const overflow = rows.length > MAX_AGENT_ROWS;
+    const visible = Math.min(overflow ? OVERFLOW_AGENT_ROWS : MAX_AGENT_ROWS, rows.length);
     const selRow = Math.max(0, sel - 1);
     const start = selRow < visible ? 0 : selRow - visible + 1;
     const hiddenBelow = rows.length - (start + visible);
 
-    // Past the cap both indicator slots are always reserved (blank at 0) so the
-    // widget height -- and everything stacked below it -- never moves as the
-    // selection scrolls the window.
-    const overflow = rows.length > MAX_AGENT_ROWS;
+    // Both indicator slots remain in the row block, blank at an edge, so every
+    // overflowing roster has the same height.
     // Column widths come from the visible agent rows so every tail lines up.
     const cells = new Map<AgentRecord, string[]>();
     for (const r of rows.slice(start, start + visible)) {
