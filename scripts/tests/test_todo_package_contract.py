@@ -34,7 +34,7 @@ def context(tmp_path: Path) -> pc.Context:
     Returns:
         pc.Context: Context with a disposable sandbox and package artifact.
     """
-    return make_context(tmp_path, pc.TODO_CONTRACT, "2.13.9")
+    return make_context(tmp_path, pc.TODO_CONTRACT, "2.13.10")
 
 
 def todo_event(
