@@ -104,7 +104,7 @@ jobs:
         if: steps.release.outputs.state == 'create'
         with:
           subject-path: promotion/stack-snapshot.json
-      - name: Create the immutable release
+      - name: Create the release
         if: steps.release.outputs.state == 'create'
         env:
           GH_TOKEN: ${{ github.token }}
