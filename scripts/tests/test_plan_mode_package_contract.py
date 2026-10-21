@@ -240,7 +240,9 @@ def lay_out_install(
     """
     for path, manifest in packages.items():
         (cwd / path).mkdir(parents=True, exist_ok=True)
-        (cwd / path / "package.json").write_text(json.dumps({"name": path, **manifest}))
+        name = path.rsplit("node_modules/", 1)[1]
+        version = "0.65.2" if name == KIT else "1.0.0"
+        (cwd / path / "package.json").write_text(json.dumps({"name": name, "version": version, **manifest}))
     for name in extra_dirs:
         (cwd / "node_modules" / name).mkdir(parents=True)
     entries = lock if lock is not None else {path: {} for path in packages}
@@ -300,11 +302,25 @@ def run_install(
         pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
     )
     entries = lock if lock is not None else lock_for(packages)
-    monkeypatch.setattr(
-        pc,
-        "run",
-        lambda _cmd, *, cwd, **_kwargs: lay_out_install(cwd, packages, lock=entries, extra_dirs=extra_dirs),
-    )
+    real_run = pc.run
+
+    def fake_run(cmd: list[Any], *, cwd: Path, **kwargs: Any) -> Any:
+        """Fake `npm install`; run the real `node` semver helper.
+
+        Parameters:
+            cmd (list[Any]): Command; `node` invocations pass through.
+            cwd (Path): Working directory.
+            **kwargs (Any): Remaining `run` arguments.
+
+        Returns:
+            Any: The real result for `node`, else `None`.
+        """
+        if Path(cmd[0]).name == "node":
+            return real_run(cmd, cwd=cwd, **kwargs)
+        lay_out_install(cwd, packages, lock=entries, extra_dirs=extra_dirs)
+        return None
+
+    monkeypatch.setattr(pc, "run", fake_run)
     return pc.install_alone(
         artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project"
     )
@@ -485,3 +501,247 @@ def test_plan_mode_install_allows_only_declared_dependency(
     monkeypatch.setattr(pc, "run", fake_run)
     with pytest.raises(pc.ContractError, match="dependencies differ"):
         pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
+
+
+def lay_out_raw(cwd: Path, files: dict[str, str], lock: dict[str, dict[str, Any]]) -> None:
+    """Write raw files under `cwd` and a lockfile.
+
+    Parameters:
+        cwd (Path): Consumer project root.
+        files (dict[str, str]): File text by path.
+        lock (dict[str, dict[str, Any]]): Lock entries by path.
+    """
+    for path, text in files.items():
+        (cwd / path).parent.mkdir(parents=True, exist_ok=True)
+        (cwd / path).write_text(text)
+    (cwd / "package-lock.json").write_text(json.dumps({"packages": {"": {}, **lock}}))
+
+
+ROOT_PATH = f"node_modules/{ROOT_PACKAGE}"
+KIT_PATH = f"node_modules/{KIT}"
+BAD_INSTALLS = {
+    "invalid-json": (f"{ROOT_PATH}/package.json", "{nope", "is not valid JSON"),
+    "non-object": (f"{ROOT_PATH}/package.json", "[]", "is not an object"),
+    "malformed-deps": (
+        f"{ROOT_PATH}/package.json",
+        json.dumps({"name": ROOT_PACKAGE, "dependencies": ["x"]}),
+        "malformed dependency maps",
+    ),
+    "wrong-name": (
+        f"{ROOT_PATH}/package.json",
+        json.dumps({"name": "other", "dependencies": {KIT: "^0.65.2"}}),
+        "is named 'other'",
+    ),
+    "installed-deps-differ": (
+        f"{ROOT_PATH}/package.json",
+        json.dumps({"name": ROOT_PACKAGE, "dependencies": {KIT: "^0.65.2", "x": "1"}}),
+        "installed dependencies differ",
+    ),
+    "absent": (None, "", "is absent from `node_modules`"),
+}
+
+
+@pytest.mark.parametrize("case", BAD_INSTALLS)
+def test_install_rejects_bad_installed_manifests(
+    case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each bad installed manifest or missing package is a `ContractError` with its own message.
+
+    Parameters:
+        case (str): Key into `BAD_INSTALLS`.
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+    target, text, message = BAD_INSTALLS[case]
+    files = {f"{KIT_PATH}/package.json": json.dumps({"name": KIT, "version": "0.65.2"})}
+    if target is not None:
+        files[target] = text
+    lock = {ROOT_PATH: {"dependencies": {KIT: "^0.65.2"}}, KIT_PATH: {}}
+    artifact = pc.PackedArtifact(
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+    )
+    monkeypatch.setattr(pc, "run", lambda _cmd, *, cwd, **_kw: lay_out_raw(cwd, files, lock))
+    with pytest.raises(pc.ContractError, match=message):
+        pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
+
+
+@pytest.mark.parametrize(
+    "stray",
+    [
+        "node_modules/a/node_modules/junk",
+        "node_modules/a/node_modules/@scope",
+        "node_modules/a/node_modules/@scope/junk",
+        f"{KIT_PATH}/node_modules/@scope/file.txt",
+        "node_modules/a/node_modules/file.txt",
+    ],
+)
+def test_install_rejects_manifestless_strays(
+    stray: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Manifest-less directories, empty scope directories and plain files under any `node_modules` fail.
+
+    Parameters:
+        stray (str): Path to create.
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+    packages = good_install()
+    artifact = pc.PackedArtifact(
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+    )
+    real_run = pc.run
+
+    def fake_run(cmd: list[Any], *, cwd: Path, **kwargs: Any) -> Any:
+        """Fake `npm install` plus a stray entry; `node` passes through.
+
+        Parameters:
+            cmd (list[Any]): Command.
+            cwd (Path): Working directory.
+            **kwargs (Any): Remaining `run` arguments.
+
+        Returns:
+            Any: Real `node` result, else `None`.
+        """
+        if Path(cmd[0]).name == "node":
+            return real_run(cmd, cwd=cwd, **kwargs)
+        lay_out_install(cwd, packages, lock=lock_for(packages))
+        target = cwd / stray
+        if target.suffix:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x")
+        else:
+            target.mkdir(parents=True)
+        return None
+
+    monkeypatch.setattr(pc, "run", fake_run)
+    with pytest.raises(pc.ContractError, match="outside the closure"):
+        pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
+
+
+def test_install_ignores_npm_metadata_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`.bin` and `.package-lock.json` (what npm writes) are not strays at any depth.
+
+    Parameters:
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+    packages = good_install()
+    real_run = pc.run
+
+    def fake_run(cmd: list[Any], *, cwd: Path, **kwargs: Any) -> Any:
+        """Fake `npm install` with npm metadata; `node` passes through.
+
+        Parameters:
+            cmd (list[Any]): Command.
+            cwd (Path): Working directory.
+            **kwargs (Any): Remaining `run` arguments.
+
+        Returns:
+            Any: Real `node` result, else `None`.
+        """
+        if Path(cmd[0]).name == "node":
+            return real_run(cmd, cwd=cwd, **kwargs)
+        lay_out_install(cwd, packages, lock=lock_for(packages))
+        (cwd / "node_modules/.bin").mkdir()
+        (cwd / "node_modules/.package-lock.json").write_text("{}")
+        (cwd / "node_modules/a/node_modules/.bin").mkdir()
+        return None
+
+    monkeypatch.setattr(pc, "run", fake_run)
+    artifact = pc.PackedArtifact(
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+    )
+    pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
+
+
+def test_install_rejects_a_misnamed_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A package installed under a directory its manifest does not name fails.
+
+    Parameters:
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+    packages = good_install()
+    packages["node_modules/a"] = {"name": "not-a", "dependencies": {"c": "1"}}
+    real_run = pc.run
+
+    def fake_run(cmd: list[Any], *, cwd: Path, **kwargs: Any) -> Any:
+        """Fake `npm install` with a manifest name override; `node` passes through.
+
+        Parameters:
+            cmd (list[Any]): Command.
+            cwd (Path): Working directory.
+            **kwargs (Any): Remaining `run` arguments.
+
+        Returns:
+            Any: Real `node` result, else `None`.
+        """
+        if Path(cmd[0]).name == "node":
+            return real_run(cmd, cwd=cwd, **kwargs)
+        lay_out_install(cwd, packages, lock=lock_for(packages))
+        return None
+
+    monkeypatch.setattr(pc, "run", fake_run)
+    artifact = pc.PackedArtifact(
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+    )
+    with pytest.raises(pc.ContractError, match="is named 'not-a'"):
+        pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
+
+
+def test_install_rejects_an_out_of_range_direct_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The root's resolved direct dependency must satisfy the declared range.
+
+    Parameters:
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+    packages = good_install()
+    packages[KIT_PATH] = {**packages[KIT_PATH], "version": "0.64.0"}
+    with pytest.raises(pc.ContractError, match=r"does not satisfy '\^0.65.2'"):
+        run_install(tmp_path, monkeypatch, packages)
+
+
+def optional_install(
+    *, lock_optional: bool, listed: bool
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Build an install whose optional dependency `opt` is lock-only.
+
+    Parameters:
+        lock_optional (bool): Whether the lock entry for `opt` is flagged `optional`.
+        listed (bool): Whether the requirer lists `opt` in `optionalDependencies`.
+
+    Returns:
+        tuple[dict[str, dict[str, Any]], dict[str, Any]]: Manifests and lock entries.
+    """
+    packages = good_install()
+    if not listed:
+        packages[KIT_PATH] = {"dependencies": {"a": "1"}}
+    lock = lock_for(packages) | {"node_modules/opt": {"optional": True} if lock_optional else {}}
+    return packages, lock
+
+
+@pytest.mark.parametrize(
+    ("lock_optional", "listed", "passes"),
+    [(True, True, True), (False, True, False), (True, False, False)],
+)
+def test_install_allows_only_skipped_optional_lock_paths(
+    lock_optional: bool, listed: bool, passes: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock-only path passes only with `optional: true` AND a requirer's `optionalDependencies`.
+
+    Parameters:
+        lock_optional (bool): Lock entry flagged optional.
+        listed (bool): Requirer lists it as optional.
+        passes (bool): Expected outcome.
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+    packages, lock = optional_install(lock_optional=lock_optional, listed=listed)
+    if passes:
+        run_install(tmp_path, monkeypatch, packages, lock=lock)
+    else:
+        with pytest.raises(pc.ContractError, match="lockfile paths differ"):
+            run_install(tmp_path, monkeypatch, packages, lock=lock)
