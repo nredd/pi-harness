@@ -125,14 +125,44 @@ registered through `models.json` with a dummy key.
 Scratch is deleted unless `--keep`.
 
 Limits: this is stock Pi only. It does not exercise `pi install npm:...`, the forked
-subagents/Plan-mode integrations (the subagents one is covered by the next section), the
+Plan-mode integration, the
 Bun-compiled candidate, or the full stack. Do not read a pass as candidate or fullstack acceptance.
+
+## Subagents and computer-use contracts
+
+`SUBAGENTS_CONTRACT` is likewise outside the standalone three, because it has real runtime
+dependencies and `make check-package-contracts` installs offline. It differs from a plugin contract in
+declared allowances only: `runtime_dependencies` (`croner`, `nanoid`; the manifest must match exactly and
+the import audit admits just those), `peer_ranges` (the `>=1.1.0` floor instead of `*`) and
+`own_license` (the packed `LICENSE` must equal the workspace's, which keeps upstream's copyright, not the
+root one). The release `stock` gate installs the tarball plus those two dependencies from the registry
+and requires `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow` in the model request.
+`scenario_subagents` then has a faux parent call `Agent` in the foreground (routed faux child), which
+is what imports `croner` and `nanoid` at runtime; failures print the tool list seen and the stderr tail.
+`make check-subagents-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-subagents`, needs the registry)
+runs that exact gate through `npm_release.run_stock_contract`, so the descriptor, siblings and scenario
+match the release `verify` run; CI's `contracts` job runs it on every non-docs PR and uploads
+`subagents-package-contracts.json`.
+
+`COMPUTER_USE_CONTRACT` (`@nredd/pi-computer-use`) is also outside the standalone three (it declares
+`own_license` and no runtime dependencies, but a `files`/`allowed` set for the macOS-only helpers:
+`prebuilt/macos/{arm64,x64}/bridge`, no linux/windows prebuilts, no `native/linux` crate).
+`scenario_computer_use` is platform-aware because `extensions/computer-use.ts` registers
+`desktop_screenshot` and `desktop_input` on darwin only: exactly 13 tools on darwin, exactly the other 11
+elsewhere (a desktop tool on non-darwin fails). It also parses each packed helper's Mach-O header in
+Python (works on Linux): 64-bit little-endian magic, `cputype` matching `arm64`/`x64`, mode `0755`. The
+evidence records `platform`, the expected `tools` and per-arch `helpers`. NOT RUN, recorded in the report:
+the `postinstall` (`setup-helper.mjs`; the stock install uses `--ignore-scripts`, and running it would
+create a keychain signing identity, `pkill` a running helper and register the app with LaunchServices)
+and every desktop tool (needs an interactive desktop with Accessibility/Screen Recording TCC grants).
+`make check-computer-use-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-computer-use`,
+needs the registry for stock Pi; postinstall and native desktop behavior are NOT RUN, as the evidence records) runs the same gate through `npm_release.run_stock_contract`; CI's `contracts` job
 
 ## Packed preset audit (no standalone Pi behavior)
 
 `@nredd/pi-preset` ships agents and themes only, so there is nothing to execute through stock Pi alone.
 `make check-package-contracts` additionally runs `package_contracts.py --audit-preset`
-(`run_audit_gate`): pack, the full tarball audit against `PRESET_CONTRACT`, then `install_alone` into a
+(`run_audit_gate`; with `REPORT=/abs/x.json` the preset report goes to `/abs/x-preset.json`): pack, the full tarball audit against `PRESET_CONTRACT`, then `install_alone` into a
 fresh project. The release `verify` stage runs the same function for the preset (descriptor gate
 `audit`), on the supplied bytes, never a repack.
 
@@ -142,9 +172,12 @@ the in-process suite, which covers what that gate asserted against real children
 `integration/inprocess/reviewer.test.ts` (the preset `code-reviewer` agent file discovered from
 `packages/preset`, child tools restricted to the read-only dev-tools allowlist, denied tools refused
 without effect) and `specialists.test.ts`, plus `package_contracts.py`'s packed dev-tools scenario
-and the stock subagents contract above. Not covered any more: the packed preset and dev-tools *bytes*
-driving a child together. The tarball audit and clean install still cover those bytes; the behavior is
-proven from the same sources.
+and the stock subagents contract above. Those two files only cover the `code-reviewer` agent discovery, the read-only child tool
+allowlist and denied-tool refusal; they have no global/project override or untrusted-project cases
+(trust is covered by `packages/subagents/test/project-agent-trust-e2e.test.ts`, which does not use the
+packed preset). No longer gated: the packed preset plus packed dev-tools bytes driving a real child
+together. Residual risk is low: the tarball audit and install-alone gates catch tarball-only breakage
+(a missing `agents/` file, a wrong `files` allowlist), and behavior is proven from the same sources.
 
 Review dispositions (PR3, HEAD `4af6e2c`), both fixed:
 

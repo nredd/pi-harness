@@ -264,6 +264,55 @@ def test_audit_gate_rejects_a_tarball_missing_required_files(tmp_path: Path) -> 
         pc.run_audit_gate(work, pc.PRESET_CONTRACT, {pc.PRESET_CONTRACT.directory: tarball})
 
 
+def test_audit_gate_propagates_an_install_alone_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clean-install failure is never swallowed by the audit gate.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Replaces `install_alone` with a failing double.
+    """
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        """Fail like a broken install.
+
+        Raises:
+            ContractError: Always.
+        """
+        raise pc.ContractError("install exploded")
+
+    monkeypatch.setattr(pc, "install_alone", boom)
+    with pytest.raises(pc.ContractError, match="install exploded"):
+        pc.run_audit_gate(tmp_path, pc.PRESET_CONTRACT)
+
+
+def test_main_audit_preset_writes_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--audit-preset --report` writes the evidence and returns 0; a failed gate returns 1.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Replaces `run_audit_gate` with a double.
+    """
+    monkeypatch.setattr(pc, "run_audit_gate", lambda _work, _contract: {"name": "@nredd/pi-preset"})
+    report = tmp_path / "out-preset.json"
+    assert pc.main(["--audit-preset", "--report", str(report)]) == 0
+    assert json.loads(report.read_text()) == {"name": "@nredd/pi-preset"}
+
+    def fail(_work: Path, _contract: pc.PackageContract) -> dict[str, object]:
+        """Fail the audit.
+
+        Raises:
+            ContractError: Always.
+        """
+        raise pc.ContractError("audit failed")
+
+    monkeypatch.setattr(pc, "run_audit_gate", fail)
+    failed = tmp_path / "failed.json"
+    assert pc.main(["--audit-preset", "--report", str(failed)]) == 1
+    assert not failed.exists()
+
+
 def test_sandbox_env_is_scrubbed(sandbox: pc.Sandbox, monkeypatch: pytest.MonkeyPatch) -> None:
     """No ambient credential or config location may leak into child processes.
 

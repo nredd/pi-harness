@@ -47,7 +47,7 @@ check-benchmark:  ## benchmarks/comparison unit gate with coverage threshold
 
 check-package-contracts:  ## Pack, audit, install and exercise each @nredd/pi-* tarball alone through exact stock Pi 1.3.0, plus audit+install of the packed preset (npm registry on first run)
 	cd scripts && uv run --locked --project ../integration python package_contracts.py $(if $(REPORT),--report $(REPORT))
-	cd scripts && uv run --locked --project ../integration python package_contracts.py --audit-preset
+	cd scripts && uv run --locked --project ../integration python package_contracts.py --audit-preset $(if $(REPORT),--report $(REPORT:.json=-preset.json))
 
 check-plan-mode-package-contract:  ## Packed @nredd/pi-plan-mode through exact stock Pi 1.3.0
 	cd scripts && uv run --locked --project ../integration python stock_package_contract.py --package @nredd/pi-plan-mode $(if $(REPORT),--report $(REPORT))
