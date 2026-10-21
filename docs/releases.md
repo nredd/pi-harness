@@ -26,7 +26,8 @@
 ## Owned npm packages
 
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-dev-tools`,
-`@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-subagents` and `@nredd/pi-preset`.
+`@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-subagents`, `@nredd/pi-todo` and
+`@nredd/pi-preset`.
 
 `scripts/release_descriptors.py` is the publisher's data registry. Each entry supplies a package name,
 repository-relative workspace, shell-free verify commands, packed-artifact contract gates, and optional
@@ -45,18 +46,10 @@ never runs it, but CI's `contracts` job runs the same gate on every
 non-docs PR as `make check-subagents-package-contract` (registry install plus a stock Pi run with one
 faux `Agent` call). The retained
 `forks.yml` job still covers the Gitlink source, not the tarball.
-For example, the future todo import will add an entry shaped like:
-
-```python
-ReleaseDescriptor(
-    name="@nredd/pi-todo",
-    workspace=PurePosixPath("packages/rpiv-todo"),
-    verify_commands=(("npm", "ci", "--ignore-scripts"), ("npm", "run", "check", "--workspace", "@nredd/pi-todo")),
-    contract=TODO_CONTRACT,
-    contract_gates=("stock",),
-    stock_gate=todo_stock_gate,
-)
-```
+`@nredd/pi-todo` uses `packages/todo`, retains the imported package's MIT `LICENSE`, and runs its native
+`npm run check` before the stock contract. Its descriptor's stock gate packs the selected bytes and calls the
+real `todo` tool through stock Pi; its two declared runtime dependencies are installed from the registry and
+its full lockfile closure is verified.
 
 `@nredd/pi-computer-use` will additionally declare `native_artifacts=(PurePosixPath("prebuilt/macos/*"),)`.
 Patterns use `PurePosixPath.full_match`: `*` and `?` stay within one path segment, while `**` matches zero
