@@ -55,7 +55,7 @@ from pydantic import (
     model_validator,
 )
 
-from faux_provider import FauxProvider, RecordedRequest, Step, TextStep, ToolStep, models_json
+from faux_provider import FauxProvider, RecordedRequest, Route, Step, TextStep, ToolStep, models_json
 
 LOGGER = logging.getLogger(__name__)
 
@@ -85,11 +85,14 @@ CODE_SUFFIXES = (".ts", ".mts", ".js", ".mjs")
 NO_PROXY_VALUE = "127.0.0.1,localhost"
 # Defense in depth for clients honoring proxy variables; this is not a network sandbox.
 DEAD_PROXY = "http://127.0.0.1:9"
+REGISTRY_ENV = {"HTTP_PROXY": "", "HTTPS_PROXY": ""}
 
 IMPORT_AUDIT = Path(__file__).with_name("import_audit.ts")
 IMPORT_AUDIT_TIMEOUT_S = 120
 STATS_ARTIFACT = "dist/pi-stats-export.mjs"
 STATS_PRIVATE_SENTINEL = "STATS-PRIVATE-TEXT-DO-NOT-EXPORT"
+SUBAGENTS_CHILD_MARKER = "pi-harness-subagents-child"
+SUBAGENTS_CHILD_TEXT = "subagents child ok"
 IMPORT_AUDIT_DIR = "pkg"  # Sources are laid out under this directory so the tsconfig cannot collide.
 
 
@@ -109,6 +112,7 @@ class PackageContract:
         exposes_tools (frozenset[str]): Tool names unique to this package.
         license (str): Exact SPDX expression the packed manifest must declare.
         runtime_dependencies (tuple[tuple[str, str], ...]): Exact direct runtime package ranges.
+        peer_ranges (tuple[tuple[str, str], ...]): Deliberate non-default peer ranges.
         own_license (bool): Whether the workspace license, rather than the repository license, is packed.
         standalone_artifacts (frozenset[str]): Files that must import only Node builtins when packed.
         packed_files (tuple[str, ...]): Exact packed paths, when the package has a fixed public payload.
@@ -121,6 +125,7 @@ class PackageContract:
     exposes_tools: frozenset[str]
     license: str = "MIT"
     runtime_dependencies: tuple[tuple[str, str], ...] = ()
+    peer_ranges: tuple[tuple[str, str], ...] = ()
     own_license: bool = False
     standalone_artifacts: frozenset[str] = frozenset()
     packed_files: tuple[str, ...] = ()
@@ -158,6 +163,23 @@ CONTRACTS = (
         exposes_tools=frozenset({"subscription_usage"}),
     ),
 )
+
+# `pi-subagents` has registry runtime dependencies, so it runs through its own stock contract.
+SUBAGENTS_CONTRACT = PackageContract(
+    name="@nredd/pi-subagents",
+    directory="subagents",
+    required=("LICENSE", "README.md", "package.json", "src/index.ts"),
+    allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^src/.+\.ts$")),
+    exposes_tools=frozenset({"Agent", "get_subagent_result", "steer_subagent", "SubagentWorkflow"}),
+    runtime_dependencies=(("croner", "^10.0.1"), ("nanoid", "^5.1.16")),
+    own_license=True,
+    peer_ranges=(
+        ("@earendil-works/pi-ai", ">=1.1.0"),
+        ("@earendil-works/pi-coding-agent", ">=1.1.0"),
+        ("@earendil-works/pi-tui", ">=1.1.0"),
+    ),
+)
+
 
 # The preset is audited and packed like the plugins but is deliberately NOT in `CONTRACTS`: it is not
 # a standalone plugin (it relies on the forked pi-subagents and `@nredd/pi-dev-tools` for its agents),
@@ -530,6 +552,13 @@ class RouterEvidence(TypedDict):
     dispatched: str
 
 
+class SubagentsEvidence(TypedDict):
+    """Return shape of `scenario_subagents`."""
+
+    tools: list[str]
+    child_text: str
+
+
 class PlanModeEvidence(TypedDict):
     """Return shape of `scenario_plan_mode`."""
 
@@ -537,7 +566,9 @@ class PlanModeEvidence(TypedDict):
     question_result: str
 
 
-ScenarioEvidence = DevToolsEvidence | SessionKitEvidence | RouterEvidence | PlanModeEvidence
+ScenarioEvidence = (
+    DevToolsEvidence | SessionKitEvidence | RouterEvidence | SubagentsEvidence | PlanModeEvidence
+)
 
 
 class DevToolsEvidenceModel(BaseModel):
@@ -564,6 +595,12 @@ class RouterEvidenceModel(BaseModel):
     )
 
 
+class SubagentsEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    tools: list[NonEmptyText] = Field(min_length=1, description="Tools the model was offered by the package")
+    child_text: NonEmptyText = Field(description="Answer the foreground `Agent` call returned from its child")
+
+
 class PlanModeEvidenceModel(BaseModel):
     model_config = STRICT_MODEL
     tools: list[str] = Field(min_length=2, description="Plan tools offered by the packed extension")
@@ -571,6 +608,7 @@ class PlanModeEvidenceModel(BaseModel):
 
 
 EVIDENCE_MODELS: dict[str, type[BaseModel]] = {
+    "@nredd/pi-subagents": SubagentsEvidenceModel,
     "@nredd/pi-dev-tools": DevToolsEvidenceModel,
     "@nredd/pi-session-kit": SessionKitEvidenceModel,
     "@nredd/pi-subscription-router": RouterEvidenceModel,
@@ -609,7 +647,11 @@ class PackageReport(BaseModel):
     size: int = Field(gt=0, description="Tarball size in bytes")
     files: list[NonEmptyText] = Field(min_length=1, description="Files in the packed tarball")
     evidence: (
-        DevToolsEvidenceModel | SessionKitEvidenceModel | RouterEvidenceModel | PlanModeEvidenceModel
+        DevToolsEvidenceModel
+        | SessionKitEvidenceModel
+        | RouterEvidenceModel
+        | SubagentsEvidenceModel
+        | PlanModeEvidenceModel
     ) = Field(description="Scenario evidence for this package")
 
 
@@ -1208,11 +1250,7 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
     ]
     expected_dependencies = dict(contract.runtime_dependencies)
     problems += [
-        (
-            f"dependency '{name}' is not a declared runtime dependency of '{contract.name}'"
-            if expected_dependencies
-            else "`dependencies` must be empty: host modules are peers and plugins are independent"
-        )
+        f"dependency '{name}' is not a declared runtime dependency of '{contract.name}'"
         for name in parsed.dependencies
         if name not in expected_dependencies
     ]
@@ -1227,9 +1265,12 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
         if name not in parsed.dependencies
     ]
     peers = parsed.peerDependencies
+    expected_peer_ranges = dict(contract.peer_ranges)
     problems += [f"peer '{name}' is not a host module" for name in peers if name not in HOST_MODULES]
     problems += [
-        f"peer '{name}' must use the range '*', not '{peers[name]}'" for name in peers if peers[name] != "*"
+        f"peer '{name}' must use the range '{expected_peer_ranges.get(name, '*')}', not '{peers[name]}'"
+        for name in peers
+        if peers[name] != expected_peer_ranges.get(name, "*")
     ]
     extensions = parsed.pi.extensions
     if not extensions:
@@ -1465,17 +1506,11 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
         raise ContractError(f"'{artifact.contract.name}' ships a nested `node_modules`: {nested}")
     lock = read_lockfile(project / "package-lock.json")
     package_path = f"node_modules/{artifact.contract.name}"
-    package_entry = lock.packages.get(package_path)
-    if package_entry is None:
+    if package_path not in lock.packages:
         raise ContractError(f"'{artifact.contract.name}' is absent from its install lockfile")
-    declared = dict(artifact.contract.runtime_dependencies)
-    if package_entry.dependencies != declared:
-        raise ContractError(
-            f"'{artifact.contract.name}' lockfile dependencies differ from its contract: "
-            f"{package_entry.dependencies} != {declared}"
-        )
-    expected_paths = {"", package_path}
-    pending = [package_path]
+    direct_paths = {f"node_modules/{name}" for name, _ in artifact.contract.runtime_dependencies}
+    expected_paths = {"", package_path, *direct_paths}
+    pending = [package_path, *direct_paths]
     while pending:
         parent = pending.pop()
         for name in lock.packages[parent].dependencies:
@@ -1488,7 +1523,7 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
     actual_paths = set(lock.packages)
     if actual_paths != expected_paths:
         raise ContractError(
-            f"'{artifact.contract.name}' install lockfile entries differ from its dependency closure: "
+            f"'{artifact.contract.name}' install pulled extra modules or has a different dependency closure: "
             f"expected {sorted(expected_paths)}, got {sorted(actual_paths)}"
         )
     expected_top = sorted(
@@ -1785,16 +1820,17 @@ class Context:
     work: Path
     siblings: tuple[PackageContract, ...]
 
-    def provider_session(self, script: Sequence[Step]) -> FauxProvider:
+    def provider_session(self, script: Sequence[Step], routes: Sequence[Route] = ()) -> FauxProvider:
         """Write `models.json` for a loopback provider running `script`.
 
         Parameters:
             script (Sequence[Step]): Scripted turns.
+            routes (Sequence[Route]): Routed child conversation scripts.
 
         Returns:
             FauxProvider: Provider to use as a context manager around the Pi run.
         """
-        provider = FauxProvider(script)
+        provider = FauxProvider(script, routes)
         (self.sandbox.agent_dir / "models.json").write_text(
             models_json(provider.base_url, PROVIDER, (PHYSICAL_MODEL,))
         )
@@ -2166,6 +2202,47 @@ def scenario_router(ctx: Context) -> RouterEvidence:
         f"rejected config registered models:\n{rejected.stdout}",
     )
     return {"virtual_model": "router/default", "dispatched": f"{PROVIDER}/{PHYSICAL_MODEL}"}
+
+
+def scenario_subagents(ctx: Context) -> SubagentsEvidence:
+    """Load the packed extension and execute one foreground `Agent` call through stock Pi.
+
+    Parameters:
+        ctx (Context): Scenario context.
+
+    Returns:
+        SubagentsEvidence: Registered tools and child response.
+
+    Raises:
+        ContractError: If the extension fails to load or the child cannot answer.
+    """
+    project = ctx.work / "project"
+    project.mkdir()
+    call = ToolStep(
+        "Agent",
+        {
+            "description": "trivial task",
+            "prompt": f"{SUBAGENTS_CHILD_MARKER}: reply with one word.",
+            "subagent_type": "general-purpose",
+            "run_in_background": False,
+        },
+    )
+    routes = [Route(SUBAGENTS_CHILD_MARKER, [TextStep(SUBAGENTS_CHILD_TEXT)])]
+    with ctx.provider_session([call, TextStep("done")], routes) as provider:
+        result = run_pi(
+            ctx.pi_bin,
+            ctx.sandbox,
+            ctx.installed,
+            project,
+            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
+        )
+    require_clean_run(result, "subagents load")
+    require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
+    record = result.single_tool_result("Agent")
+    require(not tool_is_error(record), f"subagents `Agent` failed: {record.get('result')}")
+    text = tool_text(record)
+    require(SUBAGENTS_CHILD_TEXT in text, f"subagents `Agent` result lacks the child's answer: '{text[-300:]}'")
+    return {"tools": sorted(ctx.artifact.contract.exposes_tools), "child_text": SUBAGENTS_CHILD_TEXT}
 
 
 def scenario_plan_mode(ctx: Context) -> PlanModeEvidence:
