@@ -175,7 +175,7 @@ CONTRACTS = (
 )
 
 # The preset is audited and packed like the plugins but is deliberately NOT in `CONTRACTS`: it is not
-# a standalone plugin (it relies on the forked pi-subagents and `@nredd/pi-dev-tools` for its agents),
+# a standalone plugin (it relies on `packages/subagents` and `@nredd/pi-dev-tools` for its agents),
 # so the stock gate does not run it; `run_audit_gate` audits and installs it alone instead. Its
 # themes are separately licensed, so the manifest must declare the full expression, and the license
 # texts plus `NOTICE.md` are required content rather than optional extras.
