@@ -537,7 +537,14 @@ def test_selected_published_propagates_signature_failure(repo: Path, monkeypatch
     )
 
     def fail(_identity: nr.PublishedIdentity) -> None:
-        """Simulate npm refusing the signature."""
+        """Simulate npm refusing the signature.
+
+        Parameters:
+            _identity (nr.PublishedIdentity): Unused verified identity.
+
+        Raises:
+            nr.ReleaseError: Always, as npm would.
+        """
         raise nr.ReleaseError("npm must verify the selected release signature AND attestation")
 
     monkeypatch.setattr(nr, "verify_signatures", fail)
