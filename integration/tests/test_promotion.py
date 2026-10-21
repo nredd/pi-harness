@@ -311,15 +311,6 @@ def test_checks_reject_malformed_pages(pages: list[Any]) -> None:
         verify_required_checks([RequiredCheck("a", None)], pages, FIXTURE_SHA)
 
 
-def jobs_fixture() -> dict[str, dict[str, Any]]:
-    """Load the recorded `gh run view --json jobs` response keyed by run ID.
-
-    Returns:
-        dict[str, dict[str, Any]]: run ID -> jobs response.
-    """
-    return {str(FIXTURE_RUN): fixture("github-run-jobs.json")}
-
-
 def artifacts_fixture() -> dict[str, Any]:
     """Load the recorded `actions/runs/<id>/artifacts` pages keyed by run ID.
 
@@ -330,9 +321,9 @@ def artifacts_fixture() -> dict[str, Any]:
 
 
 def test_stack_runs_match_real_recorded_run() -> None:
-    """The recorded run has a successful personal job and live stack artifact."""
+    """The recorded run has a live stack artifact bound to its run and SHA."""
     runs = fixture("github-runs.json")
-    assert registry_stack_runs(runs, jobs_fixture(), artifacts_fixture(), FIXTURE_SHA) == [FIXTURE_RUN]
+    assert registry_stack_runs(runs, artifacts_fixture(), FIXTURE_SHA) == [FIXTURE_RUN]
 
 
 def stack_job_block() -> str:
@@ -349,10 +340,8 @@ def stack_job_block() -> str:
 
 
 def test_stack_signal_still_comes_from_ci() -> None:
-    """Drift guard: the exact producer job and artifact templates remain promotion contracts."""
+    """Drift guard: the artifact template and its `steps.plan.outputs.run` gate remain promotion contracts."""
     block = stack_job_block()
-    assert "name: stack (${{ matrix.os }}, ${{ matrix.stack }})" in block
-    assert promotion.PERSONAL_STACK_JOB.fullmatch("stack (ubuntu-24.04, personal)")
     upload = block.index("name: stack-${{ matrix.os }}-${{ matrix.stack }}")
     step = block[block.rindex("- uses:", 0, upload) : upload]
     assert "actions/upload-artifact@" in step
@@ -360,63 +349,47 @@ def test_stack_signal_still_comes_from_ci() -> None:
     assert promotion.PERSONAL_STACK_ARTIFACT == "stack-ubuntu-24.04-personal"
 
 
-def test_stack_runs_reject_job_rename_despite_machine_evidence() -> None:
-    """The artifact must come from the exact Linux personal job that produces it."""
-    jobs = jobs_fixture()
-    for job in jobs[str(FIXTURE_RUN)]["jobs"]:
-        job["name"] = f"renamed {job['name']}"
-    with pytest.raises(ValueError, match="passing"):
-        registry_stack_runs(fixture("github-runs.json"), jobs, artifacts_fixture(), FIXTURE_SHA)
+def test_stack_runs_accept_renamed_job_with_valid_artifact_evidence() -> None:
+    """Job names are not evidence: a valid artifact qualifies the run whatever the matrix cell is called."""
+    runs = fixture("github-runs.json")
+    assert registry_stack_runs(runs, artifacts_fixture(), FIXTURE_SHA) == [FIXTURE_RUN]
+    assert not hasattr(promotion, "PERSONAL_STACK_JOB")
 
 
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda run, jobs, artifacts: run.update(event="pull_request"),
-        lambda run, jobs, artifacts: run.update(headBranch="topic"),
-        lambda run, jobs, artifacts: run.update(conclusion="failure"),
-        lambda run, jobs, artifacts: run.update(headSha="b" * 40),
-        lambda run, jobs, artifacts: jobs.clear(),
-        lambda run, jobs, artifacts: artifacts.clear(),
-        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"].clear(),
-        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(expired=True),
-        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(
+        lambda run, artifacts: run.update(event="pull_request"),
+        lambda run, artifacts: run.update(headBranch="topic"),
+        lambda run, artifacts: run.update(conclusion="failure"),
+        lambda run, artifacts: run.update(headSha="b" * 40),
+        lambda run, artifacts: artifacts.clear(),
+        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"].clear(),
+        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(expired=True),
+        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(
             name="stack-macos-14-personal"
         ),
-        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(
+        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(
             head_sha="b" * 40
         ),
-        lambda run, jobs, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(
-            id=1
-        ),
+        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(id=1),
     ],
 )
 def test_stack_runs_reject_absent_expired_or_mismatched_evidence(mutate: Any) -> None:
     """Only successful push/main runs with job data and a live matching artifact qualify.
 
     Parameters:
-        mutate (Any): mutation applied to the recorded runs, jobs and artifacts.
+        mutate (Any): mutation applied to the recorded run and artifacts.
 
     Returns:
         None: None.
     """
     runs = copy.deepcopy(fixture("github-runs.json"))
-    jobs = copy.deepcopy(jobs_fixture())
     artifacts = copy.deepcopy(artifacts_fixture())
     assert artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["name"] == promotion.PERSONAL_STACK_ARTIFACT
-    mutate(runs[0], jobs, artifacts)
+    mutate(runs[0], artifacts)
     with pytest.raises(ValueError, match="docs-only"):
-        registry_stack_runs(runs, jobs, artifacts, FIXTURE_SHA)
-
-
-def test_stack_runs_reject_failed_personal_job_despite_artifact() -> None:
-    """The artifact cannot qualify when its exact producer job failed."""
-    jobs = copy.deepcopy(jobs_fixture())
-    for job in jobs[str(FIXTURE_RUN)]["jobs"]:
-        if promotion.PERSONAL_STACK_JOB.fullmatch(job["name"]):
-            job["conclusion"] = "failure"
-    with pytest.raises(ValueError, match="passing"):
-        registry_stack_runs(fixture("github-runs.json"), jobs, artifacts_fixture(), FIXTURE_SHA)
+        registry_stack_runs(runs, artifacts, FIXTURE_SHA)
 
 
 @pytest.mark.parametrize("pages", ["x", [1], [{"artifacts": {}}]])
@@ -430,9 +403,7 @@ def test_stack_runs_reject_malformed_artifact_pages(pages: Any) -> None:
         None: None.
     """
     with pytest.raises(ValueError, match="rtifact"):
-        registry_stack_runs(
-            fixture("github-runs.json"), jobs_fixture(), {str(FIXTURE_RUN): pages}, FIXTURE_SHA
-        )
+        registry_stack_runs(fixture("github-runs.json"), {str(FIXTURE_RUN): pages}, FIXTURE_SHA)
 
 
 def test_owned_tags_and_gates_require_exact_owned_evidence(tmp_path: Path) -> None:
@@ -643,7 +614,6 @@ def test_cli_checks_and_stack_runs_against_recorded_fixtures(
     """
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
-    (artifacts / f"jobs-{FIXTURE_RUN}.json").write_text((FIXTURES / "github-run-jobs.json").read_text())
     (artifacts / f"run-{FIXTURE_RUN}.json").write_text((FIXTURES / "github-run-artifacts.json").read_text())
     args = ["--source-sha", FIXTURE_SHA]
     runs = [
@@ -734,33 +704,6 @@ def test_release_state_creates_resumes_or_refuses(tmp_path: Path, capsys: pytest
     assert capsys.readouterr().out == "create\n"
 
 
-def test_prepare_release_validates_existing_tag_before_downloading_asset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A mismatched existing tag refuses before release download or a later attestation.
-
-    Parameters:
-        tmp_path (Path): private candidate and release paths.
-        monkeypatch (pytest.MonkeyPatch): isolated command boundary.
-
-    Returns:
-        None: None.
-    """
-    rebuilt = tmp_path / "rebuilt.json"
-    rebuilt.write_bytes(b"{}")
-    calls: list[tuple[str, ...]] = []
-
-    def command(*args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        """Record the tag query and return a tag targeting another commit."""
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0, json.dumps({"object": {"sha": "b" * 40}}), "")
-
-    monkeypatch.setattr(publish_gate, "_command", command)
-    with pytest.raises(ValueError, match="Tag points"):
-        publish_gate.prepare_release("nredd/pi-harness", "a" * 40, rebuilt, tmp_path / "existing")
-    assert calls == [("gh", "api", "repos/nredd/pi-harness/git/ref/tags/stack/" + "a" * 40)]
-
-
 def test_advance_channel_requires_deploy_key(tmp_path: Path) -> None:
     """The write boundary refuses before touching Git when its ruleset bypass key is absent.
 
@@ -776,15 +719,8 @@ def test_advance_channel_requires_deploy_key(tmp_path: Path) -> None:
         advance_channel("nredd/pi-harness", "a" * 40, snapshot, "", tmp_path)
 
 
-def test_tag_target_requires_the_selected_sha(tmp_path: Path) -> None:
-    """The release tag must resolve to the source SHA.
-
-    Parameters:
-        tmp_path (Path): private fixture directory
-
-    Returns:
-        None: None.
-    """
+def test_tag_target_requires_the_selected_sha() -> None:
+    """The release tag must be a lightweight tag resolving to the source SHA."""
     ref = {"object": {"sha": "a" * 40, "type": "commit"}}
     verify_tag_target(ref, "a" * 40)
     with pytest.raises(ValueError, match="not"):
@@ -792,10 +728,8 @@ def test_tag_target_requires_the_selected_sha(tmp_path: Path) -> None:
     for bad in ({}, {"object": {}}, [], {"object": {"sha": 1}}):
         with pytest.raises(ValueError, match=r"object\.sha"):
             verify_tag_target(bad, "a" * 40)
-    path = tmp_path / "ref.json"
-    path.write_text(json.dumps(ref))
-    assert publish_gate.main(["tag-target", "--ref", str(path), "--source-sha", "a" * 40]) == 0
-    assert publish_gate.main(["tag-target", "--ref", str(path), "--source-sha", "b" * 40]) == 1
+    with pytest.raises(ValueError, match="annotated"):
+        verify_tag_target({"object": {"sha": "a" * 40, "type": "tag"}}, "a" * 40)
 
 
 def tagged_repo(tmp_path: Path) -> Path:
@@ -1069,7 +1003,15 @@ def test_legacy_core_tags_skip_attestation(tmp_path: Path, monkeypatch: pytest.M
     write_stack(stack_path, core={"tag": tag, "integrity": dict(frozen)})
 
     def forbidden(*_args: object, **_kwargs: object) -> None:
-        """Fail if legacy validation touches the network or provenance verifier."""
+        """Fail if legacy validation touches the network or provenance verifier.
+
+        Parameters:
+            *_args (object): ignored positional arguments.
+            **_kwargs (object): ignored keyword arguments.
+
+        Raises:
+            pytest.fail.Exception: always.
+        """
         pytest.fail("legacy tags must not download or attest")
 
     monkeypatch.setattr(promotion, "urlopen", forbidden)
@@ -1077,3 +1019,314 @@ def test_legacy_core_tags_skip_attestation(tmp_path: Path, monkeypatch: pytest.M
     stack = Stack.model_validate_json(stack_path.read_bytes())
     verify_core_assets(stack, tmp_path / "core")
     assert promotion.main(["core", "--stack", str(stack_path), "--workdir", str(tmp_path / "core")]) == 0
+
+
+FAKE_GH = """#!{python}
+import json, os, sys
+from pathlib import Path
+
+state = Path(os.environ["FAKE_GH_DIR"])
+argv = sys.argv[1:]
+with (state / "calls.log").open("a") as log:
+    log.write(json.dumps(argv) + "\\n")
+for needle, code, out, err in json.loads((state / "rules.json").read_text()):
+    if needle in " ".join(argv):
+        if argv[:2] == ["release", "download"] and code == 0:
+            (Path(argv[argv.index("--dir") + 1]) / "stack-snapshot.json").write_text(out)
+        else:
+            sys.stdout.write(out)
+        sys.stderr.write(err)
+        raise SystemExit(code)
+sys.stderr.write("unexpected gh call: " + " ".join(argv))
+raise SystemExit(99)
+"""
+
+SHA = "a" * 40
+
+
+def fake_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rules: list[list[Any]]) -> Path:
+    """Install a `gh` executable at the process boundary that answers from `rules`.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        monkeypatch (pytest.MonkeyPatch): puts the stub first on `PATH`.
+        rules (list[list[Any]]): `[argv substring, exit code, stdout, stderr]`, first match wins.
+
+    Returns:
+        Path: the stub's state directory (`calls.log` records every argv).
+    """
+    state = tmp_path / "fake-gh"
+    state.mkdir(parents=True)
+    (state / "rules.json").write_text(json.dumps(rules))
+    (state / "calls.log").write_text("")
+    binary = state / "bin" / "gh"
+    binary.parent.mkdir()
+    binary.write_text(FAKE_GH.format(python=sys.executable))
+    binary.chmod(0o755)
+    monkeypatch.setenv("FAKE_GH_DIR", str(state))
+    monkeypatch.setenv("PATH", f"{binary.parent}:/usr/bin:/bin")
+    return state
+
+
+def refs_for(tag: str, sha: str, kind: str = "commit") -> str:
+    """Build a slurped `matching-refs` response naming one tag.
+
+    Parameters:
+        tag (str): tag name.
+        sha (str): object SHA.
+        kind (str): git object type.
+
+    Returns:
+        str: JSON pages.
+    """
+    return json.dumps([[{"ref": f"refs/tags/{tag}", "object": {"sha": sha, "type": kind}}]])
+
+
+def release_json(assets: list[str]) -> str:
+    """Build a release response with the named assets.
+
+    Parameters:
+        assets (list[str]): asset names.
+
+    Returns:
+        str: release JSON.
+    """
+    return json.dumps({"assets": [{"name": name} for name in assets]})
+
+
+def prepare(tmp_path: Path, rules: list[list[Any]], monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Run `prepare_release` against a stubbed `gh` with a rebuilt snapshot of `{}`.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        monkeypatch (pytest.MonkeyPatch): process boundary.
+        rules (list[list[Any]]): stub rules.
+
+    Returns:
+        Any: the release state.
+    """
+    fake_gh(tmp_path, monkeypatch, rules)
+    rebuilt = tmp_path / "rebuilt.json"
+    rebuilt.write_bytes(b"{}")
+    return publish_gate.prepare_release("o/r", SHA, rebuilt, tmp_path / "existing")
+
+
+TAG = f"stack/{SHA}"
+REFS_API = ["matching-refs/tags/" + TAG, 0]
+
+
+def test_prepare_release_creates_when_the_tag_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty `matching-refs` (or only a prefix match) is the one "absent" answer."""
+    assert prepare(tmp_path, [[*REFS_API, "[[]]", ""]], monkeypatch) == "create"
+    other = json.dumps([[{"ref": f"refs/tags/{TAG}-x", "object": {"sha": SHA, "type": "commit"}}]])
+    assert prepare(tmp_path / "prefix", [[*REFS_API, other, ""]], monkeypatch) == "create"
+
+
+def test_prepare_release_resumes_a_matching_tag_and_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lightweight tag on the SHA with an equal snapshot asset resumes, after downloading it."""
+    rules = [
+        [*REFS_API, refs_for(TAG, SHA), ""],
+        ["releases/tags/" + TAG, 0, release_json(["stack-snapshot.json"]), ""],
+        ["release download", 0, "{}", ""],
+    ]
+    assert prepare(tmp_path, rules, monkeypatch) == "resume"
+    assert (tmp_path / "existing" / "stack-snapshot.json").read_bytes() == b"{}"
+
+
+@pytest.mark.parametrize(
+    "stderr", ["HTTP 403: rate limit exceeded", "HTTP 502: Bad Gateway", "HTTP 404: Not Found"]
+)
+def test_prepare_release_fails_closed_on_any_gh_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str
+) -> None:
+    """Every `gh` failure (even exit 1) is an error, never "tag absent"."""
+    with pytest.raises(PublishError, match="Command failed"):
+        prepare(tmp_path, [[*REFS_API[:1], 1, "", stderr]], monkeypatch)
+
+
+def test_prepare_release_refuses_a_release_without_the_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tag exists but the release has no snapshot (or no release): refuse before any download."""
+    rules = [
+        [*REFS_API, refs_for(TAG, SHA), ""],
+        ["releases/tags/" + TAG, 0, release_json(["other.txt"]), ""],
+    ]
+    with pytest.raises(PublishError, match=r"no stack-snapshot\.json"):
+        prepare(tmp_path, rules, monkeypatch)
+    assert "release download" not in (tmp_path / "fake-gh" / "calls.log").read_text()
+    gone = [[*REFS_API, refs_for(TAG, SHA), ""], ["releases/tags/" + TAG, 1, "", "HTTP 404"]]
+    with pytest.raises(PublishError, match="Command failed"):
+        prepare(tmp_path / "gone", gone, monkeypatch)
+
+
+def test_prepare_release_refuses_a_mismatched_or_annotated_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tag on another commit, or an annotated tag, refuses before the release is read."""
+    with pytest.raises(ValueError, match="Tag points"):
+        prepare(tmp_path, [[*REFS_API, refs_for(TAG, "b" * 40), ""]], monkeypatch)
+    with pytest.raises(ValueError, match="annotated"):
+        prepare(tmp_path / "ann", [[*REFS_API, refs_for(TAG, SHA, "tag"), ""]], monkeypatch)
+    assert "releases/tags" not in (tmp_path / "ann" / "fake-gh" / "calls.log").read_text()
+
+
+def test_prepare_release_refuses_a_differing_asset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An existing asset that differs from the rebuilt snapshot fails closed."""
+    rules = [
+        [*REFS_API, refs_for(TAG, SHA), ""],
+        ["releases/tags/" + TAG, 0, release_json(["stack-snapshot.json"]), ""],
+        ["release download", 0, '{"x":1}', ""],
+    ]
+    with pytest.raises(ValueError, match="differs"):
+        prepare(tmp_path, rules, monkeypatch)
+
+
+def test_confirm_tag_reads_the_exact_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`tag-target` fetches the ref itself and refuses an absent, moved or annotated tag."""
+    fake_gh(tmp_path, monkeypatch, [[*REFS_API, refs_for(TAG, SHA), ""]])
+    assert publish_gate.main(["tag-target", "--repo", "o/r", "--source-sha", SHA]) == 0
+    assert publish_gate.main(["tag-target", "--repo", "o/r", "--source-sha", "b" * 40]) == 1
+
+
+def channel_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, list[str]]:
+    """Create a bare `stack-channel` remote and a working checkout with linear plus diverged commits.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        monkeypatch (pytest.MonkeyPatch): chdirs into the checkout and installs the `gh meta` stub.
+
+    Returns:
+        tuple[Path, Path, list[str]]: remote, checkout, and the SHAs `[c1, c2, side]` where `c2`
+            descends from `c1` and `side` forks from `c1`.
+    """
+    remote, work = tmp_path / "remote.git", tmp_path / "work"
+    remote.mkdir()
+    git(remote, "init", "-q", "--bare")
+    work.mkdir()
+    git(work, "init", "-q", "-b", "main")
+    shas: list[str] = []
+    for name in ("c1", "c2"):
+        (work / "f.txt").write_text(name)
+        git(work, "add", "f.txt")
+        git(work, "commit", "-q", "-m", name)
+        shas.append(git(work, "rev-parse", "HEAD"))
+    git(work, "checkout", "-q", "-b", "side", shas[0])
+    (work / "f.txt").write_text("side")
+    git(work, "commit", "-q", "-am", "side")
+    shas.append(git(work, "rev-parse", "HEAD"))
+    git(work, "checkout", "-q", "main")
+    fake_gh(tmp_path, monkeypatch, [["api meta", 0, "ssh-ed25519 AAAA\n", ""]])
+    monkeypatch.chdir(work)
+    return remote, work, shas
+
+
+def snapshot_for(tmp_path: Path, sha: str) -> Path:
+    """Write a minimal snapshot naming `sha` (the channel gate only reads `source_sha`).
+
+    Parameters:
+        tmp_path (Path): fixture directory.
+        sha (str): commit.
+
+    Returns:
+        Path: the snapshot file.
+    """
+    path = tmp_path / f"snapshot-{sha[:8]}.json"
+    path.write_bytes(json.dumps({"source_sha": sha}, sort_keys=True, separators=(",", ":")).encode())
+    return path
+
+
+def advance(tmp_path: Path, remote: Path, sha: str, *, require_successor: bool = False) -> None:
+    """Run `advance_channel` against the bare remote.
+
+    Parameters:
+        tmp_path (Path): fixture directory.
+        remote (Path): bare remote.
+        sha (str): candidate commit.
+        require_successor (bool): whether to apply the live-tip ancestry gate.
+    """
+    advance_channel(
+        "o/r", sha, snapshot_for(tmp_path, sha), "KEY", tmp_path,
+        require_successor=require_successor, remote=str(remote),
+    )  # fmt: skip
+
+
+def channel_tip(remote: Path) -> tuple[str, str]:
+    """Return the remote `stack-channel` commit and its `stable.json`.
+
+    Parameters:
+        remote (Path): bare remote.
+
+    Returns:
+        tuple[str, str]: commit SHA and file contents.
+    """
+    return git(remote, "rev-parse", "stack-channel"), git(remote, "show", "stack-channel:stable.json")
+
+
+def test_advance_channel_seeds_then_noops_at_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing branch is seeded as an orphan with only `stable.json`; a repeat pushes nothing."""
+    remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
+    advance(tmp_path, remote, c1, require_successor=True)
+    tip, content = channel_tip(remote)
+    assert json.loads(content)["source_sha"] == c1
+    assert git(remote, "ls-tree", "--name-only", tip) == "stable.json"
+    advance(tmp_path, remote, c1, require_successor=True)
+    assert channel_tip(remote)[0] == tip
+    assert not (tmp_path / "stack-channel-key").exists()
+
+
+def test_advance_channel_requires_a_successor_of_the_live_tip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Promotion re-checks ancestry against the live tip; rollback may move anywhere."""
+    remote, _work, (c1, c2, side) = channel_fixture(tmp_path, monkeypatch)
+    advance(tmp_path, remote, c1)
+    advance(tmp_path, remote, c2, require_successor=True)
+    tip = channel_tip(remote)[0]
+    for stale in (c1, side):
+        with pytest.raises(ValueError, match="does not descend"):
+            advance(tmp_path, remote, stale, require_successor=True)
+    assert channel_tip(remote)[0] == tip
+    advance(tmp_path, remote, c1)  # rollback
+    assert json.loads(channel_tip(remote)[1])["source_sha"] == c1
+
+
+def test_advance_channel_refuses_same_commit_with_different_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tip naming the candidate commit but holding other bytes is not silently replaced."""
+    remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
+    advance(tmp_path, remote, c1)
+    snapshot = tmp_path / "other.json"
+    snapshot.write_bytes(json.dumps({"source_sha": c1, "x": 1}).encode())
+    with pytest.raises(PublishError, match="different bytes"):
+        advance_channel("o/r", c1, snapshot, "KEY", tmp_path, require_successor=True, remote=str(remote))
+
+
+def test_advance_channel_surfaces_a_failing_push(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rejected push raises `PublishError` and leaves the remote untouched."""
+    remote, _work, (c1, c2, _side) = channel_fixture(tmp_path, monkeypatch)
+    advance(tmp_path, remote, c1)
+    before = channel_tip(remote)
+    hook = remote / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\necho rejected by ruleset >&2\nexit 1\n")
+    hook.chmod(0o755)
+    with pytest.raises(PublishError, match="git push"):
+        advance(tmp_path, remote, c2, require_successor=True)
+    assert channel_tip(remote) == before
+
+
+def test_promotion_workflow_has_no_inline_expressions_or_shell_logic() -> None:
+    """Inputs reach `run:` only through `env:`, and every `run:` is a single command."""
+    text = PROMOTION_WORKFLOW.read_text()
+    runs = re.findall(r"^\s+run: (.*)$", text, flags=re.MULTILINE)
+    assert runs
+    assert not any("${{" in run for run in runs)
+    assert not re.search(r"^\s+run: [|>]", text, flags=re.MULTILINE)
+    assert not any(token in run for run in runs for token in (">", "&&", " | ", ";"))

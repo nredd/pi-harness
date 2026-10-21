@@ -34,7 +34,6 @@ SHA256_HEX_LENGTH = 64
 GIT_SHA_LENGTH = 40
 PERSONAL_STACK_ARTIFACT = "stack-ubuntu-24.04-personal"
 # The sole CI job that produces PERSONAL_STACK_ARTIFACT. Keep this machine contract exact.
-PERSONAL_STACK_JOB = re.compile(r"stack \(ubuntu-24\.04, personal\)")
 SHA_PATTERN = re.compile(rf"[0-9a-f]{{{GIT_SHA_LENGTH}}}")
 ROLLBACK_TAG_PATTERN = re.compile(rf"stack/([0-9a-f]{{{GIT_SHA_LENGTH}}})")
 OPERATIONS = ("verify-only", "promote", "rollback")
@@ -412,7 +411,7 @@ def _is_main_push_success(run: dict[str, Any], source_sha: str) -> bool:
 
 
 def candidate_run_ids(runs: list[dict[str, Any]], source_sha: str) -> list[int]:
-    """List the CI runs worth fetching jobs and artifacts for.
+    """List the CI runs worth fetching artifacts for.
 
     Parameters:
         runs (list[dict[str, Any]]): `gh run list --json` entries.
@@ -426,20 +425,18 @@ def candidate_run_ids(runs: list[dict[str, Any]], source_sha: str) -> list[int]:
 
 def registry_stack_runs(
     runs: list[dict[str, Any]],
-    jobs_by_run: dict[str, dict[str, Any]],
     artifacts_by_run: dict[str, Any],
     source_sha: str,
 ) -> list[int]:
     """Return successful push/main CI runs with the personal-stack machine evidence.
 
-    A successful job matching the exact Linux personal matrix cell establishes the artifact's
-    producer. The artifact is the machine evidence: its API provenance binds it to the exact run
-    and source SHA, and `ci.yml` uploads it only after the registry stack scenario ran. A skipped
-    docs-only or main-push-smoke cell cannot qualify.
+    The artifact is the evidence: `ci.yml` uploads it only after the registry stack scenario ran,
+    and its API provenance binds it to the exact run and source SHA. A skipped docs-only or
+    main-push-smoke cell cannot qualify. Job names are deliberately not consulted, so renaming a
+    matrix cell cannot break promotion.
 
     Parameters:
         runs (list[dict[str, Any]]): `gh run list --json` entries.
-        jobs_by_run (dict[str, dict[str, Any]]): run ID -> `gh run view --json jobs` response.
         artifacts_by_run (dict[str, Any]): run ID -> slurped `actions/runs/<id>/artifacts` pages.
         source_sha (str): selected commit.
 
@@ -449,25 +446,15 @@ def registry_stack_runs(
     Raises:
         ValueError: no run qualifies, or an artifact response is malformed.
     """
-    verified: list[int] = []
-    for run_id in candidate_run_ids(runs, source_sha):
-        jobs = jobs_by_run.get(str(run_id), {}).get("jobs", [])
-        has_producer = any(
-            isinstance(job, dict)
-            and PERSONAL_STACK_JOB.fullmatch(str(job.get("name", "")))
-            and job.get("status") == "completed"
-            and job.get("conclusion") == "success"
-            for job in jobs
-        )
-        if has_producer and _has_live_stack_artifact(
-            artifacts_by_run.get(str(run_id), []), run_id, source_sha
-        ):
-            verified.append(run_id)
+    verified = [
+        run_id
+        for run_id in candidate_run_ids(runs, source_sha)
+        if _has_live_stack_artifact(artifacts_by_run.get(str(run_id), []), run_id, source_sha)
+    ]
     if not verified:
         raise ValueError(
-            f"No successful push/main CI run with a passing '{PERSONAL_STACK_JOB.pattern}' job and a live "
-            f"'{PERSONAL_STACK_ARTIFACT}' artifact found for '{source_sha}'; docs-only SHAs and runs whose "
-            "artifacts expired cannot be promoted"
+            f"No successful push/main CI run with a live '{PERSONAL_STACK_ARTIFACT}' artifact found for "
+            f"'{source_sha}'; docs-only SHAs and runs whose artifacts expired cannot be promoted"
         )
     return sorted(verified)
 
@@ -858,9 +845,7 @@ def _add_evidence_commands(commands: Any) -> None:
     )
     candidates.add_argument("--runs", type=Path, required=True)
     candidates.add_argument("--source-sha", required=True)
-    fetch = commands.add_parser(
-        "fetch-artifacts", help="Fetch every candidate run's job and artifact evidence"
-    )
+    fetch = commands.add_parser("fetch-artifacts", help="Fetch every candidate run's artifact evidence")
     fetch.add_argument("--runs", type=Path, required=True)
     fetch.add_argument("--source-sha", required=True)
     fetch.add_argument("--repo", required=True)
@@ -972,7 +957,7 @@ def _cmd_candidate_runs(args: argparse.Namespace) -> None:
 
 
 def _cmd_fetch_artifacts(args: argparse.Namespace) -> None:
-    """Fetch job and artifact pages for every candidate run without shell control flow.
+    """Fetch artifact pages for every candidate run without shell control flow.
 
     Parameters:
         args (argparse.Namespace): `fetch-artifacts` arguments.
@@ -983,12 +968,6 @@ def _cmd_fetch_artifacts(args: argparse.Namespace) -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for run_id in candidate_run_ids(flatten_pages([_read_json(args.runs)]), args.source_sha):
         try:
-            jobs = subprocess.run(
-                ["gh", "run", "view", str(run_id), "--repo", args.repo, "--json", "jobs"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
             artifacts = subprocess.run(
                 [
                     "gh",
@@ -1004,7 +983,6 @@ def _cmd_fetch_artifacts(args: argparse.Namespace) -> None:
         except (OSError, subprocess.CalledProcessError) as error:
             detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
             raise EvidenceError(f"Could not read CI evidence for run '{run_id}': {detail}") from error
-        (args.output_dir / f"jobs-{run_id}.json").write_text(jobs.stdout)
         (args.output_dir / f"run-{run_id}.json").write_text(artifacts.stdout)
 
 
@@ -1014,13 +992,10 @@ def _cmd_stack_runs(args: argparse.Namespace) -> None:
     Parameters:
         args (argparse.Namespace): `stack-runs` arguments.
     """
-    jobs = {
-        path.stem.removeprefix("jobs-"): _read_json(path) for path in args.artifacts_dir.glob("jobs-*.json")
-    }
     artifacts = {
         path.stem.removeprefix("run-"): _read_json(path) for path in args.artifacts_dir.glob("run-*.json")
     }
-    _emit(registry_stack_runs(flatten_pages([_read_json(args.runs)]), jobs, artifacts, args.source_sha))
+    _emit(registry_stack_runs(flatten_pages([_read_json(args.runs)]), artifacts, args.source_sha))
 
 
 def _cmd_owned_evidence(args: argparse.Namespace) -> None:
