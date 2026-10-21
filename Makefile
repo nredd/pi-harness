@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap-forks bootstrap-forks-check check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract release-manifest clean
+.PHONY: help install check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract release-manifest clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
@@ -9,12 +9,6 @@ install:  ## Install owned dependencies (npm ci --ignore-scripts, uv sync --lock
 	npm ci --ignore-scripts
 	cd integration && uv sync --locked
 	cd benchmarks/comparison && uv sync --locked --all-extras
-
-bootstrap-forks:  ## Init/update fork submodules; refuses (changing nothing) if any initialized fork is dirty
-	python3 scripts/bootstrap_forks.py
-
-bootstrap-forks-check:  ## Preflight fork dirty state only; never updates
-	python3 scripts/bootstrap_forks.py --check
 
 check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
 

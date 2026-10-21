@@ -24,7 +24,7 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 - `nredd/dotfiles` main `10ca8dd` (before this docs change): machine configuration, activation and doctor. Local checkout `~/code/dotfiles`; chezmoi source `~/.local/share/chezmoi`.
 - `nredd/homebrew-tap` main `66e9289`: core nredd.6 formula, #1.
 - `nredd/pi` main `bd6444a`; released selection is `v1.3.0-nredd.7` at `2bfb8e7` on `nredd/v1.3.0`.
-- `nredd/pi-subagents` has no main; master `927cf03`. Released selection is `v0.22.0-nredd.5` at `526fa2d` (nredd/pi-subagents#7: user skill roots follow symlinks), rebased onto tintinweb master `ca93a524`, on `nredd/v0.22.0-ca93a52`.
+- `@nredd/pi-subagents@0.22.0-nredd.6` is the selected npm package, the first CI release with SLSA provenance after the owner's `0.22.0-nredd.5` bootstrap.
 - `nredd/pi-plan-mode` main `cb9b7c1`; default branch remains `nredd/v0.59.2` at `d91bb2b`. Released selection is `v0.59.3-nredd.1` at `4c2bfc3` on `nredd/v0.59.3`.
 - `nredd/rpiv-todo` main `0f46ed9`; released selection is `v2.13.9-nredd.2` at `9a4e2e8` (nredd/rpiv-todo#2: standalone suite, live-row refresh).
 - Archived on GitHub: `nredd/pi-dev-tools`, `nredd/pi-session-kit`, `nredd/pi-subscription-router`, `nredd/pi-harness-benchmark`, `nredd/pi-harness-e2e`. Their open follow-ups moved to dotfiles issues [here](https://github.com/nredd/dotfiles/issues). Do not revive standalone harness ownership.
@@ -42,8 +42,8 @@ Live selection / promotion state:
 Verification layers now implemented:
 
 - Package-native Vitest + pinned Bun suites own package behavior, including interactive host / `VirtualTerminal` tests and injectable clocks.
-- `integration/inprocess/` owns A-stack tests with real extension factories and one host identity. It also hosts the four single-fork rpiv-todo B rows; the split fork's own suite runs separately in `forks.yml`.
-- `.github/workflows/forks.yml` runs applicable full fork suites. Before tagging a fork, use a temporary CI probe PR selecting the candidate Gitlink, fetch its SHA for reviews, wait for full fork CI, then close the probe without merging. Receipts: #37, #39.
+- `integration/inprocess/` owns A-stack tests with real extension factories and one host identity. It also hosts the four historical rpiv-todo B rows. The imported packages' native suites run as workspace `npm run check` commands in the `owned` job.
+- `.github/workflows/forks.yml` runs the remaining core Gitlink suite only. Imported package releases use their workspace `npm run check` commands in `owned` before publishing.
 - `contracts` owns packed artifact identity, installation/discovery/trust and stock-host compatibility. See `docs/package-contracts.md`; do not confuse it with assembled-stack coverage.
 - `stack` D/E jobs use a formula-shaped released Node binary plus explicit `integration/stacks/personal.json` / `integration/stacks/local.json` in throwaway agent dirs, on both OSes. No chezmoi, Brewfile or live install input. D owns process boundaries; E owns the real tmux resize seam.
 - Bun standalone D/E runs in CI: the `stack (..., personal)` jobs build it from the Gitlinked core and run both stacks on it on darwin-arm64 and linux-x64 (#56); seven auth-interception cases are explicit skips (adapter #14). linux-arm64 is NOT RUN.
@@ -90,7 +90,7 @@ Historical, not the current deployment inventory:
 6. DONE -- archive all five standalone repos after the replacement gate landed. GitHub reports `archived: true` for each; final archive-pointer heads: dev-tools `91656c2`, session-kit `75fc5a6`, subscription-router `eaee3ed`, benchmark `d4b9896`, e2e `5d078a7`. Replacement PR receipts: #21, #30; follow-ups now in dotfiles. GitHub archival is a repository operation, not a pi-harness PR; local checkout deletion is not assumed.
 7. DONE -- machine-specific checks moved to dotfiles `pi-profile doctor` and its apply hook/runbook. dotfiles#3, activation pins #4, rebased forks #10; matching harness stack receipt #30. No package gate consumes the owner's config.
 8. OPEN -- resume deferred work on the rebuilt stack:
-   - Import `pi-subagents` as `packages/subagents` / `@nredd/pi-subagents` from `v0.22.0-nredd.5`, retaining its Gitlink and fork gate until shipped selection changes the stack to npm.
+   - Shipped selection is complete: the stack and local derivation select imported package workspaces from npm, and only `forks/pi` remains a Gitlink.
    - The versioned `integration/stacks/personal.json` is the authoritative package selection. The generated `local.json` development view replaces owned package sources with workspace paths and restores the full preset; it is not a machine default.
    - Promotion export: `Promote stack` explicitly verifies a selected `main` SHA, required checks, registry-byte stack evidence, owned npm provenance and the attested `nredd/pi` core release, then attests `stack-snapshot.json` and publishes it as the `stack/<sha>` release. There is no moving pointer: dotfiles pins an exact `source_sha`, and rollback is re-pinning a retained older `stack/<sha>`. See `docs/stack-promotion.md`. Owner infrastructure: ruleset `25524267` and environment `stack-promotion`; the first step after merge is dispatching `verify-only` on a `main` SHA, then `promote`. One-time cleanup after merge: delete ruleset `25524297` and deploy key `167140535`, and remove the `STACK_CHANNEL_DEPLOY_KEY` env secret.
    - Follow-up: dotfiles pins a promoted `stack/<sha>` and verifies its attestation (nredd/dotfiles#30). Core remains the attested `nredd/pi` fork release.

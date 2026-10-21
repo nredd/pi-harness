@@ -9,7 +9,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 | --- | --- | --- | --- | --- |
 | `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Reports success after the classifier logs the bypass | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (preset runs all of `test/`; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN. `@nredd/pi-computer-use`'s macOS-only checks (`test:invariants` INV-8/INV-17, `test:macos-native`, `test:desktop`'s helper wire mapping and gating, `test:macos-live`) print `NOT RUN` lines on Linux and are not passes |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract` | Same | Reports success after the classifier logs the bypass | Packed tarballs alone on exact stock Pi 1.3.0, the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
-| `stack (ubuntu-24.04, macos-14; personal, local)` | Node release-bundle D/E scenarios in each cell; each personal cell also builds the Gitlinked core with Bun and runs standalone D/E for both stacks | Only `stack (ubuntu-24.04, personal)` runs, including both standalone stacks; the other three required job names log the selective smoke | Every cell reports success after the classifier logs the bypass | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
+| `stack (ubuntu-24.04, macos-14; personal, local)` | Node release-bundle D/E scenarios in each cell; each personal cell also builds the core Gitlink with Bun and runs standalone D/E for both stacks | Only `stack (ubuntu-24.04, personal)` runs, including both standalone stacks; the other three required job names log the selective smoke | Every cell reports success after the classifier logs the bypass | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 | `bench (not run)` | a notice and a step summary | Same | Same | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
 
 ## Capacity controls
@@ -24,18 +24,11 @@ The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s
 
 The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), which remains `strict`. Strict means that advancing `main` invalidates a PR's previous green result and requires an update-branch rerun before merge. That cost is intentional for combined-result safety; docs-only bypasses make documentation updates cheaper without weakening it.
 
-`.github/workflows/forks.yml`, when `forks/**`, `.gitmodules` or the workflow changes, plus manual dispatch:
+`.github/workflows/forks.yml`, when the remaining `forks/pi` Gitlink, `.gitmodules` or the workflow changes, plus manual dispatch:
 
 | Job | Runs |
 | --- | --- |
 | `core (forks/pi)` | `npm ci`, the release's model data restored from npm `@earendil-works/pi-ai@<version>` (never the live fetch), `npm run build:offline`, the steps of the fork's `check` with Biome check-only (the step fails if the fork's `check` list changes), the env daemon, `./test.sh` |
-| `pi-subagents` | Pinned Bun, `npm ci`, `npm run check` (full Vitest suite and Bun session scenarios) |
-| `pi-plan-mode` | Pinned Bun, `npm ci`, `npm run check` (Bun session scenarios), `npm test` (full Vitest suite) |
-| `rpiv-todo` | Pinned Bun, `npm ci --ignore-scripts`, `npm run check` (Biome, strict TypeScript, full standalone Vitest suite and native Bun settled-row regressions) at the Gitlinked commit |
-| `pi-computer-use (not run)` | a notice: pi-computer-use needs macOS TCC |
-
-The rpiv-todo job needs the standalone gate that `v2.13.9-nredd.2` (nredd/rpiv-todo#2) added; an older
-Gitlink has no lockfile or `check` script, so the job fails rather than reporting a false pass.
 
 `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
 
@@ -44,16 +37,15 @@ Gitlink has no lockfile or `check` script, so the job fails rather than reportin
 - `support.ts`: `startStack({ cwd?, factories, settings?, sessionManager?, useModelRuntimeStream?, withConfiguredAuth?, mode?, ui? })` creates and
   binds core's real harness. `loadFork(name)` imports the imported package's declared entry from `packages/<dir>`; `loadOwned(name)`
   imports the owned plugin's `src/index.ts`. Direct `createXxx()` factories work too
-- Before importing a fork, resolve `pi-coding-agent`, `pi-tui`, `pi-ai`, `typebox` from both directories
+- Before importing a package workspace, resolve `pi-coding-agent`, `pi-tui`, `pi-ai`, `typebox` from both directories
   and compare real paths. A mismatch or unresolvable entry fails with the package's `node_modules/`
   deletion path. Node uses import conditions on `createRequire().resolve`; Bun uses
   `import.meta.resolve` with an explicit parent. No aliases or copied extension code
 - Root workspace dependencies supply `croner` `10.0.1`, `nanoid` `5.1.16`, `pi-tui-kit` `0.65.5`
-  from the forks' lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
-  `3.x` and leaves the fork's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
-  split's own lockfile serves only its `forks.yml` gate; the stack workspace never installs fork-local
-  dependencies, so `rpiv-config` and optional peer `rpiv-i18n` are pinned here to the fork's `2.13.9`,
-  with the same integrity as its lockfile
+  from the imported packages' historical lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
+  `3.x` and leaves the imported subagents package's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
+  source lockfile was retired with its Gitlink; the stack workspace pins `rpiv-config` and optional peer
+  `rpiv-i18n` to the imported package's `2.13.9` provenance, with the same integrity as that historical lockfile
 - `isolateStackHome()` isolates `HOME`, `PI_CODING_AGENT_DIR`, XDG config before loading entries.
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
@@ -94,8 +86,7 @@ These eight jobs are the required checks of ruleset `main required checks` (id `
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
 - `~/code/pi-harness-builds/merge-pr.sh` checks that HEAD, both transcripts and green CI, then posts
   the review receipt as a PR comment and merges. It does not post commit statuses
-- `forks.yml` jobs are path-filtered, not required protection checks; when triggered, every applicable
-  fork job must still pass before merging
+- `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
 
 Flake policy (migration plan section 7):
 
