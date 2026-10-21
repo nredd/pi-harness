@@ -17,6 +17,7 @@ import tarfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -61,7 +62,9 @@ def sandbox(tmp_path: Path) -> pc.Sandbox:
     return pc.Sandbox(tmp_path / "sandbox", pc.locate_tools())
 
 
-@pytest.mark.parametrize("contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT], ids=lambda c: c.directory)
+@pytest.mark.parametrize(
+    "contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT], ids=lambda c: c.directory
+)
 def test_supplied_tarball_is_never_repacked(
     tmp_path: Path,
     sandbox: pc.Sandbox,
@@ -478,7 +481,7 @@ def test_audit_manifest_accepts_good() -> None:
         ({"publishConfig": {"access": "restricted"}}, "`publishConfig.access` must be `public`"),
         ({"publishConfig": {}}, "`publishConfig.access` must be `public`"),
         ({"license": "ISC"}, "`license`"),
-        ({"dependencies": {"typebox": "1.0.0"}}, "`dependencies` must be empty"),
+        ({"dependencies": {"typebox": "1.0.0"}}, "not a declared runtime dependency"),
         ({"optionalDependencies": {"@nredd/pi-session-kit": "*"}}, "`optionalDependencies`"),
         ({"peerDependencies": {"@nredd/pi-session-kit": "*"}}, "not a host module"),
         ({"peerDependencies": {"typebox": ">=1"}}, "must use the range '*'"),
@@ -577,7 +580,9 @@ def test_audit_tarball_reports_unparseable_manifest(tmp_path: Path) -> None:
     assert any("`package.json` is not valid JSON" in problem for problem in problems), problems
 
 
-@pytest.mark.parametrize("contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT], ids=lambda c: c.directory)
+@pytest.mark.parametrize(
+    "contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT], ids=lambda c: c.directory
+)
 def test_real_workspace_tarballs_pass_audit(
     contract: pc.PackageContract, tmp_path: Path, sandbox: pc.Sandbox
 ) -> None:
@@ -1340,6 +1345,80 @@ def test_preset_contract_accounts_for_separately_licensed_assets() -> None:
     assert any("MIT AND Apache-2.0 AND CC-BY-SA-4.0" in problem for problem in mit_only), mit_only
     leaked = pc.audit_manifest(DEV_TOOLS, good_manifest() | {"license": preset_manifest()["license"]}, files)
     assert any("`license` must be 'MIT'" in problem for problem in leaked), leaked
+
+
+def subagents_manifest() -> dict[str, Any]:
+    """Return the real workspace manifest, which the contract must accept as published.
+
+    Returns:
+        dict[str, object]: Parsed `packages/subagents/package.json`.
+    """
+    return json.loads((pc.REPO_ROOT / "packages" / "subagents" / "package.json").read_text())
+
+
+def test_subagents_contract_declares_its_runtime_dependencies_and_peer_floor() -> None:
+    """Real dependencies and the fork's `>=1.1.0` peer floor are explicit allowances, not silent."""
+    files = ["src/index.ts"]
+    contract = pc.SUBAGENTS_CONTRACT
+    assert pc.audit_manifest(contract, subagents_manifest(), files) == []
+    # The plugin default still rejects the same manifest: the allowance is per contract.
+    plugin = pc.audit_manifest(DEV_TOOLS, subagents_manifest() | {"name": DEV_TOOLS.name}, files)
+    assert any("dependency 'croner' is not a declared" in problem for problem in plugin), plugin
+    assert any("peer '@earendil-works/pi-ai' must use the range '*'" in problem for problem in plugin), plugin
+    manifest = subagents_manifest()
+    undeclared = pc.audit_manifest(
+        contract, manifest | {"dependencies": {**manifest["dependencies"], "left-pad": "^1.0.0"}}, files
+    )
+    assert any("dependency 'left-pad' is not a declared" in problem for problem in undeclared), undeclared
+    drifted = pc.audit_manifest(contract, manifest | {"dependencies": {"croner": "^9.0.0"}}, files)
+    assert any("'croner' must use the range '^10.0.1'" in problem for problem in drifted), drifted
+    assert any("runtime dependency 'nanoid' is missing" in problem for problem in drifted), drifted
+    star = {**manifest["peerDependencies"], "@earendil-works/pi-tui": "*"}
+    loose = pc.audit_manifest(contract, manifest | {"peerDependencies": star}, files)
+    assert any("must use the range '>=1.1.0'" in problem for problem in loose), loose
+
+
+def test_declared_dependencies_may_be_imported_and_nothing_else() -> None:
+    """The import audit admits a contract's declared dependencies, and only those."""
+    found = pc.FileImports(specifiers=["croner", "nanoid", "left-pad", "croner/sub"], diagnostics=[])
+    problems = pc.classify_imports(
+        "src/a.ts", found, ["src/a.ts"], pc.SUBAGENTS_CONTRACT.runtime_dependencies
+    )
+    assert len(problems) == 1, problems
+    assert "left-pad" in problems[0]
+    assert len(pc.classify_imports("src/a.ts", found, ["src/a.ts"])) == 4
+
+
+def test_own_license_contract_requires_the_workspace_license_not_the_root_one() -> None:
+    """The imported package keeps upstream's copyright notice, so the root license is rejected."""
+    own = (pc.REPO_ROOT / "packages" / "subagents" / "LICENSE").read_bytes()
+    assert own != ROOT_LICENSE
+    assert b"tintinweb" in own
+
+
+def test_subagents_pack_matches_contract(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """`npm pack` of the workspace ships exactly what the contract enumerates, nothing more.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    contract = pc.SUBAGENTS_CONTRACT
+    artifact = pc.pack(contract, tmp_path, sandbox)
+    assert set(contract.required) <= set(artifact.files)
+    assert pc.audit_files(contract, artifact.files) == []
+    source = pc.REPO_ROOT / "packages" / "subagents"
+    on_disk = {path.relative_to(source).as_posix() for path in (source / "src").rglob("*") if path.is_file()}
+    assert {name for name in artifact.files if name.startswith("src/")} == on_disk
+    assert set(artifact.files) - on_disk == {"LICENSE", "README.md", "package.json"}
+    assert not any(name.startswith(("test/", "docs/", "examples/", "media/")) for name in artifact.files)
+
+
+def test_subagents_is_a_registry_dependent_contract_outside_the_hermetic_set() -> None:
+    """The hermetic `CONTRACTS` target must not try to install it offline; the release gate does."""
+    assert pc.SUBAGENTS_CONTRACT not in pc.CONTRACTS
+    assert "subagents" not in pc.SCENARIOS
+    assert pc.SUBAGENTS_SCENARIO is pc.scenario_subagents
 
 
 def test_preset_is_not_a_standalone_plugin_contract() -> None:
