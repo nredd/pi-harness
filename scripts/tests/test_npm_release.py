@@ -885,6 +885,18 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     assert "directory == 'preset'" not in workflow
 
 
+def test_every_standalone_descriptor_has_a_packed_artifact_gate() -> None:
+    """Every independently published package verifies its packed artifact through stock Pi.
+
+    The preset is consumed by the fork contract, not a standalone stock-Pi scenario.
+    """
+    standalone = [descriptor for descriptor in rd.DESCRIPTORS if descriptor.name != "@nredd/pi-preset"]
+    assert all(
+        "stock" in descriptor.contract_gates and descriptor.stock_gate is not None
+        for descriptor in standalone
+    )
+
+
 @pytest.mark.parametrize("contract", nr.CONTRACTS, ids=lambda c: c.directory)
 def test_verify_checks_then_packs_and_routes_exact_bytes(
     repo: Path,

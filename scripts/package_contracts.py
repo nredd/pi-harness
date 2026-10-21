@@ -1506,9 +1506,16 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
         raise ContractError(f"'{artifact.contract.name}' ships a nested `node_modules`: {nested}")
     lock = read_lockfile(project / "package-lock.json")
     package_path = f"node_modules/{artifact.contract.name}"
-    if package_path not in lock.packages:
+    package_entry = lock.packages.get(package_path)
+    if package_entry is None:
         raise ContractError(f"'{artifact.contract.name}' is absent from its install lockfile")
-    direct_paths = {f"node_modules/{name}" for name, _ in artifact.contract.runtime_dependencies}
+    declared_dependencies = dict(artifact.contract.runtime_dependencies)
+    if package_entry.dependencies != declared_dependencies:
+        raise ContractError(
+            f"'{artifact.contract.name}' lockfile dependencies differ from its contract: "
+            f"{package_entry.dependencies} != {declared_dependencies}"
+        )
+    direct_paths = {f"node_modules/{name}" for name in declared_dependencies}
     expected_paths = {"", package_path, *direct_paths}
     pending = [package_path, *direct_paths]
     while pending:
@@ -2270,8 +2277,8 @@ def scenario_plan_mode(ctx: Context) -> PlanModeEvidence:
                     "header": "Scope",
                     "question": "Exercise the packed Plan-mode question tool?",
                     "options": [
-                        {"label": "Yes", "description": "Record the expected headless result."},
-                        {"label": "No", "description": "The contract should still reject inactive use."},
+                        {"label": "Yes", "description": "Record the active headless result."},
+                        {"label": "No", "description": "The contract still records active Plan mode."},
                     ],
                 }
             ]
@@ -2283,12 +2290,12 @@ def scenario_plan_mode(ctx: Context) -> PlanModeEvidence:
             ctx.sandbox,
             ctx.installed,
             project,
-            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
+            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "/plan start"],
         )
-    require_clean_run(result, "plan-mode load")
+    require_clean_run(result, "plan-mode active tool")
     require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
     question_result = tool_text(result.single_tool_result("plan_mode_question"))
-    require("plan_mode_inactive" in question_result, f"unexpected Plan question result: {question_result}")
+    require("ui_unavailable" in question_result, f"unexpected active Plan question result: {question_result}")
     return {"tools": sorted(ctx.artifact.contract.exposes_tools), "question_result": question_result}
 
 

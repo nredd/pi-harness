@@ -675,7 +675,7 @@ def test_install_alone_rejects_extra_lockfile_package(
                 {
                     "packages": {
                         "": {},
-                        "node_modules/@nredd/pi-dev-tools": {},
+                        "node_modules/@nredd/pi-dev-tools": {"dependencies": {"left-pad": "1.0.0"}},
                         "node_modules/left-pad": {},
                     }
                 }
@@ -683,7 +683,7 @@ def test_install_alone_rejects_extra_lockfile_package(
         )
 
     monkeypatch.setattr(pc, "run", fake_run)
-    with pytest.raises(pc.ContractError, match="dependency closure"):
+    with pytest.raises(pc.ContractError, match="dependencies differ"):
         pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
 
 
@@ -1828,7 +1828,11 @@ def stub_npm_install(
         packages: dict[str, dict[str, str]] = {"": {}}
         for module in modules:
             (cwd / "node_modules" / module).mkdir(parents=True)
-            packages[f"node_modules/{module}"] = {}
+            packages[f"node_modules/{module}"] = {
+                "dependencies": dict(pc.SUBAGENTS_CONTRACT.runtime_dependencies)
+                if module == pc.SUBAGENTS_CONTRACT.name
+                else {}
+            }
         (cwd / "package-lock.json").write_text(json.dumps({"packages": packages}))
 
     monkeypatch.setattr(pc, "run", fake_run)
