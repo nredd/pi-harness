@@ -2298,6 +2298,23 @@ def scenario_subagents(ctx: Context) -> SubagentsEvidence:
     return {"tools": sorted(ctx.artifact.contract.exposes_tools), "child_text": SUBAGENTS_CHILD_TEXT}
 
 
+def todo_snapshot_subject(record: dict[str, Any]) -> str | None:
+    """Read the first task subject from a todo result's persisted `details` snapshot.
+
+    Parameters:
+        record (dict[str, Any]): A `todo` `tool_execution_end` event.
+
+    Returns:
+        str | None: `result.details.tasks[0].subject`, or `None` when the snapshot is absent or mistyped.
+    """
+    result = record.get("result")
+    details = result.get("details") if isinstance(result, dict) else None
+    tasks = details.get("tasks") if isinstance(details, dict) else None
+    first = tasks[0] if isinstance(tasks, list) and tasks else None
+    subject = first.get("subject") if isinstance(first, dict) else None
+    return subject if isinstance(subject, str) else None
+
+
 def scenario_todo(ctx: Context) -> TodoEvidence:
     """Load the packed extension and create one todo through stock Pi.
 
@@ -2305,10 +2322,10 @@ def scenario_todo(ctx: Context) -> TodoEvidence:
         ctx (Context): Scenario context.
 
     Returns:
-        TodoEvidence: Registered tool and persisted task subject.
+        TodoEvidence: Registered tool and the subject read back from `details.tasks[0]`.
 
     Raises:
-        ContractError: If the tool is absent or does not create the requested task.
+        ContractError: If the tool is absent or does not create and snapshot the requested task.
     """
     subject = "stock contract task"
     project = ctx.work / "project"
@@ -2328,6 +2345,10 @@ def scenario_todo(ctx: Context) -> TodoEvidence:
     record = result.single_tool_result("todo")
     require(not tool_is_error(record), f"todo create failed: {tool_text(record)}")
     require(subject in tool_text(record), f"todo result omitted '{subject}': {record.get('result')}")
+    require(
+        todo_snapshot_subject(record) == subject,
+        f"todo result details.tasks[0] did not persist '{subject}': {record.get('result')}",
+    )
     return {"tools": ["todo"], "subject": subject}
 
 

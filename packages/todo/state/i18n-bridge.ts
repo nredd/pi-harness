@@ -1,13 +1,14 @@
 /**
  * i18n bridge for rpiv-todo — single thin import surface so every call site
- * routes through one module. Backed by `@juicesharp/rpiv-i18n`'s SDK when
- * available; degrades to canonical-English fallbacks when not.
+ * routes through one module. Backed by `@juicesharp/rpiv-i18n`'s SDK, a hard
+ * dependency of `@nredd/pi-todo`; the English fallback is retained but is
+ * unreachable in a normal install.
  *
- * - `t(key, fallback)` is `scope("@juicesharp/rpiv-todo")` if the SDK is
- *   installed (live `/languages` updates propagate). If the SDK is missing
- *   (standalone install without rpiv-i18n), `t` is an identity passthrough
- *   that returns the inline English fallback at every call site, so the
- *   extension stays online with English UI.
+ * - `t(key, fallback)` is `scope("@juicesharp/rpiv-todo")` (live `/languages`
+ *   updates propagate). The namespace keeps its upstream name for locale and
+ *   session compatibility. If the SDK import fails anyway (broken install),
+ *   `t` is an identity passthrough that returns the inline English fallback
+ *   at every call site, so the extension stays online with English UI.
  * - `formatStatusLabel(status)` resolves a TaskStatus to its locale-aware
  *   label via the canonical `status.*` namespace, with the English literal
  *   as fallback so nothing renders blank if the namespace isn't registered.
@@ -29,11 +30,11 @@ export const I18N_NAMESPACE = "@juicesharp/rpiv-todo";
 type ScopeFn = (key: string, fallback: string) => string;
 type I18nSDK = { scope: (namespace: string) => ScopeFn };
 
-// Prefer the live SDK if installed: closures it returns track the active
-// locale, so /languages picker propagates to our render call sites. If the
-// SDK isn't installed (standalone install of this extension without
-// rpiv-i18n), the dynamic import fails, every t(key, fallback) returns the
-// canonical English literal, and the extension stays online.
+// Use the live SDK: closures it returns track the active locale, so the
+// /languages picker propagates to our render call sites. rpiv-i18n is now a
+// hard dependency, so the catch below is unreachable in a normal install; it
+// is kept as a defensive fallback (a broken install still returns the
+// canonical English literal and the extension stays online).
 //
 // Top-level await is required so a synchronous `t(...)` call from any
 // downstream module sees the resolved scope; ESM module loading awaits this
