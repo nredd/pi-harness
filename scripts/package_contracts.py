@@ -209,6 +209,56 @@ PRESET_CONTRACT = PackageContract(
 # the same set; `test_subagents_pack_matches_contract` enforces it. Peers keep the fork's `>=1.1.0`
 # floor (it needs 1.x host APIs) rather than `*`. `SubagentWorkflow` is registered unless the
 # `workflowsEnabled` setting is off, which a clean sandbox never sets.
+COMPUTER_USE_CONTRACT = PackageContract(
+    name="@nredd/pi-computer-use",
+    directory="computer-use",
+    required=(
+        "LICENSE",
+        "README.md",
+        "package.json",
+        "extensions/computer-use.ts",
+        "scripts/build-native.mjs",
+        "scripts/setup-helper.mjs",
+        "native/macos/bridge.swift",
+        "prebuilt/macos/arm64/bridge",
+        "prebuilt/macos/x64/bridge",
+    ),
+    allowed=(
+        re.compile(r"^(LICENSE|README\.md|package\.json)$"),
+        re.compile(r"^assets/reference/img\.jpg$"),
+        re.compile(r"^docs/[a-z-]+\.md$"),
+        re.compile(r"^extensions/[a-z-]+\.ts$"),
+        re.compile(
+            r"^src/(?:[a-z0-9-]+|platform/[a-z0-9-]+|platform/(?:linux|macos|windows)/[a-z0-9-]+(?:\.d)?)\.(?:ts|mts|mjs)$"
+        ),
+        re.compile(r"^scripts/(?:build-native|setup-helper)\.mjs$"),
+        re.compile(r"^native/macos/bridge\.swift$"),
+        re.compile(
+            r"^native/(?:linux|windows)/bridge-rs/(?:Cargo\.(?:lock|toml)|src/[a-z0-9_-]+\.rs|tests/[a-z0-9_-]+\.rs)$"
+        ),
+        re.compile(r"^prebuilt/macos/(?:arm64|x64)/bridge$"),
+    ),
+    exposes_tools=frozenset(
+        {
+            "find_roots",
+            "observe_ui",
+            "search_ui",
+            "expand_ui",
+            "inspect_ui",
+            "act_ui",
+            "read_text",
+            "wait_for",
+            "launch_browser",
+            "navigate_browser",
+            "evaluate_browser",
+            "desktop_screenshot",
+            "desktop_input",
+        }
+    ),
+    own_license=True,
+)
+
+
 SUBAGENTS_CONTRACT = PackageContract(
     name="@nredd/pi-subagents",
     directory="subagents",
@@ -501,7 +551,17 @@ class SubagentsEvidence(TypedDict):
     child_text: str
 
 
-ScenarioEvidence = DevToolsEvidence | SessionKitEvidence | RouterEvidence | SubagentsEvidence
+class ComputerUseEvidence(TypedDict):
+    """Stock-Pi declaration evidence, explicitly excluding native desktop execution."""
+
+    tools: list[str]
+    native_desktop: Literal["NOT RUN"]
+    native_desktop_reason: str
+
+
+ScenarioEvidence = (
+    DevToolsEvidence | SessionKitEvidence | RouterEvidence | SubagentsEvidence | ComputerUseEvidence
+)
 
 
 class DevToolsEvidenceModel(BaseModel):
@@ -534,7 +594,15 @@ class SubagentsEvidenceModel(BaseModel):
     child_text: NonEmptyText = Field(description="Answer the foreground `Agent` call returned from its child")
 
 
+class ComputerUseEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    tools: list[NonEmptyText] = Field(min_length=1, description="Tools the model was offered by the package")
+    native_desktop: Literal["NOT RUN"] = Field(description="Native desktop behavior was not exercised")
+    native_desktop_reason: NonEmptyText = Field(description="Why native desktop behavior was not exercised")
+
+
 EVIDENCE_MODELS: dict[str, type[BaseModel]] = {
+    "@nredd/pi-computer-use": ComputerUseEvidenceModel,
     "@nredd/pi-subagents": SubagentsEvidenceModel,
     "@nredd/pi-dev-tools": DevToolsEvidenceModel,
     "@nredd/pi-session-kit": SessionKitEvidenceModel,
@@ -573,7 +641,11 @@ class PackageReport(BaseModel):
     size: int = Field(gt=0, description="Tarball size in bytes")
     files: list[NonEmptyText] = Field(min_length=1, description="Files in the packed tarball")
     evidence: (
-        DevToolsEvidenceModel | SessionKitEvidenceModel | RouterEvidenceModel | SubagentsEvidenceModel
+        DevToolsEvidenceModel
+        | SessionKitEvidenceModel
+        | RouterEvidenceModel
+        | SubagentsEvidenceModel
+        | ComputerUseEvidenceModel
     ) = Field(description="Scenario evidence for this package")
 
 
@@ -1849,6 +1921,33 @@ def scenario_subagents(ctx: Context) -> SubagentsEvidence:
         f"subagents `Agent` result lacks the child's answer: '{text[-300:]}'\n{result.stderr[-1000:]}",
     )
     return {"tools": sorted(ctx.artifact.contract.exposes_tools), "child_text": SUBAGENTS_CHILD_TEXT}
+
+
+def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
+    """Load packed computer-use and prove its full model-visible tool surface only.
+
+    The helper needs an interactive macOS desktop with Accessibility and Screen Recording TCC grants.
+    This isolated stock-Pi run deliberately invokes no desktop tool and records that limit as ``NOT RUN``.
+    """
+    project = ctx.work / "project"
+    project.mkdir()
+    with ctx.provider_session([TextStep("loaded")]) as provider:
+        result = run_pi(
+            ctx.pi_bin,
+            ctx.sandbox,
+            ctx.installed,
+            project,
+            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
+        )
+    require_clean_run(result, "computer-use extension load")
+    require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
+    return {
+        "tools": sorted(ctx.artifact.contract.exposes_tools),
+        "native_desktop": "NOT RUN",
+        "native_desktop_reason": (
+            "requires an interactive macOS desktop and Accessibility/Screen Recording TCC grants"
+        ),
+    }
 
 
 def scenario_session_kit(ctx: Context) -> SessionKitEvidence:

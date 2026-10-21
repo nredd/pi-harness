@@ -47,6 +47,21 @@ class ReleaseDescriptor:
 # gates byte-for-byte. New packages add a descriptor, never a publisher branch.
 DESCRIPTORS = (
     ReleaseDescriptor(
+        name="@nredd/pi-computer-use",
+        workspace=PurePosixPath("packages/computer-use"),
+        verify_commands=(
+            ("npm", "ci", "--ignore-scripts"),
+            ("npm", "run", "check", "--workspace", "@nredd/pi-computer-use"),
+        ),
+        contract=pc.COMPUTER_USE_CONTRACT,
+        contract_gates=("stock",),
+        stock_gate=pc.scenario_computer_use,
+        native_artifacts=(
+            PurePosixPath("prebuilt/macos/arm64/bridge"),
+            PurePosixPath("prebuilt/macos/x64/bridge"),
+        ),
+    ),
+    ReleaseDescriptor(
         name="@nredd/pi-dev-tools",
         workspace=PurePosixPath("packages/dev-tools"),
         verify_commands=(
