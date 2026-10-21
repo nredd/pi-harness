@@ -128,153 +128,23 @@ Limits: this is stock Pi only. It does not exercise `pi install npm:...`, the fo
 subagents/Plan-mode integrations (the subagents one is covered by the next section), the
 Bun-compiled candidate, or the full stack. Do not read a pass as candidate or fullstack acceptance.
 
-## Optional integration: real packed preset and dev-tools through the selected pi-subagents fork
+## Packed preset audit (no standalone Pi behavior)
 
-`make check-fork-package-contracts` (`scripts/fork_package_contracts.py`, `REPORT=/abs/file.json`
-for a JSON report) is separate from both `make check` and `make check-package-contracts`. It proves a
-REAL packed `@nredd/pi-preset` `code-reviewer` agent and the REAL packed `@nredd/pi-dev-tools` work
-through the pi-subagents commit the parent Gitlink selects, on exact stock Pi 1.3.0 only. Not a
-mocked resolver, not frontmatter parsing alone. The tooling is unit tested by `make check-scripts`
-with disposable fake repositories and runs there without any initialized fork.
+`@nredd/pi-preset` ships agents and themes only, so there is nothing to execute through stock Pi alone.
+`make check-package-contracts` additionally runs `package_contracts.py --audit-preset`
+(`run_audit_gate`): pack, the full tarball audit against `PRESET_CONTRACT`, then `install_alone` into a
+fresh project. The release `verify` stage runs the same function for the preset (descriptor gate
+`audit`), on the supplied bytes, never a repack.
 
-Fork selection (nothing is bootstrapped, updated, installed into, cleaned or written in `forks/`):
-
-- Preflight runs before anything is built. `forks/pi-subagents` must have its own `.git`, a clean
-  tree (tracked, staged and untracked), and `HEAD` equal to BOTH the Gitlink in the parent index and
-  in the parent `HEAD`. A missing, uninitialized, dirty or mismatched fork is a clear refusal that
-  points at `make bootstrap-forks`; the gate never runs it. An empty directory from an uninitialized
-  submodule is detected explicitly (`git -C` would silently inspect the parent)
-- The exact commit is exported with `git archive` into the scratch directory. Its own
-  `package-lock.json` is kept and `npm ci --ignore-scripts --omit=dev --omit=peer` installs only the
-  locked runtime dependencies there (verified: exactly `croner` and `nanoid`, nothing else). Both
-  runtime versions and SHA-512 integrities are validated before npm starts; missing/malformed entries
-  and unsupported optional/transitive dependencies refuse without registry access. No
-  floating `npm install`. The tree must contain no `@earendil-works/*` or `typebox` anywhere, installed
-  versions must equal the lockfile's, and `npm ci` must not rewrite the lockfile. Nested dependency
-  trees are refused rather than omitted from the report. Dependency drift requires a deliberate
-  update to the gate's supported dependency graph
-- The report records the fork commit, its `package.json` version, the lockfile SHA-256, and each
-  installed dependency's version and lock integrity, plus the preset and dev-tools tarball identities
-  and the stock Pi pin. The registry is reached only for this `npm ci` and the stock Pi install
-  (empty npm config, no credentials, a per-run cache, so every run needs the registry). Pi runs
-  are offline against the loopback provider
-
-Owned code comes only from packed tarballs. Preset and dev-tools are packed with `npm pack`, audited,
-and installed into separate fresh projects (`install_alone`); Pi sees them only as local-path
-`packages` in the sandbox `settings.json`, never the workspace sources. The preset has its own
-`PRESET_CONTRACT` (not part of the standalone three, whose audit is unchanged): its manifest must
-declare `MIT AND Apache-2.0 AND CC-BY-SA-4.0`, and `NOTICE.md`, the three license texts and both
-themes are required content. `PackageContract.license` defaults to `MIT`, so a plugin declaring the
-preset expression still fails.
-
-`SUBAGENTS_CONTRACT` is likewise outside the standalone three, because it has real runtime
-dependencies and `make check-package-contracts` installs offline. It differs from a plugin contract in
-declared allowances only: `runtime_dependencies` (`croner`, `nanoid`; the manifest must match exactly and
-the import audit admits just those), `peer_ranges` (the fork's `>=1.1.0` floor instead of `*`) and
-`own_license` (the packed `LICENSE` must equal the workspace's, which keeps upstream's copyright, not the
-root one). The release `stock` gate installs the tarball plus those two dependencies from the registry
-and requires `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow` in the model request.
-`scenario_subagents` then has a faux parent call `Agent` in the foreground (routed faux child), which
-is what imports `croner` and `nanoid` at runtime; failures print the tool list seen and the stderr tail.
-`make check-subagents-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-subagents`, needs the registry)
-runs that exact gate through `npm_release.run_stock_contract`, so the descriptor, siblings and scenario
-match the release `verify` run; CI's `contracts` job runs it on every non-docs PR and uploads
-`subagents-package-contracts.json`.
-
-`COMPUTER_USE_CONTRACT` (`@nredd/pi-computer-use`) is also outside the standalone three (it declares
-`own_license` and no runtime dependencies, but a `files`/`allowed` set for the macOS-only helpers:
-`prebuilt/macos/{arm64,x64}/bridge`, no linux/windows prebuilts, no `native/linux` crate).
-`scenario_computer_use` is platform-aware because `extensions/computer-use.ts` registers
-`desktop_screenshot` and `desktop_input` on darwin only: exactly 13 tools on darwin, exactly the other 11
-elsewhere (a desktop tool on non-darwin fails). It also parses each packed helper's Mach-O header in
-Python (works on Linux): 64-bit little-endian magic, `cputype` matching `arm64`/`x64`, mode `0755`. The
-evidence records `platform`, the expected `tools` and per-arch `helpers`. NOT RUN, recorded in the report:
-the `postinstall` (`setup-helper.mjs`; the stock install uses `--ignore-scripts`, and running it would
-create a keychain signing identity, `pkill` a running helper and register the app with LaunchServices)
-and every desktop tool (needs an interactive desktop with Accessibility/Screen Recording TCC grants).
-`make check-computer-use-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-computer-use`,
-needs the registry for stock Pi; postinstall and native desktop behavior are NOT RUN, as the evidence records) runs the same gate through `npm_release.run_stock_contract`; CI's `contracts` job
-runs it on every non-docs PR (ubuntu-24.04 and macos-14) and uploads `computer-use-package-contracts.json`.
-
-The run: stock Pi `--no-extensions --extension <archived fork>` (so installed packages stay out of
-the parent, which the gate asserts: no `git_*` tool in the parent request; the child's own loader
-still resolves settings packages), the faux parent calls `Agent` with
-`subagent_type: "code-reviewer"`, `run_in_background: false`; the child is answered from a separate
-script selected by a marker in its task (`faux_provider.Route`, because step indexing counts
-assistant messages and would otherwise replay the parent's `Agent` call). The child's request is
-recorded with its declared tool names and its system prompt. The route matches the marker in the
-child's `user` messages only (the parent's own `Agent` arguments sit in an assistant message), not
-in all message text and not by the absence of `Agent` (nested helpers also lack it).
-
-The child does not merely advertise tools, it calls them. Its script makes one allowed call against a
-disposable seeded git repository (`git_status` sees the untracked file, `git_log` the seed commit
-subject, `read` the tracked note) and then, for every tool of `write`, `bash`, `git_status`,
-`git_commit` that its allowlist lacks, a call Pi must refuse with `Tool <name> not found`. The calls are
-harmless by construction: `write` and `bash touch` aim at sentinel paths that must still not exist
-afterwards, `git_commit` has `push: false` and the repository's `HEAD` must not move. The tool results
-come back in the child's next request (`RecordedRequest.tool_results`) and are matched call by call.
-Nothing touches a live repository, a remote or signing.
-
-Cases (each its own Pi run in a fresh sandbox; `assess_case` is pure and unit tested):
-
-- `package-default`: child tools are exactly `read`, `grep`, `find`, `git_diff`, `git_show`,
-  `git_log`, `git_status` plus `SubagentWorkflow`. The expectation is derived from the packed
-  `agents/code-reviewer.md` `tools:` line and checked equal to that set. `SubagentWorkflow` is the one
-  always-injected fork helper: `createWorkflowRefusalTool` in the fork's `src/agent-runner.ts`, injected
-  into every child with extensions loaded, and its only behavior is to refuse. Nested-delegation tools
-  need `allowed_subagents` and `StructuredOutput` needs a requested schema, so neither is present.
-  `edit`, `write`, `bash`, `ssh_exec`, `Agent`, `get_subagent_result`, `steer_subagent`, `git_commit`
-  and every other dev-tools tool are absent. The packed prompt body is in the child's system prompt
-  and `<active_agent name="code-reviewer"/>` names it; `max_turns: 40` reaches the run metadata
-  (`details.maxTurns`, the `max turns: 40` tag); the `Agent` result is a non-error `completed`
-  `code-reviewer` whose text ends with the child's answer; the parent finishes with its scripted
-  answer. Stderr is empty. The child really runs `git_status` and Pi refuses its `write`, `bash` and
-  `git_commit` calls. `toolUses` is the number of child calls (refused ones end like any other, so 4)
-  plus the fork's `extension-error:` diagnostics (0 here)
-- `global-override`: `<agent dir>/agents/code-reviewer.md` (`tools: read, find`, `extensions: false`)
-  beats the package: only its body, tools `read`, `find`
-- `project-override`: `<cwd>/.pi/agents/code-reviewer.md` (`tools: read, ext:pi-dev-tools/git_log`,
-  `extensions: [pi-dev-tools]`) beats both the global and the package agent while still loading the
-  real packed dev-tools: tools `read`, `git_log`, `SubagentWorkflow`; neither other body is in the
-  prompt. Runs under `--approve`; the child really calls `git_log`, and `git_status`, `write`, `bash`,
-  `git_commit` are refused
-- `project-override-untrusted`: the same files under `--no-approve`. The selected fork consults Pi's
-  canonical project-trust decision before reading `<cwd>/.pi/agents`, so the project agent is ignored
-  and the global override wins: the child declares exactly `read` and `find`, carries the global
-  prompt marker, and the project marker never reaches it. A fork that reads untrusted project agents
-  fails this case on purpose
-- `project-package-trusted` / `project-package-untrusted`: preset and dev-tools are installed through
-  `<cwd>/.pi/settings.json`, which Pi reads only for a trusted project, with no agent-dir packages.
-  The decision is Pi's real one-time flag (`--approve` / `--no-approve`, no saved `trust.json`, no
-  faked policy). Trusted behaves exactly like `package-default`. Untrusted, `code-reviewer` is not
-  discoverable: the fork resolves the type to its documented `general-purpose` fallback, and the child
-  gets the built-ins (`read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`) and none of dev-tools
-  (`git_status`, `git_commit` refused as unknown). Note this means an untrusted install silently
-  degrades to a write-capable agent; the case pins that so a change either way is visible
-- `missing-dev-tools`: only the preset is installed. The documented contract is a warning, not a
-  refusal: the fork reports `extension-error:extension "pi-dev-tools" requested by agent
-  "code-reviewer" was not loaded` and `extension-error:ext:pi-dev-tools referenced by ...` through its
-  tool-activity channel, and the agent still runs with its built-ins. Observed: the child declares
-  `read`, `grep`, `find`, `SubagentWorkflow` (no `git_*`), the `Agent` result succeeds and its
-  `toolUses` is exactly 2, one per diagnostic. The diagnostic text itself is not surfaced to the
-  parent in this Pi/fork combination (it feeds the widget's tool-use counter), so the counter is the
-  only machine-visible trace: `toolUses` is 7 (5 child calls, `git_status` among the refused ones, plus
-  the 2 diagnostics); it is asserted rather than invented as stderr or text
-
-Observed `toolUses` per case: `package-default` 4, `global-override` 5, `project-override` 5,
-`project-override-untrusted` 5, `missing-dev-tools` 7, `project-package-trusted` 4,
-`project-package-untrusted` 3.
-
-Validated JSON (new consumed fields, strict types): the fork `package.json` and lockfile, installed
-dependency manifests, the `Agent` result (`details.subagentType`/`status`/`toolUses`/`tags`/`maxTurns`,
-`isError`), the final assistant message, and the faux request's `messages[].content` (string, part
-list or null; a mistyped value is an HTTP 400, tool messages are recorded as text). Evidence and report models are strict Pydantic
-(`ForkContractReport`); cases must be complete and in order.
-
-Limits: stock Pi 1.3.0 and exactly the selected fork commit only. Packages are local-path
-`packages`, not `pi install`/npm-managed (the gate never publishes). Not Bun, not the full assembled
-stack, not authenticated providers, and no profile, role or activation behavior. A pass is not
-candidate or fullstack acceptance.
+The former `fork_package_contracts.py` gate (packed preset + dev-tools driving a real child through the
+Gitlinked `pi-subagents`) is removed. `packages/subagents` is now imported and loaded from source by
+the in-process suite, which covers what that gate asserted against real children:
+`integration/inprocess/reviewer.test.ts` (the preset `code-reviewer` agent file discovered from
+`packages/preset`, child tools restricted to the read-only dev-tools allowlist, denied tools refused
+without effect) and `specialists.test.ts`, plus `package_contracts.py`'s packed dev-tools scenario
+and the stock subagents contract above. Not covered any more: the packed preset and dev-tools *bytes*
+driving a child together. The tarball audit and clean install still cover those bytes; the behavior is
+proven from the same sources.
 
 Review dispositions (PR3, HEAD `4af6e2c`), both fixed:
 

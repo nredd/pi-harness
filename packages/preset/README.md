@@ -153,21 +153,12 @@ footer scenarios (quota, cache, widths, lifecycle), headless mode bindings, stat
 dependency tests, `npm pack` allowlist/license tests, and real Pi 1.3.0 resource discovery in a temporary
 `HOME`/agent dir with no live model calls or auth. Every test runs under Vitest and Bun.
 
-Real packed-tarball, real-fork evidence (committed, `make check-fork-package-contracts`, see
-[package contracts](../../docs/package-contracts.md)): the packed preset and packed
-`@nredd/pi-dev-tools` are installed as Pi `packages`, and exact stock Pi 1.3.0 runs the Gitlink-selected
-`pi-subagents` (nredd/v0.22.0 `2fc9632198745527b0478b6e79b130eed75d284a`, canonical project trust) with a loopback faux
-provider calling `Agent` with `subagent_type: code-reviewer` in the foreground. Observed through the
-child's real request: tools exactly `read`, `grep`, `find`, `git_diff`, `git_show`, `git_log`,
-`git_status` plus the fork's always-injected `SubagentWorkflow` refusal stub; no `edit`, `write`,
-`bash`, `ssh_exec`, other dev-tools or delegation tools. The packaged prompt body and `max_turns`
-reach the child; the child really runs `git_status` against a disposable repository, and Pi refuses
-its `write`, `bash` and `git_commit` calls as unknown tools. A global and a project `code-reviewer.md`
-each override the package. With dev-tools not installed the fork warns (`extension-error:`) and the
-child runs with only its built-ins, no `git_*` tools. Project `.pi/agents` overrides follow Pi's
-canonical project-trust decision: untrusted, the project file is ignored and the global override
-wins. A project-scoped install of the preset is gated the same way (untrusted, the reviewer is not
-found and the fork falls back to `general-purpose`, see the contracts doc).
+Packed-tarball evidence (`make check-package-contracts`, see
+[package contracts](../../docs/package-contracts.md)): the packed preset is audited against its
+multi-license contract and installed alone. Child behavior of the `code-reviewer` agent (tools exactly
+the read-only allowlist, denied tools refused, global/project overrides, untrusted project agents
+ignored) is exercised against real children from these sources by
+`integration/inprocess/{reviewer,specialists}.test.ts`.
 
 Pending, not claimed: profile resolution, model roles, activation, the full assembled-stack check,
 Bun compiled-artifact behavior, any other fork commit or Pi version, `pi install npm:@nredd/pi-preset` through a live Pi, and npm provenance attestation.

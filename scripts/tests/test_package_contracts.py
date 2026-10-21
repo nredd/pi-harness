@@ -235,6 +235,35 @@ def test_tarball_pairs_refuse_bad_selection(tmp_path: Path, pairs: list[str]) ->
         pc.parse_tarballs([value.replace("FILE", str(path)) for value in pairs], pc.CONTRACTS)
 
 
+def test_audit_gate_packs_audits_and_installs_the_preset(tmp_path: Path) -> None:
+    """The preset has no stock behavior; its packed bytes still pass the full audit and a clean install.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    evidence = pc.run_audit_gate(tmp_path, pc.PRESET_CONTRACT)
+    assert evidence["name"] == "@nredd/pi-preset"
+    assert "agents/code-reviewer.md" in evidence["files"]  # ty: ignore[unsupported-operator]
+
+
+def test_audit_gate_rejects_a_tarball_missing_required_files(tmp_path: Path) -> None:
+    """A supplied preset tarball that lacks contract files fails the audit instead of installing.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    manifest = b'{"name": "@nredd/pi-preset", "version": "0.0.1"}'
+    tarball = tmp_path / "nredd-pi-preset-0.0.1.tgz"
+    with tarfile.open(tarball, "w:gz") as tar:
+        info = tarfile.TarInfo("package/package.json")
+        info.size = len(manifest)
+        tar.addfile(info, io.BytesIO(manifest))
+    work = tmp_path / "work"
+    work.mkdir()
+    with pytest.raises(pc.ContractError, match="Tarball audit failed"):
+        pc.run_audit_gate(work, pc.PRESET_CONTRACT, {pc.PRESET_CONTRACT.directory: tarball})
+
+
 def test_sandbox_env_is_scrubbed(sandbox: pc.Sandbox, monkeypatch: pytest.MonkeyPatch) -> None:
     """No ambient credential or config location may leak into child processes.
 

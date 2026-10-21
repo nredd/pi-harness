@@ -20,7 +20,7 @@
 
 Timer-import audit (source imports and unbundled core `dist` used by the harness):
 
-- `forks/pi-subagents/src`, `forks/pi-plan-mode` and `forks/rpiv-todo`: no `timers` or `node:timers` imports.
+- `packages/subagents/src`, `packages/plan-mode` and `packages/todo`: no `timers` or `node:timers` imports.
 - `packages/*/src`: only session-kit `stats/load.ts` imports `setImmediate` from `node:timers/promises`, not a delayed timer. Stats is disabled in `GoalStack.kit()`.
 - Core `dist/core/auth-storage.js` imports `timers/promises.setTimeout` only for file-lock contention retries. `dist/testing/harness.js` constructs `AuthStorage.inMemory()`; children inherit that parent's `modelRuntime` via subagents `agent-runner.ts`, so neither uses the file backend.
 - Core `dist/extensions/mcp/runtime.js` imports `node:timers/promises.setTimeout` for connection retries. Parents use explicit factories without MCP; children have no configured/registered servers in the isolated home/project, so `extensions/mcp/index.js` never calls `createConnection`/`loadMcpRuntime`. Bundle chunks are not imported by the unbundled testing entry.
