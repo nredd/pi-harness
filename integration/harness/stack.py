@@ -44,29 +44,48 @@ GIT_WORKSPACE_PATHS = {
 }
 
 
+def json_path_key(path: str, key: str) -> str:
+    """Append an object key to a JSON path without ambiguity.
+
+    Parameters:
+        path (str): parent JSON path.
+        key (str): object key.
+
+    Returns:
+        str: path to `key` using identifier or JSON-string bracket notation.
+    """
+    return f"{path}.{key}" if key.isidentifier() else f"{path}[{json.dumps(key)}]"
+
+
 def reject_noncanonical_numbers(value: Any, path: str = "$") -> None:
-    """Reject numbers the JavaScript consumer cannot reproduce exactly.
+    """Reject values the JavaScript consumer cannot reproduce exactly.
 
     Parameters:
         value (Any): JSON-compatible value to inspect.
         path (str): JSON path identifying `value`.
 
     Raises:
-        ValueError: a float or unsafe integer occurs anywhere in the supplied value.
+        ValueError: a float, unsafe integer or non-string object key occurs anywhere in the supplied value.
     """
     if isinstance(value, float):
         raise ValueError(
             f"Float at `{path}` is not supported: digests are recomputed by a JS consumer, "
-            "so values must be integers, strings, bools, null, lists or objects"
+            "so values must be safe integers (±(2**53-1)), strings, bools, null, lists or objects"
         )
     if not isinstance(value, bool) and isinstance(value, int) and abs(value) > JS_SAFE_INTEGER:
         raise ValueError(
             f"Integer at `{path}` is outside the JavaScript safe-integer range "
             f"[-{JS_SAFE_INTEGER}, {JS_SAFE_INTEGER}]"
         )
+    if isinstance(value, str) and any("\ud800" <= character <= "\udfff" for character in value):
+        raise ValueError(f"String at `{path}` contains a lone surrogate")
     if isinstance(value, dict):
         for key, nested in value.items():
-            reject_noncanonical_numbers(nested, f"{path}.{key}")
+            if not isinstance(key, str):
+                raise ValueError(f"Object key at `{path}` must be a string, got {key!r}")
+            key_path = json_path_key(path, key)
+            reject_noncanonical_numbers(key, key_path)
+            reject_noncanonical_numbers(nested, key_path)
     elif isinstance(value, list):
         for index, nested in enumerate(value):
             reject_noncanonical_numbers(nested, f"{path}[{index}]")
@@ -352,6 +371,18 @@ def load_stack(path: Path) -> Stack:
     return derive_local_stack(personal)
 
 
+def canonical_stack_bytes(stack: Stack) -> bytes:
+    """Serialize a validated stack using the producer's canonical JSON representation.
+
+    Parameters:
+        stack (Stack): validated effective stack.
+
+    Returns:
+        bytes: canonical JSON bytes used for the stack digest.
+    """
+    return json.dumps(stack.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+
+
 def stack_digest(path: Path) -> str:
     """Return the SHA-256 of the effective stack, i.e. the canonical JSON of the loaded model.
 
@@ -363,12 +394,7 @@ def stack_digest(path: Path) -> str:
     Returns:
         str: hexadecimal digest.
     """
-    canonical = json.dumps(
-        load_stack(path).model_dump(mode="json"),
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return hashlib.sha256(canonical).hexdigest()
+    return hashlib.sha256(canonical_stack_bytes(load_stack(path))).hexdigest()
 
 
 def package_directory(source: str, agent_dir: Path) -> Path:

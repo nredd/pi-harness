@@ -25,6 +25,7 @@ from harness.stack import (
     LocalStackDocument,
     PackageSource,
     Stack,
+    canonical_stack_bytes,
     derive_local_stack,
     find_package,
     load_stack,
@@ -35,6 +36,7 @@ from harness.stack import (
     validate_release_identity,
     validate_shipped_stack,
 )
+from harness.stack_fixture import golden_fixture, golden_stack
 
 CORE = {
     "tag": "v1.3.0-nredd.7",
@@ -110,6 +112,7 @@ def test_stack_rejects_implicit_or_ambiguous_inputs(change: dict[str, Any]) -> N
     [
         ({"temperature": 1.0}, "$.settings.temperature"),
         ({"model": {"temperature": [1.0]}}, "$.settings.model.temperature[0]"),
+        ({"model": {"a.b": [1.0]}}, '$.settings.model["a.b"][0]'),
         ({"number": float("nan")}, "$.settings.number"),
         ({"number": float("inf")}, "$.settings.number"),
         ({"number": float("-inf")}, "$.settings.number"),
@@ -147,6 +150,41 @@ def test_stack_rejects_unsafe_integers_in_settings(value: Any, path: str) -> Non
         Stack.model_validate(stack_document(settings=settings))
 
 
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"lone": "\ud800"},
+        {"\ud800": "lone key"},
+    ],
+)
+def test_stack_rejects_lone_surrogates_before_pydantic_normalizes_them(settings: dict[str, Any]) -> None:
+    """Reject lone surrogates instead of silently replacing them during JSON serialization."""
+    with pytest.raises(ValidationError, match=r"String at `\$\.settings.*` contains a lone surrogate"):
+        Stack.model_validate(stack_document(settings=settings))
+
+
+def test_stack_rejects_non_string_nested_object_keys_before_json_normalizes_them() -> None:
+    """Reject nested keys that could collide after a JSON serializer stringifies them."""
+    for settings in (
+        {"nested": {1: "integer", "1": "string"}},
+        {"nested": {True: "boolean", "true": "string"}},
+    ):
+        with pytest.raises(ValidationError, match=r"Object key at `\$\.settings\.nested` must be a string"):
+            Stack.model_validate(stack_document(settings=settings))
+
+
+def test_stack_rejects_an_integer_key_at_any_nested_depth() -> None:
+    """Reject a non-string nested key even when no normalized-key collision exists."""
+    with pytest.raises(ValidationError, match=r"Object key at `\$\.settings\.nested` must be a string"):
+        Stack.model_validate(stack_document(settings={"nested": {1: "integer"}}))
+
+
+def test_stack_accepts_bools_before_rejecting_a_later_unsafe_integer() -> None:
+    """Keep bools out of the integer guard while still finding later unsafe integers."""
+    with pytest.raises(ValidationError, match=r"Integer at `\$\.settings\.values\[2\]` is outside"):
+        Stack.model_validate(stack_document(settings={"values": [True, False, 2**53]}))
+
+
 def test_stack_accepts_canonical_scalar_and_nested_settings() -> None:
     """Accept JSON values whose Python and JavaScript encodings agree."""
     settings = {
@@ -156,6 +194,15 @@ def test_stack_accepts_canonical_scalar_and_nested_settings() -> None:
         "nested": [True, 0, 2**53 - 1, {"value": 1}],
     }
     assert Stack.model_validate(stack_document(settings=settings)).settings == settings
+
+
+def test_producer_canonical_fixture_is_generated_from_the_real_serializer() -> None:
+    """Lock the shared fixture to the bytes and digest the producer actually emits."""
+    root = Path(__file__).resolve().parents[1]
+    fixture = json.loads((root / "tests/fixtures/stack-canonical-golden.json").read_bytes())
+    assert fixture == golden_fixture()
+    assert fixture["sha256"] == "cd9eadbcd7ae585f17b86dad2af279daf83b5e83cd98f117e0fbf55b89deea61"
+    assert hashlib.sha256(canonical_stack_bytes(golden_stack())).hexdigest() == fixture["sha256"]
 
 
 def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> None:
