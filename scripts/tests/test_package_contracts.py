@@ -27,7 +27,9 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import faux_provider as fp
+import npm_release as nr
 import package_contracts as pc
+import stock_package_contract as spc
 
 DEV_TOOLS = pc.CONTRACTS[0]
 ROOT_LICENSE = (pc.REPO_ROOT / "LICENSE").read_bytes()
@@ -65,7 +67,9 @@ def sandbox(tmp_path: Path) -> pc.Sandbox:
 
 
 @pytest.mark.parametrize(
-    "contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT], ids=lambda c: c.directory
+    "contract",
+    [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.COMPUTER_USE_CONTRACT, pc.SUBAGENTS_CONTRACT],
+    ids=lambda c: c.directory,
 )
 def test_supplied_tarball_is_never_repacked(
     tmp_path: Path,
@@ -610,7 +614,9 @@ def test_audit_tarball_reports_unparseable_manifest(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "contract", [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT], ids=lambda c: c.directory
+    "contract",
+    [*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.COMPUTER_USE_CONTRACT, pc.SUBAGENTS_CONTRACT],
+    ids=lambda c: c.directory,
 )
 def test_real_workspace_tarballs_pass_audit(
     contract: pc.PackageContract, tmp_path: Path, sandbox: pc.Sandbox
@@ -1685,7 +1691,7 @@ def test_faux_provider_records_system_and_developer_text() -> None:
 
 def test_contracts_are_hashable() -> None:
     """Dependency allowances are tuples, so every contract can key a set or dict."""
-    assert len({*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.SUBAGENTS_CONTRACT}) == 5
+    assert len({*pc.CONTRACTS, pc.PRESET_CONTRACT, pc.COMPUTER_USE_CONTRACT, pc.SUBAGENTS_CONTRACT}) == 6
 
 
 # --- scenario_subagents and the registry branch of install_alone ------------------------------------
@@ -1823,6 +1829,408 @@ def test_scenario_subagents_rejects_missing_request_and_bad_agent_result(
         run_subagents_scenario(tmp_path, monkeypatch, tools=ALL_SUBAGENT_TOOLS, result=errored)
     with pytest.raises(pc.ContractError, match="lacks the child's answer"):
         run_subagents_scenario(tmp_path, monkeypatch, tools=ALL_SUBAGENT_TOOLS, result=good_run("other"))
+
+
+CU_ALL_TOOLS = sorted(pc.COMPUTER_USE_CONTRACT.exposes_tools)
+CU_NON_DARWIN_TOOLS = sorted(pc.COMPUTER_USE_CONTRACT.exposes_tools - pc.COMPUTER_USE_DESKTOP_TOOLS)
+CU_CPU = {"arm64": 0x0100000C, "x64": 0x01000007}
+
+
+def macho(cpu: int, magic: bytes = pc.MACHO_MAGIC_64) -> bytes:
+    """Build a minimal Mach-O header plus padding.
+
+    Parameters:
+        cpu (int): `cputype`.
+        magic (bytes): Four magic bytes.
+
+    Returns:
+        bytes: Header bytes.
+    """
+    return magic + cpu.to_bytes(4, "little") + b"\0" * 16
+
+
+CU_SWIFT = ("agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift")
+CU_SETUP_SCRIPT = (
+    'const helperSourcePaths = ["agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"]\n'
+    "\t.map(f);\n"
+)
+CU_BUILD_SCRIPT = (
+    'const macosSourcePaths = [\n\t"agent_cursor.swift",\n\t"agent_cursor_motion.swift",\n'
+    '\t"bridge.swift",\n].map(f);\n'
+)
+
+
+def helper_tarball(
+    path: Path,
+    *,
+    overrides: dict[str, tuple[bytes, int]] | None = None,
+    drop: str | None = None,
+    omit_source: str | None = None,
+    setup_script: str | None = None,
+    build_script: str | None = None,
+) -> Path:
+    """Write a tarball holding both macOS helpers, optionally broken.
+
+    Parameters:
+        path (Path): Destination.
+        overrides (dict[str, tuple[bytes, int]] | None): `arch -> (content, mode)` replacements.
+        drop (str | None): Arch whose helper is omitted.
+        omit_source (str | None): Swift source left out of the tarball.
+        setup_script (str | None): Replacement `setup-helper.mjs` text.
+        build_script (str | None): Replacement `build-native.mjs` text.
+
+    Returns:
+        Path: `path`.
+    """
+    entries = {arch: (macho(cpu), 0o755) for arch, cpu in CU_CPU.items()} | (overrides or {})
+    members = {
+        "scripts/setup-helper.mjs": (setup_script or CU_SETUP_SCRIPT).encode(),
+        "scripts/build-native.mjs": (build_script or CU_BUILD_SCRIPT).encode(),
+        **{f"native/macos/{name}": b"// swift\n" for name in CU_SWIFT if name != omit_source},
+    }
+    with tarfile.open(path, "w:gz") as tar:
+        for arch, (data, mode) in entries.items():
+            if arch == drop:
+                continue
+            info = tarfile.TarInfo(f"package/prebuilt/macos/{arch}/bridge")
+            info.size, info.mode = len(data), mode
+            tar.addfile(info, io.BytesIO(data))
+        for name, data in members.items():
+            info = tarfile.TarInfo(f"package/{name}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return path
+
+
+def run_computer_use_scenario(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    platform: str,
+    tools: list[str],
+    result: pc.PiRun | None = None,
+    tarball: Path | None = None,
+    siblings: tuple[pc.PackageContract, ...] = (),
+) -> pc.ComputerUseEvidence:
+    """Run `scenario_computer_use` against a faked Pi, provider and host platform.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Patches `run_pi`, `host_platform` and the provider.
+        platform (str): Simulated `sys.platform`.
+        tools (list[str]): Tools the parent request declares.
+        result (pc.PiRun | None): Faked `pi` run; defaults to a clean one.
+        tarball (Path | None): Packed tarball; defaults to a valid helper pair.
+        siblings (tuple[pc.PackageContract, ...]): Sibling contracts.
+
+    Returns:
+        pc.ComputerUseEvidence: The scenario's evidence.
+    """
+    monkeypatch.setattr(pc, "run_pi", lambda *args, **kwargs: result or pc.PiRun(0, (), "", ""))
+    monkeypatch.setattr(pc, "host_platform", lambda: platform)
+    root = Path(tempfile.mkdtemp(dir=tmp_path))
+    packed = tarball or helper_tarball(root / "x.tgz")
+    ctx = pc.Context(
+        Path("pi"),
+        pc.Sandbox(root / "sandbox", pc.locate_tools()),
+        root / "installed",
+        pc.PackedArtifact(pc.COMPUTER_USE_CONTRACT, packed, "1.0.0", "sha512-x", "0" * 40, 1, ()),
+        root / "work",
+        siblings,
+    )
+    ctx.work.mkdir()
+    monkeypatch.setattr(pc.Context, "provider_session", lambda self, script, routes=(): StubProvider(tools))
+    return pc.scenario_computer_use(ctx)
+
+
+def test_scenario_computer_use_expects_all_13_tools_on_darwin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Darwin requires the 13-tool set and records platform, helpers and both NOT RUN items."""
+    evidence = run_computer_use_scenario(tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS)
+    assert evidence["platform"] == "darwin"
+    assert evidence["tools"] == CU_ALL_TOOLS
+    assert len(evidence["tools"]) == 13
+    assert evidence["helpers"]["arm64"] == "Mach-O arm64 cputype 0x100000c mode 0755"
+    assert evidence["helpers"]["x64"] == "Mach-O x64 cputype 0x1000007 mode 0755"
+    assert evidence["postinstall"] == "NOT RUN"
+    assert evidence["native_desktop"] == "NOT RUN"
+
+
+def test_scenario_computer_use_expects_exactly_11_tools_off_darwin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linux requires the 11-tool set, and the desktop tools must NOT be offered there."""
+    evidence = run_computer_use_scenario(tmp_path, monkeypatch, platform="linux", tools=CU_NON_DARWIN_TOOLS)
+    assert evidence["platform"] == "linux"
+    assert evidence["tools"] == CU_NON_DARWIN_TOOLS
+    assert len(evidence["tools"]) == 11
+    with pytest.raises(pc.ContractError, match=r"must not offer.*desktop_input"):
+        run_computer_use_scenario(tmp_path, monkeypatch, platform="linux", tools=CU_ALL_TOOLS)
+
+
+def test_scenario_computer_use_names_the_missing_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Darwin without `desktop_input` fails naming it; Linux without `act_ui` fails naming it."""
+    with pytest.raises(pc.ContractError, match=r"tools not offered.*desktop_input"):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=[t for t in CU_ALL_TOOLS if t != "desktop_input"]
+        )
+    with pytest.raises(pc.ContractError, match=r"tools not offered.*act_ui"):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="linux", tools=[t for t in CU_NON_DARWIN_TOOLS if t != "act_ui"]
+        )
+
+
+def test_scenario_computer_use_reports_load_failure_with_stderr_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing load surfaces the exit code, the platform and the stderr tail."""
+    broken = pc.PiRun(1, (), "", "Error: Cannot find module 'typebox'")
+    with pytest.raises(pc.ContractError, match="pi exited 1") as excinfo:
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="linux", tools=CU_NON_DARWIN_TOOLS, result=broken
+        )
+    assert "Cannot find module 'typebox'" in str(excinfo.value)
+    assert "(linux)" in str(excinfo.value)
+
+
+def test_scenario_computer_use_rejects_sibling_tools_and_no_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sibling's tool in the request fails, and so does a provider that saw no request."""
+    with pytest.raises(pc.ContractError, match=r"sibling tools present.*git_status"):
+        run_computer_use_scenario(
+            tmp_path,
+            monkeypatch,
+            platform="linux",
+            tools=[*CU_NON_DARWIN_TOOLS, "git_status"],
+            siblings=(DEV_TOOLS,),
+        )
+    with pytest.raises(pc.ContractError, match="received no request"):
+        run_computer_use_scenario(tmp_path, monkeypatch, platform="linux", tools=[])
+
+
+@pytest.mark.parametrize(
+    ("overrides", "drop", "message"),
+    [
+        ({"arm64": (macho(CU_CPU["x64"]), 0o755)}, None, "arm64/bridge has cputype 0x1000007"),
+        ({"x64": (macho(CU_CPU["arm64"]), 0o755)}, None, "x64/bridge has cputype 0x100000c"),
+        ({"arm64": (macho(CU_CPU["arm64"]), 0o644)}, None, "mode 0644, expected 0755"),
+        ({"x64": (macho(CU_CPU["x64"]), 0o775)}, None, "mode 0775, expected 0755"),
+        ({"x64": (b"#!/bin/sh\n" + b"\0" * 12, 0o755)}, None, "not a 64-bit little-endian Mach-O"),
+        (
+            {"arm64": (macho(CU_CPU["arm64"], b"\xca\xfe\xba\xbe"), 0o755)},
+            None,
+            "not a 64-bit little-endian Mach-O.*cafebabe",
+        ),
+        ({}, "x64", "has no 'prebuilt/macos/x64/bridge'"),
+    ],
+)
+def test_scenario_computer_use_rejects_bad_helpers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, tuple[bytes, int]],
+    drop: str | None,
+    message: str,
+) -> None:
+    """Wrong arch, wrong mode, non-Mach-O, fat and missing helpers each fail with a specific message."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", overrides=overrides, drop=drop)
+    with pytest.raises(pc.ContractError, match=message):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+        )
+
+
+def test_computer_use_expected_tools_split_by_platform() -> None:
+    """Only darwin includes the two desktop tools."""
+    assert pc.computer_use_expected_tools("darwin") == pc.COMPUTER_USE_CONTRACT.exposes_tools
+    assert pc.computer_use_expected_tools("win32") == pc.computer_use_expected_tools("linux")
+    assert not pc.computer_use_expected_tools("linux") & pc.COMPUTER_USE_DESKTOP_TOOLS
+
+
+def test_shared_runner_report_records_computer_use_not_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Success writes `--report` and prints the same JSON, both recording `postinstall` NOT RUN."""
+    evidence = {
+        "platform": "linux",
+        "tools": ["find_roots"],
+        "helpers": {"arm64": "Mach-O arm64", "x64": "Mach-O x64"},
+        "helper_sources": ["native/macos/bridge.swift"],
+        "postinstall": "NOT RUN",
+        "postinstall_reason": "ignore-scripts",
+        "native_desktop": "NOT RUN",
+        "native_desktop_reason": "no desktop",
+    }
+    entry = GOOD_ENTRY | {"tarball": "nredd-pi-computer-use-0.3.0.tgz", "evidence": evidence}
+    report = pc.validate_report(good_report({"@nredd/pi-computer-use": entry}))
+    monkeypatch.setattr(nr, "run_stock_contract", lambda *args, **kwargs: report)
+    path = tmp_path / "report.json"
+    assert (
+        spc.main(
+            ["--package", "@nredd/pi-computer-use", "--stock-prefix", str(tmp_path), "--report", str(path)]
+        )
+        == 0
+    )
+    written = json.loads(path.read_text())
+    assert written == json.loads(capsys.readouterr().out)
+    assert written["packages"]["@nredd/pi-computer-use"]["evidence"]["postinstall"] == "NOT RUN"
+
+
+def cu_report() -> pc.ContractReport:
+    """Build a computer-use-shaped report whose evidence records two NOT RUN items.
+
+    Returns:
+        pc.ContractReport: Validated report.
+    """
+    evidence = {
+        "platform": "linux",
+        "tools": ["find_roots"],
+        "helpers": {"arm64": "Mach-O arm64", "x64": "Mach-O x64"},
+        "helper_sources": ["native/macos/bridge.swift"],
+        "postinstall": "NOT RUN",
+        "postinstall_reason": "ignore-scripts",
+        "native_desktop": "NOT RUN",
+        "native_desktop_reason": "no desktop",
+    }
+    entry = GOOD_ENTRY | {"tarball": "nredd-pi-computer-use-0.3.0.tgz", "evidence": evidence}
+    return pc.validate_report(good_report({"@nredd/pi-computer-use": entry}))
+
+
+def test_shared_runner_logs_not_run_items(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """NOT RUN evidence is disclosed in the success log with its reasons."""
+    monkeypatch.setattr(nr, "run_stock_contract", lambda *args, **kwargs: cu_report())
+    with caplog.at_level("INFO"):
+        assert spc.main(["--package", "@nredd/pi-computer-use", "--stock-prefix", str(tmp_path)]) == 0
+    assert (
+        "computer-use package contract: passed; NOT RUN: postinstall (ignore-scripts), "
+        "native_desktop (no desktop)"
+    ) in caplog.text
+
+
+def test_shared_runner_plain_pass_without_not_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Evidence without NOT RUN entries logs a plain pass."""
+    report = pc.validate_report(good_report())
+    name = next(iter(report.packages))
+    monkeypatch.setattr(nr, "run_stock_contract", lambda *args, **kwargs: report)
+    with caplog.at_level("INFO"):
+        assert spc.main(["--package", name, "--stock-prefix", str(tmp_path)]) == 0
+    assert "package contract: passed" in caplog.text
+    assert "NOT RUN" not in caplog.text
+
+
+def test_computer_use_make_help_discloses_not_run() -> None:
+    """The Makefile help line for the computer-use gate says what is NOT RUN."""
+    lines = (pc.REPO_ROOT / "Makefile").read_text().splitlines()
+    (line,) = (item for item in lines if item.startswith("check-computer-use-package-contract:"))
+    assert "NOT RUN" in line
+
+
+@pytest.mark.parametrize("error", [pc.ContractError("bad"), nr.ReleaseError("bad")])
+def test_shared_runner_failure_exits_one_without_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: Exception
+) -> None:
+    """A contract or release error exits 1 and writes no report."""
+
+    def fail(*args: object, **kwargs: object) -> pc.ContractReport:
+        raise error
+
+    monkeypatch.setattr(nr, "run_stock_contract", fail)
+    path = tmp_path / "report.json"
+    argv = ["--package", "@nredd/pi-computer-use", "--stock-prefix", str(tmp_path), "--report", str(path)]
+    assert spc.main(argv) == 1
+    assert not path.exists()
+
+
+def test_shared_runner_unknown_package_exits_before_packing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An undeclared package exits 1 without running the stock contract."""
+
+    def boom(*args: object, **kwargs: object) -> pc.ContractReport:
+        raise AssertionError("must not pack")
+
+    monkeypatch.setattr(nr, "run_stock_contract", boom)
+    assert spc.main(["--package", "@nredd/nope", "--stock-prefix", str(tmp_path)]) == 1
+
+
+def test_audit_files_computer_use_exact_payload() -> None:
+    """The pinned 45 paths pass; stray, missing and duplicated paths are each reported."""
+    packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
+    assert len(packed) == 45
+    assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
+    assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
+    missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])
+    assert any("src/view.ts" in problem for problem in missing)
+    duplicated = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/view.ts"])
+    assert any("listed 2 times" in problem for problem in duplicated)
+
+
+def test_scenario_computer_use_rejects_unpacked_helper_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source the packed build scripts compile but the tarball lacks fails by name."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", omit_source="agent_cursor_motion.swift")
+    with pytest.raises(pc.ContractError, match=r"no 'native/macos/agent_cursor_motion\.swift'"):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+        )
+
+
+def test_scenario_computer_use_rejects_script_without_source_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A packed script whose source list cannot be found is a contract error, not a silent pass."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", setup_script="// no list\n")
+    with pytest.raises(pc.ContractError, match="has no 'helperSourcePaths' helper source list"):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+        )
+
+
+def test_scenario_computer_use_parses_mixed_quote_helper_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every literal Swift source, including single-quoted entries, is verified in the tarball."""
+    setup_script = (
+        "const helperSourcePaths = ['agent_cursor.swift', \"agent_cursor_motion.swift\", 'bridge.swift']\n"
+        ".map(f);\n"
+    )
+    tarball = helper_tarball(tmp_path / "mixed.tgz", setup_script=setup_script)
+    evidence = run_computer_use_scenario(
+        tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+    )
+    assert evidence["helper_sources"] == [f"native/macos/{name}" for name in CU_SWIFT]
+
+
+@pytest.mark.parametrize(
+    ("setup_script", "build_script", "message"),
+    [
+        ('const helperSourcePaths = ["bridge.swift", extra]\n.map(f);\n', None, "unsupported token"),
+        ('const macosSourcePaths = ["bridge.swift"]\n.map(f);\n', None, "helperSourcePaths"),
+        (None, 'const helperSourcePaths = ["bridge.swift"]\n.map(f);\n', "macosSourcePaths"),
+    ],
+    ids=["expression", "setup-wrong-variable", "build-wrong-variable"],
+)
+def test_scenario_computer_use_rejects_unsupported_or_wrong_helper_source_declaration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    setup_script: str | None,
+    build_script: str | None,
+    message: str,
+) -> None:
+    """Only each script's complete expected literal source list is accepted."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", setup_script=setup_script, build_script=build_script)
+    with pytest.raises(pc.ContractError, match=message):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+        )
 
 
 def stub_npm_install(

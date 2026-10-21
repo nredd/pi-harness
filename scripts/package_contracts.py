@@ -42,7 +42,7 @@ import tarfile
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self, TypedDict
 
@@ -207,6 +207,105 @@ PRESET_CONTRACT = PackageContract(
     ),
     exposes_tools=frozenset(),
     license="MIT AND Apache-2.0 AND CC-BY-SA-4.0",
+)
+
+COMPUTER_USE_CONTRACT = PackageContract(
+    name="@nredd/pi-computer-use",
+    directory="computer-use",
+    required=(
+        "LICENSE",
+        "README.md",
+        "package.json",
+        "extensions/computer-use.ts",
+        "scripts/build-native.mjs",
+        "scripts/setup-helper.mjs",
+        "native/macos/agent_cursor.swift",
+        "native/macos/agent_cursor_motion.swift",
+        "native/macos/bridge.swift",
+        "prebuilt/macos/arm64/bridge",
+        "prebuilt/macos/x64/bridge",
+    ),
+    # Only macOS ships: the arm64/x64 prebuilts below are the sole helper binaries, so no `prebuilt/linux`
+    # or `prebuilt/windows` pattern exists, and no Windows crate or Windows/Linux doc is packed. The
+    # `src/platform` pattern is source the TypeScript backends reference. `scenario_computer_use`
+    # additionally parses each prebuilt's Mach-O header and mode from the tarball.
+    allowed=(
+        re.compile(r"^(LICENSE|README\.md|package\.json)$"),
+        re.compile(r"^assets/reference/img\.jpg$"),
+        re.compile(r"^docs/(?:architecture|configuration|macos-root-targeting|troubleshooting|usage)\.md$"),
+        re.compile(r"^extensions/[a-z-]+\.ts$"),
+        re.compile(
+            r"^src/(?:[a-z0-9-]+|platform/[a-z0-9-]+|platform/(?:linux|macos|windows)/[a-z0-9-]+(?:\.d)?)\.(?:ts|mts|mjs)$"
+        ),
+        re.compile(r"^scripts/(?:build-native|setup-helper)\.mjs$"),
+        re.compile(r"^native/macos/(?:bridge|agent_cursor|agent_cursor_motion)\.swift$"),
+        re.compile(r"^prebuilt/macos/(?:arm64|x64)/bridge$"),
+    ),
+    exposes_tools=frozenset(
+        {
+            "find_roots",
+            "observe_ui",
+            "search_ui",
+            "expand_ui",
+            "inspect_ui",
+            "act_ui",
+            "read_text",
+            "wait_for",
+            "launch_browser",
+            "navigate_browser",
+            "evaluate_browser",
+            "desktop_screenshot",
+            "desktop_input",
+        }
+    ),
+    own_license=True,
+    packed_files=(
+        "LICENSE",
+        "README.md",
+        "assets/reference/img.jpg",
+        "docs/architecture.md",
+        "docs/configuration.md",
+        "docs/macos-root-targeting.md",
+        "docs/troubleshooting.md",
+        "docs/usage.md",
+        "extensions/computer-use.ts",
+        "native/macos/agent_cursor.swift",
+        "native/macos/agent_cursor_motion.swift",
+        "native/macos/bridge.swift",
+        "package.json",
+        "prebuilt/macos/arm64/bridge",
+        "prebuilt/macos/x64/bridge",
+        "scripts/build-native.mjs",
+        "scripts/setup-helper.mjs",
+        "src/actions.ts",
+        "src/bridge.ts",
+        "src/cdp.ts",
+        "src/config.ts",
+        "src/contract.ts",
+        "src/desktop.ts",
+        "src/note.ts",
+        "src/outline.ts",
+        "src/output.ts",
+        "src/permissions.ts",
+        "src/platform/architecture.ts",
+        "src/platform/coerce.ts",
+        "src/platform/index.ts",
+        "src/platform/linux/backend.ts",
+        "src/platform/linux/helper.ts",
+        "src/platform/macos/backend.ts",
+        "src/platform/macos/browser.ts",
+        "src/platform/macos/helper-path.d.mts",
+        "src/platform/macos/helper-path.mjs",
+        "src/platform/macos/helper.ts",
+        "src/platform/macos/permissions.ts",
+        "src/platform/types.ts",
+        "src/platform/windows/backend.ts",
+        "src/platform/windows/helper.ts",
+        "src/root-selection.ts",
+        "src/runtime.ts",
+        "src/state.ts",
+        "src/view.ts",
+    ),
 )
 
 # `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` is hermetic
@@ -602,6 +701,19 @@ class SubagentsEvidence(TypedDict):
     child_text: str
 
 
+class ComputerUseEvidence(TypedDict):
+    """Stock-Pi declaration evidence, explicitly excluding native desktop execution."""
+
+    platform: str
+    tools: list[str]
+    helpers: dict[str, str]
+    helper_sources: list[str]
+    postinstall: Literal["NOT RUN"]
+    postinstall_reason: str
+    native_desktop: Literal["NOT RUN"]
+    native_desktop_reason: str
+
+
 class PlanModeEvidence(TypedDict):
     """Return shape of `scenario_plan_mode`.
 
@@ -628,6 +740,7 @@ ScenarioEvidence = (
     | SubagentsEvidence
     | PlanModeEvidence
     | TodoEvidence
+    | ComputerUseEvidence
 )
 
 
@@ -661,6 +774,22 @@ class SubagentsEvidenceModel(BaseModel):
     child_text: NonEmptyText = Field(description="Answer the foreground `Agent` call returned from its child")
 
 
+class ComputerUseEvidenceModel(BaseModel):
+    model_config = STRICT_MODEL
+    platform: NonEmptyText = Field(description="Host `sys.platform` that selected the expected tool set")
+    tools: list[NonEmptyText] = Field(min_length=1, description="Exact tool set the model was offered")
+    helpers: dict[str, NonEmptyText] = Field(
+        min_length=1, description="Packed Mach-O check per prebuilt arch"
+    )
+    helper_sources: list[NonEmptyText] = Field(
+        min_length=1, description="Swift sources the packed build scripts compile, each verified packed"
+    )
+    postinstall: Literal["NOT RUN"] = Field(description="`setup-helper.mjs` was not exercised")
+    postinstall_reason: NonEmptyText = Field(description="Why the postinstall was not exercised")
+    native_desktop: Literal["NOT RUN"] = Field(description="Native desktop behavior was not exercised")
+    native_desktop_reason: NonEmptyText = Field(description="Why native desktop behavior was not exercised")
+
+
 class PlanModeEvidenceModel(BaseModel):
     model_config = STRICT_MODEL
     tools: list[NonEmptyText] = Field(min_length=2, description="Plan tools offered by the packed extension")
@@ -676,6 +805,7 @@ class TodoEvidenceModel(BaseModel):
 
 
 EVIDENCE_MODELS: dict[str, type[BaseModel]] = {
+    "@nredd/pi-computer-use": ComputerUseEvidenceModel,
     "@nredd/pi-subagents": SubagentsEvidenceModel,
     "@nredd/pi-dev-tools": DevToolsEvidenceModel,
     "@nredd/pi-session-kit": SessionKitEvidenceModel,
@@ -722,6 +852,7 @@ class PackageReport(BaseModel):
         | SubagentsEvidenceModel
         | PlanModeEvidenceModel
         | TodoEvidenceModel
+        | ComputerUseEvidenceModel
     ) = Field(description="Scenario evidence for this package")
 
 
@@ -2424,6 +2555,205 @@ def scenario_subagents(ctx: Context) -> SubagentsEvidence:
         f"subagents `Agent` result lacks the child's answer: '{text[-300:]}'\n{result.stderr[-1000:]}",
     )
     return {"tools": sorted(ctx.artifact.contract.exposes_tools), "child_text": SUBAGENTS_CHILD_TEXT}
+
+
+COMPUTER_USE_DESKTOP_TOOLS = frozenset({"desktop_screenshot", "desktop_input"})
+MACHO_ARCH = Literal["arm64", "x64"]
+MACHO_CPU_TYPES: Mapping[MACHO_ARCH, int] = {"arm64": 0x0100000C, "x64": 0x01000007}
+MACHO_MAGIC_64 = b"\xcf\xfa\xed\xfe"
+
+
+def host_platform() -> str:
+    """Return the platform whose tool set stock Pi will see (a seam for tests).
+
+    Returns:
+        str: `sys.platform`.
+    """
+    return sys.platform
+
+
+def computer_use_expected_tools(platform: str) -> frozenset[str]:
+    """Return the exact tools `extensions/computer-use.ts` registers on `platform`.
+
+    `desktop_screenshot` and `desktop_input` are registered on darwin only, so non-darwin hosts
+    (CI's ubuntu-24.04 cell) must see the other 11 and neither desktop tool.
+
+    Parameters:
+        platform (str): `sys.platform` value.
+
+    Returns:
+        frozenset[str]: Expected tool names.
+    """
+    tools = COMPUTER_USE_CONTRACT.exposes_tools
+    return tools if platform == "darwin" else tools - COMPUTER_USE_DESKTOP_TOOLS
+
+
+def check_macos_helper(tarball: Path, arch: MACHO_ARCH) -> str:
+    """Require a packed `prebuilt/macos/<arch>/bridge` to be a thin 64-bit Mach-O of `arch`, mode 0755.
+
+    The header is parsed here (little-endian magic then `cputype`), so it works on any host.
+
+    Parameters:
+        tarball (Path): Packed tarball.
+        arch (MACHO_ARCH): `arm64` or `x64`.
+
+    Returns:
+        str: Human-readable summary recorded as evidence.
+
+    Raises:
+        ContractError: If the member is absent, not a Mach-O of that arch, or not mode 0755.
+    """
+    name = f"prebuilt/macos/{arch}/bridge"
+    with tarfile.open(tarball) as tar:
+        try:
+            member = tar.getmember(f"package/{name}")
+        except KeyError as e:
+            raise ContractError(f"'{tarball.name}' has no '{name}'") from e
+        handle = tar.extractfile(member)
+        if handle is None:
+            raise ContractError(f"'{tarball.name}:{name}' is not a regular file")
+        mode = member.mode & 0o7777
+        header = handle.read(8)
+    require(
+        header[:4] == MACHO_MAGIC_64,
+        f"{name} is not a 64-bit little-endian Mach-O (magic {header[:4].hex()})",
+    )
+    cpu = int.from_bytes(header[4:8], "little")
+    require(
+        cpu == MACHO_CPU_TYPES[arch],
+        f"{name} has cputype {cpu:#x}, expected {MACHO_CPU_TYPES[arch]:#x} for {arch}",
+    )
+    require(mode == 0o755, f"{name} has mode {mode:04o}, expected 0755")
+    return f"Mach-O {arch} cputype {cpu:#x} mode {mode:04o}"
+
+
+HELPER_SOURCE_LIST_DECLARATIONS = {
+    "scripts/setup-helper.mjs": "helperSourcePaths",
+    "scripts/build-native.mjs": "macosSourcePaths",
+}
+HELPER_SOURCE_LITERAL = re.compile(
+    r"\s*(?P<quote>['\"])(?P<value>(?:\\.|(?!\1).)*)(?P=quote)\s*(?:,|$)", re.DOTALL
+)
+
+
+def parse_helper_source_list(script: str, source: str) -> list[str]:
+    """Parse one packed script's complete literal Swift-source declaration.
+
+    Raises:
+        ContractError: If the expected declaration is absent or contains a non-literal token.
+    """
+    expected = HELPER_SOURCE_LIST_DECLARATIONS[script]
+    declaration = re.compile(rf"\b{re.escape(expected)}\s*=\s*\[(?P<items>.*?)\]\s*\.map\b", re.DOTALL)
+    match = declaration.search(source)
+    require(match is not None, f"{script} has no '{expected}' helper source list")
+    assert match is not None
+    items = match.group("items")
+    names: list[str] = []
+    offset = 0
+    while offset < len(items):
+        if not items[offset:].strip():
+            break
+        literal = HELPER_SOURCE_LITERAL.match(items, offset)
+        require(
+            literal is not None,
+            f"{script} helper source list has unsupported token (only plain string literals, no comments "
+            f"or templates): {items[offset:].strip()!r}",
+        )
+        assert literal is not None
+        names.append(literal.group("value"))
+        offset = literal.end()
+    require(bool(names), f"{script} helper source list names no .swift files")
+    require(
+        all(name.endswith(".swift") for name in names),
+        f"{script} helper source list has unsupported non-Swift source",
+    )
+    return names
+
+
+def check_helper_sources_packed(tarball: Path) -> list[str]:
+    """Require every Swift source the packed build scripts compile to be in the tarball.
+
+    `setup-helper.mjs` (`helperSourcePaths`) and `build-native.mjs` (`macosSourcePaths`) name the
+    `native/macos/*.swift` files `--allow-build` and `build:native` compile. A name missing from the
+    tarball would make both fail from an install, so the lists are read from the packed scripts.
+
+    Parameters:
+        tarball (Path): Packed tarball.
+
+    Returns:
+        list[str]: Sorted `native/macos/<file>` paths verified present.
+
+    Raises:
+        ContractError: If a script lacks the list or a listed source is not packed.
+    """
+    sources: set[str] = set()
+    for script in HELPER_SOURCE_LIST_DECLARATIONS:
+        names = parse_helper_source_list(script, read_member(tarball, script).decode())
+        sources.update(f"native/macos/{name}" for name in names)
+    for source in sorted(sources):
+        read_member(tarball, source)
+    return sorted(sources)
+
+
+def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
+    """Load packed computer-use, prove its platform's exact tool set and audit the shipped helpers.
+
+    The tool set is platform-aware: 13 on darwin, 11 elsewhere (no desktop tools). Each packed
+    macOS helper is checked as a Mach-O of the right arch with mode 0755. Not exercised, and recorded
+    as `NOT RUN`: the `postinstall` (`setup-helper.mjs`; the stock install uses `--ignore-scripts`),
+    because it creates a keychain signing identity, `pkill`s any running helper and registers the app
+    with LaunchServices, which an isolated contract must not do to the host; and any desktop tool,
+    which needs an interactive macOS desktop with Accessibility/Screen Recording TCC grants.
+
+    Parameters:
+        ctx (Context): Scenario context.
+
+    Returns:
+        ComputerUseEvidence: Evidence recorded in the report.
+
+    Raises:
+        ContractError: If a helper is malformed, the extension fails to load or the tool set is wrong.
+    """
+    platform = host_platform()
+    expected = computer_use_expected_tools(platform)
+    helpers: dict[str, str] = {arch: check_macos_helper(ctx.artifact.path, arch) for arch in MACHO_CPU_TYPES}
+    helper_sources = check_helper_sources_packed(ctx.artifact.path)
+    project = ctx.work / "project"
+    project.mkdir()
+    with ctx.provider_session([TextStep("loaded")]) as provider:
+        result = run_pi(
+            ctx.pi_bin,
+            ctx.sandbox,
+            ctx.installed,
+            project,
+            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"],
+        )
+    require_clean_run(result, f"computer-use extension load ({platform})")
+    require_tools(
+        result,
+        replace(ctx.artifact.contract, exposes_tools=expected),
+        ctx.siblings,
+        provider.requests,
+        all_tools=True,
+    )
+    offered = set(provider.requests[0].tools)
+    leaked = (COMPUTER_USE_CONTRACT.exposes_tools - expected) & offered
+    require(not leaked, f"computer-use on {platform} must not offer {sorted(leaked)}; got {sorted(offered)}")
+    return {
+        "platform": platform,
+        "tools": sorted(expected),
+        "helpers": helpers,
+        "helper_sources": helper_sources,
+        "postinstall": "NOT RUN",
+        "postinstall_reason": (
+            "stock install uses --ignore-scripts; setup-helper.mjs would create a keychain signing "
+            "identity, pkill a running helper and register the app with LaunchServices"
+        ),
+        "native_desktop": "NOT RUN",
+        "native_desktop_reason": (
+            "requires an interactive macOS desktop and Accessibility/Screen Recording TCC grants"
+        ),
+    }
 
 
 def scenario_session_kit(ctx: Context) -> SessionKitEvidence:
