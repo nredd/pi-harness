@@ -565,6 +565,20 @@ describe("FleetList rendering", () => {
     expect(lines.some(l => l.includes("↓ 3 more"))).toBe(true);
   });
 
+  it("keeps the widget height fixed while scrolling an overflowing list", () => {
+    const agents = Array.from({ length: 9 }, (_, i) =>
+      makeRecord({ id: `a${i}`, description: `report ${i}` }));
+    const h = harness(agents);
+    const heights = [h.render(120).length]; // inactive, top
+    h.press(DOWN); // activate (main)
+    heights.push(h.render(120).length);
+    for (let i = 0; i < 9; i++) {
+      h.press(DOWN);
+      heights.push(h.render(120).length); // top, middle, then bottom
+    }
+    expect(new Set(heights).size).toBe(1);
+  });
+
   it("ends with a blank spacer so the last row clears pi's footer (#351)", () => {
     const one = harness([makeRecord({ description: "only agent" })]).render(120);
     expect(one.at(-1)).toBe("");
@@ -850,6 +864,35 @@ describe("FleetList model and activity", () => {
     const out = row(withModel(), false);
     expect(out).not.toContain("opus 4.6");
     expect(out).not.toContain("thinking: high");
+  });
+
+  it("aligns the tail columns whether or not a row has a live call segment", () => {
+    const now = Date.now();
+    const agents = [
+      withModel({ id: "a1", description: "no call", completedAt: now, startedAt: now - 1_018_000 }),
+      withModel({ id: "a2", description: "has call", startedAt: now - 59_000 }),
+    ];
+    const activity = new Map<string, AgentActivity>([["a2", {
+      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
+      modelCall: { startedAt: now - 4_000, lastEventAt: now - 100, kind: "thinking", writtenChars: 0 },
+    }]]);
+    const fleet = new FleetList(fakeManager(agents), activity, undefined, undefined, undefined, undefined, undefined, () => true);
+    let factory: any;
+    fleet.setUICtx({
+      setWidget: (_k: string, c: any) => { factory = c; },
+      onTerminalInput: () => () => {},
+      getEditorText: () => "",
+      notify: () => {},
+      custom: (() => new Promise(() => {})) as any,
+    } as any);
+    fleet.update();
+    const lines = factory({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme)
+      .render(160).map(plain);
+    const [a, b] = ["no call", "has call"].map(d => lines.find((l: string) => l.includes(d)) as string);
+    expect(a.indexOf("opus 4.6")).toBe(b.indexOf("opus 4.6"));
+    expect(a.indexOf("thinking: high")).toBe(b.indexOf("thinking: high"));
+    expect(a.indexOf("· ↓")).toBe(b.indexOf("· ↓"));
+    expect(visibleWidth(a)).toBe(visibleWidth(b));
   });
 
   it("copes with a record that has no invocation yet", () => {
