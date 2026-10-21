@@ -1,7 +1,7 @@
 {
 	"name": "@nredd/pi-computer-use",
 	"version": "0.5.1",
-	"description": "Pi extension that lets AI agents observe and control macOS, Windows, and Linux apps.",
+	"description": "Pi extension that lets AI agents observe and control macOS apps.",
 	"type": "module",
 	"keywords": [
 		"pi-package",
@@ -33,16 +33,18 @@
 		"src",
 		"scripts/build-native.mjs",
 		"scripts/setup-helper.mjs",
+		"native/macos/agent_cursor.swift",
+		"native/macos/agent_cursor_motion.swift",
 		"native/macos/bridge.swift",
-		"native/windows/bridge-rs/Cargo.lock",
-		"native/windows/bridge-rs/Cargo.toml",
-		"native/windows/bridge-rs/src",
-		"native/windows/bridge-rs/tests",
 		"prebuilt/macos",
 		"assets/reference/img.jpg",
 		"README.md",
 		"LICENSE",
-		"docs/*.md"
+		"docs/architecture.md",
+		"docs/configuration.md",
+		"docs/macos-root-targeting.md",
+		"docs/troubleshooting.md",
+		"docs/usage.md"
 	],
 	"pi": {
 		"extensions": [

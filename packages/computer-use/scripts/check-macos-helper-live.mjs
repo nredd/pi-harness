@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 if (process.platform !== "darwin" || process.env.PI_COMPUTER_USE_LIVE !== "1") {
-	console.log("macos live helper checks skipped (set PI_COMPUTER_USE_LIVE=1 on macOS)");
+	console.log("NOT RUN macos live helper checks (set PI_COMPUTER_USE_LIVE=1 on macOS)");
 	process.exit(0);
 }
 const { macosBackend } = await import("../src/platform/macos/backend.ts");

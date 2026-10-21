@@ -53,7 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.report:
         args.report.write_text(text)
     sys.stdout.write(text)
-    LOGGER.info("computer-use package contract: passed; native desktop behavior NOT RUN")
+    LOGGER.info("computer-use package contract: passed; postinstall and native desktop behavior NOT RUN")
     return 0
 
 
