@@ -13,14 +13,31 @@ import logging
 import shutil
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import npm_release as nr
 import package_contracts as pc
 import release_descriptors as rd
 
 LOGGER = logging.getLogger(__name__)
+
+
+def not_run_items(evidence: Mapping[str, Any]) -> list[str]:
+    """List every `<item>: "NOT RUN"` evidence entry with its `<item>_reason`.
+
+    Parameters:
+        evidence (Mapping[str, Any]): Dumped scenario evidence.
+
+    Returns:
+        list[str]: `<item> (<reason>)` per NOT RUN entry, in evidence order; `<item>` alone without a reason.
+    """
+    return [
+        f"{key} ({evidence[f'{key}_reason']})" if f"{key}_reason" in evidence else key
+        for key, value in evidence.items()
+        if value == "NOT RUN"
+    ]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -54,7 +71,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.report:
         args.report.write_text(text)
     sys.stdout.write(text)
-    LOGGER.info(f"{descriptor.workspace.name} package contract: passed")
+    not_run = not_run_items(report.packages[descriptor.name].evidence.model_dump())
+    suffix = f"; NOT RUN: {', '.join(not_run)}" if not_run else ""
+    LOGGER.info(f"{descriptor.workspace.name} package contract: passed{suffix}")
     return 0
 
 
