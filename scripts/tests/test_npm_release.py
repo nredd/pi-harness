@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tarfile
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -622,13 +623,14 @@ def test_registry_only_404_is_absence(
         None: Only an explicit registry miss permits publishing.
     """
 
-    def fail(_repo: Path, tool: str, *args: str) -> str:
-        """Keep merged-stream JSON parseable and force fresh registry metadata.
+    def fail(cwd: Path, tool: str, *args: str, env: Mapping[str, str] | None = None) -> str:
+        """Keep merged-stream JSON parseable, force fresh metadata, and isolate npm from the checkout.
 
         Parameters:
-            _repo (Path): Unused checkout.
+            cwd (Path): Working directory; must not be the selected checkout.
             tool (str): Expected npm command.
             *args (str): Registry query arguments.
+            env (Mapping[str, str] | None): Environment overrides; must disable the user `.npmrc`.
 
         Returns:
             str: Never returned; this simulates an npm failure.
@@ -637,6 +639,9 @@ def test_registry_only_404_is_absence(
             subprocess.CalledProcessError: The selected npm error.
         """
         assert tool == "npm"
+        assert cwd != repo
+        assert not cwd.is_relative_to(repo)
+        assert env == {"NPM_CONFIG_USERCONFIG": os.devnull}
         assert args == (
             "view",
             "@nredd/pi-session-kit@1.2.3",
@@ -1249,3 +1254,17 @@ def test_registry_propagation_is_bounded(
             nr.wait_for_registry(repo, identity)
     assert len(reads) == len(responses)
     assert sleeps == [nr.REGISTRY_POLL_INTERVAL_S] * (len(responses) - 1)
+
+
+def test_command_overlays_environment_overrides(tmp_path: Path) -> None:
+    """Overrides win over the host environment without leaking into it.
+
+    Parameters:
+        tmp_path (Path): Private working directory.
+
+    Returns:
+        None.
+    """
+    output = nr.command(tmp_path, "env", env={"NPM_CONFIG_USERCONFIG": os.devnull})
+    assert f"NPM_CONFIG_USERCONFIG={os.devnull}" in output.splitlines()
+    assert os.environ.get("NPM_CONFIG_USERCONFIG") != os.devnull

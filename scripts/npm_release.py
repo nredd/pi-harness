@@ -26,7 +26,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
@@ -191,7 +191,9 @@ def host_environment() -> dict[str, str]:
     return env
 
 
-def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
+def command(
+    repo: Path, executable: str, *args: str, timeout: int = 300, env: Mapping[str, str] | None = None
+) -> str:
     """Run a bounded, absolute-path tool command outside the `uv run` venv, preserving diagnostics.
 
     Parameters:
@@ -199,6 +201,7 @@ def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
         executable (str): Tool resolved once before invocation.
         *args (str): Literal arguments.
         timeout (int): Maximum command duration in seconds.
+        env (Mapping[str, str] | None): Variables overriding the host environment.
 
     Returns:
         str: Combined output with trailing whitespace removed.
@@ -206,7 +209,7 @@ def command(repo: Path, executable: str, *args: str, timeout: int = 300) -> str:
     return subprocess.check_output(
         [str(pc.locate_executable(executable)), *args],
         cwd=repo,
-        env=host_environment(),
+        env={**host_environment(), **(env or {})},
         text=True,
         stderr=subprocess.STDOUT,
         timeout=timeout,
@@ -423,8 +426,12 @@ def run_stock_contract(
 def registry_dist(repo: Path, target: Target) -> Distribution | None:
     """Read exact-version npm metadata; only an explicit E404 means absent.
 
+    The query runs in a fresh empty directory with no user `.npmrc`, never in `repo`: a selected
+    tag's tree could carry a `.npmrc` that steers the registry or injects credentials, and the
+    explicit registry flag alone does not cover every npm setting.
+
     Parameters:
-        repo (Path): Working directory.
+        repo (Path): Checkout the package belongs to; deliberately not used as the working directory.
         target (Target): Exact package version.
 
     Returns:
@@ -434,17 +441,19 @@ def registry_dist(repo: Path, target: Target) -> Distribution | None:
         ReleaseError: On registry errors other than E404.
     """
     try:
-        output = command(
-            repo,
-            "npm",
-            "view",
-            f"{target.name}@{target.version}",
-            "dist",
-            "--json",
-            "--loglevel=silent",  # Keep npm's stderr diagnostics out of the JSON error body.
-            "--prefer-online",  # Do not reuse cached pre-publication metadata during recovery.
-            "--registry=https://registry.npmjs.org",
-        )
+        with tempfile.TemporaryDirectory(prefix="npm-view-") as neutral:
+            output = command(
+                Path(neutral),
+                "npm",
+                "view",
+                f"{target.name}@{target.version}",
+                "dist",
+                "--json",
+                "--loglevel=silent",  # Keep npm's stderr diagnostics out of the JSON error body.
+                "--prefer-online",  # Do not reuse cached pre-publication metadata during recovery.
+                "--registry=https://registry.npmjs.org",
+                env={"NPM_CONFIG_USERCONFIG": os.devnull},
+            )
     except subprocess.CalledProcessError as e:
         try:
             error = json.loads(e.output)
