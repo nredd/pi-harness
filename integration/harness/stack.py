@@ -19,14 +19,26 @@ LOGGER = logging.getLogger(__name__)
 PINNED_NPM = re.compile(r"^npm:(?:@[^/\s]+/)?[^@/\s]+@\d+\.\d+\.\d+(?:-[\w.-]+)?$")
 PINNED_GIT = re.compile(r"^git:github\.com/[^/\s]+/[^@/\s]+@v\d+\.\d+\.\d+(?:-[\w.-]+)?$")
 CORE_TAG = re.compile(r"^v\d+\.\d+\.\d+-nredd\.\d+$")
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 LOCAL_SOURCE_PREFIXES = ("./", "../", "/")
+PERSONAL_STACK_NAME = "personal"
+LOCAL_STACK_NAME = "local"
+PERSONAL_STACK_FILE = "personal.json"
+DERIVED_FROM_KEY = "derived_from"
+SETTINGS_PACKAGES_KEY = "packages"
+PRESET_IDENTITY = "@nredd/pi-preset"
 OWNED_WORKSPACE_PATHS = {
     "@nredd/pi-dev-tools": "../../packages/dev-tools",
     "@nredd/pi-session-kit": "../../packages/session-kit",
     "@nredd/pi-subscription-router": "../../packages/subscription-router",
-    "@nredd/pi-preset": "../../packages/preset",
+    PRESET_IDENTITY: "../../packages/preset",
 }
-PRESET_IDENTITY = "@nredd/pi-preset"
+GIT_WORKSPACE_PATHS = {
+    "nredd/rpiv-todo": "../../forks/rpiv-todo",
+    "nredd/pi-subagents": "../../forks/pi-subagents",
+    "nredd/pi-plan-mode": "../../forks/pi-plan-mode",
+    "nredd/pi-computer-use": "../../forks/pi-computer-use",
+}
 
 
 class PackageSource(BaseModel):
@@ -42,11 +54,24 @@ class PackageSource(BaseModel):
     themes: list[str] = Field(default_factory=list, description="Pi theme filters, if supplied")
 
 
-class CoreRelease(BaseModel):
-    """Exact core release data, independent of a machine's Homebrew installation."""
+def source_string(package: str | PackageSource) -> str:
+    """Return the identity used for installation, uniqueness and exclusions.
 
+    Parameters:
+        package (str | PackageSource): validated stack entry.
+
+    Returns:
+        str: Pi install source, without interpreting resource filters.
+    """
+    return package if isinstance(package, str) else package.source
+
+
+class CoreRelease(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-    tag: str = Field(pattern=CORE_TAG.pattern, description="Exact `forks/pi` release tag")
+    tag: str = Field(
+        pattern=CORE_TAG.pattern,
+        description="Exact `forks/pi` release tag, independent of a machine's Homebrew installation",
+    )
     integrity: dict[str, str] = Field(
         min_length=1,
         description="Release asset filename -> SHA-256 digest for formula-consumed core artifacts",
@@ -64,18 +89,20 @@ class CoreRelease(BaseModel):
         """
         if any("/" in name or not name.endswith(".tgz") for name in self.integrity):
             raise ValueError("`core.integrity` keys must be release tarball filenames")
-        if any(re.fullmatch(r"[0-9a-f]{64}", digest) is None for digest in self.integrity.values()):
+        if any(SHA256_HEX.fullmatch(digest) is None for digest in self.integrity.values()):
             raise ValueError("`core.integrity` values must be lowercase SHA-256 digests")
         return self
 
 
 class Stack(BaseModel):
-    """Authoritative shipped package selection and harness-only test settings."""
-
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-    schema_version: Literal[1]
-    name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$", description="Evidence/golden identity")
-    core: CoreRelease
+    schema_version: Literal[1] = Field(description="Version of this authoritative stack document schema")
+    name: str = Field(
+        min_length=1,
+        pattern=r"^[a-z][a-z0-9-]*$",
+        description="Evidence/golden identity for the authoritative package selection",
+    )
+    core: CoreRelease = Field(description="Exact core identity and formula-consumed artifact integrity")
     sources: list[str | PackageSource] = Field(
         min_length=1, description="Ordered exact extension sources or stack-relative local paths"
     )
@@ -102,8 +129,8 @@ class Stack(BaseModel):
         for source in sources:
             if not (PINNED_NPM.fullmatch(source) or PINNED_GIT.fullmatch(source) or is_local_source(source)):
                 raise ValueError(f"Source must be pinned or an explicit local path: '{source}'")
-        if "packages" in self.settings:
-            raise ValueError("`settings` cannot override `packages`")
+        if SETTINGS_PACKAGES_KEY in self.settings:
+            raise ValueError(f"`settings` cannot override `{SETTINGS_PACKAGES_KEY}`")
         if not self.disabled_extensions.keys() <= set(sources) or not all(
             reason.strip() for reason in self.disabled_extensions.values()
         ):
@@ -136,24 +163,12 @@ class Stack(BaseModel):
 
 
 class LocalStackDocument(BaseModel):
-    """Minimal descriptor for the generated development stack."""
-
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-    schema_version: Literal[1]
-    name: Literal["local"]
-    derived_from: Literal["personal.json"]
-
-
-def source_string(package: str | PackageSource) -> str:
-    """Return the identity used for installation, uniqueness and exclusions.
-
-    Parameters:
-        package (str | PackageSource): validated stack entry.
-
-    Returns:
-        str: Pi install source, without interpreting resource filters.
-    """
-    return package if isinstance(package, str) else package.source
+    schema_version: Literal[1] = Field(description="Version of the local derivation descriptor schema")
+    name: Literal["local"] = Field(description="Fixed identity for the generated development stack")
+    derived_from: Literal["personal.json"] = Field(
+        description="Adjacent authoritative personal stack used for local derivation"
+    )
 
 
 def is_local_source(source: str) -> bool:
@@ -182,6 +197,35 @@ def npm_identity(source: str) -> str | None:
     return source.removeprefix("npm:").rsplit("@", 1)[0]
 
 
+def git_identity(source: str) -> str | None:
+    """Return a GitHub owner/repository identity without its exact tag.
+
+    Parameters:
+        source (str): validated source string.
+
+    Returns:
+        str | None: GitHub owner/repository identity, or `None` for non-git sources.
+    """
+    if not source.startswith("git:github.com/"):
+        return None
+    return source.removeprefix("git:github.com/").rsplit("@", 1)[0]
+
+
+def localize_source(source: str) -> str:
+    """Replace owned package identities with their local development paths.
+
+    Parameters:
+        source (str): exact personal stack source.
+
+    Returns:
+        str: workspace or fork path for owned sources, otherwise the original source.
+    """
+    return OWNED_WORKSPACE_PATHS.get(
+        npm_identity(source) or "",
+        GIT_WORKSPACE_PATHS.get(git_identity(source) or "", source),
+    )
+
+
 def derive_local_stack(personal: Stack) -> Stack:
     """Derive the full-preset development stack from the authoritative personal selection.
 
@@ -198,34 +242,26 @@ def derive_local_stack(personal: Stack) -> Stack:
     preset_count = 0
     for package in personal.sources:
         source = source_string(package)
-        identity = npm_identity(source)
-        if identity == PRESET_IDENTITY:
+        if npm_identity(source) == PRESET_IDENTITY:
             preset_count += 1
             continue
-        local_source = OWNED_WORKSPACE_PATHS.get(identity or "")
-        if local_source is None:
-            derived_sources.append(package)
-        elif isinstance(package, PackageSource):
-            derived_sources.append(package.model_copy(update={"source": local_source}))
-        else:
-            derived_sources.append(local_source)
-    if preset_count != 1:
-        raise ValueError("Personal stack must declare exactly one `@nredd/pi-preset` source")
-    derived_sources.append(OWNED_WORKSPACE_PATHS[PRESET_IDENTITY])
-    replacements = {
-        source_string(package): (
-            OWNED_WORKSPACE_PATHS.get(npm_identity(source_string(package)) or "", source_string(package))
+        localized = localize_source(source)
+        derived_sources.append(
+            package.model_copy(update={"source": localized})
+            if isinstance(package, PackageSource)
+            else localized
         )
-        for package in personal.sources
-    }
+    if preset_count != 1:
+        raise ValueError(f"Personal stack must declare exactly one '{PRESET_IDENTITY}' source")
+    derived_sources.append(OWNED_WORKSPACE_PATHS[PRESET_IDENTITY])
     return Stack(
         schema_version=personal.schema_version,
-        name="local",
+        name=LOCAL_STACK_NAME,
         core=personal.core,
         sources=derived_sources,
         settings=personal.settings,
         disabled_extensions={
-            replacements[source]: reason for source, reason in personal.disabled_extensions.items()
+            localize_source(source): reason for source, reason in personal.disabled_extensions.items()
         },
     )
 
@@ -239,13 +275,13 @@ def validate_shipped_stack(stack: Stack) -> None:
     Raises:
         ValueError: the document has a local source or is not the personal selection.
     """
-    if stack.name != "personal":
-        raise ValueError("Shipped stack must be named `personal`")
+    if stack.name != PERSONAL_STACK_NAME:
+        raise ValueError(f"Shipped stack must be named '{PERSONAL_STACK_NAME}'")
     local_sources = [
         source_string(package) for package in stack.sources if is_local_source(source_string(package))
     ]
     if local_sources:
-        raise ValueError(f"Shipped stack cannot declare local paths: {local_sources}")
+        raise ValueError(f"Shipped stack cannot declare local path '{local_sources[0]}'")
 
 
 def validate_local_derivation(personal: Stack, local: Stack) -> None:
@@ -292,14 +328,12 @@ def load_stack(path: Path) -> Stack:
         Stack: schema-validated package set.
     """
     document = json.loads(path.read_bytes())
-    if "derived_from" not in document:
+    if DERIVED_FROM_KEY not in document:
         return Stack.model_validate(document)
     descriptor = LocalStackDocument.model_validate(document)
     personal_path = path.parent / descriptor.derived_from
-    personal = load_stack(personal_path)
-    local = derive_local_stack(personal)
-    validate_local_derivation(personal, local)
-    return local
+    personal = Stack.model_validate_json(personal_path.read_bytes())
+    return derive_local_stack(personal)
 
 
 def stack_digest(path: Path) -> str:
@@ -311,7 +345,12 @@ def stack_digest(path: Path) -> str:
     Returns:
         str: hexadecimal digest.
     """
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    canonical = json.dumps(
+        load_stack(path).model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def package_directory(source: str, agent_dir: Path) -> Path:

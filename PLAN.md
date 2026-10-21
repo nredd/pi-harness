@@ -91,7 +91,7 @@ Historical, not the current deployment inventory:
 7. DONE -- machine-specific checks moved to dotfiles `pi-profile doctor` and its apply hook/runbook. dotfiles#3, activation pins #4, rebased forks #10; matching harness stack receipt #30. No package gate consumes the owner's config.
 8. OPEN -- resume deferred work on the rebuilt stack:
    - The versioned `integration/stacks/personal.json` is the authoritative package selection. The generated `local.json` development view replaces owned package sources with workspace paths and restores the full preset; it is not a machine default.
-   - Follow-up PR 2 exports only explicitly promoted, fully gated stack snapshots. The following dotfiles PR consumes the latest promoted snapshot automatically, rather than `main`; it has no dotfiles CI dependency. Core remains the attested `nredd/pi` fork release selected by the stack's Gitlink tag.
+   - Follow-up: promote gated snapshots, then have dotfiles adopt the latest promoted snapshot automatically. Core remains the attested `nredd/pi` fork release.
    - Profiles/model roles and full preset adoption (migration plan #21); the footer-only source is separate, see `docs/footer-port.md`.
    - Work-profile switch and enterprise WSL acceptance.
    - Bun: linux-arm64 execution and the auth-interception adapter (#14); standalone D/E itself runs in CI since #56.
