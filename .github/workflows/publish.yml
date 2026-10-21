@@ -94,7 +94,7 @@ jobs:
         if: steps.candidate.outputs.publish == 'true'
         env:
           TARBALL: ${{ steps.candidate.outputs.tarball }}
-        run: npm publish "$RUNNER_TEMP/npm-release/$TARBALL" --access public
+        run: npm publish "$RUNNER_TEMP/npm-release/$TARBALL" --access public --tag latest
       - name: Verify registry integrity, npm signatures and source-bound DSSE provenance
         env:
           RELEASE_TAG: ${{ github.ref_name }}
