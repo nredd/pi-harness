@@ -3,7 +3,7 @@
 [tool.ruff]
 line-length = 110
 target-version = "py313"
-per-file-target-version = { "bootstrap_forks.py" = "py312", "ci_paths.py" = "py312" }
+per-file-target-version = { "ci_paths.py" = "py312" }
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PL", "PT", "C4", "PTH", "RET"]
