@@ -8,7 +8,9 @@ References:
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -285,6 +287,7 @@ def run_install(
     *,
     lock: dict[str, dict[str, Any]] | None = None,
     extra_dirs: tuple[str, ...] = (),
+    post_install: Callable[[Path], None] | None = None,
 ) -> Path:
     """Run `install_alone` for the Plan-mode contract over a faked npm install.
 
@@ -294,6 +297,7 @@ def run_install(
         packages (dict[str, dict[str, Any]]): Manifests by path.
         lock (dict[str, dict[str, Any]] | None): Lock entries; honest ones when `None`.
         extra_dirs (tuple[str, ...]): Top-level directories without a manifest.
+        post_install (Callable[[Path], None] | None): Optional mutation after the install layout.
 
     Returns:
         Path: The installed package directory.
@@ -318,6 +322,8 @@ def run_install(
         if Path(cmd[0]).name == "node":
             return real_run(cmd, cwd=cwd, **kwargs)
         lay_out_install(cwd, packages, lock=entries, extra_dirs=extra_dirs)
+        if post_install is not None:
+            post_install(cwd)
         return None
 
     monkeypatch.setattr(pc, "run", fake_run)
@@ -654,6 +660,28 @@ def test_install_ignores_npm_metadata_files(tmp_path: Path, monkeypatch: pytest.
     pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda modules: (modules / ".package-lock.json").mkdir(),
+        lambda modules: (modules / "a" / "node_modules" / ".package-lock.json").write_text("{}"),
+        lambda modules: (modules / ".bin").write_text("not a directory"),
+        lambda modules: (modules / ".bin").mkdir() or (modules / ".bin" / "directory").mkdir(),
+    ],
+    ids=["top-level-lock-directory", "nested-lock", "bin-file", "bin-directory"],
+)
+def test_install_rejects_invalid_npm_metadata(
+    mutation: Callable[[Path], object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `.bin` and `.package-lock.json` exemptions have npm's exact shapes."""
+
+    def mutate(project: Path) -> None:
+        mutation(project / "node_modules")
+
+    with pytest.raises(pc.ContractError, match="Invalid npm metadata entry"):
+        run_install(tmp_path, monkeypatch, good_install(), post_install=mutate)
+
+
 def test_install_rejects_a_misnamed_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A package installed under a directory its manifest does not name fails.
 
@@ -702,6 +730,93 @@ def test_install_rejects_an_out_of_range_direct_dependency(
     packages[KIT_PATH] = {**packages[KIT_PATH], "version": "0.64.0"}
     with pytest.raises(pc.ContractError, match=r"does not satisfy '\^0.65.2'"):
         run_install(tmp_path, monkeypatch, packages)
+
+
+def test_install_rejects_an_out_of_range_transitive_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every closure edge, not only the root's, has its version checked."""
+    packages = good_install()
+    packages["node_modules/a/node_modules/c"] = {"version": "2.0.0"}
+    with pytest.raises(pc.ContractError, match=r"does not satisfy '1'"):
+        run_install(tmp_path, monkeypatch, packages)
+
+
+@pytest.mark.parametrize(
+    ("stdout", "message"),
+    [("not json", "Malformed `semver` output"), ("[true, false]", "Malformed `semver` output")],
+    ids=["non-json", "wrong-length"],
+)
+def test_audit_ranges_rejects_malformed_node_output(
+    stdout: str, message: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Malformed batch verdicts fail closed.
+
+    Parameters:
+        stdout (str): Faked Node output.
+        message (str): Expected error fragment.
+        tmp_path (Path): Temporary repository root.
+        monkeypatch (pytest.MonkeyPatch): Dependency substitutions.
+    """
+    (tmp_path / "node_modules" / "semver").mkdir(parents=True)
+    monkeypatch.setattr(pc, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        pc,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, stdout=stdout, stderr=""),
+    )
+    with pytest.raises(pc.ContractError, match=message):
+        pc.audit_ranges([("dep", "1.0.0", "^1")], Path("/node"))
+
+
+def test_audit_ranges_requires_semver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The range audit requires its declared root `semver` dependency."""
+    monkeypatch.setattr(pc, "REPO_ROOT", tmp_path)
+    with pytest.raises(pc.ContractError, match="`semver` is not installed"):
+        pc.audit_ranges([("dep", "1.0.0", "^1")], Path("/node"))
+
+
+def test_audit_ranges_propagates_a_nonzero_node_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed semver batch never produces an accepted range verdict."""
+    (tmp_path / "node_modules" / "semver").mkdir(parents=True)
+    monkeypatch.setattr(pc, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        pc, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(pc.ContractError("node failed"))
+    )
+    with pytest.raises(pc.ContractError, match="node failed"):
+        pc.audit_ranges([("dep", "1.0.0", "^1")], Path("/node"))
+
+
+def test_install_rejects_a_dependency_without_a_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A closure edge whose installed manifest lacks `version` fails closed."""
+    packages = good_install()
+    packages[KIT_PATH] = {**packages[KIT_PATH], "version": None}
+    with pytest.raises(pc.ContractError, match="has no resolvable version"):
+        run_install(tmp_path, monkeypatch, packages)
+
+
+@pytest.mark.parametrize("loop", [False, True], ids=["closure-path", "loop"])
+def test_install_rejects_symlinked_closure_entries(
+    loop: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symlinked packages and loops are refused before traversal can escape or recurse.
+
+    Parameters:
+        loop (bool): Create a cyclic nested entry instead of a top-level closure-path link.
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
+
+    def add_symlink(project: Path) -> None:
+        modules = project / "node_modules"
+        target = modules / "a" / "node_modules" if loop else modules / "a"
+        link = target / "loop" if loop else modules / "linked"
+        link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(pc.ContractError, match="Symlinked `node_modules` entry"):
+        run_install(tmp_path, monkeypatch, good_install(), post_install=add_symlink)
 
 
 def optional_install(

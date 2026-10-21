@@ -180,6 +180,28 @@ def test_load_tarball_refuses_invalid_candidate(tmp_path: Path, case: str) -> No
         pc.load_tarball(DEV_TOOLS, path)
 
 
+@pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE], ids=["symlink", "hardlink"])
+def test_load_tarball_rejects_special_members(tmp_path: Path, kind: bytes) -> None:
+    """Audited tarballs cannot hide files behind links.
+
+    Parameters:
+        tmp_path (Path): Disposable destination.
+        kind (bytes): Tar member type to inject.
+    """
+    path = tmp_path / "nredd-pi-dev-tools-1.0.0.tgz"
+    with tarfile.open(path, "w:gz") as tar:
+        data = json.dumps({"name": DEV_TOOLS.name, "version": "1.0.0"}).encode()
+        manifest = tarfile.TarInfo("package/package.json")
+        manifest.size = len(data)
+        tar.addfile(manifest, io.BytesIO(data))
+        member = tarfile.TarInfo("package/linked")
+        member.type = kind
+        member.linkname = "package/package.json"
+        tar.addfile(member)
+    with pytest.raises(pc.ContractError, match="non-regular member"):
+        pc.load_tarball(DEV_TOOLS, path)
+
+
 @pytest.mark.parametrize(
     "pairs",
     [
@@ -1977,3 +1999,11 @@ def test_audit_chunk_graph_requires_reachability_from_index() -> None:
         ),
     }
     assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, files, transitive) == []
+    through_non_chunk = {
+        "dist/index.ts": pc.FileImports(specifiers=["./loader.ts"], diagnostics=[]),
+        "dist/loader.ts": pc.FileImports(specifiers=["./chunks/chunk-AAAAAAA1.ts"], diagnostics=[]),
+        "dist/chunks/chunk-AAAAAAA1.ts": pc.FileImports(
+            specifiers=["./interactive-ui-BBBBBBB2.ts"], diagnostics=[]
+        ),
+    }
+    assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, [*files, "dist/loader.ts"], through_non_chunk) == []

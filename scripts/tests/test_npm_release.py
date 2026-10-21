@@ -1008,7 +1008,7 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
         expected.append("fork")
     assert events == expected
     if contract.directory == "plan-mode":
-        assert events == ["ci", "run", "test", "pack", "stock"]
+        assert events == ["ci", "run", "pack", "stock"]
 
 
 def test_every_standalone_descriptor_has_a_packed_artifact_gate() -> None:
@@ -1028,7 +1028,6 @@ def test_plan_mode_descriptor_pins_its_own_commands_and_routing() -> None:
     assert descriptor.verify_commands == (
         ("npm", "ci", "--ignore-scripts"),
         ("npm", "run", "check", "--workspace", "@nredd/pi-plan-mode"),
-        ("npm", "test", "--workspace", "@nredd/pi-plan-mode"),
     )
     assert descriptor.contract_gates == ("stock",)
     assert descriptor.stock_gate is pc.scenario_plan_mode

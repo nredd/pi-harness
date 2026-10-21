@@ -39,20 +39,6 @@ Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
     `tools[].function.name`). Tool payloads inside `structuredContent` stay opaque until the one
     scenario that reads them (`git_status.untracked`). Not modelled: the rest of Pi's event stream
 
-`SUBAGENTS_CONTRACT` is outside the standalone three, because it has real runtime
-dependencies and `make check-package-contracts` installs offline. It differs from a plugin contract in
-declared allowances only: `runtime_dependencies` (`croner`, `nanoid`; the manifest must match exactly and
-the import audit admits just those), `peer_ranges` (the fork's `>=1.1.0` floor instead of `*`) and
-`own_license` (the packed `LICENSE` must equal the workspace's, which keeps upstream's copyright, not the
-root one). The release `stock` gate installs the tarball plus those two dependencies from the registry
-and requires `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow` in the model request.
-`scenario_subagents` then has a faux parent call `Agent` in the foreground (routed faux child), which
-is what imports `croner` and `nanoid` at runtime; failures print the tool list seen and the stderr tail.
-`make check-subagents-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-subagents`, needs the registry)
-runs that exact gate through `npm_release.run_stock_contract`, so the descriptor, siblings and scenario
-match the release `verify` run; CI's `contracts` job runs it on every non-docs PR and uploads
-`subagents-package-contracts.json`.
-
 `@nredd/pi-plan-mode` is a separately invoked stock contract because it has the explicit runtime
 `@narumitw/pi-tui-kit` dependency. `make check-plan-mode-package-contract` packs it, verifies its own
 upstream MIT `LICENSE`, exact manifest dependency, manifest `files` list and the complete packed payload
@@ -100,8 +86,8 @@ What each package must satisfy:
   from the requirer's `node_modules`, so nested paths work). That closure must equal the lockfile paths,
   every installed package path and the top-level directories; every entry under every `node_modules`
   (manifest or not; only npm's `.bin` and `.package-lock.json` are exempt) must be a closure path, and a
-  scope directory needs a closure child. Each installed `name` must match its path and the root's direct
-  dependency versions must satisfy the declared ranges (the repository's `semver`). Lock-only paths are
+  scope directory needs a closure child. Each installed `name` must match its path and every installed
+  dependency edge's resolved version must satisfy its declared range (the repository's `semver`). Lock-only paths are
   allowed only when `optional: true` and an installed requirer lists them in `optionalDependencies`. A
   missing required dependency is a `ContractError`. The lockfile is never trusted for transitive edges
 - Stock Pi, `--mode json` with `--no-extensions --extension <installed dir>` (only that package),
@@ -169,6 +155,20 @@ and installed into separate fresh projects (`install_alone`); Pi sees them only 
 declare `MIT AND Apache-2.0 AND CC-BY-SA-4.0`, and `NOTICE.md`, the three license texts and both
 themes are required content. `PackageContract.license` defaults to `MIT`, so a plugin declaring the
 preset expression still fails.
+
+`SUBAGENTS_CONTRACT` is likewise outside the standalone three, because it has real runtime
+dependencies and `make check-package-contracts` installs offline. It differs from a plugin contract in
+declared allowances only: `runtime_dependencies` (`croner`, `nanoid`; the manifest must match exactly and
+the import audit admits just those), `peer_ranges` (the fork's `>=1.1.0` floor instead of `*`) and
+`own_license` (the packed `LICENSE` must equal the workspace's, which keeps upstream's copyright, not the
+root one). The release `stock` gate installs the tarball plus those two dependencies from the registry
+and requires `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow` in the model request.
+`scenario_subagents` then has a faux parent call `Agent` in the foreground (routed faux child), which
+is what imports `croner` and `nanoid` at runtime; failures print the tool list seen and the stderr tail.
+`make check-subagents-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-subagents`, needs the registry)
+runs that exact gate through `npm_release.run_stock_contract`, so the descriptor, siblings and scenario
+match the release `verify` run; CI's `contracts` job runs it on every non-docs PR and uploads
+`subagents-package-contracts.json`.
 
 The run: stock Pi `--no-extensions --extension <archived fork>` (so installed packages stay out of
 the parent, which the gate asserts: no `git_*` tool in the parent request; the child's own loader
