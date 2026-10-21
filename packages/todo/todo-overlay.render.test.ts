@@ -247,6 +247,68 @@ describe("TodoOverlay — scrollable window", () => {
 		expect(widget.render(200)[0]).toContain("Todos (4 done, 1 deferred, 25 open)");
 	});
 
+	it("omits the in-progress segment when nothing is in progress", async () => {
+		const { widget } = await setup([
+			{ action: "create", subject: "a" },
+			{ action: "create", subject: "b" },
+		]);
+		expect(widget.render(200)[0]).toContain("Todos (2 open)");
+		expect(widget.render(200)[0]).not.toContain("in progress");
+	});
+
+	it("calls out in-progress as a subset of open, expanded and collapsed", async () => {
+		const { widget, overlay } = await setup([
+			{ action: "create", subject: "a" },
+			{ action: "create", subject: "b" },
+			{ action: "create", subject: "c" },
+			{ action: "update", id: 1, status: "in_progress" },
+			{ action: "update", id: 2, status: "in_progress" },
+		]);
+		expect(widget.render(200)[0]).toContain("Todos (3 open, 2 in progress)");
+		overlay.toggleCollapse();
+		expect(widget.render(200)[0]).toContain("▸");
+		expect(widget.render(200)[0]).toContain("Todos (3 open, 2 in progress)");
+	});
+
+	it("counts all open tasks as in progress when every one is", async () => {
+		const { widget } = await setup([
+			{ action: "create", subject: "a" },
+			{ action: "update", id: 1, status: "in_progress" },
+		]);
+		expect(widget.render(200)[0]).toContain("Todos (1 open, 1 in progress)");
+	});
+
+	it("paints only the in-progress segment with the warning color", async () => {
+		await setup([
+			{ action: "create", subject: "a" },
+			{ action: "update", id: 1, status: "in_progress" },
+		]);
+		const tagged = { ...identityTheme, fg: (c: string, s: string) => `<${c}>${s}</${c}>` };
+		const ui = createMockUI() as unknown as ExtensionUIContext;
+		const o = new TodoOverlay();
+		o.setUICtx(ui);
+		o.update();
+		const factory = (ui.setWidget as ReturnType<typeof vi.fn>).mock.calls[0][1] as (
+			tui: { requestRender: () => void },
+			theme: typeof tagged,
+		) => { render: (w: number) => string[] };
+		const line = factory({ requestRender: vi.fn() }, tagged).render(200)[0];
+		expect(line).toContain("<warning>1 in progress</warning>");
+		expect(line).toContain("<accent>Todos (</accent><accent>1 open</accent><accent>, </accent>");
+		expect(line).toContain("<accent>)</accent>");
+	});
+
+	it("keeps the in-progress segment before the plan suffix", async () => {
+		const { widget } = await setup([
+			{ action: "create", subject: "extra" },
+			{ action: "update", id: 1, status: "in_progress" },
+		]);
+		const { applyPlanApproval } = await import("./state/plan.ts");
+		const { commitState, getRenderState } = await import("./state/store.ts");
+		commitState("test-session", applyPlanApproval(getRenderState(), "p1", "# T\n\n## Work\n- one\n- two\n").state);
+		expect(widget.render(200)[0]).toContain("Todos (3 open, 1 in progress · 2/2 plan items open)");
+	});
+
 	it("shows a separate plan suffix only when non-plan todos exist", async () => {
 		const { widget, tool } = await setup([{ action: "create", subject: "extra" }]);
 		const { applyPlanApproval } = await import("./state/plan.ts");
