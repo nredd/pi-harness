@@ -96,7 +96,6 @@ DESCRIPTORS = (
         verify_commands=(
             ("npm", "ci", "--ignore-scripts"),
             ("npm", "run", "check", "--workspace", "@nredd/pi-plan-mode"),
-            ("npm", "test", "--workspace", "@nredd/pi-plan-mode"),
         ),
         contract=pc.PLAN_MODE_CONTRACT,
         contract_gates=("stock",),

@@ -39,7 +39,7 @@
   },
   "scripts": {
     "build": "node scripts/build-runtime.mjs",
-    "check": "npm run test:dist && npm run build && biome check . && npm run typecheck && npm run test:bun",
+    "check": "npm run test:dist && npm run build && biome check . && npm run typecheck && npm test && npm run test:bun",
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
