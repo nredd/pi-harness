@@ -1631,13 +1631,27 @@ class StubProvider:
     """Stand-in for `FauxProvider` that records nothing and reports fixed requests."""
 
     def __init__(self, tools: list[str]) -> None:
+        """Record one fake model request offering `tools`, or none.
+
+        Parameters:
+            tools (list[str]): tool names the fake request offers; empty means no request.
+        """
         self.requests = [fp.RecordedRequest("m", ("user",), tuple(tools), "", route=None)] if tools else []
 
     def __enter__(self) -> StubProvider:
+        """Enter the context like `FauxProvider`.
+
+        Returns:
+            StubProvider: this stub.
+        """
         return self
 
     def __exit__(self, *exc: object) -> None:
-        return None
+        """Exit the context like `FauxProvider`, suppressing nothing.
+
+        Parameters:
+            *exc (object): exception type, value and traceback, ignored.
+        """
 
 
 def agent_record(text: str, *, is_error: bool = False) -> dict[str, Any]:
@@ -1692,7 +1706,14 @@ def run_subagents_scenario(
 
 
 def good_run(text: str = pc.SUBAGENTS_CHILD_TEXT) -> pc.PiRun:
-    """Return a clean faked Pi run whose `Agent` call answered `text`."""
+    """Return a clean faked Pi run whose `Agent` call answered `text`.
+
+    Parameters:
+        text (str): the child agent's answer.
+
+    Returns:
+        pc.PiRun: exit 0 with one `Agent` tool record.
+    """
     return pc.PiRun(0, (agent_record(text),), "", "")
 
 
@@ -1751,6 +1772,14 @@ def stub_npm_install(
     """
 
     def fake_run(cmd: Any, *, env: dict[str, str], cwd: Path, **_: Any) -> None:
+        """Record the npm call and lay out `node_modules` plus a lockfile for `modules`.
+
+        Parameters:
+            cmd (Any): npm argv.
+            env (dict[str, str]): subprocess environment.
+            cwd (Path): install directory.
+            **_ (Any): other `run` options, ignored.
+        """
         calls.append([str(part) for part in cmd])
         envs.append(env)
         packages: dict[str, dict[str, str]] = {"": {}}

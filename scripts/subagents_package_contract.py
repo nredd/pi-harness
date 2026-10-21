@@ -4,6 +4,11 @@
 dependencies. This entry point runs the exact gate the release `verify` stage runs
 (`npm_release.run_stock_contract`: same contract, scenario and sibling set) on a freshly packed
 tarball, so CI executes it before a tag does. Needs the npm registry.
+
+References:
+    https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
+    https://docs.npmjs.com/cli/v11/commands/npm-pack
+    https://docs.npmjs.com/cli/v11/commands/npm-install
 """
 
 from __future__ import annotations
