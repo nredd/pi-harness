@@ -1,20 +1,23 @@
 # Fork ownership
 
-`forks/` contains upstream-derived repositories, not owned workspace packages. The parent Gitlinks
-select their exact source revisions. Inspect them with `git submodule status`; do not maintain a
+`forks/` contains upstream-derived repositories. Most remain Gitlinks; imported packages retain their
+source Gitlink during the staged migration. Inspect them with `git submodule status`; do not maintain a
 second list of release pins here.
 
 | Submodule | Upstream | Build ownership |
 |---|---|---|
 | `forks/pi` | `earendil-works/pi` | Core npm workspace, standalone Bun build, native helpers |
-| `forks/pi-subagents` | `tintinweb/pi-subagents` | Fork npm check/test gate |
+| `forks/pi-subagents` | `tintinweb/pi-subagents` | Source Gitlink retained while `packages/subagents` is the imported `@nredd/pi-subagents` workspace |
 | `forks/pi-plan-mode` | `narumiruna/pi-extensions`, `packages/pi-plan-mode` | Standalone vendored build/test harness |
 | `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate since `v2.13.9-nredd.2` |
 | `forks/pi-computer-use` | `injaneity/pi-computer-use` | Fork tests and native-helper build |
 
 The initial Gitlinks select published fork tags already used by the existing installation. Adding
 those Gitlinks does not establish Bun compatibility or rerun the fork gates. Native lockfiles,
-licenses, source histories, and build procedures remain owned by their respective repositories.
+licenses, source histories, and build procedures remain owned by their respective repositories. The
+`packages/subagents` subtree imports `nredd/pi-subagents` commit
+`526fa2df76ba85df31bd14a843fae370e8efe78a` (`v0.22.0-nredd.5`) with its history; its Gitlink and
+`forks.yml` job remain until the shipped-selection PR changes the stack to npm.
 The selected `forks/pi-subagents` commit is additionally exercised with the real packed preset and
 dev-tools by `make check-fork-package-contracts` ([details](package-contracts.md)); it refuses a missing,
 dirty or Gitlink-mismatched fork and never bootstraps or installs into it.

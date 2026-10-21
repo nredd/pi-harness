@@ -26,14 +26,18 @@
 ## Owned npm packages
 
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-dev-tools`,
-`@nredd/pi-session-kit`, `@nredd/pi-subscription-router` and `@nredd/pi-preset`.
+`@nredd/pi-session-kit`, `@nredd/pi-subscription-router`, `@nredd/pi-subagents` and `@nredd/pi-preset`.
 
 `scripts/release_descriptors.py` is the publisher's data registry. Each entry supplies a package name,
 repository-relative workspace, shell-free verify commands, packed-artifact contract gates, and optional
 native-artifact glob requirements. The publisher rejects unknown tags, a workspace outside the checkout,
 package/tag skew, or missing native files before it packs. Adding a package means adding its descriptor
-and package contract, not another name-specific workflow or Python branch. For example, the future todo
-import will add an entry shaped like:
+and package contract, not another name-specific workflow or Python branch. `@nredd/pi-subagents`
+uses `packages/subagents`, its native `npm run check` (Biome, TypeScript, Vitest and pinned-Bun
+session tests), and no standalone packed-host scenario: it has runtime dependencies and remains
+covered by its native gate while the retained Gitlink job covers the same selected source. Its release
+provenance still binds the dependency-bearing installed subject to the exact tarball, tag and workflow.
+For example, the future todo import will add an entry shaped like:
 
 ```python
 ReleaseDescriptor(
@@ -98,6 +102,12 @@ Only after both cryptographic verification and source/subject binding pass can `
 GitHub release with `gh release create <tag> --verify-tag` and attach those same four files.
 The parser fixture is trimmed from the real public `vite@7.1.3` provenance bundle; it tests bindings,
 not signature validity. npm performs signature verification against the live registry.
+
+Bootstrap a new npm name before its first release:
+
+- The owner publishes the exact pre-verified tarball using npm's owner-authenticated 2FA flow.
+- Configure trusted publishing for `nredd/pi-harness`, `.github/workflows/publish.yml`, environment `npm`; require 2FA and disallow tokens.
+- Push a later signed package tag to run a real OIDC publication and prove its provenance.
 
 External configuration, already configured (not managed by this repository):
 

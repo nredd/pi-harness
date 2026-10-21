@@ -1,4 +1,6 @@
-# @tintinweb/pi-subagents
+# @nredd/pi-subagents
+
+`@nredd/pi-subagents` is maintained in [`nredd/pi-harness`](https://github.com/nredd/pi-harness/tree/main/packages/subagents). It was imported with history from [`nredd/pi-subagents`](https://github.com/nredd/pi-subagents) commit [`526fa2df76ba85df31bd14a843fae370e8efe78a`](https://github.com/nredd/pi-subagents/commit/526fa2df76ba85df31bd14a843fae370e8efe78a), tagged `v0.22.0-nredd.5`, which is rebased on [`tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents) master commit `ca93a5247e72e7053fcd10bea7125d6c4205f949`. Original authorship and the MIT `LICENSE` are retained; subsequent local changes are maintained by nredd.
 
 A [pi](https://pi.dev) extension that brings **Claude Code-style autonomous sub-agents and workflow orchestration** to pi. Spawn specialized agents that run in isolated sessions — each with its own tools, system prompt, model, and thinking level. Run them in the background (the default) or block on them, steer them mid-run, resume completed sessions, and define your own custom agent types. When the orchestration shouldn't be improvised, hand a deterministic JavaScript script to the `SubagentWorkflow` tool — `agent()`, `parallel()`, `pipeline()` — and scripts written for Claude Code's `Workflow` tool run here unchanged.
 
@@ -41,7 +43,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 ## Install
 
 ```bash
-pi install npm:@tintinweb/pi-subagents
+pi install npm:@nredd/pi-subagents
 ```
 
 Or load directly for development:
@@ -61,7 +63,7 @@ process-global clock patch is needed. The same clock object can be shared with s
 `now` method with the subscription router:
 
 ```ts
-import { createSubagentsExtension, type Clock } from "@tintinweb/pi-subagents/src/index.ts";
+import { createSubagentsExtension, type Clock } from "@nredd/pi-subagents/src/index.ts";
 
 // Host-provided clock; use () => clock.now() when passing `now` separately.
 declare const clock: Clock;
