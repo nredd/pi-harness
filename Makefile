@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap-forks bootstrap-forks-check check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts check-fork-package-contracts check-plan-mode-package-contract release-manifest clean
+.PHONY: help install bootstrap-forks bootstrap-forks-check check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts check-fork-package-contracts check-plan-mode-package-contract check-subagents-package-contract release-manifest clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
@@ -52,7 +52,10 @@ check-fork-package-contracts:  ## REAL packed preset + dev-tools through the Git
 	cd scripts && uv run --locked --project ../integration python fork_package_contracts.py $(if $(REPORT),--report $(REPORT))
 
 check-plan-mode-package-contract:  ## Packed @nredd/pi-plan-mode through exact stock Pi 1.3.0
-	cd scripts && uv run --locked --project ../integration python plan_mode_package_contract.py $(if $(REPORT),--report $(REPORT))
+	cd scripts && uv run --locked --project ../integration python stock_package_contract.py --package @nredd/pi-plan-mode $(if $(REPORT),--report $(REPORT))
+
+check-subagents-package-contract:  ## Packed @nredd/pi-subagents through exact stock Pi 1.3.0
+	cd scripts && uv run --locked --project ../integration python stock_package_contract.py --package @nredd/pi-subagents $(if $(REPORT),--report $(REPORT))
 
 release-manifest:  ## Generate releases/<release-id>.json from Gitlinks and package manifests
 	cd scripts && uv run --locked --project ../integration python release_manifest.py $(ARGS)
