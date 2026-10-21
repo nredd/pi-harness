@@ -7,13 +7,12 @@ References:
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -626,6 +625,39 @@ def select_source_sha(operation: str, requested_sha: str, rollback_tag: str) -> 
     return requested_sha
 
 
+def run_command(
+    *args: str,
+    error: type[PromotionError] = EvidenceError,
+    cwd: Path | None = None,
+    check: bool = True,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run one literal `git`/`gh`/script command with captured diagnostics.
+
+    The only subprocess wrapper for `promotion` and `promotion_verify`; `publish_gate` keeps its
+    own because the write job may import nothing outside the standard library.
+
+    Parameters:
+        *args (str): executable and arguments, never a shell string.
+        error (type[PromotionError]): exception type raised on failure.
+        cwd (Path | None): optional working directory.
+        check (bool): whether a nonzero exit raises; the caller inspects `returncode` otherwise.
+        timeout (float | None): optional seconds before the command is abandoned.
+
+    Returns:
+        subprocess.CompletedProcess[str]: the finished command.
+
+    Raises:
+        PromotionError: (`error`) the command could not run, timed out, or exited nonzero.
+    """
+    try:
+        return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=check, timeout=timeout)
+    except subprocess.CalledProcessError as failure:
+        raise error(f"Command failed: {' '.join(args[:3])}: {failure.stderr.strip()[-3000:]}") from failure
+    except (OSError, subprocess.TimeoutExpired) as failure:
+        raise error(f"Command could not complete: {' '.join(args[:3])}: {failure}") from failure
+
+
 def descends_from(repo: Path, ancestor: str, descendant: str) -> bool:
     """Ask Git whether one commit is an ancestor of another.
 
@@ -640,18 +672,12 @@ def descends_from(repo: Path, ancestor: str, descendant: str) -> bool:
     Raises:
         GitError: Git could not run or failed for a reason other than "not an ancestor".
     """
-    try:
-        result = subprocess.run(
-            [GIT_BIN, "-C", str(repo), "merge-base", "--is-ancestor", ancestor, descendant],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode not in {0, 1}:
-            result.check_returncode()
-    except (OSError, subprocess.CalledProcessError) as error:
-        detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
-        raise GitError(f"Could not compare '{ancestor}' with '{descendant}': {detail}") from error
+    result = run_command(
+        GIT_BIN, "-C", str(repo), "merge-base", "--is-ancestor", "--", ancestor, descendant,
+        error=GitError, check=False,
+    )  # fmt: skip
+    if result.returncode not in {0, 1}:
+        raise GitError(f"Could not compare '{ancestor}' with '{descendant}': {result.stderr.strip()}")
     return result.returncode == 0
 
 
@@ -719,15 +745,11 @@ def run_stack_check(repo: Path, tag: str, worktree: Path) -> OwnedPackageEvidenc
         "--repo-root",
         str(worktree),
     ]
+    result = run_command(*command, cwd=repo, timeout=STACK_CHECK_TIMEOUT, error=EvidenceError)
     try:
-        result = subprocess.run(
-            command, cwd=repo, capture_output=True, text=True, check=True, timeout=STACK_CHECK_TIMEOUT
-        )
         return OwnedPackageEvidence.model_validate_json(result.stdout)
-    except subprocess.CalledProcessError as error:
-        raise EvidenceError(f"Package check failed for '{tag}': {error.stderr.strip()[-3000:]}") from error
-    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        raise EvidenceError(f"Package check could not complete for '{tag}': {error}") from error
+    except ValueError as error:
+        raise EvidenceError(f"Package check printed unusable evidence for '{tag}': {error}") from error
 
 
 def collect_owned_evidence(
@@ -754,370 +776,9 @@ def collect_owned_evidence(
     evidence: list[OwnedPackageEvidence] = []
     for index, tag in enumerate(owned_tags(stack), start=1):
         worktree = workdir / f"pkg-{index}"
-        try:
-            subprocess.run(
-                [GIT_BIN, "-C", str(repo), "worktree", "add", "--detach", str(worktree), f"refs/tags/{tag}"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except (OSError, subprocess.CalledProcessError) as error:
-            detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
-            raise GitError(f"Could not check out tag '{tag}': {detail}") from error
+        run_command(
+            GIT_BIN, "-C", str(repo), "worktree", "add", "--detach", str(worktree), f"refs/tags/{tag}",
+            error=GitError,
+        )  # fmt: skip
         evidence.append(verify(tag, worktree))
     return evidence
-
-
-def _read_json(path: Path) -> Any:
-    """Read one JSON file.
-
-    Parameters:
-        path (Path): file to decode.
-
-    Returns:
-        Any: decoded JSON.
-    """
-    return json.loads(path.read_bytes())
-
-
-def _write_json(path: Path, value: object) -> None:
-    """Write compact sorted JSON.
-
-    Parameters:
-        path (Path): output file.
-        value (object): JSON-serializable value.
-    """
-    path.write_bytes(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
-
-
-def _emit(value: object) -> None:
-    """Write one JSON document to stdout for the workflow to capture.
-
-    Parameters:
-        value (object): JSON-serializable value.
-    """
-    sys.stdout.write(json.dumps(value) + "\n")
-
-
-def _emit_lines(values: Iterable[object]) -> None:
-    """Write one plain-text value per line to stdout for a shell loop or assignment.
-
-    Parameters:
-        values (Iterable[object]): printable values.
-    """
-    for value in values:
-        sys.stdout.write(f"{value}\n")
-
-
-def _load_stack(path: Path) -> Stack:
-    """Read and validate a stack file.
-
-    Parameters:
-        path (Path): stack JSON.
-
-    Returns:
-        Stack: the validated stack.
-    """
-    return Stack.model_validate_json(path.read_bytes())
-
-
-def _add_evidence_commands(commands: Any) -> None:
-    """Register the subcommands that read GitHub responses and verify evidence.
-
-    Parameters:
-        commands (Any): the parser's subparsers action.
-    """
-    select = commands.add_parser("select", help="Validate dispatch inputs, print the source SHA")
-    select.add_argument("--operation", required=True)
-    select.add_argument("--source-sha", default="")
-    select.add_argument("--rollback-tag", default="")
-    select.add_argument("--github-output", type=Path)
-    ancestor = commands.add_parser("ancestor", help="Fail unless --ancestor is reachable from --descendant")
-    ancestor.add_argument("--repo", type=Path, default=Path())
-    ancestor.add_argument("--ancestor", required=True)
-    ancestor.add_argument("--descendant", required=True)
-    checks = commands.add_parser("checks", help="Verify required checks succeeded on the SHA")
-    checks.add_argument("--rules", type=Path, required=True)
-    checks.add_argument("--check-pages", type=Path, required=True)
-    checks.add_argument("--source-sha", required=True)
-    candidates = commands.add_parser(
-        "candidate-runs", help="Print push/main CI run IDs to fetch, one per line"
-    )
-    candidates.add_argument("--runs", type=Path, required=True)
-    candidates.add_argument("--source-sha", required=True)
-    fetch = commands.add_parser("fetch-artifacts", help="Fetch every candidate run's artifact evidence")
-    fetch.add_argument("--runs", type=Path, required=True)
-    fetch.add_argument("--source-sha", required=True)
-    fetch.add_argument("--repo", required=True)
-    fetch.add_argument("--output-dir", type=Path, required=True)
-    runs = commands.add_parser(
-        "stack-runs", help="Find push/main CI runs that ran the personal stack scenario"
-    )
-    runs.add_argument("--runs", type=Path, required=True)
-    runs.add_argument("--artifacts-dir", type=Path, required=True)
-    runs.add_argument("--source-sha", required=True)
-
-
-def _add_snapshot_commands(commands: Any) -> None:
-    """Register the subcommands that assemble, verify and publish-gate the snapshot.
-
-    Parameters:
-        commands (Any): the parser's subparsers action.
-    """
-    owned = commands.add_parser(
-        "owned-evidence", help="Verify every owned package tag, write the evidence list"
-    )
-    owned.add_argument("--stack", type=Path, required=True)
-    owned.add_argument("--repo", type=Path, required=True)
-    owned.add_argument("--workdir", type=Path, required=True)
-    owned.add_argument("--output", type=Path, required=True)
-    core = commands.add_parser("core", help="Verify core asset digests, print core evidence")
-    core.add_argument("--stack", type=Path, required=True)
-    core.add_argument("--workdir", type=Path, required=True)
-    gates = commands.add_parser("gates", help="Assemble gate evidence JSON")
-    gates.add_argument("--stack", type=Path, required=True)
-    gates.add_argument("--checks", type=Path, required=True)
-    gates.add_argument("--stack-runs", type=Path, required=True)
-    gates.add_argument("--owned", type=Path, required=True)
-    gates.add_argument("--core", type=Path, required=True)
-    gates.add_argument("--output", type=Path, required=True)
-    build = commands.add_parser("build", help="Build the snapshot")
-    build.add_argument("--stack", type=Path, required=True)
-    build.add_argument("--source-sha", required=True)
-    build.add_argument("--gates", type=Path, required=True)
-    build.add_argument("--output", type=Path, required=True)
-    verify = commands.add_parser("verify", help="Validate a snapshot, optionally against a SHA")
-    verify.add_argument("--snapshot", type=Path, required=True)
-    verify.add_argument("--source-sha")
-    channel = commands.add_parser("channel-exists", help="Print true or false: does `stack-channel` exist")
-    channel.add_argument("--refs", type=Path, required=True)
-    channel.add_argument("--github-output", type=Path)
-    successor = commands.add_parser("successor", help="Gate a candidate against the attested stable")
-    successor.add_argument("--candidate", type=Path, required=True)
-    successor.add_argument("--refs", type=Path, required=True)
-    successor.add_argument("--stable", type=Path, required=True)
-    successor.add_argument("--repo", type=Path, default=Path())
-
-
-def _parser() -> argparse.ArgumentParser:
-    """Build the subcommand parser.
-
-    Returns:
-        argparse.ArgumentParser: parser with one subcommand per gate.
-    """
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    commands = parser.add_subparsers(dest="command", required=True)
-    _add_evidence_commands(commands)
-    _add_snapshot_commands(commands)
-    return parser
-
-
-def _cmd_select(args: argparse.Namespace) -> None:
-    """Print the validated source SHA and optionally export it to GitHub Actions.
-
-    Parameters:
-        args (argparse.Namespace): `select` arguments.
-    """
-    source_sha = select_source_sha(args.operation, args.source_sha, args.rollback_tag)
-    if args.github_output:
-        args.github_output.write_text(f"source_sha={source_sha}\n")
-    _emit_lines([source_sha])
-
-
-def _cmd_ancestor(args: argparse.Namespace) -> None:
-    """Fail unless one commit is an ancestor of another.
-
-    Parameters:
-        args (argparse.Namespace): `ancestor` arguments.
-
-    Raises:
-        ValueError: the commit is not an ancestor.
-    """
-    if not descends_from(args.repo, args.ancestor, args.descendant):
-        raise ValueError(f"'{args.ancestor}' is not an ancestor of '{args.descendant}'")
-
-
-def _cmd_checks(args: argparse.Namespace) -> None:
-    """Verify the required checks and print their names.
-
-    Parameters:
-        args (argparse.Namespace): `checks` arguments.
-    """
-    required = required_checks(flatten_pages(_read_json(args.rules)))
-    _emit(verify_required_checks(required, flatten_pages(_read_json(args.check_pages)), args.source_sha))
-
-
-def _cmd_candidate_runs(args: argparse.Namespace) -> None:
-    """Print the run IDs to fetch.
-
-    Parameters:
-        args (argparse.Namespace): `candidate-runs` arguments.
-    """
-    _emit_lines(candidate_run_ids(flatten_pages([_read_json(args.runs)]), args.source_sha))
-
-
-def _cmd_fetch_artifacts(args: argparse.Namespace) -> None:
-    """Fetch artifact pages for every candidate run without shell control flow.
-
-    Parameters:
-        args (argparse.Namespace): `fetch-artifacts` arguments.
-
-    Raises:
-        EvidenceError: GitHub CLI could not retrieve candidate artifact evidence.
-    """
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    for run_id in candidate_run_ids(flatten_pages([_read_json(args.runs)]), args.source_sha):
-        try:
-            artifacts = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    "--paginate",
-                    "--slurp",
-                    f"repos/{args.repo}/actions/runs/{run_id}/artifacts?per_page=100",
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except (OSError, subprocess.CalledProcessError) as error:
-            detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
-            raise EvidenceError(f"Could not read CI evidence for run '{run_id}': {detail}") from error
-        (args.output_dir / f"run-{run_id}.json").write_text(artifacts.stdout)
-
-
-def _cmd_stack_runs(args: argparse.Namespace) -> None:
-    """Print the run IDs that uploaded the personal stack machine evidence.
-
-    Parameters:
-        args (argparse.Namespace): `stack-runs` arguments.
-    """
-    artifacts = {
-        path.stem.removeprefix("run-"): _read_json(path) for path in args.artifacts_dir.glob("run-*.json")
-    }
-    _emit(registry_stack_runs(flatten_pages([_read_json(args.runs)]), artifacts, args.source_sha))
-
-
-def _cmd_owned_evidence(args: argparse.Namespace) -> None:
-    """Verify every owned package and write the evidence list.
-
-    Parameters:
-        args (argparse.Namespace): `owned-evidence` arguments.
-    """
-    evidence = collect_owned_evidence(_load_stack(args.stack), args.repo, args.workdir)
-    _write_json(args.output, [item.model_dump(mode="json") for item in evidence])
-
-
-def _cmd_core(args: argparse.Namespace) -> None:
-    """Verify the core release and print its evidence.
-
-    Parameters:
-        args (argparse.Namespace): `core` arguments.
-    """
-    _emit(verify_core(_load_stack(args.stack), args.workdir).model_dump(mode="json"))
-
-
-def _cmd_gates(args: argparse.Namespace) -> None:
-    """Assemble and write gate evidence.
-
-    Parameters:
-        args (argparse.Namespace): `gates` arguments.
-    """
-    owned = [OwnedPackageEvidence.model_validate(item) for item in _read_json(args.owned)]
-    gates = build_gates(
-        _load_stack(args.stack),
-        _read_json(args.checks),
-        _read_json(args.stack_runs),
-        owned,
-        CoreEvidence.model_validate_json(args.core.read_bytes()),
-    )
-    _write_json(args.output, gates.model_dump(mode="json"))
-
-
-def _cmd_build(args: argparse.Namespace) -> None:
-    """Build and write the snapshot.
-
-    Parameters:
-        args (argparse.Namespace): `build` arguments.
-    """
-    gates = GateEvidence.model_validate_json(args.gates.read_bytes())
-    _write_json(args.output, build_snapshot(args.stack, args.source_sha, gates).model_dump(mode="json"))
-
-
-def _cmd_verify(args: argparse.Namespace) -> None:
-    """Validate a snapshot, optionally pinning its source SHA.
-
-    Parameters:
-        args (argparse.Namespace): `verify` arguments.
-
-    Raises:
-        ValueError: the snapshot's source differs from `--source-sha`.
-    """
-    snapshot = StackSnapshot.model_validate_json(args.snapshot.read_bytes())
-    if args.source_sha and snapshot.source_sha != args.source_sha:
-        raise ValueError(f"Snapshot source '{snapshot.source_sha}' differs from '{args.source_sha}'")
-
-
-def _cmd_channel_exists(args: argparse.Namespace) -> None:
-    """Print whether `stack-channel` exists and optionally export it to GitHub Actions.
-
-    Parameters:
-        args (argparse.Namespace): `channel-exists` arguments.
-    """
-    exists = str(channel_exists(_read_json(args.refs))).lower()
-    if args.github_output:
-        args.github_output.write_text(f"channel_exists={exists}\n")
-    _emit_lines([exists])
-
-
-def _cmd_successor(args: argparse.Namespace) -> None:
-    """Gate a candidate against the stable pointer; a missing channel is the only seed.
-
-    Parameters:
-        args (argparse.Namespace): `successor` arguments.
-    """
-    candidate = StackSnapshot.model_validate_json(args.candidate.read_bytes())
-    stable = None
-    if channel_exists(_read_json(args.refs)):
-        stable = StackSnapshot.model_validate_json(args.stable.read_bytes())
-    descends = stable is not None and descends_from(args.repo, stable.source_sha, candidate.source_sha)
-    verify_successor(candidate, stable, descends)
-
-
-COMMANDS: dict[str, Callable[[argparse.Namespace], None]] = {
-    "select": _cmd_select,
-    "ancestor": _cmd_ancestor,
-    "checks": _cmd_checks,
-    "candidate-runs": _cmd_candidate_runs,
-    "fetch-artifacts": _cmd_fetch_artifacts,
-    "stack-runs": _cmd_stack_runs,
-    "owned-evidence": _cmd_owned_evidence,
-    "core": _cmd_core,
-    "gates": _cmd_gates,
-    "build": _cmd_build,
-    "verify": _cmd_verify,
-    "channel-exists": _cmd_channel_exists,
-    "successor": _cmd_successor,
-}
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Run one gate subcommand; refusals exit 1 with a one-line error.
-
-    Parameters:
-        argv (list[str] | None): arguments, or the process arguments.
-
-    Returns:
-        int: 0 on success, 1 on a failed gate.
-    """
-    args = _parser().parse_args(argv)
-    try:
-        COMMANDS[args.command](args)
-    except (ValueError, OSError, PromotionError) as error:
-        sys.stderr.write(f"FAILED: {error}\n")
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

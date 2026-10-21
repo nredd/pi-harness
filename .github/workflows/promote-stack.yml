@@ -23,10 +23,11 @@ defaults:
   run:
     shell: bash -euo pipefail {0}
 
-# One queue per selected commit: dispatches for different commits never replace each other, and
-# `advance-channel --operation promote` refuses a stale candidate that reaches the write job late.
+# One queue per operation and selected commit, so a `verify-only` dispatch never replaces a pending
+# `promote` of the same commit. Writes serialize globally on the `attest-and-publish` job's
+# `stack-channel` group instead; see docs/stack-promotion.md.
 concurrency:
-  group: stack-promotion-${{ inputs.source_sha || inputs.rollback_tag }}
+  group: stack-promotion-${{ inputs.operation }}-${{ inputs.source_sha || inputs.rollback_tag }}
   cancel-in-progress: false
 
 permissions: {}
@@ -81,6 +82,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: stack-promotion
+    concurrency:
+      group: stack-channel
+      cancel-in-progress: false
     permissions:
       contents: write
       attestations: write
@@ -101,6 +105,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate prepare-release --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --rebuilt promotion/stack-snapshot.json --existing-dir existing --github-output "$GITHUB_OUTPUT"
+      - name: Preflight the stack-channel pointer before any side effect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_DEPLOY_KEY: ${{ secrets.STACK_CHANNEL_DEPLOY_KEY != '' }}
+          OPERATION: ${{ inputs.operation }}
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate preflight-channel --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --snapshot promotion/stack-snapshot.json --key-present-env HAS_DEPLOY_KEY --temp-dir "$RUNNER_TEMP" --existing-dir retained --operation "$OPERATION"
       - name: Verify the existing snapshot attestation
         if: inputs.operation == 'promote' && steps.release.outputs.state == 'resume'
         env:
@@ -124,7 +135,6 @@ jobs:
         run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate tag-target --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
       - name: Advance the stack-channel pointer
         env:
-          GH_TOKEN: ${{ github.token }}
           DEPLOY_KEY: ${{ secrets.STACK_CHANNEL_DEPLOY_KEY }}
           OPERATION: ${{ inputs.operation }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
