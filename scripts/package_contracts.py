@@ -2367,7 +2367,8 @@ def scenario_plan_mode(ctx: Context) -> PlanModeEvidence:
             ctx.sandbox,
             ctx.installed,
             project,
-            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "/plan start"],
+            # `/plan start` sends no turn; `/plan <prompt>` enters Plan mode, then submits.
+            ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "/plan exercise the question tool"],
         )
     require_clean_run(result, "plan-mode active tool")
     require_tools(result, ctx.artifact.contract, ctx.siblings, provider.requests, all_tools=True)
