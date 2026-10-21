@@ -474,6 +474,38 @@ def test_preflight_ancestry_and_existing_version(repo: Path, monkeypatch: pytest
         nr.preflight(repo, tag)
 
 
+def test_selected_release_verifies_the_exact_registry_subject(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reuse the publisher verifier for a selected already-published stack package.
+
+    Parameters:
+        repo (Path): Disposable tagged package checkout.
+        monkeypatch (pytest.MonkeyPatch): Replaces registry and cryptographic boundaries.
+
+    Returns:
+        None.
+    """
+    captured: list[nr.Identity] = []
+    integrity = "sha512-" + "A" * 86 + "=="
+    monkeypatch.setattr(nr, "registry_dist", lambda *_: nr.Distribution(integrity=integrity))
+    monkeypatch.setattr(nr, "verify_signatures", captured.append)
+    monkeypatch.setattr(nr, "fetch_attestations", lambda _: b"attestation")
+    monkeypatch.setattr(
+        nr,
+        "verify_provenance",
+        lambda identity, content: captured.append(identity) if content == b"attestation" else None,
+    )
+
+    nr.verify_selected_published(repo, TAG)
+
+    assert len(captured) == 2
+    assert captured[0] == captured[1]
+    assert captured[0].target.tag == TAG
+    assert captured[0].integrity == integrity
+    assert captured[0].commit == git(repo, "rev-list", "-n", "1", TAG)
+
+
 @pytest.mark.parametrize(("code", "absent"), [("E404", True), ("E500", False), ("E401", False)])
 def test_registry_only_404_is_absence(
     repo: Path,

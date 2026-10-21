@@ -1,5 +1,7 @@
 # Assembled-stack gate
 
+- `integration/stacks/personal.json` is promoted only through the attested snapshot/channel contract in [`docs/stack-promotion.md`](../docs/stack-promotion.md); this gate supplies its registry-byte personal-stack evidence.
+
 - CI is the gate for tap and profile pin bumps. `pi-harness-e2e`'s local `make verify` is retired by this gate, not a prerequisite for it. Owner-local installation/render checks belong to the dotfiles doctor (`PLAN.md` item 7)
 - No default binary, home, credentials or package set. Inputs are `PI_BIN` and `--stack <file>`; the release fetcher accepts `--tag` or an initialized `--gitlink`. Nothing discovers the owner's Pi, dotfiles, tap or Brewfile
 - Do not run real processes on the owner's swap-bound Mac. `make check-integration` runs formatter, linter, ty and infrastructure units only; CI owns scenarios
