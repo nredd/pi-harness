@@ -43,7 +43,7 @@ Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
 `@narumitw/pi-tui-kit` dependency. `make check-plan-mode-package-contract` packs it, verifies its own
 upstream MIT `LICENSE`, exact manifest dependency, manifest `files` list, and complete enumerated tarball
 payload, installs the tarball, and requires `plan_mode_question` and `plan_mode_complete` from stock Pi. The
-faux provider calls `plan_mode_question` and the scenario records its explicit inactive-mode result. `dist/` is
+faux provider enters Plan mode with a prompt, calls `plan_mode_question`, and the scenario records its explicit headless `ui_unavailable` result. `dist/` is
 required and packed because its extension manifest targets `./dist/index.ts`; `src/` stays packed as declared
 by the source package. Its native `npm run check` first rebuilds and byte-compares every committed `dist/` file,
 so stale, missing, or extra generated output fails before the ordinary package build.
