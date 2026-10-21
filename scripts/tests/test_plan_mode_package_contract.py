@@ -33,7 +33,7 @@ def context(tmp_path: Path) -> pc.Context:
     Returns:
         pc.Context: Context with a disposable sandbox and package artifact.
     """
-    return make_context(tmp_path, pc.PLAN_MODE_CONTRACT, "0.59.3-nredd.1")
+    return make_context(tmp_path, pc.PLAN_MODE_CONTRACT, "0.59.3-nredd.2")
 
 
 def test_plan_mode_manifest_rejects_dependency_drift() -> None:
@@ -264,7 +264,7 @@ def run_install(
         Path: The installed package directory.
     """
     artifact = pc.PackedArtifact(
-        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.2", "sha512-x", "0" * 40, 1, ()
     )
     entries = lock if lock is not None else lock_for(packages)
     real_run = pc.run
@@ -437,7 +437,7 @@ def test_plan_mode_install_allows_only_declared_dependency(
         monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
     """
     artifact = pc.PackedArtifact(
-        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.2", "sha512-x", "0" * 40, 1, ()
     )
 
     def fake_run(_cmd: list[object], *, cwd: Path, **_kwargs: Any) -> None:
@@ -525,7 +525,7 @@ def test_install_rejects_bad_installed_manifests(
         files[target] = text
     lock = {ROOT_PATH: {"dependencies": {KIT: "^0.65.2"}}, KIT_PATH: {}}
     artifact = pc.PackedArtifact(
-        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.2", "sha512-x", "0" * 40, 1, ()
     )
     monkeypatch.setattr(pc, "run", lambda _cmd, *, cwd, **_kw: lay_out_raw(cwd, files, lock))
     with pytest.raises(pc.ContractError, match=message):
@@ -554,7 +554,7 @@ def test_install_rejects_manifestless_strays(
     """
     packages = good_install()
     artifact = pc.PackedArtifact(
-        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.2", "sha512-x", "0" * 40, 1, ()
     )
     real_run = pc.run
 
@@ -616,7 +616,7 @@ def test_install_ignores_npm_metadata_files(tmp_path: Path, monkeypatch: pytest.
 
     monkeypatch.setattr(pc, "run", fake_run)
     artifact = pc.PackedArtifact(
-        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.2", "sha512-x", "0" * 40, 1, ()
     )
     pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
 
@@ -672,7 +672,7 @@ def test_install_rejects_a_misnamed_directory(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.setattr(pc, "run", fake_run)
     artifact = pc.PackedArtifact(
-        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
+        pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.2", "sha512-x", "0" * 40, 1, ()
     )
     with pytest.raises(pc.ContractError, match="is named 'not-a'"):
         pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")

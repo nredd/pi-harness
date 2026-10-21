@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Republish as nredd.2: npm wedged nredd.1 (npm/cli#9889); no code change.
 - Rebase the released `v0.59.2-nredd.4` queue onto upstream 0.59.3, not unreleased main.
   Drop the absorbed custom-start patch and its duplicate regression in favor of upstream's
   ready-plan test; preserve fork approval ordering with a focused regression.
