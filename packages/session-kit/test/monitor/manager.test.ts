@@ -44,6 +44,22 @@ describe("MonitorManager", () => {
 		expect(mgr.read("nope")).toBeUndefined();
 	});
 
+	it("counts matched lines for the widget without emitting anything for passive ones", async () => {
+		const info = await mgr.start(
+			{
+				argv: node(`console.log("ok");console.log("ERROR x");console.log("ERROR y");${STAY}`),
+				name: "m",
+				match: "^ERROR",
+			},
+			tmp.dir,
+		);
+		await waitFor(() => (mgr.info(info.id)?.matches ?? 0) === 2);
+		expect(mgr.info(info.id)?.lines).toBe(3);
+		const quiet = await mgr.start({ argv: node(`console.log("a");${STAY}`), name: "q" }, tmp.dir);
+		await waitFor(() => (mgr.info(quiet.id)?.lines ?? 0) === 1);
+		expect(mgr.info(quiet.id)?.matches).toBe(0);
+	});
+
 	it("merges stdout and stderr", async () => {
 		const info = await mgr.start({ argv: node(`console.error("e");console.log("o");${STAY}`), name: "w" }, tmp.dir);
 		await waitFor(() => (mgr.read(info.id)?.lines.length ?? 0) === 2);

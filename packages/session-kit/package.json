@@ -12,6 +12,7 @@
     "src",
     "dist/pi-stats-export.mjs",
     "docs/stats-snapshots.md",
+    "CHANGELOG.md",
     "LICENSE",
     "README.md"
   ],
