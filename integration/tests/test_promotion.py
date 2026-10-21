@@ -21,7 +21,6 @@ import yaml
 from pydantic import ValidationError
 
 from harness import promotion, promotion_verify, publish_gate
-from harness import stack as stack_module
 from harness.promotion import (
     AttestationError,
     CoreEvidence,
@@ -122,15 +121,11 @@ def test_snapshot_binds_sorted_canonical_stack_bytes(tmp_path: Path) -> None:
     assert StackSnapshot.model_validate_json(item.model_dump_json()) == item
 
 
-@pytest.mark.skipif(
-    not hasattr(stack_module, "reject_noncanonical_numbers"),
-    reason="needs the producer guard from PR #107",
-)
 def test_snapshot_refuses_a_float_in_stack_settings(tmp_path: Path) -> None:
-    """The consumer rejects floats, so the producer must refuse them (guard lives in #107)."""
+    """The consumer rejects floats, so the producer must refuse them before attesting."""
     path = tmp_path / "personal.json"
     write_stack(path, settings={"temperature": 0.5})
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"Float at `\$\.settings\.temperature`"):
         build_snapshot(path, "a" * 40, GateEvidence.model_validate(GATES))
 
 
