@@ -323,25 +323,6 @@ TODO_CONTRACT = PackageContract(
 )
 
 
-PRESET_CONTRACT = PackageContract(
-    name="@nredd/pi-preset",
-    directory="preset",
-    required=(
-        "LICENSE",
-        "NOTICE.md",
-        "README.md",
-        "package.json",
-        "agents/code-reviewer.md",
-        "extensions/expanded-footer.ts",
-        "licenses/Apache-2.0-tokyonight.nvim.txt",
-        "licenses/CC-BY-SA-4.0.txt",
-        "licenses/MIT-enkia-tokyo-night-vscode-theme.txt",
-        "themes/belafonte-day.json",
-        "themes/tokyonight-storm.json",
-    ),
-)
-
-
 # --- schemas --------------------------------------------------------------------------------------
 
 STRICT_MODEL = ConfigDict(extra="forbid", frozen=True)
