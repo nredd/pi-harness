@@ -8,7 +8,6 @@ References:
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import subprocess
 import sys
@@ -26,7 +25,7 @@ from harness.release import (
     release_checksums,
     verify_provenance,
 )
-from harness.stack import Stack, validate_release_identity
+from harness.stack import Stack, canonical_stack_bytes, validate_release_identity
 
 SNAPSHOT_SCHEMA_VERSION = 1
 SHA256_HEX_LENGTH = 64
@@ -175,7 +174,7 @@ class CanonicalStack:
 
 
 def stack_bytes(stack: Stack) -> CanonicalStack:
-    """Serialize a stack using the sole snapshot digest representation.
+    """Serialize a stack with `canonical_stack_bytes`, the one representation the golden fixture locks.
 
     Parameters:
         stack (Stack): the validated stack.
@@ -183,9 +182,7 @@ def stack_bytes(stack: Stack) -> CanonicalStack:
     Returns:
         CanonicalStack: compact sorted UTF-8 JSON and its SHA-256.
     """
-    contents = json.dumps(stack.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    contents = canonical_stack_bytes(stack)
     return CanonicalStack(contents, hashlib.sha256(contents).hexdigest())
 
 

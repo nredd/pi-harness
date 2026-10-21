@@ -47,7 +47,7 @@ Dispatch `Promote stack` with `operation`:
 - `verify-only` (the default): runs every check above and builds the candidate snapshot. Writes nothing: no artifact, release, attestation or tag, and the `attest-and-publish` job (the only job in the `stack-promotion` environment, with write credentials) is skipped. Run it first to see exactly what a promotion would do; it needs no approval.
 - `promote`: `verify-only` plus attestation and the `stack/<sha>` release.
 
-Rollback is re-pinning: point dotfiles at an older retained `stack/<sha>`. Nothing in this repository moves, so there is no rollback operation. Releases and tags are immutable (ruleset `25524298`), so every previously promoted snapshot stays available and attested.
+Rollback is re-pinning: point dotfiles at an older retained `stack/<sha>`. Nothing in this repository moves, so there is no rollback operation. Tags are protected from update and deletion (ruleset `25524298`); release assets are not, but a replaced asset fails `gh attestation verify`, so every previously promoted snapshot stays usable only as attested.
 
 Environment: `environment: stack-promotion` gates the whole `attest-and-publish` job, so a required reviewer (the owner) must approve before the job gets `contents`/`attestations`/`id-token` write. It is kept deliberately: it is the only human gate between a green `verify` and a permanent attested release, and a release cannot be retracted. It also restricts the job to `main`. No secret is stored in it any more.
 
