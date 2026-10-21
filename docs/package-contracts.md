@@ -48,7 +48,7 @@ root one). The release `stock` gate installs the tarball plus those two dependen
 and requires `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow` in the model request.
 `scenario_subagents` then has a faux parent call `Agent` in the foreground (routed faux child), which
 is what imports `croner` and `nanoid` at runtime; failures print the tool list seen and the stderr tail.
-`make check-subagents-package-contract` (`scripts/subagents_package_contract.py`, needs the registry)
+`make check-subagents-package-contract` (`scripts/stock_package_contract.py --package @nredd/pi-subagents`, needs the registry)
 runs that exact gate through `npm_release.run_stock_contract`, so the descriptor, siblings and scenario
 match the release `verify` run; CI's `contracts` job runs it on every non-docs PR and uploads
 `subagents-package-contracts.json`.
@@ -57,7 +57,9 @@ match the release `verify` run; CI's `contracts` job runs it on every non-docs P
 `@narumitw/pi-tui-kit` dependency. `make check-plan-mode-package-contract` packs it, verifies its own
 upstream MIT `LICENSE`, exact manifest dependency, manifest `files` list and the complete packed payload
 (`packed_files` exact paths plus `packed_patterns` for the build-hashed `dist/chunks/*.ts(.map)`, each with
-an exact count, so a rebuild is fine but a stray file is not), installs the tarball, and requires
+an exact count and an 8-character hash, so a rebuild is fine but a stray file is not; duplicated paths
+fail, each chunk `.map` must pair with its `.ts`, and every chunk must be reachable from `dist/index.ts`
+by relative imports), installs the tarball, and requires
 `plan_mode_question` and `plan_mode_complete` from stock Pi. The faux provider enters Plan mode with
 `/plan <prompt>`, calls `plan_mode_question`, and the scenario records its explicit headless
 `ui_unavailable` result. `dist/` is required and packed because its extension manifest targets
@@ -96,8 +98,12 @@ What each package must satisfy:
   with declared runtime dependencies instead has exactly the closure derived from each INSTALLED
   `node_modules/**/package.json` (`dependencies` + `optionalDependencies`, resolved npm-style by walking up
   from the requirer's `node_modules`, so nested paths work). That closure must equal the lockfile paths,
-  every installed package path and the top-level directories; a missing required dependency is a
-  `ContractError`. The lockfile is never trusted for transitive edges
+  every installed package path and the top-level directories; every entry under every `node_modules`
+  (manifest or not; only npm's `.bin` and `.package-lock.json` are exempt) must be a closure path, and a
+  scope directory needs a closure child. Each installed `name` must match its path and the root's direct
+  dependency versions must satisfy the declared ranges (the repository's `semver`). Lock-only paths are
+  allowed only when `optional: true` and an installed requirer lists them in `optionalDependencies`. A
+  missing required dependency is a `ContractError`. The lockfile is never trusted for transitive edges
 - Stock Pi, `--mode json` with `--no-extensions --extension <installed dir>` (only that package),
   `--no-mcp`, `--offline`, no skills/templates/themes/context files, `--no-approve`:
   - dev-tools: a real `git_status` result on a disposable repo (`untracked.txt`), and an error result
