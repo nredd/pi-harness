@@ -88,7 +88,7 @@ DESCRIPTORS = (
         ),
         contract=pc.SUBAGENTS_CONTRACT,
         contract_gates=("stock",),
-        stock_gate=pc.SUBAGENTS_SCENARIO,
+        stock_gate=pc.scenario_subagents,
     ),
     ReleaseDescriptor(
         name="@nredd/pi-preset",

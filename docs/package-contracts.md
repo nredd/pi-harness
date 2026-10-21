@@ -137,6 +137,12 @@ the import audit admits just those), `peer_ranges` (the fork's `>=1.1.0` floor i
 `own_license` (the packed `LICENSE` must equal the workspace's, which keeps upstream's copyright, not the
 root one). The release `stock` gate installs the tarball plus those two dependencies from the registry
 and requires `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow` in the model request.
+`scenario_subagents` then has a faux parent call `Agent` in the foreground (routed faux child), which
+is what imports `croner` and `nanoid` at runtime; failures print the tool list seen and the stderr tail.
+`make check-subagents-package-contract` (`scripts/subagents_package_contract.py`, needs the registry)
+runs that exact gate through `npm_release.run_stock_contract`, so the descriptor, siblings and scenario
+match the release `verify` run; CI's `contracts` job runs it on every non-docs PR and uploads
+`subagents-package-contracts.json`.
 
 The run: stock Pi `--no-extensions --extension <archived fork>` (so installed packages stay out of
 the parent, which the gate asserts: no `git_*` tool in the parent request; the child's own loader
