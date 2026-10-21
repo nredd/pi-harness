@@ -1827,12 +1827,16 @@ def stub_npm_install(
         envs.append(env)
         packages: dict[str, object] = {"": {}}
         for module in modules:
-            (cwd / "node_modules" / module).mkdir(parents=True)
-            packages[f"node_modules/{module}"] = {
-                "dependencies": dict(pc.SUBAGENTS_CONTRACT.runtime_dependencies)
+            dependencies = (
+                dict(pc.SUBAGENTS_CONTRACT.runtime_dependencies)
                 if module == pc.SUBAGENTS_CONTRACT.name
                 else {}
-            }
+            )
+            (cwd / "node_modules" / module).mkdir(parents=True)
+            (cwd / "node_modules" / module / "package.json").write_text(
+                json.dumps({"name": module, "dependencies": dependencies})
+            )
+            packages[f"node_modules/{module}"] = {"dependencies": dependencies}
         (cwd / "package-lock.json").write_text(json.dumps({"packages": packages}))
 
     monkeypatch.setattr(pc, "run", fake_run)
@@ -1874,5 +1878,5 @@ def test_install_alone_rejects_an_undeclared_module(
     artifact = pc.PackedArtifact(
         pc.SUBAGENTS_CONTRACT, tmp_path / "x.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ()
     )
-    with pytest.raises(pc.ContractError, match="pulled extra modules"):
+    with pytest.raises(pc.ContractError, match="lockfile paths differ"):
         pc.install_alone(artifact, sandbox, tmp_path / "project")
