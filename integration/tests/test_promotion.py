@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
 import json
 import re
 import subprocess
@@ -20,6 +21,7 @@ from pydantic import ValidationError
 
 from harness import promotion, publish_gate
 from harness.promotion import (
+    AttestationError,
     CoreEvidence,
     EvidenceError,
     GateEvidence,
@@ -40,10 +42,12 @@ from harness.promotion import (
     run_stack_check,
     select_source_sha,
     stack_bytes,
+    verify_core_assets,
     verify_required_checks,
     verify_successor,
 )
 from harness.publish_gate import release_state, verify_tag_target
+from harness.release import LEGACY_CHECKSUMS
 from harness.stack import Stack
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -910,3 +914,126 @@ def test_publish_gate_imports_only_the_standard_library() -> None:
         if isinstance(node, ast.ImportFrom) and node.module
     }
     assert modules <= set(sys.stdlib_module_names) | {"__future__"}
+
+
+NEW_CORE_TAG = "v1.3.0-nredd.8"
+NEW_ASSET = "earendil-works-pi-coding-agent-1.3.0.tgz"
+ASSET_BYTES = b"asset"
+
+
+def core_stack(tmp_path: Path, tag: str, digest: str) -> Stack:
+    """Build a stack whose core release records one asset digest.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        tag (str): core release tag.
+        digest (str): recorded SHA-256 of the asset.
+
+    Returns:
+        Stack: the stack.
+    """
+    path = tmp_path / "core-stack.json"
+    write_stack(path, core={"tag": tag, "integrity": {NEW_ASSET: digest}})
+    return Stack.model_validate_json(path.read_bytes())
+
+
+def fake_fetch(url: str, destination: Path) -> None:
+    """Write canned bytes instead of downloading.
+
+    Parameters:
+        url (str): requested asset URL, which must be the tag's release URL.
+        destination (Path): file to write.
+    """
+    assert url == f"https://github.com/nredd/pi/releases/download/{NEW_CORE_TAG}/{NEW_ASSET}"
+    destination.write_bytes(ASSET_BYTES)
+
+
+def test_core_assets_are_hashed_and_attested_for_new_tags(tmp_path: Path) -> None:
+    """Every recorded asset is downloaded, matched to its digest and provenance-verified at its tag."""
+    digest = hashlib.sha256(ASSET_BYTES).hexdigest()
+    attested: list[tuple[str, str]] = []
+    stack = core_stack(tmp_path, NEW_CORE_TAG, digest)
+    verify_core_assets(
+        stack, tmp_path / "core", fake_fetch, lambda path, tag: attested.append((path.name, tag))
+    )
+    assert attested == [(NEW_ASSET, NEW_CORE_TAG)]
+
+
+def test_core_assets_refuse_wrong_bytes_and_failed_provenance(tmp_path: Path) -> None:
+    """A digest mismatch or a provenance failure stops promotion; a download failure is evidence-level."""
+    stack = core_stack(tmp_path, NEW_CORE_TAG, "0" * 64)
+    with pytest.raises(AttestationError, match="expected"):
+        verify_core_assets(stack, tmp_path / "core", fake_fetch, lambda path, tag: None)
+    good = core_stack(tmp_path, NEW_CORE_TAG, hashlib.sha256(ASSET_BYTES).hexdigest())
+
+    def reject(path: Path, tag: str) -> None:
+        """Simulate `gh attestation verify` rejecting the asset.
+
+        Parameters:
+            path (Path): asset.
+            tag (str): core tag.
+
+        Raises:
+            AttestationError: always.
+        """
+        raise AttestationError(f"no provenance for {path.name} at {tag}")
+
+    with pytest.raises(AttestationError, match="no provenance"):
+        verify_core_assets(good, tmp_path / "core", fake_fetch, reject)
+
+
+def test_default_core_boundaries_translate_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`gh` rejection and network failure become domain errors chained to the cause."""
+    stack = core_stack(tmp_path, NEW_CORE_TAG, hashlib.sha256(ASSET_BYTES).hexdigest())
+
+    def refused(path: Path, tag: str) -> None:
+        """Simulate the release verifier refusing.
+
+        Parameters:
+            path (Path): asset.
+            tag (str): core tag.
+
+        Raises:
+            RuntimeError: always.
+        """
+        raise RuntimeError("provenance verification failed")
+
+    monkeypatch.setattr(promotion, "verify_provenance", refused)
+    with pytest.raises(AttestationError, match="provenance") as attest_error:
+        verify_core_assets(stack, tmp_path / "a", fake_fetch)
+    assert isinstance(attest_error.value.__cause__, RuntimeError)
+
+    def offline(url: str, timeout: int) -> None:
+        """Simulate an unreachable release host.
+
+        Parameters:
+            url (str): requested URL.
+            timeout (int): requested timeout.
+
+        Raises:
+            OSError: always.
+        """
+        raise OSError("offline")
+
+    monkeypatch.setattr(promotion, "urlopen", offline)
+    with pytest.raises(EvidenceError, match="Could not download") as fetch_error:
+        verify_core_assets(stack, tmp_path / "b")
+    assert isinstance(fetch_error.value.__cause__, OSError)
+
+
+def test_legacy_core_tags_skip_attestation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy `.3`-`.7` rely on frozen digests: nothing is downloaded or attested, so `core` runs offline."""
+    tag = "v1.3.0-nredd.7"
+    frozen = LEGACY_CHECKSUMS[tag]
+    stack_path = tmp_path / "legacy.json"
+    write_stack(stack_path, core={"tag": tag, "integrity": dict(frozen)})
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        """Fail when any network or provenance boundary is touched."""
+        pytest.fail("legacy tags must not download or attest")
+
+    monkeypatch.setattr(promotion, "urlopen", forbidden)
+    monkeypatch.setattr(promotion, "verify_provenance", forbidden)
+    stack = Stack.model_validate_json(stack_path.read_bytes())
+    verify_core_assets(stack, tmp_path / "core")
+    assert promotion.main(["core", "--stack", str(stack_path), "--workdir", str(tmp_path / "core")]) == 0

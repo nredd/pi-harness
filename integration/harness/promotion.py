@@ -17,10 +17,16 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
+from urllib.request import urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from harness.release import release_checksums
+from harness.release import (
+    LEGACY_RELEASE_TAGS,
+    release_asset_url,
+    release_checksums,
+    verify_provenance,
+)
 from harness.stack import Stack, validate_release_identity
 
 SNAPSHOT_SCHEMA_VERSION = 1
@@ -33,6 +39,7 @@ ROLLBACK_TAG_PATTERN = re.compile(rf"stack/([0-9a-f]{{{GIT_SHA_LENGTH}}})")
 OPERATIONS = ("verify-only", "promote", "rollback")
 GIT_BIN = "/usr/bin/git"
 STACK_CHECK_TIMEOUT = 900
+ASSET_TIMEOUT = 120
 STRICT = ConfigDict(extra="forbid", strict=True, frozen=True)
 
 
@@ -42,6 +49,10 @@ class PromotionError(Exception):
 
 class GitError(PromotionError):
     """Git could not answer a question about the checkout."""
+
+
+class AttestationError(PromotionError):
+    """Release bytes did not match the recorded digest or lacked the required provenance."""
 
 
 class EvidenceError(PromotionError):
@@ -509,21 +520,94 @@ def build_gates(
     )
 
 
-def verify_core(stack: Stack) -> CoreEvidence:
-    """Verify the stack's core asset digests against the release's checksum file.
+AssetFetch = Callable[[str, Path], None]
+AssetAttest = Callable[[Path, str], None]
 
-    CI's registry-stack job separately fetched this release with `gh attestation verify`.
+
+def _fetch_asset(url: str, destination: Path) -> None:
+    """Download one release asset.
+
+    Parameters:
+        url (str): canonical release asset URL.
+        destination (Path): file to write.
+
+    Raises:
+        EvidenceError: the download failed.
+    """
+    try:
+        with urlopen(url, timeout=ASSET_TIMEOUT) as response:
+            destination.write_bytes(response.read())
+    except OSError as error:
+        raise EvidenceError(f"Could not download '{url}': {error}") from error
+
+
+def _attest_asset(path: Path, tag: str) -> None:
+    """Verify one asset's GitHub provenance against `nredd/pi`'s release workflow.
+
+    Parameters:
+        path (Path): downloaded asset.
+        tag (str): core tag the provenance must be bound to.
+
+    Raises:
+        AttestationError: `gh attestation verify` rejected the asset.
+    """
+    try:
+        verify_provenance(path, tag)
+    except RuntimeError as error:
+        raise AttestationError(str(error)) from error
+
+
+def verify_core_assets(
+    stack: Stack, workdir: Path, fetch: AssetFetch | None = None, attest: AssetAttest | None = None
+) -> None:
+    """Hash the real core release assets and verify their provenance (non-legacy tags only).
+
+    `SHA256SUMS` is a mutable release asset, so matching it proves nothing alone. The assets the
+    stack records are downloaded, compared with the recorded digests, and verified read-only with
+    `gh attestation verify` (signer `fork-release.yml`, source ref the tag). Legacy tags predate
+    that workflow and rely on `LEGACY_CHECKSUMS`.
 
     Parameters:
         stack (Stack): selected personal stack.
+        workdir (Path): directory for the downloaded assets; created when absent.
+        fetch (AssetFetch | None): downloader taking a URL and destination; defaults to HTTPS.
+        attest (AssetAttest | None): verifier taking an asset and its tag; defaults to `gh`.
+
+    Raises:
+        AttestationError: an asset's bytes differ from the recorded digest or lack provenance.
+        EvidenceError: an asset could not be downloaded.
+    """
+    tag = stack.core.tag
+    if tag in LEGACY_RELEASE_TAGS:
+        return
+    download, verify = fetch or _fetch_asset, attest or _attest_asset
+    workdir.mkdir(parents=True, exist_ok=True)
+    for name, digest in sorted(stack.core.integrity.items()):
+        path = workdir / name
+        download(release_asset_url(tag, name), path)
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != digest:
+            raise AttestationError(f"Core asset '{name}' has sha256 '{actual}', expected '{digest}'")
+        verify(path, tag)
+
+
+def verify_core(stack: Stack, workdir: Path) -> CoreEvidence:
+    """Verify the stack's core release identity, asset bytes and provenance.
+
+    Parameters:
+        stack (Stack): selected personal stack.
+        workdir (Path): directory for downloaded core assets.
 
     Returns:
         CoreEvidence: tag and asset digests that agree with the published release.
 
     Raises:
         ValueError: the release checksums are unreadable or disagree.
+        AttestationError: an asset's bytes or provenance is wrong (non-legacy tags).
+        EvidenceError: an asset could not be downloaded.
     """
     validate_release_identity(stack, stack.core.tag, release_checksums(stack.core.tag))
+    verify_core_assets(stack, workdir)
     return CoreEvidence(tag=stack.core.tag, integrity=dict(stack.core.integrity))
 
 
@@ -797,6 +881,7 @@ def _add_snapshot_commands(commands: Any) -> None:
     owned.add_argument("--output", type=Path, required=True)
     core = commands.add_parser("core", help="Verify core asset digests, print core evidence")
     core.add_argument("--stack", type=Path, required=True)
+    core.add_argument("--workdir", type=Path, required=True)
     gates = commands.add_parser("gates", help="Assemble gate evidence JSON")
     gates.add_argument("--stack", type=Path, required=True)
     gates.add_argument("--checks", type=Path, required=True)
@@ -904,7 +989,7 @@ def _cmd_core(args: argparse.Namespace) -> None:
     Parameters:
         args (argparse.Namespace): `core` arguments.
     """
-    _emit(verify_core(_load_stack(args.stack)).model_dump(mode="json"))
+    _emit(verify_core(_load_stack(args.stack), args.workdir).model_dump(mode="json"))
 
 
 def _cmd_gates(args: argparse.Namespace) -> None:
