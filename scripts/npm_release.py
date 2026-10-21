@@ -825,6 +825,36 @@ def verify_provenance(identity: Identity, content: bytes) -> None:
         raise ReleaseError("Provenance source commit differs from the tagged release")
 
 
+def verify_selected_published(repo: Path, tag: str) -> None:
+    """Verify a selected owned package without rebuilding its accepted tarball.
+
+    Parameters:
+        repo (Path): clean checkout containing the signed package tag.
+        tag (str): exact `@nredd/<package>@<version>` release tag.
+
+    Returns:
+        None: only after npm verifies the selected subject and its SLSA source binding.
+
+    Raises:
+        ReleaseError: the tag, registry metadata, signature, or provenance is invalid.
+    """
+    target = resolve_target(repo, tag)
+    integrity = registry_dist(repo, target)
+    if integrity is None:
+        raise ReleaseError(f"Selected package '{tag}' is absent from the npm registry")
+    commit = command(repo, "git", "rev-list", "-n", "1", tag)
+    identity = Identity(
+        target=target,
+        commit=commit,
+        tarball=f"{target.name.removeprefix('@nredd/').replace('/', '-')}-{target.version}.tgz",
+        sha256="0" * 64,
+        integrity=integrity.integrity,
+    )
+    verify_signatures(identity)
+    verify_provenance(identity, fetch_attestations(target))
+    LOGGER.info(f"Verified selected npm package '{tag}'")
+
+
 def verify_published(repo: Path, identity: Identity) -> None:
     """Require registry visibility, npm cryptographic verification and actual provenance binding.
 
@@ -852,7 +882,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["preflight", "verify", "publish-check", "registry-check"])
+    parser.add_argument(
+        "stage", choices=["preflight", "verify", "publish-check", "registry-check", "stack-check"]
+    )
     parser.add_argument("--tag", required=True)
     parser.add_argument("--repo-root", type=Path, default=pc.REPO_ROOT)
     parser.add_argument("--artifact-dir", type=Path)
@@ -867,6 +899,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 directory=target.directory,
                 needs_fork_contract=str("fork" in descriptor.contract_gates).lower(),
             )
+            return 0
+        if args.stage == "stack-check":
+            verify_selected_published(repo, args.tag)
             return 0
         if args.artifact_dir is None:
             raise ReleaseError("This stage requires `--artifact-dir`")

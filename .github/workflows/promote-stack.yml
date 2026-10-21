@@ -1,0 +1,252 @@
+# Explicitly promotes one already-gated main commit. See docs/stack-promotion.md.
+name: Promote stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character main SHA to promote
+        required: false
+        type: string
+      operation:
+        description: Create a new promotion or explicitly select an attested retained snapshot
+        required: true
+        default: promote
+        type: choice
+        options: [promote, rollback]
+      rollback_tag:
+        description: Required only for rollback, e.g. stack/<40-character-source-sha>
+        required: false
+        type: string
+
+concurrency:
+  group: stack-promotion
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    outputs:
+      source_sha: ${{ steps.candidate.outputs.source_sha }}
+      stack_tag: ${{ steps.candidate.outputs.stack_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Resolve selected main commit or retained rollback snapshot
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation }}
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
+        run: |
+          set -eu
+          mkdir promotion
+          if [ "$OPERATION" = rollback ]; then
+            test -z "$REQUESTED_SHA"
+            test -n "$ROLLBACK_TAG"
+            case "$ROLLBACK_TAG" in stack/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]* ) ;; *) echo "invalid rollback tag" >&2; exit 1 ;; esac
+            gh release download "$ROLLBACK_TAG" --repo "$GITHUB_REPOSITORY" --pattern stack-snapshot.json --dir promotion
+            gh attestation verify promotion/stack-snapshot.json --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/promote-stack.yml" --deny-self-hosted-runners
+            cd integration
+            uv run --locked python -m harness.promotion verify --snapshot ../promotion/stack-snapshot.json
+            source_sha=$(uv run --locked python -c 'import json; print(json.load(open("../promotion/stack-snapshot.json"))["source_sha"])')
+            cd ..
+          else
+            test -n "$REQUESTED_SHA"
+            printf '%s\n' "$REQUESTED_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "source_sha must be 40 lowercase hexadecimal characters" >&2; exit 1; }
+            source_sha=$REQUESTED_SHA
+          fi
+          git fetch origin main
+          git cat-file -e "$source_sha^{commit}"
+          git merge-base --is-ancestor "$source_sha" origin/main
+          echo "source_sha=$source_sha" >>"$GITHUB_OUTPUT"
+          echo "stack_tag=stack/$source_sha" >>"$GITHUB_OUTPUT"
+      - name: Check out selected source and install verifier dependencies
+        if: inputs.operation == 'promote'
+        env:
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+        run: |
+          git checkout --detach "$SOURCE_SHA"
+          npm ci --ignore-scripts
+          cd integration && uv sync --locked
+      - name: Require configured branch-protection checks on selected commit
+        if: inputs.operation == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+        run: |
+          set -eu
+          gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" >promotion/protection.json
+          jq -e '.contexts | type == "array" and length > 0' promotion/protection.json >/dev/null
+          gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA/check-runs?per_page=100" >promotion/check-runs.json
+          jq -e --slurpfile checks promotion/check-runs.json '
+            .contexts as $required | $checks[0].check_runs as $actual |
+            all($required[]; . as $name | any($actual[]; .name == $name and .head_sha == $ENV.SOURCE_SHA and .status == "completed" and .conclusion == "success"))
+          ' promotion/protection.json >/dev/null
+          jq -c '.contexts' promotion/protection.json >promotion/required-checks.json
+      - name: Require successful registry-byte personal-stack coverage
+        if: inputs.operation == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+        run: |
+          set -eu
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow CI --commit "$SOURCE_SHA" --limit 100 --json databaseId,status,conclusion >promotion/runs.json
+          : >promotion/stack-run-ids
+          jq -r '.[] | select(.status == "completed" and .conclusion == "success") | .databaseId' promotion/runs.json | while read -r run_id; do
+            gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json jobs >"promotion/run-$run_id.json"
+            if jq -e '[.jobs[] | select(.name == "stack (ubuntu-24.04, personal)" and .conclusion == "success") | .steps[] | select(.name == "Assembled D and E boundaries" and .conclusion == "success")] | length > 0' "promotion/run-$run_id.json" >/dev/null; then
+              printf '%s\n' "$run_id" >>promotion/stack-run-ids
+            fi
+          done
+          test -s promotion/stack-run-ids
+      - name: Verify each selected owned npm release subject and provenance
+        if: inputs.operation == 'promote'
+        run: |
+          set -eu
+          cd integration
+          uv run --locked python -c '
+          from harness.stack import Stack, source_string
+          from pathlib import Path
+          for source in Stack.model_validate_json(Path("stacks/personal.json").read_bytes()).sources:
+              value = source_string(source)
+              if value.startswith("npm:@nredd/"):
+                  print(value.removeprefix("npm:"))
+          ' >../promotion/owned-packages
+          cd ..
+          test -s promotion/owned-packages
+          while read -r package; do
+            tag="${package%@*}@${package##*@}"
+            uv run --locked --project integration python scripts/npm_release.py stack-check --tag "$tag"
+          done <promotion/owned-packages
+      - name: Verify selected core release identity
+        if: inputs.operation == 'promote'
+        env:
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+        run: |
+          set -eu
+          git submodule update --init forks/pi
+          cd integration
+          uv run --locked python -c '
+          from harness.release import release_checksums
+          from harness.stack import Stack, validate_release_identity
+          from pathlib import Path
+          import subprocess
+          stack = Stack.model_validate_json(Path("stacks/personal.json").read_bytes())
+          tag = subprocess.check_output(["git", "-C", "../forks/pi", "describe", "--tags", "--exact-match"], text=True).strip()
+          validate_release_identity(stack, tag, release_checksums(stack.core.tag))
+          '
+          core_tag=$(uv run --locked python -c 'from harness.stack import Stack; from pathlib import Path; print(Stack.model_validate_json(Path("stacks/personal.json").read_bytes()).core.tag)')
+          uv run --locked python -m harness.release --tag "$core_tag" --prefix "$RUNNER_TEMP/promotion-core"
+          cd ..
+      - name: Build canonical promotion snapshot
+        if: inputs.operation == 'promote'
+        env:
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+        run: |
+          set -eu
+          jq -n --slurpfile required promotion/required-checks.json --rawfile owned promotion/owned-packages --rawfile runs promotion/stack-run-ids '{required_checks: $required[0], stack_run_ids: ($runs | split("\n") | map(select(length > 0) | tonumber)), owned_packages: ($owned | split("\n") | map(select(length > 0))), core_verified: true}' >promotion/gates.json
+          cd integration
+          uv run --locked python -m harness.promotion build --stack stacks/personal.json --source-sha "$SOURCE_SHA" --gates ../promotion/gates.json --output ../promotion/stack-snapshot.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stack-snapshot-${{ steps.candidate.outputs.source_sha }}
+          path: promotion/stack-snapshot.json
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: promotion/stack-snapshot.json
+
+  publish-channel:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: stack-snapshot-${{ needs.verify.outputs.source_sha }}
+          path: promotion
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Verify candidate attestation and stable ancestry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          set -eu
+          gh attestation verify promotion/stack-snapshot.json --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/promote-stack.yml" --deny-self-hosted-runners
+          uv run --locked --project integration python -m harness.promotion verify --snapshot promotion/stack-snapshot.json
+          git fetch origin main
+          set +e
+          git ls-remote --exit-code origin refs/heads/stack-channel >/dev/null
+          channel_status=$?
+          set -e
+          if [ "$channel_status" -eq 0 ]; then
+            git fetch origin stack-channel:refs/remotes/origin/stack-channel
+          elif [ "$channel_status" -ne 2 ]; then
+            exit "$channel_status"
+          fi
+          if git show-ref --verify --quiet refs/remotes/origin/stack-channel; then
+            git show origin/stack-channel:stable.json >promotion/stable.json
+            uv run --locked --project integration python -m harness.promotion verify --snapshot promotion/stable.json
+            python3 -c 'import json; candidate=json.load(open("promotion/stack-snapshot.json")); stable=json.load(open("promotion/stable.json")); assert candidate["source_sha"] != stable["source_sha"]'
+            if [ "$OPERATION" = promote ]; then
+              stable_sha=$(python3 -c 'import json; print(json.load(open("promotion/stable.json"))["source_sha"])')
+              git merge-base --is-ancestor "$stable_sha" "$SOURCE_SHA"
+            fi
+          fi
+      - name: Retain immutable snapshot release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_TAG: ${{ needs.verify.outputs.stack_tag }}
+        run: |
+          set -eu
+          if gh release view "$STACK_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            test "${{ inputs.operation }}" = rollback
+          else
+            test "${{ inputs.operation }}" = promote
+            git tag "$STACK_TAG" "${{ needs.verify.outputs.source_sha }}"
+            git push origin "refs/tags/$STACK_TAG"
+            gh release create "$STACK_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$STACK_TAG" --notes "Verified promoted stack snapshot." promotion/stack-snapshot.json
+          fi
+      - name: Advance generated stable-channel pointer
+        env:
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+        run: |
+          set -eu
+          if git show-ref --verify --quiet refs/remotes/origin/stack-channel; then
+            git switch -C stack-channel-next origin/stack-channel
+          else
+            git switch --orphan stack-channel-next
+          fi
+          git rm -rf .
+          cp promotion/stack-snapshot.json stable.json
+          git add stable.json
+          git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot] commit -m "Advance stable stack to $SOURCE_SHA"
+          git push origin HEAD:stack-channel
