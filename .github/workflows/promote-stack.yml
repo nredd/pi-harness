@@ -1,0 +1,117 @@
+# Explicitly promotes one already-gated main commit. See docs/stack-promotion.md.
+name: Promote stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character main SHA
+        required: true
+        type: string
+      operation:
+        description: Verify only, or verify and promote
+        required: true
+        default: verify-only
+        type: choice
+        options: [verify-only, promote]
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+# One queue per operation and selected commit, so a `verify-only` dispatch never replaces a pending
+# `promote` of the same commit; see docs/stack-promotion.md.
+concurrency:
+  group: stack-promotion-${{ inputs.operation }}-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  PROMO: ${{ github.workspace }}/promotion
+  ATTEST_WORKFLOW: ${{ github.repository }}/.github/workflows/promote-stack.yml
+
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      source_sha: ${{ steps.target.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Install harness
+        run: uv sync --locked --directory integration
+      - id: target
+        name: Verify the selected commit and build the candidate snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation }}
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+        run: uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion_verify
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: inputs.operation != 'verify-only'
+        with:
+          name: stack-snapshot-${{ steps.target.outputs.source_sha }}
+          path: promotion/stack-snapshot.json
+          if-no-files-found: error
+
+  attest-and-publish:
+    if: github.ref == 'refs/heads/main' && inputs.operation != 'verify-only'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: stack-promotion
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: stack-snapshot-${{ needs.verify.outputs.source_sha }}
+          path: promotion
+      - id: release
+        name: Validate existing snapshot release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate prepare-release --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --rebuilt promotion/stack-snapshot.json --existing-dir existing --github-output "$GITHUB_OUTPUT"
+      - name: Verify the existing snapshot attestation
+        if: steps.release.outputs.state == 'resume'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify existing/stack-snapshot.json --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        if: steps.release.outputs.state == 'create'
+        with:
+          subject-path: promotion/stack-snapshot.json
+      - name: Create the release
+        if: steps.release.outputs.state == 'create'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+        run: gh release create "stack/$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "stack/$SOURCE_SHA" --notes 'Verified promoted stack snapshot.' promotion/stack-snapshot.json
+      - name: Confirm the tag points at the selected commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate tag-target --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"

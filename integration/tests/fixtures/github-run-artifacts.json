@@ -1,0 +1,51 @@
+[
+ {
+  "total_count": 4,
+  "artifacts": [
+   {
+    "name": "standalone-linux-x64",
+    "expired": false,
+    "workflow_run": {
+     "id": 39545048647,
+     "repository_id": 1422716209,
+     "head_repository_id": 1422716209,
+     "head_branch": "main",
+     "head_sha": "40e119a68a286cf498968605bcf9217359184e40"
+    }
+   },
+   {
+    "name": "contract-reports-ubuntu-24.04",
+    "expired": false,
+    "workflow_run": {
+     "id": 39545048647,
+     "repository_id": 1422716209,
+     "head_repository_id": 1422716209,
+     "head_branch": "main",
+     "head_sha": "40e119a68a286cf498968605bcf9217359184e40"
+    }
+   },
+   {
+    "name": "contract-reports-macos-14",
+    "expired": false,
+    "workflow_run": {
+     "id": 39545048647,
+     "repository_id": 1422716209,
+     "head_repository_id": 1422716209,
+     "head_branch": "main",
+     "head_sha": "40e119a68a286cf498968605bcf9217359184e40"
+    }
+   },
+   {
+    "name": "stack-ubuntu-24.04-personal",
+    "expired": false,
+    "workflow_run": {
+     "id": 39545048647,
+     "repository_id": 1422716209,
+     "head_repository_id": 1422716209,
+     "head_branch": "main",
+     "head_sha": "40e119a68a286cf498968605bcf9217359184e40"
+    }
+   }
+  ]
+ }
+]
