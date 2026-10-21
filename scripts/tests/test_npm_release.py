@@ -909,6 +909,10 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
     Returns:
         None: The selected package check precedes one pack and every applicable gate.
     """
+    descriptor = rd.descriptor_for(contract.name)
+    assert descriptor is not None
+    verify_args = [command[1:] for command in descriptor.verify_commands]
+    verify_events = [args[0] for args in verify_args]
     events: list[str] = []
     original_command = nr.command
     original_pack = pc.pack
@@ -927,7 +931,7 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
             str: Synthetic install/check output or real Git output.
         """
         if tool == "npm":
-            assert args in (("ci", "--ignore-scripts"), ("run", "check", "--workspace", contract.name))
+            assert args in verify_args
             events.append(args[0])
             return "substituted package check"
         return original_command(root, tool, *args, timeout=timeout)
@@ -944,7 +948,7 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
         Returns:
             PackedArtifact: Real packed candidate identity.
         """
-        assert events == ["ci", "run"]
+        assert events == verify_events
         events.append("pack")
         artifact = original_pack(c, dest, sandbox, source)
         candidate.append(artifact.path)
@@ -1003,14 +1007,14 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
     monkeypatch.setattr(nr.fork, "run_fork_gate", lambda _w, _s, _r, supplied: gate("fork", supplied))
     target = nr.resolve_target(repo, f"{contract.name}@1.2.3")
     nr.verify(repo, target, tmp_path / "candidate")
-    expected = ["ci", "run", "pack"]
-    descriptor = rd.descriptor_for(contract.name)
-    assert descriptor is not None
+    expected = [*verify_events, "pack"]
     if "stock" in descriptor.contract_gates:
         expected.append("stock")
     if "fork" in descriptor.contract_gates:
         expected.append("fork")
     assert events == expected
+    if contract.directory == "plan-mode":
+        assert events == ["ci", "run", "pack", "stock"]
 
 
 def test_every_standalone_descriptor_has_a_packed_artifact_gate() -> None:
@@ -1018,6 +1022,21 @@ def test_every_standalone_descriptor_has_a_packed_artifact_gate() -> None:
     for descriptor in rd.DESCRIPTORS:
         assert descriptor.contract_gates, descriptor.name
         assert ("stock" in descriptor.contract_gates) == (descriptor.stock_gate is not None), descriptor.name
+        if descriptor.name != "@nredd/pi-preset":
+            assert "stock" in descriptor.contract_gates, descriptor.name
+            assert descriptor.stock_gate is not None, descriptor.name
+
+
+def test_plan_mode_descriptor_pins_its_own_commands_and_routing() -> None:
+    """Hard-coded, independent of the descriptor data the release code consumes."""
+    descriptor = rd.descriptor_for("@nredd/pi-plan-mode")
+    assert descriptor is not None
+    assert descriptor.verify_commands == (
+        ("npm", "ci", "--ignore-scripts"),
+        ("npm", "run", "check", "--workspace", "@nredd/pi-plan-mode"),
+    )
+    assert descriptor.contract_gates == ("stock",)
+    assert descriptor.stock_gate is pc.scenario_plan_mode
 
 
 @pytest.mark.parametrize("failure", ["ci", "run"])

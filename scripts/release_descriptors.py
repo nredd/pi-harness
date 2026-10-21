@@ -106,6 +106,28 @@ DESCRIPTORS = (
         stock_gate=pc.scenario_subagents,
     ),
     ReleaseDescriptor(
+        name="@nredd/pi-plan-mode",
+        workspace=PurePosixPath("packages/plan-mode"),
+        verify_commands=(
+            ("npm", "ci", "--ignore-scripts"),
+            ("npm", "run", "check", "--workspace", "@nredd/pi-plan-mode"),
+        ),
+        contract=pc.PLAN_MODE_CONTRACT,
+        contract_gates=("stock",),
+        stock_gate=pc.scenario_plan_mode,
+    ),
+    ReleaseDescriptor(
+        name="@nredd/pi-todo",
+        workspace=PurePosixPath("packages/todo"),
+        verify_commands=(
+            ("npm", "ci", "--ignore-scripts"),
+            ("npm", "run", "check", "--workspace", "@nredd/pi-todo"),
+        ),
+        contract=pc.TODO_CONTRACT,
+        contract_gates=("stock",),
+        stock_gate=pc.scenario_todo,
+    ),
+    ReleaseDescriptor(
         name="@nredd/pi-preset",
         workspace=PurePosixPath("packages/preset"),
         verify_commands=(
