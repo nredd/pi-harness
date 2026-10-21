@@ -54,7 +54,7 @@ check-fork-package-contracts:  ## REAL packed preset + dev-tools through the Git
 check-plan-mode-package-contract:  ## Packed @nredd/pi-plan-mode through exact stock Pi 1.3.0
 	cd scripts && uv run --locked --project ../integration python stock_package_contract.py --package @nredd/pi-plan-mode $(if $(REPORT),--report $(REPORT))
 
-check-subagents-package-contract:  ## Packed @nredd/pi-subagents through exact stock Pi 1.3.0
+check-subagents-package-contract:  ## Packed @nredd/pi-subagents (+ croner/nanoid from the npm registry) through exact stock Pi 1.3.0, incl. one faux `Agent` call
 	cd scripts && uv run --locked --project ../integration python stock_package_contract.py --package @nredd/pi-subagents $(if $(REPORT),--report $(REPORT))
 
 release-manifest:  ## Generate releases/<release-id>.json from Gitlinks and package manifests

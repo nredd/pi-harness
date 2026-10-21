@@ -1058,7 +1058,7 @@ def pack(
     if digest != report.integrity or hashlib.sha1(data, usedforsecurity=False).hexdigest() != report.shasum:
         raise ContractError(f"`npm pack` identity for '{contract.name}' disagrees with the tarball bytes")
     with tarfile.open(path) as tar:
-        files = tuple(sorted(strip_prefix(member.name) for member in tar.getmembers() if member.isfile()))
+        files = tarball_files(tar, path)
     if files != tuple(sorted(entry.path for entry in report.files)):
         raise ContractError(f"`npm pack` file list for '{contract.name}' disagrees with its tarball")
     try:
@@ -1088,7 +1088,7 @@ def load_tarball(contract: PackageContract, path: Path) -> PackedArtifact:
         data = path.read_bytes()
         manifest = PackedManifestIdentity.model_validate_json(read_member(path, "package.json"))
         with tarfile.open(path) as tar:
-            files = tuple(sorted(strip_prefix(m.name) for m in tar.getmembers() if m.isfile()))
+            files = tarball_files(tar, path)
     except (OSError, ValueError, tarfile.TarError) as e:
         raise ContractError(f"Cannot read tarball '{path}': {e}") from e
     if manifest.name != contract.name:
@@ -1154,6 +1154,26 @@ def select_artifact(
     if contract.directory in tarballs:
         return load_tarball(contract, tarballs[contract.directory])
     return pack(contract, dest, sandbox, package_dir)
+
+
+def tarball_files(tar: tarfile.TarFile, path: Path) -> tuple[str, ...]:
+    """Return regular file paths while rejecting special tarball members.
+
+    Parameters:
+        tar (tarfile.TarFile): Open package archive.
+        path (Path): Archive path for diagnostics.
+
+    Returns:
+        tuple[str, ...]: Sorted paths relative to npm's `package/` prefix.
+
+    Raises:
+        ContractError: If the archive contains a symlink, hardlink, or other special member.
+    """
+    members = tar.getmembers()
+    invalid = [member.name for member in members if not member.isfile() and not member.isdir()]
+    if invalid:
+        raise ContractError(f"Tarball '{path.name}' has non-regular member(s): {sorted(invalid)}")
+    return tuple(sorted(strip_prefix(member.name) for member in members if member.isfile()))
 
 
 def strip_prefix(name: str) -> str:
@@ -1256,6 +1276,7 @@ def audit_chunk_graph(
         for name in files
         if name.endswith(".ts") and any(pattern.match(name) for pattern, _ in contract.packed_patterns)
     }
+    code = {name for name in files if name.endswith(CODE_SUFFIXES)}
     reached: set[str] = set()
     pending = ["dist/index.ts"]
     while pending:
@@ -1265,7 +1286,7 @@ def audit_chunk_graph(
             if not spec.startswith("."):
                 continue
             target = PurePosixPath(os.path.normpath(PurePosixPath(current).parent / spec)).as_posix()
-            if target in chunks and target not in reached:
+            if target in code and target not in reached:
                 reached.add(target)
                 pending.append(target)
     return [
@@ -1573,6 +1594,65 @@ class InstalledPackage:
     optional: frozenset[str]
 
 
+def is_npm_metadata(path: Path, name: str, prefix: str) -> bool:
+    """Validate an npm-created metadata entry and report whether it needs no further auditing."""
+    if name not in NPM_MODULE_METADATA:
+        return False
+    if name == ".package-lock.json":
+        valid = prefix == "node_modules" and not path.is_symlink() and path.is_file()
+    else:
+        valid = (
+            not path.is_symlink()
+            and path.is_dir()
+            and all(member.is_symlink() or member.is_file() for member in path.iterdir())
+        )
+    if not valid:
+        raise ContractError(f"Invalid npm metadata entry '{prefix}/{name}'")
+    return True
+
+
+def nested_installed_entries(directory: Path, path: str) -> list[tuple[Path, str, bool]]:
+    """Walk a package's nested `node_modules`, rejecting a symlinked directory."""
+    nested = directory / "node_modules"
+    if nested.is_symlink():
+        raise ContractError(f"Symlinked `node_modules` entry is not allowed: '{path}/node_modules'")
+    return walk_installed_entries(nested, f"{path}/node_modules") if nested.is_dir() else []
+
+
+def walk_installed_entries(modules: Path, prefix: str = "node_modules") -> list[tuple[Path, str, bool]]:
+    """Walk package-shaped entries while validating npm's limited metadata exemptions.
+
+    Parameters:
+        modules (Path): A `node_modules` directory.
+        prefix (str): Lockfile-style path of `modules`.
+
+    Returns:
+        list[tuple[Path, str, bool]]: `(path, lockfile path, is_scope)` entries.
+
+    Raises:
+        ContractError: If an entry is a symlink or npm metadata is malformed.
+    """
+    entries: list[tuple[Path, str, bool]] = []
+    for child in sorted(modules.iterdir()):
+        path = f"{prefix}/{child.name}"
+        if is_npm_metadata(child, child.name, prefix):
+            continue
+        if child.is_symlink():
+            raise ContractError(f"Symlinked `node_modules` entry is not allowed: '{path}'")
+        if child.name.startswith("@") and child.is_dir():
+            entries.append((child, path, True))
+            for member in sorted(child.iterdir()):
+                member_path = f"{path}/{member.name}"
+                if member.is_symlink():
+                    raise ContractError(f"Symlinked `node_modules` entry is not allowed: '{member_path}'")
+                entries.append((member, member_path, False))
+                entries.extend(nested_installed_entries(member, member_path))
+            continue
+        entries.append((child, path, False))
+        entries.extend(nested_installed_entries(child, path))
+    return entries
+
+
 def read_installed_packages(modules: Path, prefix: str = "node_modules") -> dict[str, InstalledPackage]:
     """Read every installed package under `modules`, including nested `node_modules`.
 
@@ -1590,23 +1670,19 @@ def read_installed_packages(modules: Path, prefix: str = "node_modules") -> dict
             fields and a `name` equal to the one its path implies.
     """
     found: dict[str, InstalledPackage] = {}
-    candidates: list[Path] = []
-    for child in sorted(modules.iterdir()):
-        if child.name in NPM_MODULE_METADATA:
+    for directory, path, is_scope in walk_installed_entries(modules, prefix):
+        if is_scope:
             continue
-        candidates += sorted(child.iterdir()) if child.name.startswith("@") and child.is_dir() else [child]
-    for directory in candidates:
         manifest_path = directory / "package.json"
         if not directory.is_dir() or not manifest_path.is_file():
             continue
-        path = f"{prefix}/{directory.relative_to(modules).as_posix()}"
         try:
             manifest = json.loads(manifest_path.read_text())
         except ValueError as e:
             raise ContractError(f"Installed '{path}/package.json' is not valid JSON: {e}") from e
         if not isinstance(manifest, dict):
             raise ContractError(f"Installed '{path}/package.json' is not an object")
-        implied = directory.relative_to(modules).as_posix()
+        implied = path.rsplit("node_modules/", 1)[1]
         if manifest.get("name") != implied:
             raise ContractError(
                 f"Installed '{path}/package.json' is named {manifest.get('name')!r}, not '{implied}'"
@@ -1621,8 +1697,6 @@ def read_installed_packages(modules: Path, prefix: str = "node_modules") -> dict
             {**optional, **dependencies},
             frozenset(optional) - set(dependencies),
         )
-        if (directory / "node_modules").is_dir():
-            found |= read_installed_packages(directory / "node_modules", f"{path}/node_modules")
     return found
 
 
@@ -1637,28 +1711,14 @@ def list_installed_entries(modules: Path, prefix: str = "node_modules") -> tuple
         tuple[set[str], set[str]]: Package-shaped entry paths (files included, scope directories
             excluded) and scope directory paths, both lockfile-style.
     """
-    entries: set[str] = set()
-    scopes: set[str] = set()
-    for child in sorted(modules.iterdir()):
-        if child.name in NPM_MODULE_METADATA:
-            continue
-        members = [child]
-        if child.name.startswith("@") and child.is_dir():
-            scopes.add(f"{prefix}/{child.name}")
-            members = sorted(child.iterdir())
-        for member in members:
-            path = f"{prefix}/{member.relative_to(modules).as_posix()}"
-            entries.add(path)
-            if (member / "node_modules").is_dir():
-                nested, nested_scopes = list_installed_entries(
-                    member / "node_modules", f"{path}/node_modules"
-                )
-                entries |= nested
-                scopes |= nested_scopes
-    return entries, scopes
+    walked = walk_installed_entries(modules, prefix)
+    return (
+        {path for _, path, is_scope in walked if not is_scope},
+        {path for _, path, is_scope in walked if is_scope},
+    )
 
 
-def check_ranges(checks: Sequence[tuple[str, str, str]], node: Path) -> list[str]:
+def audit_ranges(checks: Sequence[tuple[str, str, str]], node: Path) -> list[str]:
     """Check installed versions against declared npm ranges with the repository's `semver` package.
 
     Parameters:
@@ -1825,13 +1885,16 @@ def audit_install_closure(
     if stray:
         raise ContractError(f"'{contract.name}' install has entries outside the closure: {stray}")
     checks: list[tuple[str, str, str]] = []
-    for name, spec in contract.runtime_dependencies:
-        resolved = resolve_dependency(package_path, name, installed_packages)
-        version = installed_packages[resolved].version if resolved else None
-        if version is None:
-            raise ContractError(f"Installed '{name}' has no resolvable version")
-        checks.append((name, version, spec))
-    problems = check_ranges(checks, locate_executable("node"))
+    for parent in expected_paths - {""}:
+        for name, spec in installed_packages[parent].runtime_edges.items():
+            resolved = resolve_dependency(parent, name, installed_packages)
+            if resolved is None and name in installed_packages[parent].optional:
+                continue
+            version = installed_packages[resolved].version if resolved else None
+            if version is None:
+                raise ContractError(f"Installed '{name}' has no resolvable version")
+            checks.append((name, version, spec))
+    problems = audit_ranges(checks, locate_executable("node"))
     if problems:
         raise ContractError(f"'{contract.name}' dependency versions: {problems}")
 
@@ -1882,9 +1945,7 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
         timeout=NPM_TIMEOUT_S,
     )
     installed = project / "node_modules" / artifact.contract.name
-    top = sorted(
-        p.name for p in (project / "node_modules").iterdir() if p.name not in {".package-lock.json", ".bin"}
-    )
+    top = sorted(p.name for p in (project / "node_modules").iterdir() if p.name not in NPM_MODULE_METADATA)
     nested = [p for p in installed.rglob("node_modules") if p.is_dir()]
     if nested:
         raise ContractError(f"'{artifact.contract.name}' ships a nested `node_modules`: {nested}")
