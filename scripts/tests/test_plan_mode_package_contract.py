@@ -18,38 +18,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from contract_helpers import StubProvider, make_context
 from test_package_contracts import make_tarball
 
-import faux_provider as fp
 import package_contracts as pc
-
-
-class StubProvider:
-    """Minimal provider context exposing one recorded request."""
-
-    def __init__(self, tools: list[str]) -> None:
-        """Record a model request exposing `tools`.
-
-        Parameters:
-            tools (list[str]): Tool names the fake model received.
-        """
-        self.requests = [fp.RecordedRequest("m", ("user",), tuple(tools), "", route=None)]
-
-    def __enter__(self) -> StubProvider:
-        """Enter the inert provider context.
-
-        Returns:
-            StubProvider: This provider.
-        """
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        """Leave the inert provider context.
-
-        Parameters:
-            *_args (object): Context-manager exception arguments.
-        """
-        return
 
 
 def context(tmp_path: Path) -> pc.Context:
@@ -61,18 +33,7 @@ def context(tmp_path: Path) -> pc.Context:
     Returns:
         pc.Context: Context with a disposable sandbox and package artifact.
     """
-    work = tmp_path / "work"
-    work.mkdir()
-    return pc.Context(
-        Path("pi"),
-        pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()),
-        tmp_path / "installed",
-        pc.PackedArtifact(
-            pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
-        ),
-        work,
-        (),
-    )
+    return make_context(tmp_path, pc.PLAN_MODE_CONTRACT, "0.59.3-nredd.1")
 
 
 def test_plan_mode_manifest_rejects_dependency_drift() -> None:

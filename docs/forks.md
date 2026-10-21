@@ -9,7 +9,7 @@ second list of release pins here.
 | `forks/pi` | `earendil-works/pi` | Core npm workspace, standalone Bun build, native helpers |
 | `forks/pi-subagents` | `tintinweb/pi-subagents` | Source Gitlink retained while `packages/subagents` is the imported `@nredd/pi-subagents` workspace |
 | `forks/pi-plan-mode` | `narumiruna/pi-extensions`, `packages/pi-plan-mode` | Standalone vendored build/test harness |
-| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate since `v2.13.9-nredd.2` |
+| `forks/rpiv-todo` | `juicesharp/rpiv-mono`, `packages/rpiv-todo` | Subtree-split package; standalone npm/Bun gate since `v2.13.9-nredd.2`. Imported as `packages/todo` (subtree `ff7bb03` from fork `9a4e2e8`); the Gitlink remains the native-gate source until the shipped-selection PR |
 | `forks/pi-computer-use` | `injaneity/pi-computer-use` | Fork tests and native-helper build |
 
 The initial Gitlinks select published fork tags already used by the existing installation. Adding
