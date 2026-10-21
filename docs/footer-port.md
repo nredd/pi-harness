@@ -57,19 +57,38 @@ instead allowlist those packages. No fork change or unsupported fifth resource f
 
 1. Review/merge this branch and pass package/TypeScript and release CI. Configure the existing npm
    package's trusted publisher for this repository's `publish.yml` if not already configured:
-   `0.1.0` was published manually. Existing package ownership is sufficient; publication through
-   this workflow has not yet been demonstrated for preset.
-2. Publish `@nredd/pi-preset@0.2.0` through the existing release workflow and verify registry
-   integrity/provenance. No publication is performed by this change.
-3. Replace the dotfiles placeholder pin and inventory version. Land the separate personal-stack
-   promotion commit/PR only AFTER npm publication: filtered preset first, version `0.2.0`, matching
-   dotfiles' package position, plus CI assertions. Before publication, `stack (personal)` remains
-   on its published twelve-source selection. Do not skip installation failures or silently test
-   a local preset in its place. A promotion branch containing the unpublished pin fails normally
-   until publication. The owner still updates root planning docs. Require the matching CI gates.
+   `0.1.0` was published manually. DONE: the trusted publisher was already configured, and item 2
+   proved publication through this workflow.
+2. DONE: `@nredd/pi-preset@0.2.0` published through `publish.yml` (run 39506908135) from signed tag
+   `@nredd/pi-preset@0.2.0` at `e18831a`; registry integrity equals `identity.json`, with SLSA provenance.
+3. DONE, this PR: the personal stack pins the published filtered preset `0.2.0` first, matching
+   dotfiles' package position, with CI assertions. `stack (personal)` installs it from npm; do not
+   skip installation failures or silently test a local preset in its place.
 4. Apply dotfiles only AFTER publication: resource filters, package-agent gate and explicit chezmoi
    retirement of the three old footer files land together. Tests move, user configuration stays.
    Restart Pi and require `pi-profile doctor` green. Do not activate both implementations.
+
+## Stack promotion
+
+`integration/stacks/personal.json` carries the exact filtered `npm:@nredd/pi-preset@0.2.0` object
+in first position. Because `0.2.0` is published, the personal stack jobs install it from npm;
+do not skip them or substitute local code.
+
+`local.json` stays full/unfiltered to cover the whole preset. It should not mirror the personal
+filter: both selections need CI evidence. The fixture policy sets `packageAgents: false` whenever a stack
+contains a filtered object source (`sandbox.subagents_policy`), derived from content, not the stack
+name. For personal this matches dotfiles, which sets it unconditionally on every profile; `local`
+intentionally keeps package agents to cover the full preset. `scenarios/test_stack.py::test_preset_resource_selection` checks the exact first
+personal entry and actual host resource resolution, with no preset skills/prompts/themes; the
+registered Agent schema must expose only built-in types, not preset specialists. Local must
+expose all preset resources and specialist types. Tool-name goldens do not change (no footer tools).
+`scenarios/tui/test_footer_resize.py` now uses ONLY the selected stack's installed preset, proving
+the published personal footer renders without injecting a local copy. These scenarios run in the
+existing CI `stack` job; they were deliberately not run locally.
+
+Gate (rebased onto `e18831a`): `make check-integration` clean, 123 Python unit tests and 15 Node
+probe tests passed; `make check-scripts` 457 passed; `make check-ts` exit 0 (preset 126 Vitest, 62 in-process
+stack tests). No scenario pytest, Pi binary or tmux was invoked locally; the CI `stack` jobs are the gate.
 
 ## Local gate evidence
 

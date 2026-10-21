@@ -32,12 +32,12 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 
 Live selection / promotion state:
 
-- Tap formula selects core `v1.3.0-nredd.7` (nredd/homebrew-tap#2 after #79's four `stack` jobs; dotfiles#23 pinned it). Dotfiles #4 selected nredd.6 and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selected `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`; #16 selected `@nredd/pi-session-kit@0.5.0`. Dotfiles #17 selected pi-subagents `v0.22.0-nredd.5` after #55's four `stack` jobs passed; #21 selected `@gotgenes/pi-anthropic-auth@3.4.3` and `pi-web-access@0.43.0`. PENDING: promote `@nredd/pi-session-kit@0.6.0` (dotfiles#22) after this stack pin's CI passes.
-- Compare `integration/stacks/personal.json` with dotfiles `origin/main`'s `third_party/pi-agent-settings.base.json`; the candidate stack differs only by `@nredd/pi-session-kit@0.6.0` until dotfiles#22 lands. Git/gh verifies the committed selections, not whether a particular machine has applied them.
+- Tap formula selects core `v1.3.0-nredd.7` (nredd/homebrew-tap#2 after #79's four `stack` jobs; dotfiles#23 pinned it). Dotfiles #4 selected nredd.6 and the gated stack; #10 selected the three rebased forks above; #11 selected `@nredd/pi-session-kit@0.4.0`; #14 selected `@nredd/pi-dev-tools@0.5.1` and `@nredd/pi-subscription-router@0.4.0`; #16 selected `@nredd/pi-session-kit@0.5.0`. Dotfiles #17 selected pi-subagents `v0.22.0-nredd.5` after #55's four `stack` jobs passed; #21 selected `@gotgenes/pi-anthropic-auth@3.4.3` and `pi-web-access@0.43.0`. #22 selected `@nredd/pi-session-kit@0.6.0`. PENDING: promote the filtered `@nredd/pi-preset@0.2.0` footer-only source (this stack pin, then the dotfiles footer removal PR, which lands after it).
+- Compare `integration/stacks/personal.json` with dotfiles `origin/main`'s `third_party/pi-agent-settings.base.json`; the candidate stack differs only by the filtered `@nredd/pi-preset@0.2.0` first entry until the dotfiles footer removal lands. Git/gh verifies the committed selections, not whether a particular machine has applied them.
 - Exact third-party npm pins: `pi-web-access@0.43.0`, `pi-deferred-context-engine@0.5.0`, `@quintinshaw/pi-dynamic-workflows@3.14.0`, `pi-memory@0.4.2`.
 - Auth stack pin: `npm:@gotgenes/pi-anthropic-auth@3.4.3` in personal and local. Other fork pin: `pi-computer-use v0.5.1-nredd.2`. The stack installs but never loads computer-use in headless CI.
-- Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, promoted by dotfiles#14), `@nredd/pi-session-kit@0.6.0` (published from `7f26025`; dotfiles promotion pending this pin's `stack` jobs). preset carries unreleased changes; cut it through `publish.yml` when needed.
-- `@nredd/pi-preset@0.1.0` is published, not adopted live. The live footer remains dotfiles-owned until profiles/preset adoption.
+- Owned stack pins: `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-subscription-router@0.4.0` (gated by #51 `stack`, promoted by dotfiles#14), `@nredd/pi-session-kit@0.6.0` (published from `7f26025`, promoted by dotfiles#22), `@nredd/pi-preset@0.2.0` (published from `e18831a`, filtered footer-only source in `personal.json`; dotfiles promotion pending this pin's `stack` jobs).
+- `@nredd/pi-preset@0.2.0` is published and selected in `personal.json` as a footer-only filtered source (`packageAgents: false`). Full preset adoption (agents, skills, themes) stays deferred to profiles. The dotfiles copy of the footer is removed in a separate PR that lands after this one; never activate both.
 
 Verification layers now implemented:
 
@@ -90,7 +90,7 @@ Historical, not the current deployment inventory:
 6. DONE -- archive all five standalone repos after the replacement gate landed. GitHub reports `archived: true` for each; final archive-pointer heads: dev-tools `91656c2`, session-kit `75fc5a6`, subscription-router `eaee3ed`, benchmark `d4b9896`, e2e `5d078a7`. Replacement PR receipts: #21, #30; follow-ups now in dotfiles. GitHub archival is a repository operation, not a pi-harness PR; local checkout deletion is not assumed.
 7. DONE -- machine-specific checks moved to dotfiles `pi-profile doctor` and its apply hook/runbook. dotfiles#3, activation pins #4, rebased forks #10; matching harness stack receipt #30. No package gate consumes the owner's config.
 8. OPEN -- resume deferred work on the rebuilt stack:
-   - Profiles/model roles and preset footer adoption (migration plan #21); do not replace the live dotfiles footer implicitly.
+   - Profiles/model roles and full preset adoption (migration plan #21); the footer-only source is separate, see `docs/footer-port.md`.
    - Work-profile switch and enterprise WSL acceptance.
    - Bun: linux-arm64 execution and the auth-interception adapter (#14); standalone D/E itself runs in CI since #56.
    - linux-arm64 execution/acceptance, not just cross-building.

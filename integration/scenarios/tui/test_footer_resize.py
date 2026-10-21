@@ -1,7 +1,7 @@
-"""One real SIGWINCH seam with an explicit test-scoped local preset source.
+"""One real SIGWINCH seam over the preset already installed by the supplied stack.
 
-The live footer remains the formatting-identical dotfiles copy. Preset adoption is
-deferred to profiles (#21); adding it here does not alter the personal stack.
+Personal exercises its exact published footer-only pin; local exercises the full local
+preset. Never add a local preset to personal or silently replace its published footer.
 
 References:
 - https://github.com/nredd/pi-harness/blob/main/packages/preset/extensions/expanded-footer.ts
@@ -11,15 +11,14 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import time
 from typing import TYPE_CHECKING
 
 import pytest
 
-from harness.paths import REPO_ROOT, pi_command
 from harness.quota import USAGE_FIXTURE_EXTENSION, fixture_env, install_usage_fixture
 from harness.sessions import write_session
+from harness.stack import find_package
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -77,22 +76,12 @@ def test_resize_transitions_leave_no_stale_rows(sandbox: Sandbox, tui: Callable[
     """120 -> 60 -> 320 -> 120 preserves one stats/quota/status row without timer scaling.
 
     Parameters:
-        sandbox (Sandbox): private installed stack with a test-scoped preset.
+        sandbox (Sandbox): private installed stack with its declared preset selection.
         tui (Callable[..., TmuxPane]): actual terminal launcher for that sandbox.
     """
-    # Install only into this test's writable copy. Keep resolved sources after Pi's
-    # installer saves cwd-relative paths, and avoid loading the local preset twice.
-    source = str(REPO_ROOT.parent / "packages/preset")
-    packages = sandbox.settings()["packages"]
-    subprocess.check_output(
-        [*pi_command(), "install", source],
-        cwd=sandbox.workdir,
-        env=sandbox.env({"PI_OFFLINE": "0"}, installing=True),
-        text=True,
-        stderr=subprocess.STDOUT,
-        timeout=600,
-    )
-    sandbox.patch_json("settings.json", {"packages": packages if source in packages else [*packages, source]})
+    # Require the declared installation. A missing unpublished pin must fail, not be
+    # hidden behind a test-scoped local copy that bypasses the production filters.
+    find_package("pi-preset", sandbox.settings()["packages"], sandbox.agent_dir)
     session = sandbox.root / "footer.jsonl"
     write_session(session, sandbox.workdir, 8)
     entries = [json.loads(line) for line in session.read_text().splitlines()]

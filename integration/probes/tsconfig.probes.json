@@ -10,5 +10,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "files": ["process-lifecycle.test.ts"]
+  "files": ["process-lifecycle.test.ts", "stack-resources.ts"]
 }

@@ -191,7 +191,7 @@ def install_stack(root: Path, stack_path: Path) -> Sandbox:
     LOGGER.info(f"Stack '{stack.name}' sha256={stack_digest(stack_path)}")
     _install_sources(box, stack, sources)
     _record_stack(box, stack, stack_path, sources)
-    _configure_fixture_policy(box)
+    _configure_fixture_policy(box, stack)
     return box
 
 
@@ -278,11 +278,12 @@ def _record_stack(box: Sandbox, stack: Stack, stack_path: Path, sources: list[st
     )
 
 
-def _configure_fixture_policy(box: Sandbox) -> None:
+def _configure_fixture_policy(box: Sandbox, stack: Stack) -> None:
     """Configure deterministic fixture policy independently of distribution evidence.
 
     Parameters:
         box (Sandbox): installed fixture whose runtime policy is patched.
+        stack (Stack): validated stack whose sources decide the agent gate.
     """
     # Fixture policy, not rendered owner preferences. The real deferred engine consumes this file.
     box.patch_json(
@@ -322,7 +323,7 @@ def _configure_fixture_policy(box: Sandbox) -> None:
             ],
         },
     )
-    box.patch_json("subagents.json", {"workflowsEnabled": False})
+    box.patch_json("subagents.json", subagents_policy(stack))
     box.patch_json(
         "subscription-router.json",
         {"profiles": {"default": {"name": "Stack", "chain": [{"model": "anthropic/claude-haiku-4-5"}]}}},
@@ -330,6 +331,26 @@ def _configure_fixture_policy(box: Sandbox) -> None:
     workflows = box.home / ".pi" / "workflows" / "settings.json"
     workflows.parent.mkdir(parents=True, exist_ok=True)
     workflows.write_text('{"keywordTriggerEnabled":false}')
+
+
+def subagents_policy(stack: Stack) -> dict[str, bool]:
+    """Return the pi-subagents fixture policy derived from the stack's content.
+
+    Pi's four source filters do not control pi-subagents' separate package-agent loader, so any
+    filtered (object) source needs `packageAgents: false` or its agents leak back in. For the
+    footer-only personal selection this matches dotfiles, which sets it unconditionally; an
+    unfiltered stack (e.g. local) keeps full-preset agent discovery on purpose.
+
+    Parameters:
+        stack (Stack): validated stack document.
+
+    Returns:
+        dict[str, bool]: settings for `subagents.json`.
+    """
+    base = {"workflowsEnabled": False}
+    if any(isinstance(source, PackageSource) for source in stack.sources):
+        return base | {"packageAgents": False}
+    return base
 
 
 def package_name(source: str) -> str:
