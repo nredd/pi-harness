@@ -1,6 +1,7 @@
 /**
  * `/monitor`: background process watchers the model can start, read and stop.
  *
+ * - a collapsible above-editor widget (`monitor.collapseKey`, default `ctrl+shift+m`) lists them
  * - `monitor_start` / `monitor_read` / `monitor_stop` tools and a `/monitor` command (list, stop)
  * - output is coalesced for 2s in each monitor's ring buffer; only `match`, exit/timeout or
  *   `wake: true` emits a compact custom wake, while passive output stays out of the session
@@ -12,9 +13,10 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { KeyId } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { isChildSession, registerChildIdentity, registerParentTool } from "../child.ts";
-import type { KitConfig } from "../config.ts";
+import { COLLAPSE_KEY_OFF, defaultConfig, type KitConfig } from "../config.ts";
 import { type ManagerOptions, MonitorError, MonitorManager } from "./manager.ts";
 import { formatDuration } from "./messages.ts";
 import { boundTail } from "./output.ts";
@@ -46,7 +48,7 @@ function text(out: string, details?: unknown, isError = false) {
 
 export function register(
 	pi: ExtensionAPI,
-	_config: KitConfig,
+	config: KitConfig,
 	monitorRoot?: string,
 	runtime: Pick<ManagerOptions, "clock" | "spawnMonitor"> = {},
 ): void {
@@ -54,6 +56,17 @@ export function register(
 	const describe = (info: MonitorInfo): string => describeAt(info, runtime.clock?.now() ?? Date.now());
 	let manager: MonitorManager | undefined;
 	let widget: MonitorWidget | undefined;
+
+	// Registered once per runtime, like Todos: a key change needs /reload. `off` skips the binding.
+	const { collapseKey, maxWidgetLines } = config.monitor ?? defaultConfig().monitor; // hosts passing a pre-0.7 config shape get defaults
+	if (collapseKey !== COLLAPSE_KEY_OFF) {
+		pi.registerShortcut(collapseKey as KeyId, {
+			description: "Collapse or expand the monitors widget",
+			handler: (ctx) => {
+				if (ctx.hasUI && widget?.isVisible()) widget.toggle();
+			},
+		});
+	}
 
 	const teardown = async (): Promise<void> => {
 		const old = manager;
@@ -75,7 +88,7 @@ export function register(
 			ctx.ui.notify(`/monitor: cannot create ${root}: ${(error as Error).message}`, "warning");
 			return;
 		}
-		const w = new MonitorWidget(() => manager?.running() ?? []);
+		const w = new MonitorWidget(() => manager?.list() ?? [], { maxLines: maxWidgetLines, collapseKey });
 		w.attach(ctx);
 		widget = w;
 		manager = new MonitorManager({

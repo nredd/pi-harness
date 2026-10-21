@@ -63,6 +63,7 @@ export function fakePi(options: FakeOptions = {}) {
 		registerCommand: (name: string, opts: { handler: (args: string, ctx: any) => Promise<void> }) => {
 			commands.set(name, opts.handler);
 		},
+		registerShortcut: vi.fn(),
 		registerTool: (tool: any) => {
 			tools.set(tool.name, tool);
 			if (tool.exposure === "hidden") state.activeTools = state.activeTools.filter((name) => name !== tool.name);
