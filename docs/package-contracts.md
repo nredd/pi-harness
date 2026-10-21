@@ -44,8 +44,9 @@ Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
 upstream MIT `LICENSE`, exact manifest dependency, manifest `files` list and the complete packed payload
 (`packed_files` exact paths plus `packed_patterns` for the build-hashed `dist/chunks/*.ts(.map)`, each with
 an exact count and an 8-character hash, so a rebuild is fine but a stray file is not; duplicated paths
-fail, each chunk `.map` must pair with its `.ts`, and every chunk must be reachable from `dist/index.ts`
-by relative imports), installs the tarball, and requires
+fail, each chunk `.map` must pair with its `.ts`, every chunk must be reachable from `dist/index.ts`
+by relative imports, and any non-regular tar member such as a symlink or hardlink fails), installs the
+tarball, and requires
 `plan_mode_question` and `plan_mode_complete` from stock Pi. The faux provider enters Plan mode with
 `/plan <prompt>`, calls `plan_mode_question`, and the scenario records its explicit headless
 `ui_unavailable` result. `dist/` is required and packed because its extension manifest targets
@@ -85,8 +86,10 @@ What each package must satisfy:
   `node_modules/**/package.json` (`dependencies` + `optionalDependencies`, resolved npm-style by walking up
   from the requirer's `node_modules`, so nested paths work). That closure must equal the lockfile paths,
   every installed package path and the top-level directories; every entry under every `node_modules`
-  (manifest or not; only npm's `.bin` and `.package-lock.json` are exempt) must be a closure path, and a
-  scope directory needs a closure child. Each installed `name` must match its path and every installed
+  (manifest or not) must be a closure path, and a scope directory needs a closure child. The only
+  exemptions are npm's own: `.package-lock.json` as a regular file in the top-level `node_modules`, and
+  `.bin` as a real directory holding only files or symlinks. Any other symlinked entry, or a loop, is a
+  `ContractError`. Each installed `name` must match its path and every installed
   dependency edge's resolved version must satisfy its declared range (the repository's `semver`). Lock-only paths are
   allowed only when `optional: true` and an installed requirer lists them in `optionalDependencies`. A
   missing required dependency is a `ContractError`. The lockfile is never trusted for transitive edges
