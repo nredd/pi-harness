@@ -20,8 +20,10 @@ from harness import sandbox
 from harness.paths import pi_command
 from harness.release import gitlink_tag, release_checksums
 from harness.stack import (
+    LocalStackDocument,
     PackageSource,
     Stack,
+    derive_local_stack,
     find_package,
     load_stack,
     package_directory,
@@ -31,6 +33,31 @@ from harness.stack import (
     validate_release_identity,
     validate_shipped_stack,
 )
+
+ORIGIN_MAIN_LOCAL = {
+    "sources": [
+        "npm:@gotgenes/pi-anthropic-auth@3.4.3",
+        "npm:pi-web-access@0.43.0",
+        "../../forks/rpiv-todo",
+        "../../forks/pi-subagents",
+        "../../packages/subscription-router",
+        "../../forks/pi-plan-mode",
+        "../../packages/dev-tools",
+        "npm:pi-deferred-context-engine@0.5.0",
+        "npm:@quintinshaw/pi-dynamic-workflows@3.14.0",
+        "npm:pi-memory@0.4.2",
+        "../../forks/pi-computer-use",
+        "../../packages/session-kit",
+        "../../packages/preset",
+    ],
+    "settings": {"quietStartup": True, "fullscreen": True},
+    "disabled_extensions": {
+        "../../forks/pi-computer-use": (
+            "Installed on both OSes, never loaded: macOS helper needs GUI/TCC; Linux has no supported "
+            "helper. Fork-owned desktop tests remain opt-in."
+        )
+    },
+}
 
 CORE = {
     "tag": "v1.3.0-nredd.7",
@@ -120,7 +147,12 @@ def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> Non
         "npm:@scope/pkg@1.2.3",
         "git:github.com/x/y@v1.2.3",
     ]
-    assert stack_digest(path) == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert (
+        stack_digest(path)
+        == hashlib.sha256(
+            json.dumps(stack.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     assert find_package("pkg", [str(package)], tmp_path) == package
     with pytest.raises(FileNotFoundError, match=r"no `package\.json`"):
         Stack.model_validate(stack_document(sources=["./missing"])).resolved_sources(path)
@@ -129,33 +161,100 @@ def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> Non
 def test_shipped_stack_is_semantically_valid_and_matches_the_core_gitlink() -> None:
     """Validate exact pins, exclusions, core identity and the generated local selection."""
     root = Path(__file__).resolve().parents[1]
-    personal = load_stack(root / "stacks/personal.json")
+    personal_path = root / "stacks/personal.json"
+    personal = load_stack(personal_path)
     local = load_stack(root / "stacks/local.json")
 
     validate_shipped_stack(personal)
-    validate_local_derivation(personal, local)
     validate_release_identity(
         personal,
         gitlink_tag(root.parent / "forks/pi"),
         release_checksums(personal.core.tag),
     )
+    assert release_checksums(personal.core.tag)
+    assert [source_string(source) for source in local.sources] == ORIGIN_MAIN_LOCAL["sources"]
+    assert local.settings == ORIGIN_MAIN_LOCAL["settings"]
+    assert local.disabled_extensions == ORIGIN_MAIN_LOCAL["disabled_extensions"]
     assert isinstance(personal.sources[0], PackageSource)
-    assert source_string(local.sources[-1]) == "../../packages/preset"
     assert local.sources[-1] == "../../packages/preset"
+    local_sources = [source_string(source) for source in local.sources]
+    assert all(not source.startswith("git:github.com/nredd/") for source in local_sources)
+    assert all(not source.startswith("npm:@nredd/") for source in local_sources)
+    third_party = [
+        source_string(source)
+        for source in personal.sources
+        if not source_string(source).startswith(("npm:@nredd/", "git:github.com/nredd/"))
+    ]
+    assert [source for source in local_sources if not source.startswith("../../")] == third_party
+    for stack in (personal, local):
+        declared = {source_string(source) for source in stack.sources}
+        assert stack.disabled_extensions.keys() <= declared
+        assert all(reason.strip() for reason in stack.disabled_extensions.values())
+    assert (
+        stack_digest(root / "stacks/local.json")
+        == hashlib.sha256(
+            json.dumps(local.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    ("core", "message"),
+    [
+        ({"tag": "v1.3.0", "integrity": CORE["integrity"]}, "tag"),
+        ({"tag": CORE["tag"], "integrity": {"bad.txt": "0" * 64}}, "filename"),
+        ({"tag": CORE["tag"], "integrity": {"good.tgz": "bad"}}, "SHA-256"),
+    ],
+)
+def test_core_release_rejects_malformed_identities(core: dict[str, Any], message: str) -> None:
+    """Reject malformed tags, filenames and digests before release verification."""
+    with pytest.raises(ValidationError, match=message):
+        Stack.model_validate(stack_document(core=core))
+
+
+def test_local_derivation_rejects_missing_or_duplicate_presets() -> None:
+    """Require one personal preset before deriving the development preset."""
+    without_preset = Stack.model_validate(stack_document(name="personal", sources=["npm:pi-memory@0.4.2"]))
+    duplicate_preset = Stack.model_validate(
+        stack_document(name="personal", sources=["npm:@nredd/pi-preset@0.2.0", "npm:@nredd/pi-preset@0.2.1"])
+    )
+    for personal in (without_preset, duplicate_preset):
+        with pytest.raises(ValueError, match="exactly one"):
+            derive_local_stack(personal)
+
+
+def test_local_descriptor_and_personal_file_fail_closed(tmp_path: Path) -> None:
+    """Reject malformed descriptors and missing or nested personal documents."""
+    with pytest.raises(ValidationError):
+        LocalStackDocument.model_validate(
+            {"schema_version": 1, "name": "personal", "derived_from": "personal.json"}
+        )
+    with pytest.raises(ValidationError):
+        LocalStackDocument.model_validate(
+            {"schema_version": 1, "name": "local", "derived_from": "personal.json", "extra": True}
+        )
+    descriptor = tmp_path / "local.json"
+    descriptor.write_text(json.dumps({"schema_version": 1, "name": "local", "derived_from": "personal.json"}))
+    with pytest.raises(FileNotFoundError):
+        load_stack(descriptor)
+    (tmp_path / "personal.json").write_text(descriptor.read_text())
+    with pytest.raises(ValidationError):
+        load_stack(descriptor)
 
 
 def test_semantic_validators_reject_tampered_stack_documents() -> None:
     """Exercise shipped, derivation and release validators without literal package pin tables."""
     personal = Stack.model_validate(stack_document(name="personal", sources=["npm:@nredd/pi-preset@0.2.0"]))
     local = Stack.model_validate(stack_document(name="local", sources=["../../packages/dev-tools"]))
-    with pytest.raises(ValueError, match="local paths"):
+    with pytest.raises(ValueError, match="local path"):
         validate_shipped_stack(Stack.model_validate(stack_document(name="personal")))
     with pytest.raises(ValueError, match="does not match the personal-stack derivation"):
         validate_local_derivation(personal, local)
     with pytest.raises(ValueError, match="does not match Gitlink tag"):
         validate_release_identity(personal, "v1.3.0-nredd.6", {})
+    wrong = {"https://github.com/nredd/pi/releases/download/v1.3.0-nredd.7/good.tgz": "0" * 64}
     with pytest.raises(ValueError, match="integrity does not match"):
-        validate_release_identity(personal, "v1.3.0-nredd.7", {})
+        validate_release_identity(personal, "v1.3.0-nredd.7", wrong)
 
 
 def test_no_pi_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
