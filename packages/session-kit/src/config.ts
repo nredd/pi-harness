@@ -23,7 +23,7 @@ export interface KitConfig {
 export interface MonitorWidgetConfig {
 	/** Key spec that collapses/expands the widget, or `"off"` for no binding. */
 	collapseKey: string;
-	/** Row budget including the heading, floor `MIN_WIDGET_LINES`. */
+	/** Content-row budget including the heading, excluding the trailing spacer; floor `MIN_WIDGET_LINES`. */
 	maxWidgetLines: number;
 }
 

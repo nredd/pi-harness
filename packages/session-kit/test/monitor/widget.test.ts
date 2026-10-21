@@ -95,6 +95,27 @@ describe("renderWidget", () => {
 		expect(out.lines[0]).toBe("▸ ● Monitors (1 running · 1 failed)                collapsed");
 	});
 
+	it("prioritizes the collapsed heading over its optional hint at narrow widths", () => {
+		for (const width of [20, 30, 40, 80]) {
+			const line = renderWidget(infos, NOW, width, theme, view({ collapsed: true })).lines[0] ?? "";
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			expect(line).toContain("Monitors (2");
+			if (width < 80) expect(line).not.toContain("ctrl+shift+m to expand");
+			else {
+				expect(line).toContain("▸ ● Monitors (2 running · 1 done)");
+				expect(line).toContain("ctrl+shift+m to expand");
+			}
+		}
+	});
+
+	it("keeps the expanded heading at narrow widths", () => {
+		for (const width of [20, 30, 40, 80]) {
+			const line = renderWidget(infos, NOW, width, theme, view()).lines[0] ?? "";
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			expect(line).toContain("Monitors (2");
+		}
+	});
+
 	it("dims the heading once nothing runs, and renders nothing for no monitors", () => {
 		const done = [monitor({ status: "exited", exitCode: 0 })];
 		expect(renderWidget(done, NOW, 60, colorTheme, view()).lines[0]).toContain("<dim>○</>");
@@ -160,11 +181,11 @@ describe("windowFor", () => {
 });
 
 describe("MonitorWidget", () => {
-	function setup(initial: MonitorInfo[]) {
+	function setup(initial: MonitorInfo[], maxLines = 12) {
 		let infos = initial;
 		const setWidget = vi.fn();
 		const requestRender = vi.fn();
-		const widget = new MonitorWidget(() => infos, { maxLines: 12, collapseKey: "ctrl+shift+m", now: () => NOW });
+		const widget = new MonitorWidget(() => infos, { maxLines, collapseKey: "ctrl+shift+m", now: () => NOW });
 		widget.attach({ mode: "tui", ui: { setWidget, getToolsExpanded: () => false } } as never);
 		const mount = () => {
 			const factory = setWidget.mock.calls[0]?.[1];
@@ -211,6 +232,22 @@ describe("MonitorWidget", () => {
 		expect(component.render(60).some((l) => l.includes("↑ 2 more"))).toBe(true);
 		t.widget.toggle();
 		expect(component.handleMouse({ type: "wheel", wheelDelta: 2 })).toBeUndefined();
+		t.widget.dispose();
+	});
+
+	it("keeps content rows at the cap as the mutable list crosses it", () => {
+		const t = setup(many(5), 6);
+		t.widget.refresh();
+		const component = t.mount();
+		for (const count of [5, 6, 5]) {
+			t.set(many(count));
+			const lines = component.render(80);
+			expect(lines.at(-1)).toBe("");
+			expect(lines.slice(0, -1)).toHaveLength(6);
+		}
+		expect(component.render(80).some((line) => line.includes("more"))).toBe(false);
+		t.set(many(6));
+		expect(component.render(80).filter((line) => line.includes("more"))).toEqual(["└─ ↓ 2 more"]);
 		t.widget.dispose();
 	});
 });

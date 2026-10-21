@@ -86,9 +86,10 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
   and `elapsed · N lines` flush right. It is display only: the quiet rules above are unchanged, and
   a repaint never adds anything to the transcript or model context. Clicking the heading or
   pressing `monitor.collapseKey` collapses it to the heading plus a `ctrl+shift+m to expand` hint
-  (`▸`). It shows at most `monitor.maxWidgetLines` rows (heading included, default 12, integer >= 4,
-  else the default) as a window of constant height: `↑ N more` / `↓ N more` take a row each, so it
-  never resizes while you scroll with the mouse wheel. Pi's tool-output expansion shows every row.
+  (`▸`). `monitor.maxWidgetLines` caps content rows (heading included, default 12, integer >= 4,
+  else the default), excluding the one trailing spacer row. It is a constant-height window:
+  `↑ N more` / `↓ N more` take a row each, so it never resizes while you scroll with the mouse
+  wheel. Pi's tool-output expansion shows every row.
   `collapseKey` takes the same grammar as rpiv-todo's `collapseKey` (trimmed, lowercased; distinct
   `ctrl`/`shift`/`alt`/`super` modifiers plus one printable key or a named key; `"off"` removes the
   binding; anything else falls back to the default). It is bound once per runtime, so a change needs

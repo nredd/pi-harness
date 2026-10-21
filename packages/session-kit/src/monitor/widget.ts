@@ -65,6 +65,12 @@ function rightAlign(left: string, right: string, width: number): string {
 	return truncateToWidth(clamped + " ".repeat(gap) + right, width, "…");
 }
 
+/** Keep the full heading ahead of an optional hint; a narrow panel omits the hint. */
+function headingLine(heading: string, hint: string | undefined, width: number): string {
+	if (hint && visibleWidth(heading) + visibleWidth(hint) + 1 <= width) return rightAlign(heading, hint, width);
+	return truncateToWidth(heading, width, "…");
+}
+
 export interface WidgetView {
 	collapsed: boolean;
 	offset: number;
@@ -121,7 +127,7 @@ export function renderWidget(
 
 	if (view.collapsed) {
 		const hint = view.collapseKey === COLLAPSE_KEY_OFF ? "collapsed" : `${view.collapseKey} to expand`;
-		return { lines: [rightAlign(head, theme.fg("dim", hint), width), ""], offset: 0, maxOffset: 0 };
+		return { lines: [headingLine(head, theme.fg("dim", hint), width), ""], offset: 0, maxOffset: 0 };
 	}
 
 	const budget = view.showAll ? infos.length : view.maxLines - 1;
@@ -131,7 +137,7 @@ export function renderWidget(
 	for (const info of infos.slice(win.start, win.end)) rows.push(rowLine(info, now, Math.max(0, width - 3), theme));
 	if (win.below) rows.push(theme.fg("dim", `↓ ${infos.length - win.end} more`));
 
-	const lines = [truncateToWidth(head, width, "…")];
+	const lines = [headingLine(head, undefined, width)];
 	rows.forEach((row, i) => {
 		const connector = theme.fg("dim", i === rows.length - 1 ? "└─" : "├─");
 		lines.push(truncateToWidth(`${connector} ${row}`, width, "…"));
