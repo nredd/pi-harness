@@ -10,7 +10,6 @@ References:
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -87,14 +86,9 @@ DESCRIPTORS = (
             ("npm", "ci", "--ignore-scripts"),
             ("npm", "run", "check", "--workspace", "@nredd/pi-subagents"),
         ),
-        contract=pc.PackageContract(
-            name="@nredd/pi-subagents",
-            directory="subagents",
-            required=("LICENSE", "README.md", "package.json", "src/index.ts"),
-            allowed=(re.compile(r".+"),),
-            exposes_tools=frozenset({"Agent", "get_subagent_result", "steer_subagent"}),
-        ),
-        contract_gates=(),
+        contract=pc.SUBAGENTS_CONTRACT,
+        contract_gates=("stock",),
+        stock_gate=pc.SUBAGENTS_SCENARIO,
     ),
     ReleaseDescriptor(
         name="@nredd/pi-preset",

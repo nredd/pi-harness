@@ -33,10 +33,16 @@ repository-relative workspace, shell-free verify commands, packed-artifact contr
 native-artifact glob requirements. The publisher rejects unknown tags, a workspace outside the checkout,
 package/tag skew, or missing native files before it packs. Adding a package means adding its descriptor
 and package contract, not another name-specific workflow or Python branch. `@nredd/pi-subagents`
-uses `packages/subagents`, its native `npm run check` (Biome, TypeScript, Vitest and pinned-Bun
-session tests), and no standalone packed-host scenario: it has runtime dependencies and remains
-covered by its native gate while the retained Gitlink job covers the same selected source. Its release
-provenance still binds the dependency-bearing installed subject to the exact tarball, tag and workflow.
+uses `packages/subagents` and its native `npm run check` (Biome, TypeScript, Vitest and pinned-Bun
+session tests). The `verify` stage then packs it once and runs the `stock` gate on those exact bytes:
+the file allowlist (`files` in its `package.json` and `SUBAGENTS_CONTRACT.allowed` enumerate the same
+set, checked by `test_subagents_pack_matches_contract`), its own `LICENSE`, the manifest audit with
+declared allowances (runtime dependencies `croner` and `nanoid`, the fork's `>=1.1.0` peer floor), the
+import audit, an install of the tarball plus those dependencies from the registry, and a stock Pi 1.3.0
+run that must offer `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow`. The contract
+sits outside `package_contracts.CONTRACTS` because `make check-package-contracts` installs offline;
+a PR exercises only the pack and audit tests under `make check-scripts`, not the Pi run. The retained
+`forks.yml` job still covers the Gitlink source, not the tarball.
 For example, the future todo import will add an entry shaped like:
 
 ```python
@@ -111,7 +117,7 @@ Bootstrap a new npm name before its first release:
 
 External configuration, already configured (not managed by this repository):
 
-- Each of the four npm packages trusts repository `nredd/pi-harness`, workflow filename `publish.yml`,
+- Each owned npm package trusts repository `nredd/pi-harness`, workflow filename `publish.yml`,
   environment `npm`, with direct publishing allowed. Publishing access requires 2FA and disallows tokens;
   CI uses OIDC only. No npm secret or `NODE_AUTH_TOKEN` is configured.
 - GitHub environment `npm` permits deployments only from tags matching `@nredd/*@*`.
