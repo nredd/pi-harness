@@ -24,8 +24,10 @@ import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroun
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
-/** Max agent rows shown at once; extras collapse into a "↓ N more" indicator. */
+/** Max fleet rows shown at once; extras collapse into indicator rows. */
 const MAX_AGENT_ROWS = 5;
+/** Agent rows left when overflow reserves the two indicator rows. */
+const OVERFLOW_AGENT_ROWS = Math.max(1, MAX_AGENT_ROWS - 2);
 /** Re-render cadence so elapsed/token stats tick while agents run. */
 const TICK_MS = 200;
 /** How long a finished agent lingers in the list before it drops out. */
@@ -98,6 +100,16 @@ function rightAlign(left: string, right: string, width: number): string {
   const gap = Math.max(1, width - visibleWidth(leftClamped) - rightW);
   return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
 }
+
+/** Agent-row tail columns, left to right; text pads right, numbers pad left. */
+const TAIL_SLOTS = [
+  { align: "end" }, // model
+  { align: "end" }, // thinking level
+  { align: "end" }, // live model-call activity
+  { align: "start" }, // elapsed
+  { align: "start" }, // tokens
+  { align: "start" }, // cost
+] as const;
 
 export class FleetList {
   private ui: FleetUICtx | undefined;
@@ -544,22 +556,36 @@ export class FleetList {
     lines.push("");
     lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
 
-    // Window the rows so the selected one stays visible.
-    const visible = Math.min(MAX_AGENT_ROWS, rows.length);
+    // At the cap, the row block holds rows alone. Once it overflows, reserve
+    // two of those slots for indicators, keeping the block exactly cap lines
+    // tall while the selected row stays in the agent window.
+    const overflow = rows.length > MAX_AGENT_ROWS;
+    const visible = Math.min(overflow ? OVERFLOW_AGENT_ROWS : MAX_AGENT_ROWS, rows.length);
     const selRow = Math.max(0, sel - 1);
     const start = selRow < visible ? 0 : selRow - visible + 1;
     const hiddenBelow = rows.length - (start + visible);
 
+    // Both indicator slots remain in the row block, blank at an edge, so every
+    // overflowing roster has the same height.
+    // Column widths come from the visible agent rows so every tail lines up.
+    const cells = new Map<AgentRecord, string[]>();
+    for (const r of rows.slice(start, start + visible)) {
+      if (r.kind === "agent") cells.set(r.record, this.tailCells(r.record));
+    }
+    const colWidths = TAIL_SLOTS.map((_, i) =>
+      Math.max(0, ...[...cells.values()].map(c => visibleWidth(c[i]))));
     if (start > 0) lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more`), width));
+    else if (overflow) lines.push("");
     for (let a = start; a < start + visible; a++) {
       const row = rows[a];
       lines.push(
         row.kind === "workflow" ?
           this.renderWorkflowRow(a + 1, sel, row.workflow, width, theme)
-        : this.renderAgentRow(a + 1, sel, row.record, width, theme),
+        : this.renderAgentRow(a + 1, sel, row.record, width, theme, cells.get(row.record) ?? [], colWidths),
       );
     }
     if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
+    else if (overflow) lines.push("");
     // pi stacks below-editor widgets directly on its footer with no spacer (#351).
     lines.push("");
 
@@ -593,7 +619,39 @@ export class FleetList {
     return rightAlign(left, selected ? theme.fg("text", stats) : theme.fg("dim", stats), width);
   }
 
-  private renderAgentRow(rosterIndex: number, sel: number, record: AgentRecord, width: number, theme: Theme): string {
+  /** One agent's stats tail as {@link TAIL_SLOTS} cells; "" where a slot has no value. */
+  private tailCells(record: AgentRecord): string[] {
+    // The record, not the activity tracker — see the note in AgentWidget's
+    // running line: only the record carries a nested child's spend, and only it
+    // outlives the agent.
+    const tokens = getLifetimeTotal(record.lifetimeUsage);
+    const elapsedMs = (record.completedAt ?? this.clock.now()) - record.startedAt; // freezes once finished
+    let model = "";
+    let thinking = "";
+    if (this.showModel()) {
+      // Leading, and paired: a thinking level means nothing without its model.
+      const { modelName, tags } = buildInvocationTags(record.invocation);
+      model = modelName ?? "";
+      thinking = tags.find(tag => tag.startsWith("thinking: ")) ?? "";
+    }
+    // What the in-flight model call is doing, only while the agent is running:
+    // a finished row has no call to describe.
+    const call = record.status === "running"
+      ? describeModelCall(this.activityFor(record.id)?.modelCall, this.clock.now())
+      : undefined;
+    const cost = this.showCost() ? formatCost(getLifetimeCost(record.lifetimeUsage)) : "";
+    return [model, thinking, call ?? "", formatFleetElapsed(elapsedMs), formatFleetTokens(tokens), cost];
+  }
+
+  private renderAgentRow(
+    rosterIndex: number,
+    sel: number,
+    record: AgentRecord,
+    width: number,
+    theme: Theme,
+    cells: string[],
+    colWidths: number[],
+  ): string {
     // The selected row renders in the theme's primary text color so it reads as
     // one selection (#230). A configured badge survives — Claude Code's FleetView
     // keeps the agent color on the selected row too and only bolds it — which also
@@ -604,29 +662,13 @@ export class FleetList {
       : { fallbackColor: "muted" });
     const description = selected ? theme.fg("text", record.description) : record.description;
     const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
-    // The record, not the activity tracker — see the note in AgentWidget's
-    // running line: only the record carries a nested child's spend, and only it
-    // outlives the agent.
-    const tokens = getLifetimeTotal(record.lifetimeUsage);
-    const elapsedMs = (record.completedAt ?? this.clock.now()) - record.startedAt; // freezes once finished
-    const cost = this.showCost() ? formatCost(getLifetimeCost(record.lifetimeUsage)) : "";
-    const parts: string[] = [];
-    if (this.showModel()) {
-      // Leading, and paired: a thinking level means nothing without its model.
-      const { modelName, tags } = buildInvocationTags(record.invocation);
-      if (modelName) parts.push(modelName);
-      const thinkingTag = tags.find(tag => tag.startsWith("thinking: "));
-      if (thinkingTag) parts.push(thinkingTag);
-    }
-    // What the in-flight model call is doing, only while the agent is running:
-    // a finished row has no call to describe.
-    const call = record.status === "running"
-      ? describeModelCall(this.activityFor(record.id)?.modelCall, this.clock.now())
-      : undefined;
-    if (call) parts.push(call);
-    parts.push(formatFleetElapsed(elapsedMs), formatFleetTokens(tokens));
-    if (cost) parts.push(cost);
-    const stats = parts.join(" · ");
+    // Fixed-width slots (blank where a row has no value) keep each column at the
+    // same cells on every row; an all-empty column is dropped.
+    const stats = TAIL_SLOTS.map((slot, i) => {
+      if (colWidths[i] === 0) return undefined;
+      const pad = " ".repeat(colWidths[i] - visibleWidth(cells[i] ?? ""));
+      return slot.align === "end" ? (cells[i] ?? "") + pad : pad + (cells[i] ?? "");
+    }).filter((c): c is string => c !== undefined).join(" · ");
     const right = selected ? theme.fg("text", stats) : theme.fg("dim", stats);
     return rightAlign(left, right, width);
   }
