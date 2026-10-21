@@ -823,16 +823,17 @@ describe("FleetList cost display", () => {
   function row(showCost: boolean, cost: number, activity?: Map<string, AgentActivity>): string {
     const record = makeRecord({ lifetimeUsage: { input: 13100, output: 0, cacheWrite: 0, cost } });
     const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), () => showCost);
-    let factory: any;
-    fleet.setUICtx({
-      setWidget: (_k: string, c: any) => { factory = c; },
+    let factory: WidgetFactory | undefined;
+    const ui: FleetUICtx = {
+      setWidget: (_k, c) => { factory = c; },
       onTerminalInput: () => () => {},
       getEditorText: () => "",
       notify: () => {},
-      custom: (() => new Promise(() => {})) as any,
-    } as any);
+      custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+    };
+    fleet.setUICtx(ui);
     fleet.update();
-    return factory({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
+    return factory!({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
   }
 
   it("appends the cost after the token count when enabled", () => {
@@ -871,16 +872,17 @@ describe("FleetList model and activity", () => {
 
   function row(record: AgentRecord, showModel: boolean, activity?: Map<string, AgentActivity>): string {
     const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), undefined, undefined, undefined, undefined, undefined, () => showModel);
-    let factory: any;
-    fleet.setUICtx({
-      setWidget: (_k: string, c: any) => { factory = c; },
+    let factory: WidgetFactory | undefined;
+    const ui: FleetUICtx = {
+      setWidget: (_k, c) => { factory = c; },
       onTerminalInput: () => () => {},
       getEditorText: () => "",
       notify: () => {},
-      custom: (() => new Promise(() => {})) as any,
-    } as any);
+      custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+    };
+    fleet.setUICtx(ui);
     fleet.update();
-    return factory({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme).render(160).join("\n");
+    return factory!({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme).render(160).join("\n");
   }
 
   it("names the model and thinking level under showModel", () => {
@@ -896,6 +898,8 @@ describe("FleetList model and activity", () => {
   });
 
   it("aligns populated tail columns with Unicode and truncation", () => {
+    // Markup-free theme: escape-less tags would otherwise count as visible cells when `left` truncates.
+    const markupFree = { fg: (_c: string, text: string) => text, bold: (text: string) => text };
     const now = Date.now();
     const agents = [
       withModel({
@@ -925,17 +929,43 @@ describe("FleetList model and activity", () => {
     fleet.setUICtx(ui);
     fleet.update();
 
+    const cellStart = (line: string, text: string) => {
+      expect(line).toContain(text);
+      return visibleWidth(line.split(text, 1)[0]);
+    };
     for (const width of [60, 80]) {
-      const lines = factory?.({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, theme)
+      const lines = factory?.({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, markupFree)
         .render(width).map(plain) ?? [];
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
 
-    const lines = factory?.({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme)
+    // Widths where the descriptions truncate but still show their prefix.
+    for (const width of [110, 120, 130]) {
+      const wide = factory?.({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, markupFree)
+        .render(width).map(plain) ?? [];
+      for (const line of wide) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      const [cjk, emoji] = ["調査", "emoji"].map(description => {
+        const found = wide.find(line => line.includes(description));
+        expect(found).toBeDefined();
+        return found!;
+      });
+      // The descriptions must really truncate at these widths.
+      expect(cjk).toContain("...");
+      expect(emoji).toContain("...");
+      expect(cjk).not.toContain("deliberately long description");
+      expect(emoji).not.toContain("different long description");
+      expect(cellStart(cjk, "thinking: low")).toBe(cellStart(emoji, "thinking: ultrathink"));
+      expect(cellStart(cjk, "tokens")).toBe(cellStart(emoji, "tokens"));
+      expect(cellStart(cjk, "~$0.0042") + visibleWidth("~$0.0042"))
+        .toBe(cellStart(emoji, "~$12.34") + visibleWidth("~$12.34"));
+      expect(visibleWidth(cjk.trimEnd())).toBe(width);
+      expect(visibleWidth(emoji.trimEnd())).toBe(width);
+    }
+
+    const lines = factory?.({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, markupFree)
       .render(160).map(plain) ?? [];
     const [a, b] = ["調査", "emoji"].map(description =>
       lines.find(line => line.includes(description))!);
-    const cellStart = (line: string, text: string) => visibleWidth(line.split(text, 1)[0]);
     expect(cellStart(a, "~$0.0042") + visibleWidth("~$0.0042"))
       .toBe(cellStart(b, "~$12.34") + visibleWidth("~$12.34"));
     expect(cellStart(a, "↓ 13.1k tokens") + visibleWidth("↓ 13.1k tokens"))
