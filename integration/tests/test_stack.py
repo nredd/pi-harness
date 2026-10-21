@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from harness import sandbox
 from harness.paths import pi_command
+from harness.release import gitlink_tag, release_checksums
 from harness.stack import (
     PackageSource,
     Stack,
@@ -26,7 +27,34 @@ from harness.stack import (
     package_directory,
     source_string,
     stack_digest,
+    validate_local_derivation,
+    validate_release_identity,
+    validate_shipped_stack,
 )
+
+CORE = {
+    "tag": "v1.3.0-nredd.7",
+    "integrity": {
+        "earendil-works-pi-coding-agent-1.3.0.tgz": (
+            "16479a0cb393c7820d8b1fbcdc5c941ceb5a271dc64ecb4b8be6574df3a2e617"
+        ),
+        "earendil-works-pi-tui-1.3.0.tgz": (
+            "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0"
+        ),
+    },
+}
+
+
+def stack_document(**overrides: Any) -> dict[str, Any]:
+    """Return a minimal valid stack document with selective test overrides.
+
+    Parameters:
+        **overrides (Any): document fields to replace.
+
+    Returns:
+        dict[str, Any]: strict stack document fixture.
+    """
+    return {"schema_version": 1, "name": "unit", "core": CORE, "sources": ["./pkg"]} | overrides
 
 
 @pytest.mark.parametrize(
@@ -38,6 +66,7 @@ from harness.stack import (
         {"sources": ["npm:pkg"]},
         {"sources": ["npm:pkg@latest"]},
         {"sources": ["git:github.com/x/y"]},
+        {"sources": ["git:github.com/x/y@main"]},
         {"sources": ["~/code/pkg"]},
         {"sources": ["./pkg", "./pkg"]},
         {"sources": ["./pkg", {"source": "./pkg", "skills": []}]},
@@ -69,7 +98,7 @@ def test_stack_rejects_implicit_or_ambiguous_inputs(change: dict[str, Any]) -> N
         change (dict[str, Any]): invalid overlay on a minimal explicit stack.
     """
     with pytest.raises(ValidationError):
-        Stack.model_validate({"name": "unit", "sources": ["./pkg"]} | change)
+        Stack.model_validate(stack_document() | change)
 
 
 def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> None:
@@ -83,39 +112,50 @@ def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> Non
     (package / "package.json").write_text('{"name":"@test/pkg","version":"1.2.3"}')
     path = tmp_path / "stack.json"
     path.write_text(
-        json.dumps({"name": "unit", "sources": ["./pkg", "npm:@scope/pkg@1.2.3", "git:github.com/x/y@v1"]})
+        json.dumps(stack_document(sources=["./pkg", "npm:@scope/pkg@1.2.3", "git:github.com/x/y@v1.2.3"]))
     )
     stack = load_stack(path)
-    assert stack.resolved_sources(path) == [str(package), "npm:@scope/pkg@1.2.3", "git:github.com/x/y@v1"]
+    assert stack.resolved_sources(path) == [
+        str(package),
+        "npm:@scope/pkg@1.2.3",
+        "git:github.com/x/y@v1.2.3",
+    ]
     assert stack_digest(path) == hashlib.sha256(path.read_bytes()).hexdigest()
     assert find_package("pkg", [str(package)], tmp_path) == package
     with pytest.raises(FileNotFoundError, match=r"no `package\.json`"):
-        Stack(name="unit", sources=["./missing"]).resolved_sources(path)
+        Stack.model_validate(stack_document(sources=["./missing"])).resolved_sources(path)
 
 
-def test_supplied_stacks_are_pinned_and_exclusion_is_explicit() -> None:
-    """Keep personal/local source counts, exact pins and headless exclusions deliberate."""
+def test_shipped_stack_is_semantically_valid_and_matches_the_core_gitlink() -> None:
+    """Validate exact pins, exclusions, core identity and the generated local selection."""
     root = Path(__file__).resolve().parents[1]
     personal = load_stack(root / "stacks/personal.json")
     local = load_stack(root / "stacks/local.json")
-    assert len(personal.sources) == 13
-    assert len(local.sources) == 13
-    assert "git:github.com/nredd/pi-subagents@v0.22.0-nredd.5" in personal.sources
-    assert "git:github.com/nredd/pi-plan-mode@v0.59.3-nredd.1" in personal.sources
-    assert "npm:@nredd/pi-session-kit@0.6.0" in personal.sources
+
+    validate_shipped_stack(personal)
+    validate_local_derivation(personal, local)
+    validate_release_identity(
+        personal,
+        gitlink_tag(root.parent / "forks/pi"),
+        release_checksums(personal.core.tag),
+    )
     assert isinstance(personal.sources[0], PackageSource)
-    assert personal.sources[0].model_dump(exclude_unset=True) == {
-        "source": "npm:@nredd/pi-preset@0.2.0",
-        "extensions": ["extensions/expanded-footer.ts"],
-        "skills": [],
-        "prompts": [],
-        "themes": [],
-    }
-    assert "../../packages/preset" in local.sources
-    assert len(personal.disabled_extensions) == len(local.disabled_extensions) == 1
-    assert "pi-computer-use" in next(iter(personal.disabled_extensions))
-    assert personal.sources[1] == local.sources[0] == "npm:@gotgenes/pi-anthropic-auth@3.4.3"
-    assert len([source for source in personal.sources if source_string(source).startswith("git:")]) == 4
+    assert source_string(local.sources[-1]) == "../../packages/preset"
+    assert local.sources[-1] == "../../packages/preset"
+
+
+def test_semantic_validators_reject_tampered_stack_documents() -> None:
+    """Exercise shipped, derivation and release validators without literal package pin tables."""
+    personal = Stack.model_validate(stack_document(name="personal", sources=["npm:@nredd/pi-preset@0.2.0"]))
+    local = Stack.model_validate(stack_document(name="local", sources=["../../packages/dev-tools"]))
+    with pytest.raises(ValueError, match="local paths"):
+        validate_shipped_stack(Stack.model_validate(stack_document(name="personal")))
+    with pytest.raises(ValueError, match="does not match the personal-stack derivation"):
+        validate_local_derivation(personal, local)
+    with pytest.raises(ValueError, match="does not match Gitlink tag"):
+        validate_release_identity(personal, "v1.3.0-nredd.6", {})
+    with pytest.raises(ValueError, match="integrity does not match"):
+        validate_release_identity(personal, "v1.3.0-nredd.7", {})
 
 
 def test_no_pi_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,10 +182,12 @@ def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch,
     stack_path.write_text(
         json.dumps(
             {
+                "schema_version": 1,
                 "name": "fixture",
-                "sources": ["npm:one@1.2.3", "git:github.com/x/two@v1"],
+                "core": CORE,
+                "sources": ["npm:one@1.2.3", "git:github.com/x/two@v1.2.3"],
                 "settings": {"quietStartup": True},
-                "disabled_extensions": {"git:github.com/x/two@v1": "GUI needs TCC"},
+                "disabled_extensions": {"git:github.com/x/two@v1.2.3": "GUI needs TCC"},
             }
         )
     )
@@ -193,7 +235,7 @@ def test_installer_uses_pi_install_then_overlay(monkeypatch: pytest.MonkeyPatch,
     assert box.settings()["quietStartup"] is True
     assert box.settings()["packages"][0] == "npm:one@1.2.3"
     assert json.loads((box.agent_dir / "subagents.json").read_text())["workflowsEnabled"] is False
-    assert box.settings()["packages"][-1] == {"source": "git:github.com/x/two@v1", "extensions": []}
+    assert box.settings()["packages"][-1] == {"source": "git:github.com/x/two@v1.2.3", "extensions": []}
     assert (box.agent_dir / "stack-name").read_text() == "fixture"
     box.patch_json("settings.json", {"retry": {"enabled": True}})
     other = sandbox.build_sandbox(tmp_path / "other", box.home)
@@ -223,13 +265,15 @@ def test_installer_preserves_object_filters_and_omissions(
     entries: list[Any] = [
         {"source": "./pkg", "extensions": filters, "skills": [], "prompts": ["prompts/review.md"]},
         {"source": "npm:@scope/pkg@1.2.3", "themes": []},
-        "git:github.com/x/y@v1",
+        "git:github.com/x/y@v1.2.3",
     ]
     stack_path = tmp_path / "stack.json"
     stack_path.write_text(
         json.dumps(
             {
+                "schema_version": 1,
                 "name": "filtered",
+                "core": CORE,
                 "sources": entries,
                 "disabled_extensions": {"./pkg": "headless only"} if disabled else {},
             }
@@ -298,7 +342,9 @@ def test_package_lookup_does_not_guess_an_owner_checkout(tmp_path: Path) -> None
 
 def test_package_agents_gate_follows_filtered_sources_not_stack_name() -> None:
     """A filtered object source disables package agents under any name; plain strings do not."""
-    plain = Stack(name="personal", sources=["npm:@scope/pkg@1.2.3"])
-    filtered = Stack(name="renamed", sources=[PackageSource(source="npm:@scope/pkg@1.2.3", skills=[])])
+    plain = Stack.model_validate(stack_document(name="personal", sources=["npm:@scope/pkg@1.2.3"]))
+    filtered = Stack.model_validate(
+        stack_document(name="renamed", sources=[PackageSource(source="npm:@scope/pkg@1.2.3", skills=[])])
+    )
     assert sandbox.subagents_policy(plain) == {"workflowsEnabled": False}
     assert sandbox.subagents_policy(filtered) == {"workflowsEnabled": False, "packageAgents": False}

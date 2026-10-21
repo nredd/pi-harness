@@ -1,5 +1,13 @@
 {
+  "schema_version": 1,
   "name": "personal",
+  "core": {
+    "tag": "v1.3.0-nredd.7",
+    "integrity": {
+      "earendil-works-pi-coding-agent-1.3.0.tgz": "16479a0cb393c7820d8b1fbcdc5c941ceb5a271dc64ecb4b8be6574df3a2e617",
+      "earendil-works-pi-tui-1.3.0.tgz": "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0"
+    }
+  },
   "sources": [
     {
       "source": "npm:@nredd/pi-preset@0.2.0",
