@@ -1021,7 +1021,7 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     assert "package-manager-cache: false" in workflow
     assert workflow.count("npm publish ") == 1
     assert "npm pack" not in workflow  # Packing and release checks live in the tested Python module.
-    assert "needs_fork_contract" in workflow
+    assert "needs_fork_contract" not in workflow
     assert "directory == 'preset'" not in workflow
 
 
@@ -1138,14 +1138,31 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
     monkeypatch.setattr(nr, "command", command)
     monkeypatch.setattr(pc, "pack", pack)
     monkeypatch.setattr(pc, "run_gate", stock_gate)
-    monkeypatch.setattr(nr.fork, "run_fork_gate", lambda _w, _s, _r, supplied: gate("fork", supplied))
+
+    def audit_gate(
+        _work: Path, _contract: pc.PackageContract, supplied: dict[str, Path]
+    ) -> dict[str, object]:
+        """Record the audit gate and return a dict, as production `run_audit_gate` does.
+
+        Parameters:
+            _work (Path): Scratch directory, unused.
+            _contract (pc.PackageContract): Contract, unused.
+            supplied (dict[str, Path]): Candidate tarball paths.
+
+        Returns:
+            dict[str, object]: Synthetic audit evidence.
+        """
+        gate("audit", supplied)
+        return {"name": contract.name, "version": "1.2.3"}
+
+    monkeypatch.setattr(pc, "run_audit_gate", audit_gate)
     target = nr.resolve_target(repo, f"{contract.name}@1.2.3")
     nr.verify(repo, target, tmp_path / "candidate")
     expected = [*verify_events, "pack"]
     if "stock" in descriptor.contract_gates:
         expected.append("stock")
-    if "fork" in descriptor.contract_gates:
-        expected.append("fork")
+    if "audit" in descriptor.contract_gates:
+        expected.append("audit")
     assert events == expected
     if contract.directory == "plan-mode":
         assert events == ["ci", "run", "pack", "stock"]

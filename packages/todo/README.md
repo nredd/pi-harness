@@ -33,10 +33,9 @@ byte-identical to the fork except this README, `package.json` and comments in
   (`!docs/*.png`); the URL resolves once the package is on `main`
 - The persisted config path stays `~/.config/rpiv-todo/` and the i18n namespace stays
   `@juicesharp/rpiv-todo`, for compatibility with existing configs and sessions
-- The nested `package-lock.json` is the fork's, kept as in `packages/plan-mode`. The root npm
-  workspace (`npm ci --ignore-scripts`) uses the root lock; only a standalone `npm ci` inside this
-  directory reads the nested one. The packed contract uses neither: it `npm install`s the tarball
-  into an empty consumer, resolving from the registry, and audits that fresh install
+- There is no nested `package-lock.json`: the root workspace lock governs (`npm ci --ignore-scripts`).
+  The packed contract `npm install`s the tarball into an empty consumer, resolving from the registry,
+  and audits that fresh install
 
 ## Verification
 
