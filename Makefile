@@ -26,7 +26,7 @@ check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repo
 	uv run --locked --project integration pytest scripts -c scripts/pyproject.toml -p no:cacheprovider
 	$(MAKE) check-import-audit
 
-check-integration:  ## integration/ unit gate (no pi, tmux, or scenarios)
+check-integration:  ## integration units; requires initialized `forks/pi` Gitlink (no pi, tmux, or scenarios)
 	cd integration && $(PY_CHECK)
 	cd integration && uv run --locked pytest tests -p no:cacheprovider
 	$(MAKE) check-probes
