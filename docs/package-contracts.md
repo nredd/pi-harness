@@ -41,9 +41,12 @@ Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
 
 `@nredd/pi-plan-mode` is a separately invoked stock contract because it has the explicit runtime
 `@narumitw/pi-tui-kit` dependency. `make check-plan-mode-package-contract` packs it, verifies its own
-upstream MIT `LICENSE`, exact manifest dependency and exact `files`/allowlist, installs the tarball, and
-requires `plan_mode_question` and `plan_mode_complete` from stock Pi. `dist/` is required and packed because
-its extension manifest targets `./dist/index.ts`; `src/` stays packed as declared by the source package.
+upstream MIT `LICENSE`, exact manifest dependency, manifest `files` list, and complete enumerated tarball
+payload, installs the tarball, and requires `plan_mode_question` and `plan_mode_complete` from stock Pi. The
+faux provider calls `plan_mode_question` and the scenario records its explicit inactive-mode result. `dist/` is
+required and packed because its extension manifest targets `./dist/index.ts`; `src/` stays packed as declared
+by the source package. Its native `npm run check` first rebuilds and byte-compares every committed `dist/` file,
+so stale, missing, or extra generated output fails before the ordinary package build.
 
 What each package must satisfy:
 
@@ -70,7 +73,9 @@ What each package must satisfy:
   `eval`, `new Function`, `createRequire()(...)` results, `import.meta.resolve` or JSDoc `@import`
   tags, and a local `require` shadow is still treated as `require`
 - Fresh install (`--ignore-scripts --legacy-peer-deps --offline`, mirroring Pi's suppressed peer
-  installs): `node_modules` and the lockfile contain only the package, so no duplicate host copy
+  installs): dependency-free packages have exactly the package in `node_modules` and the lockfile. A package
+  with declared runtime dependencies instead has exactly its declared direct dependencies and their lockfile
+  closure, never a host, sibling, or unrelated package
 - Stock Pi, `--mode json` with `--no-extensions --extension <installed dir>` (only that package),
   `--no-mcp`, `--offline`, no skills/templates/themes/context files, `--no-approve`:
   - dev-tools: a real `git_status` result on a disposable repo (`untracked.txt`), and an error result

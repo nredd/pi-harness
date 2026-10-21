@@ -47,7 +47,7 @@ class StubProvider:
         Parameters:
             *_args (object): Context-manager exception arguments.
         """
-        return None
+        return
 
 
 def context(tmp_path: Path) -> pc.Context:
@@ -167,7 +167,9 @@ def test_plan_mode_install_allows_only_declared_dependency(
                 {
                     "packages": {
                         "": {},
-                        "node_modules/@nredd/pi-plan-mode": {"dependencies": {"@narumitw/pi-tui-kit": "^0.65.2"}},
+                        "node_modules/@nredd/pi-plan-mode": {
+                            "dependencies": {"@narumitw/pi-tui-kit": "^0.65.2"}
+                        },
                         "node_modules/@narumitw/pi-tui-kit": {},
                         "node_modules/@earendil-works/pi-tui": {},
                     }
