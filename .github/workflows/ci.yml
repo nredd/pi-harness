@@ -106,7 +106,7 @@ jobs:
           tool: cargo-nextest
       - name: Initialize stack forks at their Gitlinks
         if: steps.plan.outputs.run == 'true'
-        run: git submodule update --init forks/pi-subagents forks/pi-plan-mode forks/rpiv-todo
+        run: git submodule update --init forks/pi forks/pi-subagents forks/pi-plan-mode forks/rpiv-todo
       - name: Install
         if: steps.plan.outputs.run == 'true'
         run: make install
