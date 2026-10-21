@@ -1,4 +1,9 @@
-"""Failure-path coverage for the packed Plan-mode contract."""
+"""Failure-path coverage for the packed Plan-mode contract.
+
+References:
+    https://docs.npmjs.com/cli/v11/commands/npm-pack
+    https://docs.npmjs.com/cli/v11/configuring-npm/package-json#files
+"""
 
 from __future__ import annotations
 
@@ -21,12 +26,27 @@ class StubProvider:
     """Minimal provider context exposing one recorded request."""
 
     def __init__(self, tools: list[str]) -> None:
+        """Record a model request exposing `tools`.
+
+        Parameters:
+            tools (list[str]): Tool names the fake model received.
+        """
         self.requests = [fp.RecordedRequest("m", ("user",), tuple(tools), "", route=None)]
 
     def __enter__(self) -> StubProvider:
+        """Enter the inert provider context.
+
+        Returns:
+            StubProvider: This provider.
+        """
         return self
 
     def __exit__(self, *_args: object) -> None:
+        """Leave the inert provider context.
+
+        Parameters:
+            *_args (object): Context-manager exception arguments.
+        """
         return None
 
 
@@ -66,8 +86,26 @@ def test_plan_mode_manifest_rejects_dependency_drift() -> None:
     assert any("^0.65.2" in problem for problem in problems)
 
 
+def test_plan_mode_pack_matches_contract(tmp_path: Path) -> None:
+    """`npm pack` ships exactly the contract and manifest payload.
+
+    Parameters:
+        tmp_path (Path): Temporary tarball directory.
+        No additional fixtures are needed; this test creates its isolated npm environment.
+    """
+    artifact = pc.pack(pc.PLAN_MODE_CONTRACT, tmp_path, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()))
+    manifest = json.loads((pc.REPO_ROOT / "packages/plan-mode/package.json").read_text())
+    assert artifact.files == pc.PLAN_MODE_CONTRACT.packed_files
+    assert pc.audit_files(pc.PLAN_MODE_CONTRACT, artifact.files) == []
+    assert manifest["files"] == ["src", "dist", "docs", "README.md", "LICENSE"]
+
+
 def test_plan_mode_own_license_rejects_root_license(tmp_path: Path) -> None:
-    """Imported copyright must survive packing instead of being replaced by the root license."""
+    """Imported copyright must survive packing instead of being replaced by the root license.
+
+    Parameters:
+        tmp_path (Path): Temporary tarball directory.
+    """
     tarball = tmp_path / "package.tgz"
     make_tarball(tarball, {"LICENSE": (pc.REPO_ROOT / "LICENSE").read_bytes()})
     assert pc.audit_license(tarball, (pc.REPO_ROOT / "packages/plan-mode/LICENSE").read_bytes())
@@ -76,7 +114,12 @@ def test_plan_mode_own_license_rejects_root_license(tmp_path: Path) -> None:
 def test_plan_mode_scenario_reports_missing_tool_and_load_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A missing tool or failed extension load is a contract violation."""
+    """A missing tool or failed extension load is a contract violation.
+
+    Parameters:
+        tmp_path (Path): Temporary scenario root.
+        monkeypatch (pytest.MonkeyPatch): Dependency substitutions.
+    """
     ctx = context(tmp_path)
     monkeypatch.setattr(
         pc.Context,
@@ -99,12 +142,24 @@ def test_plan_mode_scenario_reports_missing_tool_and_load_failure(
 def test_plan_mode_install_allows_only_declared_dependency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The registry install branch rejects an undeclared installed package."""
+    """The registry install branch rejects an undeclared installed package.
+
+    Parameters:
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+    """
     artifact = pc.PackedArtifact(
         pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.1", "sha512-x", "0" * 40, 1, ()
     )
 
     def fake_run(_cmd: list[object], *, cwd: Path, **_kwargs: Any) -> None:
+        """Create an install lockfile containing an undeclared host package.
+
+        Parameters:
+            _cmd (list[object]): Ignored subprocess command.
+            cwd (Path): Consumer project root.
+            **_kwargs (Any): Ignored subprocess keyword arguments.
+        """
         for name in ("@nredd/pi-plan-mode", "@narumitw/pi-tui-kit", "@earendil-works/pi-tui"):
             (cwd / "node_modules" / name).mkdir(parents=True, exist_ok=True)
         (cwd / "package-lock.json").write_text(
@@ -112,7 +167,7 @@ def test_plan_mode_install_allows_only_declared_dependency(
                 {
                     "packages": {
                         "": {},
-                        "node_modules/@nredd/pi-plan-mode": {},
+                        "node_modules/@nredd/pi-plan-mode": {"dependencies": {"@narumitw/pi-tui-kit": "^0.65.2"}},
                         "node_modules/@narumitw/pi-tui-kit": {},
                         "node_modules/@earendil-works/pi-tui": {},
                     }
@@ -121,5 +176,5 @@ def test_plan_mode_install_allows_only_declared_dependency(
         )
 
     monkeypatch.setattr(pc, "run", fake_run)
-    with pytest.raises(pc.ContractError, match="pulled host modules"):
+    with pytest.raises(pc.ContractError, match="dependency closure"):
         pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
