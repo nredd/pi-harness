@@ -1,9 +1,4 @@
-"""Run the packed `@nredd/pi-subagents` stock contract outside a release.
-
-`make check-package-contracts` installs offline, so it cannot cover this package's registry
-dependencies. This entry point runs the exact gate the release `verify` stage runs
-(`npm_release.run_stock_contract`: same contract, scenario and sibling set) on a freshly packed
-tarball, so CI executes it before a tag does. Needs the npm registry.
+"""Run one packed package contract against stock Pi outside a release.
 
 References:
     https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
@@ -18,36 +13,53 @@ import logging
 import shutil
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import npm_release as nr
 import package_contracts as pc
 import release_descriptors as rd
 
 LOGGER = logging.getLogger(__name__)
-SUBJECT = "@nredd/pi-subagents"
+
+
+def not_run_items(evidence: Mapping[str, Any]) -> list[str]:
+    """List every `<item>: "NOT RUN"` evidence entry with its `<item>_reason`.
+
+    Parameters:
+        evidence (Mapping[str, Any]): Dumped scenario evidence.
+
+    Returns:
+        list[str]: `<item> (<reason>)` per NOT RUN entry, in evidence order; `<item>` alone without a reason.
+    """
+    return [
+        f"{key} ({evidence[f'{key}_reason']})" if f"{key}_reason" in evidence else key
+        for key, value in evidence.items()
+        if value == "NOT RUN"
+    ]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Pack, audit, install from the registry and exercise `@nredd/pi-subagents`.
+    """Pack, audit, install, and exercise one declared package through stock Pi.
 
     Parameters:
         argv (Sequence[str] | None): Arguments, or `None` for `sys.argv`.
 
     Returns:
-        int: 0 when the contract holds, 1 on a violation.
+        int: Zero after a successful contract; one after a contract violation.
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else None)
+    parser.add_argument("--package", required=True, dest="package", help="Declared npm package name")
     parser.add_argument("--stock-prefix", type=Path, default=pc.DEFAULT_STOCK_PREFIX)
     parser.add_argument("--report", type=Path, help="Write the JSON identity/evidence report here")
     args = parser.parse_args(argv)
-    descriptor = rd.descriptor_for(SUBJECT)
+    descriptor = rd.descriptor_for(args.package)
     if descriptor is None:
-        LOGGER.error(f"FAILED: no release descriptor for '{SUBJECT}'")
+        LOGGER.error(f"FAILED: no release descriptor for '{args.package}'")
         return 1
-    work = Path(tempfile.mkdtemp(prefix="pi-subagents-contract-"))
+    work = Path(tempfile.mkdtemp(prefix=f"{descriptor.workspace.name}-contract-"))
     try:
         report = nr.run_stock_contract(work, args.stock_prefix.resolve(), descriptor, {})
     except (pc.ContractError, nr.ReleaseError) as e:
@@ -59,7 +71,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.report:
         args.report.write_text(text)
     sys.stdout.write(text)
-    LOGGER.info("subagents package contract: passed")
+    not_run = not_run_items(report.packages[descriptor.name].evidence.model_dump())
+    suffix = f"; NOT RUN: {', '.join(not_run)}" if not_run else ""
+    LOGGER.info(f"{descriptor.workspace.name} package contract: passed{suffix}")
     return 0
 
 
