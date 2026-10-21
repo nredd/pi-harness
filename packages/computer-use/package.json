@@ -1,6 +1,6 @@
 {
 	"name": "@nredd/pi-computer-use",
-	"version": "0.5.1",
+	"version": "0.5.2",
 	"description": "Pi extension that lets AI agents observe and control macOS apps.",
 	"type": "module",
 	"keywords": [

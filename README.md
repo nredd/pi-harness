@@ -26,7 +26,7 @@ Layout:
 - `scripts/`: build, release, and chezmoi integration implementation.
 - `docs/`: development, source provenance, release, and recovery documentation.
 
-`packages/todo` (`@nredd/pi-todo` `2.13.9`, unpublished) imports the maintained rpiv-todo fork as an independently releasable plugin. It registers the persistent `todo` tool, `/todos`, and task overlay; the imported source keeps its upstream license and uses the package's native check.
+`packages/todo` (`@nredd/pi-todo` `2.13.10`, pending its first CI-attested release) imports the maintained rpiv-todo fork as an independently releasable plugin. It registers the persistent `todo` tool, `/todos`, and task overlay; the imported source keeps its upstream license and uses the package's native check.
 
 `packages/preset` (`@nredd/pi-preset` `0.2.0`, published) is the optional opinionated
 preset with agents, skills, footer, themes, and public-safe defaults. It is a resource snapshot only: no
@@ -68,7 +68,7 @@ make check-todo-package-contract # explicit: packed todo tool through stock Pi 1
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
   `integration/inprocess/` stack suite under Vitest and Bun (published packages:
   `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.6.0`,
-  `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`; `@nredd/pi-todo@2.13.9` is imported but unpublished)
+  `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`; `@nredd/pi-todo@2.13.10` is pending its first CI-attested release)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, no mocks)
