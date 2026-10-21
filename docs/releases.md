@@ -40,8 +40,10 @@ set, checked by `test_subagents_pack_matches_contract`), its own `LICENSE`, the 
 declared allowances (runtime dependencies `croner` and `nanoid`, the fork's `>=1.1.0` peer floor), the
 import audit, an install of the tarball plus those dependencies from the registry, and a stock Pi 1.3.0
 run that must offer `Agent`, `get_subagent_result`, `steer_subagent` and `SubagentWorkflow`. The contract
-sits outside `package_contracts.CONTRACTS` because `make check-package-contracts` installs offline;
-a PR exercises only the pack and audit tests under `make check-scripts`, not the Pi run. The retained
+sits outside `package_contracts.CONTRACTS` because `make check-package-contracts` installs offline and
+never runs it, but CI's `contracts` job runs the same gate on every
+non-docs PR as `make check-subagents-package-contract` (registry install plus a stock Pi run with one
+faux `Agent` call). The retained
 `forks.yml` job still covers the Gitlink source, not the tarball.
 For example, the future todo import will add an entry shaped like:
 
