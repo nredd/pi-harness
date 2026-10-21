@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -27,6 +26,7 @@ from harness import promotion
 from harness.promotion import (
     EvidenceError,
     GateEvidence,
+    GitError,
     PromotionError,
     StackSnapshot,
     build_gates,
@@ -38,6 +38,7 @@ from harness.promotion import (
     flatten_pages,
     registry_stack_runs,
     required_checks,
+    run_command,
     select_source_sha,
     verify_core,
     verify_required_checks,
@@ -109,36 +110,22 @@ class VerifyContext:
         )
 
 
-def run_tool(*args: str) -> str:
-    """Run one `git`/`gh` command with captured diagnostics.
-
-    Parameters:
-        *args (str): literal executable and arguments.
-
-    Returns:
-        str: stdout.
-
-    Raises:
-        EvidenceError: the command could not run or exited nonzero.
-    """
-    try:
-        return subprocess.run(args, capture_output=True, text=True, check=True).stdout
-    except (OSError, subprocess.CalledProcessError) as error:
-        detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
-        raise EvidenceError(f"Command failed: {' '.join(args[:3])}: {detail}") from error
-
-
-def gh_json(path: str, destination: Path) -> None:
-    """Save a paginated, slurped `gh api` response.
+def gh_json(path: str) -> object:
+    """Read a paginated, slurped `gh api` response.
 
     Parameters:
         path (str): API path, optionally with a query.
-        destination (Path): output file.
+
+    Returns:
+        object: the decoded pages.
 
     Raises:
-        EvidenceError: `gh` failed.
+        EvidenceError: `gh` failed or printed non-JSON.
     """
-    destination.write_text(run_tool("gh", "api", "--paginate", "--slurp", path))
+    try:
+        return json.loads(run_command("gh", "api", "--paginate", "--slurp", path).stdout)
+    except json.JSONDecodeError as error:
+        raise EvidenceError(f"Unreadable response from gh api {path}: {error}") from error
 
 
 def attest(path: Path, ctx: VerifyContext) -> None:
@@ -151,7 +138,7 @@ def attest(path: Path, ctx: VerifyContext) -> None:
     Raises:
         EvidenceError: attestation verification failed.
     """
-    run_tool(
+    run_command(
         "gh",
         "attestation",
         "verify",
@@ -177,7 +164,7 @@ def verify_retained_snapshot(ctx: VerifyContext, source_sha: str) -> None:
         EvidenceError: download or attestation failed.
         ValueError: the snapshot is invalid or names another commit.
     """
-    run_tool(
+    run_command(
         "gh",
         "release",
         "download",
@@ -211,27 +198,17 @@ def fetch_stack_runs(ctx: VerifyContext, source_sha: str) -> list[int]:
         EvidenceError: GitHub could not provide the evidence.
         ValueError: no run qualifies or a response is malformed.
     """
-    runs = json.loads(
-        run_tool(
-            "gh", "run", "list",
-            "--repo", ctx.repo,
-            "--workflow", "ci.yml",
-            "--commit", source_sha,
-            "--limit", "100",
-            "--json", "databaseId,status,conclusion,event,headBranch,headSha",
-        )
+    listed = run_command(
+        "gh", "run", "list",
+        "--repo", ctx.repo,
+        "--workflow", "ci.yml",
+        "--commit", source_sha,
+        "--limit", "100",
+        "--json", "databaseId,status,conclusion,event,headBranch,headSha",
     )  # fmt: skip
-    entries = flatten_pages([runs])
+    entries = flatten_pages([json.loads(listed.stdout)])
     artifacts = {
-        str(run_id): json.loads(
-            run_tool(
-                "gh",
-                "api",
-                "--paginate",
-                "--slurp",
-                f"repos/{ctx.repo}/actions/runs/{run_id}/artifacts?per_page=100",
-            )
-        )
+        str(run_id): gh_json(f"repos/{ctx.repo}/actions/runs/{run_id}/artifacts?per_page=100")
         for run_id in candidate_run_ids(entries, source_sha)
     }
     return registry_stack_runs(entries, artifacts, source_sha)
@@ -248,26 +225,19 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
         PromotionError: a gate failed.
         ValueError: evidence is malformed or insufficient.
     """
-    rules = json.loads(
-        run_tool("gh", "api", "--paginate", "--slurp", f"repos/{ctx.repo}/rules/branches/main")
-    )
-    pages = json.loads(
-        run_tool(
-            "gh", "api", "--paginate", "--slurp",
-            f"repos/{ctx.repo}/commits/{source_sha}/check-runs?per_page=100",
-        )
-    )  # fmt: skip
+    rules = gh_json(f"repos/{ctx.repo}/rules/branches/main")
+    pages = gh_json(f"repos/{ctx.repo}/commits/{source_sha}/check-runs?per_page=100")
     checks = verify_required_checks(required_checks(flatten_pages(rules)), flatten_pages(pages), source_sha)
     stack_runs = fetch_stack_runs(ctx, source_sha)
     stack_path = ctx.promo / "personal.json"
     stack_path.write_text(
-        run_tool(
+        run_command(
             promotion.GIT_BIN,
             "-C",
             str(ctx.workspace),
             "show",
             f"{source_sha}:integration/stacks/personal.json",
-        )
+        ).stdout
     )
     stack = Stack.model_validate_json(stack_path.read_bytes())
     core = verify_core(stack, ctx.temp / "core")
@@ -290,20 +260,16 @@ def check_successor(ctx: VerifyContext) -> None:
         PromotionError: Git ancestry failed.
         ValueError: the candidate is not a successor.
     """
-    refs = json.loads(
-        run_tool(
-            "gh", "api", "--paginate", "--slurp", f"repos/{ctx.repo}/git/matching-refs/heads/stack-channel"
-        )
-    )
+    refs = gh_json(f"repos/{ctx.repo}/git/matching-refs/heads/stack-channel")
     candidate = StackSnapshot.model_validate_json((ctx.promo / SNAPSHOT_FILE).read_bytes())
     stable = None
     if channel_exists(refs):
         stable_path = ctx.promo / STABLE_FILE
         stable_path.write_text(
-            run_tool(
+            run_command(
                 "gh", "api", "-H", "Accept: application/vnd.github.raw+json",
                 f"repos/{ctx.repo}/contents/{STABLE_FILE}?ref=stack-channel",
-            )
+            ).stdout
         )  # fmt: skip
         attest(stable_path, ctx)
         stable = StackSnapshot.model_validate_json(stable_path.read_bytes())
@@ -328,7 +294,8 @@ def verify(ctx: VerifyContext) -> str:
     source_sha = select_source_sha(ctx.operation, ctx.requested_sha, ctx.rollback_tag)
     with ctx.github_output.open("a") as output:
         output.write(f"source_sha={source_sha}\n")
-    run_tool(promotion.GIT_BIN, "-C", str(ctx.workspace), "fetch", "origin", "main")
+    # The repository is public, so this credential-less fetch (`persist-credentials: false`) works.
+    run_command(promotion.GIT_BIN, "-C", str(ctx.workspace), "fetch", "origin", "main", error=GitError)
     if not descends_from(ctx.workspace, source_sha, "origin/main"):
         raise ValueError(f"'{source_sha}' is not an ancestor of 'origin/main'")
     if ctx.operation == "rollback":

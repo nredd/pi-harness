@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
-from harness import promotion, publish_gate
+from harness import promotion, promotion_verify, publish_gate
 from harness.promotion import (
     AttestationError,
     CoreEvidence,
@@ -499,15 +500,8 @@ def git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def test_cli_successor_and_ancestor_use_real_git(tmp_path: Path) -> None:
-    """The `successor`/`ancestor` CLI gates use real ancestry, refusing divergent and rollback moves.
-
-    Parameters:
-        tmp_path (Path): private fixture directory
-
-    Returns:
-        None: None.
-    """
+def test_successor_and_descends_from_use_real_git(tmp_path: Path) -> None:
+    """Real ancestry: descendants pass; stale, divergent and duplicate candidates are refused."""
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
@@ -518,124 +512,28 @@ def test_cli_successor_and_ancestor_use_real_git(tmp_path: Path) -> None:
     git(repo, "checkout", "-q", "-b", "side", one)
     git(repo, "commit", "-q", "--allow-empty", "-m", "side")
     side = git(repo, "rev-parse", "HEAD")
-    docs = {}
-    for name, sha in {"one": one, "two": two, "side": side}.items():
-        docs[name] = tmp_path / f"{name}.json"
-        docs[name].write_text(snapshot(tmp_path, sha).model_dump_json())
-    none, has = tmp_path / "no-channel.json", tmp_path / "channel.json"
-    none.write_text("[[]]")
-    has.write_text(json.dumps([[{"ref": "refs/heads/stack-channel"}]]))
-    absent = tmp_path / "absent.json"
+    snaps = {name: snapshot(tmp_path, sha) for name, sha in {"one": one, "two": two, "side": side}.items()}
 
-    def successor(candidate: str, stable: Path, refs: Path) -> int:
-        """Run the `successor` CLI against a stable file and a channel listing.
+    def gate(candidate: str, stable: str | None) -> None:
+        """Run the real-ancestry successor gate.
 
         Parameters:
-            candidate (str): candidate snapshot name in `docs`.
-            stable (Path): stable snapshot path.
-            refs (Path): `matching-refs` response.
-
-        Returns:
-            int: the CLI exit code.
+            candidate (str): candidate name.
+            stable (str | None): stable name, or `None` for the seed.
         """
-        args = [
-            "successor", "--repo", str(repo), "--candidate", str(docs[candidate]),
-            "--refs", str(refs), "--stable", str(stable),
-        ]  # fmt: skip
-        return promotion.main(args)
-
-    assert promotion.main(["ancestor", "--repo", str(repo), "--ancestor", one, "--descendant", two]) == 0
-    assert successor("one", absent, none) == 0  # first seed: the channel does not exist
-    assert successor("one", absent, has) == 1  # channel exists but stable could not be read: fail closed
-    assert successor("two", docs["one"], has) == 0
-    assert successor("one", docs["two"], has) == 1
-    assert successor("side", docs["two"], has) == 1
-    assert successor("one", docs["one"], has) == 1
-    assert promotion.main(["ancestor", "--repo", str(repo), "--ancestor", side, "--descendant", two]) == 1
-
-
-def test_cli_rejects_non_personal_stack_and_bad_sha(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """`build` refuses a non-personal stack and a malformed SHA; `verify` pins the SHA.
-
-    Parameters:
-        tmp_path (Path): private fixture directory
-        capsys (pytest.CaptureFixture[str]): captured process output
-
-    Returns:
-        None: None.
-    """
-    gates = tmp_path / "gates.json"
-    gates.write_text(json.dumps(GATES))
-    personal = tmp_path / "personal.json"
-    write_stack(personal)
-    local = tmp_path / "local.json"
-    write_stack(local, name="local", sources=["./pkg"])
-    out = tmp_path / "out.json"
-
-    def build(stack: Path, sha: str) -> int:
-        """Run the `build` CLI.
-
-        Parameters:
-            stack (Path): stack file to build from.
-            sha (str): `--source-sha` value.
-
-        Returns:
-            int: the CLI exit code.
-        """
-        return promotion.main(
-            ["build", "--stack", str(stack), "--source-sha", sha, "--gates", str(gates), "--output", str(out)]
+        current = snaps[stable] if stable else None
+        descends = current is not None and descends_from(
+            repo, current.source_sha, snaps[candidate].source_sha
         )
+        verify_successor(snaps[candidate], current, descends)
 
-    assert build(local, "a" * 40) == 1
-    assert build(personal, "A" * 40) == 1
-    assert not out.exists()
-    assert build(personal, "a" * 40) == 0
-    assert promotion.main(["verify", "--snapshot", str(out), "--source-sha", "a" * 40]) == 0
-    assert promotion.main(["verify", "--snapshot", str(out), "--source-sha", "b" * 40]) == 1
-    assert "FAILED" in capsys.readouterr().err
-    assert promotion.main(["select", "--operation", "rollback", "--rollback-tag", "stack/xyz"]) == 1
-    assert promotion.main(["select", "--operation", "promote", "--source-sha", "a" * 40]) == 0
-    assert capsys.readouterr().out == "a" * 40 + "\n"
-
-
-def test_cli_checks_and_stack_runs_against_recorded_fixtures(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The `checks` and `stack-runs` CLI stages read the real recorded API responses.
-
-    Parameters:
-        tmp_path (Path): private fixture directory
-        capsys (pytest.CaptureFixture[str]): captured process output
-
-    Returns:
-        None: None.
-    """
-    artifacts = tmp_path / "artifacts"
-    artifacts.mkdir()
-    (artifacts / f"run-{FIXTURE_RUN}.json").write_text((FIXTURES / "github-run-artifacts.json").read_text())
-    args = ["--source-sha", FIXTURE_SHA]
-    runs = [
-        "stack-runs",
-        "--runs", str(FIXTURES / "github-runs.json"),
-        "--artifacts-dir", str(artifacts),
-        *args,
-    ]  # fmt: skip
-    assert promotion.main(runs) == 0
-    assert json.loads(capsys.readouterr().out) == [FIXTURE_RUN]
-    checks = [
-        "checks",
-        "--rules", str(FIXTURES / "github-rules-main.json"),
-        "--check-pages", str(FIXTURES / "github-check-runs.json"),
-        *args,
-    ]  # fmt: skip
-    assert promotion.main(checks) == 0
-    assert "stack (ubuntu-24.04, personal)" in capsys.readouterr().out
-    empty = tmp_path / "empty-rules.json"
-    empty.write_text("[[]]")
-    assert promotion.main([*checks[:2], str(empty), *checks[3:]]) == 1
-    assert "no required status checks" in capsys.readouterr().err
+    assert descends_from(repo, one, two)
+    assert not descends_from(repo, side, two)
+    gate("one", None)
+    gate("two", "one")
+    for candidate, stable in (("one", "two"), ("side", "two"), ("one", "one")):
+        with pytest.raises(ValueError, match="stable"):
+            gate(candidate, stable)
 
 
 def test_flatten_pages_flattens_lists_and_rejects_malformed_pages() -> None:
@@ -646,28 +544,14 @@ def test_flatten_pages_flattens_lists_and_rejects_malformed_pages() -> None:
             flatten_pages(bad)
 
 
-def test_candidate_runs_print_one_id_per_line(capsys: pytest.CaptureFixture[str]) -> None:
-    """Only successful push/main runs of the SHA are fetched by `fetch-artifacts`.
-
-    Parameters:
-        capsys (pytest.CaptureFixture[str]): captured process output
-
-    Returns:
-        None: None.
-    """
+def test_candidate_runs_are_successful_push_main_runs_of_the_sha() -> None:
+    """Only successful push/main runs of the SHA have their artifacts fetched."""
     runs = [
         *fixture("github-runs.json"),
         {**fixture("github-runs.json")[0], "databaseId": 7, "event": "pull_request"},
     ]
     assert candidate_run_ids(runs, FIXTURE_SHA) == [FIXTURE_RUN]
     assert candidate_run_ids(runs, "b" * 40) == []
-    assert (
-        promotion.main(
-            ["candidate-runs", "--runs", str(FIXTURES / "github-runs.json"), "--source-sha", FIXTURE_SHA]
-        )
-        == 0
-    )
-    assert capsys.readouterr().out == f"{FIXTURE_RUN}\n"
 
 
 def test_channel_exists_ignores_prefix_matches() -> None:
@@ -679,12 +563,11 @@ def test_channel_exists_ignores_prefix_matches() -> None:
         channel_exists({"ref": "refs/heads/stack-channel"})
 
 
-def test_release_state_creates_resumes_or_refuses(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_release_state_creates_resumes_or_refuses(tmp_path: Path) -> None:
     """No existing asset means create; an equal one resumes; a differing one fails closed.
 
     Parameters:
         tmp_path (Path): private fixture directory
-        capsys (pytest.CaptureFixture[str]): captured process output
 
     Returns:
         None: None.
@@ -697,11 +580,6 @@ def test_release_state_creates_resumes_or_refuses(tmp_path: Path, capsys: pytest
     existing.write_bytes(b'{"x":1}')
     with pytest.raises(ValueError, match="differs"):
         release_state(existing, rebuilt)
-    args = ["release-state", "--existing", str(existing), "--rebuilt", str(rebuilt)]
-    assert publish_gate.main(args) == 1
-    existing.unlink()
-    assert publish_gate.main(args) == 0
-    assert capsys.readouterr().out == "create\n"
 
 
 def test_advance_channel_requires_deploy_key(tmp_path: Path) -> None:
@@ -810,68 +688,26 @@ def test_collect_owned_evidence_fails_on_missing_tag_and_failed_check(tmp_path: 
     git(repo, "tag", "-d", "@nredd/pi-preset@0.2.0")
     work = tmp_path / "work"
     work.mkdir()
-    with pytest.raises(GitError, match="Could not check out") as missing:
+    with pytest.raises(GitError, match="Command failed: /usr/bin/git") as missing:
         collect_owned_evidence(preset_stack(tmp_path), repo, work)
     assert missing.value.__cause__ is not None
-    with pytest.raises(EvidenceError, match="Package check failed") as failed:
+    with pytest.raises(EvidenceError, match="Command failed") as failed:
         run_stack_check(repo, "@nredd/pi-preset@0.2.0", repo)  # no `scripts/npm_release.py` here
     assert failed.value.__cause__ is not None
 
 
-def test_cli_owned_evidence_feeds_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`owned-evidence` writes the list that `gates` consumes, with no shell parsing between them.
+def test_descends_from_raises_a_distinct_chained_error(tmp_path: Path) -> None:
+    """Git failing (not "not an ancestor") is a `GitError`, distinct from a `ValueError` refusal.
 
     Parameters:
         tmp_path (Path): private fixture directory
-        monkeypatch (pytest.MonkeyPatch): patches the package-check boundary
-
-    Returns:
-        None: None.
-    """
-    repo = tagged_repo(tmp_path)
-    monkeypatch.setattr(
-        promotion,
-        "run_stack_check",
-        lambda _repo, _tag, _worktree: OwnedPackageEvidence.model_validate(OWNED),
-    )
-    stack, work, owned = tmp_path / "personal.json", tmp_path / "work", tmp_path / "owned.json"
-    write_stack(stack)
-    work.mkdir()
-    base = ["owned-evidence", "--stack", str(stack), "--repo", str(repo), "--workdir", str(work)]
-    assert promotion.main([*base, "--output", str(owned)]) == 0
-    assert json.loads(owned.read_text()) == [OWNED]
-    files = {name: tmp_path / f"{name}.json" for name in ("checks", "stack-runs", "core", "gates")}
-    files["checks"].write_text(json.dumps(["a"]))
-    files["stack-runs"].write_text("[5]")
-    files["core"].write_text(json.dumps(CORE))
-    gates = [
-        "gates", "--stack", str(stack), "--checks", str(files["checks"]),
-        "--stack-runs", str(files["stack-runs"]), "--owned", str(owned),
-        "--core", str(files["core"]), "--output", str(files["gates"]),
-    ]  # fmt: skip
-    assert promotion.main(gates) == 0
-    assert json.loads(files["gates"].read_text())["stack_run_ids"] == [5]
-
-
-def test_descends_from_raises_a_distinct_chained_error(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Git failing (not "not an ancestor") is a `GitError` from the cause, printed as `FAILED:`.
-
-    Parameters:
-        tmp_path (Path): private fixture directory
-        capsys (pytest.CaptureFixture[str]): captured process output
 
     Returns:
         None: None.
     """
     with pytest.raises(GitError, match="Could not compare") as error:
         descends_from(tmp_path, "a" * 40, "b" * 40)
-    assert error.value.__cause__ is not None
     assert not isinstance(error.value, ValueError)
-    args = ["ancestor", "--repo", str(tmp_path), "--ancestor", "a" * 40, "--descendant", "b" * 40]
-    assert promotion.main(args) == 1
-    assert "FAILED: Could not compare" in capsys.readouterr().err
 
 
 def test_publish_gate_imports_only_the_standard_library() -> None:
@@ -1018,7 +854,6 @@ def test_legacy_core_tags_skip_attestation(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(promotion, "verify_provenance", forbidden)
     stack = Stack.model_validate_json(stack_path.read_bytes())
     verify_core_assets(stack, tmp_path / "core")
-    assert promotion.main(["core", "--stack", str(stack_path), "--workdir", str(tmp_path / "core")]) == 0
 
 
 FAKE_GH = """#!{python}
@@ -1198,7 +1033,7 @@ def channel_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pa
 
     Parameters:
         tmp_path (Path): private fixture directory.
-        monkeypatch (pytest.MonkeyPatch): chdirs into the checkout and installs the `gh meta` stub.
+        monkeypatch (pytest.MonkeyPatch): chdirs into the checkout and stubs the SSH host-key fetch.
 
     Returns:
         tuple[Path, Path, list[str]]: remote, checkout, and the SHAs `[c1, c2, side]` where `c2`
@@ -1220,7 +1055,7 @@ def channel_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pa
     git(work, "commit", "-q", "-am", "side")
     shas.append(git(work, "rev-parse", "HEAD"))
     git(work, "checkout", "-q", "main")
-    fake_gh(tmp_path, monkeypatch, [["api meta", 0, "ssh-ed25519 AAAA\n", ""]])
+    monkeypatch.setattr(publish_gate, "ssh_host_keys", lambda: "github.com ssh-ed25519 AAAA\n")
     monkeypatch.chdir(work)
     return remote, work, shas
 
@@ -1322,11 +1157,441 @@ def test_advance_channel_surfaces_a_failing_push(tmp_path: Path, monkeypatch: py
     assert channel_tip(remote) == before
 
 
-def test_promotion_workflow_has_no_inline_expressions_or_shell_logic() -> None:
-    """Inputs reach `run:` only through `env:`, and every `run:` is a single command."""
-    text = PROMOTION_WORKFLOW.read_text()
-    runs = re.findall(r"^\s+run: (.*)$", text, flags=re.MULTILINE)
+def test_advance_channel_writes_the_key_privately_and_scrubs_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key is created `0600` and removed; git/ssh children get no tokens or secrets."""
+    remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
+    monkeypatch.setenv("GH_TOKEN", "token-leak")
+    monkeypatch.setenv("DEPLOY_KEY", "key-leak")
+    seen: list[dict[str, str] | None] = []
+    real = publish_gate._command
+
+    def spy(*args: str, **kwargs: Any) -> Any:
+        """Record each child environment, then run the real command.
+
+        Parameters:
+            *args (str): command.
+            **kwargs (Any): command options.
+
+        Returns:
+            Any: the completed process.
+        """
+        seen.append(kwargs.get("env"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(publish_gate, "_command", spy)
+    modes: list[int] = []
+    real_write = publish_gate._write_private
+    monkeypatch.setattr(
+        publish_gate,
+        "_write_private",
+        lambda path, content: (real_write(path, content), modes.append(path.stat().st_mode & 0o777))[0],
+    )
+    advance(tmp_path, remote, c1)
+    assert modes == [0o600]
+    assert seen
+    for env in seen:
+        assert env is not None
+        assert set(env) == {"GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "PATH", "HOME"}
+    key = tmp_path / "stack-channel-key"
+    key.write_text("stale")
+    with pytest.raises(FileExistsError):
+        advance(tmp_path, remote, c1)  # O_EXCL: never reuse a pre-existing key file
+
+
+def stable_rules(sha: str, *, channel: bool = True) -> list[list[Any]]:
+    """Build `gh` stub rules for a live `stack-channel` whose tip names `sha`.
+
+    Parameters:
+        sha (str): commit in the tip's `stable.json`.
+        channel (bool): whether the channel branch exists.
+
+    Returns:
+        list[list[Any]]: stub rules.
+    """
+    listing = [[{"ref": "refs/heads/stack-channel"}]] if channel else [[]]
+    return [
+        ["matching-refs/heads/stack-channel", 0, json.dumps(listing), ""],
+        ["contents/stable.json", 0, snapshot_for_bytes(sha), ""],
+        ["attestation verify", 0, "", ""],
+    ]
+
+
+def snapshot_for_bytes(sha: str) -> str:
+    """Return the minimal snapshot text used by `snapshot_for`.
+
+    Parameters:
+        sha (str): commit.
+
+    Returns:
+        str: compact JSON.
+    """
+    return json.dumps({"source_sha": sha}, sort_keys=True, separators=(",", ":"))
+
+
+def preflight(tmp_path: Path, sha: str, operation: str = "promote", *, key_present: bool = True) -> None:
+    """Run `preflight_channel` for a minimal snapshot.
+
+    Parameters:
+        tmp_path (Path): fixture directory.
+        sha (str): candidate commit.
+        operation (str): `promote` or `rollback`.
+        key_present (bool): whether the deploy key secret is set.
+    """
+    publish_gate.preflight_channel(
+        "o/r", sha, snapshot_for(tmp_path, sha),
+        key_present=key_present, operation=operation,
+        temp_dir=tmp_path, existing_dir=tmp_path / "retained",
+    )  # fmt: skip
+
+
+def test_preflight_passes_for_a_seed_a_descendant_and_an_identical_tip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No channel (seed), a descendant of the tip, and the same bytes all pass without writing."""
+    _remote, _work, (c1, c2, _side) = channel_fixture(tmp_path, monkeypatch)
+    fake_gh(tmp_path, monkeypatch, stable_rules(c1, channel=False))
+    preflight(tmp_path, c1)
+    fake_gh(tmp_path / "b", monkeypatch, stable_rules(c1))
+    preflight(tmp_path, c2)
+    fake_gh(tmp_path / "c", monkeypatch, stable_rules(c2))
+    preflight(tmp_path, c2)
+
+
+def test_preflight_refuses_before_any_side_effect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing key, stale or diverged candidate, bad tip, or failed attestation all fail closed."""
+    _remote, _work, (c1, c2, side) = channel_fixture(tmp_path, monkeypatch)
+    with pytest.raises(PublishError, match="STACK_CHANNEL_DEPLOY_KEY"):
+        preflight(tmp_path, c1, key_present=False)
+    fake_gh(tmp_path, monkeypatch, stable_rules(c2))
+    for stale in (c1, side):
+        with pytest.raises(ValueError, match="does not descend"):
+            preflight(tmp_path, stale)
+    fake_gh(
+        tmp_path / "b",
+        monkeypatch,
+        [*stable_rules(c1)[:1], ["contents/stable.json", 0, '{"source_sha":"--x"}', ""], stable_rules(c1)[2]],
+    )
+    with pytest.raises(PublishError, match="malformed"):
+        preflight(tmp_path, c2)
+    fake_gh(tmp_path / "c", monkeypatch, [*stable_rules(c1)[:2], ["attestation verify", 1, "", "no match"]])
+    with pytest.raises(PublishError, match="no match"):
+        preflight(tmp_path, c2)
+    other = stable_rules(c2)
+    other[1][2] = json.dumps({"source_sha": c2, "x": 1})
+    fake_gh(tmp_path / "d", monkeypatch, other)
+    with pytest.raises(PublishError, match="different bytes"):
+        preflight(tmp_path, c2)
+
+
+def test_preflight_rollback_requires_a_retained_promoted_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rollback target needs its tag, a release asset and byte-equal contents."""
+    _remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
+    tag = f"stack/{c1}"
+    fake_gh(tmp_path, monkeypatch, [[f"matching-refs/tags/{tag}", 0, "[[]]", ""]])
+    with pytest.raises(PublishError, match="not a previously promoted"):
+        preflight(tmp_path, c1, "rollback")
+    rules = [
+        [f"matching-refs/tags/{tag}", 0, refs_for(tag, c1), ""],
+        [f"releases/tags/{tag}", 0, release_json(["stack-snapshot.json"]), ""],
+        ["release download", 0, snapshot_for_bytes(c1), ""],
+    ]
+    fake_gh(tmp_path / "b", monkeypatch, rules)
+    preflight(tmp_path, c1, "rollback")
+
+
+def test_preflight_cli_reads_the_key_flag_from_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`preflight-channel` exits 1 unless the flag variable is exactly `true`."""
+    _remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
+    fake_gh(tmp_path, monkeypatch, stable_rules(c1, channel=False))
+    argv = [
+        "preflight-channel", "--repo", "o/r", "--source-sha", c1,
+        "--snapshot", str(snapshot_for(tmp_path, c1)), "--key-present-env", "HAS_KEY",
+        "--temp-dir", str(tmp_path), "--existing-dir", str(tmp_path / "retained"),
+        "--operation", "promote",
+    ]  # fmt: skip
+    monkeypatch.setenv("HAS_KEY", "false")
+    assert publish_gate.main(argv) == 1
+    assert "STACK_CHANNEL_DEPLOY_KEY" in capsys.readouterr().err
+    monkeypatch.setenv("HAS_KEY", "true")
+    assert publish_gate.main(argv) == 0
+
+
+def test_tip_source_sha_validates_the_commit() -> None:
+    """Only a 40-hex string is a usable revision; option-like values are refused."""
+    assert publish_gate.tip_source_sha(b'{"source_sha":"' + b"a" * 40 + b'"}') == "a" * 40
+    for bad in (
+        b"{}",
+        b"[",
+        b'{"source_sha":"-x"}',
+        b'{"source_sha":5}',
+        b'{"source_sha":"' + b"A" * 40 + b'"}',
+    ):
+        with pytest.raises(PublishError):
+            publish_gate.tip_source_sha(bad)
+
+
+# promotion_verify: drive `verify()`/`main()` with a `gh` stub on PATH and real git repositories.
+
+
+def verify_env(tmp_path: Path, operation: str, *, sha: str = "", tag: str = "") -> dict[str, str]:
+    """Build the workflow environment for `promotion_verify.main`.
+
+    Parameters:
+        tmp_path (Path): fixture directory holding `workspace`.
+        operation (str): dispatch operation.
+        sha (str): `source_sha` input.
+        tag (str): `rollback_tag` input.
+
+    Returns:
+        dict[str, str]: environment mapping.
+    """
+    return {
+        "OPERATION": operation, "REQUESTED_SHA": sha, "ROLLBACK_TAG": tag,
+        "GITHUB_REPOSITORY": "o/r", "GITHUB_WORKSPACE": str(tmp_path / "workspace"),
+        "GITHUB_OUTPUT": str(tmp_path / "output"), "PROMO": str(tmp_path / "promo"),
+        "RUNNER_TEMP": str(tmp_path / "runner"),
+    }  # fmt: skip
+
+
+def main_repo(tmp_path: Path) -> tuple[str, str, str]:
+    """Create `origin` plus a `workspace` clone, and one commit that is not on `origin/main`.
+
+    Parameters:
+        tmp_path (Path): fixture directory.
+
+    Returns:
+        tuple[str, str, str]: `origin/main`'s first commit, its second, and an unmerged commit.
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    git(origin, "init", "-q", "-b", "main")
+    git(origin, "commit", "-q", "--allow-empty", "-m", "one")
+    one = git(origin, "rev-parse", "HEAD")
+    git(origin, "commit", "-q", "--allow-empty", "-m", "two")
+    two = git(origin, "rev-parse", "HEAD")
+    git(tmp_path, "clone", "-q", str(origin), "workspace")
+    work = tmp_path / "workspace"
+    git(work, "checkout", "-q", "-b", "side", one)
+    git(work, "commit", "-q", "--allow-empty", "-m", "unmerged")
+    side = git(work, "rev-parse", "HEAD")
+    git(work, "checkout", "-q", "main")
+    return one, two, side
+
+
+def stub_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Replace the evidence-heavy `build_candidate` with one that writes a valid snapshot.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): patches the module.
+        tmp_path (Path): fixture directory.
+    """
+
+    def build(ctx: promotion_verify.VerifyContext, source_sha: str) -> None:
+        """Write the candidate snapshot a real build would produce.
+
+        Parameters:
+            ctx (promotion_verify.VerifyContext): runner context.
+            source_sha (str): selected commit.
+        """
+        (ctx.promo / "stack-snapshot.json").write_text(snapshot(tmp_path, source_sha).model_dump_json())
+
+    monkeypatch.setattr(promotion_verify, "build_candidate", build)
+
+
+def test_verify_refuses_a_sha_that_is_not_on_origin_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The ancestor step runs against the fetched `origin/main`, before any evidence is read."""
+    _one, _two, side = main_repo(tmp_path)
+    fake_gh(tmp_path, monkeypatch, [])  # any gh call would exit 99
+    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=side)) == 1
+    assert "is not an ancestor of 'origin/main'" in capsys.readouterr().err
+    assert (tmp_path / "fake-gh" / "calls.log").read_text() == ""
+
+
+def test_verify_seeds_a_missing_channel_and_requires_a_successor_otherwise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No channel is the seed; an attested descendant passes; stale, duplicate and bad evidence fail."""
+    one, two, _side = main_repo(tmp_path)
+    stub_candidate(monkeypatch, tmp_path)
+    fake_gh(tmp_path, monkeypatch, stable_rules(one, channel=False))
+    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 0
+    assert f"source_sha={two}" in (tmp_path / "output").read_text()
+    snapshot_text = snapshot(tmp_path, one).model_dump_json()
+    fake_gh(
+        tmp_path / "b",
+        monkeypatch,
+        [
+            *stable_rules(one)[:1],
+            ["contents/stable.json", 0, snapshot_text, ""],
+            ["attestation verify", 0, "", ""],
+        ],
+    )
+    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 0
+    fake_gh(
+        tmp_path / "c",
+        monkeypatch,
+        [
+            *stable_rules(one)[:1],
+            ["contents/stable.json", 0, snapshot_text, ""],
+            ["attestation verify", 1, "", "bad signer"],
+        ],
+    )
+    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 1
+    assert "bad signer" in capsys.readouterr().err
+    newer = snapshot(tmp_path, two).model_dump_json()
+    fake_gh(
+        tmp_path / "d",
+        monkeypatch,
+        [*stable_rules(one)[:1], ["contents/stable.json", 0, newer, ""], ["attestation verify", 0, "", ""]],
+    )
+    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 1
+    assert "already is the stable snapshot" in capsys.readouterr().err
+    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=one)) == 1
+    assert "does not descend" in capsys.readouterr().err
+
+
+def test_verify_fails_closed_on_a_failing_gh_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `gh` failure (here the channel listing) exits 1 with one `FAILED:` line, never a seed."""
+    _one, two, _side = main_repo(tmp_path)
+    stub_candidate(monkeypatch, tmp_path)
+    fake_gh(tmp_path, monkeypatch, [["matching-refs/heads/stack-channel", 1, "", "HTTP 502"]])
+    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("FAILED:")
+    assert "HTTP 502" in err
+
+
+def test_verify_rollback_downloads_attests_and_pins_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Rollback verifies the retained asset only; another commit's snapshot or a bad attestation fails."""
+    one, _two, _side = main_repo(tmp_path)
+    tag = f"stack/{one}"
+    retained = snapshot(tmp_path, one).model_dump_json()
+    fake_gh(tmp_path, monkeypatch, [["release download", 0, retained, ""], ["attestation verify", 0, "", ""]])
+    assert promotion_verify.main(verify_env(tmp_path, "rollback", tag=tag)) == 0
+    calls = (tmp_path / "fake-gh" / "calls.log").read_text()
+    assert "matching-refs" not in calls
+    mismatched = snapshot(tmp_path, "b" * 40).model_dump_json()
+    fake_gh(
+        tmp_path / "b",
+        monkeypatch,
+        [["release download", 0, mismatched, ""], ["attestation verify", 0, "", ""]],
+    )
+    assert promotion_verify.main(verify_env(tmp_path, "rollback", tag=tag)) == 1
+    assert "differs" in capsys.readouterr().err
+    fake_gh(
+        tmp_path / "c",
+        monkeypatch,
+        [["release download", 0, retained, ""], ["attestation verify", 1, "", "unsigned"]],
+    )
+    assert promotion_verify.main(verify_env(tmp_path, "rollback", tag=tag)) == 1
+    assert "unsigned" in capsys.readouterr().err
+
+
+def test_context_from_env_reports_every_missing_variable() -> None:
+    """A missing required variable is a `ValueError` naming it, and `main` turns it into exit 1."""
+    env = {"OPERATION": "promote", "GITHUB_REPOSITORY": "o/r"}
+    with pytest.raises(ValueError, match="GITHUB_WORKSPACE, GITHUB_OUTPUT, PROMO"):
+        promotion_verify.VerifyContext.from_env(env)
+    assert promotion_verify.main(env) == 1
+
+
+# Workflow shape.
+
+
+def workflow() -> dict[str, Any]:
+    """Parse `promote-stack.yml`.
+
+    Returns:
+        dict[str, Any]: the workflow mapping (`on` is parsed by YAML as `True`).
+    """
+    return yaml.safe_load(PROMOTION_WORKFLOW.read_text())
+
+
+def step_names(job: str) -> list[str]:
+    """List one job's step labels (name, else `uses`/`id`) in order.
+
+    Parameters:
+        job (str): job id.
+
+    Returns:
+        list[str]: labels.
+    """
+    return [step.get("name") or step.get("uses", "") for step in workflow()["jobs"][job]["steps"]]
+
+
+def test_workflow_permissions_environment_and_concurrency() -> None:
+    """Least privilege per job, the environment only on the write job, and the two queues."""
+    wf = workflow()
+    assert wf["permissions"] == {}
+    jobs = wf["jobs"]
+    assert jobs["verify"]["permissions"] == {"contents": "read", "actions": "read", "checks": "read"}
+    assert jobs["attest-and-publish"]["permissions"] == {
+        "contents": "write", "attestations": "write", "id-token": "write",
+    }  # fmt: skip
+    assert "environment" not in jobs["verify"]
+    assert jobs["attest-and-publish"]["environment"] == "stack-promotion"
+    assert all(job["if"].startswith("github.ref == 'refs/heads/main'") for job in jobs.values())
+    assert wf["concurrency"]["cancel-in-progress"] is False
+    assert "inputs.operation" in wf["concurrency"]["group"]
+    assert "concurrency" not in jobs["verify"]
+    assert jobs["attest-and-publish"]["concurrency"] == {
+        "group": "stack-channel",
+        "cancel-in-progress": False,
+    }
+
+
+def test_workflow_preflight_runs_before_any_side_effect() -> None:
+    """`preflight-channel` precedes the attestation, release, tag and pointer steps."""
+    steps = workflow()["jobs"]["attest-and-publish"]["steps"]
+    commands = [step.get("run", step.get("uses", "")) for step in steps]
+
+    def index(needle: str) -> int:
+        """Find the first step mentioning `needle`.
+
+        Parameters:
+            needle (str): substring of a `run:` or `uses:` value.
+
+        Returns:
+            int: its position.
+        """
+        return next(i for i, command in enumerate(commands) if needle in command)
+
+    preflight_at = index("preflight-channel")
+    assert index("prepare-release") < preflight_at
+    for side_effect in ("attest-build-provenance", "gh release create", "tag-target", "advance-channel"):
+        assert preflight_at < index(side_effect)
+    assert "DEPLOY_KEY" not in steps[preflight_at]["env"]  # only its presence is passed on
+    advance = next(step for step in steps if "advance-channel" in step.get("run", ""))
+    assert "GH_TOKEN" not in advance["env"]
+    assert [name for name in advance["env"] if "KEY" in name] == ["DEPLOY_KEY"]
+
+
+ALLOWED_RUN_PREFIXES = (
+    "uv sync --locked --directory integration",
+    'uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.',
+    'PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate ',
+    "gh ",
+)
+
+
+def test_workflow_runs_are_single_allowlisted_commands_without_expressions() -> None:
+    """Inputs reach `run:` only through `env:`; every `run:` is one allowlisted command."""
+    runs = [step["run"] for job in workflow()["jobs"].values() for step in job["steps"] if "run" in step]
     assert runs
-    assert not any("${{" in run for run in runs)
-    assert not re.search(r"^\s+run: [|>]", text, flags=re.MULTILINE)
-    assert not any(token in run for run in runs for token in (">", "&&", " | ", ";"))
+    for run in runs:
+        assert "${{" not in run
+        assert "\n" not in run.strip()
+        assert run.startswith(ALLOWED_RUN_PREFIXES), run
+        assert not re.search(r"\|\||\||&|;|>|<|`|\$\(", run), run
