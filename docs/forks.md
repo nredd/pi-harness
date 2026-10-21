@@ -18,6 +18,18 @@ licenses, source histories, and build procedures remain owned by their respectiv
 `packages/subagents` subtree imports `nredd/pi-subagents` commit
 `526fa2df76ba85df31bd14a843fae370e8efe78a` (`v0.22.0-nredd.5`) with its history; its Gitlink and
 `forks.yml` job remain until the shipped-selection PR changes the stack to npm.
+The `packages/computer-use` subtree imports `nredd/pi-computer-use` commit
+`3fd2fe39b702558c86491e488019ac9c80f7583e` (`v0.5.1-nredd.2`) with its history. The old
+`forks.yml` job for it is only a NOT RUN placeholder; it proves nothing. The `forks/pi-computer-use`
+Gitlink duplicate of the subtree is intentional until the shipped-selection PR changes the stack to
+npm. Its packed
+stock-Pi contract checks loading and the model-visible tools only; native helper and desktop behavior
+remain NOT RUN without an interactive macOS desktop and TCC grants. Only macOS helpers ship.
+
+Known follow-up: `packages/computer-use/scripts/setup-helper.mjs` still sets `releaseRepo` to
+`injaneity/pi-computer-use` (the fallback download source when no prebuilt helper is present) and the
+bundle id/signing identity to `com.injaneity.pi-computer-use`. An import PR does not change runtime
+behavior, so this is unchanged.
 The selected `forks/pi-subagents` commit is additionally exercised with the real packed preset and
 dev-tools by `make check-fork-package-contracts` ([details](package-contracts.md)); it refuses a missing,
 dirty or Gitlink-mismatched fork and never bootstraps or installs into it.
