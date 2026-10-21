@@ -9,25 +9,20 @@ on:
         required: false
         type: string
       operation:
-        description: Verify, promote, or explicitly roll back a retained snapshot
+        description: Verify only, or verify and promote
         required: true
         default: verify-only
         type: choice
-        options: [verify-only, promote, rollback]
-      rollback_tag:
-        description: "Required only for rollback: stack/<40 lowercase hexadecimal characters>"
-        required: false
-        type: string
+        options: [verify-only, promote]
 
 defaults:
   run:
     shell: bash -euo pipefail {0}
 
 # One queue per operation and selected commit, so a `verify-only` dispatch never replaces a pending
-# `promote` of the same commit. Writes serialize globally on the `attest-and-publish` job's
-# `stack-channel` group instead; see docs/stack-promotion.md.
+# `promote` of the same commit; see docs/stack-promotion.md.
 concurrency:
-  group: stack-promotion-${{ inputs.operation }}-${{ inputs.source_sha || inputs.rollback_tag }}
+  group: stack-promotion-${{ inputs.operation }}-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 permissions: {}
@@ -67,7 +62,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OPERATION: ${{ inputs.operation }}
           REQUESTED_SHA: ${{ inputs.source_sha }}
-          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
         run: uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion_verify
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: inputs.operation != 'verify-only'
@@ -82,9 +76,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: stack-promotion
-    concurrency:
-      group: stack-channel
-      cancel-in-progress: false
     permissions:
       contents: write
       attestations: write
@@ -100,42 +91,27 @@ jobs:
           path: promotion
       - id: release
         name: Validate existing snapshot release and tag
-        if: inputs.operation == 'promote'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate prepare-release --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --rebuilt promotion/stack-snapshot.json --existing-dir existing --github-output "$GITHUB_OUTPUT"
-      - name: Preflight the stack-channel pointer before any side effect
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HAS_DEPLOY_KEY: ${{ secrets.STACK_CHANNEL_DEPLOY_KEY != '' }}
-          OPERATION: ${{ inputs.operation }}
-          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate preflight-channel --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --snapshot promotion/stack-snapshot.json --key-present-env HAS_DEPLOY_KEY --temp-dir "$RUNNER_TEMP" --existing-dir retained --operation "$OPERATION"
       - name: Verify the existing snapshot attestation
-        if: inputs.operation == 'promote' && steps.release.outputs.state == 'resume'
+        if: steps.release.outputs.state == 'resume'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh attestation verify existing/stack-snapshot.json --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
-        if: inputs.operation == 'promote' && steps.release.outputs.state == 'create'
+        if: steps.release.outputs.state == 'create'
         with:
           subject-path: promotion/stack-snapshot.json
       - name: Create the immutable release
-        if: inputs.operation == 'promote' && steps.release.outputs.state == 'create'
+        if: steps.release.outputs.state == 'create'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         run: gh release create "stack/$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "stack/$SOURCE_SHA" --notes 'Verified promoted stack snapshot.' promotion/stack-snapshot.json
       - name: Confirm the tag points at the selected commit
-        if: inputs.operation == 'promote'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate tag-target --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
-      - name: Advance the stack-channel pointer
-        env:
-          DEPLOY_KEY: ${{ secrets.STACK_CHANNEL_DEPLOY_KEY }}
-          OPERATION: ${{ inputs.operation }}
-          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate advance-channel --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --snapshot promotion/stack-snapshot.json --deploy-key-env DEPLOY_KEY --temp-dir "$RUNNER_TEMP" --operation "$OPERATION"

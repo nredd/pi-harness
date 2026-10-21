@@ -33,7 +33,6 @@ from harness.promotion import (
     build_gates,
     build_snapshot,
     candidate_run_ids,
-    channel_exists,
     collect_owned_evidence,
     descends_from,
     flatten_pages,
@@ -45,9 +44,8 @@ from harness.promotion import (
     stack_bytes,
     verify_core_assets,
     verify_required_checks,
-    verify_successor,
 )
-from harness.publish_gate import PublishError, advance_channel, release_state, verify_tag_target
+from harness.publish_gate import PublishError, release_state, verify_tag_target
 from harness.release import LEGACY_CHECKSUMS
 from harness.stack import Stack
 
@@ -155,47 +153,6 @@ def test_snapshot_rejects_tampering(tmp_path: Path, change: dict[str, Any]) -> N
     document = item.model_dump(mode="json") | change
     with pytest.raises(ValidationError):
         StackSnapshot.model_validate(document)
-
-
-def test_successor_accepts_seed_and_descendant(tmp_path: Path) -> None:
-    """Allow the initial promotion and a Git-descendant candidate.
-
-    Parameters:
-        tmp_path (Path): private fixture directory
-
-    Returns:
-        None: None.
-    """
-    stable = snapshot(tmp_path, "a" * 40)
-    candidate = snapshot(tmp_path, "b" * 40)
-    verify_successor(stable, None, False)
-    verify_successor(candidate, stable, True)
-
-
-@pytest.mark.parametrize(
-    ("source_sha", "descends", "message"),
-    [
-        ("a" * 40, True, "already"),
-        ("b" * 40, False, "does not descend"),
-    ],
-)
-def test_successor_rejects_stale_or_rollback_candidate(
-    tmp_path: Path, source_sha: str, descends: bool, message: str
-) -> None:
-    """Require a new source SHA descended from the current stable source.
-
-    Parameters:
-        tmp_path (Path): private fixture directory
-        source_sha (str): candidate source commit
-        descends (bool): whether the candidate descends from stable
-        message (str): expected error text
-
-    Returns:
-        None: None.
-    """
-    stable = snapshot(tmp_path, "a" * 40)
-    with pytest.raises(ValueError, match=message):
-        verify_successor(snapshot(tmp_path, source_sha), stable, descends)
 
 
 def fixture(name: str) -> Any:
@@ -430,57 +387,42 @@ def test_owned_tags_and_gates_require_exact_owned_evidence(tmp_path: Path) -> No
         build_gates(stack, ["a"], [], owned, core)
 
 
-@pytest.mark.parametrize(
-    ("operation", "sha", "tag", "expected"),
-    [
-        ("promote", "a" * 40, "", "a" * 40),
-        ("verify-only", "a" * 40, "", "a" * 40),
-        ("rollback", "", "stack/" + "c" * 40, "c" * 40),
-    ],
-)
-def test_select_source_sha_accepts(operation: str, sha: str, tag: str, expected: str) -> None:
-    """Accept exactly-shaped inputs for each operation.
+@pytest.mark.parametrize("operation", ["promote", "verify-only"])
+def test_select_source_sha_accepts(operation: str) -> None:
+    """Accept an exactly-shaped SHA for each operation.
 
     Parameters:
         operation (str): dispatch operation
-        sha (str): `source_sha` input
-        tag (str): `rollback_tag` input
-        expected (str): expected selected SHA
 
     Returns:
         None: None.
     """
-    assert select_source_sha(operation, sha, tag) == expected
+    assert select_source_sha(operation, "a" * 40) == "a" * 40
 
 
 @pytest.mark.parametrize(
-    ("operation", "sha", "tag"),
+    ("operation", "sha"),
     [
-        ("promote", "A" * 40, ""),
-        ("promote", "a" * 39, ""),
-        ("promote", "", ""),
-        ("promote", "a" * 40, "stack/" + "c" * 40),
-        ("rollback", "", "stack/" + "c" * 39),
-        ("rollback", "", "stack/" + "C" * 40),
-        ("rollback", "", "stack/" + "c" * 40 + "\n"),
-        ("rollback", "", "xstack/" + "c" * 40),
-        ("rollback", "a" * 40, "stack/" + "c" * 40),
-        ("delete", "a" * 40, ""),
+        ("promote", "A" * 40),
+        ("promote", "a" * 39),
+        ("promote", ""),
+        ("promote", "a" * 40 + "\n"),
+        ("rollback", "a" * 40),
+        ("delete", "a" * 40),
     ],
 )
-def test_select_source_sha_rejects(operation: str, sha: str, tag: str) -> None:
-    """Reject malformed SHAs, tags, and operation/input mixes.
+def test_select_source_sha_rejects(operation: str, sha: str) -> None:
+    """Reject malformed SHAs and unknown operations (`rollback` no longer exists).
 
     Parameters:
         operation (str): dispatch operation
         sha (str): `source_sha` input
-        tag (str): `rollback_tag` input
 
     Returns:
         None: None.
     """
-    with pytest.raises(ValueError, match=r"source_sha|Rollback|operation"):
-        select_source_sha(operation, sha, tag)
+    with pytest.raises(ValueError, match=r"source_sha|operation"):
+        select_source_sha(operation, sha)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -498,42 +440,6 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["/usr/bin/git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env
     ).stdout.strip()
-
-
-def test_successor_and_descends_from_use_real_git(tmp_path: Path) -> None:
-    """Real ancestry: descendants pass; stale, divergent and duplicate candidates are refused."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init", "-q", "-b", "main")
-    git(repo, "commit", "-q", "--allow-empty", "-m", "one")
-    one = git(repo, "rev-parse", "HEAD")
-    git(repo, "commit", "-q", "--allow-empty", "-m", "two")
-    two = git(repo, "rev-parse", "HEAD")
-    git(repo, "checkout", "-q", "-b", "side", one)
-    git(repo, "commit", "-q", "--allow-empty", "-m", "side")
-    side = git(repo, "rev-parse", "HEAD")
-    snaps = {name: snapshot(tmp_path, sha) for name, sha in {"one": one, "two": two, "side": side}.items()}
-
-    def gate(candidate: str, stable: str | None) -> None:
-        """Run the real-ancestry successor gate.
-
-        Parameters:
-            candidate (str): candidate name.
-            stable (str | None): stable name, or `None` for the seed.
-        """
-        current = snaps[stable] if stable else None
-        descends = current is not None and descends_from(
-            repo, current.source_sha, snaps[candidate].source_sha
-        )
-        verify_successor(snaps[candidate], current, descends)
-
-    assert descends_from(repo, one, two)
-    assert not descends_from(repo, side, two)
-    gate("one", None)
-    gate("two", "one")
-    for candidate, stable in (("one", "two"), ("side", "two"), ("one", "one")):
-        with pytest.raises(ValueError, match="stable"):
-            gate(candidate, stable)
 
 
 def test_flatten_pages_flattens_lists_and_rejects_malformed_pages() -> None:
@@ -554,15 +460,6 @@ def test_candidate_runs_are_successful_push_main_runs_of_the_sha() -> None:
     assert candidate_run_ids(runs, "b" * 40) == []
 
 
-def test_channel_exists_ignores_prefix_matches() -> None:
-    """`matching-refs` is a prefix match; only the exact branch counts."""
-    assert channel_exists([[{"ref": "refs/heads/stack-channel"}]])
-    assert not channel_exists([[]])
-    assert not channel_exists([[{"ref": "refs/heads/stack-channel-old"}]])
-    with pytest.raises(ValueError, match="JSON array"):
-        channel_exists({"ref": "refs/heads/stack-channel"})
-
-
 def test_release_state_creates_resumes_or_refuses(tmp_path: Path) -> None:
     """No existing asset means create; an equal one resumes; a differing one fails closed.
 
@@ -580,21 +477,6 @@ def test_release_state_creates_resumes_or_refuses(tmp_path: Path) -> None:
     existing.write_bytes(b'{"x":1}')
     with pytest.raises(ValueError, match="differs"):
         release_state(existing, rebuilt)
-
-
-def test_advance_channel_requires_deploy_key(tmp_path: Path) -> None:
-    """The write boundary refuses before touching Git when its ruleset bypass key is absent.
-
-    Parameters:
-        tmp_path (Path): private snapshot and temporary paths.
-
-    Returns:
-        None: None.
-    """
-    snapshot = tmp_path / "snapshot.json"
-    snapshot.write_bytes(b"{}")
-    with pytest.raises(PublishError, match="STACK_CHANNEL_DEPLOY_KEY"):
-        advance_channel("nredd/pi-harness", "a" * 40, snapshot, "", tmp_path)
 
 
 def test_tag_target_requires_the_selected_sha() -> None:
@@ -694,6 +576,24 @@ def test_collect_owned_evidence_fails_on_missing_tag_and_failed_check(tmp_path: 
     with pytest.raises(EvidenceError, match="Command failed") as failed:
         run_stack_check(repo, "@nredd/pi-preset@0.2.0", repo)  # no `scripts/npm_release.py` here
     assert failed.value.__cause__ is not None
+
+
+def test_descends_from_uses_real_git_ancestry(tmp_path: Path) -> None:
+    """Descendants pass; a diverged or later commit is refused."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "one")
+    one = git(repo, "rev-parse", "HEAD")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "two")
+    two = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "-b", "side", one)
+    git(repo, "commit", "-q", "--allow-empty", "-m", "side")
+    side = git(repo, "rev-parse", "HEAD")
+    assert descends_from(repo, one, two)
+    assert descends_from(repo, two, two)
+    assert not descends_from(repo, two, one)
+    assert not descends_from(repo, side, two)
 
 
 def test_descends_from_raises_a_distinct_chained_error(tmp_path: Path) -> None:
@@ -1028,331 +928,22 @@ def test_confirm_tag_reads_the_exact_ref(tmp_path: Path, monkeypatch: pytest.Mon
     assert publish_gate.main(["tag-target", "--repo", "o/r", "--source-sha", "b" * 40]) == 1
 
 
-def channel_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, list[str]]:
-    """Create a bare `stack-channel` remote and a working checkout with linear plus diverged commits.
-
-    Parameters:
-        tmp_path (Path): private fixture directory.
-        monkeypatch (pytest.MonkeyPatch): chdirs into the checkout and stubs the SSH host-key fetch.
-
-    Returns:
-        tuple[Path, Path, list[str]]: remote, checkout, and the SHAs `[c1, c2, side]` where `c2`
-            descends from `c1` and `side` forks from `c1`.
-    """
-    remote, work = tmp_path / "remote.git", tmp_path / "work"
-    remote.mkdir()
-    git(remote, "init", "-q", "--bare")
-    work.mkdir()
-    git(work, "init", "-q", "-b", "main")
-    shas: list[str] = []
-    for name in ("c1", "c2"):
-        (work / "f.txt").write_text(name)
-        git(work, "add", "f.txt")
-        git(work, "commit", "-q", "-m", name)
-        shas.append(git(work, "rev-parse", "HEAD"))
-    git(work, "checkout", "-q", "-b", "side", shas[0])
-    (work / "f.txt").write_text("side")
-    git(work, "commit", "-q", "-am", "side")
-    shas.append(git(work, "rev-parse", "HEAD"))
-    git(work, "checkout", "-q", "main")
-    monkeypatch.setattr(publish_gate, "ssh_host_keys", lambda: "github.com ssh-ed25519 AAAA\n")
-    monkeypatch.chdir(work)
-    return remote, work, shas
-
-
-def snapshot_for(tmp_path: Path, sha: str) -> Path:
-    """Write a minimal snapshot naming `sha` (the channel gate only reads `source_sha`).
-
-    Parameters:
-        tmp_path (Path): fixture directory.
-        sha (str): commit.
-
-    Returns:
-        Path: the snapshot file.
-    """
-    path = tmp_path / f"snapshot-{sha[:8]}.json"
-    path.write_bytes(json.dumps({"source_sha": sha}, sort_keys=True, separators=(",", ":")).encode())
-    return path
-
-
-def advance(tmp_path: Path, remote: Path, sha: str, *, require_successor: bool = False) -> None:
-    """Run `advance_channel` against the bare remote.
-
-    Parameters:
-        tmp_path (Path): fixture directory.
-        remote (Path): bare remote.
-        sha (str): candidate commit.
-        require_successor (bool): whether to apply the live-tip ancestry gate.
-    """
-    advance_channel(
-        "o/r", sha, snapshot_for(tmp_path, sha), "KEY", tmp_path,
-        require_successor=require_successor, remote=str(remote),
-    )  # fmt: skip
-
-
-def channel_tip(remote: Path) -> tuple[str, str]:
-    """Return the remote `stack-channel` commit and its `stable.json`.
-
-    Parameters:
-        remote (Path): bare remote.
-
-    Returns:
-        tuple[str, str]: commit SHA and file contents.
-    """
-    return git(remote, "rev-parse", "stack-channel"), git(remote, "show", "stack-channel:stable.json")
-
-
-def test_advance_channel_seeds_then_noops_at_the_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A missing branch is seeded as an orphan with only `stable.json`; a repeat pushes nothing."""
-    remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
-    advance(tmp_path, remote, c1, require_successor=True)
-    tip, content = channel_tip(remote)
-    assert json.loads(content)["source_sha"] == c1
-    assert git(remote, "ls-tree", "--name-only", tip) == "stable.json"
-    advance(tmp_path, remote, c1, require_successor=True)
-    assert channel_tip(remote)[0] == tip
-    assert not (tmp_path / "stack-channel-key").exists()
-
-
-def test_advance_channel_requires_a_successor_of_the_live_tip(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Promotion re-checks ancestry against the live tip; rollback may move anywhere."""
-    remote, _work, (c1, c2, side) = channel_fixture(tmp_path, monkeypatch)
-    advance(tmp_path, remote, c1)
-    advance(tmp_path, remote, c2, require_successor=True)
-    tip = channel_tip(remote)[0]
-    for stale in (c1, side):
-        with pytest.raises(ValueError, match="does not descend"):
-            advance(tmp_path, remote, stale, require_successor=True)
-    assert channel_tip(remote)[0] == tip
-    advance(tmp_path, remote, c1)  # rollback
-    assert json.loads(channel_tip(remote)[1])["source_sha"] == c1
-
-
-def test_advance_channel_refuses_same_commit_with_different_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A tip naming the candidate commit but holding other bytes is not silently replaced."""
-    remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
-    advance(tmp_path, remote, c1)
-    snapshot = tmp_path / "other.json"
-    snapshot.write_bytes(json.dumps({"source_sha": c1, "x": 1}).encode())
-    with pytest.raises(PublishError, match="different bytes"):
-        advance_channel("o/r", c1, snapshot, "KEY", tmp_path, require_successor=True, remote=str(remote))
-
-
-def test_advance_channel_surfaces_a_failing_push(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A rejected push raises `PublishError` and leaves the remote untouched."""
-    remote, _work, (c1, c2, _side) = channel_fixture(tmp_path, monkeypatch)
-    advance(tmp_path, remote, c1)
-    before = channel_tip(remote)
-    hook = remote / "hooks" / "pre-receive"
-    hook.write_text("#!/bin/sh\necho rejected by ruleset >&2\nexit 1\n")
-    hook.chmod(0o755)
-    with pytest.raises(PublishError, match="git push"):
-        advance(tmp_path, remote, c2, require_successor=True)
-    assert channel_tip(remote) == before
-
-
-def test_advance_channel_writes_the_key_privately_and_scrubs_the_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The key is created `0600` and removed; git/ssh children get no tokens or secrets."""
-    remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
-    monkeypatch.setenv("GH_TOKEN", "token-leak")
-    monkeypatch.setenv("DEPLOY_KEY", "key-leak")
-    seen: list[dict[str, str] | None] = []
-    real = publish_gate._command
-
-    def spy(*args: str, **kwargs: Any) -> Any:
-        """Record each child environment, then run the real command.
-
-        Parameters:
-            *args (str): command.
-            **kwargs (Any): command options.
-
-        Returns:
-            Any: the completed process.
-        """
-        seen.append(kwargs.get("env"))
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(publish_gate, "_command", spy)
-    modes: list[int] = []
-    real_write = publish_gate._write_private
-    monkeypatch.setattr(
-        publish_gate,
-        "_write_private",
-        lambda path, content: (real_write(path, content), modes.append(path.stat().st_mode & 0o777))[0],
-    )
-    advance(tmp_path, remote, c1)
-    assert modes == [0o600]
-    assert seen
-    for env in seen:
-        assert env is not None
-        assert set(env) == {"GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "PATH", "HOME"}
-    key = tmp_path / "stack-channel-key"
-    key.write_text("stale")
-    with pytest.raises(FileExistsError):
-        advance(tmp_path, remote, c1)  # O_EXCL: never reuse a pre-existing key file
-
-
-def stable_rules(sha: str, *, channel: bool = True) -> list[list[Any]]:
-    """Build `gh` stub rules for a live `stack-channel` whose tip names `sha`.
-
-    Parameters:
-        sha (str): commit in the tip's `stable.json`.
-        channel (bool): whether the channel branch exists.
-
-    Returns:
-        list[list[Any]]: stub rules.
-    """
-    listing = [[{"ref": "refs/heads/stack-channel"}]] if channel else [[]]
-    return [
-        ["matching-refs/heads/stack-channel", 0, json.dumps(listing), ""],
-        ["contents/stable.json", 0, snapshot_for_bytes(sha), ""],
-        ["attestation verify", 0, "", ""],
-    ]
-
-
-def snapshot_for_bytes(sha: str) -> str:
-    """Return the minimal snapshot text used by `snapshot_for`.
-
-    Parameters:
-        sha (str): commit.
-
-    Returns:
-        str: compact JSON.
-    """
-    return json.dumps({"source_sha": sha}, sort_keys=True, separators=(",", ":"))
-
-
-def preflight(tmp_path: Path, sha: str, operation: str = "promote", *, key_present: bool = True) -> None:
-    """Run `preflight_channel` for a minimal snapshot.
-
-    Parameters:
-        tmp_path (Path): fixture directory.
-        sha (str): candidate commit.
-        operation (str): `promote` or `rollback`.
-        key_present (bool): whether the deploy key secret is set.
-    """
-    publish_gate.preflight_channel(
-        "o/r", sha, snapshot_for(tmp_path, sha),
-        key_present=key_present, operation=operation,
-        temp_dir=tmp_path, existing_dir=tmp_path / "retained",
-    )  # fmt: skip
-
-
-def test_preflight_passes_for_a_seed_a_descendant_and_an_identical_tip(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No channel (seed), a descendant of the tip, and the same bytes all pass without writing."""
-    _remote, _work, (c1, c2, _side) = channel_fixture(tmp_path, monkeypatch)
-    fake_gh(tmp_path, monkeypatch, stable_rules(c1, channel=False))
-    preflight(tmp_path, c1)
-    fake_gh(tmp_path / "b", monkeypatch, stable_rules(c1))
-    preflight(tmp_path, c2)
-    fake_gh(tmp_path / "c", monkeypatch, stable_rules(c2))
-    preflight(tmp_path, c2)
-
-
-def test_preflight_refuses_before_any_side_effect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A missing key, stale or diverged candidate, bad tip, or failed attestation all fail closed."""
-    _remote, _work, (c1, c2, side) = channel_fixture(tmp_path, monkeypatch)
-    with pytest.raises(PublishError, match="STACK_CHANNEL_DEPLOY_KEY"):
-        preflight(tmp_path, c1, key_present=False)
-    fake_gh(tmp_path, monkeypatch, stable_rules(c2))
-    for stale in (c1, side):
-        with pytest.raises(ValueError, match="does not descend"):
-            preflight(tmp_path, stale)
-    fake_gh(
-        tmp_path / "b",
-        monkeypatch,
-        [*stable_rules(c1)[:1], ["contents/stable.json", 0, '{"source_sha":"--x"}', ""], stable_rules(c1)[2]],
-    )
-    with pytest.raises(PublishError, match="malformed"):
-        preflight(tmp_path, c2)
-    fake_gh(tmp_path / "c", monkeypatch, [*stable_rules(c1)[:2], ["attestation verify", 1, "", "no match"]])
-    with pytest.raises(PublishError, match="no match"):
-        preflight(tmp_path, c2)
-    other = stable_rules(c2)
-    other[1][2] = json.dumps({"source_sha": c2, "x": 1})
-    fake_gh(tmp_path / "d", monkeypatch, other)
-    with pytest.raises(PublishError, match="different bytes"):
-        preflight(tmp_path, c2)
-
-
-def test_preflight_rollback_requires_a_retained_promoted_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A rollback target needs its tag, a release asset and byte-equal contents."""
-    _remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
-    tag = f"stack/{c1}"
-    fake_gh(tmp_path, monkeypatch, [[f"matching-refs/tags/{tag}", 0, "[[]]", ""]])
-    with pytest.raises(PublishError, match="not a previously promoted"):
-        preflight(tmp_path, c1, "rollback")
-    rules = [
-        [f"matching-refs/tags/{tag}", 0, refs_for(tag, c1), ""],
-        [f"releases/tags/{tag}", 0, release_json(["stack-snapshot.json"]), ""],
-        ["release download", 0, snapshot_for_bytes(c1), ""],
-    ]
-    fake_gh(tmp_path / "b", monkeypatch, rules)
-    preflight(tmp_path, c1, "rollback")
-
-
-def test_preflight_cli_reads_the_key_flag_from_the_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """`preflight-channel` exits 1 unless the flag variable is exactly `true`."""
-    _remote, _work, (c1, *_rest) = channel_fixture(tmp_path, monkeypatch)
-    fake_gh(tmp_path, monkeypatch, stable_rules(c1, channel=False))
-    argv = [
-        "preflight-channel", "--repo", "o/r", "--source-sha", c1,
-        "--snapshot", str(snapshot_for(tmp_path, c1)), "--key-present-env", "HAS_KEY",
-        "--temp-dir", str(tmp_path), "--existing-dir", str(tmp_path / "retained"),
-        "--operation", "promote",
-    ]  # fmt: skip
-    monkeypatch.setenv("HAS_KEY", "false")
-    assert publish_gate.main(argv) == 1
-    assert "STACK_CHANNEL_DEPLOY_KEY" in capsys.readouterr().err
-    monkeypatch.setenv("HAS_KEY", "true")
-    assert publish_gate.main(argv) == 0
-
-
-def test_tip_source_sha_validates_the_commit() -> None:
-    """Only a 40-hex string is a usable revision; option-like values are refused."""
-    assert publish_gate.tip_source_sha(b'{"source_sha":"' + b"a" * 40 + b'"}') == "a" * 40
-    for bad in (
-        b"{}",
-        b"[",
-        b'{"source_sha":"-x"}',
-        b'{"source_sha":5}',
-        b'{"source_sha":"' + b"A" * 40 + b'"}',
-    ):
-        with pytest.raises(PublishError):
-            publish_gate.tip_source_sha(bad)
-
-
 # promotion_verify: drive `verify()`/`main()` with a `gh` stub on PATH and real git repositories.
 
 
-def verify_env(tmp_path: Path, operation: str, *, sha: str = "", tag: str = "") -> dict[str, str]:
+def verify_env(tmp_path: Path, operation: str, *, sha: str = "") -> dict[str, str]:
     """Build the workflow environment for `promotion_verify.main`.
 
     Parameters:
         tmp_path (Path): fixture directory holding `workspace`.
         operation (str): dispatch operation.
         sha (str): `source_sha` input.
-        tag (str): `rollback_tag` input.
 
     Returns:
         dict[str, str]: environment mapping.
     """
     return {
-        "OPERATION": operation, "REQUESTED_SHA": sha, "ROLLBACK_TAG": tag,
+        "OPERATION": operation, "REQUESTED_SHA": sha,
         "GITHUB_REPOSITORY": "o/r", "GITHUB_WORKSPACE": str(tmp_path / "workspace"),
         "GITHUB_OUTPUT": str(tmp_path / "output"), "PROMO": str(tmp_path / "promo"),
         "RUNNER_TEMP": str(tmp_path / "runner"),
@@ -1415,88 +1006,17 @@ def test_verify_refuses_a_sha_that_is_not_on_origin_main(
     assert (tmp_path / "fake-gh" / "calls.log").read_text() == ""
 
 
-def test_verify_seeds_a_missing_channel_and_requires_a_successor_otherwise(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_verify_writes_the_selected_sha_for_a_commit_on_origin_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No channel is the seed; an attested descendant passes; stale, duplicate and bad evidence fail."""
-    one, two, _side = main_repo(tmp_path)
-    stub_candidate(monkeypatch, tmp_path)
-    fake_gh(tmp_path, monkeypatch, stable_rules(one, channel=False))
-    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 0
-    assert f"source_sha={two}" in (tmp_path / "output").read_text()
-    snapshot_text = snapshot(tmp_path, one).model_dump_json()
-    fake_gh(
-        tmp_path / "b",
-        monkeypatch,
-        [
-            *stable_rules(one)[:1],
-            ["contents/stable.json", 0, snapshot_text, ""],
-            ["attestation verify", 0, "", ""],
-        ],
-    )
-    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 0
-    fake_gh(
-        tmp_path / "c",
-        monkeypatch,
-        [
-            *stable_rules(one)[:1],
-            ["contents/stable.json", 0, snapshot_text, ""],
-            ["attestation verify", 1, "", "bad signer"],
-        ],
-    )
-    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 1
-    assert "bad signer" in capsys.readouterr().err
-    newer = snapshot(tmp_path, two).model_dump_json()
-    fake_gh(
-        tmp_path / "d",
-        monkeypatch,
-        [*stable_rules(one)[:1], ["contents/stable.json", 0, newer, ""], ["attestation verify", 0, "", ""]],
-    )
-    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 1
-    assert "already is the stable snapshot" in capsys.readouterr().err
-    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=one)) == 1
-    assert "does not descend" in capsys.readouterr().err
-
-
-def test_verify_fails_closed_on_a_failing_gh_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A `gh` failure (here the channel listing) exits 1 with one `FAILED:` line, never a seed."""
+    """An ancestor of `origin/main` builds the candidate and reads no channel, release or attestation."""
     _one, two, _side = main_repo(tmp_path)
     stub_candidate(monkeypatch, tmp_path)
-    fake_gh(tmp_path, monkeypatch, [["matching-refs/heads/stack-channel", 1, "", "HTTP 502"]])
-    assert promotion_verify.main(verify_env(tmp_path, "promote", sha=two)) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("FAILED:")
-    assert "HTTP 502" in err
-
-
-def test_verify_rollback_downloads_attests_and_pins_the_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Rollback verifies the retained asset only; another commit's snapshot or a bad attestation fails."""
-    one, _two, _side = main_repo(tmp_path)
-    tag = f"stack/{one}"
-    retained = snapshot(tmp_path, one).model_dump_json()
-    fake_gh(tmp_path, monkeypatch, [["release download", 0, retained, ""], ["attestation verify", 0, "", ""]])
-    assert promotion_verify.main(verify_env(tmp_path, "rollback", tag=tag)) == 0
-    calls = (tmp_path / "fake-gh" / "calls.log").read_text()
-    assert "matching-refs" not in calls
-    mismatched = snapshot(tmp_path, "b" * 40).model_dump_json()
-    fake_gh(
-        tmp_path / "b",
-        monkeypatch,
-        [["release download", 0, mismatched, ""], ["attestation verify", 0, "", ""]],
-    )
-    assert promotion_verify.main(verify_env(tmp_path, "rollback", tag=tag)) == 1
-    assert "differs" in capsys.readouterr().err
-    fake_gh(
-        tmp_path / "c",
-        monkeypatch,
-        [["release download", 0, retained, ""], ["attestation verify", 1, "", "unsigned"]],
-    )
-    assert promotion_verify.main(verify_env(tmp_path, "rollback", tag=tag)) == 1
-    assert "unsigned" in capsys.readouterr().err
+    fake_gh(tmp_path, monkeypatch, [])  # any gh call would exit 99
+    assert promotion_verify.main(verify_env(tmp_path, "verify-only", sha=two)) == 0
+    assert f"source_sha={two}" in (tmp_path / "output").read_text()
+    assert StackSnapshot.model_validate_json((tmp_path / "promo" / "stack-snapshot.json").read_bytes())
+    assert (tmp_path / "fake-gh" / "calls.log").read_text() == ""
 
 
 def test_context_from_env_reports_every_missing_variable() -> None:
@@ -1519,20 +1039,8 @@ def workflow() -> dict[str, Any]:
     return yaml.safe_load(PROMOTION_WORKFLOW.read_text())
 
 
-def step_names(job: str) -> list[str]:
-    """List one job's step labels (name, else `uses`/`id`) in order.
-
-    Parameters:
-        job (str): job id.
-
-    Returns:
-        list[str]: labels.
-    """
-    return [step.get("name") or step.get("uses", "") for step in workflow()["jobs"][job]["steps"]]
-
-
 def test_workflow_permissions_environment_and_concurrency() -> None:
-    """Least privilege per job, the environment only on the write job, and the two queues."""
+    """Least privilege per job, the approval environment only on the write job, one per-SHA queue."""
     wf = workflow()
     assert wf["permissions"] == {}
     jobs = wf["jobs"]
@@ -1544,16 +1052,24 @@ def test_workflow_permissions_environment_and_concurrency() -> None:
     assert jobs["attest-and-publish"]["environment"] == "stack-promotion"
     assert all(job["if"].startswith("github.ref == 'refs/heads/main'") for job in jobs.values())
     assert wf["concurrency"]["cancel-in-progress"] is False
-    assert "inputs.operation" in wf["concurrency"]["group"]
-    assert "concurrency" not in jobs["verify"]
-    assert jobs["attest-and-publish"]["concurrency"] == {
-        "group": "stack-channel",
-        "cancel-in-progress": False,
-    }
+    assert wf["concurrency"]["group"] == "stack-promotion-${{ inputs.operation }}-${{ inputs.source_sha }}"
+    assert all("concurrency" not in job for job in jobs.values())
+    triggers = next(value for key, value in wf.items() if key in {True, "on"})  # YAML 1.1 reads `on` as True
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert inputs["operation"]["options"] == ["verify-only", "promote"]
+    assert set(inputs) == {"source_sha", "operation"}
 
 
-def test_workflow_preflight_runs_before_any_side_effect() -> None:
-    """`preflight-channel` precedes the attestation, release, tag and pointer steps."""
+def test_workflow_has_no_channel_pointer_or_deploy_key() -> None:
+    """The retired `stack-channel` branch, its deploy key, and `rollback` are gone from the workflow."""
+    text = PROMOTION_WORKFLOW.read_text()
+    for retired in ("stack-channel", "STACK_CHANNEL", "DEPLOY_KEY", "channel", "rollback", "stable.json"):
+        assert retired not in text, retired
+    assert "secrets." not in text
+
+
+def test_workflow_validates_the_tag_before_any_side_effect() -> None:
+    """`prepare-release` precedes the attestation and release; `tag-target` confirms after them."""
     steps = workflow()["jobs"]["attest-and-publish"]["steps"]
     commands = [step.get("run", step.get("uses", "")) for step in steps]
 
@@ -1568,14 +1084,10 @@ def test_workflow_preflight_runs_before_any_side_effect() -> None:
         """
         return next(i for i, command in enumerate(commands) if needle in command)
 
-    preflight_at = index("preflight-channel")
-    assert index("prepare-release") < preflight_at
-    for side_effect in ("attest-build-provenance", "gh release create", "tag-target", "advance-channel"):
-        assert preflight_at < index(side_effect)
-    assert "DEPLOY_KEY" not in steps[preflight_at]["env"]  # only its presence is passed on
-    advance = next(step for step in steps if "advance-channel" in step.get("run", ""))
-    assert "GH_TOKEN" not in advance["env"]
-    assert [name for name in advance["env"] if "KEY" in name] == ["DEPLOY_KEY"]
+    prepare_at = index("prepare-release")
+    assert prepare_at < index("attest-build-provenance") < index("gh release create") < index("tag-target")
+    assert index("gh attestation verify") < index("gh release create")
+    assert commands[-1].endswith('tag-target --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"')
 
 
 ALLOWED_RUN_PREFIXES = (
