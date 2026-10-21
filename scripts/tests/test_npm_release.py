@@ -885,13 +885,6 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     assert "directory == 'preset'" not in workflow
 
 
-def test_every_standalone_descriptor_has_a_packed_artifact_gate() -> None:
-    """No descriptor may ship without a gate that audits its real packed bytes."""
-    for descriptor in rd.DESCRIPTORS:
-        assert descriptor.contract_gates, descriptor.name
-        assert ("stock" in descriptor.contract_gates) == (descriptor.stock_gate is not None), descriptor.name
-
-
 @pytest.mark.parametrize("contract", nr.CONTRACTS, ids=lambda c: c.directory)
 def test_verify_checks_then_packs_and_routes_exact_bytes(
     repo: Path,
@@ -1014,6 +1007,30 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
     if "fork" in descriptor.contract_gates:
         expected.append("fork")
     assert events == expected
+    if contract.directory == "plan-mode":
+        assert events == ["ci", "run", "pack", "stock"]
+
+
+def test_every_standalone_descriptor_has_a_packed_artifact_gate() -> None:
+    """No descriptor may ship without a gate that audits its real packed bytes."""
+    for descriptor in rd.DESCRIPTORS:
+        assert descriptor.contract_gates, descriptor.name
+        assert ("stock" in descriptor.contract_gates) == (descriptor.stock_gate is not None), descriptor.name
+        if descriptor.name != "@nredd/pi-preset":
+            assert "stock" in descriptor.contract_gates, descriptor.name
+            assert descriptor.stock_gate is not None, descriptor.name
+
+
+def test_plan_mode_descriptor_pins_its_own_commands_and_routing() -> None:
+    """Hard-coded, independent of the descriptor data the release code consumes."""
+    descriptor = rd.descriptor_for("@nredd/pi-plan-mode")
+    assert descriptor is not None
+    assert descriptor.verify_commands == (
+        ("npm", "ci", "--ignore-scripts"),
+        ("npm", "run", "check", "--workspace", "@nredd/pi-plan-mode"),
+    )
+    assert descriptor.contract_gates == ("stock",)
+    assert descriptor.stock_gate is pc.scenario_plan_mode
 
 
 @pytest.mark.parametrize("failure", ["ci", "run"])

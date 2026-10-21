@@ -40,6 +40,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -85,6 +86,7 @@ CODE_SUFFIXES = (".ts", ".mts", ".js", ".mjs")
 NO_PROXY_VALUE = "127.0.0.1,localhost"
 # Defense in depth for clients honoring proxy variables; this is not a network sandbox.
 DEAD_PROXY = "http://127.0.0.1:9"
+# Overrides that let one npm invocation reach the registry; every other install stays offline or dead-proxied.
 SUBAGENTS_CHILD_MARKER = "pi-harness-subagents-child"
 SUBAGENTS_CHILD_TEXT = "subagents child ok"
 REGISTRY_ENV = {"HTTP_PROXY": "", "HTTPS_PROXY": ""}
@@ -207,7 +209,6 @@ PRESET_CONTRACT = PackageContract(
     license="MIT AND Apache-2.0 AND CC-BY-SA-4.0",
 )
 
-
 # `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` is hermetic
 # (`npm install --offline`, nothing but the tarball), while this package has real runtime dependencies
 # that must come from the registry. It is audited, installed and run through stock Pi by the release
@@ -293,10 +294,10 @@ PLAN_MODE_CONTRACT = PackageContract(
         "src/workflow-mutex.ts",
     ),
     packed_patterns=(
-        (re.compile(r"^dist/chunks/chunk-[A-Z0-9]+\.ts$"), 1),
-        (re.compile(r"^dist/chunks/chunk-[A-Z0-9]+\.ts\.map$"), 1),
-        (re.compile(r"^dist/chunks/interactive-ui-[A-Z0-9]+\.ts$"), 1),
-        (re.compile(r"^dist/chunks/interactive-ui-[A-Z0-9]+\.ts\.map$"), 1),
+        (re.compile(r"^dist/chunks/chunk-[A-Z0-9]{8}\.ts$"), 1),
+        (re.compile(r"^dist/chunks/chunk-[A-Z0-9]{8}\.ts\.map$"), 1),
+        (re.compile(r"^dist/chunks/interactive-ui-[A-Z0-9]{8}\.ts$"), 1),
+        (re.compile(r"^dist/chunks/interactive-ui-[A-Z0-9]{8}\.ts\.map$"), 1),
     ),
 )
 
@@ -542,6 +543,7 @@ class LockEntry(BaseModel):
     model_config = LENIENT_STRICT_MODEL
     version: str | None = Field(default=None, description="Locked version")
     integrity: str | None = Field(default=None, description="Locked registry integrity")
+    optional: bool = Field(default=False, description="npm marked this entry optional")
     dependencies: dict[str, str] = Field(default_factory=dict, description="Direct locked dependencies")
 
 
@@ -1100,7 +1102,7 @@ def pack(
     if digest != report.integrity or hashlib.sha1(data, usedforsecurity=False).hexdigest() != report.shasum:
         raise ContractError(f"`npm pack` identity for '{contract.name}' disagrees with the tarball bytes")
     with tarfile.open(path) as tar:
-        files = tuple(sorted(strip_prefix(member.name) for member in tar.getmembers() if member.isfile()))
+        files = tarball_files(tar, path)
     if files != tuple(sorted(entry.path for entry in report.files)):
         raise ContractError(f"`npm pack` file list for '{contract.name}' disagrees with its tarball")
     try:
@@ -1130,7 +1132,7 @@ def load_tarball(contract: PackageContract, path: Path) -> PackedArtifact:
         data = path.read_bytes()
         manifest = PackedManifestIdentity.model_validate_json(read_member(path, "package.json"))
         with tarfile.open(path) as tar:
-            files = tuple(sorted(strip_prefix(m.name) for m in tar.getmembers() if m.isfile()))
+            files = tarball_files(tar, path)
     except (OSError, ValueError, tarfile.TarError) as e:
         raise ContractError(f"Cannot read tarball '{path}': {e}") from e
     if manifest.name != contract.name:
@@ -1198,6 +1200,26 @@ def select_artifact(
     return pack(contract, dest, sandbox, package_dir)
 
 
+def tarball_files(tar: tarfile.TarFile, path: Path) -> tuple[str, ...]:
+    """Return regular file paths while rejecting special tarball members.
+
+    Parameters:
+        tar (tarfile.TarFile): Open package archive.
+        path (Path): Archive path for diagnostics.
+
+    Returns:
+        tuple[str, ...]: Sorted paths relative to npm's `package/` prefix.
+
+    Raises:
+        ContractError: If the archive contains a symlink, hardlink, or other special member.
+    """
+    members = tar.getmembers()
+    invalid = [member.name for member in members if not member.isfile() and not member.isdir()]
+    if invalid:
+        raise ContractError(f"Tarball '{path.name}' has non-regular member(s): {sorted(invalid)}")
+    return tuple(sorted(strip_prefix(member.name) for member in members if member.isfile()))
+
+
 def strip_prefix(name: str) -> str:
     """Drop npm's leading `package/` directory.
 
@@ -1251,7 +1273,11 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
         if not any(pattern.match(name) for pattern in contract.allowed)
     ]
     if contract.packed_files or contract.packed_patterns:
-        unmatched = [name for name in files if name not in contract.packed_files]
+        counts = Counter(files)
+        problems += [
+            f"packed file '{name}' is listed {count} times" for name, count in counts.items() if count > 1
+        ]
+        unmatched = [name for name in counts if name not in contract.packed_files]
         for pattern, count in contract.packed_patterns:
             matched = [name for name in unmatched if pattern.match(name)]
             unmatched = [name for name in unmatched if name not in matched]
@@ -1259,13 +1285,58 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
                 problems.append(
                     f"expected {count} packed file(s) matching '{pattern.pattern}', got {matched}"
                 )
+            problems += [
+                f"packed source map '{name}' has no '{name.removesuffix('.map')}'"
+                for name in matched
+                if name.endswith(".map") and name.removesuffix(".map") not in counts
+            ]
         problems += [f"packed file '{name}' is not in the '{contract.name}' contract" for name in unmatched]
         problems += [
             f"packed file '{name}' required by the '{contract.name}' contract is missing"
             for name in contract.packed_files
-            if name not in files
+            if name not in counts
         ]
     return problems
+
+
+def audit_chunk_graph(
+    contract: PackageContract, files: Sequence[str], scanned: Mapping[str, FileImports]
+) -> list[str]:
+    """Require every pattern-matched chunk to be reachable from `dist/index.ts` by relative imports.
+
+    A chunk whose name merely fits a hashed pattern, but nothing in the bundle loads, is an orphan
+    (stray or swapped file). Each `.map` must also pair with its `.ts`, which `audit_files` checks.
+
+    Parameters:
+        contract (PackageContract): Expectations.
+        files (Sequence[str]): Tarball paths relative to the package root.
+        scanned (Mapping[str, FileImports]): Parsed imports by packed code path.
+
+    Returns:
+        list[str]: Violations; empty when every matched chunk is reachable.
+    """
+    chunks = {
+        name
+        for name in files
+        if name.endswith(".ts") and any(pattern.match(name) for pattern, _ in contract.packed_patterns)
+    }
+    code = {name for name in files if name.endswith(CODE_SUFFIXES)}
+    reached: set[str] = set()
+    pending = ["dist/index.ts"]
+    while pending:
+        current = pending.pop()
+        found = scanned.get(current)
+        for spec in found.specifiers if found else ():
+            if not spec.startswith("."):
+                continue
+            target = PurePosixPath(os.path.normpath(PurePosixPath(current).parent / spec)).as_posix()
+            if target in code and target not in reached:
+                reached.add(target)
+                pending.append(target)
+    return [
+        f"packed chunk '{name}' is not reachable from 'dist/index.ts' by relative imports"
+        for name in sorted(chunks - reached)
+    ]
 
 
 def audit_license(tarball: Path, expected_license: bytes) -> list[str]:
@@ -1273,7 +1344,8 @@ def audit_license(tarball: Path, expected_license: bytes) -> list[str]:
 
     Parameters:
         tarball (Path): Tarball path.
-        expected_license (bytes): Content of the repository or workspace `LICENSE`.
+        expected_license (bytes): Expected content: the repository `LICENSE`, or the workspace's own for a
+            contract with `own_license`.
 
     Returns:
         list[str]: Violations; empty when identical.
@@ -1530,13 +1602,24 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
             name,
             found,
             artifact.files,
-            dict(contract.runtime_dependencies),
+            [dependency for dependency, _ in contract.runtime_dependencies],
             contract.standalone_artifacts,
         )
+    if contract.packed_patterns:
+        problems += audit_chunk_graph(contract, artifact.files, scanned)
     return problems
 
 
 # --- install --------------------------------------------------------------------------------------
+
+
+# Metadata npm itself writes into `node_modules` (verified against a real install): not packages.
+NPM_MODULE_METADATA = frozenset({".bin", ".package-lock.json"})
+SEMVER_CHECK = (
+    "const semver = require(process.argv[1]);"
+    "const items = JSON.parse(process.argv[2]);"
+    "console.log(JSON.stringify(items.map(([version, range]) => semver.satisfies(version, range))));"
+)
 
 
 @dataclass(frozen=True)
@@ -1544,16 +1627,80 @@ class InstalledPackage:
     """Runtime dependency edges read from one installed `package.json`.
 
     Parameters:
-        dependencies (dict[str, str]): `dependencies` as installed.
-        optional (frozenset[str]): `optionalDependencies` names, which npm may legitimately skip.
+        version (str | None): The installed `version`, when it is a string.
+        runtime_edges (dict[str, str]): Combined runtime edges, `optionalDependencies` merged with
+            `dependencies` (what npm may install for this package), NOT the `dependencies` field alone.
+        optional (frozenset[str]): Names only in `optionalDependencies`, which npm may legitimately skip.
     """
 
-    dependencies: dict[str, str]
+    version: str | None
+    runtime_edges: dict[str, str]
     optional: frozenset[str]
+
+
+def is_npm_metadata(path: Path, name: str, prefix: str) -> bool:
+    """Validate an npm-created metadata entry and report whether it needs no further auditing."""
+    if name not in NPM_MODULE_METADATA:
+        return False
+    if name == ".package-lock.json":
+        valid = prefix == "node_modules" and not path.is_symlink() and path.is_file()
+    else:
+        valid = (
+            not path.is_symlink()
+            and path.is_dir()
+            and all(member.is_symlink() or member.is_file() for member in path.iterdir())
+        )
+    if not valid:
+        raise ContractError(f"Invalid npm metadata entry '{prefix}/{name}'")
+    return True
+
+
+def nested_installed_entries(directory: Path, path: str) -> list[tuple[Path, str, bool]]:
+    """Walk a package's nested `node_modules`, rejecting a symlinked directory."""
+    nested = directory / "node_modules"
+    if nested.is_symlink():
+        raise ContractError(f"Symlinked `node_modules` entry is not allowed: '{path}/node_modules'")
+    return walk_installed_entries(nested, f"{path}/node_modules") if nested.is_dir() else []
+
+
+def walk_installed_entries(modules: Path, prefix: str = "node_modules") -> list[tuple[Path, str, bool]]:
+    """Walk package-shaped entries while validating npm's limited metadata exemptions.
+
+    Parameters:
+        modules (Path): A `node_modules` directory.
+        prefix (str): Lockfile-style path of `modules`.
+
+    Returns:
+        list[tuple[Path, str, bool]]: `(path, lockfile path, is_scope)` entries.
+
+    Raises:
+        ContractError: If an entry is a symlink or npm metadata is malformed.
+    """
+    entries: list[tuple[Path, str, bool]] = []
+    for child in sorted(modules.iterdir()):
+        path = f"{prefix}/{child.name}"
+        if is_npm_metadata(child, child.name, prefix):
+            continue
+        if child.is_symlink():
+            raise ContractError(f"Symlinked `node_modules` entry is not allowed: '{path}'")
+        if child.name.startswith("@") and child.is_dir():
+            entries.append((child, path, True))
+            for member in sorted(child.iterdir()):
+                member_path = f"{path}/{member.name}"
+                if member.is_symlink():
+                    raise ContractError(f"Symlinked `node_modules` entry is not allowed: '{member_path}'")
+                entries.append((member, member_path, False))
+                entries.extend(nested_installed_entries(member, member_path))
+            continue
+        entries.append((child, path, False))
+        entries.extend(nested_installed_entries(child, path))
+    return entries
 
 
 def read_installed_packages(modules: Path, prefix: str = "node_modules") -> dict[str, InstalledPackage]:
     """Read every installed package under `modules`, including nested `node_modules`.
+
+    Directories without a `package.json` are skipped here; `list_installed_entries` accounts for them.
 
     Parameters:
         modules (Path): A `node_modules` directory.
@@ -1563,33 +1710,91 @@ def read_installed_packages(modules: Path, prefix: str = "node_modules") -> dict
         dict[str, InstalledPackage]: Packages by `node_modules/...` path.
 
     Raises:
-        ContractError: If an installed `package.json` is not a JSON object.
+        ContractError: If an installed `package.json` is not a JSON object with maps for its dependency
+            fields and a `name` equal to the one its path implies.
     """
     found: dict[str, InstalledPackage] = {}
-    candidates: list[Path] = []
-    for child in sorted(modules.iterdir()):
-        if child.name in {".package-lock.json", ".bin"}:
+    for directory, path, is_scope in walk_installed_entries(modules, prefix):
+        if is_scope:
             continue
-        candidates += sorted(child.iterdir()) if child.name.startswith("@") else [child]
-    for directory in candidates:
         manifest_path = directory / "package.json"
         if not directory.is_dir() or not manifest_path.is_file():
             continue
-        path = f"{prefix}/{directory.relative_to(modules).as_posix()}"
         try:
             manifest = json.loads(manifest_path.read_text())
         except ValueError as e:
             raise ContractError(f"Installed '{path}/package.json' is not valid JSON: {e}") from e
         if not isinstance(manifest, dict):
             raise ContractError(f"Installed '{path}/package.json' is not an object")
+        implied = path.rsplit("node_modules/", 1)[1]
+        if manifest.get("name") != implied:
+            raise ContractError(
+                f"Installed '{path}/package.json' is named {manifest.get('name')!r}, not '{implied}'"
+            )
         dependencies = manifest.get("dependencies") or {}
         optional = manifest.get("optionalDependencies") or {}
         if not isinstance(dependencies, dict) or not isinstance(optional, dict):
             raise ContractError(f"Installed '{path}/package.json' has malformed dependency maps")
-        found[path] = InstalledPackage({**optional, **dependencies}, frozenset(optional) - set(dependencies))
-        if (directory / "node_modules").is_dir():
-            found |= read_installed_packages(directory / "node_modules", f"{path}/node_modules")
+        version = manifest.get("version")
+        found[path] = InstalledPackage(
+            version if isinstance(version, str) else None,
+            {**optional, **dependencies},
+            frozenset(optional) - set(dependencies),
+        )
     return found
+
+
+def list_installed_entries(modules: Path, prefix: str = "node_modules") -> tuple[set[str], set[str]]:
+    """List every entry under every `node_modules`, manifest or not.
+
+    Parameters:
+        modules (Path): A `node_modules` directory.
+        prefix (str): Lockfile-style path of `modules`.
+
+    Returns:
+        tuple[set[str], set[str]]: Package-shaped entry paths (files included, scope directories
+            excluded) and scope directory paths, both lockfile-style.
+    """
+    walked = walk_installed_entries(modules, prefix)
+    return (
+        {path for _, path, is_scope in walked if not is_scope},
+        {path for _, path, is_scope in walked if is_scope},
+    )
+
+
+def audit_ranges(checks: Sequence[tuple[str, str, str]], node: Path) -> list[str]:
+    """Check installed versions against declared npm ranges with the repository's `semver` package.
+
+    Parameters:
+        checks (Sequence[tuple[str, str, str]]): `(name, installed version, declared range)` triples.
+        node (Path): Absolute `node` path.
+
+    Returns:
+        list[str]: Violations; empty when every version satisfies its range.
+
+    Raises:
+        ContractError: If `semver` is not installed or the helper output is malformed.
+    """
+    if not checks:
+        return []
+    semver = REPO_ROOT / "node_modules" / "semver"
+    require(semver.is_dir(), f"`semver` is not installed at {semver}; run `npm ci`")
+    env = {"PATH": os.pathsep.join([str(node.parent), "/usr/bin", "/bin"]), "HOME": str(REPO_ROOT)}
+    payload = json.dumps([[version, spec] for _, version, spec in checks])
+    done = run(
+        [node, "-e", SEMVER_CHECK, semver, payload], env=env, cwd=REPO_ROOT, timeout=IMPORT_AUDIT_TIMEOUT_S
+    )
+    try:
+        verdicts = json.loads(done.stdout)
+    except ValueError as e:
+        raise ContractError(f"Malformed `semver` output: {done.stdout!r}") from e
+    if not isinstance(verdicts, list) or len(verdicts) != len(checks):
+        raise ContractError(f"Malformed `semver` output: {done.stdout!r}")
+    return [
+        f"installed '{name}' {version} does not satisfy '{spec}'"
+        for (name, version, spec), ok in zip(checks, verdicts, strict=True)
+        if ok is not True
+    ]
 
 
 def resolve_dependency(parent: str, name: str, installed: Mapping[str, object]) -> str | None:
@@ -1613,6 +1818,33 @@ def resolve_dependency(parent: str, name: str, installed: Mapping[str, object]) 
         current = current.rsplit("/node_modules/", 1)[0] if "/node_modules/" in current else ""
 
 
+def is_skipped_optional(
+    path: str, closure: Collection[str], installed: Mapping[str, InstalledPackage]
+) -> bool:
+    """Whether a lock-only `path` is an optional dependency npm legitimately skipped.
+
+    npm writes platform-mismatched optional dependencies to the lock as `optional: true` without
+    installing them. The caller checks the lock flag; this checks a closure member lists the name in
+    `optionalDependencies` at or below the directory the lock path hangs from.
+
+    Parameters:
+        path (str): Lock-only `node_modules/...` path.
+        closure (Collection[str]): Derived closure paths (the empty root path is ignored).
+        installed (Mapping[str, InstalledPackage]): Installed packages by path.
+
+    Returns:
+        bool: `True` when an installed requirer declares it optional.
+    """
+    name = path.rsplit("node_modules/", 1)[1]
+    parent = path[: -len(f"node_modules/{name}")].rstrip("/")
+    return any(
+        name in installed[requirer].optional
+        and (not parent or requirer == parent or requirer.startswith(f"{parent}/"))
+        for requirer in closure
+        if requirer
+    )
+
+
 def derive_closure(root: str, installed: Mapping[str, InstalledPackage]) -> set[str]:
     """Derive the runtime dependency closure of `root` from installed manifests alone.
 
@@ -1631,7 +1863,7 @@ def derive_closure(root: str, installed: Mapping[str, InstalledPackage]) -> set[
     while pending:
         parent = pending.pop()
         entry = installed[parent]
-        for name in entry.dependencies:
+        for name in entry.runtime_edges:
             child = resolve_dependency(parent, name, installed)
             if child is None:
                 if name in entry.optional:
@@ -1641,6 +1873,74 @@ def derive_closure(root: str, installed: Mapping[str, InstalledPackage]) -> set[
                 closure.add(child)
                 pending.append(child)
     return closure
+
+
+def audit_install_closure(
+    contract: PackageContract, project: Path, lock: LockFile, top: Sequence[str]
+) -> None:
+    """Prove an install is exactly the closure derived from its installed manifests.
+
+    Parameters:
+        contract (PackageContract): Installed package contract.
+        project (Path): Consumer project root.
+        lock (LockFile): Parsed install lockfile.
+        top (Sequence[str]): Sorted top-level `node_modules` entry names.
+
+    Raises:
+        ContractError: If the package, its manifests, versions, lock paths or any `node_modules` entry
+            differs from the derived closure.
+    """
+    package_path = f"node_modules/{contract.name}"
+    declared_dependencies = dict(contract.runtime_dependencies)
+    installed_packages = read_installed_packages(project / "node_modules")
+    if package_path not in installed_packages:
+        raise ContractError(f"'{contract.name}' is absent from `node_modules`")
+    if installed_packages[package_path].runtime_edges != declared_dependencies:
+        raise ContractError(
+            f"'{contract.name}' installed dependencies differ from its contract: "
+            f"{installed_packages[package_path].runtime_edges} != {declared_dependencies}"
+        )
+    expected_paths = {"", *derive_closure(package_path, installed_packages)}
+    actual_paths = set(lock.packages)
+    optional_skipped = {
+        path
+        for path in actual_paths - expected_paths
+        if lock.packages[path].optional and is_skipped_optional(path, expected_paths, installed_packages)
+    }
+    if actual_paths - optional_skipped != expected_paths:
+        raise ContractError(
+            f"'{contract.name}' lockfile paths differ from the installed dependency closure: "
+            f"expected {sorted(expected_paths)}, got {sorted(actual_paths)}"
+        )
+    installed_paths = {"", *installed_packages}
+    if installed_paths != expected_paths:
+        raise ContractError(
+            f"'{contract.name}' installed packages differ from the dependency closure: "
+            f"expected {sorted(expected_paths)}, got {sorted(installed_paths)}"
+        )
+    expected_top = sorted({path.split("/")[1] for path in expected_paths if path})
+    if top != expected_top:
+        raise ContractError(f"'{contract.name}' install entries differ: expected {expected_top}, got {top}")
+    entries, scopes = list_installed_entries(project / "node_modules")
+    stray = sorted(entries - expected_paths)
+    stray += sorted(
+        scope for scope in scopes if not any(path.startswith(f"{scope}/") for path in expected_paths)
+    )
+    if stray:
+        raise ContractError(f"'{contract.name}' install has entries outside the closure: {stray}")
+    checks: list[tuple[str, str, str]] = []
+    for parent in expected_paths - {""}:
+        for name, spec in installed_packages[parent].runtime_edges.items():
+            resolved = resolve_dependency(parent, name, installed_packages)
+            if resolved is None and name in installed_packages[parent].optional:
+                continue
+            version = installed_packages[resolved].version if resolved else None
+            if version is None:
+                raise ContractError(f"Installed '{name}' has no resolvable version")
+            checks.append((name, version, spec))
+    problems = audit_ranges(checks, locate_executable("node"))
+    if problems:
+        raise ContractError(f"'{contract.name}' dependency versions: {problems}")
 
 
 def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> Path:
@@ -1670,7 +1970,8 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
     env = sandbox.env()
     offline = ["--offline"]
     if artifact.contract.runtime_dependencies:
-        env |= REGISTRY_ENV
+        # Declared runtime dependencies come from the registry; plugins stay fully offline.
+        env = env | REGISTRY_ENV
         offline = []
     run(
         [
@@ -1688,9 +1989,7 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
         timeout=NPM_TIMEOUT_S,
     )
     installed = project / "node_modules" / artifact.contract.name
-    top = sorted(
-        p.name for p in (project / "node_modules").iterdir() if p.name not in {".package-lock.json", ".bin"}
-    )
+    top = sorted(p.name for p in (project / "node_modules").iterdir() if p.name not in NPM_MODULE_METADATA)
     nested = [p for p in installed.rglob("node_modules") if p.is_dir()]
     if nested:
         raise ContractError(f"'{artifact.contract.name}' ships a nested `node_modules`: {nested}")
@@ -1705,32 +2004,7 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
             f"'{artifact.contract.name}' lockfile dependencies differ from its contract: "
             f"{package_entry.dependencies} != {declared_dependencies}"
         )
-    installed_packages = read_installed_packages(project / "node_modules")
-    if package_path not in installed_packages:
-        raise ContractError(f"'{artifact.contract.name}' is absent from `node_modules`")
-    if installed_packages[package_path].dependencies != declared_dependencies:
-        raise ContractError(
-            f"'{artifact.contract.name}' installed dependencies differ from its contract: "
-            f"{installed_packages[package_path].dependencies} != {declared_dependencies}"
-        )
-    expected_paths = {"", *derive_closure(package_path, installed_packages)}
-    actual_paths = set(lock.packages)
-    if actual_paths != expected_paths:
-        raise ContractError(
-            f"'{artifact.contract.name}' lockfile paths differ from the installed dependency closure: "
-            f"expected {sorted(expected_paths)}, got {sorted(actual_paths)}"
-        )
-    installed_paths = {"", *installed_packages}
-    if installed_paths != expected_paths:
-        raise ContractError(
-            f"'{artifact.contract.name}' installed packages differ from the dependency closure: "
-            f"expected {sorted(expected_paths)}, got {sorted(installed_paths)}"
-        )
-    expected_top = sorted({path.split("/")[1] for path in expected_paths if path})
-    if top != expected_top:
-        raise ContractError(
-            f"'{artifact.contract.name}' install entries differ: expected {expected_top}, got {top}"
-        )
+    audit_install_closure(artifact.contract, project, lock, top)
     return installed
 
 

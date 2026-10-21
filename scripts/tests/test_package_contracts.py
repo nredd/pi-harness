@@ -17,6 +17,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +177,28 @@ def test_load_tarball_refuses_invalid_candidate(tmp_path: Path, case: str) -> No
         if case == "filename":
             path = path.rename(tmp_path / "wrong.tgz")
     with pytest.raises(pc.ContractError):
+        pc.load_tarball(DEV_TOOLS, path)
+
+
+@pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE], ids=["symlink", "hardlink"])
+def test_load_tarball_rejects_special_members(tmp_path: Path, kind: bytes) -> None:
+    """Audited tarballs cannot hide files behind links.
+
+    Parameters:
+        tmp_path (Path): Disposable destination.
+        kind (bytes): Tar member type to inject.
+    """
+    path = tmp_path / "nredd-pi-dev-tools-1.0.0.tgz"
+    with tarfile.open(path, "w:gz") as tar:
+        data = json.dumps({"name": DEV_TOOLS.name, "version": "1.0.0"}).encode()
+        manifest = tarfile.TarInfo("package/package.json")
+        manifest.size = len(data)
+        tar.addfile(manifest, io.BytesIO(data))
+        member = tarfile.TarInfo("package/linked")
+        member.type = kind
+        member.linkname = "package/package.json"
+        tar.addfile(member)
+    with pytest.raises(pc.ContractError, match="non-regular member"):
         pc.load_tarball(DEV_TOOLS, path)
 
 
@@ -1814,18 +1837,28 @@ def stub_npm_install(
         envs (list[dict[str, str]]): Receives each environment.
     """
 
-    def fake_run(cmd: Any, *, env: dict[str, str], cwd: Path, **_: Any) -> None:
+    real_run = pc.run
+
+    def fake_run(cmd: Any, *, env: dict[str, str], cwd: Path, **kwargs: Any) -> Any:
         """Record the npm call and lay out `node_modules` plus a lockfile for `modules`.
+
+        `node` (the real semver range check) passes through.
 
         Parameters:
             cmd (Any): npm argv.
             env (dict[str, str]): subprocess environment.
             cwd (Path): install directory.
-            **_ (Any): other `run` options, ignored.
+            **kwargs (Any): other `run` options.
+
+        Returns:
+            Any: The real result for `node`, else `None`.
         """
+        if Path(cmd[0]).name == "node":
+            return real_run(cmd, env=env, cwd=cwd, **kwargs)
         calls.append([str(part) for part in cmd])
         envs.append(env)
         packages: dict[str, object] = {"": {}}
+        versions = {name: spec.lstrip("^") for name, spec in pc.SUBAGENTS_CONTRACT.runtime_dependencies}
         for module in modules:
             dependencies = (
                 dict(pc.SUBAGENTS_CONTRACT.runtime_dependencies)
@@ -1834,10 +1867,13 @@ def stub_npm_install(
             )
             (cwd / "node_modules" / module).mkdir(parents=True)
             (cwd / "node_modules" / module / "package.json").write_text(
-                json.dumps({"name": module, "dependencies": dependencies})
+                json.dumps(
+                    {"name": module, "version": versions.get(module, "1.0.0"), "dependencies": dependencies}
+                )
             )
             packages[f"node_modules/{module}"] = {"dependencies": dependencies}
         (cwd / "package-lock.json").write_text(json.dumps({"packages": packages}))
+        return None
 
     monkeypatch.setattr(pc, "run", fake_run)
 
@@ -1880,3 +1916,94 @@ def test_install_alone_rejects_an_undeclared_module(
     )
     with pytest.raises(pc.ContractError, match="lockfile paths differ"):
         pc.install_alone(artifact, sandbox, tmp_path / "project")
+
+
+def plan_mode_files(chunk: str = "AAAAAAA1", ui: str = "BBBBBBB2") -> list[str]:
+    """Return a conforming Plan-mode tarball listing with the given chunk hashes.
+
+    Parameters:
+        chunk (str): Hash of the shared chunk.
+        ui (str): Hash of the interactive UI chunk.
+
+    Returns:
+        list[str]: Packed paths.
+    """
+    return [
+        *pc.PLAN_MODE_CONTRACT.packed_files,
+        f"dist/chunks/chunk-{chunk}.ts",
+        f"dist/chunks/chunk-{chunk}.ts.map",
+        f"dist/chunks/interactive-ui-{ui}.ts",
+        f"dist/chunks/interactive-ui-{ui}.ts.map",
+    ]
+
+
+def test_audit_files_accepts_rebuilt_chunk_hashes() -> None:
+    """Any 8-character hash passes: a rebuild is fine."""
+    assert pc.audit_files(pc.PLAN_MODE_CONTRACT, plan_mode_files()) == []
+    assert pc.audit_files(pc.PLAN_MODE_CONTRACT, plan_mode_files("Z9Z9Z9Z9", "0A0A0A0A")) == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda f: [n for n in f if not n.startswith("dist/chunks/chunk-")], "expected 1 packed file"),
+        (lambda f: [*f, "dist/chunks/chunk-CCCCCCC3.ts"], "expected 1 packed file"),
+        (lambda f: [*f, "dist/chunks/x.ts"], "'dist/chunks/x.ts' is not in the"),
+        (lambda f: [n for n in f if n != "src/state.ts"], "'src/state.ts' required by"),
+        (lambda f: [*f, "src/state.ts"], "'src/state.ts' is listed 2 times"),
+        (lambda f: [*f, f[-1]], "is listed 2 times"),
+        (lambda f: [n for n in f if n != "dist/chunks/chunk-AAAAAAA1.ts"], "has no 'dist/chunks/chunk-"),
+        (lambda f: [n.replace("AAAAAAA1", "SHORT") for n in f], "expected 1 packed file"),
+    ],
+    ids=["count-0", "count-2", "stray", "missing", "dup-fixed", "dup-pattern", "map-unpaired", "hash-width"],
+)
+def test_audit_files_rejects_plan_mode_payload_drift(
+    mutate: Callable[[list[str]], list[str]], message: str
+) -> None:
+    """Each packed-payload violation is reported.
+
+    Parameters:
+        mutate (Callable[[list[str]], list[str]]): Edits a conforming listing.
+        message (str): Expected problem fragment.
+    """
+    problems = pc.audit_files(pc.PLAN_MODE_CONTRACT, mutate(plan_mode_files()))
+    assert any(message in problem for problem in problems), problems
+
+
+def test_audit_chunk_graph_requires_reachability_from_index() -> None:
+    """A hash-shaped but unreferenced chunk is an orphan; reachable ones pass, transitively."""
+    files = plan_mode_files()
+    imports = {
+        "dist/index.ts": pc.FileImports(
+            specifiers=["./chunks/chunk-AAAAAAA1.ts", "./chunks/interactive-ui-BBBBBBB2.ts"], diagnostics=[]
+        ),
+        "dist/chunks/interactive-ui-BBBBBBB2.ts": pc.FileImports(
+            specifiers=["./chunk-AAAAAAA1.ts"], diagnostics=[]
+        ),
+    }
+    assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, files, imports) == []
+    orphan = {
+        "dist/index.ts": imports["dist/index.ts"].model_copy(
+            update={"specifiers": ["./chunks/chunk-AAAAAAA1.ts"]}
+        )
+    }
+    problems = pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, files, orphan)
+    assert problems == [
+        "packed chunk 'dist/chunks/interactive-ui-BBBBBBB2.ts' is not reachable from 'dist/index.ts' "
+        "by relative imports"
+    ]
+    transitive = {
+        **imports,
+        "dist/index.ts": orphan["dist/index.ts"].model_copy(
+            update={"specifiers": ["./chunks/interactive-ui-BBBBBBB2.ts"]}
+        ),
+    }
+    assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, files, transitive) == []
+    through_non_chunk = {
+        "dist/index.ts": pc.FileImports(specifiers=["./loader.ts"], diagnostics=[]),
+        "dist/loader.ts": pc.FileImports(specifiers=["./chunks/chunk-AAAAAAA1.ts"], diagnostics=[]),
+        "dist/chunks/chunk-AAAAAAA1.ts": pc.FileImports(
+            specifiers=["./interactive-ui-BBBBBBB2.ts"], diagnostics=[]
+        ),
+    }
+    assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, [*files, "dist/loader.ts"], through_non_chunk) == []
