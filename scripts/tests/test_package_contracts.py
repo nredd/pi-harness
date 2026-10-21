@@ -1803,6 +1803,7 @@ def helper_tarball(
     drop: str | None = None,
     omit_source: str | None = None,
     setup_script: str | None = None,
+    build_script: str | None = None,
 ) -> Path:
     """Write a tarball holding both macOS helpers, optionally broken.
 
@@ -1812,6 +1813,7 @@ def helper_tarball(
         drop (str | None): Arch whose helper is omitted.
         omit_source (str | None): Swift source left out of the tarball.
         setup_script (str | None): Replacement `setup-helper.mjs` text.
+        build_script (str | None): Replacement `build-native.mjs` text.
 
     Returns:
         Path: `path`.
@@ -1819,7 +1821,7 @@ def helper_tarball(
     entries = {arch: (macho(cpu), 0o755) for arch, cpu in CU_CPU.items()} | (overrides or {})
     members = {
         "scripts/setup-helper.mjs": (setup_script or CU_SETUP_SCRIPT).encode(),
-        "scripts/build-native.mjs": CU_BUILD_SCRIPT.encode(),
+        "scripts/build-native.mjs": (build_script or CU_BUILD_SCRIPT).encode(),
         **{f"native/macos/{name}": b"// swift\n" for name in CU_SWIFT if name != omit_source},
     }
     with tarfile.open(path, "w:gz") as tar:
@@ -2060,10 +2062,56 @@ def test_scenario_computer_use_rejects_script_without_source_list(
 ) -> None:
     """A packed script whose source list cannot be found is a contract error, not a silent pass."""
     tarball = helper_tarball(tmp_path / "bad.tgz", setup_script="// no list\n")
-    with pytest.raises(pc.ContractError, match="has no helper source list"):
+    with pytest.raises(pc.ContractError, match="has no 'helperSourcePaths' helper source list"):
         run_computer_use_scenario(
             tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
         )
+
+
+def test_scenario_computer_use_parses_mixed_quote_helper_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every literal Swift source, including single-quoted entries, is verified in the tarball."""
+    setup_script = (
+        "const helperSourcePaths = ['agent_cursor.swift', \"agent_cursor_motion.swift\", 'bridge.swift']\n"
+        ".map(f);\n"
+    )
+    tarball = helper_tarball(tmp_path / "mixed.tgz", setup_script=setup_script)
+    evidence = run_computer_use_scenario(
+        tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+    )
+    assert evidence["helper_sources"] == [f"native/macos/{name}" for name in CU_SWIFT]
+
+
+@pytest.mark.parametrize(
+    ("setup_script", "build_script", "message"),
+    [
+        ('const helperSourcePaths = ["bridge.swift", extra]\n.map(f);\n', None, "unsupported token"),
+        ('const macosSourcePaths = ["bridge.swift"]\n.map(f);\n', None, "helperSourcePaths"),
+        (None, 'const helperSourcePaths = ["bridge.swift"]\n.map(f);\n', "macosSourcePaths"),
+    ],
+    ids=["expression", "setup-wrong-variable", "build-wrong-variable"],
+)
+def test_scenario_computer_use_rejects_unsupported_or_wrong_helper_source_declaration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    setup_script: str | None,
+    build_script: str | None,
+    message: str,
+) -> None:
+    """Only each script's complete expected literal source list is accepted."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", setup_script=setup_script, build_script=build_script)
+    with pytest.raises(pc.ContractError, match=message):
+        run_computer_use_scenario(
+            tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
+        )
+
+
+def test_computer_use_wrapper_help_discloses_not_run_boundaries(capsys: pytest.CaptureFixture[str]) -> None:
+    """The argparse description exposes both excluded native behaviors."""
+    with pytest.raises(SystemExit, match="0"):
+        cu.main(["--help"])
+    assert "postinstall and native desktop behavior are NOT RUN" in " ".join(capsys.readouterr().out.split())
 
 
 def stub_npm_install(

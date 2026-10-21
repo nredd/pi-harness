@@ -410,7 +410,7 @@ async function pidForWindow(socketPath, windowId) {
 
 async function liveChecks() {
 	if (process.env.PI_CU_LIVE !== "1") {
-		console.log("SKIP LIVE invariants (set PI_CU_LIVE=1)");
+		console.log("NOT RUN LIVE invariants (set PI_CU_LIVE=1)");
 		return;
 	}
 	try {
@@ -445,7 +445,7 @@ async function liveChecks() {
 			});
 		} catch (error) {
 			if (!explicitWindowId) throw error;
-			console.log(`SKIP LIVE listRoots pairing (${error.message}; explicit PI_CU_LIVE_WINDOW_ID=${explicitWindowId})`);
+			console.log(`NOT RUN LIVE listRoots pairing (${error.message}; explicit PI_CU_LIVE_WINDOW_ID=${explicitWindowId})`);
 		}
 		let target = explicitWindowId && Number.isFinite(explicitWindowId)
 			? { windowId: Math.trunc(explicitWindowId), title: "PI_CU_LIVE_WINDOW_ID", appName: "explicit target" }
@@ -454,7 +454,7 @@ async function liveChecks() {
 			throw new Error(`PI_CU_LIVE_WINDOW_ID must be numeric, got ${process.env.PI_CU_LIVE_WINDOW_ID}`);
 		}
 		if (!target) {
-			console.log("SKIP LIVE look (no capturable frontmost window; Accessibility may be missing)");
+			console.log("NOT RUN LIVE look (no capturable frontmost window; Accessibility may be missing)");
 			return;
 		}
 		const look = await call(socketPath, { id: "inv-look", cmd: "look", windowId: target.windowId, readText: "always" }, 20000);
@@ -513,7 +513,7 @@ async function liveChecks() {
 			if (hasFrontier) {
 				assert(acted.regions.some((region) => region.status === "never-looked"), "frontier node did not create never-looked note entry");
 			} else {
-				console.log(`SKIP LIVE note frontier (no truncated or partially scrolled node in ${windowLabel(target)})`);
+				console.log(`NOT RUN LIVE note frontier (no truncated or partially scrolled node in ${windowLabel(target)})`);
 			}
 		});
 		console.log("LIVE INV-4 act behavior is limited to hitTest, stale_ref, and stale_look; side-effect verification belongs to cubench.");
@@ -548,7 +548,7 @@ async function liveChecks() {
 		const fullOutline = parseLookResponse(look).parsedOutline;
 		const truncated = fullOutline?.nodes.find((node) => node.truncated && node.wireRef);
 		if (!fullOutline || !truncated) {
-			console.log(`SKIP LIVE scoped graft (no truncated node in ${windowLabel(target)})`);
+			console.log(`NOT RUN LIVE scoped graft (no truncated node in ${windowLabel(target)})`);
 		} else {
 			const beforeRefs = new Map(fullOutline.nodes.map((node) => [node.ref, node.wireRef]));
 			const beforeMax = Math.max(...fullOutline.nodes.map((node) => Number(/^@e(\d+)$/.exec(node.ref)?.[1] ?? 0)));
