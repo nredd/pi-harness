@@ -29,6 +29,8 @@ export interface MonitorInfo {
 	exitCode: number | null;
 	signal: NodeJS.Signals | null;
 	lines: number;
+	/** Lines that matched `match`, for the widget's matched state. */
+	matches: number;
 	/** Newest buffered output, for the compact TUI summary only. */
 	lastLine?: string;
 	wake: boolean;
