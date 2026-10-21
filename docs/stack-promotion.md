@@ -66,7 +66,7 @@ Created 2026-10-20 via `gh api`; the workflow does not create or change any of t
 
 ## Consumer requirements
 
-Consumers MUST NOT trust `stable.json` by branch name. Before use they MUST verify both `stable.json` and the snapshot:
+Consumers MUST NOT trust `stable.json` by branch name. Before use they MUST verify `stable.json`:
 
 ```
 gh attestation verify stable.json --repo nredd/pi-harness \
@@ -74,7 +74,16 @@ gh attestation verify stable.json --repo nredd/pi-harness \
   --source-ref refs/heads/main --deny-self-hosted-runners
 ```
 
-then validate it with `StackSnapshot` (`integration/harness/promotion.py`). An unattested file, or one attested from another workflow or ref, must be rejected, keeping the last good stack.
+`stable.json` is byte-identical to the `stack-snapshot.json` release asset and the attestation subject is its digest, so one verification covers both. To verify the release asset directly:
+
+```
+gh release download stack/<source_sha> --repo nredd/pi-harness --pattern stack-snapshot.json
+gh attestation verify stack-snapshot.json --repo nredd/pi-harness \
+  --signer-workflow nredd/pi-harness/.github/workflows/promote-stack.yml \
+  --source-ref refs/heads/main --deny-self-hosted-runners
+```
+
+Then validate it with `StackSnapshot` (`integration/harness/promotion.py`). An unattested file, or one attested from another workflow or ref, must be rejected, keeping the last good stack.
 
 ## First seed
 
