@@ -24,6 +24,14 @@ The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s
 
 The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), which remains `strict`. Strict means that advancing `main` invalidates a PR's previous green result and requires an update-branch rerun before merge. That cost is intentional for combined-result safety; docs-only bypasses make documentation updates cheaper without weakening it.
 
+`.github/workflows/wsl2.yml`, every PR and `main` push:
+
+| Job | Runs | Proves |
+| --- | --- | --- |
+| `wsl2 (windows-2022)` | One `windows-2022` host with `Ubuntu-24.04` explicitly verified as WSL version 2. The Windows checkout is copied from `/mnt/...` to a non-`drvfs` WSL filesystem before executing the existing release fetcher and personal-stack D/E pytest entrypoint. | Real Node release-bundle Pi startup, text/JSON/RPC and extension discovery, installed personal-stack integration, process lifetime/output/auth seams, and the tmux footer resize boundary under WSL2. Bun is installed at the repository's pinned `1.3.14` only to keep the WSL toolchain identity aligned; this job does not run standalone Bun scenarios. |
+
+The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, a mounted Windows worktree, bootstrap failure, or any scenario failure fails it. It does not test the local stack, standalone binaries, macOS, Linux ARM64, packed contracts, benchmarks, live credentials, REA, or desktop/TCC helpers. It is deliberately one serial Windows-hosted execution rather than another broad OS/stack matrix. Its stable check name is a candidate for protection only after independent review and a native WSL2 green run; this PR does not change rulesets.
+
 `.github/workflows/forks.yml`, when the remaining `forks/pi` Gitlink, `.gitmodules` or the workflow changes, plus manual dispatch:
 
 | Job | Runs |
