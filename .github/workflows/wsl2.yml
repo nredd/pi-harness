@@ -39,7 +39,7 @@ jobs:
           distribution: Ubuntu-24.04
           wsl-version: '2'
           update: 'true'
-          additional-packages: curl git tmux xz-utils
+          additional-packages: curl git libatomic1 tmux xz-utils
 
       # setup-wsl does not forward GitHub's Windows-only environment into Linux.
       - name: Record Windows checkout path for WSL
