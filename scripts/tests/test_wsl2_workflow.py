@@ -39,7 +39,9 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     assert "wsl --list --verbose" in workflow
     assert "$listing = $listing -replace ([char]0), ''" in workflow
     assert "Ubuntu-24\\.04" in workflow
-    assert 'source_checkout=$(wslpath -u "$GITHUB_WORKSPACE")' in workflow
+    assert "Record Windows checkout path for WSL" in workflow
+    assert "wsl2-source-checkout.txt" in workflow
+    assert 'source_checkout=$(wslpath -u "$(tr -d \'\\r\\n\' < "$wsl_source_file")")' in workflow
     assert "Expected the Windows checkout below /mnt" in workflow
     assert "Harness worktree must be on the WSL Linux filesystem" in workflow
     assert "findmnt --noheadings --output FSTYPE" in workflow
