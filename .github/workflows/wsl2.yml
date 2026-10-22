@@ -1,0 +1,122 @@
+---
+# Native WSL2 stack verification. It is intentionally a single Windows-hosted job, not a matrix.
+name: Native WSL2 integration
+
+'on':
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: wsl2-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  wsl2:
+    name: wsl2 (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: false
+          persist-credentials: false
+
+      # Windows checkout defaults can rewrite shell scripts. WSL must consume their LF bytes.
+      - name: Keep checkout shell scripts LF
+        shell: pwsh
+        run: |
+          git config --local core.autocrlf false
+          git reset --hard HEAD
+
+      # Vampire/setup-wsl v7.2.0
+      - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: '2'
+          update: 'true'
+          additional-packages: curl git tmux xz-utils
+
+      - name: Assert Ubuntu is WSL2
+        shell: pwsh
+        run: |
+          # `wsl --list --verbose` is UTF-16 on hosted Windows and can contain NULs.
+          $listing = (wsl --list --verbose) -join "`n"
+          $listing = $listing -replace ([char]0), ''
+          $listing
+          if ($listing -notmatch '(?m)^\s*\*?\s*Ubuntu-24\.04\s+\S+\s+2\s*$') {
+            throw 'Ubuntu-24.04 is not listed as WSL version 2'
+          }
+
+      - name: Run the existing stack harness from the Linux filesystem
+        shell: wsl-bash_Ubuntu-24.04 {0}
+        run: |
+          set -euo pipefail
+
+          source_checkout=$(wslpath -u "$GITHUB_WORKSPACE")
+          case "$source_checkout" in
+            /mnt/*) ;;
+            *)
+              echo "Expected the Windows checkout below /mnt, got: $source_checkout" >&2
+              exit 1
+              ;;
+          esac
+          test -f "$source_checkout/.bun-version"
+
+          worktree=$(mktemp -d "$HOME/pi-harness-wsl2.XXXXXX")
+          cleanup() { rm -rf "$worktree"; }
+          trap cleanup EXIT
+          cp -a "$source_checkout/." "$worktree"
+          case "$worktree" in
+            /mnt/*)
+              echo "Harness worktree must be on the WSL Linux filesystem: $worktree" >&2
+              exit 1
+              ;;
+          esac
+          filesystem=$(findmnt --noheadings --output FSTYPE --target "$worktree" | tr -d '[:space:]')
+          case "$filesystem" in
+            drvfs|'')
+              echo "Harness worktree is not on a Linux filesystem: $filesystem" >&2
+              exit 1
+              ;;
+          esac
+          printf 'Windows checkout: %s\nWSL worktree (%s): %s\n' \
+            "$source_checkout" "$filesystem" "$worktree"
+
+          cd "$worktree"
+          git submodule update --init forks/pi
+
+          node_version=$(tr -d '\r\n' < .node-version)
+          node_archive="node-v${node_version}-linux-x64.tar.xz"
+          tool_dir="$HOME/.cache/pi-harness-wsl2-tools"
+          mkdir -p "$tool_dir"
+          curl --fail --location --retry 3 --output "$tool_dir/$node_archive" \
+            "https://nodejs.org/dist/v${node_version}/$node_archive"
+          tar --extract --xz --file "$tool_dir/$node_archive" --directory "$tool_dir"
+          export PATH="$tool_dir/node-v${node_version}-linux-x64/bin:$PATH"
+          test "$(node --version)" = "v$node_version"
+          npm install --global "$(node -p 'require("./package.json").packageManager')"
+
+          bun_version=$(tr -d '\r\n' < .bun-version)
+          export BUN_INSTALL="$tool_dir/bun"
+          curl --fail --location --retry 3 https://bun.sh/install | bash -s -- "bun-v$bun_version"
+          export PATH="$BUN_INSTALL/bin:$PATH"
+          test "$(bun --version)" = "$bun_version"
+
+          curl --fail --location --retry 3 https://astral.sh/uv/0.13.1/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          test "$(uv --version)" = 'uv 0.13.1'
+
+          npm ci --ignore-scripts
+          cd integration
+          uv sync --locked --python "$(tr -d '\r\n' < ../.python-version)"
+          uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$worktree/pi-release"
+          export PI_BIN="$worktree/pi-release/bin/pi"
+          "$PI_BIN" --version
+          uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
+            --stack stacks/personal.json -m stack -n 2 --dist loadfile --log-cli-level=INFO \
+            --junitxml=artifacts/wsl2-personal.xml
