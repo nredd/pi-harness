@@ -30,7 +30,7 @@ def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
     assert "runs-on: windows-2022" in workflow
     assert "timeout-minutes: 45" in workflow
     assert "contents: read" in workflow
-    assert "additional-packages: curl git libatomic1 tmux xz-utils" in workflow
+    assert "additional-packages: curl git libatomic1 tmux unzip xz-utils" in workflow
 
 
 def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
