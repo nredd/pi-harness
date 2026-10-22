@@ -55,6 +55,8 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     assert "git submodule update --init forks/pi" in workflow
     assert 'test "$(bun --version)" = "$bun_version"' in workflow
     assert "bun-v$bun_version" in workflow
+    assert "uv_version=0.13.1" in workflow
+    assert '"uv $uv_version"*' in workflow
     assert "uv run --locked python -m harness.release" in workflow
     assert "--gitlink ../forks/pi" in workflow
     assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in workflow
