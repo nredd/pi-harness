@@ -8,6 +8,9 @@ benchmarks, and exact-stack release tooling. The Pi core retains its upstream hi
   after activation. There is no staging/activation transaction or standalone distribution installer.
 - CI builds the Bun standalone from the Gitlinked core and runs the stack D/E scenarios on it on darwin-arm64 and
   linux-x64; seven auth-interception cases are explicit skips. linux-arm64 is NOT RUN. Details [here](docs/bun-prerequisite.md).
+- CI also runs the existing personal-stack Node D/E entrypoint once on a hosted `windows-2022` runner inside verified
+  Ubuntu WSL2, after copying the checkout from the mounted Windows drive to WSL's Linux filesystem. Coverage and exclusions:
+  [CI](docs/ci.md).
 
 Current status is [here](PLAN.md); the original migration plan and its superseded requirements are
 [here](docs/migration-plan.md).
