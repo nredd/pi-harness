@@ -93,20 +93,9 @@ jobs:
           diagnostics_dir="$(dirname "$wsl_source_file")/wsl2-diagnostics"
           test -d "$diagnostics_dir"
           worktree=
-          cleanup() {
-            status=$?
-            set +e
-            if [ -n "$worktree" ] && [ -d "$worktree/integration/artifacts" ]; then
-              mkdir -p "$diagnostics_dir/artifacts" || true
-              cp -a "$worktree/integration/artifacts/." "$diagnostics_dir/artifacts/" \
-                || printf 'WARNING: could not preserve WSL failure artifacts\n' >&2
-            fi
-            printf 'WSL harness exited with status %s.\n' "$status" >"$diagnostics_dir/capture-status.txt" \
-              || printf 'WARNING: could not record WSL capture status\n' >&2
-            rm -rf "$worktree" || printf 'WARNING: could not remove disposable WSL worktree\n' >&2
-            return "$status"
-          }
-          trap cleanup EXIT
+          # Kept in a real shell file so failure semantics are executable-tested locally.
+          source "$source_checkout/scripts/wsl2_cleanup.sh"
+          trap cleanup_wsl2_worktree EXIT
 
           worktree=$(mktemp -d "$HOME/pi-harness-wsl2.XXXXXX")
           cp -a "$source_checkout/." "$worktree"
