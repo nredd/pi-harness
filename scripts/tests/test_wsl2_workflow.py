@@ -49,6 +49,24 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     assert "drvfs|''" in workflow
 
 
+def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
+    """Keep JUnit, synthetic failure artifacts, and explicit identities after cleanup."""
+    workflow = workflow_text()
+    assert "Prepare WSL diagnostics directory" in workflow
+    assert "wsl2-diagnostics" in workflow
+    assert 'diagnostics_dir="$(dirname "$wsl_source_file")/wsl2-diagnostics"' in workflow
+    assert 'cp -a "$worktree/integration/artifacts/." "$diagnostics_dir/artifacts/"' in workflow
+    assert 'rm -rf "$worktree" || printf' in workflow
+    assert 'return "$status"' in workflow
+    assert "name: wsl2-diagnostics" in workflow
+    assert "if: always()" in workflow
+    assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in workflow
+    assert "path: ${{ runner.temp }}/wsl2-diagnostics/" in workflow
+    assert "if-no-files-found: warn" in workflow
+    assert "PI_BIN" in workflow
+    assert "Core Gitlink:" in workflow
+
+
 def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     """Require actual Pi startup, RPC, extension, and stack process coverage."""
     workflow = workflow_text()

@@ -48,6 +48,20 @@ jobs:
           $destination = Join-Path $env:RUNNER_TEMP 'wsl2-source-checkout.txt'
           [System.IO.File]::WriteAllText($destination, $env:GITHUB_WORKSPACE, [System.Text.UTF8Encoding]::new($false))
 
+      # This directory is outside the disposable Linux worktree and is safe to upload:
+      # only the harness's synthetic failure artifacts, JUnit report, and explicit identities go here.
+      - name: Prepare WSL diagnostics directory
+        shell: pwsh
+        run: |
+          $diagnostics = Join-Path $env:RUNNER_TEMP 'wsl2-diagnostics'
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $diagnostics
+          New-Item -ItemType Directory -Force $diagnostics | Out-Null
+          [System.IO.File]::WriteAllText(
+            (Join-Path $diagnostics 'capture-status.txt'),
+            "WSL harness did not start; no WSL diagnostics were generated.`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
       - name: Assert Ubuntu is WSL2
         shell: pwsh
         run: |
@@ -76,9 +90,25 @@ jobs:
           esac
           test -f "$source_checkout/.bun-version"
 
-          worktree=$(mktemp -d "$HOME/pi-harness-wsl2.XXXXXX")
-          cleanup() { rm -rf "$worktree"; }
+          diagnostics_dir="$(dirname "$wsl_source_file")/wsl2-diagnostics"
+          test -d "$diagnostics_dir"
+          worktree=
+          cleanup() {
+            status=$?
+            set +e
+            if [ -n "$worktree" ] && [ -d "$worktree/integration/artifacts" ]; then
+              mkdir -p "$diagnostics_dir/artifacts" || true
+              cp -a "$worktree/integration/artifacts/." "$diagnostics_dir/artifacts/" \
+                || printf 'WARNING: could not preserve WSL failure artifacts\n' >&2
+            fi
+            printf 'WSL harness exited with status %s.\n' "$status" >"$diagnostics_dir/capture-status.txt" \
+              || printf 'WARNING: could not record WSL capture status\n' >&2
+            rm -rf "$worktree" || printf 'WARNING: could not remove disposable WSL worktree\n' >&2
+            return "$status"
+          }
           trap cleanup EXIT
+
+          worktree=$(mktemp -d "$HOME/pi-harness-wsl2.XXXXXX")
           cp -a "$source_checkout/." "$worktree"
           case "$worktree" in
             /mnt/*)
@@ -93,8 +123,8 @@ jobs:
               exit 1
               ;;
           esac
-          printf 'Windows checkout: %s\nWSL worktree (%s): %s\n' \
-            "$source_checkout" "$filesystem" "$worktree"
+          printf 'WSL worktree filesystem: %s\n' "$filesystem" >"$diagnostics_dir/identity.txt" \
+            || printf 'WARNING: could not record WSL identity\n' >&2
 
           cd "$worktree"
           git submodule update --init forks/pi
@@ -132,7 +162,17 @@ jobs:
           uv sync --locked --python "$(tr -d '\r\n' < ../.python-version)"
           uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$worktree/pi-release"
           export PI_BIN="$worktree/pi-release/bin/pi"
-          "$PI_BIN" --version
+          pi_version=$("$PI_BIN" --version)
+          printf 'Pi release: %s\nCore Gitlink: %s\n' "$pi_version" "$(git -C ../forks/pi describe --tags --exact-match)" \
+            >>"$diagnostics_dir/identity.txt" || printf 'WARNING: could not complete WSL identity capture\n' >&2
+          printf '%s\n' "$pi_version"
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
             --stack stacks/personal.json -m stack -n 2 --dist loadfile --log-cli-level=INFO \
             --junitxml=artifacts/wsl2-personal.xml
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: wsl2-diagnostics
+          path: ${{ runner.temp }}/wsl2-diagnostics/
+          if-no-files-found: warn
