@@ -41,6 +41,13 @@ jobs:
           update: 'true'
           additional-packages: curl git tmux xz-utils
 
+      # setup-wsl does not forward GitHub's Windows-only environment into Linux.
+      - name: Record Windows checkout path for WSL
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP 'wsl2-source-checkout.txt'
+          [System.IO.File]::WriteAllText($destination, $env:GITHUB_WORKSPACE, [System.Text.UTF8Encoding]::new($false))
+
       - name: Assert Ubuntu is WSL2
         shell: pwsh
         run: |
@@ -57,7 +64,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          source_checkout=$(wslpath -u "$GITHUB_WORKSPACE")
+          wsl_source_file="$(dirname "$0")/wsl2-source-checkout.txt"
+          test -s "$wsl_source_file"
+          source_checkout=$(wslpath -u "$(tr -d '\r\n' < "$wsl_source_file")")
           case "$source_checkout" in
             /mnt/*) ;;
             *)
