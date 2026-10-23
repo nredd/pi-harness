@@ -42,10 +42,10 @@ export interface RouteEnv {
 	/** The physical model for a chain entry, or undefined when unknown or without credentials. */
 	resolve(entry: ChainEntry): Model<Api> | undefined;
 	/**
-	 * Fresh usage read for `provider` that started at or after `notBefore`.
-	 * Resolves true only when it produced live (`available`) data; must not reject.
+	 * Decision for `model` from the exact fresh snapshot started at or after
+	 * `notBefore`. Unavailable reads return undefined; must not reject.
 	 */
-	refresh(provider: string, signal: AbortSignal | undefined, notBefore: number): Promise<boolean>;
+	refresh(model: ModelRef, signal: AbortSignal | undefined, notBefore: number): Promise<UsageDecision | undefined>;
 }
 
 /** The slice of `UsageService` routing depends on. */
@@ -198,10 +198,8 @@ export class Router {
 	 * failed, stale, or cancelled read confirms nothing.
 	 */
 	async confirm(model: Model<Api>, env: RouteEnv, signal: AbortSignal | undefined, failedAt: number): Promise<boolean> {
-		const live = await env.refresh(model.provider, signal, failedAt);
-		if (!live || signal?.aborted) return false;
-		const decision = this.usage.decisionFor(model);
-		if (!decision.block) return false;
+		const decision = await env.refresh(model, signal, failedAt);
+		if (!decision?.block || signal?.aborted) return false;
 		this.tracker.mark(model, decision);
 		return true;
 	}
@@ -217,9 +215,6 @@ export class Router {
 		request.signal?.throwIfAborted();
 		const { reason, previous, failed } = request;
 		if (reason === "retry" && failed) {
-			if (hasPartialOutput(failed.message)) {
-				throw new Error("subscription-router: refusing to replay a partial response; retry explicitly.");
-			}
 			const entry = profile.chain.find((item) => sameModel(item, failed.model));
 			if (entry) {
 				const confirmed =
@@ -227,6 +222,9 @@ export class Router {
 					(await this.confirm(failed.model, env, request.signal, failed.message.timestamp));
 				request.signal?.throwIfAborted();
 				if (!confirmed) return this.toRoute(entry, failed.model, request.thinkingLevel);
+				if (hasPartialOutput(failed.message)) {
+					throw new Error("subscription-router: refusing to replay a partial response; retry explicitly.");
+				}
 			}
 		}
 		if ((reason === "continuation" || (reason === "direct" && profile.strategy === "balanced")) && previous) {

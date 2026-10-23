@@ -65,9 +65,11 @@ function routeEnv(ctx: ExtensionContext, usage: RouterUsage): RouteEnv {
 			const model = ctx.modelRegistry.find(entry.provider, entry.id);
 			return model && ctx.modelRegistry.hasConfiguredAuth(model) ? model : undefined;
 		},
-		refresh: async (provider, signal, notBefore) => {
-			const snapshot = await usage.get(ctx, provider, { fresh: true, notBefore, signal });
-			return snapshot.status === "available" && snapshot.retrievedAt >= notBefore;
+		refresh: async (model, signal, notBefore) => {
+			const snapshot = await usage.get(ctx, model.provider, { fresh: true, notBefore, signal });
+			return snapshot.status === "available" && snapshot.retrievedAt >= notBefore
+				? usage.decisionFor(model, snapshot)
+				: undefined;
 		},
 	};
 }

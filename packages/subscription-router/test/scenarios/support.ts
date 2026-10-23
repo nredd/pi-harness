@@ -98,6 +98,7 @@ export async function startRouter(
 	usage: CachedUsage,
 	strategy: Profile["strategy"] = "ordered",
 	extensions: ExtensionFactory[] = [],
+	settings: NonNullable<Parameters<typeof createHarness>[0]>["settings"] = {},
 ): Promise<RouterScenario> {
 	const register = ([provider, id]: (typeof PHYSICAL)[number]): FauxProviderRegistration =>
 		registerFauxProvider({ provider, models: [{ id }] });
@@ -114,7 +115,7 @@ export async function startRouter(
 	try {
 		harness = await createHarness({
 			useModelRuntimeStream: true,
-			settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 } },
+			settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 }, ...settings },
 			extensionFactories: [
 				...extensions,
 				createSubscriptionRouter({
