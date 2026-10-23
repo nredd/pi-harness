@@ -23,6 +23,7 @@ Tool groups land one per PR. Current state is in the table below.
 | ssh | `ssh_exec`, `ssh_pull`, `ssh_push` | done |
 | py | `py_lint`, `py_format`, `py_typecheck`, `py_test`, `py_uv` | done |
 | cargo | `cargo_check`, `cargo_clippy`, `cargo_fmt`, `cargo_test`, `cargo_build`, `cargo_run`, `cargo_doc`, `cargo_bench`, `cargo_add` | done |
+| resource | `resource_snapshot` | done |
 
 ## Conventions every tool follows
 
@@ -45,6 +46,15 @@ Tool groups land one per PR. Current state is in the table below.
   tools in Plan mode; everything else is denied there
 - `outputSchema` + `structuredContent` on every tool, `isError: true` on red with the data intact
 - Default transcript renderer, so every call settles as one `call · summary` row
+
+## Resource awareness
+
+`resource_snapshot({process_limit?})` is an always-read-only observer for a parent or subagent to call before it knowingly starts a large test or compile. Its tool description carries the same instruction: use the result to choose targeted scope, workers, or timing; it never schedules work, locks commands, or changes concurrency.
+
+- Reports logical CPU count and 1/5/15-minute load (explicitly unavailable on Windows), total/free memory, Linux `MemAvailable`, and optional macOS `memory_pressure -Q` free percentage or Linux PSI `some avg10`. Missing optional metrics remain `null`, never invented.
+- Returns at most 50 process entries, 12 by default: PID, CPU percentage, RSS bytes, elapsed time, and executable basename. It invokes only fixed `ps` metadata columns, never process arguments or environments, and caps its command output at 128 KiB with a three-second timeout.
+- OS process metadata has no proven link to a Pi parent, session, or agent. Use actual subagent/task information separately; do not claim process-to-agent attribution from this tool.
+- macOS and Linux process metadata are supported. Other platforms return an explicit unavailable reason while retaining the portable memory fields.
 
 ## git
 

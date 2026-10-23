@@ -10,6 +10,7 @@ import { Errors } from "typebox/value";
 
 type AnyTool = {
 	name: string;
+	description?: string;
 	annotations?: Record<string, boolean>;
 	parameters: TSchema;
 	outputSchema?: TSchema;
