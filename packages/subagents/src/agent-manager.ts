@@ -862,35 +862,39 @@ export class AgentManager {
    * promise never rejects — the failure is delivered through `awaitStartup`,
    * and to the record.
    *
-   * @param queuedPool - The pool this start was QUEUED on, or undefined for an
-   *   immediate start. A queue drain can be minutes after `spawn()` returned,
-   *   and nobody is awaiting `awaitStartup` by then, so a failure has to live
-   *   on the record as status "error" — what drainQueue did when the throw was
-   *   still synchronous. An immediate start instead drops the record, exactly
-   *   as the throw out of `spawn()` did: no orphan in `listAgents()`, and the
-   *   handle goes back.
+   * @param failAs - For a start that QUEUED (on a pool or on the budget
+   *   alone), how a startup failure is reported: "foreground" when an inline
+   *   `spawnAndWait` caller gets it as a throw, else "background". Undefined
+   *   for an immediate start. A queued start can begin minutes after `spawn()`
+   *   returned, and nobody is awaiting `awaitStartup` by then, so its failure
+   *   lives on the record as status "error". An immediate start instead drops
+   *   the record, exactly as the throw out of `spawn()` did: no orphan in
+   *   `listAgents()`, and the handle goes back.
    */
-  private launch(id: string, record: AgentRecord, args: SpawnArgs, queuedPool: Pool | undefined): Promise<void> {
+  private launch(id: string, record: AgentRecord, args: SpawnArgs, failAs: Pool | undefined): Promise<void> {
     const startup = this.startAgent(id, record, args).then(
       () => { this.startups.delete(id); },
       (err) => {
         this.startups.delete(id);
-        if (queuedPool !== undefined) {
-          // Mirrors settleRun: an inline caller gets this failure as a throw
-          // out of spawnAndWait, so an unconsumed record would ALSO nudge the
-          // session about it — the same failure reported twice.
-          if (queuedPool === "foreground") markConsumed(record, this.clock.now());
-          record.status = "error";
-          record.error = err instanceof Error ? err.message : String(err);
-          record.completedAt = this.clock.now();
-          this.onComplete?.(record);
-        } else {
-          this.agents.delete(id);
+        try {
+          if (failAs !== undefined) {
+            // Mirrors settleRun: an inline caller gets this failure as a throw
+            // out of spawnAndWait, so an unconsumed record would ALSO nudge the
+            // session about it — the same failure reported twice.
+            if (failAs === "foreground") markConsumed(record, this.clock.now());
+            record.status = "error";
+            record.error = err instanceof Error ? err.message : String(err);
+            record.completedAt = this.clock.now();
+            try { this.onComplete?.(record); } catch { /* the startup failure is the error worth reporting */ }
+          } else {
+            this.agents.delete(id);
+          }
+        } finally {
+          // The agent never kept its slot (startAgent gives it back on failure)
+          // or its lease, so anything queued behind it can go now.
+          this.releaseLease(record);
+          this.drainQueue();
         }
-        // The agent never kept its slot (startAgent gives it back on failure)
-        // or its lease, so anything queued behind it can go now.
-        this.releaseLease(record);
-        this.drainQueue();
         throw err;
       },
     );
@@ -1006,7 +1010,20 @@ export class AgentManager {
       }
     }
 
-    this.onStart?.(record);
+    // A throwing `onStart` fails the startup like a worktree failure: hand the
+    // slot back and remove the copy, since nothing will ever settle this run.
+    // The lease goes back in `launch`, after the cleanup.
+    try {
+      this.onStart?.(record);
+    } catch (err) {
+      this.chargePool(record.chargedPool, -1);
+      if (record.worktree) {
+        try {
+          record.worktreeResult = await cleanupWorktree(pi, baseCwd, record.worktree, options.description);
+        } catch { /* ignore cleanup errors */ }
+      }
+      throw err;
+    }
 
     // Wire parent abort signal to stop the subagent when the parent is interrupted.
     // A queued spawn can start minutes after the caller handed us its signal,
@@ -1225,15 +1242,6 @@ export class AgentManager {
     record.blocking = false;
     const pool = record.chargedPool;
     this.chargePool(pool, -1);
-    const heldLease = record.budgetLease !== undefined;
-    this.releaseLease(record);
-
-    if (guardCallback) {
-      try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
-    } else {
-      this.onComplete?.(record);
-    }
-
     // The isBackground half reproduces the pre-pool condition exactly — a
     // background settle has always drained, even for a nested child that held
     // no slot — so that path is unchanged whether or not the foreground pool is
@@ -1241,7 +1249,21 @@ export class AgentManager {
     // A drain with nothing freed is a no-op anyway, but "no-op" is a claim
     // about reachability, and matching the old condition needs no such claim.
     // The lease half: a freed budget slot may start work in any manager.
-    if (record.isBackground || pool !== undefined || heldLease) this.drainQueue();
+    const drain = record.isBackground || pool !== undefined || record.budgetLease !== undefined;
+    this.releaseLease(record);
+
+    try {
+      if (guardCallback) {
+        try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
+      } else {
+        this.onComplete?.(record);
+      }
+    } finally {
+      // Drained even when an unguarded `onComplete` throws: the slot and lease
+      // are already free, and a waiter that misses this drain may be the child
+      // a running parent is blocked on, with nothing else left to pump.
+      if (drain) this.drainQueue();
+    }
   }
 
   /**

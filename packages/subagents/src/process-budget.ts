@@ -58,11 +58,9 @@ const BUDGET_VERSION = 2;
  */
 export const MAX_PENDING_SUBAGENTS = 128;
 
-export const DEFAULT_NESTED_SUBAGENT_RESERVE = 2;
-
 export const DEFAULT_BUDGET_POLICY: Readonly<BudgetPolicy> = {
   maxActive: 0,
-  nestedReserve: DEFAULT_NESTED_SUBAGENT_RESERVE,
+  nestedReserve: 2,
   maxDepth: 2,
 };
 

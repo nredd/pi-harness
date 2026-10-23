@@ -478,7 +478,11 @@ describe("process budget covers every start path", () => {
     // Twelve finished roots whose sessions kept depth-2 nested tools; then the
     // user drops Nested depth to 1 and resumes all twelve at once. Admission
     // under the live depth (12 roots, no reserve) stranded every child.
-    vi.mocked(resumeAgent).mockImplementation((() => new Promise(() => {})) as any);
+    const resumes: Array<() => void> = [];
+    vi.mocked(resumeAgent).mockImplementation((() =>
+      new Promise(resolve => {
+        resumes.push(() => resolve({ text: "resumed", aborted: false, steered: false }));
+      })) as any);
     const m = newManager();
     const roots = Array.from({ length: 12 }, () => bg(m));
     await flush();
@@ -491,7 +495,16 @@ describe("process budget covers every start path", () => {
       const child = m.spawn(pi, ctx, "general-purpose", "c", { description: "c", depth: 2, parentAgentId: roots[0] });
       await flush();
       expect(m.getRecord(child)!.status).toBe("running");
-      void resumed;
+
+      // Settle everything: the child, then each resume (each frees the slot
+      // the next queued one takes) until all twelve have returned.
+      await finish(child);
+      while (resumes.length > 0) {
+        resumes.shift()!();
+        await flush();
+      }
+      expect((await Promise.all(resumed)).map(r => r!.status)).toEqual(Array(12).fill("completed"));
+      expect(budgetUsage()).toMatchObject({ active: 0, pending: 0 });
     } finally {
       setMaxSubagentDepth(2);
     }
@@ -668,6 +681,76 @@ describe("process budget lease release", () => {
     expect(budgetUsage()).toMatchObject({ active: 1, pending: 0 });
   });
 
+  it("releases a queued start's lease and drains even when onComplete throws on its startup failure", async () => {
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+    const m = new AgentManager(() => { throw new Error("onComplete blew up"); }, 10);
+    managers.push(m);
+    const blocker = bg(m);
+    const dir = mkdtempSync(join(tmpdir(), "budget-cwd-"));
+    const doomed = bg(m, { cwd: dir });
+    const next = bg(m);
+    await flush();
+    rmSync(dir, { recursive: true, force: true });
+
+    await finish(blocker);
+    expect(m.getRecord(doomed)!.status).toBe("error");
+    expect(m.getRecord(doomed)!.error).toMatch(/does not exist/);
+    expect(m.getRecord(next)!.status).toBe("running");
+    expect(budgetUsage()).toMatchObject({ active: 1, pending: 0 });
+  });
+
+  it("drains after an error settle whose onComplete throws, so a parent's queued child starts", async () => {
+    setBudgetPolicy({ maxActive: 2, nestedReserve: 1, maxDepth: 2 });
+    const m = new AgentManager(() => { throw new Error("onComplete blew up"); }, 10);
+    managers.push(m);
+    const parent = bg(m);
+    await flush();
+    // The first child's runner rejects; the second waits for its slot.
+    vi.mocked(runAgent).mockImplementationOnce((() => Promise.reject(new Error("provider down"))) as any);
+    const child = (description: string) =>
+      m.spawn(pi, ctx, "general-purpose", "review", { description, depth: 2, parentAgentId: parent });
+    const failing = child("c1");
+    const waiting = child("c2");
+    expect(m.getRecord(waiting)!.status).toBe("queued");
+
+    // The unguarded error-path onComplete still rejects the run's promise.
+    await expect(m.getRecord(failing)!.promise).rejects.toThrow("onComplete blew up");
+    await flush();
+    expect(m.getRecord(failing)!.status).toBe("error");
+    expect(m.getRecord(waiting)!.status).toBe("running");
+    expect(budgetUsage()).toMatchObject({ active: 2, pending: 0 });
+  });
+
+  it("hands back a spawn's pool slot and lease when its onStart throws", async () => {
+    let failStart = true;
+    const m = new AgentManager(undefined, 1, () => {
+      if (failStart) throw new Error("onStart blew up");
+    });
+    managers.push(m);
+    const doomed = bg(m);
+    await expect(m.awaitStartup(doomed)).rejects.toThrow("onStart blew up");
+    expect(m.getRecord(doomed)).toBeUndefined();
+    expect(budgetUsage()).toMatchObject({ active: 0, pending: 0 });
+
+    // maxConcurrent 1: a leaked slot would queue this forever.
+    failStart = false;
+    const next = bg(m);
+    await flush();
+    expect(m.getRecord(next)!.status).toBe("running");
+  });
+
+  it("removes the worktree and frees the slot when onStart throws after the copy", async () => {
+    vi.mocked(cleanupWorktree).mockClear();
+    vi.mocked(createWorktree).mockResolvedValueOnce({ path: "/tmp/wt", workPath: "/tmp/wt", repoRoot: "/tmp", branch: "b" } as any);
+    const m = new AgentManager(undefined, 1, () => { throw new Error("onStart blew up"); });
+    managers.push(m);
+    const doomed = bg(m, { isolation: "worktree" });
+    await expect(m.awaitStartup(doomed)).rejects.toThrow("onStart blew up");
+    expect(cleanupWorktree).toHaveBeenCalledWith(pi, "/tmp", expect.objectContaining({ path: "/tmp/wt" }), "bg");
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(budgetUsage()).toMatchObject({ active: 0, pending: 0 });
+  });
+
   it("releases an immediate start's lease when worktree creation fails", async () => {
     vi.mocked(createWorktree).mockRejectedValueOnce(new Error("not a git repo"));
     const m = newManager();
@@ -741,6 +824,50 @@ describe("process budget lease release", () => {
     await flush();
     expect(budgetUsage().active).toBe(0);
     expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it("marks a foreground resume still waiting for a lease stopped when dispose removes it", async () => {
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+    const m = newManager();
+    const id = bg(m);
+    await flush();
+    await finish(id);
+    const x = m.getRecord(id)!;
+    const blocker = bg(m);
+    await flush();
+
+    const pending = m.resume(x.id, "again");
+    await flush();
+    expect(x.status).toBe("queued");
+    await m.dispose();
+    const resumed = (await pending)!;
+    expect(resumed.status).toBe("stopped");
+    expect(resumed.completedAt).toBeDefined();
+    expect(resumeAgent).not.toHaveBeenCalled();
+    expect(budgetUsage()).toMatchObject({ active: 1, pending: 0 });
+    runs.get(blocker)!.finish();
+    await flush();
+    expect(budgetUsage().active).toBe(0);
+  });
+
+  it("turns off at once with leases held, starting every waiter and dropping a held change", async () => {
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+    const m = newManager();
+    const blocker = bg(m);
+    const queued = [bg(m), bg(m)];
+    await flush();
+    setBudgetPolicy({ maxActive: 2, nestedReserve: 1, maxDepth: 2 });
+    expect(getPendingBudgetPolicy()).toBeDefined();
+
+    setBudgetPolicy({ maxActive: 0, nestedReserve: 0, maxDepth: 1 });
+    expect(getBudgetPolicy().maxActive).toBe(0);
+    expect(getPendingBudgetPolicy()).toBeUndefined();
+    await flush();
+    expect(queued.map(id => m.getRecord(id)!.status)).toEqual(["running", "running"]);
+    // Still counted while off, so turning it back on waits for all three.
+    expect(budgetUsage()).toMatchObject({ active: 3, pending: 0, maxActive: 0 });
+    for (const id of [blocker, ...queued]) await finish(id);
+    expect(budgetUsage().active).toBe(0);
   });
 
   it("keeps a survivor's queued nested child through detach", async () => {
