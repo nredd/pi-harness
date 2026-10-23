@@ -29,6 +29,7 @@ from harness.install import (
     Journal,
     Layout,
     Options,
+    RollbackError,
     UnsupportedError,
     VerificationError,
     Verified,
@@ -866,7 +867,9 @@ def interrupt(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     assert layout.journal.exists()
 
 
-def test_interrupted_switch_is_restored_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_interrupted_switch_is_restored_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """Recovery needs no network and no tools: it runs before preflight and verification."""
     harness = Harness(tmp_path, monkeypatch)
     seed_existing(harness.home)
@@ -885,10 +888,207 @@ def test_interrupted_switch_is_restored_offline(tmp_path: Path, monkeypatch: pyt
         raise UnsupportedError("`gh` not found on PATH")
 
     monkeypatch.setattr(install, "preflight", offline)
+    assert harness.layout.journal.stat().st_mode & 0o777 == 0o600
+    caplog.set_level("INFO")
     with pytest.raises(UnsupportedError, match="gh"):
         harness.run(yes=True)
+    assert "This run restores them (with consent)" in caplog.text
+    assert "next run" not in caplog.text
     assert not harness.layout.journal.exists()
     assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+
+
+def edit_journal(harness: Harness, change: Callable[[dict[str, Any]], None]) -> None:
+    """Rewrite the pending journal in place, keeping it private.
+
+    Parameters:
+        harness (Harness): HOME with a pending journal.
+        change (Callable[[dict[str, Any]], None]): mutates the decoded journal.
+    """
+    journal = harness.layout.journal
+    document = json.loads(journal.read_text())
+    change(document)
+    journal.write_text(json.dumps(document))
+
+
+def add_step(target: Path | str, backup: Path | str | None = None) -> Callable[[dict[str, Any]], None]:
+    """Build a journal edit appending one step.
+
+    Parameters:
+        target (Path | str): step target.
+        backup (Path | str | None): step backup.
+
+    Returns:
+        Callable[[dict[str, Any]], None]: the edit.
+    """
+
+    def change(document: dict[str, Any]) -> None:
+        """Append the step.
+
+        Parameters:
+            document (dict[str, Any]): decoded journal.
+        """
+        document["steps"].append({"target": str(target), "backup": None if backup is None else str(backup)})
+
+    return change
+
+
+def set_backup(name: str, backup: str) -> Callable[[dict[str, Any]], None]:
+    """Build a journal edit pointing one recorded step's backup elsewhere.
+
+    Parameters:
+        name (str): final component of the step target.
+        backup (str): new backup path.
+
+    Returns:
+        Callable[[dict[str, Any]], None]: the edit.
+    """
+
+    def change(document: dict[str, Any]) -> None:
+        """Replace the backup.
+
+        Parameters:
+            document (dict[str, Any]): decoded journal.
+        """
+        (step,) = [step for step in document["steps"] if Path(step["target"]).name == name]
+        step["backup"] = backup
+
+    return change
+
+
+def tamper(harness: Harness, outside: Path, case: str) -> None:
+    """Make the pending journal untrusted in one way.
+
+    Parameters:
+        harness (Harness): HOME with a pending journal.
+        outside (Path): an unrelated directory the journal must never reach.
+        case (str): which tampering.
+
+    Raises:
+        ValueError: unknown case.
+    """
+    layout = harness.layout
+    journal, backups = layout.journal, layout.root / "backups" / "b"
+    agent = layout.agent_dir
+    match case:
+        case "outside-target":
+            edit_journal(harness, add_step(outside))
+        case "credentials-target":
+            edit_journal(harness, add_step(agent / "auth.json"))
+        case "traversal-target":
+            edit_journal(harness, add_step(f"{agent / 'npm'}/../auth.json"))
+        case "duplicate-target":
+            edit_journal(harness, add_step(agent / "npm"))
+        case "outside-backup":
+            edit_journal(harness, set_backup("settings.json", str(outside / "settings.json")))
+        case "traversal-backup":
+            edit_journal(harness, set_backup("settings.json", f"{backups}/../c/settings.json"))
+        case "traversal-backups-dir":
+            edit_journal(harness, lambda document: document.update(backups=f"{backups}/.."))
+        case "symlinked-backup":
+            (backups / "settings.json").unlink()
+            (backups / "settings.json").symlink_to(outside / "settings.json")
+        case "directory-as-file-backup":
+            (backups / "settings.json").unlink()
+            (backups / "settings.json").mkdir()
+        case "symlinked-backups-dir":
+            moved = outside / "b"
+            backups.replace(moved)
+            backups.symlink_to(moved)
+        case "symlinked-journal":
+            copy = outside / "transaction.json"
+            copy.write_text(journal.read_text())
+            copy.chmod(0o600)
+            journal.unlink()
+            journal.symlink_to(copy)
+        case "readable-journal":
+            journal.chmod(0o644)
+        case "corrupt-journal":
+            journal.write_text("{not json")
+        case "steps-not-a-list":
+            edit_journal(harness, lambda document: document.update(steps={}))
+        case "step-missing-backup":
+            edit_journal(harness, lambda document: document["steps"].append({"target": str(agent / "npm")}))
+        case _:
+            raise ValueError(f"Unknown tampering '{case}'")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "outside-target",
+        "credentials-target",
+        "traversal-target",
+        "duplicate-target",
+        "outside-backup",
+        "traversal-backup",
+        "traversal-backups-dir",
+        "symlinked-backup",
+        "directory-as-file-backup",
+        "symlinked-backups-dir",
+        "symlinked-journal",
+        "readable-journal",
+        "corrupt-journal",
+        "steps-not-a-list",
+        "step-missing-backup",
+    ],
+)
+def test_untrusted_journal_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A journal naming anything but the switch's own paths and backups fails closed, untouched."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    interrupt(harness, monkeypatch)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "settings.json").write_text('{"attacker": true}')
+    (outside / "keep").write_text("keep")
+    tamper(harness, outside, case)
+    before = {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")}
+    with pytest.raises(RollbackError, match="not trusted"):
+        rollback(harness.layout)
+    with pytest.raises(RollbackError, match="not trusted"):
+        harness.run(yes=True)
+    caplog.set_level("INFO")
+    assert install.run(Options(SHA, False, True, None), harness.env, None) == ExitCode.OK
+    assert "not trusted" in caplog.text
+    assert "RESTORE" not in caplog.text
+    assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == before
+    assert harness.layout.journal.exists(follow_symlinks=False)
+
+
+def test_dangling_package_tree_link_needs_consent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dangling `npm` link is existing state: the plan lists its overwrite and asks first."""
+    harness = Harness(tmp_path, monkeypatch)
+    agent = harness.layout.agent_dir
+    agent.mkdir(parents=True)
+    gone = tmp_path / "gone"
+    (agent / "npm").symlink_to(gone)
+    assert any(
+        "'" + str(agent / "npm") + "'" in line
+        for line in plan_install(harness.layout, harness.verified).overwrites
+    )
+    with pytest.raises(ConsentError):
+        harness.run()
+    assert (agent / "npm").readlink() == gone
+    assert harness.calls() == []
+    assert harness.run(yes=True) == ExitCode.OK
+    (kept,) = (harness.layout.root / "backups").glob("*/npm")
+    assert kept.readlink() == gone
+
+
+def test_dangling_core_prefix_link_needs_consent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dangling core prefix link is replaced, so the plan lists it as an overwrite."""
+    harness = Harness(tmp_path, monkeypatch)
+    prefix = harness.layout.core(harness.snapshot.stack.core.tag)
+    prefix.parent.mkdir(parents=True)
+    prefix.symlink_to(tmp_path / "gone")
+    plan = plan_install(harness.layout, harness.verified)
+    assert any(str(prefix) in line for line in plan.overwrites)
+    with pytest.raises(ConsentError):
+        harness.run()
+    assert prefix.is_symlink()
 
 
 def test_plan_reports_a_pending_journal_without_planning(
@@ -916,6 +1116,7 @@ def test_plan_reports_a_pending_journal_without_planning(
     caplog.set_level("INFO")
     assert install.run(Options(SHA, False, True, None), harness.env, None) == ExitCode.OK
     assert "PENDING" in caplog.text
+    assert "The next run without `--plan` restores them" in caplog.text
     assert f"RESTORE '{harness.layout.agent_dir / 'settings.json'}'" in caplog.text
     assert tree(harness.home) == before
 
@@ -1004,3 +1205,26 @@ def test_installer_workflow_covers_its_inputs() -> None:
         assert "integration/scenarios/installer/**" in paths
         assert required - set(paths) == set(), event
         assert all((INTEGRATION.parent / path).exists() for path in paths if "*" not in path), event
+
+
+def test_installer_workflow_token_is_main_only() -> None:
+    """Only reviewed `main` code gets the job token: never a PR, never a dispatch on another branch."""
+    text = INSTALLER_WORKFLOW.read_text()
+    workflow = yaml.safe_load(text)
+    tokens = [
+        (step.get("name"), name, value)
+        for job in workflow["jobs"].values()
+        for step in job["steps"]
+        for name, value in step.get("env", {}).items()
+        if "github.token" in str(value) or "secrets." in str(value)
+    ]
+    assert tokens == [
+        (
+            "Run the documented one-shot command in throwaway HOMEs",
+            "GH_TOKEN",
+            "${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' "
+            "&& github.token || '' }}",
+        )
+    ]
+    assert text.count("github.token") == 1
+    assert "secrets." not in text

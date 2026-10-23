@@ -121,7 +121,7 @@ def command(spec: str, stack_sha: str, *args: str) -> list[str]:
 def environment(home: Path, uv_cache: Path, path: str | None = None, gh_token: bool = True) -> dict[str, str]:
     """Build a clean environment: only PATH, the throwaway HOME and uv's cache.
 
-    A runner's `GH_TOKEN` (push and dispatch only, never a pull request) is passed to the
+    A runner's `GH_TOKEN` (reviewed `main` push or dispatch only, never a pull request) is passed to the
     installer for its rate-limit fallback: hosted runners share GitHub's anonymous rate limit.
     `uvx` and the installer process carry it; the installer hands it to `gh` alone.
 

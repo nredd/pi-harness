@@ -85,12 +85,14 @@ jobs:
         working-directory: integration
         run: uv sync --locked
       # PR code never gets a credential (AGENTS.md): a pull_request run is anonymous and fails
-      # honestly if GitHub's shared anonymous rate limit refuses it. Push and dispatch run reviewed
-      # `main` code, whose job token lets `gh` (only; the installer strips it from every other
-      # child) use the installer's rate-limit fallback.
+      # honestly if GitHub's shared anonymous rate limit refuses it. Only reviewed `main` code (a
+      # push to it, or a dispatch on it) gets the job token; a dispatch on any other branch runs
+      # unreviewed code and stays anonymous. The token lets `gh` (only; the installer strips it
+      # from every other child) use the installer's rate-limit fallback.
+      # `test_installer_workflow_token_is_main_only` pins this expression.
       - name: Run the documented one-shot command in throwaway HOMEs
         env:
-          GH_TOKEN: ${{ github.event_name != 'pull_request' && github.token || '' }}
+          GH_TOKEN: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.token || '' }}
           INSTALLER_SPEC: git+https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}#subdirectory=integration
           STACK_SHA: ${{ inputs.stack_sha || '24889f7896be7157bf9077a41465a3b29620879f' }}
         run: make -C integration installer
