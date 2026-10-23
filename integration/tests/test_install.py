@@ -519,11 +519,10 @@ def serve_snapshot(monkeypatch: pytest.MonkeyPatch, contents: bytes) -> list[tup
         return destination
 
     monkeypatch.setattr(install, "download", fake_download)
-    monkeypatch.setattr(install, "attestation_bundle", lambda repo, path, destination: destination)
     monkeypatch.setattr(
         install,
-        "verify_attestation",
-        lambda path, repo, signer, ref, bundle: identities.append((repo, signer, ref)),
+        "verify_public_attestation",
+        lambda path, repo, signer, ref: identities.append((repo, signer, ref)),
     )
     return identities
 
@@ -553,7 +552,7 @@ def test_verify_snapshot_rejects_failed_attestation(tmp_path: Path, monkeypatch:
         """
         raise RuntimeError("no matching attestations found")
 
-    monkeypatch.setattr(install, "verify_attestation", reject)
+    monkeypatch.setattr(install, "verify_public_attestation", reject)
     with pytest.raises(VerificationError, match="attestation rejected"):
         verify_snapshot(SHA, tmp_path)
 
@@ -620,3 +619,50 @@ def test_unreadable_existing_settings_are_never_overwritten(
     with pytest.raises(InstallError, match="not readable JSON"):
         harness.run(yes=True)
     assert (agent / "settings.json").read_text() == "{not json"
+
+
+def test_interrupted_update_restores_the_previous_state_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Killed right after the new `installed.json` lands, rollback restores the old record and tree."""
+    harness = Harness(tmp_path, monkeypatch)
+    harness.run()
+    layout = harness.layout
+    manifest = layout.agent_dir / "npm" / "node_modules" / "pi-memory" / "package.json"
+    manifest.write_text('{"name":"pi-memory","version":"9.9.9"}')
+    layout.state.write_text(json.dumps(json.loads(layout.state.read_text()) | {"note": "previous"}))
+    before = tree(harness.home)
+    plan = plan_install(layout, harness.verified)
+    assert plan.install_packages
+    staged = install.stage(layout, harness.verified, plan, layout.root / "staging" / "x")
+    original = install.replace_file
+
+    class Killed(BaseException):
+        """Stands in for SIGKILL after the state record is written."""
+
+    def kill_after_state(journal: Journal, live: Path, name: str, text: str) -> None:
+        """Write the file, then die if it is the state record.
+
+        Parameters:
+            journal (Journal): step record.
+            live (Path): file.
+            name (str): backup name.
+            text (str): contents.
+
+        Raises:
+            Killed: after writing `installed.json`.
+        """
+        original(journal, live, name, text)
+        if name == install.STATE_FILE:
+            raise Killed
+
+    monkeypatch.setattr(install, "replace_file", kill_after_state)
+    with pytest.raises(Killed):
+        switch(layout, harness.verified, plan, staged, Journal(layout, layout.root / "backups" / "b"))
+    assert json.loads(manifest.read_text())["version"] == "0.4.2"
+    assert "note" not in json.loads(layout.state.read_text())
+    rollback(layout)
+    assert json.loads(layout.state.read_text())["note"] == "previous"
+    after = tree(harness.home)
+    for key in [key for key in before if "staging" not in key and "backups" not in key]:
+        assert after.get(key) == before[key], key

@@ -23,6 +23,7 @@ import tarfile
 from collections.abc import Callable
 from pathlib import Path
 from types import MappingProxyType
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from harness.paths import GH_BIN, GIT_BIN, NPM_BIN
@@ -80,7 +81,12 @@ RELEASE_PACKAGES = ("pi-coding-agent", "pi-tui", "pi-agent-core", "pi-ai")
 CORE_REPO = "nredd/pi"
 ATTESTATION_WORKFLOW = f"{CORE_REPO}/.github/workflows/fork-release.yml"
 ATTESTATIONS_API = "https://api.github.com"
+RATE_LIMIT_STATUSES = frozenset({403, 429})
 ProvenanceCheck = Callable[[Path, str], None]
+
+
+class AttestationRateLimitedError(RuntimeError):
+    """GitHub's anonymous API rate limit refused an attestation lookup."""
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -188,6 +194,7 @@ def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
         Path: `destination`.
 
     Raises:
+        AttestationRateLimitedError: GitHub's anonymous rate limit refused the request.
         RuntimeError: the API could not be read, answered malformed JSON, or lists no attestation.
     """
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -196,6 +203,12 @@ def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
     try:
         with urlopen(request, timeout=120) as response:
             document = json.loads(response.read())
+    except HTTPError as error:
+        if error.code in RATE_LIMIT_STATUSES:
+            raise AttestationRateLimitedError(
+                f"Anonymous attestations API refused '{url}': {error}"
+            ) from error
+        raise RuntimeError(f"Could not read attestations for '{path.name}' from '{url}': {error}") from error
     except (OSError, ValueError) as error:
         raise RuntimeError(f"Could not read attestations for '{path.name}' from '{url}': {error}") from error
     attestations = document.get("attestations") if isinstance(document, dict) else None
@@ -250,6 +263,31 @@ def verify_attestation(
         ) from error
 
 
+def verify_public_attestation(path: Path, repo: str, signer_workflow: str, source_ref: str) -> None:
+    """Verify provenance from the anonymous bundle, falling back to `gh`'s own login when rate-limited.
+
+    The fallback lets `gh` fetch the attestation with whatever login it already has (`gh auth
+    login` or `GH_TOKEN`); this module never reads a credential. Without one, the rate limit
+    stays a verification failure.
+
+    Parameters:
+        path (Path): artifact to verify.
+        repo (str): `owner/name` the attestation must belong to.
+        signer_workflow (str): workflow that must have signed it.
+        source_ref (str): exact Git ref the signing run must have built.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: no bundle exists, or the artifact lacks the required provenance identity.
+    """
+    try:
+        bundle: Path | None = attestation_bundle(repo, path, path.with_name(f"{path.name}.sigstore.jsonl"))
+    except AttestationRateLimitedError as error:
+        LOGGER.warning(f"{error}; retrying with `gh attestation verify` and gh's own login")
+        bundle = None
+    verify_attestation(path, repo, signer_workflow, source_ref, bundle)
+
+
 def verify_provenance(path: Path, tag: str, bundle: Path | None = None) -> None:
     """Require GitHub provenance from the dedicated core-release workflow.
 
@@ -266,7 +304,7 @@ def verify_provenance(path: Path, tag: str, bundle: Path | None = None) -> None:
 
 
 def verify_provenance_anonymously(path: Path, tag: str) -> None:
-    """Verify core provenance from the public attestation bundle, needing no GitHub login.
+    """Verify core provenance from the public attestation bundle (see `verify_public_attestation`).
 
     Parameters:
         path (Path): downloaded release artifact.
@@ -276,8 +314,7 @@ def verify_provenance_anonymously(path: Path, tag: str) -> None:
         FileNotFoundError: GitHub CLI is unavailable.
         RuntimeError: no bundle exists or it does not prove the required identity.
     """
-    bundle = attestation_bundle(CORE_REPO, path, path.with_name(f"{path.name}.sigstore.jsonl"))
-    verify_provenance(path, tag, bundle)
+    verify_public_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}")
 
 
 def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:

@@ -36,7 +36,7 @@ The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, 
 
 | Job | Runs | Proves |
 | --- | --- | --- |
-| `installer (ubuntu-24.04, macos-14)` | `make -C integration installer` with `INSTALLER_SPEC` set to this exact commit (`git+https://...@<sha>#subdirectory=integration`) and `STACK_SHA` the published promotion. No token is passed. | The documented one-shot `uvx` command in throwaway HOMEs: missing prerequisites, an unpromoted SHA, real `gh` rejecting tampered bytes and a foreign signer/ref, a fresh install equal to the snapshot (order, filters, disabled computer-use, owned npm integrity), a no-op rerun, consent and preservation with an existing setup, and a SIGKILL during staging then a clean rerun. See [install](install.md). |
+| `installer (ubuntu-24.04, macos-14)` | `make -C integration installer` with `INSTALLER_SPEC` set to this exact commit (`git+https://...@<sha>#subdirectory=integration`) and `STACK_SHA` the published promotion. The installer reads no token; `GH_TOKEN` (`attestations: read`) reaches only `gh`, for the fallback when hosted runners hit GitHub's anonymous rate limit. | The documented one-shot `uvx` command in throwaway HOMEs: missing prerequisites, an unpromoted SHA, real `gh` rejecting tampered bytes and a foreign signer/ref, a fresh install equal to the snapshot (order, filters, disabled computer-use, owned npm integrity), a no-op rerun, consent and preservation with an existing setup, and a SIGKILL during staging then a clean rerun. See [install](install.md). |
 
 It is not a required check and has no docs-only bypass; it only starts when its paths change.
 

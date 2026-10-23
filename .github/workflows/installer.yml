@@ -39,6 +39,7 @@ concurrency:
 
 permissions:
   contents: read
+  attestations: read
 
 jobs:
   installer:
@@ -62,9 +63,11 @@ jobs:
       - name: Install harness dependencies
         working-directory: integration
         run: uv sync --locked
-      # No token is passed: the installer must work for anyone, anonymously.
+      # The installer reads no token. Hosted runners share GitHub's anonymous API rate limit, so
+      # `gh` alone gets the job token for the installer's rate-limit fallback.
       - name: Run the documented one-shot command in throwaway HOMEs
         env:
+          GH_TOKEN: ${{ github.token }}
           INSTALLER_SPEC: git+https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}#subdirectory=integration
           STACK_SHA: ${{ inputs.stack_sha || '24889f7896be7157bf9077a41465a3b29620879f' }}
         run: make -C integration installer
