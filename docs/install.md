@@ -16,7 +16,7 @@ uvx --python 3.13 --exclude-newer 2026-10-23T00:00:00Z \
 - `<installer-sha>` is the exact commit of the installer code. Use the same SHA as `<stack-sha>` when that promotion contains `integration/harness/install.py`: then one pin covers both, and the installer passed the same promotion gates. `stack/24889f7896be7157bf9077a41465a3b29620879f` predates the installer, so for it use any `main` commit that has the installer.
 - Add `--plan` to verify and print the plan without changing anything. Add `--yes` to agree to overwrites without a prompt.
 
-Nothing is piped into a shell. `uv` fetches the pinned Git commit, so Git's object hashes bind the installer source to the SHA you typed. `--python` and `--exclude-newer` fix the interpreter and resolve the installer's Python dependencies (pydantic) as of a fixed instant instead of the newest release.
+Nothing is piped into a shell. `uv` fetches the pinned Git commit, so Git's object hashes bind the installer source to the SHA you typed. `uv` also initializes that commit's `forks/pi` submodule (the core source, unused by the installer) and caches the checkout, so the first run downloads more than it needs. `--python` and `--exclude-newer` fix the interpreter and resolve the installer's Python dependencies (pydantic) as of a fixed instant instead of the newest release.
 
 ## What it installs
 
