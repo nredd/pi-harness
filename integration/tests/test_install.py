@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
+from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -1603,38 +1604,40 @@ def test_rerun_manifest_read_race_is_bounded(
     """Reject a static FIFO, and a swap after lookup, on the real packages_ready rerun path."""
     harness = Harness(tmp_path, monkeypatch)
     assert harness.run() == ExitCode.OK
-    script = """
-import os, sys
-from pathlib import Path
-from harness import install, stack
-from harness.promotion import load_promoted_snapshot
-snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
-sources = [stack.source_string(p) for p in snapshot.stack.sources]
-layout = install.Layout.from_env({}, Path(sys.argv[3]), None)
-original = stack.package_directory
-def swap(source, agent):
-    path = original(source, agent)
-    manifest = path / "package.json"
-    manifest.unlink()
-    os.mkfifo(manifest)
-    return path
-if sys.argv[4] == "lookup":
-    stack.package_directory = swap
-elif sys.argv[4] == "open":
-    original_open = os.open
-    manifest = original(sources[0], layout.agent_dir) / "package.json"
-    def swap_on_open(path, flags, *args):
-        if path == manifest:
+    script = dedent(
+        """
+        import os, sys
+        from pathlib import Path
+        from harness import install, stack
+        from harness.promotion import load_promoted_snapshot
+        snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
+        sources = [stack.source_string(p) for p in snapshot.stack.sources]
+        layout = install.Layout.from_env({}, Path(sys.argv[3]), None)
+        original = stack.package_directory
+        def swap(source, agent):
+            path = original(source, agent)
+            manifest = path / "package.json"
+            manifest.unlink()
+            os.mkfifo(manifest)
+            return path
+        if sys.argv[4] == "lookup":
+            stack.package_directory = swap
+        elif sys.argv[4] == "open":
+            original_open = os.open
+            manifest = original(sources[0], layout.agent_dir) / "package.json"
+            def swap_on_open(path, flags, *args):
+                if path == manifest:
+                    path.unlink()
+                    os.mkfifo(path)
+                return original_open(path, flags, *args)
+            os.open = swap_on_open
+        else:
+            path = original(sources[0], layout.agent_dir) / "package.json"
             path.unlink()
             os.mkfifo(path)
-        return original_open(path, flags, *args)
-    os.open = swap_on_open
-else:
-    path = original(sources[0], layout.agent_dir) / "package.json"
-    path.unlink()
-    os.mkfifo(path)
-assert not install.packages_ready(layout, install.Verified(snapshot, sources, {}))
-"""
+        assert not install.packages_ready(layout, install.Verified(snapshot, sources, {}))
+        """
+    )
     subprocess.run(
         [sys.executable, "-c", script, str(FIXTURE), SHA, str(harness.home), race],
         env={"PYTHONPATH": str(INTEGRATION)},
