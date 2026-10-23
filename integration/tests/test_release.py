@@ -23,6 +23,7 @@ import pytest
 from harness import release
 from harness.release import (
     ATTESTATION_WORKFLOW,
+    GITHUB_TOKEN_VARIABLES,
     RELEASE_PACKAGES,
     AttestationRateLimitedError,
     attestation_bundle,
@@ -30,6 +31,7 @@ from harness.release import (
     gitlink_tag,
     prune_native,
     release_checksums,
+    release_tarballs,
     verify_asset,
     verify_provenance,
     verify_public_attestation,
@@ -708,14 +710,53 @@ def test_public_attestation_falls_back_to_gh_login_only_when_rate_limited(
     artifact = tmp_path / "a.json"
     artifact.write_bytes(b"snapshot")
     serve_attestations(monkeypatch, outcome)
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, str] | None]] = []
     gh_bin = tmp_path / "gh"
     gh_bin.touch()
     monkeypatch.setattr(release, "GH_BIN", str(gh_bin))
-    monkeypatch.setattr(subprocess, "check_output", lambda argv, **kwargs: calls.append(argv) or "")
+    monkeypatch.setenv("GH_TOKEN", "ghp_sentinel-not-a-real-token")
+    monkeypatch.setattr(
+        subprocess, "check_output", lambda argv, **kwargs: calls.append((argv, kwargs["env"])) or ""
+    )
     verify_public_attestation(artifact, "o/r", "o/r/.github/workflows/w.yml", "refs/heads/main")
-    (argv,) = calls
+    ((argv, env),) = calls
     assert ("--bundle" in argv) == with_bundle
+    # The bundle path needs no API call, so `gh` only inherits a token for the login fallback.
+    if with_bundle:
+        assert env is not None
+        assert not GITHUB_TOKEN_VARIABLES & set(env)
+        assert "ghp_sentinel-not-a-real-token" not in env.values()
+    else:
+        assert env is None
     assert argv[argv.index("--signer-workflow") + 1] == "o/r/.github/workflows/w.yml"
     assert argv[argv.index("--source-ref") + 1] == "refs/heads/main"
     assert "--deny-self-hosted-runners" in argv
+
+
+def test_fetch_release_binds_bytes_to_explicit_checksums(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Explicit digests (the installer's snapshot) win over a re-read `SHA256SUMS`, before npm runs."""
+    tag = "v1.3.0-nredd.8"
+    served = b"republished bytes"
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(served))
+    monkeypatch.setattr(release, "release_checksums", lambda *_: checksums_for(tag, served))
+    monkeypatch.setattr(release, "verify_provenance", lambda path, release_tag: None)
+    npm_bin = tmp_path / "npm"
+    npm_bin.touch()
+    monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
+    npm_calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "check_output", lambda argv, **kwargs: npm_calls.append(argv) or "")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        fetch_release(tag, tmp_path / "prefix", checksums=checksums_for(tag, b"snapshot bytes"))
+    assert npm_calls == []
+
+
+def test_release_tarballs_names_installed_assets_first() -> None:
+    """The first two names are the coding-agent and tui tarballs `fetch_release` installs."""
+    assert release_tarballs("v1.3.0-nredd.8")[:2] == [
+        "earendil-works-pi-coding-agent-1.3.0.tgz",
+        "earendil-works-pi-tui-1.3.0.tgz",
+    ]
+    with pytest.raises(ValueError, match="Not a core fork release tag"):
+        release_tarballs("main")

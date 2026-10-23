@@ -118,27 +118,30 @@ def command(spec: str, stack_sha: str, *args: str) -> list[str]:
     ]  # fmt: skip
 
 
-def environment(home: Path, uv_cache: Path, path: str | None = None) -> dict[str, str]:
+def environment(home: Path, uv_cache: Path, path: str | None = None, gh_token: bool = True) -> dict[str, str]:
     """Build a clean environment: only PATH, the throwaway HOME and uv's cache.
 
-    A runner's `GH_TOKEN` is passed through for `gh` alone: hosted runners share GitHub's
-    anonymous rate limit, and the installer then lets `gh` retry with its own login.
+    A runner's `GH_TOKEN` (push and dispatch only, never a pull request) is passed to the
+    installer for its rate-limit fallback: hosted runners share GitHub's anonymous rate limit.
+    `uvx` and the installer process carry it; the installer hands it to `gh` alone.
 
     Parameters:
         home (Path): throwaway HOME.
         uv_cache (Path): shared uv cache.
         path (str | None): PATH override.
+        gh_token (bool): pass a runner `GH_TOKEN` through; `False` for every non-installer launch.
 
     Returns:
-        dict[str, str]: complete child environment, no tokens or user config.
+        dict[str, str]: complete child environment, no user config.
     """
+    token = os.environ.get("GH_TOKEN") if gh_token else None
     return {
         "PATH": path or os.environ["PATH"],
         "HOME": str(home),
         "TERM": "dumb",
         "UV_CACHE_DIR": str(uv_cache),
         "UV_PYTHON_INSTALL_DIR": str(uv_cache / "python"),
-    } | ({"GH_TOKEN": os.environ["GH_TOKEN"]} if os.environ.get("GH_TOKEN") else {})
+    } | ({"GH_TOKEN": token} if token else {})
 
 
 def run(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -290,7 +293,7 @@ def test_fresh_install_matches_the_promotion_and_reruns_cleanly(
         }
     pi = home / ".local" / "bin" / "pi"
     assert pi.readlink() == home / ".local" / "share" / "pi-stack" / "core" / stack.core.tag / "bin" / "pi"
-    env = environment(home, uv_cache) | {"PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1"}
+    env = environment(home, uv_cache, gh_token=False) | {"PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1"}
     version = run([str(pi), "--version"], env)
     assert version.returncode == 0
     assert version.stdout.strip() == stack.core.tag.removeprefix("v").split("-")[0]

@@ -10,6 +10,7 @@ References:
 
 from __future__ import annotations
 
+import ast
 import io
 import json
 import sys
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+import yaml
 
 from harness import install
 from harness.install import (
@@ -35,6 +37,7 @@ from harness.install import (
     required_node,
     rollback,
     switch,
+    verify_release,
     verify_snapshot,
 )
 from harness.promotion import (
@@ -44,25 +47,30 @@ from harness.promotion import (
     StackSnapshot,
     load_promoted_snapshot,
 )
+from harness.release import GITHUB_TOKEN_VARIABLES, release_asset_url
 from harness.stack import package_declarations, source_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stack-snapshot-24889f7.json"
+INTEGRATION = Path(__file__).resolve().parent.parent
+INSTALLER_WORKFLOW = INTEGRATION.parent / ".github" / "workflows" / "installer.yml"
 SHA = "24889f7896be7157bf9077a41465a3b29620879f"
 FAKE_PI = """\
 #!{python}
 # Fake `pi`: `install npm:<name>@<version>` writes the package and its lockfile entry.
 import json, os, pathlib, sys
 if sys.argv[1:] == ["--version"]:
-    print("1.3.0")
+    leaked = sorted(set(os.environ).intersection({tokens!r}))
+    print("1.3.0", *(["LEAKED", *leaked] if leaked else []))
     sys.exit(0)
 source = sys.argv[2]
 agent = pathlib.Path(os.environ["PI_CODING_AGENT_DIR"])
 log = pathlib.Path({log!r})
 with log.open("a") as handle:
-    call = [source, os.environ.get("npm_config_ignore_scripts"), os.environ["HOME"]]
+    leaked = sorted(set(os.environ).intersection({tokens!r}))
+    call = [source, os.environ.get("npm_config_ignore_scripts"), os.environ["HOME"], leaked]
     handle.write(json.dumps(call) + "\\n")
 if source in {fail!r}:
     print("npm ERR! simulated", file=sys.stderr)
@@ -118,7 +126,8 @@ class Harness:
         self.fail: list[str] = []
         self.monkeypatch = monkeypatch
         sources = [source_string(package) for package in self.snapshot.stack.sources]
-        self.verified = Verified(self.snapshot, sources)
+        self.verified = Verified(self.snapshot, sources, {})
+        self.fetched: list[Mapping[str, str] | None] = []
         self.env = {"PATH": str(self.home / ".local" / "bin")}
         monkeypatch.setattr(install.Path, "home", classmethod(lambda cls: self.home))
         monkeypatch.setattr(install, "preflight", lambda system, machine: {"node": "node"})
@@ -131,21 +140,35 @@ class Harness:
         """The installer layout for this HOME."""
         return Layout.from_env(self.env, self.home, None)
 
-    def fetch_release(self, tag: str, prefix: Path, provenance: object = None) -> Path:
+    def fetch_release(
+        self,
+        tag: str,
+        prefix: Path,
+        provenance: object = None,
+        checksums: Mapping[str, str] | None = None,
+    ) -> Path:
         """Write a fake core prefix whose `pi` is the recording fake.
 
         Parameters:
             tag (str): core tag.
             prefix (Path): empty prefix.
             provenance (object): ignored verifier.
+            checksums (Mapping[str, str] | None): recorded digests the download is bound to.
 
         Returns:
             Path: the fake executable.
         """
+        self.fetched.append(checksums)
         binary = prefix / "bin" / "pi"
         binary.parent.mkdir(parents=True)
         binary.write_text(
-            FAKE_PI.format(python=sys.executable, log=str(self.log), fail=self.fail, integrity=self.integrity)
+            FAKE_PI.format(
+                python=sys.executable,
+                log=str(self.log),
+                fail=self.fail,
+                integrity=self.integrity,
+                tokens=sorted(GITHUB_TOKEN_VARIABLES),
+            )
         )
         binary.chmod(0o755)
         return binary
@@ -166,7 +189,7 @@ class Harness:
         """Return every recorded `pi install`.
 
         Returns:
-            list[list[Any]]: `[source, ignore_scripts, HOME]` per call.
+            list[list[Any]]: `[source, ignore_scripts, HOME, leaked token variables]` per call.
         """
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
@@ -666,3 +689,318 @@ def test_interrupted_update_restores_the_previous_state_record(
     after = tree(harness.home)
     for key in [key for key in before if "staging" not in key and "backups" not in key]:
         assert after.get(key) == before[key], key
+
+
+SENTINEL = "ghp_sentinel-not-a-real-token"
+
+
+def test_github_tokens_reach_no_child_but_gh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A caller's GitHub token never reaches `node`, `pi install` or the `pi --version` post-check."""
+    for name in GITHUB_TOKEN_VARIABLES:
+        monkeypatch.setenv(name, SENTINEL)
+    caplog.set_level("INFO")
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    assert all(call[3] == [] for call in harness.calls())
+    assert "LEAKED" not in caplog.text
+    assert SENTINEL not in caplog.text
+    captured: list[tuple[list[str], dict[str, str]]] = []
+
+    def record(argv: list[str], **kwargs: Any) -> str:
+        """Record one child launch.
+
+        Parameters:
+            argv (list[str]): command.
+            **kwargs (Any): subprocess options.
+
+        Returns:
+            str: a `node --version` answer.
+        """
+        captured.append((argv, kwargs["env"]))
+        return "v22.19.0\n"
+
+    monkeypatch.setattr(install.subprocess, "check_output", record)
+    assert install.node_version("/usr/bin/node") == (22, 19, 0)
+    assert install.post_check(harness.layout) == "v22.19.0"
+    assert len(captured) == 2
+    for argv, env in captured:
+        assert not GITHUB_TOKEN_VARIABLES & set(env)
+        assert SENTINEL not in [*argv, *env.values()]
+
+
+def test_verify_release_binds_staged_core_to_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second (staging) download is checked against the snapshot digests, not a re-read list."""
+    harness = Harness(tmp_path, monkeypatch)
+    snapshot, tag = harness.snapshot, harness.snapshot.stack.core.tag
+    (tmp_path / "work" / "core").mkdir(parents=True)
+    make_tarball(
+        tmp_path / "work" / "core" / "earendil-works-pi-coding-agent-1.3.0.tgz",
+        {"engines": {"node": ">=22.19.0"}},
+    )
+    recorded = {
+        release_asset_url(tag, name): digest for name, digest in snapshot.stack.core.integrity.items()
+    }
+    extra = {release_asset_url(tag, "earendil-works-pi-ai-1.3.0.tgz"): "e" * 64}
+    monkeypatch.setattr(install, "release_checksums", lambda release_tag: recorded | extra)
+    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
+    monkeypatch.setattr(install, "node_version", lambda node: (22, 19, 0))
+    verified = verify_release(snapshot, "node", tmp_path / "work")
+    assert verified.core_checksums == recorded | extra
+    monkeypatch.setattr(install, "verify_release", lambda snapshot, node, workdir: verified)
+    assert harness.run() == ExitCode.OK
+    assert harness.fetched == [recorded | extra]
+
+
+def test_verify_release_requires_integrity_for_installed_core_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snapshot that leaves `pi-tui` unrecorded cannot bind what npm would install."""
+    snapshot = real_snapshot()
+    core = snapshot.stack.core
+    partial = {name: digest for name, digest in core.integrity.items() if "pi-tui" not in name}
+    stack = snapshot.stack.model_copy(update={"core": core.model_copy(update={"integrity": partial})})
+    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
+    with pytest.raises(VerificationError, match="pi-tui"):
+        install.verify_release(snapshot.model_copy(update={"stack": stack}), "node", tmp_path)
+
+
+def test_verify_release_rejects_wrong_legacy_core_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy tag's manifest tarball must equal its frozen digest via the shared `verify_asset`."""
+
+    def serve(url: str, destination: Path) -> Path:
+        """Serve wrong bytes.
+
+        Parameters:
+            url (str): requested URL.
+            destination (Path): output.
+
+        Returns:
+            Path: `destination`.
+        """
+        destination.write_bytes(b"not the release")
+        return destination
+
+    monkeypatch.setattr(install, "download", serve)
+    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
+    with pytest.raises(VerificationError, match="checksum mismatch"):
+        install.verify_release(real_snapshot(), "node", tmp_path)
+
+
+def test_cross_filesystem_layout_is_refused_before_any_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An installer root on another filesystem than the agent dir would fail mid-switch with EXDEV."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    before = tree(harness.home)
+    agent = harness.layout.agent_dir
+    monkeypatch.setattr(install, "device", lambda path: 2 if path == agent else 1)
+    with pytest.raises(UnsupportedError, match="one filesystem"):
+        harness.run(yes=True)
+    assert tree(harness.home) == before
+    assert not harness.layout.root.exists()
+
+
+def test_device_uses_the_nearest_existing_ancestor(tmp_path: Path) -> None:
+    """Paths that do not exist yet are judged by the directory they will be created in."""
+    assert install.device(tmp_path / "a" / "b" / "c") == tmp_path.stat().st_dev
+
+
+@pytest.mark.parametrize("name", ["settings.json", "subagents.json"])
+def test_symlinked_settings_are_refused_before_any_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """A symlinked settings file would be replaced by a regular file and lost on rollback."""
+    harness = Harness(tmp_path, monkeypatch)
+    agent = harness.layout.agent_dir
+    agent.mkdir(parents=True)
+    target = tmp_path / "dotfiles" / name
+    target.parent.mkdir()
+    target.write_text('{"mine": true}')
+    (agent / name).symlink_to(target)
+    with pytest.raises(InstallError, match="symlink"):
+        harness.run(yes=True)
+    assert (agent / name).readlink() == target
+    assert target.read_text() == '{"mine": true}'
+    assert harness.calls() == []
+    assert not (agent / "npm").exists()
+
+
+def interrupt(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kill a switch at the link step, after packages and settings moved, leaving its journal.
+
+    Parameters:
+        harness (Harness): seeded HOME.
+        monkeypatch (pytest.MonkeyPatch): module patcher.
+    """
+    layout = harness.layout
+    plan = plan_install(layout, harness.verified)
+    layout.root.mkdir(parents=True, exist_ok=True)
+    staged = install.stage(layout, harness.verified, plan, layout.root / "staging" / "x")
+
+    class Killed(BaseException):
+        """Stands in for SIGKILL."""
+
+    def kill(self: Path, target: Path | str) -> None:
+        """Die at the link step.
+
+        Parameters:
+            self (Path): link path.
+            target (Path | str): link target.
+
+        Raises:
+            Killed: always.
+        """
+        raise Killed
+
+    with monkeypatch.context() as patch:
+        patch.setattr(install.Path, "symlink_to", kill)
+        with pytest.raises(Killed):
+            switch(layout, harness.verified, plan, staged, Journal(layout, layout.root / "backups" / "b"))
+    assert layout.journal.exists()
+
+
+def test_interrupted_switch_is_restored_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Recovery needs no network and no tools: it runs before preflight and verification."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+    interrupt(harness, monkeypatch)
+
+    def offline(*args: object) -> None:
+        """Fail like a machine without network or `gh`.
+
+        Parameters:
+            *args (object): ignored.
+
+        Raises:
+            UnsupportedError: always.
+        """
+        raise UnsupportedError("`gh` not found on PATH")
+
+    monkeypatch.setattr(install, "preflight", offline)
+    with pytest.raises(UnsupportedError, match="gh"):
+        harness.run(yes=True)
+    assert not harness.layout.journal.exists()
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+
+
+def test_plan_reports_a_pending_journal_without_planning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`--plan` names the pending restore and plans nothing against a half-switched tree."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    interrupt(harness, monkeypatch)
+    before = tree(harness.home)
+
+    def unreachable(*args: object) -> None:
+        """Fail if verification or planning runs.
+
+        Parameters:
+            *args (object): ignored.
+
+        Raises:
+            AssertionError: always.
+        """
+        raise AssertionError("planned against a pending journal")
+
+    monkeypatch.setattr(install, "verify_snapshot", unreachable)
+    monkeypatch.setattr(install, "plan_install", unreachable)
+    caplog.set_level("INFO")
+    assert install.run(Options(SHA, False, True, None), harness.env, None) == ExitCode.OK
+    assert "PENDING" in caplog.text
+    assert f"RESTORE '{harness.layout.agent_dir / 'settings.json'}'" in caplog.text
+    assert tree(harness.home) == before
+
+
+def test_existing_git_tree_is_replaced_as_planned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The plan's `git` overwrite happens even though the stack stages no git package, and rolls back."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    git = harness.layout.agent_dir / "git" / "github.com" / "me" / "mine"
+    git.mkdir(parents=True)
+    (git / "index.ts").write_text("mine")
+    assert any("git" in line for line in plan_install(harness.layout, harness.verified).overwrites)
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+
+    def refuse(self: Path, target: Path | str) -> None:
+        """Fail the final link step.
+
+        Parameters:
+            self (Path): link path.
+            target (Path | str): link target.
+
+        Raises:
+            OSError: always.
+        """
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(install.Path, "symlink_to", refuse)
+        with pytest.raises(InstallError, match="rolled back"):
+            harness.run(yes=True)
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+    assert harness.run(yes=True) == ExitCode.OK
+    assert not (harness.layout.agent_dir / "git").exists()
+    (kept,) = (harness.layout.root / "backups").glob("*/git/github.com/me/mine/index.ts")
+    assert kept.read_text() == "mine"
+
+
+def harness_closure(*roots: Path) -> set[Path]:
+    """Return every `harness` module the given files import, transitively, plus the files.
+
+    Parameters:
+        *roots (Path): Python files under `integration/`.
+
+    Returns:
+        set[Path]: files relative to `integration/`.
+    """
+    seen: set[Path] = set()
+    pending = [root.relative_to(INTEGRATION) for root in roots]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        for node in ast.walk(ast.parse((INTEGRATION / current).read_text())):
+            names = []
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "harness":
+                names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+            elif isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names if alias.name.split(".")[0] == "harness"]
+            for name in names:
+                module = Path(*name.split(".")).with_suffix(".py")
+                if (INTEGRATION / module).is_file():
+                    pending.append(module)
+    return seen
+
+
+def test_installer_workflow_covers_its_inputs() -> None:
+    """Both trigger lists name every file the acceptance imports or is pinned by."""
+    workflow = yaml.safe_load(INSTALLER_WORKFLOW.read_text())["on"]
+    closure = harness_closure(
+        INTEGRATION / "harness" / "install.py",
+        INTEGRATION / "scenarios" / "installer" / "test_installer.py",
+        INTEGRATION / "conftest.py",
+    )
+    required = {
+        ".github/workflows/installer.yml",
+        ".node-version",
+        "integration/Makefile",
+        "integration/pyproject.toml",
+        "integration/uv.lock",
+        "integration/harness/__init__.py",
+        *(f"integration/{path}" for path in closure if path.parts[0] != "scenarios"),
+    }
+    for event in ("pull_request", "push"):
+        paths = workflow[event]["paths"]
+        assert "integration/scenarios/installer/**" in paths
+        assert required - set(paths) == set(), event
+        assert all((INTEGRATION.parent / path).exists() for path in paths if "*" not in path), event

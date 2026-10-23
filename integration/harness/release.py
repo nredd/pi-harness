@@ -20,7 +20,7 @@ import re
 import shutil
 import subprocess
 import tarfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from urllib.error import HTTPError
@@ -82,11 +82,28 @@ CORE_REPO = "nredd/pi"
 ATTESTATION_WORKFLOW = f"{CORE_REPO}/.github/workflows/fork-release.yml"
 ATTESTATIONS_API = "https://api.github.com"
 RATE_LIMIT_STATUSES = frozenset({403, 429})
+# Every variable `gh` reads a GitHub token from; only `gh`'s login fallback may see them.
+# https://cli.github.com/manual/gh_help_environment
+GITHUB_TOKEN_VARIABLES = frozenset(
+    {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+)
 ProvenanceCheck = Callable[[Path, str], None]
 
 
 class AttestationRateLimitedError(RuntimeError):
     """GitHub's anonymous API rate limit refused an attestation lookup."""
+
+
+def without_github_tokens(env: Mapping[str, str]) -> dict[str, str]:
+    """Return a child environment with every GitHub token variable removed.
+
+    Parameters:
+        env (Mapping[str, str]): environment to copy.
+
+    Returns:
+        dict[str, str]: `env` minus `GITHUB_TOKEN_VARIABLES`.
+    """
+    return {key: value for key, value in env.items() if key not in GITHUB_TOKEN_VARIABLES}
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -237,6 +254,8 @@ def verify_attestation(
     """
     if not Path(GH_BIN).is_file():
         raise FileNotFoundError(f"Attestation verification requires `gh` at '{GH_BIN}'")
+    # A local bundle needs no GitHub API call, so `gh` gets a token only when it must fetch.
+    env = without_github_tokens(os.environ) if bundle is not None else None
     try:
         subprocess.check_output(
             [
@@ -253,6 +272,7 @@ def verify_attestation(
                 source_ref,
                 "--deny-self-hosted-runners",
             ],
+            env=env,
             text=True,
             stderr=subprocess.STDOUT,
             timeout=120,
@@ -355,7 +375,30 @@ def prune_native(node_modules: Path, system: str, arch: str) -> None:
                 shutil.rmtree(directory)
 
 
-def fetch_release(tag: str, prefix: Path, provenance: ProvenanceCheck | None = None) -> Path:
+def release_tarballs(tag: str) -> list[str]:
+    """Return the release tarball filenames of `RELEASE_PACKAGES` for one core tag, in order.
+
+    Parameters:
+        tag (str): core fork release tag.
+
+    Returns:
+        list[str]: filenames; the first two are the ones `fetch_release` installs.
+
+    Raises:
+        ValueError: not a core fork release tag.
+    """
+    match = TAG.fullmatch(tag)
+    if match is None:
+        raise ValueError(f"Not a core fork release tag: '{tag}'")
+    return [f"earendil-works-{package}-{match['version']}.tgz" for package in RELEASE_PACKAGES]
+
+
+def fetch_release(
+    tag: str,
+    prefix: Path,
+    provenance: ProvenanceCheck | None = None,
+    checksums: Mapping[str, str] | None = None,
+) -> Path:
     """Verify every consumed release asset, then install into a new private prefix, never the live one.
 
     New tags must publish all of `RELEASE_PACKAGES`. Legacy tags are verified for exactly the assets
@@ -367,6 +410,8 @@ def fetch_release(tag: str, prefix: Path, provenance: ProvenanceCheck | None = N
         prefix (Path): empty installation prefix.
         provenance (ProvenanceCheck | None): per-asset verifier taking the asset and tag;
             defaults to `verify_provenance` (the caller's `gh` login).
+        checksums (Mapping[str, str] | None): release URL -> SHA-256 the downloaded bytes must
+            match; defaults to `release_checksums(tag)`.
 
     Returns:
         Path: private pi executable.
@@ -376,14 +421,11 @@ def fetch_release(tag: str, prefix: Path, provenance: ProvenanceCheck | None = N
         RuntimeError: provenance or npm installation failed.
         FileNotFoundError: npm is unavailable.
     """
-    match = TAG.fullmatch(tag)
-    if match is None:
-        raise ValueError(f"Not a core fork release tag: '{tag}'")
+    names = release_tarballs(tag)
     if prefix.exists() and any(prefix.iterdir()):
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
-    checksums = release_checksums(tag)
-    version = match["version"]
-    urls = [release_asset_url(tag, f"earendil-works-{package}-{version}.tgz") for package in RELEASE_PACKAGES]
+    checksums = dict(release_checksums(tag) if checksums is None else checksums)
+    urls = [release_asset_url(tag, name) for name in names]
     if tag in LEGACY_RELEASE_TAGS:
         urls = [url for url in urls if url in checksums]
     for url in urls:

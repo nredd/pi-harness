@@ -2,7 +2,8 @@
 
 Order of operations, every step fail-closed:
 
-1. Check the platform and prerequisites, all at once, before touching anything.
+0. Restore an interrupted switch from its journal, offline and with consent (`--plan` only reports it).
+1. Check the platform, prerequisites and one-filesystem layout, all at once, before touching anything.
 2. Download `stack-snapshot.json` and its public attestation bundle, verify the attestation
    against `promote-stack.yml` on `refs/heads/main`, then validate it with `StackSnapshot` and
    require its `source_sha` to equal the pin.
@@ -26,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
 import json
 import logging
 import os
@@ -38,6 +38,7 @@ import sys
 import tarfile
 import tempfile
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import IntEnum
@@ -62,8 +63,11 @@ from harness.release import (
     fetch_release,
     release_asset_url,
     release_checksums,
+    release_tarballs,
+    verify_asset,
     verify_provenance_anonymously,
     verify_public_attestation,
+    without_github_tokens,
 )
 from harness.sandbox import deep_merge
 from harness.stack import (
@@ -77,7 +81,7 @@ from harness.stack import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterator, Mapping
 
     from harness.stack import Stack
 
@@ -126,7 +130,11 @@ class InstallError(Exception):
 
 
 class UnsupportedError(InstallError):
-    """The platform or a prerequisite is unsupported or missing; nothing was changed."""
+    """Unusable input, platform, filesystem layout or prerequisite; nothing was changed.
+
+    A malformed stack SHA is a usage error and shares this status with argparse's own usage
+    errors (`2`).
+    """
 
 
 class VerificationError(InstallError):
@@ -202,6 +210,9 @@ class Verified:
 
     snapshot: StackSnapshot
     sources: list[str]
+    # Release URL -> SHA-256 the staged core download must match. Every asset the snapshot
+    # records carries the snapshot's digest, so the installed bytes are the verified ones.
+    core_checksums: dict[str, str]
 
     @property
     def stack(self) -> Stack:
@@ -241,7 +252,11 @@ def node_version(node: str) -> tuple[int, int, int]:
     """
     try:
         output = subprocess.check_output(
-            [node, "--version"], text=True, stderr=subprocess.STDOUT, timeout=VERSION_TIMEOUT
+            [node, "--version"],
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=VERSION_TIMEOUT,
+            env=without_github_tokens(os.environ),
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise UnsupportedError(f"Could not run '{node} --version': {error}") from error
@@ -377,20 +392,30 @@ def verify_release(snapshot: StackSnapshot, node: str, workdir: Path) -> Verifie
         UnsupportedError: Node.js is older than the core requires.
     """
     stack = snapshot.stack
+    tag = stack.core.tag
     try:
-        validate_release_identity(stack, stack.core.tag, release_checksums(stack.core.tag))
+        checksums = release_checksums(tag)
+        validate_release_identity(stack, tag, checksums)
+        installed = release_tarballs(tag)[:2]
+        missing = [name for name in installed if name not in stack.core.integrity]
+        if missing:
+            raise ValueError(f"the snapshot records no integrity for installed asset(s) {', '.join(missing)}")
         verify_core_assets(stack, workdir / "core", attest=verify_provenance_anonymously)
     except (ValueError, PromotionError, RuntimeError) as error:
-        raise VerificationError(f"Core release '{stack.core.tag}' rejected: {error}") from error
-    name = next((asset for asset in sorted(stack.core.integrity) if "pi-coding-agent" in asset), None)
-    if name is None:
-        raise VerificationError(f"Core '{stack.core.tag}' records no `pi-coding-agent` asset")
+        raise VerificationError(f"Core release '{tag}' rejected: {error}") from error
+    core_checksums = checksums | {
+        release_asset_url(tag, name): digest for name, digest in stack.core.integrity.items()
+    }
+    name = installed[0]
     tarball = workdir / "core" / name
     if not tarball.is_file():
         # Legacy tags verify against frozen digests without downloading; fetch the manifest's tarball.
-        tarball = download(release_asset_url(stack.core.tag, name), workdir / name)
-        if sha256(tarball) != stack.core.integrity[name]:
-            raise VerificationError(f"Core asset '{name}' does not match its recorded sha256")
+        url = release_asset_url(tag, name)
+        tarball = download(url, workdir / name)
+        try:
+            verify_asset(tarball, url, core_checksums)
+        except ValueError as error:
+            raise VerificationError(f"Core asset '{name}' rejected: {error}") from error
     minimum, installed = required_node(tarball), node_version(node)
     if installed < minimum:
         raise UnsupportedError(
@@ -400,19 +425,62 @@ def verify_release(snapshot: StackSnapshot, node: str, workdir: Path) -> Verifie
     LOGGER.info(
         f"Verified core '{stack.core.tag}' assets; Node.js {'.'.join(map(str, installed))} is supported"
     )
-    return Verified(snapshot, [source_string(package) for package in stack.sources])
+    return Verified(snapshot, [source_string(package) for package in stack.sources], core_checksums)
 
 
-def sha256(path: Path) -> str:
-    """Return a file's SHA-256.
+def device(path: Path) -> int:
+    """Return the filesystem device of a path, or of its nearest existing ancestor.
 
     Parameters:
-        path (Path): file.
+        path (Path): absolute path that may not exist yet.
 
     Returns:
-        str: lowercase hex digest.
+        int: `st_dev`.
     """
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return path.stat().st_dev
+
+
+def require_one_filesystem(layout: Layout) -> None:
+    """Refuse a layout whose switch-over renames would cross filesystems.
+
+    Staging and backups live under the installer root and are moved into the agent and link
+    directories with `rename(2)`, which fails with `EXDEV` across filesystems. That is refused
+    here, before anything changes, instead of failing mid-switch.
+
+    Parameters:
+        layout (Layout): installer paths.
+
+    Raises:
+        UnsupportedError: the installer root, agent dir and link dir are not on one filesystem.
+    """
+    paths = (layout.root, layout.agent_dir, layout.bin_dir)
+    if len({device(path) for path in paths}) > 1:
+        raise UnsupportedError(
+            "The installer directory, agent directory and link directory must be on one filesystem "
+            f"('{layout.root}', '{layout.agent_dir}', '{layout.bin_dir}'); move `XDG_DATA_HOME`, "
+            "`PI_CODING_AGENT_DIR` or `--bin-dir` so they share one, nothing changed"
+        )
+
+
+def refuse_symlink(path: Path) -> None:
+    """Refuse to replace a symlinked settings file before anything changes.
+
+    The atomic replace would turn the link into a regular file and its backup into a copy of the
+    target, so rollback could not restore the link. The user's own link stays theirs to resolve.
+
+    Parameters:
+        path (Path): settings file the plan would write.
+
+    Raises:
+        InstallError: `path` is a symlink.
+    """
+    if path.is_symlink():
+        raise InstallError(
+            f"'{path}' is a symlink to '{path.readlink()}'; the installer would replace the link, not "
+            "its target. Replace it with a regular file or move it, nothing changed"
+        )
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -533,6 +601,7 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
         "packages": package_declarations(stack, verified.sources)
     }
     if desired != current:
+        refuse_symlink(settings_path)
         plan.settings = desired
         changed = sorted(key for key in desired if desired.get(key) != current.get(key))
         message = f"set {', '.join(f'`{key}`' for key in changed)} in '{settings_path}'"
@@ -546,6 +615,7 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
     current_subagents = read_json(subagents_path)
     desired_subagents = deep_merge(current_subagents, package_agents_policy(stack))
     if desired_subagents != current_subagents:
+        refuse_symlink(subagents_path)
         plan.subagents = desired_subagents
         message = f"set `packageAgents: false` in '{subagents_path}' so filtered packages stay filtered"
         (plan.overwrites if current_subagents else plan.creates).append(message)
@@ -849,7 +919,14 @@ def stage(layout: Layout, verified: Verified, plan: Plan, staging: Path) -> Path
     if plan.install_core:
         staged_core = staging / "core"
         try:
-            fetch_release(stack.core.tag, staged_core, provenance=verify_provenance_anonymously)
+            # Bound to the snapshot's digests, not a re-read `SHA256SUMS`: the bytes installed
+            # are the bytes `verify_release` accepted.
+            fetch_release(
+                stack.core.tag,
+                staged_core,
+                provenance=verify_provenance_anonymously,
+                checksums=verified.core_checksums,
+            )
         except (OSError, ValueError, RuntimeError) as error:
             raise InstallError(f"Core '{stack.core.tag}' installation failed: {error}") from error
         for leftover in ("fetch-home", "npm-cache", "tui-resource"):
@@ -877,14 +954,17 @@ def switch(
     layout.agent_dir.mkdir(parents=True, exist_ok=True)
     journal.backups.mkdir(parents=True, exist_ok=True)
     if staged_agent is not None:
+        # Every existing tree is replaced, as planned, even when the stack stages none of it: a
+        # leftover `git` tree is backed up rather than kept beside packages it no longer declares.
         for tree in PACKAGE_TREES:
             staged, live = staged_agent / tree, layout.agent_dir / tree
-            if not staged.exists():
+            if not (staged.exists() or live.exists() or live.is_symlink()):
                 continue
             backup = journal.record(live, tree)
             if backup is not None:
                 live.replace(backup)
-            staged.replace(live)
+            if staged.exists():
+                staged.replace(live)
     for name, desired in ((SETTINGS_FILE, plan.settings), (SUBAGENTS_FILE, plan.subagents)):
         if desired is not None:
             replace_file(journal, layout.agent_dir / name, name, json.dumps(desired, indent=2) + "\n")
@@ -977,10 +1057,75 @@ def post_check(layout: Layout) -> str:
             text=True,
             stderr=subprocess.STDOUT,
             timeout=VERSION_TIMEOUT,
-            env=os.environ | {"PI_SKIP_VERSION_CHECK": "1", "PI_OFFLINE": "1"},
+            env=without_github_tokens(os.environ) | {"PI_SKIP_VERSION_CHECK": "1", "PI_OFFLINE": "1"},
         ).strip()
     except (OSError, subprocess.SubprocessError) as error:
         raise InstallError(f"Installed '{layout.link}' does not run: {error}") from error
+
+
+@contextmanager
+def locked(layout: Layout) -> Iterator[None]:
+    """Hold the installer lock, creating the installer root if needed.
+
+    Parameters:
+        layout (Layout): installer paths.
+
+    Yields:
+        None: while the lock is held.
+
+    Raises:
+        InstallError: another installer holds the lock.
+    """
+    layout.root.mkdir(parents=True, exist_ok=True)
+    with (layout.root / "lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise InstallError(f"Another installer holds '{layout.root / 'lock'}'") from error
+        yield
+
+
+def recover(layout: Layout, assume_yes: bool, ask: Callable[[str], str] | None) -> None:
+    """Restore an interrupted switch, with consent, before anything else runs.
+
+    Parameters:
+        layout (Layout): installer paths, with the lock held.
+        assume_yes (bool): `--yes` was passed.
+        ask (Callable[[str], str] | None): interactive prompt, `None` without a terminal.
+
+    Raises:
+        ConsentError: the restore was not agreed to.
+        RollbackError: a step could not be restored.
+    """
+    if not layout.journal.exists():
+        return
+    report_pending(layout)
+    consent(Plan(overwrites=["restore the state replaced by the interrupted install"]), assume_yes, ask)
+    LOGGER.info(f"Restored {', '.join(rollback(layout)) or 'nothing'}")
+
+
+def report_pending(layout: Layout) -> None:
+    """Log the steps an interrupted switch left in its journal, newest first.
+
+    An install plan computed now would describe a half-switched tree, so none is shown until the
+    restore has run.
+
+    Parameters:
+        layout (Layout): installer paths.
+    """
+    LOGGER.warning(
+        f"PENDING: a previous install was interrupted; '{layout.journal}' lists its steps. The next run "
+        "without `--plan` restores them (with consent) before planning anything"
+    )
+    document = read_marker(layout.journal)
+    steps = document.get("steps") if isinstance(document, dict) else None
+    if not isinstance(steps, list):
+        LOGGER.warning(f"The journal is unreadable; restore by hand from '{layout.root / 'backups'}'")
+        return
+    for step in reversed(steps):
+        if isinstance(step, dict):
+            source = f"from '{step['backup']}'" if step.get("backup") else "by removing it (it was new)"
+            LOGGER.info(f"RESTORE '{step.get('target')}' {source}")
 
 
 @dataclass(frozen=True)
@@ -1009,28 +1154,25 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
     """
     if SHA_PATTERN.fullmatch(opts.source_sha) is None:
         raise UnsupportedError(f"Stack SHA must be 40 lowercase hex characters, got '{opts.source_sha}'")
-    tools = preflight(platform.system(), platform.machine())
     layout = Layout.from_env(env, Path.home(), opts.bin_dir)
+    if layout.journal.exists():
+        if opts.plan_only:
+            report_pending(layout)
+            return ExitCode.OK
+        # Restoring needs only the journal and its backups: no network, no tools, no snapshot.
+        with locked(layout):
+            recover(layout, opts.assume_yes, ask)
+    tools = preflight(platform.system(), platform.machine())
+    require_one_filesystem(layout)
     with tempfile.TemporaryDirectory(prefix="pi-stack-verify-") as temporary:
         workdir = Path(temporary)
         verified = verify_release(verify_snapshot(opts.source_sha, workdir), tools["node"], workdir)
     if opts.plan_only:
         report_plan(plan_install(layout, verified), verified)
         return ExitCode.OK
-    layout.root.mkdir(parents=True, exist_ok=True)
-    with (layout.root / "lock").open("w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise InstallError(f"Another installer holds '{layout.root / 'lock'}'") from error
-        if layout.journal.exists():
-            LOGGER.warning(f"A previous install was interrupted; '{layout.journal}' lists its steps")
-            consent(
-                Plan(overwrites=["restore the state replaced by the interrupted install"]),
-                opts.assume_yes,
-                ask,
-            )
-            LOGGER.info(f"Restored {', '.join(rollback(layout)) or 'nothing'}")
+    with locked(layout):
+        # Another run may have been interrupted while this one verified.
+        recover(layout, opts.assume_yes, ask)
         remove(layout.root / "staging")
         plan = plan_install(layout, verified)
         report_plan(plan, verified)

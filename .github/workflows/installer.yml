@@ -1,31 +1,52 @@
 ---
 # Real one-shot installer acceptance (docs/install.md) against a published `stack/<sha>`.
 # It runs the documented `uvx` command from this exact commit in throwaway HOMEs. Not a required
-# check; it runs only when the installer or the code it reuses changes.
+# check; it runs only when the installer, the harness modules it or `conftest.py` imports, or its
+# toolchain pins change. `test_installer_workflow_covers_its_inputs` keeps both path lists complete.
 name: Installer
 
 'on':
   pull_request:
     paths:
       - .github/workflows/installer.yml
+      - .node-version
+      - integration/Makefile
+      - integration/conftest.py
+      - integration/harness/__init__.py
       - integration/harness/install.py
+      - integration/harness/interactive.py
+      - integration/harness/isolation.py
+      - integration/harness/paths.py
+      - integration/harness/power.py
       - integration/harness/promotion.py
       - integration/harness/release.py
       - integration/harness/sandbox.py
       - integration/harness/stack.py
+      - integration/harness/tmux.py
       - integration/pyproject.toml
       - integration/scenarios/installer/**
+      - integration/uv.lock
   push:
     branches: [main]
     paths:
       - .github/workflows/installer.yml
+      - .node-version
+      - integration/Makefile
+      - integration/conftest.py
+      - integration/harness/__init__.py
       - integration/harness/install.py
+      - integration/harness/interactive.py
+      - integration/harness/isolation.py
+      - integration/harness/paths.py
+      - integration/harness/power.py
       - integration/harness/promotion.py
       - integration/harness/release.py
       - integration/harness/sandbox.py
       - integration/harness/stack.py
+      - integration/harness/tmux.py
       - integration/pyproject.toml
       - integration/scenarios/installer/**
+      - integration/uv.lock
   workflow_dispatch:
     inputs:
       stack_sha:
@@ -63,11 +84,13 @@ jobs:
       - name: Install harness dependencies
         working-directory: integration
         run: uv sync --locked
-      # The installer reads no token. Hosted runners share GitHub's anonymous API rate limit, so
-      # `gh` alone gets the job token for the installer's rate-limit fallback.
+      # PR code never gets a credential (AGENTS.md): a pull_request run is anonymous and fails
+      # honestly if GitHub's shared anonymous rate limit refuses it. Push and dispatch run reviewed
+      # `main` code, whose job token lets `gh` (only; the installer strips it from every other
+      # child) use the installer's rate-limit fallback.
       - name: Run the documented one-shot command in throwaway HOMEs
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.event_name != 'pull_request' && github.token || '' }}
           INSTALLER_SPEC: git+https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}#subdirectory=integration
           STACK_SHA: ${{ inputs.stack_sha || '24889f7896be7157bf9077a41465a3b29620879f' }}
         run: make -C integration installer
