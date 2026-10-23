@@ -54,9 +54,9 @@ Semantics:
     argv[0] and is NOT used.
   - Linux: basename of `readlink /proc/PID/exe` (` (deleted)` marker removed), read between the two
     identity-checked stat reads. The kernel gates that link by ptrace read access, so other users'
-    processes are usually `""` without privileges. `/proc/PID/stat` comm is NOT used for user
-    processes: `prctl(PR_SET_NAME)`, `/proc/self/comm` and Node's `process.title` rewrite it.
-    Kernel threads (`PF_KTHREAD`) keep their comm (`kworker/0:1`); userspace cannot rename them.
+    processes are usually `""` without privileges. `/proc/PID/stat` comm is NOT used:
+    `prctl(PR_SET_NAME)`, `/proc/self/comm` and Node's `process.title` rewrite it. Kernel threads
+    have no `VmRSS`, so they are skipped (`process-unreadable-or-changed`) and never named.
   - Whoever names the executable file still chooses the name. Names are bounded to 128 code points
     with control characters replaced, no user names, paths or agent attribution are collected, and
     consumers must treat them as untrusted display text, never execute or interpret them.

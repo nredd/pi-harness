@@ -68,16 +68,11 @@ export function processCpu(previous: ProcessCounter | undefined, current: Proces
 	return { state: "available", value: (cpu / elapsed) * 100 };
 }
 
-/** Bound display text by code point and replace terminal controls. */
-function safeText(value: string): string {
-	return Array.from(value.replace(/[\p{C}]/gu, "?"))
+/** Bound display names by code point and replace terminal controls; directories never leave the parser. */
+export function safeName(value: string): string {
+	return Array.from(basename(value).replace(/[\p{C}]/gu, "?"))
 		.slice(0, 128)
 		.join("");
-}
-
-/** Bounded display basename; directories never leave the parser. */
-export function safeName(value: string): string {
-	return safeText(basename(value));
 }
 
 /** Basename of a Linux `/proc/PID/exe` target, without the kernel's unlinked-file marker. */
@@ -85,20 +80,12 @@ export function executableName(target: string): string {
 	return safeName(target.endsWith(" (deleted)") ? target.slice(0, -" (deleted)".length) : target);
 }
 
-/** Linux `PF_KTHREAD`: userspace cannot rename kernel threads (comm writes need the same thread group). */
-const KERNEL_THREAD = 0x00200000;
-
-/** Linux stat fields; `name` is set only for kernel threads because user comm is process-writable. */
-export interface LinuxStat extends ProcessCounter {
-	kernelThread: boolean;
-}
-
 /**
- * Parse Linux stat's parenthesized comm safely, including embedded spaces and ')' characters. A user
- * process can rewrite its own comm (`prctl(PR_SET_NAME)`, `/proc/self/comm`, Node's `process.title`),
- * so comm is only trusted as a kernel thread name. Callers derive user names from the executable.
+ * Parse Linux stat, skipping the parenthesized comm safely (embedded spaces and ')' characters). comm is
+ * NOT a name source: processes rewrite it (`prctl(PR_SET_NAME)`, `/proc/self/comm`, Node's
+ * `process.title`). `name` stays ""; callers derive it from `/proc/PID/exe`.
  */
-export function linuxStat(text: string, hz: number, at: number): LinuxStat | null {
+export function linuxStat(text: string, hz: number, at: number): ProcessCounter | null {
 	const start = text.indexOf("(");
 	const end = text.lastIndexOf(")");
 	if (start < 1 || end <= start || !Number.isFinite(hz) || hz <= 0) return null;
@@ -108,24 +95,20 @@ export function linuxStat(text: string, hz: number, at: number): LinuxStat | nul
 		.trim()
 		.split(/\s+/);
 	const parentPid = Number(fields[1]);
-	const flags = Number(fields[6]);
 	const user = Number(fields[11]);
 	const system = Number(fields[12]);
 	const identity = fields[19];
 	if (
 		!identity ||
 		!/^\d+$/.test(identity) ||
-		![pid, parentPid, flags, user, system].every((n) => Number.isSafeInteger(n) && n >= 0) ||
+		![pid, parentPid, user, system].every((n) => Number.isSafeInteger(n) && n >= 0) ||
 		pid === 0
 	)
 		return null;
-	const kernelThread = (flags & KERNEL_THREAD) !== 0;
 	return {
 		pid,
 		parentPid,
-		// Kernel thread names such as `kworker/0:1` are not paths.
-		name: kernelThread ? safeText(text.slice(start + 1, end)) : "",
-		kernelThread,
+		name: "",
 		identity: `${pid}:${identity}`,
 		rssBytes: 0,
 		cpuMs: ((user + system) / hz) * 1000,

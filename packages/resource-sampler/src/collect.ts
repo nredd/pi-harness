@@ -143,14 +143,13 @@ export async function linuxProcesses(budget: Budget, hz: number): Promise<Proces
 			const path = `/proc/${entry.name}`;
 			const first = linuxStat(await budget.read(`${path}/stat`), hz, performance.now());
 			if (!first) throw new Error("process incomplete");
-			const name = first.kernelThread ? first.name : await budget.executable(`${path}/exe`);
+			const name = await budget.executable(`${path}/exe`);
 			const rssBytes = linuxRss(await budget.read(`${path}/status`));
 			const last = linuxStat(await budget.read(`${path}/stat`), hz, performance.now());
 			// The name and RSS reads sit between two stat reads, so PID reuse rejects both.
 			if (!last || first.pid !== Number(entry.name) || first.identity !== last.identity || rssBytes === null)
 				throw new Error("process changed or incomplete");
-			const { kernelThread: _, ...counter } = last;
-			result.push({ ...counter, name, rssBytes });
+			result.push({ ...last, name, rssBytes });
 		} catch {
 			budget.signal.throwIfAborted();
 			budget.skipped++;
