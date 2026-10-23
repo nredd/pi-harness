@@ -85,6 +85,84 @@ describe("usage read ownership", () => {
 		expect(service.peek("anthropic")).toBeUndefined();
 	});
 
+	it.each([false, true])("follows the newer confirming read (older finishes first=%s)", async (olderFirst) => {
+		let now = T0;
+		const pending: ((response: Response) => void)[] = [];
+		const service = new UsageService({
+			now: () => now,
+			getAccessToken: async () => "synthetic",
+			fetch: () => new Promise<Response>((resolve) => pending.push(resolve)),
+		});
+		const early = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+		await vi.waitFor(() => expect(pending).toHaveLength(1));
+		now++;
+		const late = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+		await vi.waitFor(() => expect(pending).toHaveLength(2));
+		if (olderFirst) {
+			pending[0]?.(body(100));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(service.peek("anthropic")).toBeUndefined();
+		}
+		pending[1]?.(body(100));
+		const newest = await late;
+		if (!olderFirst) pending[0]?.(body(100));
+		expect(await early).toBe(newest);
+		expect(service.peek("anthropic")).toBe(newest);
+		expect(pending).toHaveLength(2);
+	});
+
+	it.each(["abort", "timeout"] as const)(
+		"bounds a superseded caller on %s without cancelling the newer read",
+		async (ending) => {
+			vi.useFakeTimers();
+			try {
+				let now = T0;
+				const pending: ((response: Response) => void)[] = [];
+				const service = new UsageService({
+					now: () => now,
+					getAccessToken: async () => "synthetic",
+					fetch: () => new Promise<Response>((resolve) => pending.push(resolve)),
+				});
+				const controller = new AbortController();
+				const early = service.get(ctx, "anthropic", { force: true, signal: controller.signal });
+				await vi.advanceTimersByTimeAsync(0);
+				now++;
+				const late = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+				await vi.advanceTimersByTimeAsync(0);
+				pending[0]?.(body(100));
+				await vi.advanceTimersByTimeAsync(0);
+				if (ending === "abort") controller.abort();
+				else await vi.advanceTimersByTimeAsync(20_000);
+				expect((await early).message).toContain(ending === "abort" ? "cancelled" : "timed out");
+				pending[1]?.(body(25));
+				await late;
+				await vi.advanceTimersByTimeAsync(0);
+				expect(service.peek("anthropic")?.windows[0]?.usedPercent).toBe(25);
+				expect((await service.get(ctx, "anthropic", { force: true })).message).toContain("once per minute");
+				expect(pending).toHaveLength(2);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it("evaluates the exact returned snapshot even when a later cache read disagrees", async () => {
+		let now = T0;
+		let used = 0;
+		const service = new UsageService({
+			now: () => now,
+			getAccessToken: async () => "synthetic",
+			fetch: async () => body(used),
+		});
+		const first = await service.get(ctx, "anthropic");
+		now++;
+		used = 100;
+		await service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+		const model = { provider: "anthropic", id: "sonnet" };
+		expect(service.decisionFor(model).block).toBe(true);
+		expect(service.decisionFor(model, first).block).toBe(false);
+	});
+
 	it("a pre-cancelled manual refresh neither reads credentials nor consumes the manual allowance", async () => {
 		let calls = 0;
 		const service = new UsageService({

@@ -98,9 +98,55 @@ describe("router recovery through a real session", () => {
 		expect(effects).toBe(1);
 		expect(a.state.callCount).toBe(2);
 		expect(b.state.callCount).toBe(0);
-		expect(usage.reads).toHaveLength(0);
-		expect(scenario.tracker.active()).toEqual([]);
+		expect(usage.reads).toHaveLength(errorMessage === RETRY ? 1 : 0);
+		expect(scenario.tracker.active()).toHaveLength(errorMessage === RETRY ? 1 : 0);
 	});
+
+	it.each(["overloaded", "length", "overflow", "unconfirmed quota"] as const)(
+		"preserves core same-model recovery after partial %s",
+		async (kind) => {
+			const clock = new Clock();
+			const usage = new CachedUsage(clock);
+			usage.set("spike-a", 0);
+			scenario = await startRouter(
+				usage,
+				"ordered",
+				[
+					(pi) => {
+						pi.on("session_before_compact", (event) => ({
+							compaction: {
+								summary: "recovered input",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+							},
+						}));
+					},
+				],
+				{ compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
+			);
+			const [a, b] = scenario.providers;
+			a.setResponses([
+				fauxAssistantMessage("partial", {
+					stopReason: kind === "length" ? "length" : "error",
+					errorMessage:
+						kind === "overloaded"
+							? "overloaded_error"
+							: kind === "overflow"
+								? "prompt is too long"
+								: kind === "unconfirmed quota"
+									? RETRY
+									: undefined,
+					timestamp: clock.now(),
+				}),
+				fauxAssistantMessage("recovered"),
+			]);
+			await scenario.harness.session.prompt("x".repeat(5000));
+			expect(a.state.callCount).toBe(2);
+			expect(b.state.callCount).toBe(0);
+			expect(getAssistantTexts(scenario.harness)).toContain("recovered");
+			expect(usage.reads).toHaveLength(kind === "unconfirmed quota" ? 1 : 0);
+		},
+	);
 
 	it("cancellation during settle confirmation prevents another physical dispatch", async () => {
 		const clock = new Clock();

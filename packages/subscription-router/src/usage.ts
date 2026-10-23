@@ -325,7 +325,14 @@ export class UsageService {
 			this.lastManualRefreshAt.set(provider, now);
 		}
 		const snapshot = await waitForCaller(this.refresh(ctx, provider, now, options.notBefore), options.signal);
-		if (!snapshot) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
+		if (!snapshot) {
+			return errorSnapshot(
+				provider,
+				"error",
+				now,
+				options.signal?.aborted ? "Usage request was cancelled." : "Usage request timed out.",
+			);
+		}
 		return snapshot;
 	}
 
@@ -344,8 +351,7 @@ export class UsageService {
 	 * data with an unknown or past reset, missing data, and failed reads fail open.
 	 * An unlimited plan never blocks; a credit balance never bypasses a window.
 	 */
-	decisionFor(model: ModelRef): UsageDecision {
-		const snapshot = this.peek(model.provider);
+	decisionFor(model: ModelRef, snapshot = this.peek(model.provider)): UsageDecision {
 		if (!snapshot || (snapshot.status !== "available" && snapshot.status !== "stale")) return { block: false };
 		if (snapshot.credits?.unlimited === true) return { block: false };
 		const now = this.transport.now();
@@ -426,8 +432,14 @@ export class UsageService {
 				// A post-failure read may supersede a slow warm-up. Only the newest
 				// initiated read owns cache/backoff writes, regardless of completion order.
 				if (this.inFlight.get(provider)?.read !== refresh) {
-					// Confirmation consults the shared cache after get(). Do not certify
-					// an unstored response against another read's (possibly stale) state.
+					// Follow only later owners, never older reads: the dependency graph
+					// is acyclic. The caller's total wait is bounded across supersessions.
+					const newer = this.inFlight.get(provider);
+					if (newer) return newer.read;
+					const cached = this.cache.get(provider);
+					if (cached?.status === "available" && cached.retrievedAt >= Math.max(now, notBefore ?? now)) {
+						return cached;
+					}
 					return errorSnapshot(
 						provider,
 						"error",
@@ -539,14 +551,17 @@ function waitForCaller(
 	refresh: Promise<UsageSnapshot>,
 	signal: AbortSignal | undefined,
 ): Promise<UsageSnapshot | undefined> {
-	if (!signal) return refresh;
-	if (signal.aborted) return Promise.resolve(undefined);
+	if (signal?.aborted) return Promise.resolve(undefined);
 	return new Promise((resolve) => {
-		const abort = () => resolve(undefined);
-		signal.addEventListener("abort", abort, { once: true });
-		void refresh.then((snapshot) => {
-			signal.removeEventListener("abort", abort);
+		const finish = (snapshot?: UsageSnapshot) => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", abort);
 			resolve(snapshot);
-		});
+		};
+		const abort = () => finish();
+		// One credential lookup plus one fetch, regardless of supersession count.
+		const timer = setTimeout(abort, 2 * REQUEST_TIMEOUT_MS);
+		signal?.addEventListener("abort", abort, { once: true });
+		void refresh.then(finish);
 	});
 }

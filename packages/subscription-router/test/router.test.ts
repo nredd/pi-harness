@@ -47,13 +47,14 @@ function harness(options: { live?: Record<string, UsageDecision>; unknown?: stri
 	const tracker = new ExhaustionTracker(() => clock.now);
 	const env: RouteEnv = {
 		resolve: (entry) => (options.unknown?.includes(entry.id) ? undefined : model(entry)),
-		refresh: async (provider) => {
+		refresh: async (model) => {
+			const { provider } = model;
 			refreshed.push(provider);
-			if (options.stale) return false;
+			if (options.stale) return undefined;
 			for (const [key, decision] of Object.entries(live)) {
 				if (key === provider || key.startsWith(`${provider}/`)) cached[key] = decision;
 			}
-			return true;
+			return usage.decisionFor(model);
 		},
 	};
 	return { router: new Router(usage, tracker), tracker, env, clock, cached, refreshed };
@@ -203,7 +204,7 @@ describe("Router.route", () => {
 			...env,
 			refresh: async () => {
 				controller.abort();
-				return true;
+				return { block: true };
 			},
 		};
 		await expect(
@@ -322,7 +323,7 @@ describe("balanced routing", () => {
 			...env,
 			refresh: async () => {
 				cached.anthropic = { block: true, window: "weekly", scope: "provider", resetAt: T0 + MINUTE };
-				return true;
+				return cached.anthropic;
 			},
 		};
 		expect((await router.route(profile, request({ reason: "retry", failed }), confirmedEnv)).model.id).toBe(third.id);

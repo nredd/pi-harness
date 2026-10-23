@@ -10,6 +10,8 @@ installation pins or OAuth ownership. No release or live-provider acceptance is 
 | Partial-stream terminal quota / retry | `test/scenarios/recovery.test.ts`, real Pi session + faux streaming deltas, Vitest and Bun | Text appears once; no alternate dispatch; failed tool calls do not execute; prior successful tool effect occurs once |
 | Empty-error recovery | Same scenario suite | Only confirmed quota switches; failed assistant omitted; prior assistant/tool result retained; physical models and exact request counts |
 | Transient failure | Same scenario suite | Three core retries, four attempts on A, zero on B, no quota mark without confirmation |
+| Partial core recovery | Same scenario suite | Overload, below-maxTokens length, context overflow and unconfirmed quota each recover on A with exactly two calls, zero B calls; only the quota case reads usage |
+| Concurrent confirmations | `test/scenarios/concurrent-confirmation.test.ts`, two real Pi sessions | R1 finishes first after R2 supersedes it; both follow R2's exhausted snapshot and dispatch B exactly once per session |
 | Cancellation at settle | Same scenario suite | Core suppresses continuation after abort; a completed quota confirmation may remain marked because the settle context has no streaming abort signal |
 | Balanced selection / continuation | `test/scenarios/balanced.test.ts`, Vitest and Bun | Six existing three-provider scenarios retain scoring, hysteresis, continuation stickiness, stale and unmeasured fallback |
 | Direct `subscription_usage` | `test/scenarios/usage-tool.test.ts`, real tool dispatch, Vitest and Bun | Malformed payload, unavailable credentials, credential-owner exception, HTTP failure, retained stale data, invalid reset; sanitized text/details; one tool result |
@@ -34,7 +36,13 @@ These assertions failed before their corresponding fixes, not just after increas
 - Superseded-success race replaced the newer exhausted snapshot; superseded failure installed backoff
   and prevented the next read. With a preexisting snapshot, the older failure replaced fresh 100%
   data with stale 10% data. A superseded response also reported itself `available` despite not
-  owning the shared snapshot used by confirmation; it now returns a sanitized error.
+  owning the shared snapshot used by confirmation. It now follows the newer read/cache, or returns
+  an error when no usable replacement exists; decisions use the exact returned snapshot.
+- The initial blanket partial-output guard blocked core overload and recoverable length retries:
+  both real-session counterexamples made one physical call instead of two. The quota-only guard
+  preserves core's same-model retry and omission semantics.
+- Returning an error for every superseded read stalled valid concurrent confirmations: R1 and R2
+  both returned 100%, but R1 failed in either completion order. Both now return the newest snapshot.
 - A pre-cancelled force read consumed the manual allowance; the next real request returned `error`
   instead of `available`.
 - A finite but unrepresentable `1e100` reset caused `RangeError: Invalid time value` in `decisionFor`.
@@ -53,7 +61,10 @@ It bounds its own wait to ten seconds, then uses existing failure backoff. It ca
 core API: a late result is ignored by this router read, but core may still finish its own work.
 The subsequent HTTP request has a separate ten-second abort timer. Injected transports are expected
 to honor that HTTP abort signal, like native fetch; the router does not promise to terminate arbitrary
-noncooperative custom transports.
+noncooperative custom transports. Each caller nevertheless has a 20-second total wait bound,
+including chains of newer reads; cancellation removes its listener and timeout. An initiated force
+read consumes manual allowance even if superseded; a pre-aborted read never does and returns an
+error even when cached data exists.
 
 Process-global caches are intentionally shared by provider. Cross-process account switching and
 real token refresh/revocation remain core/collector integration risks, not simulated guarantees.
@@ -71,7 +82,16 @@ remain host responsibilities.
 Local macOS development gate: `make check` passed on Node 26.12.0, npm 11.20.0, Bun 1.3.14,
 Python 3.13.15, with the existing Codex 0.154.0 binary and fresh private Codex/cache directories.
 The gate ran under `caffeinate -is` on AC after checking host load and concurrent processes.
-Router: 144 Vitest cases, including 20 real-session cases repeated by Bun, not 164 distinct tests.
+Review-fix rerun on 2026-10-23: `make check` and `make check-package-contracts` both exited 0.
+Router: 154 Vitest cases, including 25 real-session cases repeated by Bun, not 179 distinct tests.
+The corrected length fixture first reproduced the old guard's one-call failure with core compaction
+enabled and a synthetic summary, then passed with the scoped guard. Partial overload, overflow and
+unconfirmed quota also pass. The two-session shared-collector scenario dispatches each fallback
+exactly once. Supersession tests cover both completion orders, cancellation, timeout, newest-only
+cache/backoff ownership and exact-snapshot decisions. Pre-aborted cached reads return cancellation;
+an initiated manual read retains its allowance charge when superseded (intentional policy).
+Raw local receipts: `router-critic-20261023/check.log`, `contracts.log`, `contracts.json`, plus the
+preset and resource-sampler JSON reports in the same build-artifact directory.
 Stack in-process: 64 Vitest and 64 Bun. Scripts: 533; integration units: 251; benchmark units: 91,
 92.98% coverage, including the actual credential-free Codex sandbox boundary.
 Existing unrelated skips/live exclusions in the root gate remain exclusions, not passes.
