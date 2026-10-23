@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -188,7 +188,9 @@ describe("resource_snapshot on the real host through the published sampler", () 
 				const found = snapshot.processes.entries.find((entry) => entry.pid === pid);
 				expect(found, JSON.stringify(snapshot.processes.entries.slice(0, 5))).toBeDefined();
 				expect(found?.parentPid).toBe(process.pid);
-				expect(found?.executable).toBe(basename(process.execPath).slice(0, 15));
+				// Linux reports the main thread's comm (e.g. `node-MainThread`), never a path.
+				expect(found?.executable).toMatch(/^node/);
+				expect(found?.executable).not.toContain("/");
 				const ps = await execFileAsync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { env: { LC_ALL: "C" } });
 				expect(Number(ps.stdout.trim())).toBe(found?.parentPid);
 				if (process.platform === "linux") {
