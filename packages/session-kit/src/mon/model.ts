@@ -3,7 +3,10 @@ export interface MonProcess {
 	/** Stable sampler identity, not PID alone (PIDs can be reused). */
 	identity: string;
 	pid: number;
+	/** Untrusted executable basename; "" when the OS gave none. */
 	name: string;
+	/** `unknown`: no name was readable. `truncated`: the OS limit may have cut it (macOS 16 bytes). */
+	nameState?: "unknown" | "truncated";
 	cpuPercent: number | null;
 	rssBytes: number | null;
 }
@@ -28,8 +31,10 @@ export interface MonSnapshot {
 	cpuState: "available" | "warming" | "unavailable";
 	/** Process interval CPU cannot exist for this platform; the view then defaults to RSS order. */
 	processCpu?: "unavailable";
-	/** Safe, bounded diagnostic supplied by the adapter. */
+	/** Safe, bounded warning supplied by the adapter: something limits what the view can show. */
 	notice?: string;
+	/** Safe, bounded platform note (expected limits, e.g. macOS process CPU); rendered muted. */
+	hint?: string;
 }
 
 export type MonSort = "cpu" | "rss" | "pid";
@@ -52,6 +57,12 @@ export function percent(value: number | null): string {
 	return value === null || !Number.isFinite(value) ? "--" : `${value.toFixed(1)}%`;
 }
 
+/** Process share of total RAM, from the same sample's RSS and total. */
+export function share(part: number | null, total: number | null): string {
+	if (part === null || total === null || !Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return "--";
+	return `${((part / total) * 100).toFixed(1)}`;
+}
+
 export function bytes(value: number | null): string {
 	if (value === null || !Number.isFinite(value)) return "--";
 	return value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)}G` : `${(value / 1024 ** 2).toFixed(0)}M`;
@@ -66,15 +77,19 @@ export interface MonHistoryPoint {
 /**
  * Time-proportional buckets, newest on the right. A column is the typical sampling interval (lower
  * median of consecutive captures), widened only when the history spans more than the width. Columns
- * after the first capture without a CPU value are real gaps (`·`), never interpolated CPU; columns
- * before it are blank because no history exists yet. The latest sample in a bucket wins.
+ * after the first capture without a CPU value are real gaps (`null`), never interpolated CPU; the
+ * leading `blank` columns precede the first capture because no history exists yet. The latest sample
+ * in a bucket wins.
  */
-export function timeHistory(history: readonly MonHistoryPoint[], width: number): string {
+function historyBuckets(
+	history: readonly MonHistoryPoint[],
+	width: number,
+): { blank: number; buckets: (number | null)[] } {
 	const first = history[0];
 	const last = history.at(-1);
-	if (!first || !last || width < 1) return "";
+	if (!first || !last || width < 1) return { blank: Math.max(0, width), buckets: [] };
 	const span = last.sampledAtMs - first.sampledAtMs;
-	if (span <= 0) return sparkline([last.value], 1).padStart(width);
+	if (span <= 0) return { blank: width - 1, buckets: [last.value] };
 	const deltas = history
 		.slice(1)
 		.map((point, i) => point.sampledAtMs - (history[i]?.sampledAtMs ?? point.sampledAtMs))
@@ -90,7 +105,42 @@ export function timeHistory(history: readonly MonHistoryPoint[], width: number):
 		buckets[index] = point.value;
 		oldest = Math.min(oldest, index);
 	}
-	return " ".repeat(oldest) + sparkline(buckets.slice(oldest), width - oldest);
+	return { blank: oldest, buckets: buckets.slice(oldest) };
+}
+
+/** One-row history: blank before data, `·` for gaps. */
+export function timeHistory(history: readonly MonHistoryPoint[], width: number): string {
+	if (!history.length || width < 1) return "";
+	const { blank, buckets } = historyBuckets(history, width);
+	return " ".repeat(blank) + sparkline(buckets, buckets.length);
+}
+
+/**
+ * Multi-row history (top row first), `rows * 8` levels on the same fixed 0..100 scale. A gap is `·`
+ * on the bottom row only; zero keeps a `▁` baseline so a quiet host never looks like missing data.
+ */
+export function timeHistoryRows(history: readonly MonHistoryPoint[], width: number, rows: number): string[] {
+	if (rows <= 1) return [timeHistory(history, width)];
+	const lines = Array.from({ length: rows }, () => "");
+	if (!history.length || width < 1) return lines;
+	const { blank, buckets } = historyBuckets(history, width);
+	const ticks = "▁▂▃▄▅▆▇█";
+	for (let row = 0; row < rows; row++) lines[row] = " ".repeat(blank);
+	for (const value of buckets) {
+		const level =
+			value === null || !Number.isFinite(value)
+				? -1
+				: Math.max(0, Math.min(rows * 8, Math.round((value * rows * 8) / 100)));
+		for (let row = 0; row < rows; row++) {
+			// Row 0 is the top; `fill` is how many eighths this row holds.
+			const floor = (rows - 1 - row) * 8;
+			const fill = level - floor;
+			const bottom = row === rows - 1;
+			lines[row] +=
+				level < 0 ? (bottom ? "·" : " ") : fill >= 8 ? "█" : fill > 0 ? (ticks[fill - 1] ?? " ") : bottom ? "▁" : " ";
+		}
+	}
+	return lines;
 }
 
 /** Fixed 0..100 host CPU scale: a quiet history must not look saturated. */

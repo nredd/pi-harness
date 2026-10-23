@@ -13,7 +13,7 @@ const SIZES = [
 	[120, 40],
 ] as const;
 /** A real process sample arrived; the empty view also says "0 sampled". */
-const SAMPLED = /BUSY PROCESSES {2}[1-9]\d* sampled/;
+const SAMPLED = / PROCESSES {2}[1-9]\d* sampled/;
 let fixture: TerminalFixture | undefined;
 afterEach(async () => {
 	await fixture?.dispose();
@@ -65,14 +65,8 @@ it("/mon shows two real observations, every size, then releases sampling on clos
 	expect(fixture.clock.pending).toBe(1);
 	await sleep(150);
 	fixture.clock.advance(2000);
-	// Bun's `os.cpus()` counters are cached on macOS (observed with 1.3.14 and 1.4.3): usually frozen,
-	// so the sampler keeps host CPU warming with its reason, occasionally a coarse jump. Shipped Pi
-	// runs on Node, where the interval is measured; Bun only proves the explanation path.
-	const measured = (s: string) => s.includes("LIVE") && /\d+\.\d%/.test(s);
-	const bun = "bun" in process.versions;
-	const live = await until((s) =>
-		bun ? measured(s) || s.includes("Host CPU warming: CPU counters have not advanced") : measured(s),
-	);
+	// Sampler 0.1.1 copies Bun's lazy `os.cpus()` counters, so Node and Bun both measure the interval.
+	const live = await until((s) => s.includes("LIVE") && /\d+\.\d%/.test(s));
 	expect(live).toMatch(SAMPLED);
 	if (platform() === "darwin") {
 		expect(live).toContain("RSS ↓");
@@ -86,7 +80,7 @@ it("/mon shows two real observations, every size, then releases sampling on clos
 	await fixture.close();
 	expect(fixture.clock.pending).toBe(0);
 	expect(children()).toEqual([]);
-	expect(host.viewport().join("\n")).not.toContain("BUSY PROCESSES");
+	expect(host.viewport().join("\n")).not.toMatch(SAMPLED);
 });
 
 it("/mon releases an in-flight real sample on session shutdown", async () => {

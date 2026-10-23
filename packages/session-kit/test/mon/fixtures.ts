@@ -21,6 +21,8 @@ export function snapshot(cpuPercent = 36.2, platform: "linux" | "darwin" = "linu
 			rssBytes: p.rssBytes,
 			cpuPercent: p.cpu.state === "available" ? p.cpu.value : null,
 		})),
-		...(platform === "darwin" ? { notice: "Process CPU unavailable: macOS identity precision" } : {}),
+		...(platform === "darwin"
+			? { processCpu: "unavailable" as const, hint: "Process CPU unavailable: macOS identity precision" }
+			: {}),
 	};
 }

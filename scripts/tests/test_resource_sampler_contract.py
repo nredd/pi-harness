@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -142,3 +143,38 @@ def test_only_declared_shared_library_is_an_allowed_sibling_import() -> None:
         standalone_artifacts=["dist/x.mjs"],
     )
     assert standalone
+    library = pc.classify_imports(
+        "dist/index.js",
+        pc.FileImports(specifiers=["@nredd/pi-resource-sampler"], diagnostics=[]),
+        ["dist/index.js"],
+        declared,
+        library=True,
+    )
+    assert library
+
+
+def test_shared_library_consumers_use_the_common_pin() -> None:
+    """Every contract declaring the sampler uses `SHARED_LIBRARIES`' one exact version."""
+    assert dict(pc.SHARED_LIBRARIES) == {"@nredd/pi-resource-sampler": pc.RESOURCE_SAMPLER_VERSION}
+    for contract in (*pc.CONTRACTS, pc.RESOURCE_SAMPLER_CONTRACT):
+        assert pc.shared_library_pin_problems(contract) == [], contract.name
+    drifted = replace(session_kit(), runtime_dependencies=(("@nredd/pi-resource-sampler", "0.1.0"),))
+    assert pc.shared_library_pin_problems(drifted) == [
+        "'@nredd/pi-session-kit' declares shared library '@nredd/pi-resource-sampler' at '0.1.0', "
+        f"not the common pin '{pc.RESOURCE_SAMPLER_VERSION}'"
+    ]
+
+
+def test_session_kit_locks_the_registry_sampler_not_the_workspace() -> None:
+    """npm links a same-version workspace, so the root lock must carry a nested registry entry.
+
+    `npm dedupe` would drop it and silently test the workspace copy instead of the published bytes.
+    """
+    lock = json.loads((pc.REPO_ROOT / "package-lock.json").read_text())["packages"]
+    name, version = "@nredd/pi-resource-sampler", pc.RESOURCE_SAMPLER_VERSION
+    entry = lock[f"packages/session-kit/node_modules/{name}"]
+    assert entry["version"] == version
+    assert entry["resolved"] == f"https://registry.npmjs.org/{name}/-/pi-resource-sampler-{version}.tgz"
+    assert entry["integrity"].startswith("sha512-")
+    assert "link" not in entry
+    assert lock["packages/session-kit"]["dependencies"] == {name: version}

@@ -2,7 +2,7 @@ import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { MonView } from "../../src/mon/component.ts";
-import { sortProcesses, sparkline, timeHistory } from "../../src/mon/model.ts";
+import { sortProcesses, sparkline, timeHistory, timeHistoryRows } from "../../src/mon/model.ts";
 import { snapshot } from "./fixtures.ts";
 
 const theme = { fg: (_color: string, s: string) => s, bg: (_color: string, s: string) => s, bold: (s: string) => s };
@@ -68,9 +68,9 @@ describe("mon responsive dashboard", () => {
 			expect(seen.join("\n")).toContain(text);
 		expect(seen.join("\n")).toContain("PgDn scroll");
 		v.handleInput("g");
-		expect(v.render(40).join("\n")).toContain("Navigation");
+		expect(v.render(40).join("\n")).toContain("Keys");
 		v.handleInput("\u001b[6~");
-		expect(v.render(40).join("\n")).not.toContain("Navigation");
+		expect(v.render(40).join("\n")).not.toContain("Keys");
 	});
 
 	it("fills completion-paced history contiguously, right-aligned, with only real gaps dotted", () => {
@@ -133,10 +133,11 @@ describe("mon responsive dashboard", () => {
 			v.update({ ...snapshot(50), capturedAt, sampledAtMs: (i + 1) * 2000 });
 		});
 		expect(v.state.historyLength).toBe(4);
-		const history = v.render(80).find((line) => line.includes("▅"));
+		// 50% fills the bottom row of the two-row card chart exactly.
+		const history = v.render(80).find((line) => line.includes("█"));
 		expect(history).toBeDefined();
 		expect(history).not.toContain("·");
-		expect(history).toMatch(/[^▅]▅{4}[^▅]/);
+		expect(history).toMatch(/[^█]█{4}[^█]/);
 		expect(v.render(80).join("\n")).toContain("6.0s span");
 	});
 
@@ -145,16 +146,41 @@ describe("mon responsive dashboard", () => {
 		v.update({ ...snapshot(80), sampledAtMs: 12_000 });
 		v.update({ ...snapshot(80), sampledAtMs: 12_000, status: "stale" });
 		expect(v.state.historyLength).toBe(2);
-		const history = v.render(80).find((line) => line.includes("▇"));
+		const history = v.render(40).find((line) => line.includes("▇"));
 		expect(history).toBeDefined();
 		expect(history).not.toContain("·");
 	});
 
-	it("composes wide cards side by side and stacks medium cards", () => {
+	it("composes cards side by side from 72 columns and a compact summary below", () => {
 		const { v } = view(40);
 		expect(v.render(120).find((line) => line.includes("CPU / interval"))).toContain("MEMORY / load");
-		expect(v.render(80).find((line) => line.includes("CPU / interval"))).not.toContain("MEMORY / load");
+		expect(v.render(80).find((line) => line.includes("CPU / interval"))).toContain("MEMORY / load");
+		const compact = v.render(60).join("\n");
+		expect(compact).not.toContain("CPU / interval");
+		expect(compact).toContain("CPU 36.2%  RAM 10.4G/24.0G  load 3.21");
 		expect(v.render(40).join("\n")).not.toContain("CPU / interval");
+	});
+
+	it("draws two-row card history on a fixed scale with gaps on the bottom row only", () => {
+		const points = [0, 50, 100, null, 75].map((value, i) => ({ sampledAtMs: i * 2000, value }));
+		expect(timeHistoryRows(points, 6, 2)).toEqual([" " + "  █ ▄", " ▁██·█"]);
+		expect(timeHistoryRows([], 3, 2)).toEqual(["", ""]);
+		expect(timeHistoryRows(points, 6, 1)).toEqual([timeHistory(points, 6)]);
+	});
+
+	it("shows RSS share of RAM, a scrollbar only on overflow, and freshness in the header", () => {
+		const { v } = view(24);
+		v.update({ ...snapshot(), capturedAt: new Date(2026, 9, 23, 13, 4, 5).getTime(), scanMs: 42 });
+		const lines = v.render(100);
+		expect(lines[0]).toMatch(/● LIVE .*updated 13:04:05 · scan 42ms $/);
+		expect(lines.find((line) => line.includes("NAME"))).toMatch(/PID +CPU% +RSS +MEM% +NAME/);
+		// 640MiB of 24GiB.
+		expect(lines.find((line) => line.includes("1000 "))).toMatch(/640M +2\.6 +fixture-/);
+		expect(lines.some((line) => line.endsWith("┃"))).toBe(true);
+		const tall = view(80).v.render(100);
+		expect(tall.some((line) => line.endsWith("┃"))).toBe(false);
+		v.update({ ...snapshot(), status: "stale" });
+		expect(v.render(100)[0]).toMatch(/▲ STALE .*last ok 13:04:05 $/);
 	});
 
 	it("caches by dimensions and invalidates on update, input and theme changes", () => {

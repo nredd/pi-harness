@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
+import { lstat, readFile } from "node:fs/promises";
 import { platform } from "node:os";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import {
 	createResourceSampler,
 	type ResourceSampler,
@@ -33,7 +36,24 @@ function raw(overrides: Partial<ResourceSnapshot> = {}): ResourceSnapshot {
 	return { ...resourceFixture(), ...overrides } as ResourceSnapshot;
 }
 
+const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
 describe("published sampler source on this host", () => {
+	it("resolves the exact registry sampler, never the workspace copy", async () => {
+		const manifest = JSON.parse(await readFile(join(PACKAGE_ROOT, "package.json"), "utf8"));
+		const version = manifest.dependencies["@nredd/pi-resource-sampler"];
+		expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+		const resolved = spawnSync(
+			process.execPath,
+			["--input-type=module", "-e", "console.log(import.meta.resolve('@nredd/pi-resource-sampler'))"],
+			{ cwd: PACKAGE_ROOT, encoding: "utf8" },
+		);
+		const installed = join(PACKAGE_ROOT, "node_modules", "@nredd", "pi-resource-sampler");
+		expect(fileURLToPath(resolved.stdout.trim())).toBe(join(installed, "dist", "index.js"));
+		expect((await lstat(installed)).isSymbolicLink()).toBe(false);
+		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe(version);
+	});
+
 	it("maps two actual observations: warming baseline, then measured interval CPU", async () => {
 		const source = createSamplerSource();
 		const signal = new AbortController().signal;
@@ -60,7 +80,11 @@ describe("published sampler source on this host", () => {
 				// Unavailable stays unknown; it never becomes 0%.
 				expect(second.processes.every((p) => p.cpuPercent === null)).toBe(true);
 				expect(second.processCpu).toBe("unavailable");
-				expect(second.notice).toContain("macOS: process CPU unavailable");
+				expect(second.hint).toContain("macOS: process CPU unavailable");
+				// 0.1.1 names come from `p_comm`, never argv or a rewritten process title.
+				const node = second.processes.find((p) => p.pid === process.pid);
+				expect(node?.name).toMatch(/^(node|bun)/);
+				expect(second.processes.every((p) => !p.name.includes(" exec "))).toBe(true);
 			} else {
 				expect(self?.cpuPercent).toBeGreaterThanOrEqual(0);
 				expect(second.processCpu).toBeUndefined();
@@ -171,7 +195,67 @@ describe("sampler snapshot mapping", () => {
 				},
 			}),
 		);
-		expect(partial.notice).toBe("Partial: 40 of 900 seen processes (deadline, pid-limit, byte-limit)");
+		expect(partial.notice).toBe("Partial list: 40 of 900 seen (time budget, process cap, read budget)");
+		expect(partial.hint).toBeUndefined();
+	});
+
+	it("treats routine Linux skips and unreadable names as hints, not warnings", () => {
+		const processes = resourceFixture().processes.map((p, i) => ({ ...p, name: i < 3 ? "" : p.name }));
+		const linux = toMonSnapshot(
+			raw({
+				processes,
+				coverage: {
+					complete: false,
+					enumerated: 52,
+					sampled: 40,
+					skipped: 12,
+					bytesRead: 1,
+					reasons: ["process-unreadable-or-changed"],
+				},
+			}),
+		);
+		expect(linux.notice).toBeUndefined();
+		expect(linux.hint).toBe(
+			"12 skipped: kernel threads, exited or unreadable · 3 names unknown (no access, e.g. other users)",
+		);
+		expect(linux.processes.slice(0, 4).map((p) => p.nameState)).toEqual(["unknown", "unknown", "unknown", undefined]);
+		const view = new MonView({ theme, rows: () => 24, requestRender: vi.fn(), onClose: vi.fn() });
+		view.update(linux);
+		view.handleInput("p");
+		const text = view.render(80).join("\n");
+		expect(text).toContain("(unknown)");
+		expect(text).toContain("12 skipped");
+		expect(text).not.toContain("▲");
+		// A budget limit next to the routine skip is still a warning.
+		const capped = toMonSnapshot(
+			raw({
+				coverage: {
+					complete: false,
+					enumerated: 52,
+					sampled: 40,
+					skipped: 12,
+					bytesRead: 1,
+					reasons: ["process-unreadable-or-changed", "deadline"],
+				},
+			}),
+		);
+		expect(capped.notice).toBe("Partial list: 40 of 52 seen (unreadable or exited, time budget)");
+	});
+
+	it("marks macOS names that may be cut at 16 bytes, never Linux names", () => {
+		const names = ["Google Chrome He", "WindowServer", "界界界界界a"];
+		const processes = resourceFixture("darwin")
+			.processes.slice(0, 3)
+			.map((p, i) => ({ ...p, name: names[i] ?? "" }));
+		const darwin = toMonSnapshot(raw({ ...resourceFixture("darwin"), processes } as Partial<ResourceSnapshot>));
+		expect(darwin.processes.map((p) => p.nameState)).toEqual(["truncated", undefined, "truncated"]);
+		const linux = toMonSnapshot(
+			raw({ processes: resourceFixture().processes.map((p) => ({ ...p, name: names[0] ?? "" })) }),
+		);
+		expect(linux.processes.every((p) => p.nameState === undefined)).toBe(true);
+		const view = new MonView({ theme, rows: () => 24, requestRender: vi.fn(), onClose: vi.fn() });
+		view.update(darwin);
+		expect(view.render(80).join("\n")).toContain("Google Chrome He…");
 	});
 
 	it("labels Darwin process CPU unavailable and defaults the view to RSS until the user sorts", () => {
