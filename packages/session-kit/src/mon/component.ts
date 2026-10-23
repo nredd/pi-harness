@@ -50,7 +50,7 @@ const HELP = [
 	"",
 	"*Reading it",
 	" LIVE: the last collection succeeded;",
-	" `updated` is when, on this clock.",
+	" updated HH:MM:SS is when (local).",
 	" CPU warming: first interval baseline,",
 	" not a stale or failed sample.",
 	" CPU is interval usage, not lifetime.",
