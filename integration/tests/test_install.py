@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import io
 import json
+import shutil
 import sys
 import tarfile
 from pathlib import Path
@@ -1152,6 +1153,137 @@ def test_existing_git_tree_is_replaced_as_planned(tmp_path: Path, monkeypatch: p
     assert not (harness.layout.agent_dir / "git").exists()
     (kept,) = (harness.layout.root / "backups").glob("*/git/github.com/me/mine/index.ts")
     assert kept.read_text() == "mine"
+
+
+def make_unsupported(layout: Layout, case: str) -> Path:
+    """Put an entry of a kind the installer cannot back up and restore where a switch replaces one.
+
+    Parameters:
+        layout (Layout): installer paths.
+        case (str): which entry.
+
+    Returns:
+        Path: the unsupported entry.
+
+    Raises:
+        ValueError: unknown case.
+    """
+    match case:
+        case "bin-pi-directory":
+            path = layout.link
+            if path.exists(follow_symlinks=False):
+                path.unlink()
+            path.mkdir(parents=True)
+            (path / "mine").write_text("mine")
+        case "npm-file" | "git-file":
+            path = layout.agent_dir / case.removesuffix("-file")
+            if path.is_dir():
+                shutil.rmtree(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("mine")
+        case "state-directory":
+            path = layout.state
+            path.mkdir(parents=True)
+            (path / "mine").write_text("mine")
+        case _:
+            raise ValueError(f"Unknown case '{case}'")
+    return path
+
+
+@pytest.mark.parametrize("case", ["bin-pi-directory", "npm-file", "git-file", "state-directory"])
+def test_unsupported_existing_kind_is_refused_before_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """A kind the journal could not restore is refused before the prompt, so no switch strands it."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    path = make_unsupported(harness.layout, case)
+    before = tree(tmp_path)
+    prompts: list[str] = []
+    with pytest.raises(UnsupportedError, match="nothing changed") as raised:
+        harness.run(ask=lambda prompt: prompts.append(prompt) or "y")
+    assert str(path) in str(raised.value)
+    with pytest.raises(UnsupportedError, match="nothing changed"):
+        harness.run(yes=True)
+    assert prompts == []
+    assert harness.calls() == []
+    assert not harness.layout.journal.exists()
+    assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == {
+        k: v for k, v in before.items() if not k.endswith("pi-stack/lock")
+    }
+
+
+def test_kind_changed_after_planning_never_enters_the_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target that turns unsupported mid-run is refused unjournaled, so the journal still restores."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    layout = harness.layout
+    plan = plan_install(layout, harness.verified)
+    layout.root.mkdir(parents=True)
+    staged = install.stage(layout, harness.verified, plan, layout.root / "staging" / "x")
+    make_unsupported(layout, "bin-pi-directory")
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+    with pytest.raises(UnsupportedError, match="bin"):
+        switch(layout, harness.verified, plan, staged, Journal(layout, layout.root / "backups" / "b"))
+    steps = json.loads(layout.journal.read_text())["steps"]
+    assert str(layout.link) not in [step["target"] for step in steps]
+    assert rollback(layout)
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+    assert not layout.journal.exists()
+
+
+def test_journal_is_private_before_any_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No umask exposes the journal's paths: its file is owner-only from creation, before data."""
+    modes: list[int] = []
+    fsync = install.os.fsync
+
+    def observe(descriptor: int) -> None:
+        """Record the file mode the moment the data is flushed, before any later chmod.
+
+        Parameters:
+            descriptor (int): open file.
+        """
+        modes.append(install.os.fstat(descriptor).st_mode & 0o777)
+        fsync(descriptor)
+
+    monkeypatch.setattr(install.os, "fsync", observe)
+    previous = install.os.umask(0)
+    try:
+        install.write_atomic(tmp_path / "transaction.json", "{}", mode=install.JOURNAL_MODE)
+    finally:
+        install.os.umask(previous)
+    assert modes == [0o600]
+    assert (tmp_path / "transaction.json").stat().st_mode & 0o777 == 0o600
+
+
+def test_owner_read_only_journal_is_trusted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Owner-only means no group or other bits; a `0400` journal still restores."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+    interrupt(harness, monkeypatch)
+    harness.layout.journal.chmod(0o400)
+    assert rollback(harness.layout)
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+
+
+def test_restore_with_another_layout_says_how_to_recover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rerun with another `--bin-dir` fails closed and names the settings the restore needs."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    interrupt(harness, monkeypatch)
+    before = tree(tmp_path)
+    with pytest.raises(RollbackError, match="PI_CODING_AGENT_DIR") as raised:
+        install.run(Options(SHA, True, False, tmp_path / "elsewhere"), harness.env, None)
+    assert "--bin-dir" in str(raised.value)
+    assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == {
+        k: v for k, v in before.items() if not k.endswith("pi-stack/lock")
+    }
+    assert harness.run(yes=True) == ExitCode.OK
 
 
 def harness_closure(*roots: Path) -> set[Path]:

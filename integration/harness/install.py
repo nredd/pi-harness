@@ -624,7 +624,50 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
         plan.subagents = desired_subagents
         message = f"set `packageAgents: false` in '{subagents_path}' so filtered packages stay filtered"
         (plan.overwrites if current_subagents else plan.creates).append(message)
+    if not plan.empty:
+        # Before consent: a kind the journal cannot restore must never be moved into a backup.
+        for target in replaced_targets(layout, plan):
+            require_restorable_kind(layout, target)
     return plan
+
+
+def replaced_targets(layout: Layout, plan: Plan) -> list[Path]:
+    """List every existing path a switch for this plan may replace.
+
+    Parameters:
+        layout (Layout): installer paths.
+        plan (Plan): non-empty plan.
+
+    Returns:
+        list[Path]: targets, the state record always included.
+    """
+    targets = [layout.agent_dir / tree for tree in PACKAGE_TREES] if plan.install_packages else []
+    if plan.settings is not None:
+        targets.append(layout.agent_dir / SETTINGS_FILE)
+    if plan.subagents is not None:
+        targets.append(layout.agent_dir / SUBAGENTS_FILE)
+    if plan.link is not None:
+        targets.append(layout.link)
+    return [*targets, layout.state]
+
+
+def require_restorable_kind(layout: Layout, target: Path) -> None:
+    """Refuse to replace an entry whose backup the journal validator would not restore.
+
+    Parameters:
+        layout (Layout): installer paths.
+        target (Path): path a switch replaces.
+
+    Raises:
+        UnsupportedError: `target` exists as a kind its backup may not hold; nothing changed.
+    """
+    _, kinds = journaled_paths(layout)[target]
+    kind = entry_kind(target)
+    if kind is not None and kind not in kinds:
+        raise UnsupportedError(
+            f"'{target}' is a {kind}; the installer only replaces a {' or '.join(sorted(kinds))} there. "
+            "Move it aside yourself, nothing changed"
+        )
 
 
 def declared_source(package: object) -> str:
@@ -753,6 +796,7 @@ class Journal:
             layout (Layout): installer paths.
             backups (Path): directory receiving the replaced state.
         """
+        self.layout = layout
         self.path = layout.journal
         self.backups = backups
         self.steps: list[dict[str, Any]] = []
@@ -766,7 +810,12 @@ class Journal:
 
         Returns:
             Path | None: where the existing target will be kept, `None` when it does not exist.
+
+        Raises:
+            UnsupportedError: the target changed since planning into a kind a restore would
+                refuse; it is not recorded, so the journal stays restorable.
         """
+        require_restorable_kind(self.layout, target)
         existed = target.exists() or target.is_symlink()
         backup = self.backups / name if existed else None
         self.steps.append({"target": str(target), "backup": str(backup) if backup else None})
@@ -790,11 +839,14 @@ def write_atomic(path: Path, text: str, mode: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     keep = mode if mode is not None else (path.stat().st_mode & 0o777 if path.exists() else 0o644)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    with temporary.open("w") as handle:
+    # Created owner-only whatever the umask, and given its final mode before any data: the
+    # journal names every path a restore deletes, so it is never readable by others.
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        os.fchmod(descriptor, keep)
         handle.write(text)
         handle.flush()
-        os.fsync(handle.fileno())
-    temporary.chmod(keep)
+        os.fsync(descriptor)
     temporary.replace(path)
 
 
@@ -957,8 +1009,10 @@ def load_journal(layout: Layout) -> list[Step]:
         return validate_journal(layout, read_journal(layout.journal))
     except ValueError as error:
         raise RollbackError(
-            f"Journal '{layout.journal}' is not trusted: {error}; nothing was restored, restore by hand "
-            f"from '{layout.root / 'backups'}'"
+            f"Journal '{layout.journal}' is not trusted: {error}; nothing was restored. It only names the "
+            "paths of the run that wrote it: if that run used another `--bin-dir` or "
+            "`PI_CODING_AGENT_DIR`, rerun with the same ones. Otherwise restore by hand from "
+            f"'{layout.root / 'backups'}'"
         ) from error
 
 
