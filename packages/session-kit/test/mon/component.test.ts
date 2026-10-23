@@ -2,7 +2,7 @@ import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { MonView } from "../../src/mon/component.ts";
-import { sortProcesses, sparkline } from "../../src/mon/model.ts";
+import { sortProcesses, sparkline, timeHistory } from "../../src/mon/model.ts";
 import { snapshot } from "./fixtures.ts";
 
 const theme = { fg: (_color: string, s: string) => s, bg: (_color: string, s: string) => s, bold: (s: string) => s };
@@ -34,6 +34,60 @@ describe("mon responsive dashboard", () => {
 			if (width >= 25) expect(lines.at(-1)).toContain("? help");
 			if (width >= 12) expect(lines.at(-1)).toContain("q/Esc close");
 		}
+	});
+
+	it.each([6, 8, 9, 12, 16, 20])("keeps selection visible at %i rows even with stale diagnostics", (height) => {
+		const { v } = view(height);
+		v.update({ ...snapshot(), status: "stale", notice: "Sampling stopped. Close and reopen to retry." });
+		for (const key of ["j", "G", "k", "g"]) {
+			v.handleInput(key);
+			const pid = v.state.selected?.split(":")[0];
+			expect(v.render(40).join("\n")).toContain(pid);
+		}
+	});
+
+	it("scrolls all metric explanations at 40x12 without moving process selection", () => {
+		const { v } = view(12);
+		const selected = v.state.selected;
+		v.handleInput("?");
+		const seen: string[] = [];
+		for (let i = 0; i < 40; i++) {
+			seen.push(...v.render(40));
+			v.handleInput("j");
+		}
+		expect(v.state.selected).toBe(selected);
+		for (const text of [
+			"interval usage",
+			"exceed 100%",
+			"unavailable",
+			"minus free",
+			"not percent",
+			"elapsed time",
+			"scheduling",
+		])
+			expect(seen.join("\n")).toContain(text);
+		expect(seen.join("\n")).toContain("PgDn scroll");
+		v.handleInput("g");
+		expect(v.render(40).join("\n")).toContain("Navigation");
+		v.handleInput("\u001b[6~");
+		expect(v.render(40).join("\n")).not.toContain("Navigation");
+	});
+
+	it("preserves irregular elapsed time and reports stale last success", () => {
+		expect(
+			timeHistory(
+				[
+					{ capturedAt: 0, value: 0 },
+					{ capturedAt: 1000, value: 100 },
+					{ capturedAt: 10000, value: 50 },
+				],
+				11,
+			),
+		).toBe("▁█········▅");
+		const { v } = view();
+		v.update({ ...snapshot(), capturedAt: 10000 });
+		v.update({ ...snapshot(), capturedAt: 25000, status: "stale" });
+		expect(v.render(80).join("\n")).toContain("Last success: 1970-01-01T00:00:10.000Z");
 	});
 
 	it("composes wide cards side by side and stacks medium cards", () => {

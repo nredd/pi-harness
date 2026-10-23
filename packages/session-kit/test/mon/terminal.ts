@@ -20,8 +20,9 @@ const view = new MonView({
 for (let i = 0; i < 90; i++)
 	view.update({
 		...snapshot(35 + Math.sin(i / 6) * 20 + Math.cos(i / 2) * 8, "darwin"),
+		capturedAt: Date.UTC(2026, 9, 22, 22, 0, 0) + i * 2000 + (i >= 50 ? 15000 : 0),
 		notice: "FIXTURE / macOS process CPU unavailable",
 	});
-tui.addChild(view);
-tui.setFocus(view);
+// Match ctx.ui.custom's focused overlay, so Pi yields paging keys to the dashboard.
+tui.showOverlay(view, { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 });
 tui.start();

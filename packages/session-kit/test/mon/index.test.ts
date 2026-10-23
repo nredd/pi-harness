@@ -91,6 +91,75 @@ describe("mon interaction lifecycle", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
+	it("invalidates a deferred UI factory before it can create a source", async () => {
+		const h = setup();
+		let admit!: () => void;
+		const admission = new Promise<void>((resolve) => {
+			admit = resolve;
+		});
+		const original = h.custom.getMockImplementation();
+		h.custom.mockImplementationOnce(async (factory) => {
+			await admission;
+			return original?.(factory);
+		});
+		const run = h.run();
+		await vi.waitFor(() => expect(h.custom).toHaveBeenCalledOnce());
+		const shutdown = h.events.get("session_shutdown")?.();
+		admit();
+		await Promise.all([run, shutdown]);
+		expect(h.createSource).not.toHaveBeenCalled();
+	});
+
+	it("serializes concurrent replacements through deferred source disposal", async () => {
+		vi.useFakeTimers();
+		const h = setup();
+		let release!: () => void;
+		h.dispose.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		);
+		const first = h.run();
+		await vi.advanceTimersByTimeAsync(0);
+		const second = h.run();
+		const third = h.run();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.createSource).toHaveBeenCalledTimes(1);
+		release();
+		await vi.advanceTimersByTimeAsync(0);
+		await Promise.all([first, second]);
+		expect(h.createSource).toHaveBeenCalledTimes(3);
+		expect(h.dispose).toHaveBeenCalledTimes(2);
+		h.input("q");
+		await third;
+		expect(h.dispose).toHaveBeenCalledTimes(3);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it.each(["session_shutdown", "session_start"])("invalidates queued openers on %s during disposal", async (event) => {
+		vi.useFakeTimers();
+		const h = setup();
+		let release!: () => void;
+		h.dispose.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		);
+		const first = h.run();
+		await vi.advanceTimersByTimeAsync(0);
+		const second = h.run();
+		const third = h.run();
+		await vi.advanceTimersByTimeAsync(0);
+		const shutdown = h.events.get(event)?.();
+		release();
+		await Promise.all([first, second, third, shutdown]);
+		expect(h.createSource).toHaveBeenCalledOnce();
+		expect(h.dispose).toHaveBeenCalledOnce();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("disposes the previous interaction before reopening", async () => {
 		vi.useFakeTimers();
 		const h = setup();
