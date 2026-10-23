@@ -177,16 +177,21 @@ expected failure plus `hostile child reaped` with the expected status (SIGKILL f
 legacy `ps` call is bounded too. `test_probe_reports_cleanup_failure_with_the_primary_error` patches
 its own copy of the program so `stop` reaps and then throws, and requires the `AggregateError` text.
 The gate runs the probe with `run(..., own_group=True)` (`run_own_group`): its own session, and on
-the 30s timeout or an interruption of the gate the whole process group is killed, so a hung probe
-cannot orphan the child. The group is signalled only while its leader is unreaped, so the group id
-cannot have been reused; if `communicate` already reaped the leader, nothing is signalled and the
-original exception carries a note. Default `run` stays plain `subprocess.run`, which kills only the
-child. `test_probe_timeout_kills_its_whole_process_group` and
+the 30s timeout or a `KeyboardInterrupt` in the gate the whole process group is killed while its
+leader is unreaped, so a hung probe cannot orphan the child. The group is signalled only while its
+leader is unreaped, so the group id cannot have been reused; if `communicate` already reaped the
+leader, nothing is signalled, the original exception carries a note, and surviving members may
+outlive the gate. Only Python exceptions reach this cleanup: a SIGTERM or SIGHUP the gate does not
+handle, or a SIGKILL, ends the worker with no cleanup and the group may outlive it. Default `run`
+stays plain `subprocess.run`, which kills only the child. `test_probe_timeout_kills_its_whole_process_group` and
 `test_probe_interrupt_kills_its_whole_process_group` time out or interrupt the real probe and require
-EOF on a FIFO only the child holds (`FifoWitness`; the child exits on its own after 20s, so a
-regression cannot leave it behind); `test_reaped_leader_group_is_never_signalled` and the
-`test_run_default_*` timeout/interrupt tests cover the guard and the unchanged default path. A
-SIGKILLed gate runs no cleanup at all; that boundary is not covered.
+EOF within 10s on a FIFO only the child holds (`FifoWitness`; the child exits on its own 20s after
+it starts, opening included, so a regression cannot leave it behind). Its open is non-blocking and
+retried, since a blocking open waits for a reader before any exit timer starts;
+`test_fifo_writer_exits_without_a_reader` requires both writers to exit with no reader or a closed
+one. `test_reaped_leader_group_is_never_signalled` and the `test_run_default_*` timeout/interrupt
+tests cover the guard and the unchanged default path. The reaped-leader skip and unhandled
+SIGTERM/SIGHUP/SIGKILL of the gate are not covered by any cleanup.
 Existing `owned` macOS/Linux jobs run the native package tests; existing `contracts` jobs run this
 packed consumer. No new runner matrix or Pi load is needed for a Pi-independent library.
 
