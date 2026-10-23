@@ -223,14 +223,16 @@ describe("Agent tool result — effective model", () => {
     expect(result.details.tags).toContain("thinking: high (asked max)");
   });
 
-  // Asserted on the immediate background result, which renders BEFORE a session
-  // exists. That is the only place the two causes of a mismatch are separable:
-  // a clamp cannot have happened yet, so "(asked max)" here can only come from
-  // the agent file outranking the parameter.
-  it("discloses a level an agent file pinned over the caller's (#182)", async () => {
+  // Asserted on the immediate background result, which renders before a session
+  // exists. This pins the requested dispatch level before Pi can clamp it.
+  it("uses an explicit thinking level over an agent default without false disclosure", async () => {
     pinnedAgent("thinking: low\n");
     const tool = await agentTool();
-    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as never);
+    let dispatchedThinking: string | undefined;
+    vi.mocked(runAgent).mockImplementation((_c, _t, _p, options) => {
+      dispatchedThinking = options.thinkingLevel;
+      return new Promise(() => {}) as never;
+    });
 
     const result = await tool.execute(
       "tc-4",
@@ -240,7 +242,30 @@ describe("Agent tool result — effective model", () => {
       ctx(),
     );
 
-    expect(result.details.tags).toContain("thinking: low (asked max)");
+    expect(dispatchedThinking).toBe("max");
+    expect(result.details.tags).toContain("thinking: max");
+    expect(result.details.tags.join(" ")).not.toContain("asked");
+  });
+
+  it("uses an agent thinking default when the caller omits the parameter", async () => {
+    pinnedAgent("thinking: low\n");
+    const tool = await agentTool();
+    let dispatchedThinking: string | undefined;
+    vi.mocked(runAgent).mockImplementation((_c, _t, _p, options) => {
+      dispatchedThinking = options.thinkingLevel;
+      return new Promise(() => {}) as never;
+    });
+
+    const result = await tool.execute(
+      "tc-4-default",
+      { prompt: "go", description: "d", subagent_type: "pinned", run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
+
+    expect(dispatchedThinking).toBe("low");
+    expect(result.details.tags).toContain("thinking: low");
   });
 
   it("runs an explicitly requested model over a pinned agent default", async () => {
