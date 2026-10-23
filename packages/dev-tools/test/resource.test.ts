@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,8 +75,8 @@ function fixture(platform: string, processes: ProcessSample[], overrides: Partia
 	});
 }
 
-/** Fake sampler recording its options, sample signals and disposal. */
-function fakeSampler(make: (monotonicTimeMs: number) => ResourceSnapshot, fail?: Error) {
+/** Fake sampler recording its options, sample signals and disposal; `disposeFailure` makes disposal reject. */
+function fakeSampler(make: (monotonicTimeMs: number) => ResourceSnapshot, fail?: Error, disposeFailure?: Error) {
 	const state = { options: undefined as SamplerOptions | undefined, samples: 0, disposed: 0 };
 	const createSampler = (options: SamplerOptions): ResourceSampler => {
 		state.options = options;
@@ -88,6 +88,7 @@ function fakeSampler(make: (monotonicTimeMs: number) => ResourceSnapshot, fail?:
 			},
 			async dispose() {
 				state.disposed++;
+				if (disposeFailure) throw disposeFailure;
 			},
 		};
 	};
@@ -112,13 +113,17 @@ function options(make: (monotonicTimeMs: number) => ResourceSnapshot, extra: Res
 	return { fake, calls, resolved };
 }
 
-/** Spy on the real published sampler's disposal. */
+/** Spy on the real published sampler: its raw samples, and its disposal. */
 function realSampler() {
-	const state = { disposed: 0 };
+	const state = { disposed: 0, samples: [] as ResourceSnapshot[] };
 	const createSampler = (samplerOptions: SamplerOptions): ResourceSampler => {
 		const sampler = createResourceSampler(samplerOptions);
 		return {
-			sample: (signal) => sampler.sample(signal),
+			async sample(signal) {
+				const sample = await sampler.sample(signal);
+				state.samples.push(sample);
+				return sample;
+			},
 			async dispose() {
 				state.disposed++;
 				await sampler.dispose();
@@ -131,6 +136,18 @@ function realSampler() {
 async function exited(child: ReturnType<typeof spawn>): Promise<void> {
 	if (child.exitCode !== null || child.signalCode !== null) return;
 	await new Promise((resolve) => child.once("exit", resolve));
+}
+
+/** Live direct children of this process from an independent `ps`, excluding that `ps` itself. */
+function directChildren(): number[] {
+	const ps = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8", env: { LC_ALL: "C" } });
+	if (ps.status !== 0) throw new Error(`ps failed: ${ps.status}`);
+	return ps.stdout
+		.trim()
+		.split("\n")
+		.map((line) => line.trim().split(/\s+/).map(Number))
+		.filter(([pid, ppid]) => ppid === process.pid && pid !== ps.pid)
+		.map(([pid]) => pid as number);
 }
 
 describe("resource_snapshot on the real host through the published sampler", () => {
@@ -173,38 +190,93 @@ describe("resource_snapshot on the real host through the published sampler", () 
 	});
 
 	it.runIf(process.platform === "darwin" || process.platform === "linux")(
-		"discovers a real child under its real parent, matching an independent ps read",
+		"discovers a real child under its real parent in the full sample, matching an independent ps read",
 		async () => {
-			// Busy for Linux interval-CPU ranking, resident for Darwin RSS ranking.
-			const child = spawn(process.execPath, ["-e", "const b = Buffer.alloc(160 * 2 ** 20, 1); for (;;) b[0]++"], {
-				stdio: "ignore",
-			});
+			// Idle and small: inclusion is asserted against the sampler's complete scan, not a host-dependent top-50 rank.
+			const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], { stdio: "ignore" });
 			try {
 				const pid = child.pid;
 				if (pid === undefined) throw new Error("child did not start");
 				await new Promise((resolve) => setTimeout(resolve, 300));
-				const snapshot = await resourceSnapshot(50, {}, undefined, 200);
-				if (snapshot.processes.status !== "available") throw new Error("missing process metadata");
-				const found = snapshot.processes.entries.find((entry) => entry.pid === pid);
-				expect(found, JSON.stringify(snapshot.processes.entries.slice(0, 5))).toBeDefined();
+				const real = realSampler();
+				const snapshot = await resourceSnapshot(50, { createSampler: real.createSampler }, undefined, 200);
+				const raw = real.state.samples.at(-1);
+				if (raw === undefined || snapshot.processes.status !== "available") throw new Error("missing process metadata");
+				expect(raw.coverage.reasons).not.toContain("process-collection-unavailable");
+				const found = raw.processes.find((entry) => entry.pid === pid);
+				expect(found, `child ${pid} absent from ${raw.processes.length} sampled processes`).toBeDefined();
 				expect(found?.parentPid).toBe(process.pid);
 				// Linux reports the main thread's comm (e.g. `node-MainThread`), never a path.
-				expect(found?.executable).toMatch(/^node/);
-				expect(found?.executable).not.toContain("/");
+				expect(found?.name).toMatch(/^node/);
+				expect(found?.name).not.toContain("/");
 				const ps = await execFileAsync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { env: { LC_ALL: "C" } });
 				expect(Number(ps.stdout.trim())).toBe(found?.parentPid);
-				if (process.platform === "linux") {
-					expect(found?.cpu.state).toBe("available");
-					expect(snapshot.processes.ranking).toBe("interval-cpu");
-				} else {
-					expect(found?.cpu.state).toBe("unavailable");
+				// Present in both scans, so Linux measures it; Darwin never can.
+				expect(found?.cpu.state).toBe(process.platform === "linux" ? "available" : "unavailable");
+				// The bounded tool output is exactly a projection of that same scan.
+				const { entries } = snapshot.processes;
+				expect(entries).toHaveLength(Math.min(50, raw.processes.length));
+				const byPid = new Map(raw.processes.map((entry) => [entry.pid, entry]));
+				for (const entry of entries) {
+					const source = byPid.get(entry.pid);
+					expect(entry).toEqual({
+						pid: source?.pid,
+						parentPid: source?.parentPid,
+						cpu: source?.cpu,
+						rssBytes: source?.rssBytes,
+						executable: source?.name,
+					});
 				}
+				if (raw.processes.length <= 50) expect(entries.map((entry) => entry.pid)).toContain(pid);
 			} finally {
 				child.kill("SIGKILL");
 				await exited(child);
 			}
 		},
 		20_000,
+	);
+
+	it.runIf(process.platform === "darwin" || process.platform === "linux")(
+		"cancels the real sampler while its first scan is in flight, then disposes and leaves no helper",
+		async () => {
+			const controller = new AbortController();
+			const reason = new Error("cancelled mid-sample");
+			const state = { disposed: 0, pendingAtAbort: false, sampleCalls: 0 };
+			const createSampler = (samplerOptions: SamplerOptions): ResourceSampler => {
+				const sampler = createResourceSampler(samplerOptions);
+				return {
+					sample(signal) {
+						state.sampleCalls++;
+						let settled = false;
+						const inner = sampler.sample(signal);
+						inner.then(
+							() => {
+								settled = true;
+							},
+							() => {
+								settled = true;
+							},
+						);
+						// Let the scan start its helper or reads, then abort while it is still running.
+						setImmediate(() => {
+							state.pendingAtAbort = !settled;
+							controller.abort(reason);
+						});
+						return inner;
+					},
+					async dispose() {
+						state.disposed++;
+						await sampler.dispose();
+					},
+				};
+			};
+			const before = new Set(directChildren());
+			await expect(resourceSnapshot(1, { createSampler }, controller.signal, INTERVAL_MS)).rejects.toBe(reason);
+			expect(state.pendingAtAbort).toBe(true);
+			expect(state.sampleCalls).toBe(1);
+			expect(state.disposed).toBe(1);
+			expect(directChildren().filter((pid) => !before.has(pid))).toEqual([]);
+		},
 	);
 
 	it("rejects a pre-aborted call and disposes the real sampler without optional probes", async () => {
@@ -409,6 +481,60 @@ describe("resource_snapshot mapping", () => {
 		await expect(resourceSnapshot(1, { createSampler: fake.createSampler }, undefined, INTERVAL_MS)).rejects.toThrow(
 			"sampler exploded",
 		);
+		expect(fake.state.disposed).toBe(1);
+	});
+
+	it("rejects a Darwin cancellation that lands during the pressure probe after the second sample", async () => {
+		const controller = new AbortController();
+		const reason = new Error("cancelled after sampling");
+		const { fake, resolved } = options(fixture("darwin", [proc(5, 50, darwinCpu)]), {
+			run: async () => {
+				controller.abort(reason);
+				return { ...completed(""), aborted: true, exitCode: null, termSignal: "SIGTERM" };
+			},
+		});
+		await expect(resourceSnapshot(1, resolved, controller.signal, INTERVAL_MS)).rejects.toBe(reason);
+		expect(fake.state.samples).toBe(2);
+		expect(fake.state.disposed).toBe(1);
+	});
+
+	it("rejects a Linux cancellation that lands during the MemAvailable read after the second sample", async () => {
+		const controller = new AbortController();
+		const reason = new Error("cancelled after sampling");
+		const { fake, resolved } = options(fixture("linux", [proc(5, 50, warming)]), {
+			readFile: async () => {
+				controller.abort(reason);
+				throw new Error("read interrupted");
+			},
+		});
+		await expect(resourceSnapshot(1, resolved, controller.signal, INTERVAL_MS)).rejects.toBe(reason);
+		expect(fake.state.samples).toBe(2);
+		expect(fake.state.disposed).toBe(1);
+	});
+
+	it("keeps the sampler failure, not a later disposal failure", async () => {
+		const fake = fakeSampler(fixture("linux", []), new Error("sampler exploded"), new Error("dispose exploded"));
+		await expect(resourceSnapshot(1, { createSampler: fake.createSampler }, undefined, INTERVAL_MS)).rejects.toThrow(
+			"sampler exploded",
+		);
+		expect(fake.state.disposed).toBe(1);
+	});
+
+	it("keeps the cancellation, not a later disposal failure", async () => {
+		const fake = fakeSampler(fixture("linux", []), undefined, new Error("dispose exploded"));
+		const controller = new AbortController();
+		const reason = new Error("cancelled by caller");
+		controller.abort(reason);
+		await expect(
+			resourceSnapshot(1, { createSampler: fake.createSampler }, controller.signal, INTERVAL_MS),
+		).rejects.toBe(reason);
+		expect(fake.state.disposed).toBe(1);
+	});
+
+	it("rejects with the disposal failure when the snapshot itself succeeded", async () => {
+		const fake = fakeSampler(fixture("linux", [proc(5, 50, warming)]), undefined, new Error("dispose exploded"));
+		const { resolved } = options(fixture("linux", []), { createSampler: fake.createSampler });
+		await expect(resourceSnapshot(1, resolved, undefined, INTERVAL_MS)).rejects.toThrow("dispose exploded");
 		expect(fake.state.disposed).toBe(1);
 	});
 

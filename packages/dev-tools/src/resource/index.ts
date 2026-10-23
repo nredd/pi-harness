@@ -172,7 +172,9 @@ function validate(name: string, value: number, min: number, max: number): void {
  * Sample the host twice, `intervalMs` apart, through one private sampler.
  *
  * Requests no arguments or environments (names are OS-reported titles) and no process-to-agent attribution. Cancellation and sampler
- * failures reject; the sampler is always disposed, which awaits any helper reaping.
+ * failures reject; the sampler is always disposed, which awaits any helper reaping. A cancellation that lands after the
+ * second sample, while optional memory probes run, still rejects. When the call already failed, that primary error
+ * wins over a disposal failure; a disposal failure after a successful snapshot rejects.
  */
 export async function resourceSnapshot(
 	limit: number,
@@ -184,28 +186,47 @@ export async function resourceSnapshot(
 	validate("interval", intervalMs, MIN_INTERVAL_MS, MAX_INTERVAL_MS);
 	const options: Required<ResourceSnapshotOptions> = { ...defaultOptions, ...overrides };
 	const sampler = options.createSampler({ maxDurationMs: SAMPLE_BUDGET_MS });
+	let snapshot: Snapshot;
 	try {
-		const first = await sampler.sample(signal);
-		await delay(intervalMs, undefined, { signal });
-		const second = await sampler.sample(signal);
-		const [one, five, fifteen] = second.loadAverage;
-		return {
-			platform: second.platform,
-			interval: { requestedMs: intervalMs, measuredMs: second.monotonicTimeMs - first.monotonicTimeMs },
-			cpu: {
-				logicalCpus: second.logicalCpus,
-				loadAverage:
-					second.loadAverage.length === 3 && one !== undefined && five !== undefined && fifteen !== undefined
-						? [one, five, fifteen]
-						: null,
-				utilization: second.cpu,
-			},
-			memory: { status: "available", ...second.memory, ...(await memoryExtras(options, second, signal)) },
-			processes: summarizeProcesses(second, limit),
-		};
-	} finally {
-		await sampler.dispose();
+		snapshot = await collectSnapshot(sampler, options, limit, intervalMs, signal);
+	} catch (error) {
+		// The caller needs the sample, abort or probe failure, not a secondary cleanup failure.
+		await sampler.dispose().catch(() => undefined);
+		throw error;
 	}
+	await sampler.dispose();
+	return snapshot;
+}
+
+/** Two samples `intervalMs` apart plus optional memory figures. Disposal is the caller's job. */
+async function collectSnapshot(
+	sampler: ResourceSampler,
+	options: Required<ResourceSnapshotOptions>,
+	limit: number,
+	intervalMs: number,
+	signal?: AbortSignal,
+): Promise<Snapshot> {
+	const first = await sampler.sample(signal);
+	await delay(intervalMs, undefined, { signal });
+	const second = await sampler.sample(signal);
+	// Optional probes swallow their own failures, including an abort; never return a snapshot after cancellation.
+	const extras = await memoryExtras(options, second, signal);
+	signal?.throwIfAborted();
+	const [one, five, fifteen] = second.loadAverage;
+	return {
+		platform: second.platform,
+		interval: { requestedMs: intervalMs, measuredMs: second.monotonicTimeMs - first.monotonicTimeMs },
+		cpu: {
+			logicalCpus: second.logicalCpus,
+			loadAverage:
+				second.loadAverage.length === 3 && one !== undefined && five !== undefined && fifteen !== undefined
+					? [one, five, fifteen]
+					: null,
+			utilization: second.cpu,
+		},
+		memory: { status: "available", ...second.memory, ...extras },
+		processes: summarizeProcesses(second, limit),
+	};
 }
 
 function formatMetric(metric: Metric<number>): string {

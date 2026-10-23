@@ -76,10 +76,14 @@ What each package must satisfy:
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
 - Every import is a `node:` builtin, a host module, a declared runtime dependency, or a relative path
   inside the package. No `@nredd/*` sibling, with one narrow exception: an exact `SHARED_LIBRARIES`
-  specifier (today only the `library=True` `@nredd/pi-resource-sampler`) that the importing plugin's
-  contract also declares as an exact runtime dependency. Deep imports, undeclared or ranged
-  dependencies, `workspace:`/`file:` specs, imports from a library and imports from a standalone
-  artifact all stay violations. `@nredd/pi-dev-tools` pins `@nredd/pi-resource-sampler` `0.1.0`. The stats artifact (`dist/`) may import only `node:` builtins: the standalone
+  specifier (only the `library=True` `@nredd/pi-resource-sampler`) that the importing plugin's
+  contract also declares as an exact runtime dependency at `RESOURCE_SAMPLER_VERSION`. Both constants
+  are defined once, in `scripts/package_contracts.py`, and serve both consumers: dev-tools'
+  `resource_snapshot` (#128) and session-kit's `/mon` (#123). Bare specifier only. Deep imports,
+  undeclared or ranged dependencies, `workspace:`/`file:` specs, imports from a library and imports
+  from a standalone artifact (session-kit's stats `dist/`) all stay violations; whichever PR lands
+  second keeps this one definition and the library/standalone guard. The stats artifact (`dist/`)
+  may import only `node:` builtins: the standalone
   check runs before relative-import resolution, so `../src/index.ts` is rejected even if it exists
 - Imports are read with the repository's installed TypeScript 7.0.2 parser (`scripts/import_audit.ts`
   via `typescript/unstable/sync`, which drives the bundled `tsgo`; no new dependency, one batched
@@ -108,14 +112,21 @@ What each package must satisfy:
 - Stock Pi, `--mode json` with `--no-extensions --extension <installed dir>` (only that package),
   `--no-mcp`, `--offline`, no skills/templates/themes/context files, `--no-approve`:
   - dev-tools: a real `git_status` result on a disposable repo (`untracked.txt`), and an error result
-    outside a repository. Then `resource_snapshot` with `process_limit: 50`: the gate's own busy,
-    160 MiB resident `node` child must appear with `parentPid` equal to the gate process (real
-    parent-child discovery through the packed plugin and its installed sampler), entries carry only
-    `pid`/`parentPid`/`cpu`/`rssBytes`/`executable`, and ranking is `interval-cpu` on Linux, `rss`
-    on Darwin. `process_limit: 51` must be an error result. Evidence records the ranking, the refusal
-    text and the installed sampler's locked registry integrity (a real, unlinked directory at exactly
-    `0.1.0`). Cancellation is not driven through headless Pi; the package tests cancel the same
-    registry-installed sampler mid-sample and mid-interval
+    outside a repository. Then a real parent-child discovery: the gate starts an idle, small `node`
+    child, and one complete, unranked scan by the sampler the installed plugin directory resolves
+    (checked to be the installed registry copy) must contain exactly that PID with `parentPid` equal to
+    the gate process, confirmed by an independent `/bin/ps`. Inclusion is not tied to the tool's top-50
+    ranking, so a host with many larger or busier processes cannot hide it; the probe prints only PIDs.
+    With the child still running, `resource_snapshot` with `process_limit: 50` must return exactly
+    `min(50, coverage.sampled)` entries carrying only `pid`/`parentPid`/`cpu`/`rssBytes`/`executable`,
+    ranked `interval-cpu` on Linux and `rss` on Darwin. `process_limit: 51` must be an error result.
+    Evidence records the ranking, the refusal text and the sampler integrity, which must equal the
+    registry's own `npm view @nredd/pi-resource-sampler@<RESOURCE_SAMPLER_VERSION> dist` integrity, with
+    the lock's `resolved` equal to the published tarball URL (queried through the credential-free
+    sandbox; URLs in errors drop userinfo and query). Cancellation is not driven through headless Pi.
+    The package tests cancel the registry-installed sampler while its first scan is in flight (checked
+    pending at abort, no helper child left) and mid-interval; faked samplers cover a pre-aborted call,
+    cancellation after the second sample, and disposal failures (the primary error or abort wins)
   - session-kit: real `monitor_start`/`monitor_read` output, then the exact packed bytes of
     `dist/pi-stats-export.mjs` copied ALONE into a fresh directory (no `src/`, package or
     `node_modules` beside or above it) and run with only `node` from another unrelated directory,

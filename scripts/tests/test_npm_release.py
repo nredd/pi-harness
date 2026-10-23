@@ -416,7 +416,9 @@ def test_release_contract_gives_each_stock_descriptor_all_other_siblings(
             "untracked": ["fixture"],
             "failure_path": "substituted",
             "resource_ranking": "rss",
-            "resource_sampler_integrity": "sha512-" + "B" * 86 + "==",
+            "resource_sampler_integrity": json.loads((pc.REPO_ROOT / "package-lock.json").read_text())[
+                "packages"
+            ]["packages/dev-tools/node_modules/@nredd/pi-resource-sampler"]["integrity"],
             "resource_failure_path": "process_limit 51 refused",
         }
 
