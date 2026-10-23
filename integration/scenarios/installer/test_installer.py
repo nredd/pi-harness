@@ -19,9 +19,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import selectors
 import shutil
 import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -331,6 +333,50 @@ def test_existing_config_needs_consent_and_survives(
     assert json.loads((backup / "settings.json").read_text())["packages"] == ["npm:pi-mine@1.0.0"]
 
 
+def kill_at_marker(process: subprocess.Popen[str], marker: str, timeout: float) -> str:
+    """Wait at most `timeout` seconds for a line prefix, always kill and reap the group.
+
+    Parameters:
+        process (subprocess.Popen[str]): child started in its own session with piped stdout.
+        marker (str): line prefix at which to interrupt staging.
+        timeout (float): marker detection deadline in seconds.
+
+    Returns:
+        str: bounded captured output through the marker.
+
+    Raises:
+        AssertionError: the marker is absent, late, or output exceeds one MiB.
+    """
+    output = bytearray()
+    deadline = time.monotonic() + timeout
+    try:
+        assert process.stdout is not None, "child stdout must be piped"
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, f"Timed out waiting for '{marker}': {output.decode(errors='replace')}"
+                if not selector.select(remaining):
+                    continue
+                chunk = os.read(process.stdout.fileno(), 65536)
+                assert chunk, f"Child exited before '{marker}': {output.decode(errors='replace')}"
+                output.extend(chunk)
+                assert len(output) <= 1024 * 1024, "Child output exceeded one MiB before marker"
+                if any(line.startswith(marker.encode()) for line in output.split(b"\n")):
+                    return output.decode(errors="replace")
+    finally:
+        # Reap an already-exited leader first: macOS may reject signals to its zombie-only group.
+        process.poll()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        finally:
+            process.wait(timeout=60)
+            if process.stdout is not None:
+                process.stdout.close()
+
+
 def test_killed_install_changes_nothing_and_rerun_completes(
     spec: str, stack_sha: str, uv_cache: Path, home: Path
 ) -> None:
@@ -347,15 +393,8 @@ def test_killed_install_changes_nothing_and_rerun_completes(
         text=True,
         start_new_session=True,
     )
-    assert process.stdout is not None
-    seen = []
-    for line in process.stdout:
-        seen.append(line)
-        if line.startswith(KILL_AFTER):
-            os.killpg(process.pid, signal.SIGKILL)
-            break
-    process.wait(timeout=60)
-    assert process.returncode == -signal.SIGKILL, "".join(seen)
+    seen = kill_at_marker(process, KILL_AFTER, INSTALL_TIMEOUT)
+    assert process.returncode == -signal.SIGKILL, seen
     assert digest_tree(home) == before
     assert not (home / ".local" / "share" / "pi-stack" / "transaction.json").exists()
     rerun = run(command(spec, stack_sha, "--yes"), environment(home, uv_cache))

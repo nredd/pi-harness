@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness.headless import run_headless
-from harness.stack import find_package, load_stack
+from harness.stack import find_package, load_stack, package_manifest
 
 if TYPE_CHECKING:
     from harness.sandbox import Sandbox
@@ -148,7 +148,7 @@ def test_computer_use_headless_exclusion(sandbox: Sandbox) -> None:
     """
     packages = sandbox.settings()["packages"]
     directory = find_package("pi-computer-use", packages, sandbox.agent_dir)
-    manifest = json.loads((directory / "package.json").read_text())
+    manifest = package_manifest(directory)
     assert manifest["pi"]["extensions"], manifest
     evidence = json.loads((sandbox.agent_dir / "stack-evidence.json").read_text())
     installed = next(item for item in evidence["packages"] if item["name"].endswith("pi-computer-use"))

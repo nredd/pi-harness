@@ -48,6 +48,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
+from harness.files import NonRegularFileError, entry_kind
+from harness.files import read_regular as read_regular_file
 from harness.promotion import (
     SHA_PATTERN,
     SNAPSHOT_ASSET,
@@ -72,6 +74,7 @@ from harness.release import (
 )
 from harness.sandbox import deep_merge
 from harness.stack import (
+    CORE_TAG,
     install_overrides,
     installed_identities,
     package_agents_policy,
@@ -567,28 +570,10 @@ def read_regular(path: Path, *, follow: bool) -> str | None:
         UnsupportedError: the path, or the target it is allowed to follow, is not a regular file.
         OSError: the file cannot be read.
     """
-    kind = entry_kind(path)
-    if kind == "symlink" and follow:
-        try:
-            kind = mode_kind(path.stat().st_mode)
-        except FileNotFoundError:
-            return None
-    if kind is None:
-        return None
-    accepted = "a regular file or a link to one" if follow else "a regular file"
-    if kind != "file":
-        raise UnsupportedError(
-            f"'{path}' is a {kind}; the installer only reads {accepted} there. "
-            "Move it aside yourself, nothing changed"
-        )
-    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | (0 if follow else os.O_NOFOLLOW)
-    with os.fdopen(os.open(path, flags)) as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise UnsupportedError(
-                f"'{path}' stopped being a regular file while it was read; the installer only reads "
-                f"{accepted} there. Move it aside yourself, nothing changed"
-            )
-        return handle.read()
+    try:
+        return read_regular_file(path, follow=follow)
+    except NonRegularFileError as error:
+        raise UnsupportedError(str(error)) from error
 
 
 def packages_ready(layout: Layout, verified: Verified) -> bool:
@@ -628,6 +613,7 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
     stack, plan = verified.stack, Plan()
     prefix = layout.core(stack.core.tag)
     if not core_ready(layout, stack):
+        require_restorable_kind(layout, prefix)
         plan.install_core = True
         # A dangling link is still replaced, so it counts as existing state (consent required).
         target = plan.overwrites if prefix.exists(follow_symlinks=False) else plan.creates
@@ -711,7 +697,10 @@ def require_restorable_kind(layout: Layout, target: Path, outcome: str = "nothin
     Raises:
         UnsupportedError: `target` exists as a kind its backup may not hold.
     """
-    _, kinds = journaled_paths(layout)[target]
+    try:
+        _, kinds = journaled_path(layout, target)
+    except ValueError as error:
+        raise UnsupportedError(f"Cannot safely replace '{target}': {error}; {outcome}") from error
     kind = entry_kind(target)
     if kind is not None and kind not in kinds:
         raise UnsupportedError(
@@ -942,40 +931,27 @@ def journaled_paths(layout: Layout) -> dict[Path, tuple[str, frozenset[str]]]:
     )
 
 
-def entry_kind(path: Path) -> str | None:
-    """Classify a path without following a final symlink.
+def journaled_path(layout: Layout, target: Path) -> tuple[str, frozenset[str]]:
+    """Resolve one switch target, including an exact versioned core prefix for offline recovery.
 
     Parameters:
-        path (Path): entry.
+        layout (Layout): installer paths.
+        target (Path): canonical target path.
 
     Returns:
-        str | None: the `mode_kind` of the entry itself; `None` when absent.
+        tuple[str, frozenset[str]]: backup basename and restorable kinds.
+
+    Raises:
+        ValueError: the target is outside the installer layout or its core parent is not real.
     """
-    try:
-        return mode_kind(path.lstat().st_mode)
-    except FileNotFoundError:
-        return None
-
-
-def mode_kind(mode: int) -> str:
-    """Name the kind of entry a `stat` mode describes.
-
-    Parameters:
-        mode (int): `st_mode`.
-
-    Returns:
-        str: `symlink`, `directory`, `file` (regular), `fifo`, `socket`, `device` or `other`.
-    """
-    kinds = (
-        (stat.S_ISLNK, "symlink"),
-        (stat.S_ISDIR, "directory"),
-        (stat.S_ISREG, "file"),
-        (stat.S_ISFIFO, "fifo"),
-        (stat.S_ISSOCK, "socket"),
-        (stat.S_ISCHR, "device"),
-        (stat.S_ISBLK, "device"),
-    )
-    return next((name for test, name in kinds if test(mode)), "other")
+    known = journaled_paths(layout).get(target)
+    if known is not None:
+        return known
+    if target.parent == layout.root / "core" and CORE_TAG.fullmatch(target.name):
+        if entry_kind(target.parent) not in {None, "directory"}:
+            raise ValueError(f"Core parent '{target.parent}' is not a real directory")
+        return f"core-{target.name}", frozenset({"directory", "symlink"})
+    raise ValueError(f"step target '{target}' is not a path the installer replaces")
 
 
 def read_journal(path: Path) -> object:
@@ -1038,14 +1014,14 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
             raise ValueError(f"'{directory}' is not a real directory")
     if entry_kind(backups) == "directory" and backups.lstat().st_uid != os.getuid():
         raise ValueError(f"'{backups}' is not owned by the current user")
-    allowed = {str(path): (path, name, kinds) for path, (name, kinds) in journaled_paths(layout).items()}
     steps: list[Step] = []
     for raw in raw_steps:
         if not isinstance(raw, dict) or set(raw) != {"target", "backup"}:
             raise ValueError(f"step {raw!r} is not a `{{target, backup}}` object")
-        if raw["target"] not in allowed:
-            raise ValueError(f"step target '{raw['target']}' is not a path the installer replaces")
-        target, name, kinds = allowed[raw["target"]]
+        if not isinstance(raw["target"], str) or str(Path(raw["target"])) != raw["target"]:
+            raise ValueError(f"step target '{raw['target']}' is not a canonical path")
+        target = Path(raw["target"])
+        name, kinds = journaled_path(layout, target)
         if any(step.target == target for step in steps):
             raise ValueError(f"step target '{target}' is recorded twice")
         backup = backups / name
@@ -1210,15 +1186,18 @@ def stage(layout: Layout, verified: Verified, plan: Plan, staging: Path) -> Path
         for leftover in ("fetch-home", "npm-cache", "tui-resource"):
             remove(staged_core / leftover)
         write_atomic(staged_core / CORE_MARKER, json.dumps(stack.core.model_dump(mode="json"), indent=2))
-        if prefix.exists(follow_symlinks=False):
-            remove(prefix)
-        prefix.parent.mkdir(parents=True, exist_ok=True)
-        staged_core.replace(prefix)
+        prefix = staged_core
     return install_packages(verified, prefix / "bin" / "pi", staging) if plan.install_packages else None
 
 
 def switch(
-    layout: Layout, verified: Verified, plan: Plan, staged_agent: Path | None, journal: Journal
+    layout: Layout,
+    verified: Verified,
+    plan: Plan,
+    staged_agent: Path | None,
+    journal: Journal,
+    *,
+    staged_core: Path | None = None,
 ) -> None:
     """Move staged state into place, journaling every replacement first.
 
@@ -1228,9 +1207,17 @@ def switch(
         plan (Plan): planned changes.
         staged_agent (Path | None): staged agent tree, when packages changed.
         journal (Journal): durable step record.
+        staged_core (Path | None): verified private core prefix, when the core changed.
     """
     layout.agent_dir.mkdir(parents=True, exist_ok=True)
     journal.backups.mkdir(parents=True, exist_ok=True)
+    if staged_core is not None:
+        prefix = layout.core(verified.stack.core.tag)
+        backup = journal.record(prefix, f"core-{verified.stack.core.tag}")
+        if backup is not None:
+            prefix.replace(backup)
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        staged_core.replace(prefix)
     if staged_agent is not None:
         # Every existing tree is replaced, as planned, even when the stack stages none of it: a
         # leftover `git` tree is backed up rather than kept beside packages it no longer declares.
@@ -1303,7 +1290,14 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> Path:
         staged_agent = stage(layout, verified, plan, staging)
         journal = Journal(layout, backups)
         try:
-            switch(layout, verified, plan, staged_agent, journal)
+            switch(
+                layout,
+                verified,
+                plan,
+                staged_agent,
+                journal,
+                staged_core=staging / "core" if plan.install_core else None,
+            )
         except BaseException as error:
             restored = rollback(layout)
             raise InstallError(
@@ -1353,13 +1347,29 @@ def locked(layout: Layout) -> Iterator[None]:
 
     Raises:
         InstallError: another installer holds the lock.
+        UnsupportedError: the lock is not an owned regular file, or is writable by others.
     """
     layout.root.mkdir(parents=True, exist_ok=True)
-    with (layout.root / "lock").open("w") as lock:
+    path = layout.root / "lock"
+    kind = entry_kind(path)
+    if kind not in {None, "file"}:
+        raise UnsupportedError(f"Lock '{path}' is a {kind}; move it aside yourself, nothing changed")
+    try:
+        descriptor = os.open(
+            path, os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_NOCTTY, 0o600
+        )
+    except OSError as error:
+        raise UnsupportedError(f"Cannot safely open lock '{path}'; nothing changed: {error}") from error
+    with os.fdopen(descriptor, "rb", buffering=0) as lock:
+        info = os.fstat(lock.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise UnsupportedError(
+                f"Lock '{path}' must be a regular file you own, not writable by others; nothing changed"
+            )
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise InstallError(f"Another installer holds '{layout.root / 'lock'}'") from error
+            raise InstallError(f"Another installer holds '{path}'") from error
         yield
 
 

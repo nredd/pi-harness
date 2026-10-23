@@ -1374,11 +1374,12 @@ def special_home(tmp_path: Path) -> tuple[Path, Path]:
     return home / ".pi" / "agent", root
 
 
-def run_child(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def run_child(tmp_path: Path, timeout: float = 60) -> subprocess.CompletedProcess[str]:
     """Run `install.main` with `--yes` in a child confined to `special_home`, killed after 60 s.
 
     Parameters:
         tmp_path (Path): directory `special_home` seeded.
+        timeout (float): hard child deadline in seconds.
 
     Returns:
         subprocess.CompletedProcess[str]: the finished child.
@@ -1399,7 +1400,7 @@ def run_child(tmp_path: Path) -> subprocess.CompletedProcess[str]:
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=timeout,
         check=False,
     )
 
@@ -1530,3 +1531,189 @@ def test_installer_workflow_token_is_main_only() -> None:
     ]
     assert text.count("github.token") == 1
     assert "secrets." not in text
+
+
+@pytest.mark.parametrize("kind", ["fifo", "fifo-link", "socket"])
+def test_special_lock_is_bounded_and_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A hostile lock entry never blocks or changes its target."""
+    _, root = special_home(tmp_path)
+    make_special(root / "lock", kind, monkeypatch)
+    before = tree(tmp_path)
+    result = run_child(tmp_path, timeout=3)
+    assert result.returncode == ExitCode.UNSUPPORTED, result.stderr
+    assert "lock" in result.stderr
+    assert tree(tmp_path) == before
+
+
+def test_lock_symlink_does_not_truncate_target(tmp_path: Path) -> None:
+    """Reject a lock link before touching the existing target's bytes."""
+    _, root = special_home(tmp_path)
+    target = root / "mine"
+    target.write_text("keep me")
+    (root / "lock").symlink_to(target)
+    result = run_child(tmp_path, timeout=3)
+    assert target.read_text() == "keep me"
+    assert result.returncode == ExitCode.UNSUPPORTED, result.stderr
+
+
+@pytest.mark.parametrize("untrusted", ["owner", "mode"])
+def test_lock_rejects_untrusted_regular_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, untrusted: str
+) -> None:
+    """Reject foreign ownership or writable-by-others locks without changing their contents."""
+    harness = Harness(tmp_path, monkeypatch)
+    lock = harness.layout.root / "lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("keep me")
+    if untrusted == "owner":
+        monkeypatch.setattr(install.os, "getuid", lambda: lock.stat().st_uid + 1)
+    else:
+        lock.chmod(0o666)
+    with (
+        pytest.raises(UnsupportedError, match="must be a regular file you own"),
+        install.locked(harness.layout),
+    ):
+        pytest.fail("untrusted lock acquired")
+    assert lock.read_text() == "keep me"
+
+
+def test_lock_keeps_bytes_and_excludes_contenders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lock is never truncated, including by a losing contender."""
+    harness = Harness(tmp_path, monkeypatch)
+    lock = harness.layout.root / "lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("keep me")
+    with (
+        install.locked(harness.layout),
+        pytest.raises(InstallError, match="Another installer"),
+        install.locked(harness.layout),
+    ):
+        pytest.fail("second installer acquired lock")
+    assert lock.read_text() == "keep me"
+    with install.locked(harness.layout):
+        assert lock.read_text() == "keep me"
+
+
+@pytest.mark.parametrize("race", ["static", "lookup", "open"])
+def test_rerun_manifest_read_race_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, race: str
+) -> None:
+    """Reject a static FIFO, and a swap after lookup, on the real packages_ready rerun path."""
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    script = """
+import os, sys
+from pathlib import Path
+from harness import install, stack
+from harness.promotion import load_promoted_snapshot
+snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
+sources = [stack.source_string(p) for p in snapshot.stack.sources]
+layout = install.Layout.from_env({}, Path(sys.argv[3]), None)
+original = stack.package_directory
+def swap(source, agent):
+    path = original(source, agent)
+    manifest = path / "package.json"
+    manifest.unlink()
+    os.mkfifo(manifest)
+    return path
+if sys.argv[4] == "lookup":
+    stack.package_directory = swap
+elif sys.argv[4] == "open":
+    original_open = os.open
+    manifest = original(sources[0], layout.agent_dir) / "package.json"
+    def swap_on_open(path, flags, *args):
+        if path == manifest:
+            path.unlink()
+            os.mkfifo(path)
+        return original_open(path, flags, *args)
+    os.open = swap_on_open
+else:
+    path = original(sources[0], layout.agent_dir) / "package.json"
+    path.unlink()
+    os.mkfifo(path)
+assert not install.packages_ready(layout, install.Verified(snapshot, sources, {}))
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(FIXTURE), SHA, str(harness.home), race],
+        env={"PYTHONPATH": str(INTEGRATION)},
+        capture_output=True,
+        text=True,
+        timeout=3,
+        check=True,
+    )
+
+
+def test_failed_package_staging_preserves_existing_core(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live link to a drifted core keeps its original bytes when package staging fails."""
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    prefix = harness.layout.core(harness.snapshot.stack.core.tag)
+    (prefix / install.CORE_MARKER).unlink()
+    (prefix / "mine").write_text("old core")
+    harness.fail.append(harness.verified.sources[0])
+    (harness.layout.agent_dir / "npm" / "node_modules").rename(tmp_path / "old-packages")
+    before = tree(harness.home)
+    with pytest.raises(InstallError, match=r"pi install.*failed"):
+        harness.run(yes=True)
+    assert tree(harness.home) == before
+
+
+@pytest.mark.parametrize("kind", ["fifo", "socket"])
+def test_special_core_prefix_is_refused_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A non-restorable core prefix gets the documented semantic refusal, not OSError."""
+    harness = Harness(tmp_path, monkeypatch)
+    prefix = harness.layout.core(harness.snapshot.stack.core.tag)
+    prefix.parent.mkdir(parents=True)
+    make_special(prefix, kind, monkeypatch)
+    with pytest.raises(UnsupportedError, match="only replaces"):
+        harness.run(yes=True)
+    assert not harness.fetched
+
+
+@pytest.mark.parametrize("interrupt_switch", [False, True])
+def test_core_replacement_is_backed_up_and_offline_recoverable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupt_switch: bool
+) -> None:
+    """A drifted live core is backed up, and an interrupted switch restores it offline."""
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    prefix = harness.layout.core(harness.snapshot.stack.core.tag)
+    (prefix / install.CORE_MARKER).unlink()
+    (prefix / "mine").write_text("old core")
+    before = tree(harness.home)
+    plan = plan_install(harness.layout, harness.verified)
+    assert plan.install_core
+    assert not plan.install_packages
+    assert plan.link is None
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    staged_agent = install.stage(harness.layout, harness.verified, plan, staging)
+    assert tree(harness.home) == before
+    backups = harness.layout.root / "backups" / "core-replacement"
+    journal = Journal(harness.layout, backups)
+    if interrupt_switch:
+
+        def interrupt_file(*args: object) -> None:
+            """Interrupt after the core switch, before writing the installed state."""
+            raise RuntimeError("interrupt")
+
+        monkeypatch.setattr(install, "replace_file", interrupt_file)
+        with pytest.raises(RuntimeError, match="interrupt"):
+            switch(
+                harness.layout, harness.verified, plan, staged_agent, journal, staged_core=staging / "core"
+            )
+        assert (backups / f"core-{prefix.name}" / "mine").read_text() == "old core"
+        assert rollback(harness.layout)
+        assert tree(harness.home) == before
+    else:
+        switch(harness.layout, harness.verified, plan, staged_agent, journal, staged_core=staging / "core")
+        journal.commit()
+        assert (backups / f"core-{prefix.name}" / "mine").read_text() == "old core"
+        assert not (prefix / "mine").exists()
+        assert install.core_ready(harness.layout, harness.snapshot.stack)
