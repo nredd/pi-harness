@@ -187,13 +187,9 @@ export class MonView implements Component {
 	}
 
 	/** `--` reads as absent, not as a value: dim it everywhere. */
-	private value(text: string, width: number, color: Color = "text"): string {
+	private value(text: string, width: number): string {
 		const padded = text.padStart(width);
-		return text === "--"
-			? this.options.theme.fg("dim", padded)
-			: color === "text"
-				? padded
-				: this.options.theme.fg(color, padded);
+		return text === "--" ? this.options.theme.fg("dim", padded) : padded;
 	}
 
 	/** Host CPU severity, always paired with the number so meaning never depends on color. */
