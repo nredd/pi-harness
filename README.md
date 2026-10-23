@@ -17,6 +17,11 @@ Current status is [here](PLAN.md); the original migration plan and its supersede
 Every migration PR requires separate Standards and Spec reviewer subagents against its final HEAD,
 including documentation, fork, dotfiles, and automated promotion changes.
 
+`packages/resource-sampler` is the Pi-independent `@nredd/pi-resource-sampler` ESM library for
+bounded, privacy-safe interval host sampling. It has no Pi entrypoint or runtime dependencies.
+Its [README](packages/resource-sampler/README.md) defines CPU/coverage semantics and Darwin's
+explicit process-CPU precision limitation. No consumer migration or publication is included.
+
 Layout:
 
 - `packages/`: independently versioned plugins and optional preset, including imported `@nredd/pi-computer-use`. Its packed contract proves stock-Pi loading and the model-visible tool surface; native desktop behavior is explicitly NOT RUN without an interactive macOS TCC-granted session.
