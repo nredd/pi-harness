@@ -1698,8 +1698,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     {
       setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
       setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
-      setMaxActiveSubagents: (n) => setBudgetPolicy({ maxActive: n }),
-      setNestedSubagentReserve: (n) => setBudgetPolicy({ nestedReserve: n }),
+      setBudgetPolicy,
       setDefaultMaxTurns,
       setGraceTurns,
       setDefaultJoinMode,

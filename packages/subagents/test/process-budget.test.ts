@@ -25,16 +25,20 @@ vi.mock("../src/worktree.js", () => ({
 
 import { AgentManager } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
+import { setMaxSubagentDepth } from "../src/nested-tools.js";
 import {
   admissionLimit,
   BUDGET_QUEUE_FULL_ERROR,
   budgetUsage,
+  getBudgetPolicy,
+  getPendingBudgetPolicy,
+  isCoherent,
   MAX_PENDING_SUBAGENTS,
   resetBudgetForTests,
   setBudgetPolicy,
 } from "../src/process-budget.js";
 import type { AgentRecord } from "../src/types.js";
-import { createWorktree } from "../src/worktree.js";
+import { cleanupWorktree, createWorktree } from "../src/worktree.js";
 
 const pi = {} as any;
 const ctx = { cwd: "/tmp" } as any;
@@ -91,7 +95,7 @@ const finish = async (id: string) => {
 
 beforeEach(() => {
   resetBudgetForTests();
-  setBudgetPolicy({ maxActive: 12, nestedReserve: 2 });
+  setBudgetPolicy({ maxActive: 12, nestedReserve: 2, maxDepth: 2 });
   runs = new Map();
   managers = [];
   vi.mocked(runAgent).mockReset();
@@ -104,21 +108,38 @@ afterEach(async () => {
   resetBudgetForTests();
 });
 
-describe("admissionLimit", () => {
+describe("admissionLimit and coherence", () => {
   it("holds back the reserve per nesting level below the run", () => {
-    const policy = { maxActive: 12, nestedReserve: 2 };
-    expect(admissionLimit(policy, 1, 2)).toBe(10);
-    expect(admissionLimit(policy, 2, 2)).toBe(12);
-    expect(admissionLimit(policy, 1, 3)).toBe(8);
-    expect(admissionLimit(policy, 2, 3)).toBe(10);
+    expect(admissionLimit({ maxActive: 12, nestedReserve: 2, maxDepth: 2 }, 1)).toBe(10);
+    expect(admissionLimit({ maxActive: 12, nestedReserve: 2, maxDepth: 2 }, 2)).toBe(12);
+    expect(admissionLimit({ maxActive: 12, nestedReserve: 2, maxDepth: 3 }, 1)).toBe(8);
+    expect(admissionLimit({ maxActive: 12, nestedReserve: 2, maxDepth: 3 }, 2)).toBe(10);
     // Nesting disabled: top-level runs are leaves and get the whole cap.
-    expect(admissionLimit(policy, 1, 1)).toBe(12);
-    expect(admissionLimit(policy, 1, 0)).toBe(12);
+    expect(admissionLimit({ maxActive: 12, nestedReserve: 2, maxDepth: 1 }, 1)).toBe(12);
+    expect(admissionLimit({ maxActive: 12, nestedReserve: 2, maxDepth: 0 }, 1)).toBe(12);
+    expect(admissionLimit({ maxActive: 0, nestedReserve: 2, maxDepth: 2 }, 1)).toBe(Number.POSITIVE_INFINITY);
   });
 
-  it("is unlimited when off and never drops below one", () => {
-    expect(admissionLimit({ maxActive: 0, nestedReserve: 2 }, 1, 2)).toBe(Number.POSITIVE_INFINITY);
-    expect(admissionLimit({ maxActive: 2, nestedReserve: 5 }, 1, 2)).toBe(1);
+  it("accepts only policies whose limits rise strictly from at least one", () => {
+    expect(isCoherent({ maxActive: 12, nestedReserve: 2, maxDepth: 2 })).toBe(true);
+    expect(isCoherent({ maxActive: 0, nestedReserve: 0, maxDepth: 8 })).toBe(true);
+    expect(isCoherent({ maxActive: 1, nestedReserve: 0, maxDepth: 1 })).toBe(true);
+    expect(isCoherent({ maxActive: 15, nestedReserve: 2, maxDepth: 8 })).toBe(true);
+    // A plain cap with nesting on: parents can fill it and wait forever.
+    expect(isCoherent({ maxActive: 12, nestedReserve: 0, maxDepth: 2 })).toBe(false);
+    // The old `Math.max(1, ...)` floor: limit(1) = limit(2) = 1 at depth 8.
+    expect(isCoherent({ maxActive: 12, nestedReserve: 2, maxDepth: 8 })).toBe(false);
+    expect(isCoherent({ maxActive: 2, nestedReserve: 2, maxDepth: 2 })).toBe(false);
+  });
+
+  it("refuses an incoherent policy with a warning, keeping the one in force", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setBudgetPolicy({ maxActive: 12, nestedReserve: 2, maxDepth: 8 });
+    setBudgetPolicy({ maxActive: 12, nestedReserve: 0, maxDepth: 2 });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("it could deadlock"));
+    expect(getBudgetPolicy()).toEqual({ maxActive: 12, nestedReserve: 2, maxDepth: 2 });
+    warn.mockRestore();
   });
 });
 
@@ -172,7 +193,7 @@ describe("process budget across managers", () => {
   });
 
   it("waitForAll waits out a start queued behind another manager's leases", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const a = newManager();
     const b = newManager();
     const blocker = bg(a);
@@ -192,7 +213,7 @@ describe("process budget across managers", () => {
   });
 
   it("starts the earliest eligible waiter in any manager", async () => {
-    setBudgetPolicy({ maxActive: 2, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 2, nestedReserve: 0, maxDepth: 1 });
     const a = newManager();
     const b = newManager();
     const [a1] = [bg(a), bg(a)];
@@ -207,7 +228,7 @@ describe("process budget across managers", () => {
   });
 
   it("is shared with a reloaded module instance and its manager", async () => {
-    setBudgetPolicy({ maxActive: 2, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 2, nestedReserve: 0, maxDepth: 1 });
     const old = newManager();
     const [o1] = [bg(old), bg(old)];
     await flush();
@@ -280,7 +301,7 @@ describe("process budget with nested reviewers", () => {
   });
 
   it("keeps the parent's lease while a sibling tool runs beside its queued child", async () => {
-    setBudgetPolicy({ maxActive: 3, nestedReserve: 1 });
+    setBudgetPolicy({ maxActive: 3, nestedReserve: 1, maxDepth: 2 });
     const observed: number[] = [];
     let releaseChildren!: () => void;
     const childrenMayFinish = new Promise<void>(r => { releaseChildren = r; });
@@ -321,7 +342,7 @@ describe("process budget with nested reviewers", () => {
 
 describe("process budget covers every start path", () => {
   it("queues foreground, workflow, scheduled and detached RPC spawns behind the cap", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const m = newManager();
     const first = bg(m);
     await flush();
@@ -352,7 +373,7 @@ describe("process budget covers every start path", () => {
   });
 
   it("fails a spawn fast once the pending queue is full, leaving no record", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const m = newManager();
     bg(m);
     for (let i = 0; i < MAX_PENDING_SUBAGENTS; i++) bg(m);
@@ -361,7 +382,7 @@ describe("process budget covers every start path", () => {
     expect(m.listAgents()).toHaveLength(before);
   });
 
-  it("is off by default: counted, never enforced", async () => {
+  it("is off by default: counted, never enforced, and turned on only once idle", async () => {
     resetBudgetForTests();
     const m = newManager();
     const ids = Array.from({ length: 20 }, (_, i) =>
@@ -370,22 +391,110 @@ describe("process budget covers every start path", () => {
     expect(ids.every(id => m.getRecord(id)!.status === "running")).toBe(true);
     expect(budgetUsage()).toMatchObject({ active: 20, pending: 0, maxActive: 0 });
 
-    // Turning it on mid-run counts what is already running.
-    setBudgetPolicy({ maxActive: 12 });
+    // Twenty runs admitted with no reserve: enforcing now could strand their
+    // children, so the policy waits for the last of them.
+    setBudgetPolicy({ maxActive: 12, nestedReserve: 2, maxDepth: 2 });
+    expect(getPendingBudgetPolicy()).toEqual({ maxActive: 12, nestedReserve: 2, maxDepth: 2 });
     const late = bg(m);
-    expect(m.getRecord(late)!.status).toBe("queued");
+    expect(m.getRecord(late)!.status).toBe("running");
+    for (const id of [...ids, late]) await finish(id);
+    expect(budgetUsage()).toMatchObject({ active: 0, maxActive: 12 });
+    expect(getPendingBudgetPolicy()).toBeUndefined();
   });
 
   it("raising the cap starts waiters at once", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const m = newManager();
     bg(m);
     const queued = bg(m);
     await flush();
     expect(m.getRecord(queued)!.status).toBe("queued");
-    setBudgetPolicy({ maxActive: 2 });
+    setBudgetPolicy({ maxActive: 2, nestedReserve: 0, maxDepth: 1 });
     await flush();
     expect(m.getRecord(queued)!.status).toBe("running");
+  });
+
+  it("holds a lowered cap until idle, so a waiting child of a running parent still starts", async () => {
+    setBudgetPolicy({ maxActive: 3, nestedReserve: 1, maxDepth: 2 });
+    const m = newManager();
+    const [p1, p2] = [bg(m), bg(m)];
+    await flush();
+    const child = (parent: string) =>
+      m.spawn(pi, ctx, "general-purpose", "review", { description: "review", depth: 2, parentAgentId: parent });
+    const c1 = child(p1);
+    const c2 = child(p2);
+    await flush();
+    expect(m.getRecord(c2)!.status).toBe("queued");
+
+    // Applied now, maxActive 2 would leave c2 behind two parents waiting on it forever.
+    setBudgetPolicy({ maxActive: 2, nestedReserve: 1, maxDepth: 2 });
+    expect(getBudgetPolicy().maxActive).toBe(3);
+    await finish(c1);
+    expect(m.getRecord(c2)!.status).toBe("running");
+
+    for (const id of [c2, p1, p2]) await finish(id);
+    expect(getBudgetPolicy()).toEqual({ maxActive: 2, nestedReserve: 1, maxDepth: 2 });
+  });
+
+  it("checks every deeper level, so later roots cannot take the slots grandchildren need", async () => {
+    // limit(1) = 10, limit(2) = 12, limit(3) = 14. The old check looked only at
+    // the run's own level: two more roots fit there, filled the process to 14,
+    // and every depth-2 parent then waited forever on a grandchild.
+    setBudgetPolicy({ maxActive: 14, nestedReserve: 2, maxDepth: 3 });
+    const m = newManager();
+    const roots = [bg(m), bg(m)];
+    await flush();
+    const nested = (parent: string, depth: number) =>
+      m.spawn(pi, ctx, "general-purpose", "n", { description: "n", depth, parentAgentId: parent });
+    const children = Array.from({ length: 10 }, (_, i) => nested(roots[i % 2], 2));
+    await flush();
+    expect(children.every(id => m.getRecord(id)!.status === "running")).toBe(true);
+
+    const lateRoots = [bg(m), bg(m)];
+    await flush();
+    expect(lateRoots.map(id => m.getRecord(id)!.status)).toEqual(["queued", "queued"]);
+    const grandchild = nested(children[0], 3);
+    await flush();
+    expect(m.getRecord(grandchild)!.status).toBe("running");
+    expect(budgetUsage()).toMatchObject({ active: 13, pending: 2 });
+  });
+
+  it("refuses a run deeper than the policy reserves for instead of parking it", async () => {
+    // A project file set its own maxSubagentDepth to 8; the global policy covers 2.
+    const m = newManager();
+    const root = bg(m, { maxSubagentDepth: 8 });
+    await flush();
+    const child = m.spawn(pi, ctx, "general-purpose", "c", { description: "c", depth: 2, parentAgentId: root, maxSubagentDepth: 8 });
+    await flush();
+    expect(m.getRecord(child)!.status).toBe("running");
+    const before = m.listAgents().length;
+    expect(() => m.spawn(pi, ctx, "general-purpose", "g", { description: "g", depth: 3, parentAgentId: child, maxSubagentDepth: 8 }))
+      .toThrow(/exceeds the process budget's depth 2/);
+    expect(m.listAgents()).toHaveLength(before);
+    expect(budgetUsage()).toMatchObject({ active: 2, pending: 0 });
+  });
+
+  it("admits against the policy depth, not the live nesting setting", async () => {
+    // Twelve finished roots whose sessions kept depth-2 nested tools; then the
+    // user drops Nested depth to 1 and resumes all twelve at once. Admission
+    // under the live depth (12 roots, no reserve) stranded every child.
+    vi.mocked(resumeAgent).mockImplementation((() => new Promise(() => {})) as any);
+    const m = newManager();
+    const roots = Array.from({ length: 12 }, () => bg(m));
+    await flush();
+    for (const id of roots) await finish(id);
+    setMaxSubagentDepth(1);
+    try {
+      const resumed = roots.map(id => m.resume(id, "again"));
+      await flush();
+      expect(roots.map(id => m.getRecord(id)!.status)).toEqual([...Array(10).fill("running"), "queued", "queued"]);
+      const child = m.spawn(pi, ctx, "general-purpose", "c", { description: "c", depth: 2, parentAgentId: roots[0] });
+      await flush();
+      expect(m.getRecord(child)!.status).toBe("running");
+      void resumed;
+    } finally {
+      setMaxSubagentDepth(2);
+    }
   });
 });
 
@@ -410,7 +519,7 @@ describe("process budget and resumes", () => {
   });
 
   it("queues a background resume at the cap and starts it on release", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const m = newManager();
     const x = await finishedAgent(m);
     const blocker = bg(m);
@@ -430,7 +539,7 @@ describe("process budget and resumes", () => {
   });
 
   it("makes a foreground resume wait for a lease, and runs it once one frees", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const m = newManager();
     const x = await finishedAgent(m);
     const blocker = bg(m);
@@ -449,7 +558,7 @@ describe("process budget and resumes", () => {
   });
 
   it("releases a foreground resume's wait on abort without running it", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const m = newManager();
     const x = await finishedAgent(m);
     bg(m);
@@ -463,6 +572,51 @@ describe("process budget and resumes", () => {
     expect((await pending)!.status).toBe("stopped");
     expect(resumeAgent).not.toHaveBeenCalled();
     expect(budgetUsage()).toMatchObject({ active: 1, pending: 0 });
+  });
+
+  it("refuses either resume when the queue is full, leaving the record unchanged", async () => {
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+    const m = newManager();
+    const x = await finishedAgent(m);
+    bg(m);
+    for (let i = 0; i < MAX_PENDING_SUBAGENTS; i++) bg(m);
+    const snapshot = { ...x };
+
+    await expect(m.resume(x.id, "fg")).rejects.toThrow(BUDGET_QUEUE_FULL_ERROR);
+    await expect(m.resume(x.id, "bg", undefined, { isBackground: true })).rejects.toThrow(BUDGET_QUEUE_FULL_ERROR);
+    expect(m.getRecord(x.id)).toEqual(snapshot);
+    expect(resumeAgent).not.toHaveBeenCalled();
+  });
+
+  it("hands back a background resume's slot and lease when its start throws", async () => {
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+    let failResume = false;
+    const completed: string[] = [];
+    const m = new AgentManager(r => completed.push(`${r.id}:${r.status}`), 1, () => {
+      if (failResume) throw new Error("onStart blew up");
+    });
+    managers.push(m);
+    const x = await finishedAgent(m);
+    const blocker = bg(m);
+    await flush();
+    failResume = true;
+    expect((await m.resume(x.id, "again", undefined, { isBackground: true }))!.status).toBe("queued");
+
+    // Queued path: granted when the blocker settles, fails in onStart.
+    await finish(blocker);
+    expect(x.status).toBe("error");
+    expect(x.error).toBe("onStart blew up");
+    expect(completed).toContain(`${x.id}:error`);
+    expect(budgetUsage()).toMatchObject({ active: 0, pending: 0 });
+
+    // Immediate path: the throw reaches the caller, nothing stays charged.
+    await expect(m.resume(x.id, "again", undefined, { isBackground: true })).rejects.toThrow("onStart blew up");
+    expect(x.status).toBe("error");
+    expect(budgetUsage()).toMatchObject({ active: 0, pending: 0 });
+    failResume = false;
+    const next = bg(m);
+    await flush();
+    expect(m.getRecord(next)!.status).toBe("running");
   });
 
   it("refuses a second resume of the same record in the same tick, on both paths", async () => {
@@ -484,7 +638,7 @@ describe("process budget and resumes", () => {
 
 describe("process budget lease release", () => {
   it("drops a queued spawn's waiter on abort and wakes its blocked caller", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const m = newManager();
     bg(m);
     await flush();
@@ -499,7 +653,7 @@ describe("process budget lease release", () => {
   });
 
   it("releases the lease of a queued start that fails at startup", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     const m = newManager();
     const blocker = bg(m);
     const dir = mkdtempSync(join(tmpdir(), "budget-cwd-"));
@@ -523,7 +677,7 @@ describe("process budget lease release", () => {
   });
 
   it("holds a lease stopped mid-copy until the copy is cleaned up", async () => {
-    setBudgetPolicy({ maxActive: 1, nestedReserve: 0 });
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
     let copied!: (wt: any) => void;
     vi.mocked(createWorktree).mockReturnValueOnce(new Promise(r => { copied = r; }) as any);
     const m = newManager();
@@ -542,21 +696,77 @@ describe("process budget lease release", () => {
     expect(m.getRecord(next)!.status).toBe("running");
   });
 
-  it("releases leases on dispose, and a late settle does not release twice", async () => {
+  it("keeps a run's lease through dispose until the run itself settles", async () => {
+    setBudgetPolicy({ maxActive: 2, nestedReserve: 0, maxDepth: 1 });
     const a = newManager();
     const ids = [bg(a), bg(a)];
     await flush();
-    expect(budgetUsage().active).toBe(2);
-    const stranded = ids.map(id => runs.get(id)!);
+    const stillRunning = ids.map(id => runs.get(id)!);
 
     await a.dispose();
-    expect(budgetUsage().active).toBe(0);
-
+    // The sessions are shut down, but the runs have not returned: still counted.
+    expect(budgetUsage().active).toBe(2);
     const b = newManager();
-    bg(b);
+    const waiting = bg(b);
     await flush();
-    for (const run of stranded) run.finish();
+    expect(b.getRecord(waiting)!.status).toBe("queued");
+
+    stillRunning[0].finish();
     await flush();
+    expect(b.getRecord(waiting)!.status).toBe("running");
+    stillRunning[1].finish();
+    await flush();
+    expect(budgetUsage()).toMatchObject({ active: 1, pending: 0 });
+  });
+
+  it("keeps a lease stopped mid-copy through dispose until the worktree cleanup finishes", async () => {
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+    let copied!: (wt: any) => void;
+    vi.mocked(createWorktree).mockReturnValueOnce(new Promise(r => { copied = r; }) as any);
+    let cleaned!: () => void;
+    vi.mocked(cleanupWorktree).mockReturnValueOnce(new Promise(r => { cleaned = () => r({ hasChanges: false }); }) as any);
+    const m = newManager();
+    bg(m, { isolation: "worktree" });
+    await flush();
+
+    // `/new` with no survivors: abortAll, then dispose.
+    m.abortAll();
+    await m.dispose();
     expect(budgetUsage().active).toBe(1);
+    copied({ path: "/tmp/wt", workPath: "/tmp/wt", repoRoot: "/tmp", branch: "b" });
+    await flush();
+    expect(cleanupWorktree).toHaveBeenCalled();
+    expect(budgetUsage().active).toBe(1);
+    cleaned();
+    await flush();
+    expect(budgetUsage().active).toBe(0);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps a survivor's queued nested child through detach", async () => {
+    setBudgetPolicy({ maxActive: 3, nestedReserve: 1, maxDepth: 2 });
+    const m = newManager();
+    const [p1, p2] = [bg(m), bg(m)];
+    await flush();
+    const child = (parent: string) =>
+      m.spawn(pi, ctx, "general-purpose", "review", { description: "review", depth: 2, parentAgentId: parent });
+    const c1 = child(p1);
+    const c2 = child(p2);
+    await flush();
+    expect(m.getRecord(c2)!.status).toBe("queued");
+
+    expect(m.detach()).toBe(3);
+    expect(m.getRecord(c2)!.status).toBe("queued");
+    await finish(c1);
+    expect(m.getRecord(c2)!.status).toBe("running");
+
+    // A stopped parent still takes its queued child with it.
+    const c3 = child(p1);
+    await flush();
+    expect(m.getRecord(c3)!.status).toBe("queued");
+    m.abort(p1);
+    await flush();
+    expect(m.getRecord(c3)!.status).toBe("stopped");
+    expect(budgetUsage().pending).toBe(0);
   });
 });
