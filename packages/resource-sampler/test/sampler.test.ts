@@ -1,10 +1,14 @@
-import type { CpuInfo } from "node:os";
+import { mkdtemp, readlink, rm, symlink } from "node:fs/promises";
+import { type CpuInfo, tmpdir } from "node:os";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Budget, command } from "../src/collect.js";
 import {
+	cpuSnapshot,
 	darwinProcess,
+	executableName,
 	hostCpu,
 	linuxRss,
 	linuxStat,
@@ -46,6 +50,42 @@ describe("honest counters", () => {
 		expect(processCpu(proc(100, 100), proc(500, 200))).toEqual({ state: "available", value: 400 });
 		expect(processCpu(proc(100, 100), proc(100, 200))).toEqual({ state: "available", value: 0 });
 	});
+	it("snapshots Bun-style lazy os.cpus() placeholders when called, not when first read", () => {
+		let now = 0;
+		// Mirrors Bun's lazyCpus wrapper: the first property access on any element reads native counters.
+		const lazy = (): CpuInfo[] => {
+			const array: CpuInfo[] = [];
+			const populate = () => {
+				for (let i = 0; i < 2; i++) array[i] = core(now, now);
+			};
+			for (let i = 0; i < 2; i++) {
+				const read = (): CpuInfo => {
+					if (array[i] === instance) populate();
+					return array[i] as CpuInfo;
+				};
+				const instance: CpuInfo = {
+					get model() {
+						return read().model;
+					},
+					get speed() {
+						return read().speed;
+					},
+					get times() {
+						return read().times;
+					},
+				};
+				array[i] = instance;
+			}
+			return array;
+		};
+		const stale = lazy();
+		const before = cpuSnapshot(lazy());
+		now = 100;
+		const after = cpuSnapshot(lazy());
+		expect(hostCpu(before, after)).toEqual({ state: "available", value: 50 });
+		// The 0.1.0 failure: an unread stored array describes the later instant, never the earlier one.
+		expect(hostCpu(stale, after)).toEqual({ state: "warming", reason: "CPU counters have not advanced" });
+	});
 	it("does not fabricate zero for PID reuse, first sample, reset or invalid time", () => {
 		for (const before of [undefined, proc(100, 100, "12:49"), proc(101, 50), proc(90, 100), proc(90, Number.NaN)]) {
 			expect(processCpu(before, proc(100, 100)).state).toBe("warming");
@@ -61,22 +101,26 @@ describe("privacy-safe native parsers", () => {
 		fields[11] = "20";
 		fields[12] = "30";
 		fields[19] = "987654321987654321";
-		const parsed = linuxStat(`12 (some ) name) ${fields.join(" ")}`, 100, 123);
+		const parsed = linuxStat(`12 (npm exec secret) ${fields.join(" ")}`, 100, 123);
+		// User comm is process-writable (process.title, PR_SET_NAME): never reported as a name.
 		expect(parsed).toMatchObject({
 			pid: 12,
 			parentPid: 1,
-			name: "some ) name",
+			name: "",
 			identity: "12:987654321987654321",
 			cpuMs: 500,
 			at: 123,
 		});
+		expect(executableName("/usr/lib/node/bin/node (deleted)")).toBe("node");
+		expect(executableName("/opt/a b/\u001b[2Jtool")).toBe("?[2Jtool");
+		expect(safeName("\u{1F9A9}".repeat(200))).toHaveLength(256);
 		expect(linuxRss("VmRSS:\t42 kB\n")).toBe(43008);
 		expect(linuxRss("no RSS")).toBeNull();
 		expect(linuxStat("12 malformed", 100, 1)).toBeNull();
 		expect(linuxStat(`12 (name) ${fields.join(" ")}`, 0, 1)).toBeNull();
 	});
 	it("parses measured Darwin ps precision and strips control characters", () => {
-		expect(darwinProcess("    1 0 Sat Oct  3 01:49:05 2026 185:32.40 17648 launchd", 12)).toMatchObject({
+		expect(darwinProcess("    1 0 Sat Oct  3 01:49:05 2026 185:32.40 17648 launchd         ", 12)).toMatchObject({
 			pid: 1,
 			identity: "1:Sat Oct  3 01:49:05 2026",
 			rssBytes: 18071552,
@@ -127,6 +171,40 @@ describe("bounded child lifecycle", () => {
 		const failed = new Budget(performance.now() + 1000, 4096, 10, new AbortController().signal);
 		expect((await command("/nonexistent-resource-sampler-fixture", [], failed)).complete).toBe(false);
 		expect(failed.reasons.has("command-unavailable")).toBe(true);
+	});
+});
+
+// Real readlink, except where a test forces a runtime result no real symlink can produce.
+vi.mock("node:fs/promises", async (original) => {
+	const actual = await original<typeof import("node:fs/promises")>();
+	return { ...actual, readlink: vi.fn(actual.readlink) };
+});
+
+describe("bounded executable links", () => {
+	it("charges readlink to the remaining byte budget and drops names beyond it", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "resource-sampler-"));
+		try {
+			const target = `/opt/${"d".repeat(100)}/tool`;
+			const link = join(dir, "exe");
+			await symlink(target, link);
+			const roomy = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
+			expect(await roomy.executable(link)).toBe("tool");
+			expect(roomy.bytesRead).toBe(target.length);
+			const tight = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
+			tight.bytesRead = 4096 - 50;
+			expect(await tight.executable(link)).toBe("");
+			expect(tight.bytesRead).toBe(4096);
+			expect([...tight.reasons]).toEqual(["byte-limit"]);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+	it("drops a target that fills Node's PATH_MAX readlink buffer, which may be truncated", async () => {
+		vi.mocked(readlink).mockResolvedValueOnce(Buffer.alloc(4096, "a"));
+		const budget = new Budget(performance.now() + 2000, 1 << 20, 10, new AbortController().signal);
+		expect(await budget.executable("/proc/1/exe")).toBe("");
+		expect(budget.bytesRead).toBe(4096);
+		expect([...budget.reasons]).toEqual(["file-byte-limit"]);
 	});
 });
 

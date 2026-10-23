@@ -81,7 +81,7 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
   `integration/inprocess/` stack suite under Vitest and Bun (published packages:
-  `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.6.0`,
+  `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.7.0`,
   `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`; `@nredd/pi-todo@2.13.10` is pending its first CI-attested release)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
