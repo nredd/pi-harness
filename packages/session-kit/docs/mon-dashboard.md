@@ -44,10 +44,11 @@ sample, including its `ps` child on macOS. Mapping rules:
 
 ## Presentation
 
-- From 72 columns and 18 rows, CPU and memory/load cards sit side by side; CPU history is two rows
-  (16 levels) there. Narrower or shorter terminals get a three-line summary (`CPU`, `RAM`, 1-minute
-  load, one-row history); at six rows summary/chrome yields to the selected process. The last row
-  reserves close/help. Below 60 columns the header keeps the update clock over the tagline.
+- From 72 columns and 17 rows (one more per diagnostic line), CPU and memory/load cards sit side
+  by side; CPU history is two rows (16 levels) there. Narrower or shorter terminals get a
+  three-line summary (`CPU`, `RAM`, 1-minute load, one-row history); at six rows summary/chrome
+  yields to the selected process. The last row reserves close/help. Below 60 columns the header
+  keeps the update clock over the tagline.
 - Columns: `PID`, `CPU%` (100 = one core), `RSS`, `MEM%` (RSS over total RAM, 60+ columns),
   `NAME` last so long names never push numbers off screen. `--` is dimmed. A `▸` marks the
   selection; a theme scrollbar appears only when the list overflows. The memory card adds 1-minute
