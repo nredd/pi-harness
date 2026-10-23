@@ -69,6 +69,12 @@ make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, s
 make check-todo-package-contract # explicit: packed todo tool through stock Pi 1.3.0
 ```
 
+On macOS, keep the host awake for the entire gate, e.g. `/usr/bin/caffeinate -is make check`
+on AC power. The assertion ends with the command and does not change power settings. Check
+current CPU/memory pressure and concurrent builds before starting; a low load average alone
+is not enough. Closed-lid maintenance sleep can suspend lifecycle timers for seconds or minutes,
+so check `powerd` sleep/wake logs when real-time assertions overrun. Do not relax their deadlines.
+
 `make check` runs, without rewriting files:
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
