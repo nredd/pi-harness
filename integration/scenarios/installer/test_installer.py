@@ -36,7 +36,7 @@ from harness.promotion import (
     load_promoted_snapshot,
     snapshot_url,
 )
-from harness.release import attestation_bundle, verify_attestation
+from harness.release import AttestationRateLimitedError, attestation_bundle, verify_attestation
 from harness.stack import package_declarations, source_string
 
 pytestmark = pytest.mark.installer
@@ -121,6 +121,9 @@ def command(spec: str, stack_sha: str, *args: str) -> list[str]:
 def environment(home: Path, uv_cache: Path, path: str | None = None) -> dict[str, str]:
     """Build a clean environment: only PATH, the throwaway HOME and uv's cache.
 
+    A runner's `GH_TOKEN` is passed through for `gh` alone: hosted runners share GitHub's
+    anonymous rate limit, and the installer then lets `gh` retry with its own login.
+
     Parameters:
         home (Path): throwaway HOME.
         uv_cache (Path): shared uv cache.
@@ -135,7 +138,7 @@ def environment(home: Path, uv_cache: Path, path: str | None = None) -> dict[str
         "TERM": "dumb",
         "UV_CACHE_DIR": str(uv_cache),
         "UV_PYTHON_INSTALL_DIR": str(uv_cache / "python"),
-    }
+    } | ({"GH_TOKEN": os.environ["GH_TOKEN"]} if os.environ.get("GH_TOKEN") else {})
 
 
 def run(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -200,7 +203,7 @@ def seed_existing(home: Path) -> None:
     (agent / "AGENTS.md").write_text("# mine\n")
 
 
-def published(stack_sha: str, workdir: Path) -> tuple[Path, Path]:
+def published(stack_sha: str, workdir: Path) -> tuple[Path, Path | None]:
     """Download the real snapshot and its public bundle.
 
     Parameters:
@@ -208,10 +211,13 @@ def published(stack_sha: str, workdir: Path) -> tuple[Path, Path]:
         workdir (Path): scratch.
 
     Returns:
-        tuple[Path, Path]: snapshot and bundle paths.
+        tuple[Path, Path | None]: snapshot and bundle, `None` when rate-limited (then `gh` fetches).
     """
     snapshot = download(snapshot_url(stack_sha), workdir / SNAPSHOT_ASSET)
-    return snapshot, attestation_bundle(SNAPSHOT_REPO, snapshot, workdir / "bundle.jsonl")
+    try:
+        return snapshot, attestation_bundle(SNAPSHOT_REPO, snapshot, workdir / "bundle.jsonl")
+    except AttestationRateLimitedError:
+        return snapshot, None
 
 
 def test_missing_prerequisites_change_nothing(

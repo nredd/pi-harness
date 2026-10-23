@@ -59,12 +59,11 @@ from harness.promotion import (
     verify_core_assets,
 )
 from harness.release import (
-    attestation_bundle,
     fetch_release,
     release_asset_url,
     release_checksums,
-    verify_attestation,
     verify_provenance_anonymously,
+    verify_public_attestation,
 )
 from harness.sandbox import deep_merge
 from harness.stack import (
@@ -348,9 +347,8 @@ def verify_snapshot(source_sha: str, workdir: Path) -> StackSnapshot:
     """
     path = download(snapshot_url(source_sha), workdir / SNAPSHOT_ASSET)
     try:
-        bundle = attestation_bundle(SNAPSHOT_REPO, path, workdir / f"{SNAPSHOT_ASSET}.sigstore.jsonl")
-        verify_attestation(path, SNAPSHOT_REPO, SNAPSHOT_SIGNER_WORKFLOW, SNAPSHOT_SOURCE_REF, bundle)
-    except RuntimeError as error:
+        verify_public_attestation(path, SNAPSHOT_REPO, SNAPSHOT_SIGNER_WORKFLOW, SNAPSHOT_SOURCE_REF)
+    except (OSError, RuntimeError) as error:
         raise VerificationError(f"Snapshot attestation rejected: {error}") from error
     try:
         snapshot = load_promoted_snapshot(path.read_bytes(), source_sha)
@@ -888,22 +886,14 @@ def switch(
                 live.replace(backup)
             staged.replace(live)
     for name, desired in ((SETTINGS_FILE, plan.settings), (SUBAGENTS_FILE, plan.subagents)):
-        if desired is None:
-            continue
-        live = layout.agent_dir / name
-        backup = journal.record(live, name)
-        if backup is not None:
-            temporary = backup.with_name(f".{name}.tmp")
-            shutil.copy2(live, temporary)
-            temporary.replace(backup)
-        write_atomic(live, json.dumps(desired, indent=2) + "\n")
+        if desired is not None:
+            replace_file(journal, layout.agent_dir / name, name, json.dumps(desired, indent=2) + "\n")
     if plan.link is not None:
         layout.bin_dir.mkdir(parents=True, exist_ok=True)
         backup = journal.record(layout.link, "bin-pi")
         if backup is not None:
             layout.link.replace(backup)
         layout.link.symlink_to(plan.link)
-    journal.record(layout.state, STATE_FILE)
     state = {
         "source_sha": verified.snapshot.source_sha,
         "stack_sha256": verified.snapshot.stack_sha256,
@@ -912,7 +902,24 @@ def switch(
         "agent_dir": str(layout.agent_dir),
         "installed_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
-    write_atomic(layout.state, json.dumps(state, indent=2) + "\n")
+    replace_file(journal, layout.state, STATE_FILE, json.dumps(state, indent=2) + "\n")
+
+
+def replace_file(journal: Journal, live: Path, name: str, text: str) -> None:
+    """Journal, back up, then atomically replace one file.
+
+    Parameters:
+        journal (Journal): durable step record.
+        live (Path): file to replace.
+        name (str): backup name.
+        text (str): new contents.
+    """
+    backup = journal.record(live, name)
+    if backup is not None:
+        temporary = backup.with_name(f".{name}.tmp")
+        shutil.copy2(live, temporary)
+        temporary.replace(backup)
+    write_atomic(live, text)
 
 
 def apply(layout: Layout, verified: Verified, plan: Plan) -> Path:
@@ -932,7 +939,7 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> Path:
     """
     staging = layout.root / "staging" / uuid.uuid4().hex
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    backups = layout.root / "backups" / f"{stamp}-{verified.snapshot.source_sha[:12]}"
+    backups = layout.root / "backups" / f"{stamp}-{verified.snapshot.source_sha[:12]}-{uuid.uuid4().hex[:6]}"
     staging.mkdir(parents=True)
     try:
         staged_agent = stage(layout, verified, plan, staging)

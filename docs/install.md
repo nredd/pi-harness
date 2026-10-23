@@ -43,7 +43,7 @@ The installer never reads, copies or writes credentials or personal state. After
 ## Verification, before any change
 
 1. Platform and prerequisites, all reported at once.
-2. `stack-snapshot.json` is downloaded from the `stack/<stack-sha>` release. Its attestation bundle comes from GitHub's public attestations API (no token), and `gh attestation verify --bundle` must accept it for repository `nredd/pi-harness`, signer workflow `nredd/pi-harness/.github/workflows/promote-stack.yml`, source ref `refs/heads/main`, hosted runners only. These are the consumer requirements in [stack promotion](stack-promotion.md#consumer-requirements).
+2. `stack-snapshot.json` is downloaded from the `stack/<stack-sha>` release. Its attestation bundle comes from GitHub's public attestations API (no token), and `gh attestation verify --bundle` must accept it for repository `nredd/pi-harness`, signer workflow `nredd/pi-harness/.github/workflows/promote-stack.yml`, source ref `refs/heads/main`, hosted runners only. These are the consumer requirements in [stack promotion](stack-promotion.md#consumer-requirements). GitHub limits anonymous API use to 60 requests an hour per IP address; when that refuses the lookup, `gh attestation verify` is retried without `--bundle`, so `gh` fetches the attestation with its own login (`gh auth login` or `GH_TOKEN`). The installer never reads a token; without a login the rate limit is a verification failure.
 3. The bytes are validated with `StackSnapshot` (schema, canonical `stack_sha256`) and `source_sha` must equal `<stack-sha>`. No other interpretation of the manifest exists: the installer reuses `harness.promotion` and `harness.stack`.
 4. The core release identity is checked with `validate_release_identity`; each recorded asset is hashed, and attested by `nredd/pi`'s `fork-release.yml` for non-legacy tags. Legacy tags `v1.3.0-nredd.3` to `.7` predate that workflow and rely on the frozen digests in `harness/release.py`.
 5. Node.js must satisfy the core's `engines.node` (read from the verified tarball; `>=22.19.0` for `v1.3.0-nredd.7`).
@@ -54,7 +54,7 @@ A failed check exits before anything in your home changes.
 
 ## Prerequisites and platforms
 
-- `uv` (to run the command), Git (for `uv` to fetch the pinned commit), `gh` (GitHub CLI, verification only, no login), Node.js meeting the core's engine, npm.
+- `uv` (to run the command), Git (for `uv` to fetch the pinned commit), `gh` (GitHub CLI with `gh attestation verify`; no login unless the anonymous rate limit is hit), Node.js meeting the core's engine, npm.
 - Network access to `github.com`, `api.github.com`, the Sigstore TUF CDN that `gh` uses, and `registry.npmjs.org`.
 
 Supported, because the real installer acceptance runs there: macOS on Apple silicon (`Darwin/arm64`) and Linux x86-64 (`Linux/x86_64`). Everything else, including Windows, WSL, Linux ARM64 and Intel macOS, is refused up front rather than guessed.
@@ -82,4 +82,4 @@ To uninstall: remove `~/.local/bin/pi`, `~/.local/share/pi-stack`, `~/.pi/agent/
 ## Testing
 
 - Units, offline, against the real `stack/24889f7` snapshot bytes: `integration/tests/test_install.py` (part of `make check-integration`).
-- Real acceptance, in throwaway HOMEs with real GitHub, `gh`, npm and core: `make -C integration installer INSTALLER_SPEC='git+https://github.com/nredd/pi-harness@<installer-sha>#subdirectory=integration' STACK_SHA=<stack-sha>`. It covers missing prerequisites, an unpromoted SHA, tampered bytes and foreign signer/ref against real `gh`, a fresh install compared with the snapshot (order, filtered preset, disabled computer-use, owned integrity, `pi --version`, `pi list`), a no-op rerun, consent with an existing setup whose credentials and unrelated settings survive, and a SIGKILL during staging followed by a successful rerun. `.github/workflows/installer.yml` runs it on `ubuntu-24.04` and `macos-14` from the exact commit, with no token.
+- Real acceptance, in throwaway HOMEs with real GitHub, `gh`, npm and core: `make -C integration installer INSTALLER_SPEC='git+https://github.com/nredd/pi-harness@<installer-sha>#subdirectory=integration' STACK_SHA=<stack-sha>`. It covers missing prerequisites, an unpromoted SHA, tampered bytes and foreign signer/ref against real `gh`, a fresh install compared with the snapshot (order, filtered preset, disabled computer-use, owned integrity, `pi --version`, `pi list`), a no-op rerun, consent with an existing setup whose credentials and unrelated settings survive, and a SIGKILL during staging followed by a successful rerun. `.github/workflows/installer.yml` runs it on `ubuntu-24.04` and `macos-14` from the exact commit. Hosted runners share the anonymous rate limit, so that job gives `gh` (only) the job token for the fallback.

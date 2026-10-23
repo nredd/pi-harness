@@ -12,9 +12,11 @@ import io
 import json
 import subprocess
 import tarfile
+from email.message import Message
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.error import HTTPError
 
 import pytest
 
@@ -22,12 +24,15 @@ from harness import release
 from harness.release import (
     ATTESTATION_WORKFLOW,
     RELEASE_PACKAGES,
+    AttestationRateLimitedError,
+    attestation_bundle,
     fetch_release,
     gitlink_tag,
     prune_native,
     release_checksums,
     verify_asset,
     verify_provenance,
+    verify_public_attestation,
 )
 
 # sha256 (frozen in `LEGACY_CHECKSUMS`) -> npm SRI sha512 of the same downloaded legacy tarball.
@@ -620,3 +625,97 @@ def test_root_overrides_stay_tied_to_verified_legacy_releases() -> None:
         entry = lock[f"node_modules/{name}"]
         assert entry["resolved"] == url
         assert entry["integrity"] == LOCK_INTEGRITY[sha256]
+
+
+def serve_attestations(monkeypatch: pytest.MonkeyPatch, outcome: bytes | int) -> list[str]:
+    """Answer the attestations API with a body or an HTTP status, recording requests.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): module patcher.
+        outcome (bytes | int): response body, or an HTTP error status.
+
+    Returns:
+        list[str]: requested URLs; each request is also checked to carry no credentials.
+    """
+    requests: list[str] = []
+
+    def fake_urlopen(request: Any, timeout: int) -> io.BytesIO:
+        """Serve the configured outcome.
+
+        Parameters:
+            request (Any): `urllib.request.Request`.
+            timeout (int): seconds.
+
+        Returns:
+            io.BytesIO: the body.
+
+        Raises:
+            HTTPError: the configured status.
+        """
+        requests.append(request.full_url)
+        assert not request.has_header("Authorization")
+        if isinstance(outcome, int):
+            raise HTTPError(request.full_url, outcome, "refused", Message(), None)
+        return io.BytesIO(outcome)
+
+    monkeypatch.setattr(release, "urlopen", fake_urlopen)
+    return requests
+
+
+def test_attestation_bundle_writes_every_bundle_anonymously(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bundles are looked up by the artifact digest, without credentials, one JSON line each."""
+    artifact = tmp_path / "a.json"
+    artifact.write_bytes(b"snapshot")
+    body = json.dumps({"attestations": [{"bundle": {"n": 1}}, {"bundle": {"n": 2}}]}).encode()
+    requests = serve_attestations(monkeypatch, body)
+    bundle = attestation_bundle("o/r", artifact, tmp_path / "b.jsonl")
+    digest = hashlib.sha256(b"snapshot").hexdigest()
+    assert requests == [f"https://api.github.com/repos/o/r/attestations/sha256:{digest}"]
+    assert [json.loads(line) for line in bundle.read_text().splitlines()] == [{"n": 1}, {"n": 2}]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "error"),
+    [
+        (403, AttestationRateLimitedError),
+        (429, AttestationRateLimitedError),
+        (404, RuntimeError),
+        (b'{"attestations": []}', RuntimeError),
+        (b"not json", RuntimeError),
+    ],
+)
+def test_attestation_bundle_failures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: bytes | int, error: type[Exception]
+) -> None:
+    """Rate limits are distinguishable; every other failure is a plain verification error."""
+    artifact = tmp_path / "a.json"
+    artifact.write_bytes(b"snapshot")
+    serve_attestations(monkeypatch, outcome)
+    with pytest.raises(error) as caught:
+        attestation_bundle("o/r", artifact, tmp_path / "b.jsonl")
+    assert (type(caught.value) is AttestationRateLimitedError) == (error is AttestationRateLimitedError)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "with_bundle"), [(b'{"attestations":[{"bundle":{}}]}', True), (403, False)]
+)
+def test_public_attestation_falls_back_to_gh_login_only_when_rate_limited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: bytes | int, with_bundle: bool
+) -> None:
+    """The anonymous bundle is preferred; only a rate limit hands the lookup to `gh` itself."""
+    artifact = tmp_path / "a.json"
+    artifact.write_bytes(b"snapshot")
+    serve_attestations(monkeypatch, outcome)
+    calls: list[list[str]] = []
+    gh_bin = tmp_path / "gh"
+    gh_bin.touch()
+    monkeypatch.setattr(release, "GH_BIN", str(gh_bin))
+    monkeypatch.setattr(subprocess, "check_output", lambda argv, **kwargs: calls.append(argv) or "")
+    verify_public_attestation(artifact, "o/r", "o/r/.github/workflows/w.yml", "refs/heads/main")
+    (argv,) = calls
+    assert ("--bundle" in argv) == with_bundle
+    assert argv[argv.index("--signer-workflow") + 1] == "o/r/.github/workflows/w.yml"
+    assert argv[argv.index("--source-ref") + 1] == "refs/heads/main"
+    assert "--deny-self-hosted-runners" in argv
