@@ -80,8 +80,9 @@ What each package must satisfy:
   contract also declares as an exact runtime dependency at `RESOURCE_SAMPLER_VERSION`.
   `SHARED_LIBRARIES` maps each library to that common pin, and `shared_library_pin_problems` (run by
   `audit_manifest`, and over every contract in the tests) refuses a consumer declaring any other exact
-  version, so the two consumers cannot drift apart. Both constants are defined once, in `scripts/package_contracts.py`, and serve both consumers: dev-tools'
-  `resource_snapshot` (#128) and session-kit's `/mon` (#123). Bare specifier only. Deep imports,
+  version, so the two consumers cannot drift apart. Both constants are defined once, in
+  `scripts/package_contracts.py`, and serve both consumers: dev-tools' `resource_snapshot` (#128)
+  and session-kit's `/mon` (#123). Bare specifier only. Deep imports,
   undeclared or ranged dependencies, `workspace:`/`file:` specs, imports from a library and imports
   from a standalone artifact (session-kit's stats `dist/`) all stay violations; whichever PR lands
   second keeps this one definition and the library/standalone guard. The stats artifact (`dist/`)
@@ -99,7 +100,8 @@ What each package must satisfy:
   tags, and a local `require` shadow is still treated as `require`
 - Fresh install (`--ignore-scripts --legacy-peer-deps`, mirroring Pi's suppressed peer installs;
   `--offline` unless the contract declares runtime dependencies, which come from the registry, so
-  dev-tools now needs the registry for its exact sampler): dependency-free packages have exactly the package in `node_modules` and the lockfile. A package
+  dev-tools now needs the registry for its exact sampler): dependency-free packages have exactly the
+  package in `node_modules` and the lockfile. A package
   with declared runtime dependencies instead has exactly the closure derived from each INSTALLED
   `node_modules/**/package.json` (`dependencies` + `optionalDependencies`, resolved npm-style by walking up
   from the requirer's `node_modules`, so nested paths work). That closure must equal the lockfile paths,
@@ -107,36 +109,44 @@ What each package must satisfy:
   (manifest or not) must be a closure path, and a scope directory needs a closure child. The only
   exemptions are npm's own: `.package-lock.json` as a regular file in the top-level `node_modules`, and
   `.bin` as a real directory holding only files or symlinks. Any other symlinked entry, or a loop, is a
-  `ContractError`. Each installed `name` must match its path and every installed
-  dependency edge's resolved version must satisfy its declared range (the repository's `semver`). Lock-only paths are
+  `ContractError`. Each installed `name` must match its path and every installed dependency edge's
+  resolved version must satisfy its declared range (the repository's `semver`). Lock-only paths are
   allowed only when `optional: true` and an installed requirer lists them in `optionalDependencies`. A
   missing required dependency is a `ContractError`. The lockfile is never trusted for transitive edges
 - Stock Pi, `--mode json` with `--no-extensions --extension <installed dir>` (only that package),
   `--no-mcp`, `--offline`, no skills/templates/themes/context files, `--no-approve`:
   - dev-tools: a real `git_status` result on a disposable repo (`untracked.txt`), and an error result
     outside a repository. Then a real parent-child discovery: the gate starts an idle, small `node`
-    child, and one unranked scan by the sampler the installed plugin directory resolves (checked to be
+    child whose argv[0], process title and Linux comm hold a random 32-hex secret, first proving the
+    sampler 0.1.0 name source (`ps -c` comm on Darwin, `/proc/PID/comm` on Linux) shows it. One
+    unranked scan by the sampler the installed plugin directory resolves (checked to be
     the installed registry copy) must contain exactly that PID with `parentPid` equal to the gate
     process, confirmed by an independent `/bin/ps`. Inclusion is not tied to the tool's top-50
     ranking, so a host with many larger or busier processes cannot hide it. The scan need NOT be
     complete: any process exiting mid-scan marks it partial, so requiring `coverage.complete` would
-    make the gate host-flaky. Only `process-collection-unavailable` fails it outright; otherwise the
-    target is the known child, and a miss reports the scan's `coverage` (complete or PARTIAL with
-    sampled/enumerated counts and reasons such as `deadline`, `pid-limit`, `byte-limit`), so a
-    truncated scan is never reported as a missing child. The probe prints only PIDs and coverage
-    counters, never names.
+    make the gate host-flaky. Only `process-collection-unavailable` fails it outright. Otherwise the
+    known child must be in the scan, partial or not, and a miss reports the scan's `coverage`
+    (complete, or PARTIAL with sampled/enumerated counts and reasons such as `deadline`, `pid-limit`,
+    `byte-limit`), so a truncated scan is never reported as a missing child. The child's name must be
+    its kernel executable basename (the resolved `node` basename on Linux; on Darwin the invoked or
+    resolved basename cut to 16 bytes), never comm and never an invented `""`, and no 12-character
+    window of the secret may appear anywhere in that scan. The same probe then aborts a started
+    sample, which must reject with the exact abort reason. It prints only PIDs, coverage counters,
+    the marker child's own name and a leak flag, never other names.
     With the child still running, `resource_snapshot` with `process_limit: 50` must return exactly
     `min(50, coverage.sampled)` entries carrying only `pid`/`parentPid`/`cpu`/`rssBytes`/`executable`,
-    ranked `interval-cpu` on Linux and `rss` on Darwin. `process_limit: 51` must be an error result.
+    ranked `interval-cpu` on Linux and `rss` on Darwin, and no window of the secret may appear in the
+    tool record. `process_limit: 51` must be an error result.
     Evidence records the ranking, the refusal text and the sampler integrity, which must equal the
     registry's own `npm view @nredd/pi-resource-sampler@<RESOURCE_SAMPLER_VERSION> dist` integrity, with
     the lock's `resolved` equal to the published tarball URL (queried through the credential-free
-    sandbox; URLs in errors drop userinfo and query). Cancellation is not driven through headless Pi.
-    The package tests cancel the registry-installed sampler while its first scan is in flight (checked
-    pending at abort, the sampler's own scan rejected with the exact abort reason rather than a later
-    interval wait, no helper child left) and mid-interval; faked samplers cover a pre-aborted call,
-    cancellation after the second sample, and disposal failures, rejected or thrown synchronously (the
-    primary error or abort wins)
+    sandbox; URLs in errors drop userinfo and query). Tool-level cancellation is not driven through
+    headless Pi. The package tests also run the secret-bearing child through the tool, and cancel
+    the registry-installed sampler while its first scan is in flight (checked pending at abort, the
+    sampler's own scan rejected with the exact abort reason rather than a later interval wait, no
+    helper child left) and mid-interval; faked samplers cover a pre-aborted call, cancellation after
+    the second sample, and disposal failures, rejected or thrown synchronously (the primary error or
+    abort wins)
   - session-kit: real `monitor_start`/`monitor_read` output, then the exact packed bytes of
     `dist/pi-stats-export.mjs` copied ALONE into a fresh directory (no `src/`, package or
     `node_modules` beside or above it) and run with only `node` from another unrelated directory,
