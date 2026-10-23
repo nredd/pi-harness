@@ -110,9 +110,13 @@ non-triggering display message. The overlay is TUI-only and works in Plan mode.
 ## Stats
 
 `/stats` is Claude Code's `/stats` pane over fresh local sessions plus imported machine snapshots,
-split by provider and model. It NEVER performs network I/O. Machine coverage and the last successful
-remote import are shown; unsynced machines show `local-only` / `never synced`. Invalid or missing
-snapshots retain last-good data and show `incomplete coverage`.
+split by provider and model. It NEVER performs network I/O. The header shows `viewer last import`,
+not producer freshness; without imports it says `viewer never imported`. Tab/Shift-Tab reaches
+**Machines**, with each known label/opaque UUID, local scan status, and remote exported-at UTC
+instant plus age at opening. Old exports stay old after a fresh import; future clocks are flagged.
+Unknown/rejected sources and retained last-good snapshots are explicit. This lists known sources,
+not undiscovered machines. Invalid or missing snapshots show `incomplete coverage`.
+Print/JSON output includes the same provenance. Details: [here](docs/stats-snapshots.md).
 
 Pinned header: tabs and the coverage note, then the date ranges and the model filter, then a rule.
 Overview: an activity heatmap (one column per week) with the headline numbers (favorite model,

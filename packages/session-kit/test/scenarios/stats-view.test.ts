@@ -169,6 +169,8 @@ async function hourlyTabs(fixture: TerminalFixture): Promise<void> {
 	await fixture.key("\x1b[B\x1b[Ajk");
 	layout(fixture);
 	await fixture.key("\t");
+	expect(layout(fixture)).toContain("Viewer last import:");
+	await fixture.key("\t");
 	await fixture.key("k".repeat(60));
 	expect(layout(fixture)).toMatch(/Total tokens +\d/);
 }

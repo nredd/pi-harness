@@ -70,6 +70,9 @@ The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, 
   run on the same host. The child runner loads the real kit itself. All assertion destinations
   and native timer boundaries live in the ledger: [here](verification-rebuild.md)
 
+- `stats-plan.test.ts` checks the explicit `viewer last import` label and cycles through
+  Overview, Models and Machines while Plan mode remains enabled; the Machines view retains
+  viewer-import and local-scan evidence across terminal resizes.
 - `memory-deferred-kit.test.ts` loads real npm memory/context-engine factories with session-kit:
   memory write/read and system-message refresh coexist with hidden monitor registration,
   session-lifetime search promotion and successful controlled monitor execution. qmd is a
