@@ -51,6 +51,8 @@ export class MonPoll {
 					load: [],
 					processes: [],
 					capturedAt: this.clock.now(),
+					sampledAtMs: performance.now(),
+					cpuState: "unavailable",
 					...this.last,
 					status: "stale",
 					notice: "Sampling stopped. Close and reopen to retry.",

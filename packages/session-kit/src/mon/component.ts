@@ -53,14 +53,18 @@ export class MonView implements Component {
 
 	update(snapshot: MonSnapshot): void {
 		this.snapshot = snapshot;
-		if (snapshot.status === "live") this.lastSuccess = snapshot.capturedAt;
+		// Collector success is independent of CPU: a warming sample still carries fresh memory/processes.
+		// A stale snapshot is not a new measurement, so it adds no history point.
+		if (snapshot.status === "live") {
+			this.lastSuccess = snapshot.capturedAt;
+			// Leading samples without a CPU value are "no data yet" (blank), not gaps.
+			if (snapshot.cpuPercent !== null || this.history.length > 0) {
+				this.history.push({ sampledAtMs: snapshot.sampledAtMs, value: snapshot.cpuPercent });
+				if (this.history.length > 120) this.history.shift();
+			}
+		}
 		// Never rank by a column that is unavailable for every row, unless the user asked for it.
 		if (!this.sortChosen) this.sort = snapshot.processCpu === "unavailable" ? "rss" : "cpu";
-		this.history.push({
-			capturedAt: snapshot.capturedAt,
-			value: snapshot.status === "stale" ? null : snapshot.cpuPercent,
-		});
-		if (this.history.length > 120) this.history.shift();
 		this.reorder();
 		this.refresh();
 	}
@@ -154,7 +158,7 @@ export class MonView implements Component {
 		const cpu = this.panel(
 			"CPU / interval",
 			[
-				` ${t.bold(percent(s?.cpuPercent ?? null))} ${t.fg("muted", `of ${s?.logicalCpus ?? "--"} logical CPUs`)}`,
+				` ${t.bold(percent(s?.cpuPercent ?? null))}${this.cpuState()} ${t.fg("muted", `of ${s?.logicalCpus ?? "--"} logical CPUs`)}`,
 				` ${t.fg("accent", fitCols(timeHistory(this.history, leftWidth - 4), leftWidth - 4))}`,
 				` ${t.fg("dim", this.historyLabel())}`,
 			],
@@ -178,8 +182,14 @@ export class MonView implements Component {
 		return width >= 80 && typeof scan === "number" && Number.isFinite(scan) ? `  scan ${Math.round(scan)}ms` : "";
 	}
 
+	/** Why host CPU reads `--`; textual, so meaning never depends on color. */
+	private cpuState(): string {
+		const state = this.snapshot?.cpuState;
+		return state === "warming" || state === "unavailable" ? ` ${this.options.theme.fg("warning", state)}` : "";
+	}
+
 	private historyLabel(): string {
-		const span = Math.max(0, (this.history.at(-1)?.capturedAt ?? 0) - (this.history[0]?.capturedAt ?? 0));
+		const span = Math.max(0, (this.history.at(-1)?.sampledAtMs ?? 0) - (this.history[0]?.sampledAtMs ?? 0));
 		return `0..100% · ${(span / 1000).toFixed(1)}s span · time →`;
 	}
 
@@ -188,7 +198,7 @@ export class MonView implements Component {
 		width = Math.max(1, width);
 		if (this.cache?.width === width && this.cache.height === height) return this.cache.lines;
 		const t = this.options.theme;
-		const status = this.snapshot?.status ?? "warming";
+		const status = this.snapshot?.status ?? "waiting";
 		const statusColor = status === "live" ? "success" : "warning";
 		const footer = t.fg(
 			"muted",
@@ -220,6 +230,9 @@ export class MonView implements Component {
 				" CPU is interval usage, not lifetime.",
 				" Process CPU can exceed 100% (one core).",
 				" -- is unavailable, never zero.",
+				" CPU warming: first interval baseline.",
+				" LIVE means collection succeeded,",
+				" even while CPU is warming.",
 				" Selection follows identity, not row.",
 				" RAM is total minus free, not pressure.",
 				" Load 1/5/15 min: not percent.",
@@ -245,7 +258,7 @@ export class MonView implements Component {
 			if (height >= (width >= 100 ? 16 : 20) && width >= 60) lines.push(...this.cards(width));
 			else if (height >= 8 + diagnosticRows) {
 				lines.push(
-					` CPU ${t.fg("accent", percent(this.snapshot?.cpuPercent ?? null))}  RAM ${bytes(this.snapshot?.memoryUsedBytes ?? null)}/${bytes(this.snapshot?.memoryTotalBytes ?? null)}`,
+					` CPU ${t.fg("accent", percent(this.snapshot?.cpuPercent ?? null))}${this.cpuState()}  RAM ${bytes(this.snapshot?.memoryUsedBytes ?? null)}/${bytes(this.snapshot?.memoryTotalBytes ?? null)}`,
 				);
 				lines.push(` ${t.fg("accent", timeHistory(this.history, width - 2))}`);
 				lines.push(t.fg("dim", ` ${this.historyLabel()}`));

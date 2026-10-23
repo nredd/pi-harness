@@ -16,11 +16,16 @@ export interface MonSnapshot {
 	memoryTotalBytes: number | null;
 	load: readonly number[];
 	processes: readonly MonProcess[];
-	/** Local display time, never persisted. */
+	/** Wall-clock capture time, for display only (it can jump). Never persisted. */
 	capturedAt: number;
+	/** Monotonic capture time; history spacing uses this, never wall time. */
+	sampledAtMs: number;
 	/** Collection time of this capture, when the adapter measured it. */
 	scanMs?: number | null;
-	status: "live" | "warming" | "stale";
+	/** Collector outcome: `live` is a successful collection even when host CPU has no value yet. */
+	status: "live" | "stale";
+	/** Host interval CPU state, independent of collector success. */
+	cpuState: "available" | "warming" | "unavailable";
 	/** Process interval CPU cannot exist for this platform; the view then defaults to RSS order. */
 	processCpu?: "unavailable";
 	/** Safe, bounded diagnostic supplied by the adapter. */
@@ -53,25 +58,26 @@ export function bytes(value: number | null): string {
 }
 
 export interface MonHistoryPoint {
-	capturedAt: number;
+	/** Monotonic milliseconds, so wall-clock steps cannot invent or hide gaps. */
+	sampledAtMs: number;
 	value: number | null;
 }
 
 /**
  * Time-proportional buckets, newest on the right. A column is the typical sampling interval (lower
  * median of consecutive captures), widened only when the history spans more than the width. Columns
- * after the first capture with no sample are real gaps (`·`), never interpolated CPU; columns before
- * it are blank because no history exists yet. The latest sample in a bucket wins.
+ * after the first capture without a CPU value are real gaps (`·`), never interpolated CPU; columns
+ * before it are blank because no history exists yet. The latest sample in a bucket wins.
  */
 export function timeHistory(history: readonly MonHistoryPoint[], width: number): string {
 	const first = history[0];
 	const last = history.at(-1);
 	if (!first || !last || width < 1) return "";
-	const span = last.capturedAt - first.capturedAt;
+	const span = last.sampledAtMs - first.sampledAtMs;
 	if (span <= 0) return sparkline([last.value], 1).padStart(width);
 	const deltas = history
 		.slice(1)
-		.map((point, i) => point.capturedAt - (history[i]?.capturedAt ?? point.capturedAt))
+		.map((point, i) => point.sampledAtMs - (history[i]?.sampledAtMs ?? point.sampledAtMs))
 		.filter((delta) => delta > 0)
 		.sort((a, b) => a - b);
 	const typical = deltas[Math.floor((deltas.length - 1) / 2)] ?? span;
@@ -79,7 +85,7 @@ export function timeHistory(history: readonly MonHistoryPoint[], width: number):
 	const buckets: (number | null)[] = Array.from({ length: width }, () => null);
 	let oldest = width - 1;
 	for (const point of history) {
-		const index = width - 1 - Math.round((last.capturedAt - point.capturedAt) / step);
+		const index = width - 1 - Math.round((last.sampledAtMs - point.sampledAtMs) / step);
 		if (index < 0 || index >= width) continue;
 		buckets[index] = point.value;
 		oldest = Math.min(oldest, index);

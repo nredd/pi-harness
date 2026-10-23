@@ -76,26 +76,26 @@ describe("mon responsive dashboard", () => {
 	it("fills completion-paced history contiguously, right-aligned, with only real gaps dotted", () => {
 		// Real cadence is 2000ms plus scan time; drift must not invent gaps.
 		const at = (i: number) => i * 2023 + (i >= 6 ? 15000 : 0);
-		const points = Array.from({ length: 10 }, (_, i) => ({ capturedAt: at(i), value: 50 }));
+		const points = Array.from({ length: 10 }, (_, i) => ({ sampledAtMs: at(i), value: 50 }));
 		const line = timeHistory(points.slice(0, 6), 20);
 		expect(line).toBe(`${" ".repeat(14)}${"▅".repeat(6)}`);
 		const gapped = timeHistory(points, 30);
 		expect(gapped.trimStart()).toMatch(/^▅{6}·{7}▅{4}$/);
-		const long = Array.from({ length: 120 }, (_, i) => ({ capturedAt: i * 2000, value: 50 }));
+		const long = Array.from({ length: 120 }, (_, i) => ({ sampledAtMs: i * 2000, value: 50 }));
 		const compressed = timeHistory(long, 40);
 		expect(compressed).toHaveLength(40);
 		expect(compressed).not.toContain(" ");
 		expect(compressed).not.toContain("·");
-		expect(timeHistory([{ capturedAt: 5, value: null }], 4)).toBe("   ·");
+		expect(timeHistory([{ sampledAtMs: 5, value: null }], 4)).toBe("   ·");
 	});
 
 	it("preserves irregular elapsed time and reports stale last success", () => {
 		expect(
 			timeHistory(
 				[
-					{ capturedAt: 0, value: 0 },
-					{ capturedAt: 1000, value: 100 },
-					{ capturedAt: 10000, value: 50 },
+					{ sampledAtMs: 0, value: 0 },
+					{ sampledAtMs: 1000, value: 100 },
+					{ sampledAtMs: 10000, value: 50 },
 				],
 				11,
 			),
@@ -104,6 +104,50 @@ describe("mon responsive dashboard", () => {
 		v.update({ ...snapshot(), capturedAt: 10000 });
 		v.update({ ...snapshot(), capturedAt: 25000, status: "stale" });
 		expect(v.render(80).join("\n")).toContain("Last success: 1970-01-01T00:00:10.000Z");
+	});
+
+	it("counts a warming or CPU-unavailable collection as a success, separate from CPU state", () => {
+		const v = new MonView({ theme, rows: () => 24, requestRender: vi.fn(), onClose: vi.fn() });
+		expect(v.render(80)[0]).toContain("WAITING");
+		v.update({ ...snapshot(), cpuPercent: null, cpuState: "warming", capturedAt: 10000 });
+		let text = v.render(80).join("\n");
+		expect(text).toContain("LIVE");
+		expect(text).toContain("-- warming");
+		expect(text).not.toContain("WARMING");
+		v.update({ ...snapshot(), cpuPercent: null, cpuState: "unavailable", capturedAt: 12000, sampledAtMs: 12000 });
+		expect(v.render(80).join("\n")).toContain("-- unavailable");
+		v.update({ ...snapshot(), cpuPercent: null, cpuState: "unavailable", capturedAt: 12000, status: "stale" });
+		text = v.render(80).join("\n");
+		expect(text).toContain("STALE");
+		// Memory/process data came from the 12s collection; it is not "never succeeded".
+		expect(text).toContain("Last success: 1970-01-01T00:00:12.000Z");
+	});
+
+	it("leaves a leading warming baseline blank and spaces history by monotonic time", () => {
+		const v = new MonView({ theme, rows: () => 24, requestRender: vi.fn(), onClose: vi.fn() });
+		v.update({ ...snapshot(), cpuPercent: null, cpuState: "warming", sampledAtMs: 0, capturedAt: 0 });
+		expect(v.state.historyLength).toBe(0);
+		// The wall clock steps back an hour then forward two; monotonic cadence stays regular.
+		const walls = [-3_600_000, -3_598_000, 3_600_000, 3_602_000];
+		walls.forEach((capturedAt, i) => {
+			v.update({ ...snapshot(50), capturedAt, sampledAtMs: (i + 1) * 2000 });
+		});
+		expect(v.state.historyLength).toBe(4);
+		const history = v.render(80).find((line) => line.includes("▅"));
+		expect(history).toBeDefined();
+		expect(history).not.toContain("·");
+		expect(history).toMatch(/[^▅]▅{4}[^▅]/);
+		expect(v.render(80).join("\n")).toContain("6.0s span");
+	});
+
+	it("adds no history point for a stale snapshot, keeping the last measured value", () => {
+		const { v } = view();
+		v.update({ ...snapshot(80), sampledAtMs: 12_000 });
+		v.update({ ...snapshot(80), sampledAtMs: 12_000, status: "stale" });
+		expect(v.state.historyLength).toBe(2);
+		const history = v.render(80).find((line) => line.includes("▇"));
+		expect(history).toBeDefined();
+		expect(history).not.toContain("·");
 	});
 
 	it("composes wide cards side by side and stacks medium cards", () => {
@@ -126,16 +170,16 @@ describe("mon responsive dashboard", () => {
 		expect(v.render(80).join("\n")).toContain("70.0%");
 	});
 
-	it("bounds history at 120 and shows stale/warming states without inventing zero", () => {
+	it("bounds history at 120 and shows stale and CPU warming states without inventing zero", () => {
 		const { v } = view();
 		for (let i = 0; i < 150; i++) v.update(snapshot(i % 100));
 		expect(v.state.historyLength).toBe(120);
 		v.update({ ...snapshot(), status: "stale", notice: "Collector unavailable" });
 		expect(v.render(80).join("\n")).toContain("STALE");
-		v.update({ ...snapshot(), status: "warming", cpuPercent: null });
+		v.update({ ...snapshot(), cpuState: "warming", cpuPercent: null });
 		const text = v.render(80).join("\n");
-		expect(text).toContain("WARMING");
-		expect(text).toContain("--");
+		expect(text).toContain("LIVE");
+		expect(text).toContain("-- warming");
 	});
 
 	it("keeps identity through refresh and sorts, but not PID reuse", () => {
