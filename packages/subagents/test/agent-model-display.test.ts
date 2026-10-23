@@ -229,7 +229,7 @@ describe("Agent tool result — effective model", () => {
     pinnedAgent("thinking: low\n");
     const tool = await agentTool();
     let dispatchedThinking: string | undefined;
-    vi.mocked(runAgent).mockImplementation((_c: any, _t: any, _p: any, options: any) => {
+    vi.mocked(runAgent).mockImplementation((_c, _t, _p, options) => {
       dispatchedThinking = options.thinkingLevel;
       return new Promise(() => {}) as never;
     });
@@ -251,7 +251,7 @@ describe("Agent tool result — effective model", () => {
     pinnedAgent("thinking: low\n");
     const tool = await agentTool();
     let dispatchedThinking: string | undefined;
-    vi.mocked(runAgent).mockImplementation((_c: any, _t: any, _p: any, options: any) => {
+    vi.mocked(runAgent).mockImplementation((_c, _t, _p, options) => {
       dispatchedThinking = options.thinkingLevel;
       return new Promise(() => {}) as never;
     });
