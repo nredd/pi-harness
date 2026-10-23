@@ -356,7 +356,7 @@ def test_local_descriptor_and_personal_file_fail_closed(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("source", "local"),
     [
-        ("npm:@nredd/pi-session-kit@0.6.0", "../../packages/session-kit"),
+        ("npm:@nredd/pi-session-kit@0.7.0", "../../packages/session-kit"),
         ("npm:@nredd/pi-preset@0.2.0", "../../packages/preset"),
         ("npm:@nredd/pi-subagents@0.22.0-nredd.6", "../../packages/subagents"),
         ("npm:@nredd/pi-todo@2.13.10", "../../packages/todo"),
