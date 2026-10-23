@@ -13,7 +13,10 @@ from __future__ import annotations
 import ast
 import io
 import json
+import os
 import shutil
+import socket
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -1225,13 +1228,180 @@ def test_kind_changed_after_planning_never_enters_the_journal(
     staged = install.stage(layout, harness.verified, plan, layout.root / "staging" / "x")
     make_unsupported(layout, "bin-pi-directory")
     before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
-    with pytest.raises(UnsupportedError, match="bin"):
+    with pytest.raises(UnsupportedError, match="bin") as raised:
         switch(layout, harness.verified, plan, staged, Journal(layout, layout.root / "backups" / "b"))
+    assert "nothing changed" not in str(raised.value)
     steps = json.loads(layout.journal.read_text())["steps"]
     assert str(layout.link) not in [step["target"] for step in steps]
     assert rollback(layout)
     assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
     assert not layout.journal.exists()
+
+
+def test_kind_changed_mid_run_rolls_back_and_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mid-run kind change is a rolled-back failure (exit `1`), never reported as nothing changed."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+    original = install.stage
+
+    def stage_then_swap(layout: Layout, verified: Verified, plan: install.Plan, staging: Path) -> Path | None:
+        """Stage, then turn the `pi` link into a directory before the switch reaches it.
+
+        Parameters:
+            layout (Layout): installer paths.
+            verified (Verified): verified input.
+            plan (install.Plan): planned changes.
+            staging (Path): staging directory.
+
+        Returns:
+            Path | None: the staged agent tree.
+        """
+        staged = original(layout, verified, plan, staging)
+        make_unsupported(layout, "bin-pi-directory")
+        return staged
+
+    monkeypatch.setattr(install, "stage", stage_then_swap)
+    with pytest.raises(InstallError, match="rolled back") as raised:
+        harness.run(yes=True)
+    assert not isinstance(raised.value, UnsupportedError)
+    assert "nothing changed" not in str(raised.value)
+    after = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+    assert after == {k: v for k, v in before.items() if k != ".local/bin/pi"} | {
+        ".local/bin/pi/mine": b"mine"
+    }
+    assert not harness.layout.journal.exists()
+
+
+SPECIAL_CHILD = """\
+import sys
+from pathlib import Path
+from harness import install
+from harness.promotion import load_promoted_snapshot
+from harness.stack import source_string
+snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
+sources = [source_string(package) for package in snapshot.stack.sources]
+install.preflight = lambda system, machine: {"node": "node"}
+install.verify_snapshot = lambda sha, workdir: snapshot
+install.verify_release = lambda snapshot, node, workdir: install.Verified(snapshot, sources, {})
+sys.exit(install.main(sys.argv[2:]))
+"""
+
+
+def make_special(path: Path, kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Create a FIFO, a link to one, or a Unix socket at `path`.
+
+    Parameters:
+        path (Path): entry to create; its parent exists.
+        kind (str): `fifo`, `fifo-link` or `socket`.
+        monkeypatch (pytest.MonkeyPatch): restores the working directory a socket bind uses.
+    """
+    match kind:
+        case "fifo":
+            os.mkfifo(path)
+        case "fifo-link":
+            os.mkfifo(path.with_name("pipe"))
+            path.symlink_to(path.with_name("pipe"))
+        case "socket":
+            # Bound by relative name: `sun_path` is ~104 bytes and pytest's tmp paths can exceed it.
+            monkeypatch.chdir(path.parent)
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(path.name)
+            server.close()
+        case _:
+            raise ValueError(f"Unknown kind '{kind}'")
+
+
+@pytest.mark.parametrize(
+    ("name", "kind", "message"),
+    [
+        ("settings.json", "fifo", "is a fifo; the installer only reads a regular file or a link to one"),
+        ("subagents.json", "fifo", "is a fifo; the installer only reads a regular file or a link to one"),
+        ("settings.json", "fifo-link", "is a fifo; the installer only reads a regular file or a link to one"),
+        ("installed.json", "fifo", "is a fifo; the installer only replaces a file there"),
+        ("installed.json", "fifo-link", "is a symlink; the installer only replaces a file there"),
+        ("settings.json", "socket", "is a socket; the installer only reads a regular file or a link to one"),
+        ("installed.json", "socket", "is a socket; the installer only replaces a file there"),
+    ],
+)
+def test_special_files_fail_fast_without_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, kind: str, message: str
+) -> None:
+    """The real entry point refuses a FIFO or socket before opening it: exit `2`, never a hang.
+
+    Run as a child with a hard timeout, because the regression is a read that blocks forever.
+    """
+    if kind == "socket" and not hasattr(socket, "AF_UNIX"):
+        pytest.skip("no Unix domain sockets")
+    agent, root = special_home(tmp_path)
+    target = root / name if name == install.STATE_FILE else agent / name
+    target.unlink(missing_ok=True)
+    make_special(target, kind, monkeypatch)
+    before = tree(tmp_path)
+    result = run_child(tmp_path)
+    assert result.returncode == ExitCode.UNSUPPORTED, result.stderr
+    assert f"UNSUPPORTED: '{target}' {message}" in result.stderr
+    assert "nothing changed" in result.stderr
+    assert install.entry_kind(target) == ("symlink" if kind == "fifo-link" else kind)
+    assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == before
+    assert not (root / "transaction.json").exists()
+
+
+def test_fifo_journal_fails_closed_without_blocking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A FIFO in place of the journal is untrusted at once, never opened in blocking mode."""
+    _, root = special_home(tmp_path)
+    make_special(root / "transaction.json", "fifo", monkeypatch)
+    before = tree(tmp_path)
+    result = run_child(tmp_path)
+    assert result.returncode == ExitCode.FAILED, result.stderr
+    assert "is not trusted: it is not a regular file; nothing was restored" in result.stderr
+    assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == before
+
+
+def special_home(tmp_path: Path) -> tuple[Path, Path]:
+    """Seed an existing setup under `tmp_path/home`, with the installer root under `tmp_path/data`.
+
+    Parameters:
+        tmp_path (Path): private directory.
+
+    Returns:
+        tuple[Path, Path]: the agent directory and the installer root, both existing.
+    """
+    home = tmp_path / "home"
+    seed_existing(home)
+    root = tmp_path / "data" / "pi-stack"
+    root.mkdir(parents=True)
+    return home / ".pi" / "agent", root
+
+
+def run_child(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    """Run `install.main` with `--yes` in a child confined to `special_home`, killed after 60 s.
+
+    Parameters:
+        tmp_path (Path): directory `special_home` seeded.
+
+    Returns:
+        subprocess.CompletedProcess[str]: the finished child.
+    """
+    home = tmp_path / "home"
+    env = {
+        "HOME": str(home),
+        "PATH": os.environ["PATH"],
+        "PYTHONPATH": str(INTEGRATION),
+        "PI_CODING_AGENT_DIR": str(home / ".pi" / "agent"),
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+    }
+    argv = [str(FIXTURE), SHA, "--yes", "--bin-dir", str(home / ".local" / "bin")]
+    return subprocess.run(
+        [sys.executable, "-c", SPECIAL_CHILD, *argv],
+        env=env,
+        cwd=tmp_path,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
 
 
 def test_journal_is_private_before_any_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

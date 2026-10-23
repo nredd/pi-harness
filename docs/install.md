@@ -67,7 +67,15 @@ The installer prints the plan first: the packages in order with their filters, e
 
 Overwrites include existing `~/.pi/agent/npm` and `~/.pi/agent/git` trees (both are replaced and backed up, even when the stack installs no git package), changed `settings.json` keys, packages you declared that are not in the stack (they stop loading), `subagents.json`, and an existing `~/.local/bin/pi`. Everything replaced is moved or copied to `~/.local/share/pi-stack/backups/<UTC time>-<sha>/` first and kept.
 
-A corrupt `settings.json` or `subagents.json` stops the run; fix or move it yourself. So does a symlinked one that would change: an atomic replace would turn your link into a regular file, so it is refused before anything changes. Likewise, a path the switch replaces that holds a kind its backup could not be restored as (a directory at `~/.local/bin/pi` or `installed.json`, a regular file at `~/.pi/agent/npm` or `git`, anything that is not a regular file, directory or link) exits `2` before the prompt; move it aside yourself. A path that turns into such a kind mid-run is refused before it is journaled.
+Every path is classified with `lstat` before it is opened, so a FIFO, socket or device is refused instead of read (a FIFO would block the run forever). Accepted kinds, per path:
+
+- `settings.json`, `subagents.json`: a regular file, or a link to one, which is read through. A link that would change is refused (exit `1`): an atomic replace would turn your link into a regular file. A dangling link counts as absent, so it is refused the same way when the plan writes the file. Any other kind, including a link to one, exits `2`.
+- `installed.json`: a regular file only. A link is never followed and, like any other kind, exits `2`.
+- `~/.pi/agent/npm`, `~/.pi/agent/git`: a directory or a link.
+- `~/.local/bin/pi`: a regular file or a link.
+- `transaction.json`: see the journal below.
+
+A corrupt `settings.json` or `subagents.json` stops the run (exit `1`); fix or move it yourself. Refusals by kind happen before the prompt and before anything changes; move the entry aside yourself. A path that turns into a refused kind after planning is refused before it is journaled: the switch fails, rolls back the steps it already took and exits `1`.
 
 ## Reruns, updates, interruptions
 
@@ -77,7 +85,7 @@ A corrupt `settings.json` or `subagents.json` stops the run; fix or move it your
 - The switch-over is journaled in `~/.local/share/pi-stack/transaction.json` before each step. A failure during the switch rolls back immediately. If the process is killed mid-switch, the next run restores every journaled step (after consent) first, offline: the restore needs no network, no prerequisites and no snapshot, so it completes even if verification then fails. The journal is created owner-only (`0600`) before any data is written, whatever your umask. It is trusted only if it is a regular file you own with no group or other permission bits (`0600`, or `0400` if you made it read-only) and every step names a path a switch replaces (`npm`/`git` trees, `settings.json`, `subagents.json`, the `pi` link, `installed.json`) with its backup, of the kind that path holds, inside one `backups/<run>/` directory; anything else fails closed before a single file changes. The journal names the exact paths of the run that wrote it, so restore with that run's `--bin-dir` and `PI_CODING_AGENT_DIR` (and `XDG_DATA_HOME`, which locates the journal); with other ones the steps fall outside the allowed paths and the run fails closed, saying so. A dangling `npm`/`git` tree or core link counts as existing state, so replacing it needs consent. `--plan` lists the pending `RESTORE` steps, exits `0`, and plans nothing until the restore has run. If a restore itself fails, the run says so and keeps the journal; the original files are in `backups/`.
 - Only one installer runs at a time (`~/.local/share/pi-stack/lock`).
 
-Exit codes: `0` installed or already installed, `1` failed (state unchanged or restored, as reported), `2` malformed stack SHA or arguments (usage), unsupported platform, split filesystems, an existing entry of an unrestorable kind or missing prerequisite, `3` verification failed, `4` consent required or declined.
+Exit codes: `0` installed or already installed, `1` failed (state unchanged or restored, as reported), `2` malformed stack SHA or arguments (usage), unsupported platform, split filesystems, an existing entry of a refused kind (before anything changes) or missing prerequisite, `3` verification failed, `4` consent required or declined.
 
 To uninstall: remove `~/.local/bin/pi`, `~/.local/share/pi-stack`, `~/.pi/agent/npm`, and the `packages` key of `~/.pi/agent/settings.json`, or restore from `backups/`.
 
