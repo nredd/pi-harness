@@ -2,7 +2,12 @@
 
 Pi-independent, dependency-free ESM library for passive host resource dashboards and snapshots.
 `@nredd/pi-resource-sampler` is not a Pi extension. No tools, timers, hooks, output or policy are
-registered. Initial implementation only; no consumer migration or npm publication in this PR.
+registered. Runs on Node >=22.14 and Bun.
+
+Upgrade from `0.1.0`, which is unsafe: on Darwin it reported `ps -c -o comm`, the basename of argv[0],
+so a launcher-chosen argv[0] or Node `process.title` (e.g. `npm exec <package> mcp`) leaked into
+`processes[].name`. On Bun, host `cpu` read lazily populated `os.cpus()` objects, so the second sample
+was `warming` and the third could be a fictional 0 or 100. `0.1.1` keeps the same TypeScript interface.
 
 ```ts
 import { createResourceSampler } from '@nredd/pi-resource-sampler';
@@ -27,10 +32,12 @@ Semantics:
 - `processes[].cpu`: Linux user+system counter delta divided by monotonic elapsed milliseconds.
   100 means one logical core, multi-threaded processes can exceed 100. Linux `CLK_TCK` is read
   once with fixed `/usr/bin/getconf CLK_TCK`; no assumed tick rate or RSS page size.
-- Linux identity includes the exact `/proc/PID/stat` start tick string. Read stat/status/stat and
+- Linux identity includes the exact `/proc/PID/stat` start tick string. Read stat/exe/status/stat and
   reject identity changes during RSS collection. Missing or inaccessible processes are skipped and
   invalidate their old baselines. New/reused PIDs and counter resets warm rather than showing zero.
-- Darwin uses only `/bin/ps -A -c -o pid=,ppid=,lstart=,time=,rss=,comm=` with `LC_ALL=C`.
+- `cpu` copies every `os.cpus()` counter when sampled. Bun returns lazy placeholders that read native
+  counters on first property access; an unread stored baseline would describe a later instant.
+- Darwin uses only `/bin/ps -A -o pid=,ppid=,lstart=,time=,rss=,ucomm=` with `LC_ALL=C`.
   Actual macOS observation: `time` prints hundredths (e.g. `185:32.40`), but `lstart` prints only
   seconds (`Sat Oct 3 01:49:05 2026`). That cannot rule out PID reuse within one second, so Darwin
   process interval CPU is explicitly `unavailable`. No decaying `%cpu` is relabelled as an interval.
@@ -40,9 +47,19 @@ Semantics:
 - `memory.freeBytes` means free, NOT available or pressure. `loadAverage` is load, NOT percent.
   Linux memory PSI preserves native `some`/optional `full`, avg10/60/300 percentages and cumulative
   stall microseconds. Missing/invalid PSI is unavailable. Other platforms explicitly have no PSI.
-- Names are bounded basenames with control characters removed; no arguments, environments,
-  user names, executable paths or agent attribution are collected. Process names remain untrusted
-  display strings; consumers must not execute or interpret them.
+- `processes[].name` is an executable basename from kernel metadata, never argv, environment, process
+  title or a process-writable name. `""` means unavailable, not a process called nothing:
+  - Darwin: `ucomm`, which `ps` prints from kinfo `p_comm`. XNU writes it only at exec, from the
+    looked-up executable file name, truncated to 16 bytes (`Google Chrome He`). `ps -c -o comm` is
+    argv[0] and is NOT used.
+  - Linux: basename of `readlink /proc/PID/exe` (` (deleted)` marker removed), read between the two
+    identity-checked stat reads. The kernel gates that link by ptrace read access, so other users'
+    processes are usually `""` without privileges. `/proc/PID/stat` comm is NOT used for user
+    processes: `prctl(PR_SET_NAME)`, `/proc/self/comm` and Node's `process.title` rewrite it.
+    Kernel threads (`PF_KTHREAD`) keep their comm (`kworker/0:1`); userspace cannot rename them.
+  - Whoever names the executable file still chooses the name. Names are bounded to 128 code points
+    with control characters replaced, no user names, paths or agent attribution are collected, and
+    consumers must treat them as untrusted display text, never execute or interpret them.
 
 Bounds:
 
@@ -67,7 +84,10 @@ scans (2.6ms/sample, excludes helper CPU); a separate fixed `ps` invocation meas
 real-input gate and reports its snapshot duration/coverage.
 
 Development: `npm run check --workspace @nredd/pi-resource-sampler` (single-worker tests, including
-actual host samples and child cleanup); `make check-resource-sampler-contract` builds and exercises
+actual host samples and child cleanup). `test/runtime.test.ts` runs under both Vitest (Node) and
+`bun test`: it starts a child whose argv[0], argv, environment, process title and (Linux) comm hold a
+random secret, proves the 0.1.0 source exposes it, then requires no 12-character fragment in the
+snapshot, plus three real CPU samples. `make check-resource-sampler-contract` builds and exercises
 an isolated installed tarball, with no Pi or siblings. Both run on existing macOS/Linux CI jobs.
 `dist` contains compiled ESM and declarations; the exact packed payload is contract-pinned. No install
 scripts or runtime dependencies. New npm-name ownership bootstrap requires the owner's interactive
