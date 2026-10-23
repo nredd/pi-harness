@@ -75,7 +75,7 @@ What each package must satisfy:
   dependencies, peers only from the Pi host set (`@earendil-works/pi-ai`,
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
 - Every import is a `node:` builtin, a host module, a declared runtime dependency, or a relative path
-  inside the package. No `@nredd/*` sibling, with one narrow exception: an exact `SIBLING_LIBRARIES`
+  inside the package. No `@nredd/*` sibling, with one narrow exception: an exact `SHARED_LIBRARIES`
   specifier (today only the `library=True` `@nredd/pi-resource-sampler`) that the importing plugin's
   contract also declares as an exact runtime dependency. Deep imports, undeclared or ranged
   dependencies, `workspace:`/`file:` specs, imports from a library and imports from a standalone
@@ -186,7 +186,7 @@ contract still requires `pi.extensions` and retains its original host-module rul
 descriptor uses the same audit/isolated execution gate; no npm publication or bootstrap is performed.
 The new npm name requires owner-controlled staged publication/2FA and trusted-publisher setup before
 release. Consumers pin an exact published version and are admitted only through the narrow
-`SIBLING_LIBRARIES` rule above, not a relaxed sibling import rule.
+`SHARED_LIBRARIES` rule above, not a relaxed sibling import rule.
 
 ## Packed preset audit (no standalone Pi behavior)
 

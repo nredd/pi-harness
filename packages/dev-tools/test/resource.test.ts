@@ -443,13 +443,14 @@ describe("resource_snapshot mapping", () => {
 		registerResourceTools(mock.pi, resolved);
 		const tool = mock.tools.get("resource_snapshot");
 		expect(tool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
-		expect(tool?.description).toContain("never returns command arguments or environments");
+		expect(tool?.description).toContain("does not request command arguments or environments");
+		expect(tool?.description).toContain("can be a process-set title that includes argument text");
 		expect(tool?.description).toContain("cannot attribute OS processes to agents");
 		const result = await mock.call("resource_snapshot", { process_limit: 1, interval_ms: INTERVAL_MS }, "/tmp");
 		expect(result.isError).toBe(false);
 		expect(mock.text(result)).toContain("7 1 12.5% 102400 tester");
 		expect(mock.text(result)).toContain("interval utilization 37.5% over 120ms");
-		expect(mock.text(result)).toContain("No arguments, environments, or process-to-agent attribution");
+		expect(mock.text(result)).toContain("may include process-set titles; no process-to-agent attribution");
 		for (const params of [{ process_limit: 51 }, { process_limit: 0 }, { interval_ms: 99 }, { interval_ms: 5_001 }]) {
 			await expect(mock.call("resource_snapshot", params, "/tmp")).rejects.toThrow("params rejected");
 		}

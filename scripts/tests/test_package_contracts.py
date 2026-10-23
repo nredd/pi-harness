@@ -483,7 +483,7 @@ def test_dev_tools_pins_the_published_sampler_exactly() -> None:
     """The only sibling allowance is an exact published library version, never a range or link."""
     assert dict(DEV_TOOLS.runtime_dependencies) == {"@nredd/pi-resource-sampler": "0.1.0"}
     assert pc.RESOURCE_SAMPLER_CONTRACT.library
-    assert {pc.RESOURCE_SAMPLER_CONTRACT.name} == pc.SIBLING_LIBRARIES
+    assert {pc.RESOURCE_SAMPLER_CONTRACT.name} == pc.SHARED_LIBRARIES
     manifest = json.loads((pc.REPO_ROOT / "packages" / "dev-tools" / "package.json").read_text())
     assert manifest["dependencies"] == dict(DEV_TOOLS.runtime_dependencies)
 
