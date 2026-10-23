@@ -6,9 +6,10 @@ export interface ProcessSample {
 	pid: number;
 	parentPid: number;
 	/**
-	 * Executable basename from kernel metadata, never argv, environment or process title: Darwin
-	 * `p_comm` (at most 16 bytes), Linux `/proc/PID/exe` basename. "" means unavailable,
-	 * e.g. another user's Linux process. Untrusted display text: whoever names the file chooses it.
+	 * Executable basename from kernel metadata, never argv, environment, process title or Linux comm:
+	 * Darwin `p_comm` (at most 16 bytes), Linux `/proc/PID/exe` basename. "" means unavailable,
+	 * e.g. another user's Linux process. Untrusted display text: whoever names the file chooses it, and
+	 * a Linux process can exec a `memfd_create` file it named itself.
 	 */
 	name: string;
 	identity: string;

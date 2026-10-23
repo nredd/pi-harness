@@ -47,8 +47,9 @@ Semantics:
 - `memory.freeBytes` means free, NOT available or pressure. `loadAverage` is load, NOT percent.
   Linux memory PSI preserves native `some`/optional `full`, avg10/60/300 percentages and cumulative
   stall microseconds. Missing/invalid PSI is unavailable. Other platforms explicitly have no PSI.
-- `processes[].name` is an executable basename from kernel metadata, never argv, environment, process
-  title or a process-writable name. `""` means unavailable, not a process called nothing:
+- `processes[].name` is an executable basename from kernel metadata. It excludes argv, environment,
+  process title and Linux comm, but it is still untrusted metadata that the process or its launcher can
+  choose (see the last item). `""` means unavailable, not a process called nothing:
   - Darwin: `ucomm`, which `ps` prints from kinfo `p_comm`. XNU writes it only at exec, from the
     looked-up executable file name, truncated to 16 bytes (`Google Chrome He`). `ps -c -o comm` is
     argv[0] and is NOT used.
@@ -57,15 +58,23 @@ Semantics:
     processes are usually `""` without privileges. `/proc/PID/stat` comm is NOT used:
     `prctl(PR_SET_NAME)`, `/proc/self/comm` and Node's `process.title` rewrite it. Kernel threads
     have no `VmRSS`, so they are skipped (`process-unreadable-or-changed`) and never named.
-  - Whoever names the executable file still chooses the name. Names are bounded to 128 code points
-    with control characters replaced, no user names, paths or agent attribution are collected, and
-    consumers must treat them as untrusted display text, never execute or interpret them.
+  - Whoever names, links or copies the executable file chooses the name. On Linux a process can also
+    exec a `memfd_create` file it named itself (`memfd:<name>`), and a privileged one can replace its
+    exe link with `prctl(PR_SET_MM_EXE_FILE)`. Names are bounded to 128 code points with control
+    characters replaced, no user names, paths or agent attribution are collected, and consumers must
+    treat them as untrusted display text, never execute or interpret them.
 
 Bounds:
 
 - Default scan budget 250ms, 2048 PIDs, 2MiB captured bytes; options allow at most 5s, 16384 PIDs,
   16MiB. Linux proc files read sequentially (concurrency one), at most 8KiB each. Directory iteration
   stops at the budget; Darwin output stops at the PID/output budget and reaps the fixed helper.
+- `/proc/PID/exe` is a `readlink`, which Node and Bun cannot cap: each call copies up to PATH_MAX
+  (4096) bytes into a fixed runtime buffer before the length is known. That fixed per-call syscall
+  copy can exceed the remaining budget; the logical budget cannot. A target longer than the remainder
+  is charged the remainder and its name dropped (`""`, `byte-limit`), so `bytesRead <= maxBytes`. A
+  target filling the 4096-byte buffer may be truncated: Node returns it silently and the name is
+  dropped too (`file-byte-limit`); Bun refuses it with `ENAMETOOLONG`, so the name is `""`.
 - `coverage.complete`, `enumerated`, `sampled`, `skipped`, `bytesRead` and reasons describe partial
   coverage explicitly. `enumerated` is encountered rows, not total processes when partial. Truncation
   is not a host-wide top-process ranking. OS enumeration order may favor the same subset each time.

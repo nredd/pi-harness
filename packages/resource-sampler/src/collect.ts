@@ -4,6 +4,9 @@ import { performance } from "node:perf_hooks";
 import { darwinProcess, executableName, linuxRss, linuxStat, type ProcessCounter, psi } from "./counters.js";
 import type { ResourceSnapshot } from "./types.js";
 
+/** Linux PATH_MAX: Node (libuv `pathconf`) and Bun (`PathBuffer`) readlink buffer size on Linux. */
+const LINK_BUFFER_BYTES = 4096;
+
 /** Per-scan mutable budget, never shared between sampler instances. */
 export class Budget {
 	bytesRead = 0;
@@ -47,18 +50,33 @@ export class Budget {
 	}
 	/**
 	 * Linux executable basename, or "" when the exe link is unreadable (other users' processes without
-	 * ptrace read access, exited processes) or the budget is spent. Errors carry no detail outward.
+	 * ptrace read access, exited processes), over budget or possibly truncated. Errors carry no detail
+	 * outward. Node and Bun cannot cap readlink below their fixed PATH_MAX buffer, so the length is only
+	 * known after the syscall: a target beyond the remaining budget is charged the remainder and dropped,
+	 * keeping `bytesRead <= maxBytes`. Node returns a full buffer silently truncated, so that is dropped too.
 	 */
 	async executable(path: string): Promise<string> {
 		if (!this.ready()) return "";
+		let target: Buffer;
 		try {
-			const target = await readlink(path, { encoding: "buffer" });
-			this.bytesRead += target.length;
-			return executableName(target.toString("utf8"));
+			target = await readlink(path, { encoding: "buffer" });
 		} catch {
 			this.signal.throwIfAborted();
 			return "";
 		}
+		this.signal.throwIfAborted();
+		const remaining = this.maxBytes - this.bytesRead;
+		if (target.length > remaining) {
+			this.bytesRead = this.maxBytes;
+			this.reasons.add("byte-limit");
+			return "";
+		}
+		this.bytesRead += target.length;
+		if (target.length >= LINK_BUFFER_BYTES) {
+			this.reasons.add("file-byte-limit");
+			return "";
+		}
+		return executableName(target.toString("utf8"));
 	}
 }
 
