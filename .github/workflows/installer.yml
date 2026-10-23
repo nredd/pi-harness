@@ -1,0 +1,70 @@
+---
+# Real one-shot installer acceptance (docs/install.md) against a published `stack/<sha>`.
+# It runs the documented `uvx` command from this exact commit in throwaway HOMEs. Not a required
+# check; it runs only when the installer or the code it reuses changes.
+name: Installer
+
+'on':
+  pull_request:
+    paths:
+      - .github/workflows/installer.yml
+      - integration/harness/install.py
+      - integration/harness/promotion.py
+      - integration/harness/release.py
+      - integration/harness/sandbox.py
+      - integration/harness/stack.py
+      - integration/pyproject.toml
+      - integration/scenarios/installer/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/installer.yml
+      - integration/harness/install.py
+      - integration/harness/promotion.py
+      - integration/harness/release.py
+      - integration/harness/sandbox.py
+      - integration/harness/stack.py
+      - integration/pyproject.toml
+      - integration/scenarios/installer/**
+  workflow_dispatch:
+    inputs:
+      stack_sha:
+        description: Promoted `stack/<sha>` to install
+        required: false
+        default: 24889f7896be7157bf9077a41465a3b29620879f
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: installer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Install harness dependencies
+        working-directory: integration
+        run: uv sync --locked
+      # No token is passed: the installer must work for anyone, anonymously.
+      - name: Run the documented one-shot command in throwaway HOMEs
+        env:
+          INSTALLER_SPEC: git+https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}#subdirectory=integration
+          STACK_SHA: ${{ inputs.stack_sha || '24889f7896be7157bf9077a41465a3b29620879f' }}
+        run: make -C integration installer
