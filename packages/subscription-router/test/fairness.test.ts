@@ -8,6 +8,7 @@ describe("normalized quota fairness (not request equality)", () => {
 		for (let n = 1; n <= 192; n++) {
 			await sim.step({ incumbent: false });
 			expect(Math.max(...sim.debits) - Math.min(...sim.debits)).toBeLessThanOrEqual(1);
+			if (n % 3 === 0) expect(new Set(sim.debits).size).toBe(1);
 		}
 		expect(sim.debits).toEqual([64, 64, 64]);
 	});
@@ -62,6 +63,10 @@ describe("normalized quota fairness (not request equality)", () => {
 					if (result.ok) {
 						const remaining = result.entry.provider === "quota-0" ? 16 - a : 16 - b;
 						expect(remaining * 1.2).toBeGreaterThanOrEqual(Math.max(16 - a, 16 - b));
+						const current = incumbent.provider === "quota-0" ? 16 - a : 16 - b;
+						const best = Math.max(16 - a, 16 - b);
+						if ((current === 5 && best === 6) || (current === 10 && best === 12))
+							expect(result.entry).toEqual(incumbent);
 					}
 				}
 			}
@@ -75,7 +80,6 @@ describe("limits of fairness", () => {
 		const selected = await Promise.all(clients.map((sim) => sim.step({ fresh: false })));
 		expect(selected).toEqual(Array<number>(16).fill(0));
 		// Sixteen real account debits would oversubscribe capacity eight before telemetry catches up.
-		expect(selected.filter((index) => index === 0).length).toBeGreaterThan(8);
 	});
 
 	it("lag permits exhaustion before the reset; refreshing only redirects later work", async () => {
@@ -105,10 +109,11 @@ describe("limits of fairness", () => {
 		expect(await sticky.step({ reason: "direct" })).toBe(0);
 	});
 
-	it("an unbounded single debit defeats any post-dispatch balance guarantee", async () => {
+	it("a large debit exceeds the unit-cost premise; fresh feedback redirects the next prompt", async () => {
 		const sim = new FairnessSimulation([64, 64]);
 		await sim.step({ cost: 128 });
-		expect(sim.debits).toEqual([128, 0]);
+		expect(Math.abs((sim.debits[0] ?? 0) - (sim.debits[1] ?? 0)) / 64).toBeGreaterThan(1 / 6 + 1 / 64);
+		expect(await sim.step({ incumbent: false })).toBe(1);
 	});
 
 	it("fresh unlimited dominates finite accounts, while stale and missing are fallbacks", async () => {
@@ -132,9 +137,14 @@ describe("limits of fairness", () => {
 		if (!entry) throw new Error("Missing entry");
 		expect(sim.router.blockedBy(entry)).toBeDefined();
 		sim.clock.advance(3_600_000);
+		// Keep observations fresh without replacing their passed windows or utilization.
+		for (const snapshot of sim.usage.snapshots.values()) snapshot.expiresAt = sim.clock.now() + 60_000;
 		expect(sim.router.blockedBy(entry)).toBeUndefined();
 		const picked = sim.router.pick(sim.profile, sim.env);
-		expect(picked.ok && picked.candidates.map((candidate) => candidate.score.kind)).toEqual(["fallback", "fallback"]);
+		expect(picked.ok && picked.candidates.map((candidate) => candidate.score)).toEqual([
+			{ kind: "fallback", reason: "no applicable active windows" },
+			{ kind: "fallback", reason: "no applicable active windows" },
+		]);
 	});
 
 	it("the limiting applicable model window and reset pace defeat raw percent comparisons", () => {
@@ -150,6 +160,8 @@ describe("limits of fairness", () => {
 		let picked = sim.router.pick(sim.profile, sim.env);
 		expect(picked.ok && picked.entry.provider).toBe("quota-1");
 		modelWindow.families = ["opus"];
+		picked = sim.router.pick(sim.profile, sim.env);
+		expect(picked.ok && picked.entry.provider).toBe("quota-0");
 		providerWindow.resetAt = sim.clock.now() + 3_600_000 / 4;
 		picked = sim.router.pick(sim.profile, sim.env);
 		expect(picked.ok && picked.entry.provider).toBe("quota-1"); // 0.5/0.25 > 1

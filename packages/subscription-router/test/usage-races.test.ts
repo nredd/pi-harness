@@ -7,6 +7,123 @@ const ctx = {} as never;
 const body = (used: number) => new Response(JSON.stringify({ five_hour: { utilization: used } }));
 
 describe("usage read ownership", () => {
+	it.each(["deadline", "timely", "abort", "too-old"] as const)(
+		"handles overlapping lookup/fetch at the outer deadline: %s",
+		async (ending) => {
+			vi.useFakeTimers();
+			vi.setSystemTime(T0);
+			try {
+				let lookups = 0;
+				const pending: ((response: Response) => void)[] = [];
+				const service = new UsageService({
+					now: () => Date.now(),
+					getAccessToken: async () => {
+						if (++lookups === 2) await new Promise((resolve) => setTimeout(resolve, 9_000));
+						return "synthetic";
+					},
+					fetch: (_url, options) =>
+						new Promise<Response>((resolve, reject) => {
+							pending.push(resolve);
+							options.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "AbortError")));
+						}),
+				});
+				const controller = new AbortController();
+				const addListener = vi.spyOn(controller.signal, "addEventListener");
+				const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+				const early = service.get(ctx, "anthropic", {
+					fresh: true,
+					notBefore: ending === "too-old" ? T0 + 1 : T0,
+					signal: controller.signal,
+				});
+				await vi.advanceTimersByTimeAsync(5_000);
+				const late = service.get(ctx, "anthropic", { fresh: true, notBefore: Date.now() });
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(pending).toHaveLength(1);
+				pending[0]?.(body(100)); // R2 already owns the read when R1 completes at t=6s.
+				await vi.advanceTimersByTimeAsync(13_000);
+				if (ending === "timely") pending[1]?.(body(25));
+				if (ending === "abort") controller.abort();
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(Date.now() - T0).toBe(20_000);
+				expect(pending).toHaveLength(2); // R2 fetch starts at t=14s and aborts at t=24s.
+				if (ending === "abort" || ending === "too-old") {
+					expect((await early).message).toBe(
+						ending === "abort" ? "Usage request was cancelled." : "Usage request timed out.",
+					);
+				} else {
+					expect(await early).toMatchObject({
+						status: "available",
+						retrievedAt: ending === "timely" ? T0 + 5_000 : T0,
+						windows: [{ usedPercent: ending === "timely" ? 25 : 100 }],
+					});
+				}
+				expect(addListener).toHaveBeenCalledTimes(1);
+				expect(removeListener).toHaveBeenCalledTimes(1);
+				await vi.advanceTimersByTimeAsync(4_000);
+				if (ending === "timely") {
+					expect((await late).status).toBe("available");
+					expect(service.peek("anthropic")?.windows[0]?.usedPercent).toBe(25);
+				} else {
+					expect((await late).message).toBe("Usage request timed out.");
+					expect(service.peek("anthropic")).toBeUndefined();
+					expect((await service.get(ctx, "anthropic", { force: true })).message).toContain("Backing off");
+				}
+				expect(removeListener).toHaveBeenCalledTimes(1);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+	it("keeps each caller's deadline across a chain and uses its newest completed evidence", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(T0);
+		try {
+			let lookups = 0;
+			const pending: ((response: Response) => void)[] = [];
+			const service = new UsageService({
+				now: () => Date.now(),
+				getAccessToken: async () => {
+					if (++lookups > 1) await new Promise((resolve) => setTimeout(resolve, 9_000));
+					return "synthetic";
+				},
+				fetch: (_url, options) =>
+					new Promise<Response>((resolve, reject) => {
+						pending.push(resolve);
+						options.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "AbortError")));
+					}),
+			});
+			const early = service.get(ctx, "anthropic", { fresh: true, notBefore: T0 });
+			await vi.advanceTimersByTimeAsync(1_000);
+			const joined = service.get(ctx, "anthropic", { fresh: true, notBefore: T0 });
+			await vi.advanceTimersByTimeAsync(4_000);
+			const middle = service.get(ctx, "anthropic", { fresh: true, notBefore: Date.now() });
+			await vi.advanceTimersByTimeAsync(1_000);
+			pending[0]?.(body(100));
+			await vi.advanceTimersByTimeAsync(9_000);
+			const latest = service.get(ctx, "anthropic", { fresh: true, notBefore: Date.now() });
+			pending[1]?.(body(50)); // R2 completes at 15s, already superseded by R3.
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(Date.now() - T0).toBe(20_000);
+			expect(await early).toMatchObject({
+				status: "available",
+				retrievedAt: T0 + 5_000,
+				windows: [{ usedPercent: 50 }],
+			});
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(await joined).toEqual(await early);
+			await vi.advanceTimersByTimeAsync(4_000);
+			expect(await middle).toEqual(await early);
+			await vi.advanceTimersByTimeAsync(9_000);
+			expect((await latest).message).toBe("Usage request timed out.");
+			expect(pending).toHaveLength(3);
+			expect(service.peek("anthropic")).toBeUndefined();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it.each([false, true])("does not let a superseded read overwrite a newer success (old failure=%s)", async (fail) => {
 		let now = T0;
 		const pending: ((response: Response) => void)[] = [];
@@ -147,7 +264,8 @@ describe("usage read ownership", () => {
 				await vi.advanceTimersByTimeAsync(0);
 				if (ending === "abort") controller.abort();
 				else await vi.advanceTimersByTimeAsync(20_000);
-				expect((await early).message).toContain(ending === "abort" ? "cancelled" : "timed out");
+				if (ending === "abort") expect((await early).message).toContain("cancelled");
+				else expect(await early).toMatchObject({ status: "available", windows: [{ usedPercent: 100 }] });
 				pending[1]?.(body(25));
 				await late;
 				await vi.advanceTimersByTimeAsync(0);
