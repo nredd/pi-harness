@@ -12,6 +12,7 @@ installation pins or OAuth ownership. No release or live-provider acceptance is 
 | Transient failure | Same scenario suite | Three core retries, four attempts on A, zero on B, no quota mark without confirmation |
 | Partial core recovery | Same scenario suite | Overload, below-maxTokens length, context overflow and unconfirmed quota each recover on A with exactly two calls, zero B calls; only the quota case reads usage |
 | Concurrent confirmations | `test/scenarios/concurrent-confirmation.test.ts`, two real Pi sessions | Both follow R2's successful snapshot; when R2 fails, R1 alone recovers exactly once in either completion order, without clearing R2's backoff |
+| Supersession deadline | `test/concurrent-deadline.test.ts`, two real Pi sessions, Vitest fake clock | R1 alone recovers once at 20s despite R2 remaining pending until 24s; no duplicate physical dispatch, no cache overwrite, R2 backoff retained |
 | Cancellation at settle | Same scenario suite | Core suppresses continuation after abort; a completed quota confirmation may remain marked because the settle context has no streaming abort signal |
 | Balanced selection / continuation | `test/scenarios/balanced.test.ts`, Vitest and Bun | Six existing three-provider scenarios retain scoring, hysteresis, continuation stickiness, stale and unmeasured fallback |
 | Direct `subscription_usage` | `test/scenarios/usage-tool.test.ts`, real tool dispatch, Vitest and Bun | Malformed payload, unavailable credentials, credential-owner exception, HTTP failure, retained stale data, invalid reset; sanitized text/details; one tool result |
@@ -49,6 +50,14 @@ These assertions failed before their corresponding fixes, not just after increas
   Both orders reproduced `error` instead of `available` before the isolated-result fallback.
   Tests cover HTTP 500/429, timeout, freshness rejection, and two real sessions sharing the service:
   only R1 recovers, exactly once; R2 confirms nothing and its backoff remains active.
+- A valid overlapping deadline repro starts R1 at 0s and R2 at 5s, then completes R1 at 6s.
+  R2's credential lookup takes 9s (fetch starts at 14s); its fetch times out at 24s. Before
+  deadline fallback, R1 returned `error` rather than its completed `available` result at 20s.
+  Restoring the old outer-timeout behavior in the real Pi session test also reproduced zero
+  fallback dispatches instead of one. An R1 completion before R2 starts is NOT a supersession
+  repro. The outer deadline now selects completed evidence without adding a competing timer.
+  Tests also cover newer success at 19s, abort without fallback, freshness rejection, joined
+  callers, a three-read chain, exact original deadlines, and timer/listener cleanup.
 - A pre-cancelled force read consumed the manual allowance; the next real request returned `error`
   instead of `available`.
 - A finite but unrepresentable `1e100` reset caused `RangeError: Invalid time value` in `decisionFor`.
@@ -68,7 +77,10 @@ core API: a late result is ignored by this router read, but core may still finis
 The subsequent HTTP request has a separate ten-second abort timer. Injected transports are expected
 to honor that HTTP abort signal, like native fetch; the router does not promise to terminate arbitrary
 noncooperative custom transports. Each caller nevertheless has a 20-second total wait bound,
-including chains of newer reads; cancellation removes its listener and timeout. An initiated force
+including chains of newer reads. At that deadline, the newest completed qualifying success in the
+caller's forward-only read chain or cache is returned locally; it never publishes superseded data.
+Cancellation returns no fallback. Settling removes the caller's listener and timer once, even when
+the shared read completes later. No per-supersession timer races the outer deadline. An initiated force
 read consumes manual allowance even if superseded; a pre-aborted read never does and returns an
 error even when cached data exists.
 
@@ -105,6 +117,14 @@ Stack in-process: 64 Vitest and 64 Bun. Scripts: 533; integration units: 251; be
 Existing unrelated skips/live exclusions in the root gate remain exclusions, not passes.
 `make check-package-contracts` also passed, including the three router multiprovider scenarios,
 all original standalone plugin contracts, resource-sampler consumer and preset audit/install.
+Deadline-boundary rerun on 2026-10-23: `make check` and `make check-package-contracts` exited 0
+with the same pinned tools. Router: 168 Vitest cases (the new fake-clock real-core deadline case
+is Vitest-only), plus the existing 27 scenarios repeated by Bun. Raw receipts live under
+`router-deadline-20261023/` in the local build-artifact directory: `check.log`, `contracts.log`,
+`contracts.json`, and the preset/resource-sampler reports. The first full gate reached benchmarks
+but failed because the newly selected isolated `CODEX_HOME` directory did not exist; after creating
+the private Codex/cache directories, the entire gate passed. That failed receipt remains
+`check-env-failure.log`; no product code or test threshold was changed to pass it.
 PR CI is separate exact-HEAD evidence; local macOS is not Linux or standalone acceptance.
 
 ## Proposed live smoke, not run
