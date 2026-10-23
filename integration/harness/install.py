@@ -498,11 +498,13 @@ def read_json(path: Path) -> dict[str, Any]:
 
     Raises:
         InstallError: the file exists but is not a JSON object; it is never overwritten blindly.
+        UnsupportedError: the path, or its link target, is not a regular file.
     """
-    if not path.exists():
-        return {}
     try:
-        value = json.loads(path.read_text())
+        text = read_regular(path, follow=True)
+        if text is None:
+            return {}
+        value = json.loads(text)
     except (OSError, ValueError) as error:
         raise InstallError(
             f"Existing '{path}' is not readable JSON; fix or move it, nothing changed: {error}"
@@ -528,7 +530,10 @@ def core_ready(layout: Layout, stack: Stack) -> bool:
 
 
 def read_marker(path: Path) -> object:
-    """Read a JSON marker, `None` when absent or unreadable.
+    """Read an installer-written JSON marker, `None` when absent, unreadable or not a regular file.
+
+    A link or special file is never followed or opened for reading; whoever plans a replacement
+    of the path refuses its kind (`require_restorable_kind`).
 
     Parameters:
         path (Path): marker file.
@@ -537,9 +542,53 @@ def read_marker(path: Path) -> object:
         object: decoded JSON, or `None`.
     """
     try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
+        text = read_regular(path, follow=False)
+        return None if text is None else json.loads(text)
+    except (OSError, ValueError, UnsupportedError):
         return None
+
+
+def read_regular(path: Path, *, follow: bool) -> str | None:
+    """Read a regular file, refusing any other kind before opening it.
+
+    Opening a FIFO for reading blocks until a writer appears, and a socket cannot be opened at
+    all, so the kind is checked first, without following a final link unless `follow` allows
+    one to a regular file. The open is non-blocking and re-checked with `fstat` in case the
+    entry changed in between.
+
+    Parameters:
+        path (Path): file.
+        follow (bool): accept a symlink whose target is a regular file; a dangling one is absent.
+
+    Returns:
+        str | None: contents, `None` when absent.
+
+    Raises:
+        UnsupportedError: the path, or the target it is allowed to follow, is not a regular file.
+        OSError: the file cannot be read.
+    """
+    kind = entry_kind(path)
+    if kind == "symlink" and follow:
+        try:
+            kind = mode_kind(path.stat().st_mode)
+        except FileNotFoundError:
+            return None
+    if kind is None:
+        return None
+    accepted = "a regular file or a link to one" if follow else "a regular file"
+    if kind != "file":
+        raise UnsupportedError(
+            f"'{path}' is a {kind}; the installer only reads {accepted} there. "
+            "Move it aside yourself, nothing changed"
+        )
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | (0 if follow else os.O_NOFOLLOW)
+    with os.fdopen(os.open(path, flags)) as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise UnsupportedError(
+                f"'{path}' stopped being a regular file while it was read; the installer only reads "
+                f"{accepted} there. Move it aside yourself, nothing changed"
+            )
+        return handle.read()
 
 
 def packages_ready(layout: Layout, verified: Verified) -> bool:
@@ -651,22 +700,23 @@ def replaced_targets(layout: Layout, plan: Plan) -> list[Path]:
     return [*targets, layout.state]
 
 
-def require_restorable_kind(layout: Layout, target: Path) -> None:
+def require_restorable_kind(layout: Layout, target: Path, outcome: str = "nothing changed") -> None:
     """Refuse to replace an entry whose backup the journal validator would not restore.
 
     Parameters:
         layout (Layout): installer paths.
         target (Path): path a switch replaces.
+        outcome (str): what the refusal leaves behind, for the message.
 
     Raises:
-        UnsupportedError: `target` exists as a kind its backup may not hold; nothing changed.
+        UnsupportedError: `target` exists as a kind its backup may not hold.
     """
     _, kinds = journaled_paths(layout)[target]
     kind = entry_kind(target)
     if kind is not None and kind not in kinds:
         raise UnsupportedError(
             f"'{target}' is a {kind}; the installer only replaces a {' or '.join(sorted(kinds))} there. "
-            "Move it aside yourself, nothing changed"
+            f"Move it aside yourself, {outcome}"
         )
 
 
@@ -813,9 +863,10 @@ class Journal:
 
         Raises:
             UnsupportedError: the target changed since planning into a kind a restore would
-                refuse; it is not recorded, so the journal stays restorable.
+                refuse; it is not recorded, so the journal stays restorable and the switch
+                rolls back the steps before it.
         """
-        require_restorable_kind(self.layout, target)
+        require_restorable_kind(self.layout, target, "the steps before it are rolled back")
         existed = target.exists() or target.is_symlink()
         backup = self.backups / name if existed else None
         self.steps.append({"target": str(target), "backup": str(backup) if backup else None})
@@ -898,17 +949,33 @@ def entry_kind(path: Path) -> str | None:
         path (Path): entry.
 
     Returns:
-        str | None: `symlink`, `directory`, `file` or `other`; `None` when absent.
+        str | None: the `mode_kind` of the entry itself; `None` when absent.
     """
     try:
-        mode = path.lstat().st_mode
+        return mode_kind(path.lstat().st_mode)
     except FileNotFoundError:
         return None
-    if stat.S_ISLNK(mode):
-        return "symlink"
-    if stat.S_ISDIR(mode):
-        return "directory"
-    return "file" if stat.S_ISREG(mode) else "other"
+
+
+def mode_kind(mode: int) -> str:
+    """Name the kind of entry a `stat` mode describes.
+
+    Parameters:
+        mode (int): `st_mode`.
+
+    Returns:
+        str: `symlink`, `directory`, `file` (regular), `fifo`, `socket`, `device` or `other`.
+    """
+    kinds = (
+        (stat.S_ISLNK, "symlink"),
+        (stat.S_ISDIR, "directory"),
+        (stat.S_ISREG, "file"),
+        (stat.S_ISFIFO, "fifo"),
+        (stat.S_ISSOCK, "socket"),
+        (stat.S_ISCHR, "device"),
+        (stat.S_ISBLK, "device"),
+    )
+    return next((name for test, name in kinds if test(mode)), "other")
 
 
 def read_journal(path: Path) -> object:
@@ -924,7 +991,8 @@ def read_journal(path: Path) -> object:
         ValueError: the journal is a link, not private, foreign-owned or not JSON.
     """
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        # Non-blocking: a FIFO in its place must fail the regular-file check, not wait for a writer.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY)
     except OSError as error:
         raise ValueError(f"cannot open it without following links: {error}") from error
     with os.fdopen(descriptor) as handle:
