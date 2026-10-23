@@ -33,6 +33,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -105,6 +106,9 @@ INSTALL_TIMEOUT = 600
 VERSION_TIMEOUT = 60
 STATE_FILE = "installed.json"
 JOURNAL_FILE = "transaction.json"
+# Only the owner may write or read the journal: it names every path a restore deletes.
+JOURNAL_MODE = 0o600
+LINK_BACKUP = "bin-pi"
 CORE_MARKER = "pi-stack-core.json"
 SETTINGS_FILE = "settings.json"
 SUBAGENTS_FILE = "subagents.json"
@@ -396,8 +400,8 @@ def verify_release(snapshot: StackSnapshot, node: str, workdir: Path) -> Verifie
     try:
         checksums = release_checksums(tag)
         validate_release_identity(stack, tag, checksums)
-        installed = release_tarballs(tag)[:2]
-        missing = [name for name in installed if name not in stack.core.integrity]
+        tarballs = release_tarballs(tag)[:2]
+        missing = [name for name in tarballs if name not in stack.core.integrity]
         if missing:
             raise ValueError(f"the snapshot records no integrity for installed asset(s) {', '.join(missing)}")
         verify_core_assets(stack, workdir / "core", attest=verify_provenance_anonymously)
@@ -406,7 +410,7 @@ def verify_release(snapshot: StackSnapshot, node: str, workdir: Path) -> Verifie
     core_checksums = checksums | {
         release_asset_url(tag, name): digest for name, digest in stack.core.integrity.items()
     }
-    name = installed[0]
+    name = tarballs[0]
     tarball = workdir / "core" / name
     if not tarball.is_file():
         # Legacy tags verify against frozen digests without downloading; fetch the manifest's tarball.
@@ -576,7 +580,8 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
     prefix = layout.core(stack.core.tag)
     if not core_ready(layout, stack):
         plan.install_core = True
-        target = plan.overwrites if prefix.exists() else plan.creates
+        # A dangling link is still replaced, so it counts as existing state (consent required).
+        target = plan.overwrites if prefix.exists(follow_symlinks=False) else plan.creates
         target.append(f"install core '{stack.core.tag}' into '{prefix}'")
     executable = str(prefix / "bin" / "pi")
     if not (layout.link.is_symlink() and str(layout.link.readlink()) == executable):
@@ -590,7 +595,7 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
     if not packages_ready(layout, verified):
         plan.install_packages = True
         for tree in PACKAGE_TREES:
-            if (layout.agent_dir / tree).exists():
+            if (layout.agent_dir / tree).exists(follow_symlinks=False):
                 plan.overwrites.append(f"replace package tree '{layout.agent_dir / tree}' (backed up)")
         plan.creates.append(
             f"install {len(verified.sources)} packages in stack order into '{layout.agent_dir}'"
@@ -765,7 +770,8 @@ class Journal:
         existed = target.exists() or target.is_symlink()
         backup = self.backups / name if existed else None
         self.steps.append({"target": str(target), "backup": str(backup) if backup else None})
-        write_atomic(self.path, json.dumps({"backups": str(self.backups), "steps": self.steps}, indent=2))
+        document = {"backups": str(self.backups), "steps": self.steps}
+        write_atomic(self.path, json.dumps(document, indent=2), mode=JOURNAL_MODE)
         return backup
 
     def commit(self) -> None:
@@ -804,8 +810,163 @@ def remove(path: Path) -> None:
         shutil.rmtree(path)
 
 
+@dataclass(frozen=True)
+class Step:
+    """One validated journal step: a path the switch replaced and where its original is kept."""
+
+    target: Path
+    backup: Path | None
+
+
+def journaled_paths(layout: Layout) -> dict[Path, tuple[str, frozenset[str]]]:
+    """Map every path a switch may replace to its backup name and the entry kinds it may hold.
+
+    Parameters:
+        layout (Layout): installer paths.
+
+    Returns:
+        dict[Path, tuple[str, frozenset[str]]]: target -> backup name, allowed backup kinds.
+    """
+    trees = {layout.agent_dir / tree: (tree, frozenset({"directory", "symlink"})) for tree in PACKAGE_TREES}
+    files = {layout.agent_dir / name: (name, frozenset({"file"})) for name in (SETTINGS_FILE, SUBAGENTS_FILE)}
+    return (
+        trees
+        | files
+        | {
+            layout.link: (LINK_BACKUP, frozenset({"file", "symlink"})),
+            layout.state: (STATE_FILE, frozenset({"file"})),
+        }
+    )
+
+
+def entry_kind(path: Path) -> str | None:
+    """Classify a path without following a final symlink.
+
+    Parameters:
+        path (Path): entry.
+
+    Returns:
+        str | None: `symlink`, `directory`, `file` or `other`; `None` when absent.
+    """
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    return "file" if stat.S_ISREG(mode) else "other"
+
+
+def read_journal(path: Path) -> object:
+    """Read the journal only if it is a private regular file the current user owns.
+
+    Parameters:
+        path (Path): journal file.
+
+    Returns:
+        object: decoded JSON.
+
+    Raises:
+        ValueError: the journal is a link, not private, foreign-owned or not JSON.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise ValueError(f"cannot open it without following links: {error}") from error
+    with os.fdopen(descriptor) as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("it is not a regular file")
+        if info.st_uid != os.getuid():
+            raise ValueError(f"it is owned by uid '{info.st_uid}', not the current user")
+        if info.st_mode & 0o077:
+            raise ValueError(f"its mode is '{oct(info.st_mode & 0o777)}', not private")
+        try:
+            return json.loads(handle.read())
+        except (OSError, ValueError) as error:
+            raise ValueError(f"it is not readable JSON: {error}") from error
+
+
+def validate_journal(layout: Layout, document: object) -> list[Step]:
+    """Check every journal step against the paths a switch can touch, before anything is restored.
+
+    Parameters:
+        layout (Layout): installer paths.
+        document (object): decoded journal.
+
+    Returns:
+        list[Step]: steps in the order they were recorded.
+
+    Raises:
+        ValueError: any step names a path outside the layout, a backup outside its directory, an
+            unexpected entry kind, or the document is malformed.
+    """
+    if not isinstance(document, dict) or set(document) != {"backups", "steps"}:
+        raise ValueError("it is not a `{backups, steps}` object")
+    raw_backups, raw_steps = document["backups"], document["steps"]
+    store = layout.root / "backups"
+    if not isinstance(raw_backups, str) or not isinstance(raw_steps, list):
+        raise ValueError("`backups` is not a path or `steps` is not a list")
+    backups = Path(raw_backups)
+    # Exact strings: `Path` would normalize `a//b` and keep `..`, neither of which a journal holds.
+    if str(backups) != raw_backups or backups.parent != store or backups.name in {"", ".", ".."}:
+        raise ValueError(f"backup directory '{raw_backups}' is not directly inside '{store}'")
+    for directory in (store, backups):
+        if entry_kind(directory) not in {None, "directory"}:
+            raise ValueError(f"'{directory}' is not a real directory")
+    if entry_kind(backups) == "directory" and backups.lstat().st_uid != os.getuid():
+        raise ValueError(f"'{backups}' is not owned by the current user")
+    allowed = {str(path): (path, name, kinds) for path, (name, kinds) in journaled_paths(layout).items()}
+    steps: list[Step] = []
+    for raw in raw_steps:
+        if not isinstance(raw, dict) or set(raw) != {"target", "backup"}:
+            raise ValueError(f"step {raw!r} is not a `{{target, backup}}` object")
+        if raw["target"] not in allowed:
+            raise ValueError(f"step target '{raw['target']}' is not a path the installer replaces")
+        target, name, kinds = allowed[raw["target"]]
+        if any(step.target == target for step in steps):
+            raise ValueError(f"step target '{target}' is recorded twice")
+        backup = backups / name
+        if raw["backup"] is None:
+            steps.append(Step(target, None))
+            continue
+        if raw["backup"] != str(backup):
+            raise ValueError(f"backup '{raw['backup']}' for '{target}' is not '{backup}'")
+        kind = entry_kind(backup)
+        if kind is not None and kind not in kinds:
+            raise ValueError(f"backup '{backup}' is a {kind}, expected {' or '.join(sorted(kinds))}")
+        steps.append(Step(target, backup))
+    return steps
+
+
+def load_journal(layout: Layout) -> list[Step]:
+    """Read and validate the journal of an interrupted switch.
+
+    Parameters:
+        layout (Layout): installer paths.
+
+    Returns:
+        list[Step]: validated steps in the order they were recorded.
+
+    Raises:
+        RollbackError: the journal is not trusted; nothing was changed.
+    """
+    try:
+        return validate_journal(layout, read_journal(layout.journal))
+    except ValueError as error:
+        raise RollbackError(
+            f"Journal '{layout.journal}' is not trusted: {error}; nothing was restored, restore by hand "
+            f"from '{layout.root / 'backups'}'"
+        ) from error
+
+
 def rollback(layout: Layout) -> list[str]:
     """Restore every journaled step of an interrupted switch, newest first.
+
+    Every step is validated before the first one is restored, so an untrusted journal changes
+    nothing.
 
     Parameters:
         layout (Layout): installer paths.
@@ -814,29 +975,24 @@ def rollback(layout: Layout) -> list[str]:
         list[str]: restored targets.
 
     Raises:
-        RollbackError: a step could not be restored; the journal is kept for another attempt.
+        RollbackError: the journal is not trusted, or a step could not be restored; the journal is
+            kept for another attempt.
     """
-    if not layout.journal.exists():
+    if not layout.journal.exists(follow_symlinks=False):
         return []
-    document = read_marker(layout.journal)
-    if not isinstance(document, dict) or not isinstance(document.get("steps"), list):
-        raise RollbackError(
-            f"Journal '{layout.journal}' is unreadable; restore by hand from '{layout.root / 'backups'}'"
-        )
+    steps = load_journal(layout)
     restored = []
     try:
-        for step in reversed(document["steps"]):
-            target = Path(step["target"])
-            backup = Path(step["backup"]) if step["backup"] else None
-            if backup is None:
-                remove(target)
-            elif backup.exists() or backup.is_symlink():
-                remove(target)
-                backup.replace(target)
+        for step in reversed(steps):
+            if step.backup is None:
+                remove(step.target)
+            elif step.backup.exists(follow_symlinks=False):
+                remove(step.target)
+                step.backup.replace(step.target)
             # A recorded backup that does not exist yet means the step never started: the
             # original target is still in place.
-            restored.append(str(target))
-    except (OSError, KeyError, TypeError) as error:
+            restored.append(str(step.target))
+    except OSError as error:
         raise RollbackError(
             f"Could not restore an interrupted install: {error}; journal kept at '{layout.journal}'"
         ) from error
@@ -932,7 +1088,7 @@ def stage(layout: Layout, verified: Verified, plan: Plan, staging: Path) -> Path
         for leftover in ("fetch-home", "npm-cache", "tui-resource"):
             remove(staged_core / leftover)
         write_atomic(staged_core / CORE_MARKER, json.dumps(stack.core.model_dump(mode="json"), indent=2))
-        if prefix.exists():
+        if prefix.exists(follow_symlinks=False):
             remove(prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
         staged_core.replace(prefix)
@@ -970,7 +1126,7 @@ def switch(
             replace_file(journal, layout.agent_dir / name, name, json.dumps(desired, indent=2) + "\n")
     if plan.link is not None:
         layout.bin_dir.mkdir(parents=True, exist_ok=True)
-        backup = journal.record(layout.link, "bin-pi")
+        backup = journal.record(layout.link, LINK_BACKUP)
         if backup is not None:
             layout.link.replace(backup)
         layout.link.symlink_to(plan.link)
@@ -1095,16 +1251,16 @@ def recover(layout: Layout, assume_yes: bool, ask: Callable[[str], str] | None) 
 
     Raises:
         ConsentError: the restore was not agreed to.
-        RollbackError: a step could not be restored.
+        RollbackError: the journal is not trusted (nothing changed) or a step could not be restored.
     """
-    if not layout.journal.exists():
+    if not layout.journal.exists(follow_symlinks=False):
         return
-    report_pending(layout)
+    report_pending(layout, restoring=True)
     consent(Plan(overwrites=["restore the state replaced by the interrupted install"]), assume_yes, ask)
     LOGGER.info(f"Restored {', '.join(rollback(layout)) or 'nothing'}")
 
 
-def report_pending(layout: Layout) -> None:
+def report_pending(layout: Layout, restoring: bool) -> None:
     """Log the steps an interrupted switch left in its journal, newest first.
 
     An install plan computed now would describe a half-switched tree, so none is shown until the
@@ -1112,20 +1268,31 @@ def report_pending(layout: Layout) -> None:
 
     Parameters:
         layout (Layout): installer paths.
+        restoring (bool): this run restores now; `False` for `--plan`, which only reports.
+
+    Raises:
+        RollbackError: restoring and the journal is not trusted, so the run fails closed before
+            asking for consent.
     """
-    LOGGER.warning(
-        f"PENDING: a previous install was interrupted; '{layout.journal}' lists its steps. The next run "
-        "without `--plan` restores them (with consent) before planning anything"
+    when = (
+        "This run restores them (with consent)"
+        if restoring
+        else "The next run without `--plan` restores them (with consent)"
     )
-    document = read_marker(layout.journal)
-    steps = document.get("steps") if isinstance(document, dict) else None
-    if not isinstance(steps, list):
-        LOGGER.warning(f"The journal is unreadable; restore by hand from '{layout.root / 'backups'}'")
+    LOGGER.warning(
+        f"PENDING: a previous install was interrupted; '{layout.journal}' lists its steps. {when} "
+        "before planning anything"
+    )
+    try:
+        steps = load_journal(layout)
+    except RollbackError as error:
+        if restoring:
+            raise
+        LOGGER.warning(str(error))
         return
     for step in reversed(steps):
-        if isinstance(step, dict):
-            source = f"from '{step['backup']}'" if step.get("backup") else "by removing it (it was new)"
-            LOGGER.info(f"RESTORE '{step.get('target')}' {source}")
+        source = f"from '{step.backup}'" if step.backup else "by removing it (it was new)"
+        LOGGER.info(f"RESTORE '{step.target}' {source}")
 
 
 @dataclass(frozen=True)
@@ -1155,9 +1322,9 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
     if SHA_PATTERN.fullmatch(opts.source_sha) is None:
         raise UnsupportedError(f"Stack SHA must be 40 lowercase hex characters, got '{opts.source_sha}'")
     layout = Layout.from_env(env, Path.home(), opts.bin_dir)
-    if layout.journal.exists():
+    if layout.journal.exists(follow_symlinks=False):
         if opts.plan_only:
-            report_pending(layout)
+            report_pending(layout, restoring=False)
             return ExitCode.OK
         # Restoring needs only the journal and its backups: no network, no tools, no snapshot.
         with locked(layout):
