@@ -1173,7 +1173,11 @@ def test_every_standalone_descriptor_has_a_packed_artifact_gate() -> None:
     for descriptor in rd.DESCRIPTORS:
         assert descriptor.contract_gates, descriptor.name
         assert ("stock" in descriptor.contract_gates) == (descriptor.stock_gate is not None), descriptor.name
-        if descriptor.name != "@nredd/pi-preset":
+        if descriptor.contract.library:
+            assert descriptor.contract_gates == ("audit",), descriptor.name
+            assert descriptor.contract.node_probe, descriptor.name
+            assert descriptor.stock_gate is None, descriptor.name
+        elif descriptor.name != "@nredd/pi-preset":
             assert "stock" in descriptor.contract_gates, descriptor.name
             assert descriptor.stock_gate is not None, descriptor.name
 
