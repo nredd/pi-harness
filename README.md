@@ -17,6 +17,11 @@ Current status is [here](PLAN.md); the original migration plan and its supersede
 Every migration PR requires separate Standards and Spec reviewer subagents against its final HEAD,
 including documentation, fork, dotfiles, and automated promotion changes.
 
+`packages/resource-sampler` is the Pi-independent `@nredd/pi-resource-sampler` ESM library for
+bounded, privacy-safe interval host sampling. It has no Pi entrypoint or runtime dependencies.
+Its [README](packages/resource-sampler/README.md) defines CPU/coverage semantics and Darwin's
+explicit process-CPU precision limitation. No consumer migration or publication is included.
+
 Layout:
 
 - `packages/`: independently versioned plugins and optional preset, including imported `@nredd/pi-computer-use`. Its packed contract proves stock-Pi loading and the model-visible tool surface; native desktop behavior is explicitly NOT RUN without an interactive macOS TCC-granted session.
@@ -63,6 +68,12 @@ make check                 # owned-code gates, see below
 make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, see docs/package-contracts.md
 make check-todo-package-contract # explicit: packed todo tool through stock Pi 1.3.0
 ```
+
+On macOS, keep the host awake for the entire gate, e.g. `/usr/bin/caffeinate -is make check`
+on AC power. The assertion ends with the command and does not change power settings. Check
+current CPU/memory pressure and concurrent builds before starting; a low load average alone
+is not enough. Closed-lid maintenance sleep can suspend lifecycle timers for seconds or minutes,
+so check `powerd` sleep/wake logs when real-time assertions overrun. Do not relax their deadlines.
 
 `make check` runs, without rewriting files:
 
