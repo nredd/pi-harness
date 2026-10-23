@@ -48,6 +48,29 @@ export function bytes(value: number | null): string {
 	return value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)}G` : `${(value / 1024 ** 2).toFixed(0)}M`;
 }
 
+export interface MonHistoryPoint {
+	capturedAt: number;
+	value: number | null;
+}
+
+/** Time-proportional buckets; empty intervals stay gaps, never interpolated CPU. */
+export function timeHistory(history: readonly MonHistoryPoint[], width: number): string {
+	const first = history[0];
+	const last = history.at(-1);
+	if (!first || !last || width < 1) return "";
+	const span = last.capturedAt - first.capturedAt;
+	if (span <= 0) return sparkline([last.value], width);
+	const buckets: (number | null)[] = Array.from({ length: width }, () => null);
+	for (const point of history) {
+		const index = Math.max(
+			0,
+			Math.min(width - 1, Math.round(((point.capturedAt - first.capturedAt) / span) * (width - 1))),
+		);
+		buckets[index] = point.value;
+	}
+	return sparkline(buckets, width);
+}
+
 /** Fixed 0..100 host CPU scale: a quiet history must not look saturated. */
 export function sparkline(history: readonly (number | null)[], width: number): string {
 	const ticks = "▁▂▃▄▅▆▇█";

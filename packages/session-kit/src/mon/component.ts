@@ -1,16 +1,17 @@
 /** Responsive, cached /mon dashboard. Rendering and navigation never collect resources. */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, Key, matchesKey } from "@earendil-works/pi-tui";
+import { type Component, Key, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { fitCols, sanitize } from "../diff/view.ts";
 import {
 	bytes,
+	type MonHistoryPoint,
 	type MonProcess,
 	type MonSnapshot,
 	type MonSort,
 	percent,
 	SORTS,
 	sortProcesses,
-	sparkline,
+	timeHistory,
 } from "./model.ts";
 
 export interface MonViewOptions {
@@ -23,7 +24,11 @@ export interface MonViewOptions {
 /** Single-interaction view; update is the sole ingress for sampler data. */
 export class MonView implements Component {
 	private snapshot: MonSnapshot | undefined;
-	private history: (number | null)[] = [];
+	private history: MonHistoryPoint[] = [];
+	private lastSuccess: number | undefined;
+	private helpScroll = 0;
+	private helpPageSize = 1;
+	private helpLength = 0;
 	private processes: MonProcess[] = [];
 	private selected: string | undefined;
 	private sort: MonSort = "cpu";
@@ -40,7 +45,11 @@ export class MonView implements Component {
 
 	update(snapshot: MonSnapshot): void {
 		this.snapshot = snapshot;
-		this.history.push(snapshot.status === "stale" ? null : snapshot.cpuPercent);
+		if (snapshot.status === "live") this.lastSuccess = snapshot.capturedAt;
+		this.history.push({
+			capturedAt: snapshot.capturedAt,
+			value: snapshot.status === "stale" ? null : snapshot.cpuPercent,
+		});
 		if (this.history.length > 120) this.history.shift();
 		this.reorder();
 		this.refresh();
@@ -76,7 +85,16 @@ export class MonView implements Component {
 			this.processes.findIndex((p) => p.identity === this.selected),
 		);
 		if (data === "?") this.help = !this.help;
-		else if (data === "c" || data === "m" || data === "p" || data === "s") {
+		else if (this.help) {
+			if (data === "j" || matchesKey(data, Key.down)) this.helpScroll++;
+			else if (data === "k" || matchesKey(data, Key.up)) this.helpScroll--;
+			else if (matchesKey(data, Key.pageDown)) this.helpScroll += this.helpPageSize;
+			else if (matchesKey(data, Key.pageUp)) this.helpScroll -= this.helpPageSize;
+			else if (data === "g" || matchesKey(data, Key.home)) this.helpScroll = 0;
+			else if (data === "G" || matchesKey(data, Key.end)) this.helpScroll = this.helpLength;
+			else return;
+			this.helpScroll = Math.max(0, Math.min(this.helpScroll, this.helpLength - this.helpPageSize));
+		} else if (data === "c" || data === "m" || data === "p" || data === "s") {
 			this.sort =
 				data === "c"
 					? "cpu"
@@ -123,8 +141,8 @@ export class MonView implements Component {
 			"CPU / interval",
 			[
 				` ${t.bold(percent(s?.cpuPercent ?? null))} ${t.fg("muted", `of ${s?.logicalCpus ?? "--"} logical CPUs`)}`,
-				` ${t.fg("accent", fitCols(sparkline(this.history, leftWidth - 4), leftWidth - 4))}`,
-				` ${t.fg("dim", "scale 0..100% · newest at right")}`,
+				` ${t.fg("accent", fitCols(timeHistory(this.history, leftWidth - 4), leftWidth - 4))}`,
+				` ${t.fg("dim", this.historyLabel())}`,
 			],
 			leftWidth,
 		);
@@ -140,6 +158,11 @@ export class MonView implements Component {
 		return wide ? cpu.map((line, i) => `${line}  ${memory[i] ?? ""}`) : [...cpu, ...memory];
 	}
 
+	private historyLabel(): string {
+		const span = Math.max(0, (this.history.at(-1)?.capturedAt ?? 0) - (this.history[0]?.capturedAt ?? 0));
+		return `0..100% · ${(span / 1000).toFixed(1)}s span · time →`;
+	}
+
 	render(width: number): string[] {
 		const height = Math.max(1, this.options.rows());
 		width = Math.max(1, width);
@@ -149,7 +172,11 @@ export class MonView implements Component {
 		const statusColor = status === "live" ? "success" : "warning";
 		const footer = t.fg(
 			"muted",
-			width < 60 ? " q/Esc close  ? help  s sort" : " q/Esc close  ? help  j/k move  PgUp/PgDn page  c/m/p sort",
+			this.help
+				? " q/Esc close  ? help  j/k PgDn scroll"
+				: width < 60
+					? " q/Esc close  ? help  s sort"
+					: " q/Esc close  ? help  j/k move  PgUp/PgDn page  c/m/p sort",
 		);
 		if (height === 1) return [fitCols(footer, width)];
 		const lines = [
@@ -158,8 +185,7 @@ export class MonView implements Component {
 				t.fg("dim", width >= 60 ? "  LOCAL RESOURCES / read only" : "  read only"),
 		];
 		if (this.help) {
-			lines.push(
-				"",
+			const help = [
 				t.bold(" Navigation"),
 				" j/k or arrows   select process",
 				" PgUp/PgDn       move one page",
@@ -170,21 +196,42 @@ export class MonView implements Component {
 				" ?               return to dashboard",
 				" q/Esc           close",
 				"",
-				" CPU is interval usage, not lifetime CPU.",
+				" CPU is interval usage, not lifetime.",
 				" Process CPU can exceed 100% (one core).",
 				" -- is unavailable, never zero.",
 				" Selection follows identity, not row.",
 				" RAM is total minus free, not pressure.",
-				" Read only. No kill, locks or scheduling.",
+				" Load 1/5/15 min: not percent.",
+				" History: elapsed time; dots are gaps.",
+				" No kill, locks or scheduling.",
+			].flatMap((line) => wrapTextWithAnsi(line, width));
+			this.helpPageSize = Math.max(1, height - 3);
+			this.helpLength = help.length;
+			this.helpScroll = Math.max(0, Math.min(this.helpScroll, help.length - this.helpPageSize));
+			lines.push(
+				t.fg(
+					"accent",
+					` HELP ${this.helpScroll + 1}-${Math.min(help.length, this.helpScroll + this.helpPageSize)}/${help.length}`,
+				),
 			);
+			lines.push(...help.slice(this.helpScroll, this.helpScroll + this.helpPageSize));
 		} else {
-			if (height >= 16 && width >= 60) lines.push(...this.cards(width));
-			else if (height >= 6) {
+			const diagnosticRows = Number(status === "stale") + Number(Boolean(this.snapshot?.notice));
+			if (height >= (width >= 100 ? 16 : 20) && width >= 60) lines.push(...this.cards(width));
+			else if (height >= 8 + diagnosticRows) {
 				lines.push(
 					` CPU ${t.fg("accent", percent(this.snapshot?.cpuPercent ?? null))}  RAM ${bytes(this.snapshot?.memoryUsedBytes ?? null)}/${bytes(this.snapshot?.memoryTotalBytes ?? null)}`,
 				);
-				lines.push(` ${t.fg("accent", sparkline(this.history, width - 2))}`);
+				lines.push(` ${t.fg("accent", timeHistory(this.history, width - 2))}`);
+				lines.push(t.fg("dim", ` ${this.historyLabel()}`));
 			}
+			if (status === "stale" && height >= 8)
+				lines.push(
+					t.fg(
+						"warning",
+						` Last success: ${this.lastSuccess === undefined ? "none" : new Date(this.lastSuccess).toISOString()}`,
+					),
+				);
 			if (this.snapshot?.notice && height >= 8) lines.push(t.fg("warning", ` ${sanitize(this.snapshot.notice)}`));
 			lines.push(
 				t.fg(

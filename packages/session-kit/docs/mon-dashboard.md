@@ -7,9 +7,13 @@ workspace-only dependency, release, pin change or live activation is included.
 ## Presentation
 
 - At 100+ columns, CPU history and memory/load cards sit side by side. At 60..99 they
-  stack. Narrow or short terminals get the compact summary. The last row reserves close/help.
-- Host CPU history uses a fixed 0..100% scale, at most 120 samples, newest on the right.
-  Unknown/stale history points are gaps, not zero. Warming/live/stale states use semantic
+  stack when height permits. Narrow or short terminals get the compact summary; at six rows
+  summary/chrome yields to the selected process. The last row reserves close/help.
+- Host CPU history keeps each capture timestamp, uses a fixed 0..100% scale and at most
+  120 samples, newest on the right. Horizontal buckets represent elapsed time, not sample
+  index; the caption states the actual span in seconds. The latest sample in a bucket wins.
+  Empty time buckets and unknown/stale history points are gaps, not zero or interpolation.
+  Stale views show the last successful capture's UTC timestamp (or `none`). Warming/live/stale states use semantic
   theme colors and text, so meaning does not depend on color.
 - Memory is total minus free, explicitly **non-free**, not an estimate of available memory
   or a pressure score. Load averages are not percentages. Process CPU is interval CPU,
@@ -19,7 +23,10 @@ workspace-only dependency, release, pin change or live activation is included.
   Unknown/non-finite measurements sort last with deterministic PID/identity tie breaks.
 - `j/k` and arrows select; PageUp/PageDown page; `g/G` jump first/last; `c/m/p` sort
   CPU/RSS/PID; `s` cycles sort; `?` toggles help; `q`/Escape close. CPU/RSS descend,
-  PID ascends. No kill, locks, workload control, process arguments or environment display.
+  PID ascends. Help has a bounded, wrapped viewport with a visible range and scroll hint;
+  `j/k`, arrows, PageUp/PageDown and `g/G` scroll help without moving the process selection.
+  All metric explanations remain reachable at 40x12.
+  No kill, locks, workload control, process arguments or environment display.
 
 ## Ownership
 
@@ -31,7 +38,9 @@ source's asynchronous disposal. Errors stop collection and retain explicitly sta
 reopening is the retry mechanism. Late results are discarded.
 
 `registerMon` requires an explicit source factory, opens it only inside a TUI interaction,
-and closes on replacement/session shutdown/start. It registers no model tool, persists no
+and serializes replacement through completed asynchronous disposal, including concurrent opens.
+Session shutdown/start invalidates pending openers before they can create a source, even when
+Pi defers the UI factory. It registers no model tool, persists no
 history, sends no model messages and does no network work. RPC/print/JSON cannot sample.
 
 ## Remaining integration boundary
@@ -56,9 +65,11 @@ resource measurements.
   The Darwin fixture preserves available host CPU but unavailable process CPU; tests forbid
   replacing that unavailable value with zero.
 - Manual real-terminal fixture: `bun test/mon/terminal.ts dark` (or `light`). This uses the
-  actual Pi alternate-screen TUI and marks itself `FIXTURE / macOS process CPU unavailable`. Resize through 40x12,
+  actual Pi alternate-screen focused overlay (matching the command's keyboard routing) and marks itself `FIXTURE / macOS process CPU unavailable`. Resize through 40x12,
   60x20, 80x24 and 120x40, navigate, toggle help and quit. It creates no sampling timers.
 - Local acceptance captures: `~/code/pi-harness-builds/mon-evidence/` contains raw terminal
   write recordings, ANSI/plain tmux captures for both themes at all four sizes, navigation,
-  help, and exit status (`1 0`: pane exited successfully). These are terminal recordings,
+  help, and exit status (`1 0`: pane exited successfully). Revised captures in `revision/`
+  also exercise 40x6 selection, 40x12 help paging and an explicit 15-second history gap.
+  These are terminal recordings,
   not desktop screenshots and not live-sampler proof.
