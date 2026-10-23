@@ -13,6 +13,9 @@
     "directory": "packages/dev-tools"
   },
   "keywords": ["pi-package", "pi-extension"],
+  "dependencies": {
+    "@nredd/pi-resource-sampler": "0.1.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"

@@ -411,7 +411,14 @@ def test_release_contract_gives_each_stock_descriptor_all_other_siblings(
         assert ctx.siblings == tuple(
             descriptor.contract for descriptor in rd.DESCRIPTORS if descriptor is not subject
         )
-        return {"tool": "git_status", "untracked": ["fixture"], "failure_path": "substituted"}
+        return {
+            "tool": "git_status",
+            "untracked": ["fixture"],
+            "failure_path": "substituted",
+            "resource_ranking": "rss",
+            "resource_sampler_integrity": "sha512-" + "B" * 86 + "==",
+            "resource_failure_path": "process_limit 51 refused",
+        }
 
     monkeypatch.setattr(pc, "locate_tools", lambda: tools)
     monkeypatch.setattr(pc, "ensure_stock_pi", lambda *_: tmp_path / "pi")

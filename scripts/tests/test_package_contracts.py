@@ -32,6 +32,11 @@ import package_contracts as pc
 import stock_package_contract as spc
 
 DEV_TOOLS = pc.CONTRACTS[0]
+RESOURCE_EVIDENCE: dict[str, object] = {
+    "resource_ranking": "rss",
+    "resource_sampler_integrity": "sha512-" + "B" * 86 + "==",
+    "resource_failure_path": "process_limit 51 refused",
+}
 ROOT_LICENSE = (pc.REPO_ROOT / "LICENSE").read_bytes()
 
 
@@ -148,7 +153,14 @@ def test_stock_gate_audits_and_installs_supplied_bytes(
         """
         assert ctx.artifact == artifact
         assert (ctx.installed / "src/index.ts").read_bytes() == pc.read_member(artifact.path, "src/index.ts")
-        return {"tool": "git_status", "untracked": ["fixture"], "failure_path": "Pi boundary substituted"}
+        return {
+            "tool": "git_status",
+            "untracked": ["fixture"],
+            "failure_path": "Pi boundary substituted",
+            "resource_ranking": "rss",
+            "resource_sampler_integrity": "sha512-" + "B" * 86 + "==",
+            "resource_failure_path": "process_limit 51 refused",
+        }
 
     monkeypatch.setattr(pc, "pack", forbid)
     monkeypatch.setattr(pc, "ensure_stock_pi", lambda *_: tmp_path / "never-run-pi")
@@ -467,6 +479,52 @@ def test_audit_imports_rejects_sibling_in_every_form(source: str) -> None:
     assert "sibling plugin" in problems[0]
 
 
+def test_dev_tools_pins_the_published_sampler_exactly() -> None:
+    """The only sibling allowance is an exact published library version, never a range or link."""
+    assert dict(DEV_TOOLS.runtime_dependencies) == {"@nredd/pi-resource-sampler": "0.1.0"}
+    assert pc.RESOURCE_SAMPLER_CONTRACT.library
+    assert {pc.RESOURCE_SAMPLER_CONTRACT.name} == pc.SIBLING_LIBRARIES
+    manifest = json.loads((pc.REPO_ROOT / "packages" / "dev-tools" / "package.json").read_text())
+    assert manifest["dependencies"] == dict(DEV_TOOLS.runtime_dependencies)
+
+
+@pytest.mark.parametrize(
+    ("specifier", "dependencies", "path", "library", "allowed"),
+    [
+        ("@nredd/pi-resource-sampler", ["@nredd/pi-resource-sampler"], "src/a.ts", False, True),
+        ("@nredd/pi-resource-sampler", [], "src/a.ts", False, False),
+        (
+            "@nredd/pi-resource-sampler/dist/collect.js",
+            ["@nredd/pi-resource-sampler"],
+            "src/a.ts",
+            False,
+            False,
+        ),
+        ("@nredd/pi-session-kit", ["@nredd/pi-session-kit"], "src/a.ts", False, False),
+        ("@nredd/pi-resource-sampler", ["@nredd/pi-resource-sampler"], "dist/index.js", True, False),
+        ("@nredd/pi-resource-sampler", ["@nredd/pi-resource-sampler"], pc.STATS_ARTIFACT, False, False),
+    ],
+    ids=["declared-library", "undeclared", "deep-import", "declared-plugin", "from-library", "standalone"],
+)
+def test_sibling_library_import_needs_an_exact_declared_dependency(
+    specifier: str, dependencies: list[str], path: str, *, library: bool, allowed: bool
+) -> None:
+    """Only a plugin source file may import a published sibling library it declares.
+
+    Parameters:
+        specifier (str): Imported module.
+        dependencies (list[str]): Declared runtime dependency names.
+        path (str): Importing packed file.
+        library (bool): Audit the file as part of a library contract.
+        allowed (bool): Whether the import is acceptable.
+    """
+    found = pc.FileImports(specifiers=[specifier], diagnostics=[])
+    problems = pc.classify_imports(
+        path, found, [path], dependencies, frozenset({pc.STATS_ARTIFACT}), library=library
+    )
+    assert (problems == []) is allowed, problems
+
+
 def test_audit_imports_ignores_import_text_in_comments_and_strings() -> None:
     """Text that merely looks like an import is not one."""
     source = (
@@ -567,6 +625,7 @@ def good_manifest() -> dict[str, object]:
         "name": "@nredd/pi-dev-tools",
         "publishConfig": {"access": "public"},
         "license": "MIT",
+        "dependencies": dict(DEV_TOOLS.runtime_dependencies),
         "peerDependencies": {"@earendil-works/pi-coding-agent": "*", "typebox": "*"},
         "pi": {"extensions": ["./src/index.ts"]},
     }
@@ -593,6 +652,13 @@ def test_audit_manifest_accepts_good() -> None:
         ({"publishConfig": {}}, "`publishConfig.access` must be `public`"),
         ({"license": "ISC"}, "`license`"),
         ({"dependencies": {"typebox": "1.0.0"}}, "not a declared runtime dependency"),
+        ({"dependencies": {"@nredd/pi-resource-sampler": "^0.1.0"}}, "must use the range '0.1.0'"),
+        ({"dependencies": {"@nredd/pi-resource-sampler": "workspace:*"}}, "must use the range '0.1.0'"),
+        (
+            {"dependencies": {"@nredd/pi-resource-sampler": "file:../resource-sampler"}},
+            "must use the range '0.1.0'",
+        ),
+        ({"dependencies": {}}, "declared runtime dependency '@nredd/pi-resource-sampler' is missing"),
         ({"optionalDependencies": {"@nredd/pi-session-kit": "*"}}, "`optionalDependencies`"),
         ({"peerDependencies": {"@nredd/pi-session-kit": "*"}}, "not a host module"),
         ({"peerDependencies": {"typebox": ">=1"}}, "must use the range '*'"),
@@ -928,7 +994,12 @@ GOOD_ENTRY: dict[str, object] = {
     "shasum": "a" * 40,
     "size": 1234,
     "files": ["LICENSE", "package.json"],
-    "evidence": {"tool": "git_status", "untracked": ["untracked.txt"], "failure_path": "not a repo"},
+    "evidence": {
+        "tool": "git_status",
+        "untracked": ["untracked.txt"],
+        "failure_path": "not a repo",
+        **RESOURCE_EVIDENCE,
+    },
 }
 
 
@@ -999,10 +1070,28 @@ def test_validate_report_accepts_every_scenario_evidence() -> None:
         (with_entry(tarball="nredd-pi-dev-tools-9.9.9.tgz"), "is not"),
         (with_entry(files=[]), "files"),
         (with_entry(files=["a", "a"]), "duplicate files"),
-        (with_entry(evidence={"tool": "git_status", "untracked": [], "failure_path": "x"}), "untracked"),
-        (with_entry(evidence={"tool": "git_status", "untracked": ["a"], "failure_path": ""}), "failure_path"),
         (
-            with_entry(evidence={"tool": "git_status", "untracked": ["a"], "failure_path": "x", "extra": 1}),
+            with_entry(
+                evidence={"tool": "git_status", "untracked": [], "failure_path": "x", **RESOURCE_EVIDENCE}
+            ),
+            "untracked",
+        ),
+        (
+            with_entry(
+                evidence={"tool": "git_status", "untracked": ["a"], "failure_path": "", **RESOURCE_EVIDENCE}
+            ),
+            "failure_path",
+        ),
+        (
+            with_entry(
+                evidence={
+                    "tool": "git_status",
+                    "untracked": ["a"],
+                    "failure_path": "x",
+                    **RESOURCE_EVIDENCE,
+                    "extra": 1,
+                }
+            ),
             "extra",
         ),
         (with_entry(evidence={"tool": "monitor_start"}), "evidence"),
@@ -1482,6 +1571,7 @@ def preset_manifest() -> dict[str, object]:
     """
     return good_manifest() | {
         "name": "@nredd/pi-preset",
+        "dependencies": {},
         "license": "MIT AND Apache-2.0 AND CC-BY-SA-4.0",
         "peerDependencies": {"@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*"},
         "pi": {"extensions": ["./extensions/expanded-footer.ts"]},
@@ -2368,7 +2458,7 @@ def stub_npm_install(
     ("contract", "modules", "offline"),
     [
         (pc.SUBAGENTS_CONTRACT, ["@nredd/pi-subagents", "croner", "nanoid"], False),
-        (DEV_TOOLS, ["@nredd/pi-dev-tools"], True),
+        (pc.CONTRACTS[2], ["@nredd/pi-subscription-router"], True),
     ],
     ids=["registry", "offline"],
 )
