@@ -15,6 +15,7 @@ from typing import Any, Literal, Self, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from harness.files import read_regular
 from harness.release import release_asset_url
 
 LOGGER = logging.getLogger(__name__)
@@ -459,7 +460,7 @@ def installed_identities(stack: Stack, sources: list[str], agent_dir: Path) -> l
     """
     identities = []
     for _, resolved in zip(stack.sources, sources, strict=True):
-        manifest = json.loads((package_directory(resolved, agent_dir) / "package.json").read_text())
+        manifest = package_manifest(package_directory(resolved, agent_dir))
         if resolved.startswith("npm:") and manifest["version"] != resolved.rsplit("@", 1)[1]:
             raise ValueError(f"Installed npm version differs from '{resolved}': '{manifest['version']}'")
         identities.append({"name": manifest["name"], "version": manifest["version"], "source": resolved})
@@ -482,6 +483,30 @@ def package_agents_policy(stack: Stack) -> dict[str, bool]:
     if any(isinstance(source, PackageSource) for source in stack.sources):
         return {"packageAgents": False}
     return {}
+
+
+def package_manifest(directory: Path) -> dict[str, Any]:
+    """Read an installed package's JSON object through the shared nonblocking reader.
+
+    Parameters:
+        directory (Path): package root, including linked package roots.
+
+    Returns:
+        dict[str, Any]: decoded manifest.
+
+    Raises:
+        FileNotFoundError: the manifest is absent.
+        ValueError: the manifest is not regular or is not a JSON object.
+        OSError: the manifest cannot be read.
+    """
+    path = directory / "package.json"
+    text = read_regular(path, follow=True)
+    if text is None:
+        raise FileNotFoundError(f"Package manifest is absent: '{path}'")
+    manifest = json.loads(text)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Package manifest is not a JSON object: '{path}'")
+    return manifest
 
 
 def package_directory(source: str, agent_dir: Path) -> Path:
@@ -527,7 +552,7 @@ def find_package(name: str, packages: list[Any], agent_dir: Path) -> Path:
     for package in packages:
         source = package["source"] if isinstance(package, dict) else package
         directory = package_directory(source, agent_dir)
-        actual = json.loads((directory / "package.json").read_text())["name"]
+        actual = package_manifest(directory)["name"]
         if actual == name or actual.rsplit("/", 1)[-1] == name:
             return directory
     raise LookupError(f"Package '{name}' is not declared in this stack")
