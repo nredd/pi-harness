@@ -1,7 +1,23 @@
+import { execFile, spawn } from "node:child_process";
+import { lstat, readFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import {
+	createResourceSampler,
+	type ProcessSample,
+	type ResourceSampler,
+	type ResourceSnapshot,
+	type SamplerOptions,
+} from "@nredd/pi-resource-sampler";
 import { describe, expect, it } from "vitest";
-import { type RunOptions, type RunResult, run } from "../src/core/index.ts";
+import type { RunOptions, RunResult } from "../src/core/index.ts";
 import { type ResourceSnapshotOptions, registerResourceTools, resourceSnapshot } from "../src/resource/index.ts";
 import { createMockPi } from "./support.ts";
+
+const execFileAsync = promisify(execFile);
+const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const INTERVAL_MS = 100;
 
 function completed(stdout: string): RunResult {
 	return {
@@ -17,223 +33,432 @@ function completed(stdout: string): RunResult {
 	};
 }
 
-function linuxOptions(calls: RunOptions[]): ResourceSnapshotOptions {
-	return {
-		platform: () => "linux",
-		availableParallelism: () => 8,
-		loadavg: () => [1.25, 2.5, 3.75],
-		totalmem: () => 16_000,
-		freemem: () => 4_000,
-		readFile: async (path) => {
-			if (path === "/proc/meminfo") return "MemAvailable:       9 kB\n";
-			if (path === "/proc/pressure/memory") return "some avg10=0.42 avg60=0.10 avg300=0.01 total=1\n";
-			throw new Error("unexpected path");
-		},
-		run: async (options) => {
-			calls.push(options);
-			return completed("  7  12.5  100 00:10:00 /usr/local/bin/tester\n  8   1.0  200 00:00:03 node\n");
-		},
-	};
+function proc(pid: number, rssBytes: number, cpu: ProcessSample["cpu"], name = "node"): ProcessSample {
+	return { pid, parentPid: 1, name, identity: `${pid}:1`, rssBytes, cpu };
 }
 
-describe("resource_snapshot", () => {
+const measured = (value: number): ProcessSample["cpu"] => ({ state: "available", value });
+const warming: ProcessSample["cpu"] = { state: "warming", reason: "initial sample or PID reused" };
+const darwinCpu: ProcessSample["cpu"] = { state: "unavailable", reason: "ps start identity precision is one second" };
+
+function fixture(platform: string, processes: ProcessSample[], overrides: Partial<ResourceSnapshot> = {}) {
+	return (monotonicTimeMs: number): ResourceSnapshot => ({
+		version: 1,
+		platform,
+		wallTimeMs: 1_700_000_000_000 + monotonicTimeMs,
+		monotonicTimeMs,
+		durationMs: 5,
+		cpu: monotonicTimeMs === 0 ? { state: "warming", reason: "initial" } : { state: "available", value: 37.5 },
+		logicalCpus: 8,
+		loadAverage: platform === "win32" ? [] : [1.25, 2.5, 3.75],
+		memory: { totalBytes: 16_000, freeBytes: 4_000 },
+		processes,
+		coverage: {
+			complete: true,
+			enumerated: processes.length,
+			sampled: processes.length,
+			skipped: 0,
+			bytesRead: 10,
+			reasons: [],
+		},
+		pressure:
+			platform === "linux"
+				? {
+						source: "linux-psi",
+						memory: {
+							state: "available",
+							value: { some: { avg10: 0.42, avg60: 0.1, avg300: 0.01, total: 1 }, full: null },
+						},
+					}
+				: { source: "unsupported", reason: "no comparable native PSI metric on this platform" },
+		...overrides,
+	});
+}
+
+/** Fake sampler recording its options, sample signals and disposal. */
+function fakeSampler(make: (monotonicTimeMs: number) => ResourceSnapshot, fail?: Error) {
+	const state = { options: undefined as SamplerOptions | undefined, samples: 0, disposed: 0 };
+	const createSampler = (options: SamplerOptions): ResourceSampler => {
+		state.options = options;
+		return {
+			async sample(signal) {
+				signal?.throwIfAborted();
+				if (fail && state.samples === 1) throw fail;
+				return make(state.samples++ * 120);
+			},
+			async dispose() {
+				state.disposed++;
+			},
+		};
+	};
+	return { state, createSampler };
+}
+
+function options(make: (monotonicTimeMs: number) => ResourceSnapshot, extra: ResourceSnapshotOptions = {}) {
+	const fake = fakeSampler(make);
+	const calls: RunOptions[] = [];
+	const resolved: ResourceSnapshotOptions = {
+		createSampler: fake.createSampler,
+		readFile: async (path) => {
+			if (path === "/proc/meminfo") return "MemAvailable:       9 kB\n";
+			throw new Error("unexpected path");
+		},
+		run: async (runOptions) => {
+			calls.push(runOptions);
+			return completed("System-wide memory free percentage: 37%\n");
+		},
+		...extra,
+	};
+	return { fake, calls, resolved };
+}
+
+/** Spy on the real published sampler's disposal. */
+function realSampler() {
+	const state = { disposed: 0 };
+	const createSampler = (samplerOptions: SamplerOptions): ResourceSampler => {
+		const sampler = createResourceSampler(samplerOptions);
+		return {
+			sample: (signal) => sampler.sample(signal),
+			async dispose() {
+				state.disposed++;
+				await sampler.dispose();
+			},
+		};
+	};
+	return { state, createSampler };
+}
+
+async function exited(child: ReturnType<typeof spawn>): Promise<void> {
+	if (child.exitCode !== null || child.signalCode !== null) return;
+	await new Promise((resolve) => child.once("exit", resolve));
+}
+
+describe("resource_snapshot on the real host through the published sampler", () => {
+	it("resolves the exact registry sampler, never the workspace copy", async () => {
+		const manifest = JSON.parse(await readFile(join(PACKAGE_ROOT, "package.json"), "utf8"));
+		expect(manifest.dependencies).toEqual({ "@nredd/pi-resource-sampler": "0.1.0" });
+		const { stdout } = await execFileAsync(
+			process.execPath,
+			["--input-type=module", "-e", "console.log(import.meta.resolve('@nredd/pi-resource-sampler'))"],
+			{ cwd: PACKAGE_ROOT },
+		);
+		const resolved = fileURLToPath(stdout.trim());
+		const installed = join(PACKAGE_ROOT, "node_modules", "@nredd", "pi-resource-sampler");
+		expect(resolved).toBe(join(installed, "dist", "index.js"));
+		expect((await lstat(installed)).isSymbolicLink()).toBe(false);
+		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe("0.1.0");
+	});
+
 	it("smokes the real host through tool execution and output schema validation", async () => {
 		const mock = createMockPi();
 		registerResourceTools(mock.pi);
-		const result = await mock.call("resource_snapshot", { process_limit: 50 }, process.cwd());
+		const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
 		const snapshot = result.structuredContent as Awaited<ReturnType<typeof resourceSnapshot>>;
 		expect(snapshot.cpu.logicalCpus).toBeGreaterThan(0);
 		expect(snapshot.memory.totalBytes).toBeGreaterThan(0);
-		if (process.platform === "darwin" || process.platform === "linux") {
-			expect(snapshot.processes.status).toBe("available");
-			if (snapshot.processes.status !== "available") throw new Error("missing process metadata");
-			expect(snapshot.processes.entries.length).toBeGreaterThan(0);
-			expect(snapshot.processes.entries.length).toBeLessThanOrEqual(50);
-			expect(snapshot.processes.cpuSemantics).toContain("average");
-			for (const entry of snapshot.processes.entries) {
-				expect(Object.keys(entry).sort()).toEqual(["cpuPercent", "elapsed", "executable", "pid", "rssBytes"]);
-				expect(entry.executable).not.toContain("/");
-			}
+		expect(snapshot.interval.requestedMs).toBe(INTERVAL_MS);
+		expect(snapshot.interval.measuredMs).toBeGreaterThanOrEqual(INTERVAL_MS - 1);
+		expect(snapshot.cpu.utilization.state).toBe("available");
+		if (process.platform !== "darwin" && process.platform !== "linux") return;
+		if (snapshot.processes.status !== "available") throw new Error("missing process metadata");
+		expect(snapshot.processes.entries.length).toBeGreaterThan(0);
+		expect(snapshot.processes.entries.length).toBeLessThanOrEqual(50);
+		expect(snapshot.processes.ranking).toBe(process.platform === "linux" ? "interval-cpu" : "rss");
+		for (const entry of snapshot.processes.entries) {
+			expect(Object.keys(entry).sort()).toEqual(["cpu", "executable", "parentPid", "pid", "rssBytes"]);
+			expect(entry.executable).not.toContain("/");
+			if (process.platform === "darwin") expect(entry.cpu.state).toBe("unavailable");
+			if (entry.cpu.state === "available") expect(entry.cpu.value).toBeGreaterThanOrEqual(0);
 		}
 	});
 
-	it.each(["missing", "nonzero", "timeout", "aborted"])("handles real subprocess %s failures", async (failure) => {
+	it.runIf(process.platform === "darwin" || process.platform === "linux")(
+		"discovers a real child under its real parent, matching an independent ps read",
+		async () => {
+			// Busy for Linux interval-CPU ranking, resident for Darwin RSS ranking.
+			const child = spawn(process.execPath, ["-e", "const b = Buffer.alloc(160 * 2 ** 20, 1); for (;;) b[0]++"], {
+				stdio: "ignore",
+			});
+			try {
+				const pid = child.pid;
+				if (pid === undefined) throw new Error("child did not start");
+				await new Promise((resolve) => setTimeout(resolve, 300));
+				const snapshot = await resourceSnapshot(50, {}, undefined, 200);
+				if (snapshot.processes.status !== "available") throw new Error("missing process metadata");
+				const found = snapshot.processes.entries.find((entry) => entry.pid === pid);
+				expect(found, JSON.stringify(snapshot.processes.entries.slice(0, 5))).toBeDefined();
+				expect(found?.parentPid).toBe(process.pid);
+				expect(found?.executable).toBe(basename(process.execPath).slice(0, 15));
+				const ps = await execFileAsync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { env: { LC_ALL: "C" } });
+				expect(Number(ps.stdout.trim())).toBe(found?.parentPid);
+				if (process.platform === "linux") {
+					expect(found?.cpu.state).toBe("available");
+					expect(snapshot.processes.ranking).toBe("interval-cpu");
+				} else {
+					expect(found?.cpu.state).toBe("unavailable");
+				}
+			} finally {
+				child.kill("SIGKILL");
+				await exited(child);
+			}
+		},
+		20_000,
+	);
+
+	it("rejects a pre-aborted call and disposes the real sampler without optional probes", async () => {
+		const real = realSampler();
+		const calls: RunOptions[] = [];
 		const controller = new AbortController();
-		if (failure === "aborted") controller.abort();
-		const snapshot = await resourceSnapshot(
-			1,
-			{
-				...linuxOptions([]),
-				run: (options) =>
-					run({
-						...options,
-						cmd: failure === "missing" ? "/nonexistent/resource-observer-test" : process.execPath,
-						args: ["-e", failure === "nonzero" ? "process.exit(7)" : "setInterval(() => {}, 1000)"],
-						timeoutMs: 100,
-					}),
-			},
-			controller.signal,
+		controller.abort(new Error("cancelled by caller"));
+		await expect(
+			resourceSnapshot(
+				1,
+				{
+					createSampler: real.createSampler,
+					run: async (o) => {
+						calls.push(o);
+						return completed("");
+					},
+				},
+				controller.signal,
+			),
+		).rejects.toThrow("cancelled by caller");
+		expect(real.state.disposed).toBe(1);
+		expect(calls).toEqual([]);
+	});
+
+	it("cancels during the interval and still disposes the real sampler", async () => {
+		const real = realSampler();
+		const controller = new AbortController();
+		const pending = resourceSnapshot(1, { createSampler: real.createSampler }, controller.signal, 5_000);
+		setTimeout(() => controller.abort(), 150);
+		const started = performance.now();
+		await expect(pending).rejects.toThrow();
+		expect(performance.now() - started).toBeLessThan(3_000);
+		expect(real.state.disposed).toBe(1);
+	});
+
+	it("propagates tool cancellation as an error rather than a partial snapshot", async () => {
+		const mock = createMockPi();
+		registerResourceTools(mock.pi);
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			mock.tools.get("resource_snapshot")?.execute("cancelled", {}, controller.signal, undefined, { cwd: "/tmp" }),
+		).rejects.toThrow();
+	});
+});
+
+describe("resource_snapshot mapping", () => {
+	it("maps a Linux sample: interval CPU first, warming never ranked as zero, PSI and MemAvailable", async () => {
+		const { fake, resolved } = options(
+			fixture("linux", [
+				proc(7, 100, measured(12.5), "tester"),
+				proc(8, 1_000_000, warming),
+				proc(9, 200, measured(0)),
+				proc(10, 300, measured(0)),
+			]),
 		);
-		expect(snapshot.processes.status).toBe("unavailable");
+		const snapshot = await resourceSnapshot(4, resolved, undefined, INTERVAL_MS);
+		expect(fake.state.options).toEqual({ maxDurationMs: 1_000 });
+		expect(fake.state.disposed).toBe(1);
+		expect(snapshot).toMatchObject({
+			platform: "linux",
+			interval: { requestedMs: INTERVAL_MS, measuredMs: 120 },
+			cpu: { logicalCpus: 8, loadAverage: [1.25, 2.5, 3.75], utilization: { state: "available", value: 37.5 } },
+			memory: {
+				status: "available",
+				totalBytes: 16_000,
+				freeBytes: 4_000,
+				availableBytes: 9 * 1024,
+				pressure: { source: "linux-psi", value: 0.42 },
+			},
+			processes: { status: "available", limit: 4, ranking: "interval-cpu", truncated: false },
+		});
+		if (snapshot.processes.status !== "available") throw new Error("missing metadata");
+		expect(snapshot.processes.entries.map((entry) => entry.pid)).toEqual([7, 10, 9, 8]);
+		expect(snapshot.processes.entries[0]).toEqual({
+			pid: 7,
+			parentPid: 1,
+			cpu: { state: "available", value: 12.5 },
+			rssBytes: 100,
+			executable: "tester",
+		});
+		expect(snapshot.processes.cpuSemantics).toContain("interval CPU");
+	});
+
+	it("bounds 60 entries to the limit and reports incomplete coverage as truncated", async () => {
+		const processes = Array.from({ length: 60 }, (_, i) => proc(i + 1, 10, measured(i)));
+		const coverage = {
+			complete: false,
+			enumerated: 61,
+			sampled: 60,
+			skipped: 1,
+			bytesRead: 10,
+			reasons: ["process-unreadable-or-changed"],
+		};
+		const { resolved } = options(fixture("linux", processes, { coverage }));
+		const snapshot = await resourceSnapshot(50, resolved, undefined, INTERVAL_MS);
+		if (snapshot.processes.status !== "available") throw new Error("missing metadata");
+		expect(snapshot.processes.entries).toHaveLength(50);
+		expect(snapshot.processes.entries[0]?.pid).toBe(60);
+		expect(snapshot.processes).toMatchObject({ truncated: true, coverage });
+	});
+
+	it("ranks Darwin by RSS and labels unavailable interval CPU without any average", async () => {
+		const { calls, resolved } = options(
+			fixture("darwin", [proc(5, 50, darwinCpu, "Activity Monitor"), proc(6, 500, darwinCpu)]),
+		);
+		const controller = new AbortController();
+		const snapshot = await resourceSnapshot(2, resolved, controller.signal, INTERVAL_MS);
+		expect(snapshot.memory).toMatchObject({ availableBytes: null, pressure: { source: "memory_pressure", value: 37 } });
+		expect(calls).toEqual([
+			expect.objectContaining({
+				cmd: "memory_pressure",
+				args: ["-Q"],
+				env: { LC_ALL: "C" },
+				signal: controller.signal,
+			}),
+		]);
+		expect(snapshot.processes).toMatchObject({
+			ranking: "rss",
+			entries: [{ pid: 6 }, { pid: 5, executable: "Activity Monitor", cpu: darwinCpu }],
+		});
+		if (snapshot.processes.status !== "available") throw new Error("missing metadata");
+		expect(snapshot.processes.cpuSemantics).toContain("never a ps lifetime or decaying average");
 	});
 
 	it.each([{ timedOut: true }, { aborted: true }, { spawnError: "missing" }, { stdoutDropped: 1 }, { exitCode: 1 }])(
 		"rejects Darwin pressure from unsuccessful commands: %j",
 		async (failure) => {
-			const snapshot = await resourceSnapshot(1, {
-				...linuxOptions([]),
-				platform: () => "darwin",
+			const { resolved } = options(fixture("darwin", [proc(5, 50, darwinCpu)]), {
 				run: async () => ({ ...completed("System-wide memory free percentage: 37%\n"), ...failure }),
 			});
+			const snapshot = await resourceSnapshot(1, resolved, undefined, INTERVAL_MS);
 			expect(snapshot.memory.pressure).toBeNull();
 		},
 	);
 
-	it("parses Darwin pressure and metadata with executable spaces", async () => {
-		const snapshot = await resourceSnapshot(1, {
-			...linuxOptions([]),
-			platform: () => "darwin",
-			run: async (options) => {
-				expect(options.env).toEqual({ LC_ALL: "C" });
-				return completed(
-					options.cmd === "memory_pressure"
-						? "System-wide memory free percentage: 37%\n"
-						: "5 2.0 50 01:00 /Applications/Activity Monitor\n",
-				);
+	it("keeps base memory figures when optional probes throw", async () => {
+		const linux = options(fixture("linux", [proc(5, 50, warming)]), {
+			readFile: async () => {
+				throw new Error("EACCES");
 			},
 		});
-		expect(snapshot.memory.pressure).toEqual({ source: "memory_pressure", value: 37 });
-		expect(snapshot.processes).toMatchObject({
-			cpuSemantics: "ps decaying CPU average, not an interval sample",
-			entries: [{ executable: "Activity Monitor" }],
+		expect((await resourceSnapshot(1, linux.resolved, undefined, INTERVAL_MS)).memory).toMatchObject({
+			totalBytes: 16_000,
+			freeBytes: 4_000,
+			availableBytes: null,
+			pressure: { source: "linux-psi", value: 0.42 },
 		});
+		const darwin = options(fixture("darwin", [proc(5, 50, darwinCpu)]), {
+			run: async () => {
+				throw new Error("missing");
+			},
+		});
+		expect((await resourceSnapshot(1, darwin.resolved, undefined, INTERVAL_MS)).memory.pressure).toBeNull();
 	});
 
-	it.each([0, -1, 51, 1.5, NaN, Infinity])("rejects invalid direct limits %s before probing", async (limit) => {
-		await expect(
-			resourceSnapshot(limit, {
-				platform: () => {
-					throw new Error("must not probe");
-				},
+	it("keeps unavailable PSI absent, not zero", async () => {
+		const { resolved } = options(
+			fixture("linux", [proc(5, 50, warming)], {
+				pressure: { source: "linux-psi", memory: { state: "unavailable", reason: "PSI absent" } },
 			}),
-		).rejects.toThrow(RangeError);
-	});
-
-	it("bounds 60 rows to 50 and labels Linux lifetime averages", async () => {
-		const snapshot = await resourceSnapshot(50, {
-			...linuxOptions([]),
-			run: async () => completed(Array.from({ length: 60 }, (_, i) => `${i + 1} ${i} 10 00:01 node`).join("\n")),
-		});
-		expect(snapshot.processes).toMatchObject({
-			limit: 50,
-			cpuSemantics: "ps lifetime CPU average, not current utilization",
-			truncated: false,
-		});
-		if (snapshot.processes.status !== "available") throw new Error("missing metadata");
-		expect(snapshot.processes.entries).toHaveLength(50);
-		expect(snapshot.processes.entries[0]?.pid).toBe(60);
-	});
-
-	it("discards capped partial rows and ignores malformed or exited process rows", async () => {
-		const snapshot = await resourceSnapshot(50, {
-			...linuxOptions([]),
-			run: async () => ({ ...completed("garbage\n4 1.0 20 00:01 node\n5 2.0 10 00:02 partial"), stdoutDropped: 20 }),
-		});
-		expect(snapshot.processes).toMatchObject({ truncated: true, entries: [{ pid: 4 }] });
-		if (snapshot.processes.status !== "available") throw new Error("missing metadata");
-		expect(snapshot.processes.entries).toHaveLength(1);
-	});
-
-	it("passes tool cancellation to both Darwin commands", async () => {
-		const mock = createMockPi();
-		const controller = new AbortController();
-		controller.abort();
-		const calls: RunOptions[] = [];
-		registerResourceTools(mock.pi, {
-			...linuxOptions([]),
-			platform: () => "darwin",
-			run: async (options) => {
-				calls.push(options);
-				return run({ ...options, cmd: process.execPath, args: ["-e", "process.exit(99)"] });
-			},
-		});
-		await mock.tools.get("resource_snapshot")?.execute("cancelled", {}, controller.signal, undefined, { cwd: "/tmp" });
-		expect(calls).toHaveLength(2);
-		expect(calls.every((call) => call.signal === controller.signal)).toBe(true);
-	});
-
-	it("collects bounded Linux metadata without command arguments or environments", async () => {
-		const calls: RunOptions[] = [];
-		const snapshot = await resourceSnapshot(1, linuxOptions(calls));
-		expect(snapshot).toMatchObject({
-			platform: "linux",
-			cpu: { logicalCpus: 8, loadAverage: [1.25, 2.5, 3.75] },
-			memory: {
-				status: "available",
-				availableBytes: 9 * 1024,
-				pressure: { source: "linux-psi", value: 0.42 },
-			},
-			processes: {
-				status: "available",
-				limit: 1,
-				entries: [{ pid: 7, cpuPercent: 12.5, rssBytes: 100 * 1024, elapsed: "00:10:00", executable: "tester" }],
-			},
-		});
-		expect(calls).toEqual([
-			expect.objectContaining({
-				cmd: "ps",
-				args: ["-A", "--sort=-pcpu", "-o", "pid=,pcpu=,rss=,etime=,comm="],
-				timeoutMs: 3_000,
-				maxBytes: 128 * 1024,
-			}),
-		]);
-	});
-
-	it("keeps base memory metrics and reports optional probes as absent on failures", async () => {
-		const snapshot = await resourceSnapshot(12, {
-			platform: () => "darwin",
-			availableParallelism: () => 10,
-			loadavg: () => [0, 0, 0],
-			totalmem: () => 100,
-			freemem: () => 25,
-			readFile: async () => "",
-			run: async (options) => {
-				if (options.cmd === "memory_pressure") throw new Error("missing");
-				return { ...completed(""), exitCode: 1 };
-			},
-		});
-		expect(snapshot.memory).toMatchObject({ status: "available", totalBytes: 100, freeBytes: 25, pressure: null });
-		expect(snapshot.processes).toEqual({ status: "unavailable", reason: "process metadata command unavailable" });
+		);
+		expect((await resourceSnapshot(1, resolved, undefined, INTERVAL_MS)).memory.pressure).toBeNull();
 	});
 
 	it("is explicit about unavailable Windows load and process metadata", async () => {
-		const snapshot = await resourceSnapshot(12, {
-			platform: () => "win32",
-			availableParallelism: () => 4,
-			loadavg: () => [0, 0, 0],
-			totalmem: () => 100,
-			freemem: () => 50,
-			readFile: async () => "",
-			run: async () => completed(""),
-		});
-		expect(snapshot.cpu).toEqual({ logicalCpus: 4, loadAverage: null });
+		const coverage = {
+			complete: false,
+			enumerated: 0,
+			sampled: 0,
+			skipped: 0,
+			bytesRead: 0,
+			reasons: ["unsupported-platform"],
+		};
+		const { resolved } = options(fixture("win32", [], { coverage }));
+		const snapshot = await resourceSnapshot(12, resolved, undefined, INTERVAL_MS);
+		expect(snapshot.cpu.loadAverage).toBeNull();
 		expect(snapshot.processes).toEqual({
 			status: "unavailable",
 			reason: "bounded process metadata is unsupported on win32",
 		});
 	});
 
+	it("reports failed process collection as unavailable with its finite reasons", async () => {
+		const coverage = {
+			complete: false,
+			enumerated: 0,
+			sampled: 0,
+			skipped: 0,
+			bytesRead: 0,
+			reasons: ["command-failed"],
+		};
+		const { resolved } = options(fixture("darwin", [], { coverage }));
+		expect((await resourceSnapshot(1, resolved, undefined, INTERVAL_MS)).processes).toEqual({
+			status: "unavailable",
+			reason: "process metadata unavailable (command-failed)",
+		});
+	});
+
+	it("propagates sampler failures and always disposes", async () => {
+		const fake = fakeSampler(fixture("linux", []), new Error("sampler exploded"));
+		await expect(resourceSnapshot(1, { createSampler: fake.createSampler }, undefined, INTERVAL_MS)).rejects.toThrow(
+			"sampler exploded",
+		);
+		expect(fake.state.disposed).toBe(1);
+	});
+
+	it.each([
+		[0, INTERVAL_MS],
+		[-1, INTERVAL_MS],
+		[51, INTERVAL_MS],
+		[1.5, INTERVAL_MS],
+		[Number.NaN, INTERVAL_MS],
+		[Number.POSITIVE_INFINITY, INTERVAL_MS],
+		[1, 99],
+		[1, 5_001],
+		[1, 150.5],
+	])("rejects invalid direct limit %s or interval %s before sampling", async (limit, interval) => {
+		await expect(
+			resourceSnapshot(
+				limit,
+				{
+					createSampler: () => {
+						throw new Error("must not sample");
+					},
+				},
+				undefined,
+				interval,
+			),
+		).rejects.toThrow(RangeError);
+	});
+
 	it("registers a read-only tool with bounded input and privacy guidance", async () => {
 		const mock = createMockPi();
-		registerResourceTools(mock.pi, linuxOptions([]));
-		expect(mock.tools.get("resource_snapshot")?.annotations?.readOnlyHint).toBe(true);
-		expect(mock.tools.get("resource_snapshot")?.description).toContain(
-			"never returns command arguments or environments",
-		);
-		const result = await mock.call("resource_snapshot", { process_limit: 1 }, "/tmp");
+		const { resolved } = options(fixture("linux", [proc(7, 102_400, measured(12.5), "tester")]));
+		registerResourceTools(mock.pi, resolved);
+		const tool = mock.tools.get("resource_snapshot");
+		expect(tool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+		expect(tool?.description).toContain("never returns command arguments or environments");
+		expect(tool?.description).toContain("cannot attribute OS processes to agents");
+		const result = await mock.call("resource_snapshot", { process_limit: 1, interval_ms: INTERVAL_MS }, "/tmp");
 		expect(result.isError).toBe(false);
-		expect(mock.text(result)).toContain("7 12.5 102400 00:10:00 tester");
+		expect(mock.text(result)).toContain("7 1 12.5% 102400 tester");
+		expect(mock.text(result)).toContain("interval utilization 37.5% over 120ms");
 		expect(mock.text(result)).toContain("No arguments, environments, or process-to-agent attribution");
-		await expect(mock.call("resource_snapshot", { process_limit: 51 }, "/tmp")).rejects.toThrow("params rejected");
+		for (const params of [{ process_limit: 51 }, { process_limit: 0 }, { interval_ms: 99 }, { interval_ms: 5_001 }]) {
+			await expect(mock.call("resource_snapshot", params, "/tmp")).rejects.toThrow("params rejected");
+		}
+	});
+
+	it("injects awareness guidance without forcing activation", () => {
+		const mock = createMockPi();
+		registerResourceTools(mock.pi);
+		const [hook] = mock.hooks.get("before_agent_start") ?? [];
+		const result = hook?.({ systemPrompt: "base" }, {}) as { systemPrompt: string };
+		expect(result.systemPrompt).toContain("Before knowingly starting a large test or compile");
+		expect(result.systemPrompt).toContain("not a lock, serialization rule, or fixed threshold");
 	});
 });

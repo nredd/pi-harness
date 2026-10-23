@@ -75,8 +75,11 @@ What each package must satisfy:
   dependencies, peers only from the Pi host set (`@earendil-works/pi-ai`,
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
 - Every import is a `node:` builtin, a host module, a declared runtime dependency, or a relative path
-  inside the package. No
-  `@nredd/*` sibling. The stats artifact (`dist/`) may import only `node:` builtins: the standalone
+  inside the package. No `@nredd/*` sibling, with one narrow exception: an exact `SIBLING_LIBRARIES`
+  specifier (today only the `library=True` `@nredd/pi-resource-sampler`) that the importing plugin's
+  contract also declares as an exact runtime dependency. Deep imports, undeclared or ranged
+  dependencies, `workspace:`/`file:` specs, imports from a library and imports from a standalone
+  artifact all stay violations. `@nredd/pi-dev-tools` pins `@nredd/pi-resource-sampler` `0.1.0`. The stats artifact (`dist/`) may import only `node:` builtins: the standalone
   check runs before relative-import resolution, so `../src/index.ts` is rejected even if it exists
 - Imports are read with the repository's installed TypeScript 7.0.2 parser (`scripts/import_audit.ts`
   via `typescript/unstable/sync`, which drives the bundled `tsgo`; no new dependency, one batched
@@ -88,8 +91,9 @@ What each package must satisfy:
   they are not syntax. Limits: this is a syntactic audit, not a security proof. It does not see
   `eval`, `new Function`, `createRequire()(...)` results, `import.meta.resolve` or JSDoc `@import`
   tags, and a local `require` shadow is still treated as `require`
-- Fresh install (`--ignore-scripts --legacy-peer-deps --offline`, mirroring Pi's suppressed peer
-  installs): dependency-free packages have exactly the package in `node_modules` and the lockfile. A package
+- Fresh install (`--ignore-scripts --legacy-peer-deps`, mirroring Pi's suppressed peer installs;
+  `--offline` unless the contract declares runtime dependencies, which come from the registry, so
+  dev-tools now needs the registry for its exact sampler): dependency-free packages have exactly the package in `node_modules` and the lockfile. A package
   with declared runtime dependencies instead has exactly the closure derived from each INSTALLED
   `node_modules/**/package.json` (`dependencies` + `optionalDependencies`, resolved npm-style by walking up
   from the requirer's `node_modules`, so nested paths work). That closure must equal the lockfile paths,
@@ -104,7 +108,14 @@ What each package must satisfy:
 - Stock Pi, `--mode json` with `--no-extensions --extension <installed dir>` (only that package),
   `--no-mcp`, `--offline`, no skills/templates/themes/context files, `--no-approve`:
   - dev-tools: a real `git_status` result on a disposable repo (`untracked.txt`), and an error result
-    outside a repository
+    outside a repository. Then `resource_snapshot` with `process_limit: 50`: the gate's own busy,
+    160 MiB resident `node` child must appear with `parentPid` equal to the gate process (real
+    parent-child discovery through the packed plugin and its installed sampler), entries carry only
+    `pid`/`parentPid`/`cpu`/`rssBytes`/`executable`, and ranking is `interval-cpu` on Linux, `rss`
+    on Darwin. `process_limit: 51` must be an error result. Evidence records the ranking, the refusal
+    text and the installed sampler's locked registry integrity (a real, unlinked directory at exactly
+    `0.1.0`). Cancellation is not driven through headless Pi; the package tests cancel the same
+    registry-installed sampler mid-sample and mid-interval
   - session-kit: real `monitor_start`/`monitor_read` output, then the exact packed bytes of
     `dist/pi-stats-export.mjs` copied ALONE into a fresh directory (no `src/`, package or
     `node_modules` beside or above it) and run with only `node` from another unrelated directory,
@@ -174,7 +185,8 @@ in-package relative imports, never host modules or sibling extensions. The defau
 contract still requires `pi.extensions` and retains its original host-module rules. The release
 descriptor uses the same audit/isolated execution gate; no npm publication or bootstrap is performed.
 The new npm name requires owner-controlled staged publication/2FA and trusted-publisher setup before
-release. Consumer dependencies and migration are separate work, not a relaxed sibling import rule.
+release. Consumers pin an exact published version and are admitted only through the narrow
+`SIBLING_LIBRARIES` rule above, not a relaxed sibling import rule.
 
 ## Packed preset audit (no standalone Pi behavior)
 

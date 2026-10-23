@@ -5,13 +5,16 @@ fresh project, and drives it through a real, exact-version stock Pi install:
 
 1. `npm pack`: file list must match a narrow allowlist; `LICENSE` must be byte-identical to the
    repository root; the packed manifest must be public-publishable, keep host modules as `*` peers,
-   and have no dependencies.
-2. Source audit: every import in the tarball is relative (inside the package), a Node builtin, or a
-   host-provided Pi module. No sibling plugin, no bundled host copy. Imports come from the installed
-   TypeScript parser (`import_audit.ts`, one batched `node` run per package) rather than a regex;
-   computed specifiers are rejected, not skipped. It is a syntactic audit, not a proof about `eval`.
-3. Fresh install (`--ignore-scripts --legacy-peer-deps --offline`, like Pi's managed installs that
-   suppress peer installation): `node_modules` holds only the package, never a host duplicate.
+   and declare exactly the contract's runtime dependencies (none for most plugins).
+2. Source audit: every import in the tarball is relative (inside the package), a Node builtin, a
+   host-provided Pi module or a declared runtime dependency. No sibling plugin (only a published
+   `SIBLING_LIBRARIES` entry that is also a declared dependency), no bundled host copy. Imports
+   come from the installed TypeScript parser (`import_audit.ts`, one batched `node` run per
+   package) rather than a regex; computed specifiers are rejected, not skipped. It is a syntactic
+   audit, not a proof about `eval`.
+3. Fresh install (`--ignore-scripts --legacy-peer-deps`, like Pi's managed installs that suppress
+   peer installation; `--offline` unless the contract declares registry runtime dependencies):
+   `node_modules` holds only the package and its declared closure, never a host duplicate.
 4. Stock Pi `--mode json` with only that package loaded (`--no-extensions --extension DIR`), a
    scrubbed environment, a temporary `HOME` and agent directory, no credentials, and a loopback
    scripted provider. The package must do real work: a dev tool result, a session-kit monitor and
@@ -184,6 +187,12 @@ await assert.rejects(sampler.sample(), /disposed/);
 """,
 )
 
+# Published Pi-independent libraries a plugin may import, ONLY when it is also an exact declared
+# runtime dependency of that plugin's contract. Every other `@nredd/` specifier stays a violation.
+SIBLING_LIBRARIES = frozenset({RESOURCE_SAMPLER_CONTRACT.name})
+# `resource_snapshot` runs on this exact published sampler, installed from the registry.
+RESOURCE_SAMPLER_DEPENDENCY = (RESOURCE_SAMPLER_CONTRACT.name, "0.1.0")
+
 
 CONTRACTS = (
     PackageContract(
@@ -191,7 +200,8 @@ CONTRACTS = (
         directory="dev-tools",
         required=("LICENSE", "README.md", "package.json", "src/index.ts"),
         allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^src/.+\.ts$")),
-        exposes_tools=frozenset({"git_status"}),
+        exposes_tools=frozenset({"git_status", "resource_snapshot"}),
+        runtime_dependencies=(RESOURCE_SAMPLER_DEPENDENCY,),
     ),
     PackageContract(
         name="@nredd/pi-session-kit",
@@ -352,9 +362,9 @@ COMPUTER_USE_CONTRACT = PackageContract(
     ),
 )
 
-# `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` is hermetic
-# (`npm install --offline`, nothing but the tarball), while this package has real runtime dependencies
-# that must come from the registry. It is audited, installed and run through stock Pi by the release
+# `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` installs its plugins
+# offline except for one exact published `SIBLING_LIBRARIES` pin (dev-tools -> resource sampler), while
+# this package has third-party runtime dependencies that must come from the registry. It is audited, installed and run through stock Pi by the release
 # `verify` stage (descriptor `stock_gate`), by CI's `make check-subagents-package-contract` and by the
 # pack-vs-contract test, not by that target. The
 # `files` allowlist in `packages/subagents/package.json` and `allowed`/`required` below must enumerate
@@ -721,6 +731,9 @@ class DevToolsEvidence(TypedDict):
     tool: str
     untracked: list[str]
     failure_path: str
+    resource_ranking: str
+    resource_sampler_integrity: str
+    resource_failure_path: str
 
 
 class SessionKitEvidence(TypedDict):
@@ -793,6 +806,15 @@ class DevToolsEvidenceModel(BaseModel):
     tool: Literal["git_status"] = Field(description="Tool the scenario ran")
     untracked: list[str] = Field(min_length=1, description="Untracked paths the real tool reported")
     failure_path: NonEmptyText = Field(description="Error text from the outside-a-repository run")
+    resource_ranking: Literal["interval-cpu", "rss"] = Field(
+        description="`resource_snapshot` ranking on the host that found the marker child under its parent"
+    )
+    resource_sampler_integrity: Sha512Integrity = Field(
+        description="Locked registry integrity of the installed `@nredd/pi-resource-sampler`"
+    )
+    resource_failure_path: NonEmptyText = Field(
+        description="Error text from an out-of-bounds `process_limit`"
+    )
 
 
 class SessionKitEvidenceModel(BaseModel):
@@ -1696,6 +1718,8 @@ def classify_imports(
     Allowed: Node builtins (`node:` prefix), host-provided Pi modules, the contract's declared runtime
     dependencies, and relative paths that stay inside the package. Everything else, including any
     `@nredd/` sibling and any specifier the parser could not resolve to a literal, is a violation.
+    The one sibling exception is an exact `SIBLING_LIBRARIES` specifier that is also a declared
+    dependency of a non-library, non-standalone file.
     Files in `standalone_artifacts` (the bundled stats `dist/` artifact) may import `node:` builtins
     only; relative imports are forbidden too, because it is copied alone.
 
@@ -1717,7 +1741,8 @@ def classify_imports(
         if spec.startswith("node:"):
             continue
         if spec.startswith(SIBLING_SCOPE):
-            problems.append(f"{path}: imports sibling plugin '{spec}'")
+            if library or standalone or spec not in SIBLING_LIBRARIES or spec not in dependencies:
+                problems.append(f"{path}: imports sibling plugin '{spec}'")
         elif standalone:
             problems.append(
                 f"{path}: standalone artifact imports '{spec}', only `node:` builtins are allowed"
@@ -2568,7 +2593,115 @@ def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
         tool_is_error(failed),
         f"git_status outside a repository must be an error result: {failed.get('result')}",
     )
-    return {"tool": "git_status", "untracked": ["untracked.txt"], "failure_path": tool_text(failed)[:200]}
+    ranking, resource_failure = exercise_resource_snapshot(ctx)
+    return {
+        "tool": "git_status",
+        "untracked": ["untracked.txt"],
+        "failure_path": tool_text(failed)[:200],
+        "resource_ranking": ranking,
+        "resource_sampler_integrity": installed_sampler_integrity(ctx.installed),
+        "resource_failure_path": resource_failure[:200],
+    }
+
+
+def installed_sampler_integrity(installed: Path) -> str:
+    """Prove the installed plugin resolves the exact published sampler from the registry.
+
+    Parameters:
+        installed (Path): Installed `@nredd/pi-dev-tools` directory inside `<project>/node_modules`.
+
+    Returns:
+        str: The locked registry integrity of the installed sampler.
+
+    Raises:
+        ContractError: If the sampler is linked, missing, another version, or locked without integrity.
+    """
+    name, version = RESOURCE_SAMPLER_DEPENDENCY
+    project = installed.parents[2]
+    module = project / "node_modules" / name
+    require(module.is_dir() and not module.is_symlink(), f"'{name}' is not a real installed directory")
+    entry = read_lockfile(project / "package-lock.json").packages.get(f"node_modules/{name}")
+    require(
+        entry is not None and entry.version == version and entry.integrity is not None,
+        f"'{name}' is not locked at exactly {version} with a registry integrity: {entry}",
+    )
+    # Narrowed by `require` above.
+    assert entry is not None
+    assert entry.integrity is not None
+    return entry.integrity
+
+
+def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
+    """Find a real marker child under this process through `resource_snapshot`, then a refused call.
+
+    The child is busy (Linux ranks measured interval CPU first) and resident (Darwin has no
+    interval process CPU and ranks by RSS), so it is inside the 50-entry bound on either host.
+
+    Parameters:
+        ctx (Context): Scenario context.
+
+    Returns:
+        tuple[str, str]: The reported ranking and the out-of-bounds call's error text.
+
+    Raises:
+        ContractError: If the snapshot fails, misses the child or its parent, or the refusal succeeds.
+    """
+    project = ctx.work / "resource"
+    project.mkdir()
+    argv = ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"]
+    child = subprocess.Popen(
+        [str(ctx.sandbox.tools.node), "-e", "const b = Buffer.alloc(160 * 2 ** 20, 1); for (;;) b[0]++"],
+        env=ctx.sandbox.env(),
+        cwd=project,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        script = [ToolStep("resource_snapshot", {"process_limit": 50, "interval_ms": 300}), TextStep("done")]
+        with ctx.provider_session(script):
+            ok = run_pi(ctx.pi_bin, ctx.sandbox, ctx.installed, project, argv)
+    finally:
+        child.kill()
+        child.wait(timeout=30)
+    require_clean_run(ok, "dev-tools resource_snapshot")
+    record = ok.single_tool_result("resource_snapshot")
+    require(not tool_is_error(record), f"resource_snapshot failed: {tool_text(record)}")
+    structured = parse_tool_record(record).result.structuredContent or {}
+    processes = structured.get("processes")
+    require(
+        isinstance(processes, dict) and processes.get("status") == "available",
+        f"resource_snapshot has no process metadata: {structured}",
+    )
+    assert isinstance(processes, dict)  # Narrowed by `require` above.
+    entries = processes.get("entries")
+    require(isinstance(entries, list) and 0 < len(entries) <= 50, f"unbounded entries: {entries}")
+    assert isinstance(entries, list)
+    found = [entry for entry in entries if isinstance(entry, dict) and entry.get("pid") == child.pid]
+    require(
+        len(found) == 1 and found[0].get("parentPid") == os.getpid(),
+        f"marker child {child.pid} under parent {os.getpid()} not discovered: {entries[:5]}",
+    )
+    require(
+        all(
+            isinstance(entry, dict) and set(entry) == {"pid", "parentPid", "cpu", "rssBytes", "executable"}
+            for entry in entries
+        ),
+        f"resource_snapshot entries carry unexpected fields: {entries[:3]}",
+    )
+    ranking = processes.get("ranking")
+    expected = "interval-cpu" if sys.platform.startswith("linux") else "rss"
+    require(
+        ranking == expected, f"resource_snapshot ranking {ranking!r} is not {expected!r} on {sys.platform}"
+    )
+
+    refused_script = [ToolStep("resource_snapshot", {"process_limit": 51}), TextStep("done")]
+    with ctx.provider_session(refused_script):
+        bad = run_pi(ctx.pi_bin, ctx.sandbox, ctx.installed, project, argv)
+    require_clean_run(bad, "dev-tools resource_snapshot out of bounds")
+    refused = bad.single_tool_result("resource_snapshot")
+    require(tool_is_error(refused), f"process_limit 51 must be an error result: {refused.get('result')}")
+    return expected, tool_text(refused)
 
 
 def scenario_subagents(ctx: Context) -> SubagentsEvidence:
