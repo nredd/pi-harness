@@ -1,0 +1,189 @@
+import type { CpuInfo } from "node:os";
+import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
+import { describe, expect, it } from "vitest";
+import { Budget, command } from "../src/collect.js";
+import {
+	darwinProcess,
+	hostCpu,
+	linuxRss,
+	linuxStat,
+	type ProcessCounter,
+	processCpu,
+	psi,
+	safeName,
+} from "../src/counters.js";
+import { createResourceSampler } from "../src/index.js";
+
+const core = (user: number, idle: number): CpuInfo => ({
+	model: "fixture",
+	speed: 1000,
+	times: { user, idle, sys: 0, nice: 0, irq: 0 },
+});
+const proc = (cpuMs: number, at: number, identity = "12:50"): ProcessCounter => ({
+	pid: 12,
+	parentPid: 1,
+	name: "fixture",
+	identity,
+	rssBytes: 1024,
+	cpuMs,
+	at,
+});
+
+describe("honest counters", () => {
+	it("warms first sample, topology changes, rollback and non-advancing counters", () => {
+		expect(hostCpu(undefined, [core(1, 1)]).state).toBe("warming");
+		expect(hostCpu([core(1, 1)], [core(2, 2), core(1, 1)]).state).toBe("warming");
+		expect(hostCpu([core(2, 2)], [core(1, 10)]).state).toBe("warming");
+		expect(hostCpu([core(2, 2)], [core(2, 2)]).state).toBe("warming");
+		expect(hostCpu([core(2, 2)], [core(Number.NaN, 2)]).state).toBe("warming");
+	});
+	it("normalizes aggregate CPU but preserves multi-core process CPU", () => {
+		expect(hostCpu([core(0, 0), core(0, 0)], [core(100, 100), core(0, 200)])).toEqual({
+			state: "available",
+			value: 25,
+		});
+		expect(processCpu(proc(100, 100), proc(500, 200))).toEqual({ state: "available", value: 400 });
+		expect(processCpu(proc(100, 100), proc(100, 200))).toEqual({ state: "available", value: 0 });
+	});
+	it("does not fabricate zero for PID reuse, first sample, reset or invalid time", () => {
+		for (const before of [undefined, proc(100, 100, "12:49"), proc(101, 50), proc(90, 100), proc(90, Number.NaN)]) {
+			expect(processCpu(before, proc(100, 100)).state).toBe("warming");
+		}
+	});
+});
+
+describe("privacy-safe native parsers", () => {
+	it("parses Linux parentheses and exact start identity without assuming page size", () => {
+		const fields = Array<string>(22).fill("0");
+		fields[0] = "S";
+		fields[1] = "1";
+		fields[11] = "20";
+		fields[12] = "30";
+		fields[19] = "987654321987654321";
+		const parsed = linuxStat(`12 (some ) name) ${fields.join(" ")}`, 100, 123);
+		expect(parsed).toMatchObject({
+			pid: 12,
+			parentPid: 1,
+			name: "some ) name",
+			identity: "12:987654321987654321",
+			cpuMs: 500,
+			at: 123,
+		});
+		expect(linuxRss("VmRSS:\t42 kB\n")).toBe(43008);
+		expect(linuxRss("no RSS")).toBeNull();
+		expect(linuxStat("12 malformed", 100, 1)).toBeNull();
+		expect(linuxStat(`12 (name) ${fields.join(" ")}`, 0, 1)).toBeNull();
+	});
+	it("parses measured Darwin ps precision and strips control characters", () => {
+		expect(darwinProcess("    1 0 Sat Oct  3 01:49:05 2026 185:32.40 17648 launchd", 12)).toMatchObject({
+			pid: 1,
+			identity: "1:Sat Oct  3 01:49:05 2026",
+			rssBytes: 18071552,
+			name: "launchd",
+		});
+		expect(darwinProcess("48488 48487 Thu Oct 22 20:28:58 2026 0:00.41 14384 ", 12)?.name).toBe("");
+		expect(darwinProcess("truncated row", 1)).toBeNull();
+		expect(safeName("/bin/test\u001b[2J")).toBe("test?[2J");
+	});
+	it("keeps native PSI semantics and rejects impossible or malformed values", () => {
+		expect(
+			psi("some avg10=1.25 avg60=0.00 avg300=0.05 total=42\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")?.some,
+		).toEqual({ avg10: 1.25, avg60: 0, avg300: 0.05, total: 42 });
+		expect(psi("some avg10=101 avg60=0 avg300=0 total=2")).toBeNull();
+		expect(psi("unknown")).toBeNull();
+	});
+});
+
+describe("bounded child lifecycle", () => {
+	it("reaps the child on cancellation before returning", async () => {
+		const controller = new AbortController();
+		const budget = new Budget(performance.now() + 3000, 4096, 10, controller.signal);
+		const pending = command(process.execPath, ["-e", "console.log(process.pid); setInterval(() => {}, 1000)"], budget);
+		const readyDeadline = performance.now() + 2000;
+		while (budget.bytesRead === 0 && performance.now() < readyDeadline) await delay(10);
+		controller.abort();
+		const result = await pending;
+		const pid = Number(result.text.trim());
+		expect(pid).toBeGreaterThan(0);
+		expect(result.complete).toBe(false);
+		expect(() => process.kill(pid, 0)).toThrow();
+	});
+	it("bounds bytes and duration for a noisy child", async () => {
+		const budget = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
+		const result = await command(
+			process.execPath,
+			["-e", "setInterval(() => process.stdout.write('x'.repeat(8192)), 1)"],
+			budget,
+		);
+		expect(result.complete).toBe(false);
+		expect(budget.bytesRead).toBe(4096);
+		expect(budget.reasons.has("byte-limit")).toBe(true);
+	});
+	it("kills a silent child at the deadline and handles spawn failure", async () => {
+		const budget = new Budget(performance.now() + 100, 4096, 10, new AbortController().signal);
+		expect((await command(process.execPath, ["-e", "setInterval(() => {}, 1000)"], budget)).complete).toBe(false);
+		expect(budget.reasons.has("deadline")).toBe(true);
+		const failed = new Budget(performance.now() + 1000, 4096, 10, new AbortController().signal);
+		expect((await command("/nonexistent-resource-sampler-fixture", [], failed)).complete).toBe(false);
+		expect(failed.reasons.has("command-unavailable")).toBe(true);
+	});
+});
+
+describe("real local sampler", () => {
+	it("samples the actual host twice with explicit platform semantics", async () => {
+		const sampler = createResourceSampler({ maxDurationMs: 2000 });
+		try {
+			const first = await sampler.sample();
+			expect(first.cpu.state).toBe("warming");
+			await delay(60);
+			const second = await sampler.sample();
+			expect(second.wallTimeMs).toBeGreaterThan(0);
+			expect(second.monotonicTimeMs).toBeGreaterThan(first.monotonicTimeMs);
+			expect(second.cpu.state).toBe("available");
+			if (second.cpu.state === "available") {
+				expect(second.cpu.value).toBeGreaterThanOrEqual(0);
+				expect(second.cpu.value).toBeLessThanOrEqual(100);
+			}
+			expect(second.processes.some((entry) => entry.pid === process.pid)).toBe(true);
+			const own = second.processes.find((entry) => entry.pid === process.pid);
+			expect(own?.cpu.state).toBe(process.platform === "linux" ? "available" : "unavailable");
+			expect(second.coverage.bytesRead).toBeLessThanOrEqual(2_097_152);
+			console.info(
+				JSON.stringify({
+					platform: second.platform,
+					durationMs: second.durationMs,
+					coverage: second.coverage,
+					cpu: second.cpu,
+					ownProcessCpu: own?.cpu,
+				}),
+			);
+		} finally {
+			await sampler.dispose();
+		}
+	});
+	it("exposes partial PID coverage, rejects overlap/cancellation and awaits disposal", async () => {
+		const sampler = createResourceSampler({ maxPids: 1 });
+		const first = sampler.sample();
+		await expect(sampler.sample()).rejects.toThrow("active sample");
+		const result = await first;
+		expect(result.processes.length).toBeLessThanOrEqual(1);
+		expect(result.coverage.complete).toBe(false);
+		expect(result.coverage.reasons).toContain("pid-limit");
+		const controller = new AbortController();
+		controller.abort();
+		await expect(sampler.sample(controller.signal)).rejects.toThrow();
+		const pending = sampler.sample();
+		const rejected = expect(pending).rejects.toThrow();
+		await sampler.dispose();
+		await rejected;
+		await sampler.dispose();
+		await expect(sampler.sample()).rejects.toThrow("disposed");
+	});
+	it("rejects unsafe budgets before doing I/O", () => {
+		for (const maxPids of [0, -1, 1.5, Number.NaN, 16385])
+			expect(() => createResourceSampler({ maxPids })).toThrow(RangeError);
+		expect(() => createResourceSampler({ maxBytes: 1 })).toThrow(RangeError);
+		expect(() => createResourceSampler({ maxDurationMs: Number.POSITIVE_INFINITY })).toThrow(RangeError);
+	});
+});
