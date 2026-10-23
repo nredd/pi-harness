@@ -9,8 +9,10 @@ References:
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
+import os
 import shutil
 import sys
 import tarfile
@@ -32,6 +34,10 @@ import package_contracts as pc
 import stock_package_contract as spc
 
 DEV_TOOLS = pc.CONTRACTS[0]
+SAMPLER = pc.RESOURCE_SAMPLER_CONTRACT.name
+# Derived from the pin, so moving `RESOURCE_SAMPLER_VERSION` (e.g. to the `0.1.1` fix) needs no test edits.
+PIN = pc.RESOURCE_SAMPLER_VERSION
+OTHER_PIN = f"{PIN}-other"
 # The real published identity, as the repository lockfile pins it for dev-tools; never an invented hash.
 SAMPLER_LOCK = json.loads((pc.REPO_ROOT / "package-lock.json").read_text())["packages"][
     "packages/dev-tools/node_modules/@nredd/pi-resource-sampler"
@@ -537,7 +543,7 @@ OTHER_INTEGRITY = "sha512-" + "A" * 86 + "=="
     ("entry", "link", "message"),
     [
         (LOCKED, True, "not a real installed directory"),
-        (LOCKED | {"version": "0.1.1"}, False, "not exactly '0.1.0'"),
+        (LOCKED | {"version": OTHER_PIN}, False, f"not exactly '{PIN}'"),
         (LOCKED | {"integrity": OTHER_INTEGRITY}, False, "differs from the published"),
         ({k: v for k, v in LOCKED.items() if k != "integrity"}, False, "differs from the published"),
         (LOCKED | {"resolved": "file:../resource-sampler"}, False, "not the published"),
@@ -629,6 +635,72 @@ def test_published_sampler_dist_queries_the_exact_release_without_credentials(
     assert seen["env"]["HTTPS_PROXY"] == ""
 
 
+def discovery_context(root: Path, sandbox: pc.Sandbox) -> pc.Context:
+    """Return a dev-tools scenario context whose installed sampler path is predictable.
+
+    Parameters:
+        root (Path): Scratch directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+
+    Returns:
+        pc.Context: Context with `installed` three levels under `root`.
+    """
+    artifact = pc.PackedArtifact(DEV_TOOLS, root / "x.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ())
+    return pc.Context(Path("pi"), sandbox, root / "a" / "b" / "installed", artifact, root, ())
+
+
+@pytest.mark.parametrize(
+    ("complete", "reasons", "found", "message"),
+    [
+        (False, ["process-unreadable-or-changed"], True, None),
+        (True, [], False, "not in the complete scan"),
+        (
+            False,
+            ["deadline", "pid-limit"],
+            False,
+            r"PARTIAL scan \(3/9 sampled, reasons \['deadline', 'pid-limit'\]\)",
+        ),
+        (False, ["process-collection-unavailable"], True, "sampler scan failed"),
+    ],
+    ids=["partial-but-found", "complete-miss", "truncated-miss", "unavailable"],
+)
+def test_discovery_targets_the_known_child_and_names_a_partial_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    sandbox: pc.Sandbox,
+    tmp_path: Path,
+    reasons: list[str],
+    message: str | None,
+    *,
+    complete: bool,
+    found: bool,
+) -> None:
+    """A partial scan that holds the child passes; a miss says whether the scan was truncated.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Patches `run` for the probe and `ps`.
+        sandbox (pc.Sandbox): Scrubbed environment.
+        tmp_path (Path): Pytest temporary directory.
+        reasons (list[str]): Coverage reasons the probe reports.
+        message (str | None): Expected error pattern, or None for a pass.
+        complete (bool): Coverage completeness the probe reports.
+        found (bool): Whether the probe found the child.
+    """
+    ctx = discovery_context(tmp_path, sandbox)
+    child, parent = 4242, os.getpid()
+    probe = {
+        "resolved": str(ctx.installed.parents[2] / "node_modules" / SAMPLER / "dist" / "index.js"),
+        "coverage": {"complete": complete, "enumerated": 9, "sampled": 3, "reasons": reasons},
+        "found": [{"pid": child, "parentPid": parent}] if found else [],
+    }
+    outputs = iter([json.dumps(probe), f"{parent}\n"])
+    monkeypatch.setattr(pc, "run", lambda *_args, **_kwargs: type("Done", (), {"stdout": next(outputs)})())
+    if message is None:
+        pc.discover_child_with_installed_sampler(ctx, child)
+    else:
+        with pytest.raises(pc.ContractError, match=message):
+            pc.discover_child_with_installed_sampler(ctx, child)
+
+
 def test_published_sampler_dist_rejects_malformed_metadata(
     monkeypatch: pytest.MonkeyPatch, sandbox: pc.Sandbox, tmp_path: Path
 ) -> None:
@@ -641,9 +713,9 @@ def test_published_sampler_dist_rejects_malformed_metadata(
 
 def test_dev_tools_pins_the_published_sampler_exactly() -> None:
     """The only sibling allowance is an exact published library version, never a range or link."""
-    assert dict(DEV_TOOLS.runtime_dependencies) == {"@nredd/pi-resource-sampler": "0.1.0"}
+    assert dict(DEV_TOOLS.runtime_dependencies) == {SAMPLER: PIN}
     assert pc.RESOURCE_SAMPLER_CONTRACT.library
-    assert {pc.RESOURCE_SAMPLER_CONTRACT.name} == pc.SHARED_LIBRARIES
+    assert dict(pc.SHARED_LIBRARIES) == {SAMPLER: PIN}
     manifest = json.loads((pc.REPO_ROOT / "packages" / "dev-tools" / "package.json").read_text())
     assert manifest["dependencies"] == dict(DEV_TOOLS.runtime_dependencies)
 
@@ -812,12 +884,9 @@ def test_audit_manifest_accepts_good() -> None:
         ({"publishConfig": {}}, "`publishConfig.access` must be `public`"),
         ({"license": "ISC"}, "`license`"),
         ({"dependencies": {"typebox": "1.0.0"}}, "not a declared runtime dependency"),
-        ({"dependencies": {"@nredd/pi-resource-sampler": "^0.1.0"}}, "must use the range '0.1.0'"),
-        ({"dependencies": {"@nredd/pi-resource-sampler": "workspace:*"}}, "must use the range '0.1.0'"),
-        (
-            {"dependencies": {"@nredd/pi-resource-sampler": "file:../resource-sampler"}},
-            "must use the range '0.1.0'",
-        ),
+        ({"dependencies": {SAMPLER: f"^{PIN}"}}, f"must use the range '{PIN}'"),
+        ({"dependencies": {SAMPLER: "workspace:*"}}, f"must use the range '{PIN}'"),
+        ({"dependencies": {SAMPLER: "file:../resource-sampler"}}, f"must use the range '{PIN}'"),
         ({"dependencies": {}}, "declared runtime dependency '@nredd/pi-resource-sampler' is missing"),
         ({"optionalDependencies": {"@nredd/pi-session-kit": "*"}}, "`optionalDependencies`"),
         ({"peerDependencies": {"@nredd/pi-session-kit": "*"}}, "not a host module"),
@@ -836,6 +905,22 @@ def test_audit_manifest_rejects(mutation: dict[str, object], needle: str) -> Non
     """
     problems = pc.audit_manifest(DEV_TOOLS, good_manifest() | mutation, ["src/index.ts"])
     assert any(needle in problem for problem in problems), problems
+
+
+def test_every_contract_uses_the_common_shared_library_pin() -> None:
+    """No consumer of a shared library (dev-tools today, session-kit `/mon` next) may drift from its pin."""
+    assert {contract.name: pc.shared_library_pin_problems(contract) for contract in pc.CONTRACTS} == {
+        contract.name: [] for contract in pc.CONTRACTS
+    }
+
+
+def test_audit_manifest_rejects_a_consumer_at_another_exact_sampler_version() -> None:
+    """A contract and manifest that agree on a different exact version are still refused."""
+    drifted = dataclasses.replace(DEV_TOOLS, runtime_dependencies=((SAMPLER, OTHER_PIN),))
+    manifest = good_manifest() | {"dependencies": {SAMPLER: OTHER_PIN}}
+    assert pc.audit_manifest(drifted, manifest, ["src/index.ts"]) == [
+        f"'{DEV_TOOLS.name}' declares shared library '{SAMPLER}' at '{OTHER_PIN}', not the common pin '{PIN}'"
+    ]
 
 
 def test_audit_manifest_accepts_false_private() -> None:

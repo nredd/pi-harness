@@ -76,7 +76,12 @@ function fixture(platform: string, processes: ProcessSample[], overrides: Partia
 }
 
 /** Fake sampler recording its options, sample signals and disposal; `disposeFailure` makes disposal reject. */
-function fakeSampler(make: (monotonicTimeMs: number) => ResourceSnapshot, fail?: Error, disposeFailure?: Error) {
+function fakeSampler(
+	make: (monotonicTimeMs: number) => ResourceSnapshot,
+	fail?: Error,
+	disposeFailure?: Error,
+	disposeThrowsSync = false,
+) {
 	const state = { options: undefined as SamplerOptions | undefined, samples: 0, disposed: 0 };
 	const createSampler = (options: SamplerOptions): ResourceSampler => {
 		state.options = options;
@@ -86,9 +91,10 @@ function fakeSampler(make: (monotonicTimeMs: number) => ResourceSnapshot, fail?:
 				if (fail && state.samples === 1) throw fail;
 				return make(state.samples++ * 120);
 			},
-			async dispose() {
+			dispose() {
 				state.disposed++;
-				if (disposeFailure) throw disposeFailure;
+				if (disposeFailure && disposeThrowsSync) throw disposeFailure;
+				return disposeFailure ? Promise.reject(disposeFailure) : Promise.resolve();
 			},
 		};
 	};
@@ -192,7 +198,9 @@ describe("resource_snapshot on the real host through the published sampler", () 
 	it.runIf(process.platform === "darwin" || process.platform === "linux")(
 		"discovers a real child under its real parent in the full sample, matching an independent ps read",
 		async () => {
-			// Idle and small: inclusion is asserted against the sampler's complete scan, not a host-dependent top-50 rank.
+			// Idle and small: inclusion is asserted against the sampler's full unranked scan, not a host-dependent top-50
+			// rank. The scan need not be complete (a process exiting mid-scan marks it partial); the known child must be
+			// in it, and a miss reports the coverage so a truncated scan is never mistaken for a missing child.
 			const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], { stdio: "ignore" });
 			try {
 				const pid = child.pid;
@@ -204,7 +212,10 @@ describe("resource_snapshot on the real host through the published sampler", () 
 				if (raw === undefined || snapshot.processes.status !== "available") throw new Error("missing process metadata");
 				expect(raw.coverage.reasons).not.toContain("process-collection-unavailable");
 				const found = raw.processes.find((entry) => entry.pid === pid);
-				expect(found, `child ${pid} absent from ${raw.processes.length} sampled processes`).toBeDefined();
+				expect(
+					found,
+					`child ${pid} absent from ${raw.processes.length} sampled processes, coverage ${JSON.stringify(raw.coverage)}`,
+				).toBeDefined();
 				expect(found?.parentPid).toBe(process.pid);
 				// Linux reports the main thread's comm (e.g. `node-MainThread`), never a path.
 				expect(found?.name).toMatch(/^node/);
@@ -241,7 +252,12 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		async () => {
 			const controller = new AbortController();
 			const reason = new Error("cancelled mid-sample");
-			const state = { disposed: 0, pendingAtAbort: false, sampleCalls: 0 };
+			const state = {
+				disposed: 0,
+				pendingAtAbort: false,
+				sampleCalls: 0,
+				inner: undefined as { status: "fulfilled" } | { status: "rejected"; reason: unknown } | undefined,
+			};
 			const createSampler = (samplerOptions: SamplerOptions): ResourceSampler => {
 				const sampler = createResourceSampler(samplerOptions);
 				return {
@@ -252,9 +268,11 @@ describe("resource_snapshot on the real host through the published sampler", () 
 						inner.then(
 							() => {
 								settled = true;
+								state.inner = { status: "fulfilled" };
 							},
-							() => {
+							(error: unknown) => {
 								settled = true;
+								state.inner = { status: "rejected", reason: error };
 							},
 						);
 						// Let the scan start its helper or reads, then abort while it is still running.
@@ -273,6 +291,10 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			const before = new Set(directChildren());
 			await expect(resourceSnapshot(1, { createSampler }, controller.signal, INTERVAL_MS)).rejects.toBe(reason);
 			expect(state.pendingAtAbort).toBe(true);
+			// The sampler's own scan must reject with the reason; a scan that ignored the signal and finished would
+			// leave the later interval `delay` to reject with the same reason and hide that.
+			expect(state.inner).toEqual({ status: "rejected", reason });
+			expect(state.inner?.status === "rejected" && state.inner.reason).toBe(reason);
 			expect(state.sampleCalls).toBe(1);
 			expect(state.disposed).toBe(1);
 			expect(directChildren().filter((pid) => !before.has(pid))).toEqual([]);
@@ -514,6 +536,14 @@ describe("resource_snapshot mapping", () => {
 
 	it("keeps the sampler failure, not a later disposal failure", async () => {
 		const fake = fakeSampler(fixture("linux", []), new Error("sampler exploded"), new Error("dispose exploded"));
+		await expect(resourceSnapshot(1, { createSampler: fake.createSampler }, undefined, INTERVAL_MS)).rejects.toThrow(
+			"sampler exploded",
+		);
+		expect(fake.state.disposed).toBe(1);
+	});
+
+	it("keeps the sampler failure when an injected dispose throws synchronously", async () => {
+		const fake = fakeSampler(fixture("linux", []), new Error("sampler exploded"), new Error("dispose exploded"), true);
 		await expect(resourceSnapshot(1, { createSampler: fake.createSampler }, undefined, INTERVAL_MS)).rejects.toThrow(
 			"sampler exploded",
 		);

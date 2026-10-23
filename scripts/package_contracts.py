@@ -8,7 +8,7 @@ fresh project, and drives it through a real, exact-version stock Pi install:
    and declare exactly the contract's runtime dependencies (none for most plugins).
 2. Source audit: every import in the tarball is relative (inside the package), a Node builtin, a
    host-provided Pi module or a declared runtime dependency. No sibling plugin (only a published
-   `SHARED_LIBRARIES` entry that is also a declared dependency), no bundled host copy. Imports
+   `SHARED_LIBRARIES` entry declared at its common exact pin), no bundled host copy. Imports
    come from the installed TypeScript parser (`import_audit.ts`, one batched `node` run per
    package) rather than a regex; computed specifiers are rejected, not skipped. It is a syntactic
    audit, not a proof about `eval`.
@@ -47,6 +47,7 @@ from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Annotated, Any, Literal, Self, TypedDict
 from urllib.parse import urlsplit
 
@@ -190,11 +191,13 @@ await assert.rejects(sampler.sample(), /disposed/);
 """,
 )
 
-# Compiled, Pi-independent `@nredd/` libraries a plugin may import, only when its contract declares the
-# exact registry release. The single definition for both sampler consumers (dev-tools `resource_snapshot`,
-# session-kit `/mon`); `classify_imports` still refuses it in library and standalone-artifact files.
-# Plugins remain banned from importing each other.
-SHARED_LIBRARIES = frozenset({RESOURCE_SAMPLER_CONTRACT.name})
+# Compiled, Pi-independent `@nredd/` libraries a plugin may import, mapped to the ONE exact registry
+# release every consumer must declare (`shared_library_pin_problems`). The single definition for both
+# sampler consumers (dev-tools `resource_snapshot`, session-kit `/mon`); `classify_imports` still refuses
+# it in library and standalone-artifact files. Plugins remain banned from importing each other.
+SHARED_LIBRARIES: Mapping[str, str] = MappingProxyType(
+    {RESOURCE_SAMPLER_CONTRACT.name: RESOURCE_SAMPLER_VERSION}
+)
 
 
 CONTRACTS = (
@@ -1566,6 +1569,26 @@ def audit_license(tarball: Path, expected_license: bytes) -> list[str]:
     return [] if packed == expected_license else ["packed `LICENSE` differs from the expected `LICENSE`"]
 
 
+def shared_library_pin_problems(contract: PackageContract) -> list[str]:
+    """Check that every `SHARED_LIBRARIES` dependency the contract declares uses the common pin.
+
+    `classify_imports` only sees dependency names, so without this a second consumer could declare
+    the sampler at another exact version and still import it.
+
+    Parameters:
+        contract (PackageContract): Expectations to check.
+
+    Returns:
+        list[str]: Violations; empty when every shared library is pinned at its common version.
+    """
+    return [
+        f"'{contract.name}' declares shared library '{name}' at '{declared}', "
+        f"not the common pin '{SHARED_LIBRARIES[name]}'"
+        for name, declared in contract.runtime_dependencies
+        if name in SHARED_LIBRARIES and declared != SHARED_LIBRARIES[name]
+    ]
+
+
 def audit_manifest(contract: PackageContract, manifest: object, expected_files: Sequence[str]) -> list[str]:
     """Check the packed `package.json` for independence and publication safety.
 
@@ -1588,7 +1611,7 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
             f"is malformed: {item['msg']}"
             for item in e.errors()
         ]
-    problems: list[str] = []
+    problems = shared_library_pin_problems(contract)
     if parsed.name != contract.name:
         problems.append(f"name is '{parsed.name}', expected '{contract.name}'")
     if parsed.private is True:
@@ -2701,7 +2724,7 @@ def installed_sampler_integrity(installed: Path, published: PublishedDist) -> st
 
 
 # Run from the installed plugin directory, so the specifier resolves exactly as the packed plugin's own import
-# does. One full, unranked scan; prints only PIDs, never names.
+# does. One full, unranked scan; prints only PIDs and coverage counters, never names.
 SAMPLER_DISCOVERY_PROBE = """
 import { fileURLToPath } from 'node:url';
 import { createResourceSampler } from '@nredd/pi-resource-sampler';
@@ -2712,7 +2735,12 @@ try {
     const found = sample.processes.filter((entry) => entry.pid === pid);
     console.log(JSON.stringify({
         resolved: fileURLToPath(import.meta.resolve('@nredd/pi-resource-sampler')),
-        reasons: sample.coverage.reasons,
+        coverage: {
+            complete: sample.coverage.complete,
+            enumerated: sample.coverage.enumerated,
+            sampled: sample.coverage.sampled,
+            reasons: sample.coverage.reasons,
+        },
         found: found.map((entry) => ({ pid: entry.pid, parentPid: entry.parentPid })),
     }));
 } finally {
@@ -2727,18 +2755,30 @@ class DiscoveredProcess(BaseModel):
     parentPid: int = Field(description="Sampled parent PID")
 
 
+class ScanCoverage(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    complete: bool = Field(description="True only when the scan recorded no limit or skip reason")
+    enumerated: int = Field(description="Process entries encountered")
+    sampled: int = Field(description="Process entries returned")
+    reasons: list[str] = Field(description="Why the scan is partial, e.g. `deadline`, `pid-limit`")
+
+
 class SamplerDiscovery(BaseModel):
     model_config = LENIENT_STRICT_MODEL
     resolved: NonEmptyText = Field(description="Real path the plugin directory resolves the sampler to")
-    reasons: list[str] = Field(description="Coverage reasons of the scan")
+    coverage: ScanCoverage = Field(description="Coverage of the scan")
     found: list[DiscoveredProcess] = Field(description="Scan entries with the marker PID")
 
 
 def discover_child_with_installed_sampler(ctx: Context, child: int) -> None:
-    """Find `child` under this process in one complete scan by the plugin's installed sampler.
+    """Find `child` under this process in one unranked scan by the plugin's installed sampler.
 
     Inclusion is checked against the full scan, not the tool's top-50 ranking, so it does not depend on
-    how many larger or busier processes the host runs. An independent `ps` confirms the parent.
+    how many larger or busier processes the host runs. The scan need not be complete: a process exiting
+    mid-scan marks it partial on any busy host, and requiring completeness would make the gate host-flaky.
+    The target is the known child, which must be in it; a miss names the scan's coverage, so a truncated
+    scan (`deadline`, `pid-limit`, `byte-limit`) is reported as such, never as a missing child. An
+    independent `ps` confirms the parent.
 
     Parameters:
         ctx (Context): Scenario context.
@@ -2764,13 +2804,19 @@ def discover_child_with_installed_sampler(ctx: Context, child: int) -> None:
         Path(report.resolved) == expected.resolve(),
         f"plugin resolves the sampler to {report.resolved}, not {expected}",
     )
+    coverage = report.coverage
     require(
-        "process-collection-unavailable" not in report.reasons,
-        f"sampler scan failed: {report.reasons}",
+        "process-collection-unavailable" not in coverage.reasons,
+        f"sampler scan failed: {coverage.reasons}",
+    )
+    scope = (
+        "the complete scan"
+        if coverage.complete
+        else f"a PARTIAL scan ({coverage.sampled}/{coverage.enumerated} sampled, reasons {coverage.reasons})"
     )
     require(
         report.found == [DiscoveredProcess(pid=child, parentPid=os.getpid())],
-        f"marker child {child} under parent {os.getpid()} not in the full scan: {report.found}",
+        f"marker child {child} under parent {os.getpid()} not in {scope}: {report.found}",
     )
     ps = run(
         [Path("/bin/ps"), "-o", "ppid=", "-p", str(child)],
