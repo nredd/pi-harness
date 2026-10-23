@@ -40,7 +40,9 @@ type Snapshot = {
 		availableBytes: number | null;
 		pressure: { source: "memory_pressure" | "linux-psi"; value: number } | null;
 	}>;
-	processes: Available<{ limit: number; entries: ProcessEntry[] }> | Unavailable;
+	processes:
+		| Available<{ limit: number; cpuSemantics: string; truncated: boolean; entries: ProcessEntry[] }>
+		| Unavailable;
 };
 
 const defaultOptions = {
@@ -87,6 +89,7 @@ function parseProcesses(text: string, limit: number): ProcessEntry[] {
 async function collectMemory(
 	options: Required<ResourceSnapshotOptions>,
 	hostPlatform: NodeJS.Platform,
+	signal?: AbortSignal,
 ): Promise<Snapshot["memory"]> {
 	const memory = {
 		status: "available" as const,
@@ -104,10 +107,15 @@ async function collectMemory(
 			const result = await options.run({
 				cmd: "memory_pressure",
 				args: ["-Q"],
+				signal,
+				env: { LC_ALL: "C" },
 				timeoutMs: COMMAND_TIMEOUT_MS,
 				maxBytes: COMMAND_MAX_BYTES,
 			});
-			const pressure = result.exitCode === 0 ? parseMacFreePercent(result.stdout) : null;
+			const pressure =
+				result.exitCode === 0 && !result.timedOut && !result.aborted && !result.spawnError && !result.stdoutDropped
+					? parseMacFreePercent(result.stdout)
+					: null;
 			if (pressure !== null) memory.pressure = { source: "memory_pressure", value: pressure };
 		}
 	} catch {
@@ -120,6 +128,7 @@ async function collectProcesses(
 	options: Required<ResourceSnapshotOptions>,
 	hostPlatform: NodeJS.Platform,
 	limit: number,
+	signal?: AbortSignal,
 ): Promise<Snapshot["processes"]> {
 	if (hostPlatform !== "darwin" && hostPlatform !== "linux") {
 		return { status: "unavailable", reason: `bounded process metadata is unsupported on ${hostPlatform}` };
@@ -129,18 +138,43 @@ async function collectProcesses(
 			? ["-A", "-r", "-o", "pid=,pcpu=,rss=,etime=,comm="]
 			: ["-A", "--sort=-pcpu", "-o", "pid=,pcpu=,rss=,etime=,comm="];
 	try {
-		const result = await options.run({ cmd: "ps", args, timeoutMs: COMMAND_TIMEOUT_MS, maxBytes: COMMAND_MAX_BYTES });
+		const result = await options.run({
+			cmd: "ps",
+			args,
+			signal,
+			env: { LC_ALL: "C" },
+			timeoutMs: COMMAND_TIMEOUT_MS,
+			maxBytes: COMMAND_MAX_BYTES,
+		});
 		if (result.exitCode !== 0 || result.timedOut || result.aborted || result.spawnError) {
 			return { status: "unavailable", reason: "process metadata command unavailable" };
 		}
-		return { status: "available", limit, entries: parseProcesses(result.stdout, limit) };
+		// A capped final line may contain only part of an executable name.
+		const text = result.stdoutDropped ? result.stdout.slice(0, result.stdout.lastIndexOf("\n") + 1) : result.stdout;
+		return {
+			status: "available",
+			limit,
+			cpuSemantics:
+				hostPlatform === "linux"
+					? "ps lifetime CPU average, not current utilization"
+					: "ps decaying CPU average, not an interval sample",
+			truncated: result.stdoutDropped > 0,
+			entries: parseProcesses(text, limit),
+		};
 	} catch {
 		return { status: "unavailable", reason: "process metadata command unavailable" };
 	}
 }
 
 /** Collect a bounded snapshot without arguments, environments, or process-to-agent attribution. */
-export async function resourceSnapshot(limit: number, overrides: ResourceSnapshotOptions = {}): Promise<Snapshot> {
+export async function resourceSnapshot(
+	limit: number,
+	overrides: ResourceSnapshotOptions = {},
+	signal?: AbortSignal,
+): Promise<Snapshot> {
+	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PROCESS_LIMIT) {
+		throw new RangeError(`process limit must be an integer from 1 to ${MAX_PROCESS_LIMIT}`);
+	}
 	const options: Required<ResourceSnapshotOptions> = { ...defaultOptions, ...overrides };
 	const hostPlatform = options.platform();
 	const cpu = {
@@ -150,8 +184,8 @@ export async function resourceSnapshot(limit: number, overrides: ResourceSnapsho
 	return {
 		platform: hostPlatform,
 		cpu,
-		memory: await collectMemory(options, hostPlatform),
-		processes: await collectProcesses(options, hostPlatform, limit),
+		memory: await collectMemory(options, hostPlatform, signal),
+		processes: await collectProcesses(options, hostPlatform, limit, signal),
 	};
 }
 
@@ -165,18 +199,22 @@ function formatSnapshot(snapshot: Snapshot): string {
 		: "";
 	const processes =
 		snapshot.processes.status === "available"
-			? `${snapshot.processes.entries.length} bounded entries (pid cpu% RSS elapsed executable)${snapshot.processes.entries.length > 0 ? `\n${snapshot.processes.entries.map((entry) => `${entry.pid} ${entry.cpuPercent.toFixed(1)} ${entry.rssBytes} ${entry.elapsed} ${entry.executable}`).join("\n")}` : ""}`
+			? `${snapshot.processes.entries.length} bounded entries (${snapshot.processes.cpuSemantics}; truncated=${snapshot.processes.truncated}; pid cpu% RSS elapsed executable)${snapshot.processes.entries.length > 0 ? `\n${snapshot.processes.entries.map((entry) => `${entry.pid} ${entry.cpuPercent.toFixed(1)} ${entry.rssBytes} ${entry.elapsed} ${entry.executable}`).join("\n")}` : ""}`
 			: `unavailable (${snapshot.processes.reason})`;
 	return `host ${snapshot.platform}: CPU ${cpu}; memory ${memory}${pressure}; processes ${processes}. No arguments, environments, or process-to-agent attribution are collected.`;
 }
 
 /** Register the model-visible observer. */
 export function registerResourceTools(pi: ExtensionAPI, options: ResourceSnapshotOptions = {}): void {
+	// This hook also reaches child sessions and survives tool deferral. Never force tool activation.
+	pi.on("before_agent_start", (event) => ({
+		systemPrompt: `${event.systemPrompt}\n\nBefore knowingly starting a large test or compile, inspect host resources and concurrent work, including other agents, then choose sensible scope, workers, or timing. Use resource_snapshot when available; if deferred, discover the read-only host resource observer with the available tool-search facility first. OS process metadata cannot identify agents; consult actual agent/task information separately. This is awareness, not a lock, serialization rule, or fixed threshold.`,
+	}));
 	pi.registerTool({
 		name: "resource_snapshot",
 		label: "resource snapshot",
 		description:
-			"Read-only bounded host snapshot for resource awareness before a known large test or compile. Reports CPU count/load, memory availability and available pressure metrics, plus up to 50 busiest process metadata entries (pid, CPU, RSS, elapsed, executable only). It never returns command arguments or environments and cannot attribute OS processes to agents. Use it to choose scope, workers or timing; it makes no scheduling, locking or concurrency change.",
+			"Read-only bounded host snapshot for resource awareness before a known large test or compile. Reports CPU count/load, memory availability and available pressure metrics, plus up to 50 process metadata entries ranked by ps CPU averages (Linux lifetime average, Darwin decaying average, not current interval utilization) (pid, CPU, RSS, elapsed, executable only). It never returns command arguments or environments and cannot attribute OS processes to agents. Use it to choose scope, workers or timing; it makes no scheduling, locking or concurrency change.",
 		promptSnippet:
 			"Inspect current host resources and bounded process metadata before a known large test or compile; use it for awareness only, not process-to-agent attribution",
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -185,7 +223,7 @@ export function registerResourceTools(pi: ExtensionAPI, options: ResourceSnapsho
 				Type.Integer({
 					minimum: 1,
 					maximum: MAX_PROCESS_LIMIT,
-					description: `Busiest process metadata entries to return. Default ${DEFAULT_PROCESS_LIMIT}.`,
+					description: `Process metadata entries ranked by ps CPU average to return. Default ${DEFAULT_PROCESS_LIMIT}.`,
 				}),
 			),
 		}),
@@ -210,7 +248,9 @@ export function registerResourceTools(pi: ExtensionAPI, options: ResourceSnapsho
 			}),
 			processes: Type.Union([
 				Type.Object({
-					limit: Type.Number(),
+					limit: Type.Integer({ minimum: 1, maximum: MAX_PROCESS_LIMIT }),
+					cpuSemantics: Type.String(),
+					truncated: Type.Boolean(),
 					status: Type.Literal("available"),
 					entries: Type.Array(
 						Type.Object({
@@ -225,8 +265,8 @@ export function registerResourceTools(pi: ExtensionAPI, options: ResourceSnapsho
 				Type.Object({ status: Type.Literal("unavailable"), reason: Type.String() }),
 			]),
 		}),
-		async execute(_id, params) {
-			const snapshot = await resourceSnapshot(params.process_limit ?? DEFAULT_PROCESS_LIMIT, options);
+		async execute(_id, params, signal) {
+			const snapshot = await resourceSnapshot(params.process_limit ?? DEFAULT_PROCESS_LIMIT, options, signal);
 			return toolResult({ text: formatSnapshot(snapshot), structured: snapshot });
 		},
 	});
