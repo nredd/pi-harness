@@ -158,7 +158,8 @@ export class MonView implements Component {
 		const cpu = this.panel(
 			"CPU / interval",
 			[
-				` ${t.bold(percent(s?.cpuPercent ?? null))}${this.cpuState()} ${t.fg("muted", `of ${s?.logicalCpus ?? "--"} logical CPUs`)}`,
+				// "-- warming of 10 logical CPUs" misreads; a separator keeps state and capacity apart.
+				` ${t.bold(percent(s?.cpuPercent ?? null))}${this.cpuState()} ${t.fg("muted", `${this.cpuState() ? "·" : "of"} ${s?.logicalCpus ?? "--"} logical CPUs`)}`,
 				` ${t.fg("accent", fitCols(timeHistory(this.history, leftWidth - 4), leftWidth - 4))}`,
 				` ${t.fg("dim", this.historyLabel())}`,
 			],

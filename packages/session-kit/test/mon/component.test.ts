@@ -112,10 +112,10 @@ describe("mon responsive dashboard", () => {
 		v.update({ ...snapshot(), cpuPercent: null, cpuState: "warming", capturedAt: 10000 });
 		let text = v.render(80).join("\n");
 		expect(text).toContain("LIVE");
-		expect(text).toContain("-- warming");
+		expect(text).toContain("-- warming · 12 logical CPUs");
 		expect(text).not.toContain("WARMING");
 		v.update({ ...snapshot(), cpuPercent: null, cpuState: "unavailable", capturedAt: 12000, sampledAtMs: 12000 });
-		expect(v.render(80).join("\n")).toContain("-- unavailable");
+		expect(v.render(80).join("\n")).toContain("-- unavailable · 12 logical CPUs");
 		v.update({ ...snapshot(), cpuPercent: null, cpuState: "unavailable", capturedAt: 12000, status: "stale" });
 		text = v.render(80).join("\n");
 		expect(text).toContain("STALE");
