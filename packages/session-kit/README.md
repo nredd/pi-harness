@@ -3,7 +3,7 @@
 Published to npm as `@nredd/pi-session-kit` (public). From `0.4.0`, each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-session-kit@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`); earlier versions were published manually without provenance. `0.4.0` adds `createSessionKit(options)` (explicit `config`, `agentDir`, `monitorRoot`, injectable `clock` and `spawnMonitor`; the default export is unchanged) and fixes leaderless orphan-group sweeps at `ps` start-time resolution. `0.5.0` redesigns `/stats` around the full pane (pinned header, aligned stat cells, a Models table on wide panes) and gives every chart a clock- or calendar-aligned time axis, including the 5h and 24h hourly views.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and standalone harness
 references below describe the legacy deployment, not installation or candidate verification of
-this package. `0.6.0` keeps passive monitor output only in the monitor ring buffer rather than adding it to the transcript or model context; `monitor_read` is the explicit output surface, and match/exit/timeout wakes are compact summaries with a cursor.
+this package. `0.6.0` keeps passive monitor output only in the monitor ring buffer rather than adding it to the transcript or model context; `monitor_read` is the explicit output surface, and match/exit/timeout wakes are compact summaries with a cursor. `0.7.0` adds the `/stats` Machines tab with per-machine producer export age, separate from the viewer's last import, and the collapsible monitors widget.
 
 ## Standalone use
 
@@ -16,7 +16,7 @@ session branch. Closing pi stops its work.
 ## Install and config
 
 ```sh
-pi install npm:@nredd/pi-session-kit@0.6.0
+pi install npm:@nredd/pi-session-kit@0.7.0
 ```
 
 Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
