@@ -70,7 +70,7 @@ it("corrupt import retains remote totals and fresh local usage", async () => {
 	const shown = layout(fixture);
 	expect(shown).toMatch(/Total tokens +676\b/);
 	expect(shown).toMatch(/incomplete/i);
-	expect(shown).toMatch(/last remote sync|remote sync|last sync/i);
+	expect(shown).toMatch(/viewer last import/i);
 	await fixture.close();
 	footer(fixture);
 });
