@@ -46,7 +46,7 @@ describe("resolveAgentInvocationConfig", () => {
 
     expect(resolved.modelInput).toBe("provider/param-model");
     expect(resolved.modelFromParams).toBe(true);
-    expect(resolved.thinking).toBe("high");
+    expect(resolved.thinking).toBe("minimal");
     expect(resolved.maxTurns).toBe(42);
     expect(resolved.inheritContext).toBe(false);
     expect(resolved.runInBackground).toBe(false);
@@ -152,8 +152,8 @@ describe("resolveJoinMode", () => {
   });
 });
 
-describe("resolveAgentInvocationConfig — overridden params (#182)", () => {
-  it("uses the caller's explicit model while recording a pinned thinking level", () => {
+describe("resolveAgentInvocationConfig — thinking precedence", () => {
+  it("lets an explicit thinking parameter override an agent default", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({ model: "provider/config-model", thinking: "low" }),
       { model: "provider/param-model", thinking: "max" },
@@ -161,39 +161,23 @@ describe("resolveAgentInvocationConfig — overridden params (#182)", () => {
 
     expect(resolved.modelInput).toBe("provider/param-model");
     expect(resolved.modelFromParams).toBe(true);
-    expect(resolved.overridden).toEqual({ thinking: "max" });
+    expect(resolved.thinking).toBe("max");
   });
 
-  it("records nothing when the caller got what they asked for", () => {
+  it("uses the agent thinking default when the caller omits it", () => {
     const resolved = resolveAgentInvocationConfig(
-      makeConfig({ model: "provider/same", thinking: "high" }),
-      { model: "provider/same", thinking: "high" },
+      makeConfig({ thinking: "low" }),
+      { model: "provider/param-model" },
     );
 
-    expect(resolved.overridden).toBeUndefined();
+    expect(resolved.thinking).toBe("low");
   });
 
-  it("records nothing when only one side named a value", () => {
-    // Config-only is the agent's own default, not an override; param-only won
-    // outright. Neither is a request that went unhonored.
-    expect(resolveAgentInvocationConfig(
-      makeConfig({ model: "provider/config-model", thinking: "low" }),
-      {},
-    ).overridden).toBeUndefined();
-
+  it("uses a caller thinking level when the agent leaves it unset", () => {
     expect(resolveAgentInvocationConfig(
       makeConfig(),
       { model: "provider/param-model", thinking: "max" },
-    ).overridden).toBeUndefined();
-  });
-
-  it("records each field independently", () => {
-    const resolved = resolveAgentInvocationConfig(
-      makeConfig({ thinking: "low" }),
-      { model: "provider/param-model", thinking: "max" },
-    );
-
-    expect(resolved.overridden).toEqual({ thinking: "max" });
+    ).thinking).toBe("max");
   });
 });
 
