@@ -13,6 +13,18 @@ export interface ProcessCounter {
 	at: number;
 }
 
+/**
+ * Copy counters immediately. Bun's `os.cpus()` returns lazy placeholders that read native counters on
+ * first property access, so a stored but unread array would silently describe a later instant.
+ */
+export function cpuSnapshot(list: readonly CpuInfo[]): CpuInfo[] {
+	return list.map(({ model, speed, times }) => ({
+		model,
+		speed,
+		times: { user: times.user, nice: times.nice, sys: times.sys, idle: times.idle, irq: times.irq },
+	}));
+}
+
 /** Compute an aggregate interval, validating each core and each counter before summing. */
 export function hostCpu(previous: CpuInfo[] | undefined, current: CpuInfo[]): Metric<number> {
 	if (!previous || previous.length !== current.length || current.length === 0) {
@@ -56,14 +68,23 @@ export function processCpu(previous: ProcessCounter | undefined, current: Proces
 	return { state: "available", value: (cpu / elapsed) * 100 };
 }
 
-/** Bound display names and strip terminal controls; paths/arguments never leave the parser. */
+/** Bound display names by code point and replace terminal controls; directories never leave the parser. */
 export function safeName(value: string): string {
-	return basename(value)
-		.replace(/[\p{C}]/gu, "?")
-		.slice(0, 128);
+	return Array.from(basename(value).replace(/[\p{C}]/gu, "?"))
+		.slice(0, 128)
+		.join("");
 }
 
-/** Parse Linux stat's parenthesized comm safely, including embedded spaces and ')' characters. */
+/** Basename of a Linux `/proc/PID/exe` target, without the kernel's unlinked-file marker. */
+export function executableName(target: string): string {
+	return safeName(target.endsWith(" (deleted)") ? target.slice(0, -" (deleted)".length) : target);
+}
+
+/**
+ * Parse Linux stat, skipping the parenthesized comm safely (embedded spaces and ')' characters). comm is
+ * NOT a name source: processes rewrite it (`prctl(PR_SET_NAME)`, `/proc/self/comm`, Node's
+ * `process.title`). `name` stays ""; callers derive it from `/proc/PID/exe`.
+ */
 export function linuxStat(text: string, hz: number, at: number): ProcessCounter | null {
 	const start = text.indexOf("(");
 	const end = text.lastIndexOf(")");
@@ -87,7 +108,7 @@ export function linuxStat(text: string, hz: number, at: number): ProcessCounter 
 	return {
 		pid,
 		parentPid,
-		name: safeName(text.slice(start + 1, end)),
+		name: "",
 		identity: `${pid}:${identity}`,
 		rssBytes: 0,
 		cpuMs: ((user + system) / hz) * 1000,
@@ -103,7 +124,11 @@ export function linuxRss(text: string): number | null {
 	return Number.isSafeInteger(bytes) ? bytes : null;
 }
 
-/** Darwin lstart has only one-second identity precision; do not derive interval CPU from it. */
+/**
+ * Parse `ps -o pid=,ppid=,lstart=,time=,rss=,ucomm=`. `ucomm` is the kernel's `p_comm`, written only at
+ * exec from the executable file name (at most 16 bytes); it is not argv[0] or the process title.
+ * Darwin lstart has only one-second identity precision; do not derive interval CPU from it.
+ */
 export function darwinProcess(line: string, at: number): ProcessCounter | null {
 	const match =
 		/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\S+)\s+(\d+)\s+(.*?)\s*$/.exec(line);
