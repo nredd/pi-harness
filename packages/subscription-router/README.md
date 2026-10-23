@@ -72,6 +72,9 @@ follow the newer read (or its fresh cached result), rather than treating superse
 If that newer read is unavailable, an earlier caller may use its own successful snapshot started at
 or after its `notBefore` boundary. This fallback never writes shared cache or backoff state: the
 newer failure's backoff remains in force. A newer successful snapshot remains authoritative.
+At the caller's 20-second deadline, a still-pending newer read cannot hide already completed live
+evidence: the caller uses the newest qualifying success in its supersession chain (or cache).
+Cancellation never uses this fallback, and neither deadline fallback nor supersession extends the wait.
 Confirmation evaluates that exact returned snapshot, not a potentially different shared cache entry.
 
 Mid-run recovery: upstream doesn't retry terminal quota errors (`insufficient_quota`, billing,

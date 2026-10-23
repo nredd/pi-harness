@@ -282,11 +282,19 @@ export interface UsageGetOptions {
 	signal?: AbortSignal;
 }
 
+/** Initiation-ordered reads retain local evidence without publishing superseded results. */
+interface UsageRead {
+	startedAt: number;
+	read: Promise<UsageSnapshot>;
+	snapshot?: UsageSnapshot;
+	newer?: UsageRead;
+}
+
 /** Subscription quota state for OAuth-backed consumer plans. */
 export class UsageService {
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly lastManualRefreshAt = new Map<string, number>();
-	private readonly inFlight = new Map<string, { startedAt: number; read: Promise<UsageSnapshot> }>();
+	private readonly inFlight = new Map<string, UsageRead>();
 	private readonly backoff = new Map<string, { failures: number; until: number }>();
 
 	constructor(
@@ -324,7 +332,23 @@ export class UsageService {
 			}
 			this.lastManualRefreshAt.set(provider, now);
 		}
-		const snapshot = await waitForCaller(this.refresh(ctx, provider, now, options.notBefore), options.signal);
+		const refresh = this.refresh(ctx, provider, now, options.notBefore);
+		const snapshot = await waitForCaller(refresh.read, options.signal, () => {
+			// The one outer deadline owns fallback selection. Inner waits must not
+			// race it with separate timers or extend it for each newer owner.
+			let fallback: UsageSnapshot | undefined;
+			const consider = (candidate: UsageSnapshot | undefined) => {
+				if (
+					candidate?.status === "available" &&
+					candidate.retrievedAt >= Math.max(refresh.startedAt, options.notBefore ?? refresh.startedAt) &&
+					(!fallback || candidate.retrievedAt >= fallback.retrievedAt)
+				)
+					fallback = candidate;
+			};
+			for (let entry: UsageRead | undefined = refresh; entry; entry = entry.newer) consider(entry.snapshot);
+			consider(this.cache.get(provider));
+			return fallback;
+		});
 		if (!snapshot) {
 			return errorSnapshot(
 				provider,
@@ -424,11 +448,12 @@ export class UsageService {
 		return { ...cached, status: "stale", expiresAt: now, message };
 	}
 
-	private refresh(ctx: ExtensionContext, provider: string, now: number, notBefore?: number): Promise<UsageSnapshot> {
+	private refresh(ctx: ExtensionContext, provider: string, now: number, notBefore?: number): UsageRead {
 		const existing = this.inFlight.get(provider);
-		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing.read;
+		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing;
 		const refresh = this.fetchSnapshot(ctx, provider, now)
 			.then(async (outcome) => {
+				entry.snapshot = outcome.snapshot;
 				// A post-failure read may supersede a slow warm-up. Only the newest
 				// initiated read owns cache/backoff writes, regardless of completion order.
 				if (this.inFlight.get(provider)?.read !== refresh) {
@@ -467,8 +492,10 @@ export class UsageService {
 			.finally(() => {
 				if (this.inFlight.get(provider)?.read === refresh) this.inFlight.delete(provider);
 			});
-		this.inFlight.set(provider, { startedAt: now, read: refresh });
-		return refresh;
+		const entry: UsageRead = { startedAt: now, read: refresh };
+		if (existing) existing.newer = entry;
+		this.inFlight.set(provider, entry);
+		return entry;
 	}
 
 	private recordFailure(provider: string, retryAfter: number | undefined): void {
@@ -549,21 +576,25 @@ export class UsageService {
 	}
 }
 
-/** Resolve with `refresh`, or undefined as soon as `signal` aborts. */
+/** Prefer the completed read; at the total deadline use live evidence, never on abort. */
 function waitForCaller(
 	refresh: Promise<UsageSnapshot>,
 	signal: AbortSignal | undefined,
+	onTimeout: () => UsageSnapshot | undefined,
 ): Promise<UsageSnapshot | undefined> {
 	if (signal?.aborted) return Promise.resolve(undefined);
 	return new Promise((resolve) => {
+		let settled = false;
 		const finish = (snapshot?: UsageSnapshot) => {
+			if (settled) return;
+			settled = true;
 			clearTimeout(timer);
 			signal?.removeEventListener("abort", abort);
 			resolve(snapshot);
 		};
 		const abort = () => finish();
 		// One credential lookup plus one fetch, regardless of supersession count.
-		const timer = setTimeout(abort, 2 * REQUEST_TIMEOUT_MS);
+		const timer = setTimeout(() => finish(signal?.aborted ? undefined : onTimeout()), 2 * REQUEST_TIMEOUT_MS);
 		signal?.addEventListener("abort", abort, { once: true });
 		void refresh.then(finish);
 	});
