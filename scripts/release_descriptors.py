@@ -87,6 +87,8 @@ DESCRIPTORS = (
         workspace=PurePosixPath("packages/session-kit"),
         verify_commands=(
             ("npm", "ci", "--ignore-scripts"),
+            # The exact sampler release resolves to its same-version workspace, whose `dist` is unbuilt.
+            ("npm", "run", "build", "--workspace", "@nredd/pi-resource-sampler"),
             ("npm", "run", "check", "--workspace", "@nredd/pi-session-kit"),
         ),
         contract=pc.CONTRACTS[1],

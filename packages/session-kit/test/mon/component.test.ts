@@ -73,6 +73,22 @@ describe("mon responsive dashboard", () => {
 		expect(v.render(40).join("\n")).not.toContain("Navigation");
 	});
 
+	it("fills completion-paced history contiguously, right-aligned, with only real gaps dotted", () => {
+		// Real cadence is 2000ms plus scan time; drift must not invent gaps.
+		const at = (i: number) => i * 2023 + (i >= 6 ? 15000 : 0);
+		const points = Array.from({ length: 10 }, (_, i) => ({ capturedAt: at(i), value: 50 }));
+		const line = timeHistory(points.slice(0, 6), 20);
+		expect(line).toBe(`${" ".repeat(14)}${"▅".repeat(6)}`);
+		const gapped = timeHistory(points, 30);
+		expect(gapped.trimStart()).toMatch(/^▅{6}·{7}▅{4}$/);
+		const long = Array.from({ length: 120 }, (_, i) => ({ capturedAt: i * 2000, value: 50 }));
+		const compressed = timeHistory(long, 40);
+		expect(compressed).toHaveLength(40);
+		expect(compressed).not.toContain(" ");
+		expect(compressed).not.toContain("·");
+		expect(timeHistory([{ capturedAt: 5, value: null }], 4)).toBe("   ·");
+	});
+
 	it("preserves irregular elapsed time and reports stale last success", () => {
 		expect(
 			timeHistory(

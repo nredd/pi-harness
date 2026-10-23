@@ -76,7 +76,9 @@ What each package must satisfy:
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
 - Every import is a `node:` builtin, a host module, a declared runtime dependency, or a relative path
   inside the package. No
-  `@nredd/*` sibling. The stats artifact (`dist/`) may import only `node:` builtins: the standalone
+  `@nredd/*` sibling, except a compiled Pi-independent library in `SHARED_LIBRARIES` that the
+  contract declares as an exact runtime dependency (today only session-kit ->
+  `@nredd/pi-resource-sampler` `RESOURCE_SAMPLER_VERSION`; bare specifier only, no subpaths). The stats artifact (`dist/`) may import only `node:` builtins: the standalone
   check runs before relative-import resolution, so `../src/index.ts` is rejected even if it exists
 - Imports are read with the repository's installed TypeScript 7.0.2 parser (`scripts/import_audit.ts`
   via `typescript/unstable/sync`, which drives the bundled `tsgo`; no new dependency, one batched
@@ -174,7 +176,10 @@ in-package relative imports, never host modules or sibling extensions. The defau
 contract still requires `pi.extensions` and retains its original host-module rules. The release
 descriptor uses the same audit/isolated execution gate; no npm publication or bootstrap is performed.
 The new npm name requires owner-controlled staged publication/2FA and trusted-publisher setup before
-release. Consumer dependencies and migration are separate work, not a relaxed sibling import rule.
+release. Consumers declare the exact registry release (`RESOURCE_SAMPLER_VERSION`, never a range,
+`workspace:` or `file:` spec) as a contract `runtime_dependencies` entry; their stock gate installs it
+from npm next to the packed plugin. In the monorepo npm links the same-version workspace instead, so
+the session-kit release descriptor builds the sampler's `dist` before its package check.
 
 ## Packed preset audit (no standalone Pi behavior)
 

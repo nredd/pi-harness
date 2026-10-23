@@ -1,23 +1,42 @@
-# Resource dashboard foundation
+# /mon resource dashboard
 
-`src/mon/` is a fixture-tested dashboard and interaction shell, NOT an enabled `/mon`
-command yet. `src/index.ts` deliberately does not register it. No production sampler,
-workspace-only dependency, release, pin change or live activation is included.
+`/mon` is a read-only, interactive-TUI view of local host resources. It is on by default and
+disabled with `{ "mon": { "enabled": false } }` in `pi-session-kit.json`. In RPC/print/JSON modes
+it only warns; it never samples there.
+
+## Source
+
+`src/mon/source.ts` is a thin mapping over the published `@nredd/pi-resource-sampler`, declared
+as the exact runtime dependency `0.1.0`. No collector lives in session-kit. Each open view creates
+one sampler (its own CPU baseline) and disposes it on close; disposal aborts and awaits any active
+sample, including its `ps` child on macOS. Mapping rules:
+
+- `warming` and `unavailable` metrics become `--`, never zero. The first observation is a warming
+  baseline; persistent warming shows the sampler's reason (e.g. `Host CPU warming: CPU counters
+  have not advanced`, which Bun's cached `os.cpus()` produces on macOS; shipped Pi runs on Node).
+- Partial coverage shows `Partial: S of E seen processes (reasons)`, at most three sampler reasons.
+  The process header counts *sampled* rows, not host processes.
+- macOS process interval CPU is always unavailable (the sampler's `ps` start time has one-second
+  precision, so PID reuse cannot be excluded). The view says so, explains it in help, and orders by
+  RSS until the user picks a sort. Linux first samples are warming, so CPU order stays stable.
+- `capturedAt` is the sampler's wall time; history spacing uses it. `scan Nms` (80+ columns) is the
+  sampler's collection duration. Missing/zero memory totals and non-finite values become unknown.
 
 ## Presentation
 
 - At 100+ columns, CPU history and memory/load cards sit side by side. At 60..99 they
   stack when height permits. Narrow or short terminals get the compact summary; at six rows
   summary/chrome yields to the selected process. The last row reserves close/help.
-- Host CPU history keeps each capture timestamp, uses a fixed 0..100% scale and at most
-  120 samples, newest on the right. Horizontal buckets represent elapsed time, not sample
-  index; the caption states the actual span in seconds. The latest sample in a bucket wins.
-  Empty time buckets and unknown/stale history points are gaps, not zero or interpolation.
-  Stale views show the last successful capture's UTC timestamp (or `none`). Warming/live/stale states use semantic
-  theme colors and text, so meaning does not depend on color.
-- Memory is total minus free, explicitly **non-free**, not an estimate of available memory
-  or a pressure score. Load averages are not percentages. Process CPU is interval CPU,
-  where 100% is one logical CPU and multithreaded processes can exceed 100%.
+- Host CPU history keeps each capture timestamp, uses a fixed 0..100% scale and at most 120
+  samples, newest on the right. A column is the lower-median interval between captures, widened
+  only when the history is longer than the width, so completion-paced drift never invents gaps.
+  Columns with no capture after the first are gaps (`·`), never zero or interpolation; columns
+  before it are blank. The caption states the actual span. The latest sample in a bucket wins.
+  Stale views show the last successful capture's UTC timestamp (or `none`). Warming/live/stale
+  states use semantic theme colors and text, so meaning does not depend on color.
+- Memory is total minus free, explicitly **non-free**, not available memory or a pressure score
+  (on macOS free pages are small by design). Load averages are not percentages. Process CPU is
+  interval CPU, where 100% is one logical CPU and multithreaded processes can exceed 100%.
 - The process viewport preserves selection by sampler identity, not PID or sorted row.
   Exited identities choose a bounded neighboring row; PID reuse cannot inherit selection.
   Unknown/non-finite measurements sort last with deterministic PID/identity tie breaks.
@@ -25,51 +44,38 @@ workspace-only dependency, release, pin change or live activation is included.
   CPU/RSS/PID; `s` cycles sort; `?` toggles help; `q`/Escape close. CPU/RSS descend,
   PID ascends. Help has a bounded, wrapped viewport with a visible range and scroll hint;
   `j/k`, arrows, PageUp/PageDown and `g/G` scroll help without moving the process selection.
-  All metric explanations remain reachable at 40x12.
-  No kill, locks, workload control, process arguments or environment display.
+  No kill, locks, workload control, process arguments or environment display. Process names
+  are the sampler's sanitized display names and are never interpreted.
 
 ## Ownership
 
 `MonView` accepts presentation snapshots and never collects data. It caches rendered lines
-by dimensions until update/input/theme invalidation. Pi coalesces `requestRender` calls.
-`MonPoll` owns one completion-paced probe, schedules the next timeout only after completion,
-and has no catch-up queue. Closing aborts collection, cancels the timeout and awaits the
-source's asynchronous disposal. Errors stop collection and retain explicitly stale values;
-reopening is the retry mechanism. Late results are discarded.
+by dimensions until update/input/theme invalidation. `MonPoll` owns one completion-paced probe
+(~2s after the previous one completed), with no catch-up queue. Closing aborts collection,
+cancels the timeout and awaits the sampler's disposal. Errors stop collection and retain
+explicitly stale values; reopening is the retry mechanism. Late results are discarded.
 
-`registerMon` requires an explicit source factory, opens it only inside a TUI interaction,
-and serializes replacement through completed asynchronous disposal, including concurrent opens.
-Session shutdown/start invalidates pending openers before they can create a source, even when
-Pi defers the UI factory. It registers no model tool, persists no
-history, sends no model messages and does no network work. RPC/print/JSON cannot sample.
-
-## Remaining integration boundary
-
-Use the independently published `@nredd/pi-resource-sampler`, with a registry-resolvable
-exact dependency, before enabling the feature in `src/index.ts` and configuration. The adapter
-must map its available/warming/unavailable metrics without inventing zeros, expose partial
-coverage and sampling age, distinguish unavailable memory from zero, use its stable process
-identity, and await its `dispose()`. Do not copy its collector or import a workspace source path.
-
-Publication/adapter/config integration, real-sampler lifecycle acceptance, packed-install
-verification and full harness CI remain pending. The fixture preview is not evidence of real
-resource measurements.
+`registerMon` opens a source only inside a TUI interaction and serializes replacement through
+completed asynchronous disposal, including concurrent opens. Session shutdown/start invalidates
+pending openers before they can create a source, even when Pi defers the UI factory. It registers
+no model tool, persists no history, sends no model messages and does no network work.
 
 ## Verification
 
-- `npm run check` in `packages/session-kit` runs formatter/linter, types, Vitest and real-session
-  Bun tests. `test/mon/` adds responsive/cache/identity/sorting/key and fake-clock lifecycle tests.
-  `resource-fixture.ts` uses the actual v1 snapshot shape, compile-checked against PR122
-  `e6bbe312eaa14f4920c47dc063c213fb36c3b077`'s exported `ResourceSnapshot` in the external
-  `~/code/pi-harness-builds/mon-fixture-contract.ts` check. No source-path dependency ships.
-  The Darwin fixture preserves available host CPU but unavailable process CPU; tests forbid
-  replacing that unavailable value with zero.
-- Manual real-terminal fixture: `bun test/mon/terminal.ts dark` (or `light`). This uses the
-  actual Pi alternate-screen focused overlay (matching the command's keyboard routing) and marks itself `FIXTURE / macOS process CPU unavailable`. Resize through 40x12,
-  60x20, 80x24 and 120x40, navigate, toggle help and quit. It creates no sampling timers.
-- Local acceptance captures: `~/code/pi-harness-builds/mon-evidence/` contains raw terminal
-  write recordings, ANSI/plain tmux captures for both themes at all four sizes, navigation,
-  help, and exit status (`1 0`: pane exited successfully). Revised captures in `revision/`
-  also exercise 40x6 selection, 40x12 help paging and an explicit 15-second history gap.
-  These are terminal recordings,
-  not desktop screenshots and not live-sampler proof.
+- `npm run check` in `packages/session-kit` (after `npm run build --workspace
+  @nredd/pi-resource-sampler` in a fresh clone; the root `npm run check` orders it first). In the
+  monorepo npm links the same-version sampler workspace, whose packed content matches the
+  registry 0.1.0 tarball; the packed stock gate installs the real registry release.
+  - `test/mon/source.test.ts`: two actual host observations (warming, then measured), mid-sample
+    close leaving no child process or timer, a real poll's two updates, and mapping edge cases.
+  - `test/mon/theme.test.ts`: actual built-in dark and light themes over an actual observation at
+    40x12, 60x20, 80x24 and 120x40.
+  - `test/scenarios/mon.test.ts` (Vitest and Bun): the real interactive Pi host, `createSessionKit`
+    and the real sampler; two observations, resize matrix, close/Escape/reopen, close before the
+    first sample and session shutdown all leave no kit timer or child process.
+  - `test/mon/{component,poll,index}.test.ts`: layout, identity, history, lifecycle interleavings
+    with fakes; `resource-fixture.ts` is type-checked against the package's `ResourceSnapshot`.
+- `make check-package-contracts` packs session-kit, installs it alone (sampler from npm, exact
+  lockfile closure) and drives it through stock Pi.
+- Manual fixture preview (no sampling): `bun test/mon/terminal.ts dark|light`. It is labelled
+  `FIXTURE` and is not evidence of real measurements.

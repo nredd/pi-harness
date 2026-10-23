@@ -7,14 +7,16 @@ this package. `0.6.0` keeps passive monitor output only in the monitor ring buff
 
 ## Standalone use
 
-The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, there are no runtime dependencies and no sibling plugin is required. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency is the exact published `@nredd/pi-resource-sampler@0.1.0` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 Session-scoped pi extensions for tmux users. No daemon, supervisor, core patch or cross-pane
 registry. Each runtime owns its goal, loops and monitors; persisted goal state follows the active
 session branch. Closing pi stops its work.
 
-The fixture-first resource dashboard foundation is documented in [docs/mon-dashboard.md](docs/mon-dashboard.md).
-`/mon` is **not enabled** until its shared sampler is published and integrated; this is not a second `/monitor` process runner.
+`/mon` opens a read-only, full-pane view of local CPU, memory, load and busy processes, sampled
+every ~2s by the shared `@nredd/pi-resource-sampler` library only while it is open. Details and
+limits (macOS process CPU is unavailable, memory is non-free, partial coverage) are in
+[docs/mon-dashboard.md](docs/mon-dashboard.md). It is not a second `/monitor` process runner.
 
 ## Install and config
 
@@ -32,7 +34,8 @@ Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
   "loop": { "enabled": true },
   "monitor": { "enabled": true, "collapseKey": "ctrl+shift+m", "maxWidgetLines": 12 },
   "diff": { "enabled": true },
-  "stats": { "enabled": true }
+  "stats": { "enabled": true },
+  "mon": { "enabled": true }
 }
 ```
 

@@ -1,6 +1,13 @@
 /** Responsive, cached /mon dashboard. Rendering and navigation never collect resources. */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, Key, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Key,
+	matchesKey,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { fitCols, sanitize } from "../diff/view.ts";
 import {
 	bytes,
@@ -32,6 +39,7 @@ export class MonView implements Component {
 	private processes: MonProcess[] = [];
 	private selected: string | undefined;
 	private sort: MonSort = "cpu";
+	private sortChosen = false;
 	private help = false;
 	private scroll = 0;
 	private pageSize = 1;
@@ -46,6 +54,8 @@ export class MonView implements Component {
 	update(snapshot: MonSnapshot): void {
 		this.snapshot = snapshot;
 		if (snapshot.status === "live") this.lastSuccess = snapshot.capturedAt;
+		// Never rank by a column that is unavailable for every row, unless the user asked for it.
+		if (!this.sortChosen) this.sort = snapshot.processCpu === "unavailable" ? "rss" : "cpu";
 		this.history.push({
 			capturedAt: snapshot.capturedAt,
 			value: snapshot.status === "stale" ? null : snapshot.cpuPercent,
@@ -95,6 +105,7 @@ export class MonView implements Component {
 			else return;
 			this.helpScroll = Math.max(0, Math.min(this.helpScroll, this.helpLength - this.helpPageSize));
 		} else if (data === "c" || data === "m" || data === "p" || data === "s") {
+			this.sortChosen = true;
 			this.sort =
 				data === "c"
 					? "cpu"
@@ -120,8 +131,11 @@ export class MonView implements Component {
 	private panel(title: string, lines: string[], width: number): string[] {
 		const { theme } = this.options;
 		const inner = Math.max(0, width - 2);
+		const label = truncateToWidth(`─ ${title} `, inner, "…");
 		return [
-			theme.fg("border", "╭") + theme.fg("accent", fitCols(` ${title} `, inner)) + theme.fg("border", "╮"),
+			theme.fg("border", "╭") +
+				theme.fg("accent", label) +
+				theme.fg("border", `${"─".repeat(Math.max(0, inner - visibleWidth(label)))}╮`),
 			...lines.map((line) => theme.fg("border", "│") + fitCols(line, inner) + theme.fg("border", "│")),
 			theme.fg("border", `╰${"─".repeat(inner)}╯`),
 		];
@@ -150,12 +164,18 @@ export class MonView implements Component {
 			"MEMORY / load",
 			[
 				` ${t.bold(bytes(used))} ${t.fg("muted", `/ ${bytes(total)} non-free`)}`,
-				` ${t.fg("success", "━".repeat(full))}${t.fg("dim", "─".repeat(meterWidth - full))} ${ratio === null ? "--" : `${Math.round(ratio * 100)}%`}`,
+				` ${t.fg("accent", "━".repeat(full))}${t.fg("dim", "─".repeat(meterWidth - full))} ${ratio === null ? "--" : `${Math.round(ratio * 100)}%`}`,
 				` ${t.fg("muted", "load 1 / 5 / 15")}  ${s?.load.map((n) => (Number.isFinite(n) ? n.toFixed(2) : "--")).join("  ") || "--"}`,
 			],
 			wide ? width - leftWidth - 2 : width,
 		);
 		return wide ? cpu.map((line, i) => `${line}  ${memory[i] ?? ""}`) : [...cpu, ...memory];
+	}
+
+	/** Scan cost is only shown when measured and the line has room for it. */
+	private scanLabel(width: number): string {
+		const scan = this.snapshot?.scanMs;
+		return width >= 80 && typeof scan === "number" && Number.isFinite(scan) ? `  scan ${Math.round(scan)}ms` : "";
 	}
 
 	private historyLabel(): string {
@@ -182,7 +202,8 @@ export class MonView implements Component {
 		const lines = [
 			t.bold(t.fg("accent", " MON")) +
 				`  ${t.fg(statusColor, status.toUpperCase())}` +
-				t.fg("dim", width >= 60 ? "  LOCAL RESOURCES / read only" : "  read only"),
+				t.fg("dim", width >= 60 ? "  LOCAL RESOURCES / read only" : "  read only") +
+				t.fg("dim", this.scanLabel(width)),
 		];
 		if (this.help) {
 			const help = [
@@ -202,7 +223,11 @@ export class MonView implements Component {
 				" Selection follows identity, not row.",
 				" RAM is total minus free, not pressure.",
 				" Load 1/5/15 min: not percent.",
-				" History: elapsed time; dots are gaps.",
+				" Lists can be partial; notices say why.",
+				" History: elapsed time, newest right;",
+				" dots are gaps, blank is no data yet.",
+				" macOS: ps start time is whole seconds,",
+				" so process CPU stays -- (sort: RSS).",
 				" No kill, locks or scheduling.",
 			].flatMap((line) => wrapTextWithAnsi(line, width));
 			this.helpPageSize = Math.max(1, height - 3);
@@ -236,7 +261,7 @@ export class MonView implements Component {
 			lines.push(
 				t.fg(
 					"accent",
-					` BUSY PROCESSES  ${this.processes.length} total  ${this.sort.toUpperCase()} ${this.sort === "pid" ? "↑" : "↓"}`,
+					` BUSY PROCESSES  ${this.processes.length} sampled  ${this.sort.toUpperCase()} ${this.sort === "pid" ? "↑" : "↓"}`,
 				),
 			);
 			const compact = width < 60;

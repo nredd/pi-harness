@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add `/mon`: a read-only TUI dashboard of host CPU history, non-free memory, load and sampled processes, on by default (`mon.enabled`)
+- Depend on the exact published `@nredd/pi-resource-sampler@0.1.0`; one sampler per open view, disposed (children reaped, no timers) on close, session shutdown or replacement
+- Map warming/unavailable metrics to `--`, never zero; explain partial coverage, persistent warming and macOS's unavailable process CPU (default RSS order there)
+- Draw CPU history newest-right at the observed sampling interval, so only real gaps render as `·`
+
 ## 0.7.0
 
 - Add a `/stats` **Machines** tab (Tab/Shift-Tab): each known machine's label and opaque UUID, local scan status, and remote producer `exportedAt` UTC instant plus age at opening

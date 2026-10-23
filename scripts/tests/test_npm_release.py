@@ -820,6 +820,7 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
         """
         if tool == "npm" and args in (
             ("ci", "--ignore-scripts"),
+            ("run", "build", "--workspace", "@nredd/pi-resource-sampler"),
             ("run", "check", "--workspace", "@nredd/pi-session-kit"),
         ):
             return "Package check substituted (no local scenarios)"
