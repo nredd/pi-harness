@@ -31,9 +31,10 @@ import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { ModelCallEvent } from "./model-call.js";
 import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel } from "./model-resolver.js";
-import { getMaxSubagentDepth } from "./nested-tools.js";
 import {
+  assertWithinBudgetDepth,
   BUDGET_QUEUE_FULL_ERROR,
+  type BudgetLease,
   budgetHasPendingRoom,
   enqueueBudget,
   pumpBudget,
@@ -703,14 +704,14 @@ export class AgentManager {
     // `bypassQueue` skips the pool, never the process budget: that ceiling is
     // the one guarantee every path shares.
     const waitPool = options.bypassQueue ? undefined : pool;
-    const lease = waitPool === undefined || this.poolHasRoom(waitPool)
-      ? tryAcquireBudget(record.depth ?? 1, this.maxDepthOf(record))
-      : undefined;
+    let lease: BudgetLease | undefined;
+    try {
+      lease = this.admit(record, waitPool);
+    } catch (err) {
+      this.agents.delete(id);
+      throw err;
+    }
     if (lease === undefined) {
-      if (!budgetHasPendingRoom()) {
-        this.agents.delete(id);
-        throw new Error(BUDGET_QUEUE_FULL_ERROR);
-      }
       // Queue it — started once its pool has room and the process budget a
       // lease, whichever was missing.
       // Idempotent for background (already "queued"); the flip that matters is
@@ -781,9 +782,19 @@ export class AgentManager {
     record.detachParentAbort = undefined;
   }
 
-  /** The nesting cap the budget reserves slots against for `record`'s branch. */
-  private maxDepthOf(record: AgentRecord): number {
-    return record.maxSubagentDepth ?? getMaxSubagentDepth();
+  /**
+   * The one admission check every start makes: a lease now when `pool` (if
+   * any) has room and the process budget admits `record`'s depth, else
+   * undefined and the caller queues. Throws, having changed nothing, when the
+   * start could never be admitted (deeper than the budget reserves for) or the
+   * budget's wait queue is full.
+   */
+  private admit(record: AgentRecord, pool: Pool | undefined): BudgetLease | undefined {
+    const depth = record.depth ?? 1;
+    assertWithinBudgetDepth(depth);
+    const lease = pool === undefined || this.poolHasRoom(pool) ? tryAcquireBudget(depth) : undefined;
+    if (lease === undefined && !budgetHasPendingRoom()) throw new Error(BUDGET_QUEUE_FULL_ERROR);
+    return lease;
   }
 
   /** Give back `record`'s budget lease, if it holds one. Callers drain afterwards. */
@@ -820,7 +831,6 @@ export class AgentManager {
     };
     entry.cancel = enqueueBudget({
       depth: record.depth ?? 1,
-      maxDepth: this.maxDepthOf(record),
       ready: () => pool === undefined || this.poolHasRoom(pool),
       grant: (lease) => {
         this.queue = this.queue.filter(e => e !== entry);
@@ -1397,9 +1407,6 @@ export class AgentManager {
     // same tick is refused too. The caller decides whether to wait or steer.
     if (record.status === "running" || record.status === "queued") return undefined;
 
-    const depth = record.depth ?? 1;
-    const maxDepth = this.maxDepthOf(record);
-
     // Background resume: settle asynchronously and notify on completion exactly
     // like a background spawn, returning immediately with the record still
     // "running" — or "queued" when at the concurrency limit. Previously
@@ -1407,10 +1414,10 @@ export class AgentManager {
     // returned before its background branch, and resume() only ever awaited
     // inline), so a resumed agent always blocked the caller until it finished.
     if (options?.isBackground) {
-      // The pool `occupiesPoolSlot` will charge once `isBackground` is set below.
-      const pool: Pool | undefined = isTopLevelAgent(record) ? "background" : undefined;
-      const lease = pool === undefined || this.poolHasRoom(pool) ? tryAcquireBudget(depth, maxDepth) : undefined;
-      if (lease === undefined && !budgetHasPendingRoom()) throw new Error(BUDGET_QUEUE_FULL_ERROR);
+      // The pool it will be charged to once `isBackground` is set below; asked
+      // before anything mutates the record, so a refusal leaves it untouched.
+      const pool: Pool | undefined = occupiesPoolSlot({ ...record, isBackground: true }) ? "background" : undefined;
+      const lease = this.admit(record, pool);
 
       record.isBackground = true;
       record.resultConsumed = false;
@@ -1420,21 +1427,32 @@ export class AgentManager {
       record.completedAt = undefined;
       record.status = "queued";
 
-      const start = () => this.startResume(id, record, prompt, signal, options);
+      // `startResume` throws only from the `onStart` callback, after it has
+      // charged the pool and with the lease held: hand both back and leave the
+      // record an error rather than "running" forever.
+      const start = () => {
+        try {
+          this.startResume(id, record, prompt, signal, options);
+        } catch (err) {
+          if (occupiesPoolSlot(record)) this.runningBackground--;
+          this.releaseLease(record);
+          record.status = "error";
+          record.error = err instanceof Error ? err.message : String(err);
+          record.completedAt = this.clock.now();
+          this.drainQueue();
+          throw err;
+        }
+      };
       if (lease === undefined) {
         // At a limit — queue it, started when a slot and a lease free up. A
         // detached resume has no inline caller, hence nothing to release. The
         // queue is shared with spawns, whose startup is async, so entries are
-        // promise-shaped even though a resume starts synchronously; failures
-        // land on the record here, since the budget pump swallows throws.
+        // promise-shaped even though a resume starts synchronously; a failure
+        // is reported here, since the budget pump swallows throws.
         this.enqueueStart(id, record, pool, async () => {
           try {
             start();
-          } catch (err) {
-            this.releaseLease(record);
-            record.status = "error";
-            record.error = err instanceof Error ? err.message : String(err);
-            record.completedAt = this.clock.now();
+          } catch {
             this.onComplete?.(record);
           }
         }, () => {});
@@ -1448,8 +1466,8 @@ export class AgentManager {
     // Foreground resume: run inline and return the settled record. Takes a
     // budget lease like everything else, waiting for one if the process is at
     // its limit; the caller's signal (or `/agents` stop) releases the wait.
-    const lease = tryAcquireBudget(depth, maxDepth);
-    if (lease === undefined && !budgetHasPendingRoom()) throw new Error(BUDGET_QUEUE_FULL_ERROR);
+    // No pool: the foreground pool does not cover resumes (see the README).
+    const lease = this.admit(record, undefined);
     record.status = lease === undefined ? "queued" : "running";
     record.budgetLease = lease;
     record.startedAt = this.clock.now();
@@ -1470,6 +1488,11 @@ export class AgentManager {
     if (signal?.aborted) this.abort(id);
 
     if (lease === undefined) {
+      // The queue entry's `start` only marks the record running: the run itself
+      // stays inline below, so the caller awaits the same `resumeAgent` call
+      // as an unqueued resume, and the lease the grant handed over is released
+      // by the same tail. `granted` tells a grant from a removal (abort,
+      // dispose), which resolves the same promise.
       let granted = false;
       if (record.status === "queued") {
         await new Promise<void>(resolve => {
@@ -1480,8 +1503,13 @@ export class AgentManager {
           }, resolve);
         });
       }
-      // Stopped while it waited: it never ran, so there is nothing to settle.
+      // Removed while it waited: it never ran, so there is nothing to settle.
+      // `abort` already marked it stopped; `dispose` and `detach` did not.
       if (!granted) {
+        if (record.status === "queued") {
+          record.status = "stopped";
+          record.completedAt = this.clock.now();
+        }
         this.detachParentAbort(record);
         return record;
       }
@@ -1899,19 +1927,26 @@ export class AgentManager {
    * they own their own session and report through a notification. Queued agents
    * would start later against a stale context, foreground agents belong to a
    * tool call that is being torn down, and workflow children die with their
-   * workflow, so all of those are aborted.
+   * workflow, so all of those are aborted. A QUEUED nested child is kept: its
+   * parent is a survivor waiting on it (the process budget can queue one), and
+   * if the parent is stopped instead, its settle aborts the child.
    *
    * @returns how many agents keep running.
    */
   detach(): number {
+    const keepQueued = (id: string): boolean => {
+      const record = this.agents.get(id);
+      return record !== undefined && record.parentAgentId !== undefined && record.workflowId === undefined;
+    };
     for (const queued of this.queue) {
+      if (keepQueued(queued.id)) continue;
       const record = this.agents.get(queued.id);
       if (record) {
         record.status = "stopped";
         record.completedAt = this.clock.now();
       }
     }
-    this.dequeue(() => true);
+    this.dequeue(entry => !keepQueued(entry.id));
     let survivors = 0;
     for (const record of this.agents.values()) {
       if (record.status !== "running") continue;
@@ -1985,8 +2020,7 @@ export class AgentManager {
     // Clear queue — via dequeue, so anyone blocked in spawnAndWait is woken
     // rather than left awaiting a gate nothing will ever resolve.
     this.dequeue(() => true);
-    const records = [...this.agents.values()];
-    const sessions = records.map(record => record.session);
+    const sessions = [...this.agents.values()].map(record => record.session);
     this.agents.clear();
     this.startups.clear();
     if (pi) {
@@ -2004,11 +2038,12 @@ export class AgentManager {
     // handler and the process exits right after it returns, so anything left unawaited
     // here never runs at all. Bounded — each call carries its own ceiling, concurrently.
     await Promise.all(sessions.map(session => shutdownChildSession(session)));
-    // Only now, with every session shut down, can nothing of this manager's
-    // still be running: hand back any lease a run did not get to release
-    // itself, so other managers in the process are not charged for it. A run
-    // that settles later releases again, which is a no-op.
-    for (const record of records) this.releaseLease(record);
-    pumpBudget();
+    // Leases are NOT released here. `shutdownChildSession` is bounded and does
+    // not wait for a run's promise, a worktree copy or its cleanup, so work can
+    // still be going on; each run hands its lease back from its own settle
+    // path (`settleRun`, the resume tails, the startup-failure and mid-copy
+    // exits), which no longer needs this manager's maps. A run that never
+    // settles keeps its slot, which is the honest count.
+    this.drainQueue();
   }
 }

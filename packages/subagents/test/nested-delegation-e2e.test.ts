@@ -289,7 +289,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       live: false,
       beforeRun: () => {
         registerAgents(loadCustomAgents(cwd));
-        setBudgetPolicy({ maxActive: 3, nestedReserve: 1 });
+        setBudgetPolicy({ maxActive: 3, nestedReserve: 1, maxDepth: 2 });
       },
     });
 
