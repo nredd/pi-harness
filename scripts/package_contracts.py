@@ -173,7 +173,26 @@ RESOURCE_SAMPLER_CONTRACT = PackageContract(
     node_probe="""
 import assert from 'node:assert/strict';
 import { setTimeout } from 'node:timers/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createResourceSampler } from '@nredd/pi-resource-sampler';
+// argv[0], process title and Linux comm all carry a random secret that names must never expose.
+const secret = randomBytes(16).toString('hex');
+const hostile = spawn(process.execPath, ['-e', `process.title = process.env.S;
+if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
+console.log('ready'); setInterval(() => {}, 1000);`], {
+    argv0: secret, env: {S: secret}, stdio: ['ignore', 'pipe', 'ignore'],
+});
+await new Promise((resolve, reject) => {
+    hostile.stdout.once('data', resolve);
+    hostile.once('exit', reject);
+});
+// Negative control: the 0.1.0 name source (Darwin `ps -c` comm, Linux comm) really carries the secret.
+const legacy = process.platform === 'linux'
+    ? readFileSync(`/proc/${hostile.pid}/comm`, 'utf8').trim() === secret.slice(0, 15)
+    : execFileSync('/bin/ps', ['-c', '-o', 'comm=', '-p', `${hostile.pid}`]).toString().includes(secret);
+assert.ok(legacy, 'hostile child does not expose the secret through the 0.1.0 name source');
 const sampler = createResourceSampler({maxDurationMs: 2000});
 try {
     const first = await sampler.sample();
@@ -183,10 +202,15 @@ try {
     assert.equal(second.cpu.state, 'available');
     assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
     assert.ok(second.processes.some(p => p.pid === process.pid));
+    assert.ok(second.processes.some(p => p.pid === hostile.pid));
+    // Every 12-char window: shorter than Linux comm (15 bytes) and Darwin p_comm (16 bytes) fragments.
+    const text = JSON.stringify([first, second]);
+    for (let i = 0; i + 12 <= secret.length; i++)
+        assert.ok(!text.includes(secret.slice(i, i + 12)), 'process names expose argv, title or comm');
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(sampler.sample(controller.signal));
-} finally { await sampler.dispose(); }
+} finally { hostile.kill('SIGKILL'); await sampler.dispose(); }
 await assert.rejects(sampler.sample(), /disposed/);
 """,
 )

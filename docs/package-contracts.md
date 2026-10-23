@@ -195,7 +195,10 @@ both OSes and uploads its report with the other `*contracts*.json` artifacts.
 `make check-resource-sampler-contract` (also a prerequisite of `make check-package-contracts`)
 builds, packs, audits and installs `@nredd/pi-resource-sampler` alone, then runs the descriptor's
 fixed Node ESM consumer against those exact installed bytes. It samples the real host twice,
-checks aggregate CPU range and self-process visibility, and exercises cancellation and disposal.
+checks aggregate CPU range and self-process visibility, and exercises cancellation and disposal. A
+child's argv[0], process title and Linux comm hold a random 32-hex secret; the probe first proves the
+0.1.0 name source (`ps -c` comm on Darwin, `/proc/PID/comm` on Linux) shows it, then requires the
+child in the second snapshot and no 12-character window of the secret anywhere in either snapshot.
 Existing `owned` macOS/Linux jobs run the native package tests; existing `contracts` jobs run this
 packed consumer. No new runner matrix or Pi load is needed for a Pi-independent library.
 
