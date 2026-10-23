@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -97,3 +98,59 @@ def test_library_probe_runs_on_installed_bytes(tmp_path: Path, monkeypatch: pyte
     assert calls[0] == {"kind": "install"}
     assert calls[1]["argv"] == [tools.node, "--input-type=module", "-e", contract.node_probe]
     assert calls[1]["cwd"] == tmp_path / "install"
+
+
+@pytest.mark.parametrize(
+    ("child_script", "disguise", "failure", "status"),
+    [
+        pytest.param(
+            "setInterval(() => {}, 1000);",
+            True,
+            "hostile child not ready within 300 ms",
+            "SIGTERM",
+            id="silent",
+        ),
+        pytest.param("process.exit(3);", True, "hostile child exited before readiness", "3", id="exits"),
+        pytest.param(
+            "console.log('ready'); setInterval(() => {}, 1000);",
+            False,
+            "hostile child does not expose the secret through the 0.1.0 name source",
+            "SIGTERM",
+            id="negative-control",
+        ),
+    ],
+)
+def test_library_probe_reaps_child_when_setup_fails(
+    tmp_path: Path, child_script: str, disguise: bool, failure: str, status: str
+) -> None:
+    """Run the real probe with a broken child: it must fail for that reason and still reap the child.
+
+    The failures happen before the probe imports the library, so no installed package is needed.
+    `hostile child reaped` is printed only after Node observed that exact child's exit status, so a
+    reused PID cannot make it pass.
+
+    Parameters:
+        tmp_path (Path): Empty working directory without the library installed.
+        child_script (str): Broken child program.
+        disguise (bool): Whether the child's argv[0] carries the secret.
+        failure (str): Expected setup failure.
+        status (str): Expected exit code or terminating signal of the reaped child.
+    """
+    probe = pc.resource_sampler_probe(child_script, disguise=disguise, ready_ms=300)
+    result = subprocess.run(
+        [str(pc.locate_tools().node), "--input-type=module", "-e", probe],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert failure in result.stderr
+    assert f"hostile child reaped: {status}\n" in result.stderr
+
+
+def test_library_probe_rejects_non_positive_readiness() -> None:
+    """Reject a readiness bound that could never be met before building the program."""
+    with pytest.raises(ValueError, match="ready_ms"):
+        pc.resource_sampler_probe(ready_ms=0)

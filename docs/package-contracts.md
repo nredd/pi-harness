@@ -167,6 +167,12 @@ checks aggregate CPU range and self-process visibility, and exercises cancellati
 child's argv[0], process title and Linux comm hold a random 32-hex secret; the probe first proves the
 0.1.0 name source (`ps -c` comm on Darwin, `/proc/PID/comm` on Linux) shows it, then requires the
 child in the second snapshot and no 12-character window of the secret anywhere in either snapshot.
+The probe samples with the library maxima (5s, 16384 PIDs, 16MiB); a child the bounded scan misses
+fails with the snapshot coverage, never passes vacuously. Everything after spawn, readiness and the
+negative control included, runs inside the `try` whose `finally` sends SIGTERM, then SIGKILL, and
+awaits that exact child's exit status with a bound. `resource_sampler_probe` builds the program;
+`test_library_probe_reaps_child_when_setup_fails` runs it with a silent, an exiting and an
+undisguised child and requires the expected failure plus `hostile child reaped`.
 Existing `owned` macOS/Linux jobs run the native package tests; existing `contracts` jobs run this
 packed consumer. No new runner matrix or Pi load is needed for a Pi-independent library.
 
@@ -175,9 +181,9 @@ packed consumer. No new runner matrix or Pi load is needed for a Pi-independent 
 field, peers or runtime dependencies are allowed. Import auditing permits Node builtins and
 in-package relative imports, never host modules or sibling extensions. The default extension
 contract still requires `pi.extensions` and retains its original host-module rules. The release
-descriptor uses the same audit/isolated execution gate; no npm publication or bootstrap is performed.
-The new npm name requires owner-controlled staged publication/2FA and trusted-publisher setup before
-release. Consumer dependencies and migration are separate work, not a relaxed sibling import rule.
+descriptor uses the same audit/isolated execution gate; `publish.yml` published `0.1.1` (see
+[releases](releases.md)). Consumer dependencies and migration are separate work, not a relaxed
+sibling import rule.
 
 ## Packed preset audit (no standalone Pi behavior)
 
