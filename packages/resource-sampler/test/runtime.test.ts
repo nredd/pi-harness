@@ -25,6 +25,9 @@ const HOSTILE = [
 	"setInterval(() => {}, 1000);",
 ].join("\n");
 
+/** Ready at once, with no disguise: the negative control fails. */
+const READY = 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);';
+
 /** Spawn only; the caller must hand the child to `supervise` before anything else can throw. */
 function launch(secret: string, script = HOSTILE, disguise = true): ChildProcess {
 	return spawn(process.execPath, ["-e", script, secret], {
@@ -91,8 +94,14 @@ function message(error: unknown): string {
 }
 
 /** Every step after spawn, readiness included, is followed by reaping the child; a cleanup failure is
- * reported with, never instead of, the step's own error. */
-async function supervise<T>(child: ChildProcess, readyMs: number, body: (pid: number) => Promise<T>): Promise<T> {
+ * reported with, never instead of, the step's own error. In-process only: a test worker killed by
+ * SIGKILL runs no JavaScript, so nothing here can reap the child then. `reap` is injectable for tests. */
+async function supervise<T>(
+	child: ChildProcess,
+	readyMs: number,
+	body: (pid: number) => Promise<T>,
+	reap: (child: ChildProcess) => Promise<void> = stop,
+): Promise<T> {
 	let outcome: { value: T } | { error: unknown };
 	try {
 		await ready(child, readyMs);
@@ -101,7 +110,7 @@ async function supervise<T>(child: ChildProcess, readyMs: number, body: (pid: nu
 		outcome = { error };
 	}
 	try {
-		await stop(child);
+		await reap(child);
 	} catch (cleanup) {
 		if (!("error" in outcome)) throw cleanup;
 		throw new AggregateError(
@@ -116,7 +125,16 @@ async function supervise<T>(child: ChildProcess, readyMs: number, body: (pid: nu
 /** The pre-0.1.1 name sources must really carry the secret, or this test proves nothing. */
 function legacySourceLeaks(pid: number, secret: string): boolean {
 	if (process.platform === "linux") return readFileSync(`/proc/${pid}/comm`, "utf8").trim() === secret.slice(0, 15);
-	return execFileSync("/bin/ps", ["-c", "-o", "comm=", "-p", String(pid)], { encoding: "utf8" }).includes(secret);
+	return execFileSync("/bin/ps", ["-c", "-o", "comm=", "-p", String(pid)], {
+		encoding: "utf8",
+		timeout: STOP_MS,
+	}).includes(secret);
+}
+
+/** The real `stop`, then an injected failure, so the cleanup-error path runs deterministically. */
+async function failingReap(child: ChildProcess): Promise<void> {
+	await stop(child);
+	throw new Error("injected cleanup failure");
 }
 
 /** Negative control, then the privacy check against the actual sampler. */
@@ -155,7 +173,7 @@ describe(`actual sampler on ${runtime}`, () => {
 	}, 10_000);
 	it("reaps the child when the negative control fails", async () => {
 		const secret = randomBytes(16).toString("hex");
-		const child = launch(secret, 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);', false);
+		const child = launch(secret, READY, false);
 		await expect(supervise(child, READY_MS, (pid) => privacy(pid, secret))).rejects.toThrow(
 			"0.1.0 name source does not carry the secret",
 		);
@@ -171,6 +189,27 @@ describe(`actual sampler on ${runtime}`, () => {
 		);
 		expect(child.signalCode).toBe("SIGKILL");
 	}, 15_000);
+	it("reports a cleanup failure with, never instead of, the primary error", async () => {
+		const child = launch(randomBytes(16).toString("hex"), READY, false);
+		const primary = new Error("primary");
+		const failure = await supervise(
+			child,
+			READY_MS,
+			async () => {
+				throw primary;
+			},
+			failingReap,
+		).catch((error: unknown) => error);
+		expect(failure).toBeInstanceOf(AggregateError);
+		expect((failure as AggregateError).errors[0]).toBe(primary);
+		expect((failure as AggregateError).message).toBe("primary; cleanup also failed: injected cleanup failure");
+		expect(child.signalCode).toBe("SIGTERM");
+	}, 10_000);
+	it("reports a cleanup failure alone when the body succeeded", async () => {
+		const child = launch(randomBytes(16).toString("hex"), READY, false);
+		await expect(supervise(child, READY_MS, async () => {}, failingReap)).rejects.toThrow(/^injected cleanup failure$/);
+		expect(child.signalCode).toBe("SIGTERM");
+	}, 10_000);
 	it("measures host CPU from the second sample on, without stale runtime counters", async () => {
 		const sampler = createResourceSampler({ maxDurationMs: 2000 });
 		try {

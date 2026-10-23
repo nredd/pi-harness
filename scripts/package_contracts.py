@@ -233,7 +233,8 @@ await supervise(hostile, async () => {
     // Negative control: the 0.1.0 name source (Darwin `ps -c` comm, Linux comm) really carries the secret.
     const legacy = process.platform === 'linux'
         ? readFileSync(`/proc/${hostile.pid}/comm`, 'utf8').trim() === secret.slice(0, 15)
-        : execFileSync('/bin/ps', ['-c', '-o', 'comm=', '-p', `${hostile.pid}`]).toString().includes(secret);
+        : execFileSync('/bin/ps', ['-c', '-o', 'comm=', '-p', `${hostile.pid}`], {timeout: STOP_MS})
+            .toString().includes(secret);
     assert.ok(legacy, 'hostile child does not expose the secret through the 0.1.0 name source');
     const { createResourceSampler } = await import('@nredd/pi-resource-sampler');
     const sampler = createResourceSampler(BOUNDS);
@@ -266,8 +267,8 @@ def resource_sampler_probe(
 ) -> str:
     """Build the installed-library probe around one disposable child.
 
-    The defaults are the shipped contract. Tests inject a silent, exiting or undisguised child to prove
-    readiness and negative-control failures still reap it.
+    The defaults are the shipped contract. Tests inject a silent, an exiting, an undisguised and a
+    SIGTERM-ignoring child to prove readiness and negative-control failures still reap it.
 
     Parameters:
         child_script (str): Node program the child evaluates; it prints `ready` once observable.
@@ -1216,8 +1217,8 @@ def run(
         cwd (Path): Working directory.
         timeout (int): Seconds before the child is killed.
         check (bool): Raise `ContractError` on a nonzero exit.
-        own_group (bool): Start the child in its own session and, on timeout or interruption, kill
-            that whole process group, so grandchildren it spawned cannot outlive it.
+        own_group (bool): Run through `run_own_group`, so a timeout or interruption kills the
+            child's whole process group. Default `subprocess.run` kills only the child.
 
     Returns:
         subprocess.CompletedProcess[str]: Captured text output.
@@ -1228,6 +1229,53 @@ def run(
     argv = [str(part) for part in cmd]
     if not Path(argv[0]).is_absolute():
         raise ValueError(f"Executable must be an absolute path: '{argv[0]}'")
+    try:
+        if own_group:
+            done = run_own_group(argv, env=env, cwd=cwd, timeout=timeout)
+        else:
+            done = subprocess.run(
+                argv,
+                env=env,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+    except subprocess.TimeoutExpired as e:
+        raise ContractError(f"`{' '.join(argv[:3])}` timed out after {timeout}s") from e
+    if check and done.returncode != 0:
+        raise ContractError(
+            f"`{' '.join(argv[:3])}` exited {done.returncode}\n"
+            f"stdout: {done.stdout[-2000:]}\nstderr: {done.stderr[-2000:]}"
+        )
+    return done
+
+
+def run_own_group(
+    argv: list[str], *, env: dict[str, str], cwd: Path, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    """Run `argv` as the leader of a new session; on timeout or interruption kill its whole group.
+
+    The group is signalled only while the leader is unreaped (`returncode` unset, read without a
+    `poll` that could reap it): until then its pid, the group id, cannot be reused, like
+    `integration/harness/headless.py` `kill_process_group`. If `communicate` already reaped the
+    leader (its SIGINT grace wait can), the id may be reused, so nothing is signalled and the
+    original exception says so. Members left after a normal exit are the program's own job.
+
+    Parameters:
+        argv (list[str]): Argument vector; `argv[0]` is absolute.
+        env (dict[str, str]): Complete child environment.
+        cwd (Path): Working directory.
+        timeout (int): Seconds before the group is killed.
+
+    Returns:
+        subprocess.CompletedProcess[str]: Captured text output.
+
+    Raises:
+        subprocess.TimeoutExpired: After the group was killed and the leader reaped.
+    """
     with subprocess.Popen(
         argv,
         env=env,
@@ -1236,29 +1284,19 @@ def run(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        start_new_session=own_group,
+        start_new_session=True,
     ) as process:
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except BaseException as e:
-            # The leader is not reaped yet, so its group id cannot have been reused, like
-            # `integration/harness/headless.py` `kill_process_group`.
-            if own_group:
+            if process.returncode is None:
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
             else:
-                process.kill()
-            process.wait()
-            if isinstance(e, subprocess.TimeoutExpired):
-                raise ContractError(f"`{' '.join(argv[:3])}` timed out after {timeout}s") from e
+                e.add_note(f"process group {process.pid} not signalled: its leader was already reaped")
             raise
-    done = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
-    if check and done.returncode != 0:
-        raise ContractError(
-            f"`{' '.join(argv[:3])}` exited {done.returncode}\n"
-            f"stdout: {done.stdout[-2000:]}\nstderr: {done.stderr[-2000:]}"
-        )
-    return done
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def locate_tools() -> Tools:
