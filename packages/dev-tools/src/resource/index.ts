@@ -1,4 +1,4 @@
-/** Read-only, privacy-safe host resource observation for choosing test and build scope. */
+/** Read-only host resource observation for choosing test and build scope. */
 
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -171,7 +171,7 @@ function validate(name: string, value: number, min: number, max: number): void {
 /**
  * Sample the host twice, `intervalMs` apart, through one private sampler.
  *
- * Collects no arguments, environments, or process-to-agent attribution. Cancellation and sampler
+ * Requests no arguments or environments (names are OS-reported titles) and no process-to-agent attribution. Cancellation and sampler
  * failures reject; the sampler is always disposed, which awaits any helper reaping.
  */
 export async function resourceSnapshot(
@@ -225,7 +225,7 @@ function formatSnapshot(snapshot: Snapshot): string {
 		snapshot.processes.status === "available"
 			? `${snapshot.processes.entries.length} bounded entries ranked by ${snapshot.processes.ranking} (${snapshot.processes.cpuSemantics}; truncated=${snapshot.processes.truncated}; pid ppid cpu RSS executable)${snapshot.processes.entries.length > 0 ? `\n${snapshot.processes.entries.map((entry) => `${entry.pid} ${entry.parentPid} ${formatMetric(entry.cpu)} ${entry.rssBytes} ${entry.executable}`).join("\n")}` : ""}`
 			: `unavailable (${snapshot.processes.reason})`;
-	return `host ${snapshot.platform}: CPU ${cpu}; memory ${memory}${pressure}; processes ${processes}. No arguments, environments, or process-to-agent attribution are collected.`;
+	return `host ${snapshot.platform}: CPU ${cpu}; memory ${memory}${pressure}; processes ${processes}. Arguments and environments are not requested, but OS-reported process names may include process-set titles; no process-to-agent attribution.`;
 }
 
 const metricSchema = Type.Union([
@@ -243,7 +243,7 @@ export function registerResourceTools(pi: ExtensionAPI, options: ResourceSnapsho
 		name: "resource_snapshot",
 		label: "resource snapshot",
 		description:
-			"Read-only bounded host snapshot for resource awareness before a known large test or compile. Samples twice over a short interval (default 500ms) and reports CPU count, load average and interval CPU utilization, memory availability and available pressure metrics, plus up to 50 process entries (pid, parent pid, interval CPU, RSS, executable basename only). Process interval CPU is measured on Linux; where it cannot be measured (Darwin) it is reported unavailable and entries are ranked by RSS instead, never by a ps lifetime or decaying average. It never returns command arguments or environments and cannot attribute OS processes to agents. Use it to choose scope, workers or timing; it makes no scheduling, locking or concurrency change.",
+			"Read-only bounded host snapshot for resource awareness before a known large test or compile. Samples twice over a short interval (default 500ms) and reports CPU count, load average and interval CPU utilization, memory availability and available pressure metrics, plus up to 50 process entries (pid, parent pid, interval CPU, RSS, executable basename only). Process interval CPU is measured on Linux; where it cannot be measured (Darwin) it is reported unavailable and entries are ranked by RSS instead, never by a ps lifetime or decaying average. It does not request command arguments or environments, but process names are OS-reported and on macOS can be a process-set title that includes argument text, so treat them as untrusted and possibly sensitive. It cannot attribute OS processes to agents. Use it to choose scope, workers or timing; it makes no scheduling, locking or concurrency change.",
 		promptSnippet:
 			"Inspect current host resources and bounded process metadata before a known large test or compile; use it for awareness only, not process-to-agent attribution",
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

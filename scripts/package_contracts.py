@@ -8,7 +8,7 @@ fresh project, and drives it through a real, exact-version stock Pi install:
    and declare exactly the contract's runtime dependencies (none for most plugins).
 2. Source audit: every import in the tarball is relative (inside the package), a Node builtin, a
    host-provided Pi module or a declared runtime dependency. No sibling plugin (only a published
-   `SIBLING_LIBRARIES` entry that is also a declared dependency), no bundled host copy. Imports
+   `SHARED_LIBRARIES` entry that is also a declared dependency), no bundled host copy. Imports
    come from the installed TypeScript parser (`import_audit.ts`, one batched `node` run per
    package) rather than a regex; computed specifiers are rejected, not skipped. It is a syntactic
    audit, not a proof about `eval`.
@@ -158,6 +158,8 @@ RESOURCE_SAMPLER_FILES = (
         for suffix in ("js", "d.ts")
     ),
 )
+# Exact published release consumers install from the registry; never a range, workspace or file spec.
+RESOURCE_SAMPLER_VERSION = "0.1.0"
 RESOURCE_SAMPLER_CONTRACT = PackageContract(
     name="@nredd/pi-resource-sampler",
     directory="resource-sampler",
@@ -187,11 +189,9 @@ await assert.rejects(sampler.sample(), /disposed/);
 """,
 )
 
-# Published Pi-independent libraries a plugin may import, ONLY when it is also an exact declared
-# runtime dependency of that plugin's contract. Every other `@nredd/` specifier stays a violation.
-SIBLING_LIBRARIES = frozenset({RESOURCE_SAMPLER_CONTRACT.name})
-# `resource_snapshot` runs on this exact published sampler, installed from the registry.
-RESOURCE_SAMPLER_DEPENDENCY = (RESOURCE_SAMPLER_CONTRACT.name, "0.1.0")
+# Compiled, Pi-independent `@nredd/` libraries a plugin may import, only when its contract declares the
+# exact registry release. Plugins remain banned from importing each other.
+SHARED_LIBRARIES = frozenset({RESOURCE_SAMPLER_CONTRACT.name})
 
 
 CONTRACTS = (
@@ -201,7 +201,7 @@ CONTRACTS = (
         required=("LICENSE", "README.md", "package.json", "src/index.ts"),
         allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^src/.+\.ts$")),
         exposes_tools=frozenset({"git_status", "resource_snapshot"}),
-        runtime_dependencies=(RESOURCE_SAMPLER_DEPENDENCY,),
+        runtime_dependencies=((RESOURCE_SAMPLER_CONTRACT.name, RESOURCE_SAMPLER_VERSION),),
     ),
     PackageContract(
         name="@nredd/pi-session-kit",
@@ -363,11 +363,11 @@ COMPUTER_USE_CONTRACT = PackageContract(
 )
 
 # `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` installs its plugins
-# offline except for one exact published `SIBLING_LIBRARIES` pin (dev-tools -> resource sampler), while
-# this package has third-party runtime dependencies that must come from the registry. It is audited, installed and run through stock Pi by the release
-# `verify` stage (descriptor `stock_gate`), by CI's `make check-subagents-package-contract` and by the
-# pack-vs-contract test, not by that target. The
-# `files` allowlist in `packages/subagents/package.json` and `allowed`/`required` below must enumerate
+# offline except for one exact published `SHARED_LIBRARIES` pin (dev-tools -> resource sampler), while
+# this package has third-party runtime dependencies that must come from the registry. It is audited,
+# installed and run through stock Pi by the release `verify` stage (descriptor `stock_gate`), by
+# CI's `make check-subagents-package-contract` and by the pack-vs-contract test, not by that target.
+# The `files` allowlist in `packages/subagents/package.json` and `allowed`/`required` below must enumerate
 # the same set; `test_subagents_pack_matches_contract` enforces it. Peers keep the fork's `>=1.1.0`
 # floor (it needs 1.x host APIs) rather than `*`. `SubagentWorkflow` is registered unless the
 # `workflowsEnabled` setting is off, which a clean sandbox never sets.
@@ -1718,7 +1718,7 @@ def classify_imports(
     Allowed: Node builtins (`node:` prefix), host-provided Pi modules, the contract's declared runtime
     dependencies, and relative paths that stay inside the package. Everything else, including any
     `@nredd/` sibling and any specifier the parser could not resolve to a literal, is a violation.
-    The one sibling exception is an exact `SIBLING_LIBRARIES` specifier that is also a declared
+    The one sibling exception is an exact `SHARED_LIBRARIES` specifier that is also a declared
     dependency of a non-library, non-standalone file.
     Files in `standalone_artifacts` (the bundled stats `dist/` artifact) may import `node:` builtins
     only; relative imports are forbidden too, because it is copied alone.
@@ -1741,7 +1741,7 @@ def classify_imports(
         if spec.startswith("node:"):
             continue
         if spec.startswith(SIBLING_SCOPE):
-            if library or standalone or spec not in SIBLING_LIBRARIES or spec not in dependencies:
+            if library or standalone or spec not in SHARED_LIBRARIES or spec not in dependencies:
                 problems.append(f"{path}: imports sibling plugin '{spec}'")
         elif standalone:
             problems.append(
@@ -2616,7 +2616,7 @@ def installed_sampler_integrity(installed: Path) -> str:
     Raises:
         ContractError: If the sampler is linked, missing, another version, or locked without integrity.
     """
-    name, version = RESOURCE_SAMPLER_DEPENDENCY
+    name, version = RESOURCE_SAMPLER_CONTRACT.name, RESOURCE_SAMPLER_VERSION
     project = installed.parents[2]
     module = project / "node_modules" / name
     require(module.is_dir() and not module.is_symlink(), f"'{name}' is not a real installed directory")
