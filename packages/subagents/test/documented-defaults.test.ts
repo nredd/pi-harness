@@ -10,6 +10,7 @@
 // suites that hold module references across tests.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getBudgetPolicy, resetBudgetForTests } from "../src/process-budget.js";
 
 describe("documented defaults (README:441)", () => {
   beforeEach(() => {
@@ -35,9 +36,8 @@ describe("documented defaults (README:441)", () => {
 
   // Off: nothing above the per-session pools ever bounded the process, and the
   // 12-with-reserve-2 policy is an opt-in in global settings, not a default.
-  it("the process budget is off by default with a reserve of 2 at depth 2", async () => {
-    delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:process-budget")];
-    const { getBudgetPolicy } = await import("../src/process-budget.js");
+  it("the process budget is off by default with a reserve of 2 at depth 2", () => {
+    resetBudgetForTests();
     expect(getBudgetPolicy()).toEqual({ maxActive: 0, nestedReserve: 2, maxDepth: 2 });
   });
 

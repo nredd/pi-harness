@@ -3,12 +3,15 @@
  *
  * Exercised through real `AgentManager`s with a scripted runner, because the
  * point of the budget is the paths the per-manager pools never saw: a second
- * manager, a reloaded module instance, nested children, workflow children,
+ * manager, nested children, workflow children,
  * scheduled (`bypassQueue`) and detached RPC spawns, and both kinds of resume.
+ * A separate static-import fixture checks shared state across module copies.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ModuleKind, transpileModule } from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", () => ({
@@ -30,12 +33,16 @@ import {
   admissionLimit,
   BUDGET_QUEUE_FULL_ERROR,
   budgetUsage,
+  enqueueBudget,
   getBudgetPolicy,
   getPendingBudgetPolicy,
   isCoherent,
   MAX_PENDING_SUBAGENTS,
+  pumpBudget,
+  releaseBudget,
   resetBudgetForTests,
   setBudgetPolicy,
+  tryAcquireBudget,
 } from "../src/process-budget.js";
 import type { AgentRecord } from "../src/types.js";
 import { cleanupWorktree, createWorktree } from "../src/worktree.js";
@@ -74,8 +81,8 @@ function scriptRuns(fn: typeof runAgent, body?: (run: Run) => Promise<void> | vo
   }) as any);
 }
 
-function newManager(Ctor: typeof AgentManager = AgentManager): AgentManager {
-  const manager = new Ctor(undefined, 10);
+function newManager(): AgentManager {
+  const manager = new AgentManager(undefined, 10);
   managers.push(manager);
   return manager;
 }
@@ -227,30 +234,76 @@ describe("process budget across managers", () => {
     expect(a.getRecord(aQueued)!.status).toBe("queued");
   });
 
-  it("is shared with a reloaded module instance and its manager", async () => {
+  it("does not let a synchronous completion listener jump an eligible waiter", async () => {
+    setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+    let blocker: string | undefined;
+    let newcomer: string | undefined;
+    const m = new AgentManager(record => {
+      if (record.id === blocker) newcomer = bg(m);
+    }, 10);
+    managers.push(m);
+    blocker = bg(m);
+    const waiting = bg(m);
+    await flush();
+    expect(m.getRecord(waiting)!.status).toBe("queued");
+
+    await finish(blocker);
+    expect(newcomer).toBeDefined();
+    expect(m.getRecord(waiting)!.status).toBe("running");
+    expect(m.getRecord(newcomer!)!.status).toBe("queued");
+    await finish(waiting);
+    expect(m.getRecord(newcomer!)!.status).toBe("running");
+  });
+
+  it("does not let a re-entrant grant callback jump the next eligible waiter", () => {
     setBudgetPolicy({ maxActive: 2, nestedReserve: 0, maxDepth: 1 });
-    const old = newManager();
-    const [o1] = [bg(old), bg(old)];
-    await flush();
+    const blocker = tryAcquireBudget(1)!;
+    const held = tryAcquireBudget(1)!;
+    const order: string[] = [];
+    let barged = false;
+    enqueueBudget({ depth: 1, ready: () => true, grant: lease => {
+      order.push("first");
+      releaseBudget(lease);
+      const newcomer = tryAcquireBudget(1);
+      barged = newcomer !== undefined;
+      releaseBudget(newcomer);
+    } });
+    enqueueBudget({ depth: 1, ready: () => true, grant: lease => {
+      order.push("second");
+      releaseBudget(lease);
+    } });
+    releaseBudget(blocker);
+    pumpBudget();
+    expect(order).toEqual(["first", "second"]);
+    expect(barged).toBe(false);
+    expect(budgetUsage()).toMatchObject({ active: 1, pending: 0 });
+    releaseBudget(held);
+  });
 
-    // `/reload` loads a fresh copy of every module while `old` keeps running.
-    vi.resetModules();
-    const freshBudget = await import("../src/process-budget.js");
-    const freshRunner = await import("../src/agent-runner.js");
-    const { AgentManager: FreshManager } = await import("../src/agent-manager.js");
-    expect(FreshManager).not.toBe(AgentManager);
-    scriptRuns(freshRunner.runAgent);
-    expect(freshBudget.budgetUsage()).toMatchObject({ active: 2, maxActive: 2 });
-
-    const fresh = newManager(FreshManager);
-    const f1 = bg(fresh);
-    await flush();
-    expect(fresh.getRecord(f1)!.status).toBe("queued");
-
-    // The OLD manager's settle starts the NEW manager's waiter.
-    await finish(o1);
-    expect(fresh.getRecord(f1)!.status).toBe("running");
-    expect(budgetUsage()).toMatchObject({ active: 2, pending: 0 });
+  it("shares the cap and waiters with a separately loaded copy of the budget module", () => {
+    // Compile the actual source once, then load two physical ESM files in one
+    // process. Static imports in the fixture give distinct module instances,
+    // not two references to one cached module, without keeping a source fork.
+    // Real managers' admission/release wiring is exercised by the tests above.
+    const dir = mkdtempSync(join(tmpdir(), "budget-reload-"));
+    try {
+      const source = readFileSync(new URL("../src/process-budget.ts", import.meta.url), "utf8");
+      const { outputText } = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext } });
+      writeFileSync(join(dir, "old.mjs"), outputText);
+      writeFileSync(join(dir, "fresh.mjs"), outputText);
+      // Model a reload onto the next incompatible state version, using the
+      // same source apart from its version marker, not a handwritten budget.
+      const incompatibleSource = source.replace(/const BUDGET_VERSION = (\d+);/, (_, version: string) =>
+        `const BUDGET_VERSION = ${Number(version) + 1};`);
+      expect(incompatibleSource).not.toBe(source);
+      writeFileSync(join(dir, "incompatible.mjs"), transpileModule(incompatibleSource, {
+        compilerOptions: { module: ModuleKind.ESNext },
+      }).outputText);
+      copyFileSync(new URL("./fixtures/process-budget-reload.mjs", import.meta.url), join(dir, "check.mjs"));
+      expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -427,7 +480,11 @@ describe("process budget covers every start path", () => {
     expect(m.getRecord(c2)!.status).toBe("queued");
 
     // Applied now, maxActive 2 would leave c2 behind two parents waiting on it forever.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     setBudgetPolicy({ maxActive: 2, nestedReserve: 1, maxDepth: 2 });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("change deferred until all running subagents settle"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("continuous work can delay this indefinitely"));
+    warn.mockRestore();
     expect(getBudgetPolicy().maxActive).toBe(3);
     await finish(c1);
     expect(m.getRecord(c2)!.status).toBe("running");
