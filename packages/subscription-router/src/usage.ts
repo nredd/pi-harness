@@ -428,18 +428,21 @@ export class UsageService {
 		const existing = this.inFlight.get(provider);
 		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing.read;
 		const refresh = this.fetchSnapshot(ctx, provider, now)
-			.then((outcome) => {
+			.then(async (outcome) => {
 				// A post-failure read may supersede a slow warm-up. Only the newest
 				// initiated read owns cache/backoff writes, regardless of completion order.
 				if (this.inFlight.get(provider)?.read !== refresh) {
 					// Follow only later owners, never older reads: the dependency graph
 					// is acyclic. The caller's total wait is bounded across supersessions.
 					const newer = this.inFlight.get(provider);
-					if (newer) return newer.read;
-					const cached = this.cache.get(provider);
-					if (cached?.status === "available" && cached.retrievedAt >= Math.max(now, notBefore ?? now)) {
-						return cached;
-					}
+					const latest = newer ? await newer.read : this.cache.get(provider);
+					const freshEnough = (snapshot: UsageSnapshot | undefined): snapshot is UsageSnapshot =>
+						snapshot?.status === "available" && snapshot.retrievedAt >= Math.max(now, notBefore ?? now);
+					if (freshEnough(latest)) return latest;
+					// This caller can use its exact live result, but must not overwrite
+					// the newer owner's cache or clear the newer failure's backoff.
+					if (freshEnough(outcome.snapshot)) return outcome.snapshot;
+					if (latest) return latest;
 					return errorSnapshot(
 						provider,
 						"error",

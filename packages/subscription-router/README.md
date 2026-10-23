@@ -69,6 +69,9 @@ Confirmation needs live data read after the failure: a cached or in-flight read 
 error's timestamp doesn't count, while simultaneous failures still share one request. A failed or
 backed-off read confirms nothing. If a later failure supersedes an in-flight read, earlier callers
 follow the newer read (or its fresh cached result), rather than treating supersession as failure.
+If that newer read is unavailable, an earlier caller may use its own successful snapshot started at
+or after its `notBefore` boundary. This fallback never writes shared cache or backoff state: the
+newer failure's backoff remains in force. A newer successful snapshot remains authoritative.
 Confirmation evaluates that exact returned snapshot, not a potentially different shared cache entry.
 
 Mid-run recovery: upstream doesn't retry terminal quota errors (`insufficient_quota`, billing,

@@ -65,25 +65,39 @@ describe("usage read ownership", () => {
 		});
 	});
 
-	it("never certifies a superseded response as live against a different shared snapshot", async () => {
-		let now = T0;
-		const pending: ((response: Response) => void)[] = [];
-		const service = new UsageService({
-			now: () => now,
-			getAccessToken: async () => "synthetic",
-			fetch: () => new Promise<Response>((resolve) => pending.push(resolve)),
-		});
-		const early = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
-		await vi.waitFor(() => expect(pending).toHaveLength(1));
-		now++;
-		const late = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
-		await vi.waitFor(() => expect(pending).toHaveLength(2));
-		pending[1]?.(new Response("private-response", { status: 500 }));
-		await late;
-		pending[0]?.(body(100));
-		expect(await early).toMatchObject({ status: "error", message: "Usage request was superseded by a newer read." });
-		expect(service.peek("anthropic")).toBeUndefined();
-	});
+	it.each([
+		[false, 500],
+		[true, 500],
+		[false, 429],
+		[true, 429],
+	] as const)(
+		"retains its own confirmation when the newer read fails (older first=%s, status=%s)",
+		async (olderFirst, status) => {
+			let now = T0;
+			const pending: ((response: Response) => void)[] = [];
+			const service = new UsageService({
+				now: () => now,
+				getAccessToken: async () => "synthetic",
+				fetch: () => new Promise<Response>((resolve) => pending.push(resolve)),
+			});
+			const early = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+			await vi.waitFor(() => expect(pending).toHaveLength(1));
+			now++;
+			const late = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+			await vi.waitFor(() => expect(pending).toHaveLength(2));
+			if (olderFirst) {
+				pending[0]?.(body(100));
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+			pending[1]?.(new Response("private-response", { status }));
+			await late;
+			if (!olderFirst) pending[0]?.(body(100));
+			expect(await early).toMatchObject({ status: "available", retrievedAt: T0, windows: [{ usedPercent: 100 }] });
+			expect(service.peek("anthropic")).toBeUndefined();
+			expect((await service.get(ctx, "anthropic", { force: true })).message).toContain("Backing off");
+			expect(pending).toHaveLength(2);
+		},
+	);
 
 	it.each([false, true])("follows the newer confirming read (older finishes first=%s)", async (olderFirst) => {
 		let now = T0;
@@ -103,7 +117,7 @@ describe("usage read ownership", () => {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(service.peek("anthropic")).toBeUndefined();
 		}
-		pending[1]?.(body(100));
+		pending[1]?.(body(25));
 		const newest = await late;
 		if (!olderFirst) pending[0]?.(body(100));
 		expect(await early).toBe(newest);
@@ -145,6 +159,59 @@ describe("usage read ownership", () => {
 			}
 		},
 	);
+
+	it.each([false, true])("retains its confirmation after a newer timeout (older first=%s)", async (olderFirst) => {
+		vi.useFakeTimers();
+		try {
+			let now = T0;
+			const pending: ((response: Response) => void)[] = [];
+			const service = new UsageService({
+				now: () => now,
+				getAccessToken: async () => "synthetic",
+				fetch: (_url, options) =>
+					new Promise<Response>((resolve, reject) => {
+						pending.push(resolve);
+						if (pending.length === 2) {
+							options?.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "AbortError")));
+						}
+					}),
+			});
+			const early = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+			await vi.advanceTimersByTimeAsync(0);
+			now++;
+			const late = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+			await vi.advanceTimersByTimeAsync(0);
+			if (olderFirst) pending[0]?.(body(100));
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(await late).toMatchObject({ status: "error", message: "Usage request timed out." });
+			if (!olderFirst) pending[0]?.(body(100));
+			expect(await early).toMatchObject({ status: "available", retrievedAt: T0 });
+			expect(service.peek("anthropic")).toBeUndefined();
+			expect((await service.get(ctx, "anthropic", { force: true })).message).toContain("Backing off");
+			expect(pending).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not use its own response when it predates the requested freshness boundary", async () => {
+		let now = T0;
+		const pending: ((response: Response) => void)[] = [];
+		const service = new UsageService({
+			now: () => now,
+			getAccessToken: async () => "synthetic",
+			fetch: () => new Promise<Response>((resolve) => pending.push(resolve)),
+		});
+		const early = service.get(ctx, "anthropic", { fresh: true, notBefore: T0 + 1 });
+		await vi.waitFor(() => expect(pending).toHaveLength(1));
+		now++;
+		const late = service.get(ctx, "anthropic", { fresh: true, notBefore: now });
+		await vi.waitFor(() => expect(pending).toHaveLength(2));
+		pending[1]?.(new Response(null, { status: 500 }));
+		await late;
+		pending[0]?.(body(100));
+		expect((await early).status).toBe("error");
+	});
 
 	it("evaluates the exact returned snapshot even when a later cache read disagrees", async () => {
 		let now = T0;

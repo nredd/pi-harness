@@ -10,7 +10,11 @@ import { ExhaustionTracker } from "../../src/exhaustion.js";
 import { createSubscriptionRouter } from "../../src/index.js";
 import { UsageService } from "../../src/usage.js";
 
-it("both concurrent confirmations recover through the newest read without duplicate dispatches", async () => {
+it.each([
+	{ newerFails: false, olderFirst: true },
+	{ newerFails: true, olderFirst: true },
+	{ newerFails: true, olderFirst: false },
+])("concurrent confirmation recovery without duplicate dispatches: %j", async ({ newerFails, olderFirst }) => {
 	let now = Date.parse("2030-01-01T00:00:00Z");
 	const pending: ((response: Response) => void)[] = [];
 	const waitForReads = async (count: number) => {
@@ -104,22 +108,32 @@ it("both concurrent confirmations recover through the newest read without duplic
 		now++;
 		const second = sessions[1].session.prompt("two");
 		await waitForReads(3);
-		pending[1]?.(response(100));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(b.state.callCount).toBe(0);
-		expect(usage.peek("anthropic")?.windows[0]?.usedPercent).toBe(0);
-		pending[2]?.(response(100));
+		if (olderFirst) {
+			pending[1]?.(response(100));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(b.state.callCount).toBe(0);
+			expect(usage.peek("anthropic")?.windows[0]?.usedPercent).toBe(0);
+		}
+		pending[2]?.(newerFails ? new Response(null, { status: 500 }) : response(100));
+		if (!olderFirst) {
+			await second;
+			pending[1]?.(response(100));
+		}
 		await Promise.all([first, second]);
 		expect(a.state.callCount).toBe(2);
-		expect(b.state.callCount).toBe(2);
+		expect(b.state.callCount).toBe(newerFails ? 1 : 2);
+		if (newerFails) {
+			expect(usage.peek("anthropic")).toMatchObject({ status: "stale", windows: [{ usedPercent: 0 }] });
+			expect((await usage.get({} as never, "anthropic", { force: true })).message).toContain("Backing off");
+		}
 		expect(pending).toHaveLength(3);
 		expect(tracker.active()).toHaveLength(1);
-		for (const harness of sessions) {
+		for (const [index, harness] of sessions.entries()) {
 			expect(
 				harness
 					.eventsOfType("message_end")
 					.filter((event) => event.message.role === "assistant" && event.message.provider === "local"),
-			).toHaveLength(1);
+			).toHaveLength(newerFails && index === 1 ? 0 : 1);
 		}
 	} finally {
 		for (const harness of sessions) harness.cleanup();
