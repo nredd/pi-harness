@@ -8,6 +8,7 @@ import { type Clock, realClock } from "../clock.ts";
 import type { KitConfig } from "../config.ts";
 import { say } from "../output.ts";
 import { StatsView, summary } from "./component.ts";
+import { freshnessLines } from "./freshness.ts";
 import type { Loaded } from "./load.ts";
 import { type Combined, coverageLabel, loadCombined } from "./snapshot.ts";
 
@@ -52,19 +53,20 @@ export function register(
 
 			const damage = [...problems(loaded), ...loaded.coverage.problems.map((p) => `/stats: ${p}`)];
 			const coverage = coverageLabel(loaded.coverage);
+			const freshness = freshnessLines(loaded.coverage, clock.now());
 			if (!tui) {
 				say(
 					pi,
 					ctx,
 					MESSAGE_TYPE,
-					[summary(loaded.calls.filter((c) => c.ms <= clock.now())), coverage, ...damage].join("\n"),
+					[summary(loaded.calls.filter((c) => c.ms <= clock.now())), coverage, ...freshness, ...damage].join("\n"),
 					"info",
 				);
 				return;
 			}
 			for (const line of damage) ctx.ui.notify(line, "warning");
 			if (loaded.calls.length === 0) {
-				ctx.ui.notify(`/stats: no usage recorded yet\n${coverage}`, "info");
+				ctx.ui.notify(`/stats: no usage recorded yet\n${coverage}\n${freshness.join("\n")}`, "info");
 				return;
 			}
 			const { calls, sessions, badLines } = loaded;
@@ -75,6 +77,7 @@ export function register(
 						sessions,
 						badLines,
 						coverage,
+						freshness,
 						now: clock.now(),
 						theme,
 						rows: () => tuiHost.terminal.rows,

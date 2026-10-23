@@ -126,7 +126,7 @@ it("copies/forks across machines count once, while fresh local calls and childre
 	expect(result.coverage.machines).toBe(3);
 	seed(viewer, [usage("entry-2", at("2026-10-02"), 20), usage("fresh-local", at("2026-10-03"), 40)]);
 	expect((await loadCombined(viewer)).calls.map((c) => c.input)).toEqual([10, 20, 30, 40]);
-	expect(coverageLabel(result.coverage)).toContain("last remote sync");
+	expect(coverageLabel(result.coverage)).toContain("viewer last import");
 	const own = await exportStats(viewer, repo);
 	const ownManifest = JSON.parse(readFileSync(join(own.snapshotDir, "manifest.json"), "utf8"));
 	const sessions = ownManifest.shards.flatMap(
@@ -237,7 +237,7 @@ it("failed first import remains never-synced and failed subsequent import does n
 	const first = await importStats(viewer, repo);
 	expect(first.problems.length).toBeGreaterThan(0);
 	expect(first.importedAt).toBe(0);
-	expect(coverageLabel((await loadCombined(viewer)).coverage)).toContain("never synced");
+	expect(coverageLabel((await loadCombined(viewer)).coverage)).toContain("viewer never imported");
 	seed(a);
 	const out = await exportStats(a, repo);
 	const successful = await importStats(viewer, repo);

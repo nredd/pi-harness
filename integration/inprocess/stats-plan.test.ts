@@ -21,7 +21,7 @@ afterEach(async () => {
 	await home?.cleanup();
 });
 
-/** Both real tabs retain hourly axes through scrolling, then return to Overview's totals. */
+/** Chart tabs retain hourly axes; Machines shows freshness before returning to Overview. */
 async function hourlyTabs(): Promise<void> {
 	await fixture.key("j".repeat(40));
 	chart(layout(fixture));
@@ -31,6 +31,9 @@ async function hourlyTabs(): Promise<void> {
 	expect(layout(fixture)).toContain("Tokens per hour");
 	for (const key of ["\x1b[B", "\x1b[A", "j", "k"]) await fixture.key(key);
 	layout(fixture);
+	await fixture.key("\t");
+	expect(layout(fixture)).toContain("Viewer last import:");
+	expect(layout(fixture)).toContain("Local scan complete at opening");
 	await fixture.key("\t");
 	await fixture.key("k".repeat(60));
 	expect(layout(fixture)).toContain("Total tokens ");
@@ -69,7 +72,7 @@ it("combined snapshots remain available in Plan mode", async () => {
 	const shown = layout(fixture);
 	expect(shown).toMatch(/Total tokens +624\b/);
 	expect(shown).toMatch(/\b3 machines\b/);
-	expect(shown).toMatch(/last remote sync|remote sync|last sync/i);
+	expect(shown).toContain("viewer last import");
 	expect(shown).not.toMatch(/local.only|never.synced/i);
 	for (const [total, anthropic, codex] of [
 		[156, 52, 104],
