@@ -17,6 +17,11 @@ Current status is [here](PLAN.md); the original migration plan and its supersede
 Every migration PR requires separate Standards and Spec reviewer subagents against its final HEAD,
 including documentation, fork, dotfiles, and automated promotion changes.
 
+`packages/resource-sampler` is the Pi-independent `@nredd/pi-resource-sampler` ESM library for
+bounded, privacy-safe interval host sampling. It has no Pi entrypoint or runtime dependencies.
+Its [README](packages/resource-sampler/README.md) defines CPU/coverage semantics and Darwin's
+explicit process-CPU precision limitation. No consumer migration or publication is included.
+
 Layout:
 
 - `packages/`: independently versioned plugins and optional preset, including imported `@nredd/pi-computer-use`. Its packed contract proves stock-Pi loading and the model-visible tool surface; native desktop behavior is explicitly NOT RUN without an interactive macOS TCC-granted session.
@@ -64,11 +69,17 @@ make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, s
 make check-todo-package-contract # explicit: packed todo tool through stock Pi 1.3.0
 ```
 
+On macOS, keep the host awake for the entire gate, e.g. `/usr/bin/caffeinate -is make check`
+on AC power. The assertion ends with the command and does not change power settings. Check
+current CPU/memory pressure and concurrent builds before starting; a low load average alone
+is not enough. Closed-lid maintenance sleep can suspend lifecycle timers for seconds or minutes,
+so check `powerd` sleep/wake logs when real-time assertions overrun. Do not relax their deadlines.
+
 `make check` runs, without rewriting files:
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
   `integration/inprocess/` stack suite under Vitest and Bun (published packages:
-  `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.6.0`,
+  `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.7.0`,
   `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`; `@nredd/pi-todo@2.13.10` is pending its first CI-attested release)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract

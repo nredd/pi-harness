@@ -12,6 +12,12 @@ The publish job alone requests a short-lived npm OIDC identity.
 | `stack (ubuntu-24.04, macos-14; personal, local)` | Node release-bundle D/E scenarios in each cell; each personal cell also builds the core Gitlink with Bun and runs standalone D/E for both stacks | Only `stack (ubuntu-24.04, personal)` runs, including both standalone stacks; the other three required job names log the selective smoke | Every cell reports success after the classifier logs the bypass | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 | `bench (not run)` | a notice and a step summary | Same | Same | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
 
+The resource sampler's package gate runs real host sampling and bounded helper cleanup in each
+`owned` OS cell. `check-package-contracts` also builds/audits/installs its exact ESM tarball and
+runs an isolated Node consumer in each `contracts` OS cell. This library has no Pi entrypoint;
+Darwin process CPU is explicitly unavailable because `ps` start identity has one-second precision.
+No consumer migration, publication, extra CI job or runner is added.
+
 ## Capacity controls
 
 `classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all eight required matrix jobs start and report a terminal status. A docs-only change skips their expensive steps, and every skipped job writes a notice plus a step summary containing the changed-file list. Each job's `plan` step emits `run=true` or `run=false`, logs the changed files when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates.
