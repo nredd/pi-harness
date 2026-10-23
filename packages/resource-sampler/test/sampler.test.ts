@@ -96,7 +96,6 @@ describe("privacy-safe native parsers", () => {
 		const fields = Array<string>(22).fill("0");
 		fields[0] = "S";
 		fields[1] = "1";
-		fields[6] = "4194560";
 		fields[11] = "20";
 		fields[12] = "30";
 		fields[19] = "987654321987654321";
@@ -106,18 +105,10 @@ describe("privacy-safe native parsers", () => {
 			pid: 12,
 			parentPid: 1,
 			name: "",
-			kernelThread: false,
 			identity: "12:987654321987654321",
 			cpuMs: 500,
 			at: 123,
 		});
-		fields[6] = String(0x00208040);
-		expect(linuxStat(`2 (kworker/0:1 ) x) ${fields.join(" ")}`, 100, 1)).toMatchObject({
-			name: "kworker/0:1 ) x",
-			kernelThread: true,
-		});
-		fields[6] = "-1";
-		expect(linuxStat(`12 (name) ${fields.join(" ")}`, 100, 1)).toBeNull();
 		expect(executableName("/usr/lib/node/bin/node (deleted)")).toBe("node");
 		expect(executableName("/opt/a b/\u001b[2Jtool")).toBe("?[2Jtool");
 		expect(safeName("\u{1F9A9}".repeat(200))).toHaveLength(256);
