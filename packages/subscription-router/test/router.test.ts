@@ -1,4 +1,4 @@
-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import { type Api, fauxAssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { ChainEntry, Profile } from "../src/config.js";
@@ -72,7 +72,7 @@ function request(overrides: Partial<ModelRouteRequest> = {}): ModelRouteRequest 
 function failure(entry: ChainEntry, errorMessage: string): ModelRouteRequest["failed"] {
 	return {
 		model: model(entry),
-		message: { role: "assistant", stopReason: "error", errorMessage, timestamp: T0 } as AssistantMessage,
+		message: fauxAssistantMessage([], { stopReason: "error", errorMessage, timestamp: T0 }),
 	};
 }
 

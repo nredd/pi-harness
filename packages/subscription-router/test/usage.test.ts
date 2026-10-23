@@ -338,11 +338,15 @@ describe("UsageService", () => {
 		expect(service.decisionFor({ provider: "openai-codex", id: "gpt-5-codex" }).block).toBe(false);
 	});
 
-	it("marks providers without a collector unavailable", async () => {
-		const { service, requests } = harness([{ body: {} }]);
-		expect((await service.get(ctx, "openrouter")).status).toBe("unavailable");
-		expect(requests).toHaveLength(0);
-	});
+	it.each(["openrouter", "__proto__", "constructor", "toString"])(
+		"does not resolve credentials for unknown collector %s",
+		async (provider) => {
+			const { service, requests, tokens } = harness([{ body: {} }]);
+			expect((await service.get(ctx, provider)).status).toBe("unavailable");
+			expect(requests).toHaveLength(0);
+			expect(tokens).toHaveLength(0);
+		},
+	);
 
 	it("renders prompt text in stable buckets", async () => {
 		const render = async (utilization: number) => {
@@ -407,6 +411,27 @@ describe("UsageService", () => {
 		const snapshot = await service.get(ctx, "anthropic");
 		expect(snapshot.status).toBe("error");
 		expect(snapshot.message).toBe("OAuth credential lookup failed.");
+	});
+
+	it("bounds a stalled credential owner without implementing OAuth refresh itself", async () => {
+		vi.useFakeTimers();
+		try {
+			const lookup = vi.fn(() => new Promise<string>(() => {}));
+			const fetch = vi.fn();
+			const service = new UsageService({ fetch, now: () => T0, getAccessToken: lookup });
+			let result: Awaited<ReturnType<UsageService["get"]>> | undefined;
+			const pending = service.get(ctx, "anthropic").then((snapshot) => {
+				result = snapshot;
+			});
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(result).toMatchObject({ status: "error", message: "OAuth credential lookup timed out." });
+			await pending;
+			expect(fetch).not.toHaveBeenCalled();
+			await service.get(ctx, "anthropic");
+			expect(lookup).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("reports caller cancellation separately from a request timeout", async () => {

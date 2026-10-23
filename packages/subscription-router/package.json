@@ -19,8 +19,8 @@
     "typebox": "*"
   },
   "scripts": {
-    "lint": "biome check src/ test/ e2e/",
-    "format": "biome check --write src/ test/ e2e/",
+    "lint": "biome check src/ test/",
+    "format": "biome check --write src/ test/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:bun": "bun test test/scenarios",

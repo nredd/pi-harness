@@ -30,6 +30,13 @@ export function isQuotaError(message: Pick<AssistantMessage, "stopReason" | "err
 	return message.stopReason === "error" && QUOTA_ERROR_PATTERN.test(message.errorMessage ?? "");
 }
 
+/** A failed stream with output cannot be transparently replayed without duplicating visible output. */
+export function hasPartialOutput(message: Pick<AssistantMessage, "content">): boolean {
+	return message.content.some(
+		(part) => part.type === "toolCall" || (part.type === "text" ? part.text.length > 0 : part.thinking.length > 0),
+	);
+}
+
 /** What the router needs from the host. `ExtensionContext` provides it in production. */
 export interface RouteEnv {
 	/** The physical model for a chain entry, or undefined when unknown or without credentials. */
@@ -210,6 +217,9 @@ export class Router {
 		request.signal?.throwIfAborted();
 		const { reason, previous, failed } = request;
 		if (reason === "retry" && failed) {
+			if (hasPartialOutput(failed.message)) {
+				throw new Error("subscription-router: refusing to replay a partial response; retry explicitly.");
+			}
 			const entry = profile.chain.find((item) => sameModel(item, failed.model));
 			if (entry) {
 				const confirmed =

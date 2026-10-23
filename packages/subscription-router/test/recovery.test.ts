@@ -56,6 +56,7 @@ function settle(tail: ProjectedSessionEntry): Pick<AgentBeforeSettleEvent, "entr
 function quotaError(chain: ChainEntry, text = "insufficient_quota"): ProjectedSessionEntry {
 	return entry("a1", {
 		role: "assistant",
+		content: [],
 		provider: chain.provider,
 		model: chain.id,
 		stopReason: "error",
