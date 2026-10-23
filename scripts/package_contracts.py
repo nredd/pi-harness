@@ -39,13 +39,17 @@ import logging
 import os
 import re
 import secrets
+import selectors
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -163,6 +167,141 @@ RESOURCE_SAMPLER_FILES = (
 )
 # Exact published release consumers install from the registry; never a range, workspace or file spec.
 RESOURCE_SAMPLER_VERSION = "0.1.1"
+# The hostile child puts a random secret in argv[0], its process title and (Linux) comm.
+SAMPLER_HOSTILE_CHILD = """process.title = process.env.S;
+if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
+console.log('ready'); setInterval(() => {}, 1000);"""
+# Every process the library can bound, so a busy host fails with explicit coverage, never a silent pass.
+SAMPLER_PROBE_BOUNDS = {"maxDurationMs": 5000, "maxPids": 16384, "maxBytes": 16_777_216}
+SAMPLER_PROBE_BODY = """
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+const STOP_MS = 2000;
+const exited = child => child.exitCode !== null || child.signalCode !== null;
+// Wait for this exact ChildProcess's reaped exit status, never a PID probe that reuse could fool.
+async function exitedWithin(child, ms) {
+    if (exited(child)) return true;
+    const timer = new AbortController();
+    try {
+        const exit = once(child, 'exit').then(() => true);
+        return await Promise.race([exit, delay(ms, false, {signal: timer.signal})]);
+    } finally { timer.abort(); }
+}
+// SIGTERM, bounded wait, then SIGKILL and one more bounded wait, like integration/inprocess/support.ts.
+async function stop(child) {
+    if (child.pid === undefined || exited(child)) return;
+    child.kill('SIGTERM');
+    if (await exitedWithin(child, STOP_MS)) return;
+    child.kill('SIGKILL');
+    if (!(await exitedWithin(child, STOP_MS))) throw new Error(`hostile child ${child.pid} survived SIGKILL`);
+}
+function ready(child, ms) {
+    return new Promise((resolve, reject) => {
+        let output = '';
+        const finish = error => {
+            clearTimeout(timer);
+            child.stdout.off('data', data);
+            child.off('exit', exit);
+            child.off('error', finish);
+            if (error) reject(error); else resolve();
+        };
+        const data = chunk => { output += chunk; if (output.includes('ready\\n')) finish(); };
+        const exit = () => finish(new Error('hostile child exited before readiness'));
+        const timer = setTimeout(() => finish(new Error(`hostile child not ready within ${ms} ms`)), ms);
+        child.stdout.on('data', data);
+        child.once('exit', exit);
+        child.once('error', finish);
+    });
+}
+const message = error => (error instanceof Error ? error.message : String(error));
+// Run `body`, then always reap the child; a cleanup failure is reported with, never instead of, `body`'s.
+async function supervise(child, body) {
+    let failure;
+    try { await body(); } catch (error) { failure = {error}; }
+    try { await stop(child); } catch (cleanup) {
+        if (!failure) throw cleanup;
+        const text = `${message(failure.error)}; cleanup also failed: ${message(cleanup)}`;
+        throw new AggregateError([failure.error, cleanup], text);
+    } finally {
+        const status = child.signalCode ?? child.exitCode;
+        const pid = child.pid ?? 'never spawned';
+        console.error(exited(child) ? `hostile child reaped: ${status}` : `hostile child ${pid} not reaped`);
+    }
+    if (failure) throw failure.error;
+}
+const secret = randomBytes(16).toString('hex');
+const hostile = spawn(process.execPath, ['-e', CHILD_SCRIPT], {
+    argv0: DISGUISE ? secret : process.execPath, env: {S: secret}, stdio: ['ignore', 'pipe', 'ignore'],
+});
+// Everything after spawn runs inside `supervise`, so readiness or negative-control failures still reap it.
+await supervise(hostile, async () => {
+    await ready(hostile, READY_MS);
+    // Negative control: the 0.1.0 name source (Darwin `ps -c` comm, Linux comm) really carries the secret.
+    const legacy = process.platform === 'linux'
+        ? readFileSync(`/proc/${hostile.pid}/comm`, 'utf8').trim() === secret.slice(0, 15)
+        : execFileSync('/bin/ps', ['-c', '-o', 'comm=', '-p', `${hostile.pid}`], {timeout: STOP_MS})
+            .toString().includes(secret);
+    assert.ok(legacy, 'hostile child does not expose the secret through the 0.1.0 name source');
+    const { createResourceSampler } = await import('@nredd/pi-resource-sampler');
+    const sampler = createResourceSampler(BOUNDS);
+    try {
+        const first = await sampler.sample();
+        assert.equal(first.cpu.state, 'warming');
+        await delay(60);
+        const second = await sampler.sample();
+        assert.equal(second.cpu.state, 'available');
+        assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
+        const coverage = JSON.stringify(second.coverage);
+        const seen = pid => second.processes.some(p => p.pid === pid);
+        assert.ok(seen(process.pid), `probe not observed within bounds: ${coverage}`);
+        assert.ok(seen(hostile.pid), `hostile child not observed within bounds: ${coverage}`);
+        // Every 12-char window: shorter than Linux comm (15 bytes) and Darwin p_comm (16 bytes) fragments.
+        const text = JSON.stringify([first, second]);
+        for (let i = 0; i + 12 <= secret.length; i++)
+            assert.ok(!text.includes(secret.slice(i, i + 12)), 'process names expose argv, title or comm');
+        const controller = new AbortController();
+        controller.abort();
+        await assert.rejects(sampler.sample(controller.signal));
+    } finally { await sampler.dispose(); }
+    await assert.rejects(sampler.sample(), /disposed/);
+});
+"""
+
+
+def resource_sampler_probe(
+    child_script: str = SAMPLER_HOSTILE_CHILD, *, disguise: bool = True, ready_ms: int = 5000
+) -> str:
+    """Build the installed-library probe around one disposable child.
+
+    The defaults are the shipped contract. Tests inject a silent, an exiting, an undisguised and a
+    SIGTERM-ignoring child to prove readiness and negative-control failures still reap it.
+
+    Parameters:
+        child_script (str): Node program the child evaluates; it prints `ready` once observable.
+        disguise (bool): Whether the child's argv[0] is the secret rather than the Node executable.
+        ready_ms (int): Readiness bound in milliseconds.
+
+    Returns:
+        str: ESM program for `node --input-type=module -e`.
+
+    Raises:
+        ValueError: If `ready_ms` is not positive.
+    """
+    if ready_ms <= 0:
+        raise ValueError(f"`ready_ms` must be positive: '{ready_ms}'")
+    config = (
+        f"const CHILD_SCRIPT = {json.dumps(child_script)};\n"
+        f"const DISGUISE = {json.dumps(disguise)};\n"
+        f"const READY_MS = {ready_ms};\n"
+        f"const BOUNDS = {json.dumps(SAMPLER_PROBE_BOUNDS)};\n"
+    )
+    return config + SAMPLER_PROBE_BODY
+
+
 RESOURCE_SAMPLER_CONTRACT = PackageContract(
     name="@nredd/pi-resource-sampler",
     directory="resource-sampler",
@@ -171,49 +310,7 @@ RESOURCE_SAMPLER_CONTRACT = PackageContract(
     exposes_tools=frozenset(),
     packed_files=RESOURCE_SAMPLER_FILES,
     library=True,
-    node_probe="""
-import assert from 'node:assert/strict';
-import { setTimeout } from 'node:timers/promises';
-import { execFileSync, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { createResourceSampler } from '@nredd/pi-resource-sampler';
-// argv[0], process title and Linux comm all carry a random secret that names must never expose.
-const secret = randomBytes(16).toString('hex');
-const hostile = spawn(process.execPath, ['-e', `process.title = process.env.S;
-if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
-console.log('ready'); setInterval(() => {}, 1000);`], {
-    argv0: secret, env: {S: secret}, stdio: ['ignore', 'pipe', 'ignore'],
-});
-await new Promise((resolve, reject) => {
-    hostile.stdout.once('data', resolve);
-    hostile.once('exit', reject);
-});
-// Negative control: the 0.1.0 name source (Darwin `ps -c` comm, Linux comm) really carries the secret.
-const legacy = process.platform === 'linux'
-    ? readFileSync(`/proc/${hostile.pid}/comm`, 'utf8').trim() === secret.slice(0, 15)
-    : execFileSync('/bin/ps', ['-c', '-o', 'comm=', '-p', `${hostile.pid}`]).toString().includes(secret);
-assert.ok(legacy, 'hostile child does not expose the secret through the 0.1.0 name source');
-const sampler = createResourceSampler({maxDurationMs: 2000});
-try {
-    const first = await sampler.sample();
-    assert.equal(first.cpu.state, 'warming');
-    await setTimeout(60);
-    const second = await sampler.sample();
-    assert.equal(second.cpu.state, 'available');
-    assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
-    assert.ok(second.processes.some(p => p.pid === process.pid));
-    assert.ok(second.processes.some(p => p.pid === hostile.pid));
-    // Every 12-char window: shorter than Linux comm (15 bytes) and Darwin p_comm (16 bytes) fragments.
-    const text = JSON.stringify([first, second]);
-    for (let i = 0; i + 12 <= secret.length; i++)
-        assert.ok(!text.includes(secret.slice(i, i + 12)), 'process names expose argv, title or comm');
-    const controller = new AbortController();
-    controller.abort();
-    await assert.rejects(sampler.sample(controller.signal));
-} finally { hostile.kill('SIGKILL'); await sampler.dispose(); }
-await assert.rejects(sampler.sample(), /disposed/);
-""",
+    node_probe=resource_sampler_probe(),
 )
 
 # Compiled, Pi-independent `@nredd/` libraries a plugin may import, mapped to the ONE exact registry
@@ -1150,6 +1247,7 @@ def run(
     cwd: Path,
     timeout: int,
     check: bool = True,
+    own_group: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run an absolute-path command without a shell.
 
@@ -1159,6 +1257,9 @@ def run(
         cwd (Path): Working directory.
         timeout (int): Seconds before the child is killed.
         check (bool): Raise `ContractError` on a nonzero exit.
+        own_group (bool): Run through `run_own_group`, so a Python-level timeout or
+            `KeyboardInterrupt` kills the child's whole process group while its leader is
+            unreaped. Default `subprocess.run` kills only the child.
 
     Returns:
         subprocess.CompletedProcess[str]: Captured text output.
@@ -1170,16 +1271,19 @@ def run(
     if not Path(argv[0]).is_absolute():
         raise ValueError(f"Executable must be an absolute path: '{argv[0]}'")
     try:
-        done = subprocess.run(
-            argv,
-            env=env,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
+        if own_group:
+            done = run_own_group(argv, env=env, cwd=cwd, timeout=timeout)
+        else:
+            done = subprocess.run(
+                argv,
+                env=env,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
     except subprocess.TimeoutExpired as e:
         raise ContractError(f"`{' '.join(argv[:3])}` timed out after {timeout}s") from e
     if check and done.returncode != 0:
@@ -1188,6 +1292,55 @@ def run(
             f"stdout: {done.stdout[-2000:]}\nstderr: {done.stderr[-2000:]}"
         )
     return done
+
+
+def run_own_group(
+    argv: list[str], *, env: dict[str, str], cwd: Path, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    """Run `argv` as the leader of a new session; on timeout or interruption kill its whole group.
+
+    The group is signalled only while the leader is unreaped (`returncode` unset, read without a
+    `poll` that could reap it): until then its pid, the group id, cannot be reused, like
+    `integration/harness/headless.py` `kill_process_group`. If `communicate` already reaped the
+    leader (its SIGINT grace wait can), the id may be reused, so nothing is signalled and the
+    original exception says so, and surviving members may outlive the gate. Members left after a
+    normal exit are the program's own job. Only exceptions raised in this process run the cleanup:
+    a SIGTERM or SIGHUP without a Python handler, or a SIGKILL, ends the gate with no cleanup and
+    the group may outlive it.
+
+    Parameters:
+        argv (list[str]): Argument vector; `argv[0]` is absolute.
+        env (dict[str, str]): Complete child environment.
+        cwd (Path): Working directory.
+        timeout (int): Seconds before the group is killed.
+
+    Returns:
+        subprocess.CompletedProcess[str]: Captured text output.
+
+    Raises:
+        subprocess.TimeoutExpired: After the group was killed and the leader reaped.
+    """
+    with subprocess.Popen(
+        argv,
+        env=env,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException as e:
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            else:
+                e.add_note(f"process group {process.pid} not signalled: its leader was already reaped")
+            raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def locate_tools() -> Tools:
@@ -2842,7 +2995,58 @@ def kernel_executable_names(node: Path) -> set[str]:
     return {name.encode()[:16].decode(errors="ignore") for name in (node.name, resolved)}
 
 
-def start_hostile_child(ctx: Context, project: Path, secret: str) -> subprocess.Popen[bytes]:
+def wait_hostile_ready(child: subprocess.Popen[bytes], timeout: float) -> None:
+    """Read a bounded readiness line without blocking on a silent or partial-line child.
+
+    Parameters:
+        child (subprocess.Popen[bytes]): Child with piped stdout, owned by the caller.
+        timeout (float): Maximum readiness wait in seconds.
+
+    Raises:
+        ContractError: If readiness times out, stdout closes or its line is malformed.
+    """
+    assert child.stdout is not None
+    deadline = time.monotonic() + timeout
+    output = b""
+    with selectors.DefaultSelector() as selector:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        while b"\n" not in output:
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, "hostile marker child readiness timed out")
+            require(bool(selector.select(remaining)), "hostile marker child readiness timed out")
+            chunk = os.read(child.stdout.fileno(), 1024)
+            require(bool(chunk), "hostile marker child exited before readiness")
+            output += chunk
+            require(len(output) <= 1024, "hostile marker child readiness line is too long")
+    require(output.split(b"\n", 1)[0] == b"ready", "hostile marker child readiness is malformed")
+
+
+def stop_hostile_child(child: subprocess.Popen[bytes]) -> None:
+    """Kill and reap the owned marker child within two seconds and close its pipe.
+
+    Parameters:
+        child (subprocess.Popen[bytes]): Marker child owned by this gate.
+
+    Raises:
+        subprocess.TimeoutExpired: If the exact child survives SIGKILL for two seconds.
+    """
+    try:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=2)
+    finally:
+        if child.stdout is not None:
+            child.stdout.close()
+
+
+def start_hostile_child(
+    ctx: Context,
+    project: Path,
+    secret: str,
+    *,
+    script: str = SAMPLER_HOSTILE_CHILD,
+    ready_timeout: float = 5,
+) -> subprocess.Popen[bytes]:
     """Start an idle `node` child whose argv[0], process title and Linux comm hold `secret`.
 
     Negative control: the sampler 0.1.0 name source (Darwin `ps -c` comm, Linux `/proc/PID/comm`) must
@@ -2852,19 +3056,15 @@ def start_hostile_child(ctx: Context, project: Path, secret: str) -> subprocess.
         ctx (Context): Scenario context.
         project (Path): Working directory.
         secret (str): Random marker secret.
+        script (str): Child script, injectable for real startup-failure tests.
+        ready_timeout (float): Maximum startup wait in seconds.
 
     Returns:
-        subprocess.Popen[bytes]: The running child; the caller kills it.
+        subprocess.Popen[bytes]: The running child; the caller uses `stop_hostile_child`.
 
     Raises:
         ContractError: If the child does not start or the legacy source does not show the secret.
     """
-    script = (
-        "process.title = process.env.S;"
-        "if (process.platform === 'linux')"
-        " require('node:fs').writeFileSync('/proc/self/comm', process.env.S);"
-        "console.log('ready'); setInterval(() => {}, 1 << 30);"
-    )
     child = subprocess.Popen(
         [secret, "-e", script],
         executable=str(ctx.sandbox.tools.node),
@@ -2874,10 +3074,8 @@ def start_hostile_child(ctx: Context, project: Path, secret: str) -> subprocess.
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
-    assert child.stdout is not None  # `stdout=PIPE` above.
-    ready = child.stdout.readline()
     try:
-        require(ready.strip() == b"ready", f"hostile marker child did not start: {ready!r}")
+        wait_hostile_ready(child, ready_timeout)
         if sys.platform.startswith("linux"):
             legacy = Path(f"/proc/{child.pid}/comm").read_text().strip() == secret[:15]
         else:
@@ -2890,8 +3088,7 @@ def start_hostile_child(ctx: Context, project: Path, secret: str) -> subprocess.
             legacy = secret in ps.stdout
         require(legacy, "hostile marker child does not expose its secret through the 0.1.0 name source")
     except BaseException:
-        child.kill()
-        child.wait(timeout=30)
+        stop_hostile_child(child)
         raise
     return child
 
@@ -2990,8 +3187,7 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
         with ctx.provider_session(script):
             ok = run_pi(ctx.pi_bin, ctx.sandbox, ctx.installed, project, argv)
     finally:
-        child.kill()
-        child.wait(timeout=30)
+        stop_hostile_child(child)
     require_clean_run(ok, "dev-tools resource_snapshot")
     record = ok.single_tool_result("resource_snapshot")
     require(not tool_is_error(record), f"resource_snapshot failed: {tool_text(record)}")
@@ -3840,6 +4036,7 @@ def run_audit_gate(
             env=sandbox.env(),
             cwd=work / "install",
             timeout=30,
+            own_group=True,
         )
     return {
         "name": contract.name,
