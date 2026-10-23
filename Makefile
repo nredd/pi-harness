@@ -31,7 +31,8 @@ check-probes:  ## Probes (process-lifecycle, stack-resources) Biome + strict tsc
 	node --test integration/probes/transcript-types.test.ts integration/probes/process-lifecycle.test.ts
 
 check-import-audit:  ## Import-audit helper Biome + strict tsc, then node --test against the real TypeScript parser
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/import_audit.ts scripts/import_audit.test.ts
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs
+	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
 	node --test scripts/import_audit.test.ts
 

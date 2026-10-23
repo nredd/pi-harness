@@ -126,7 +126,8 @@ function timestamp(value: unknown): number | undefined {
 	}
 	const raw = finiteNumber(value);
 	if (raw === undefined) return undefined;
-	return raw < SECONDS_VS_MS_THRESHOLD ? raw * 1000 : raw;
+	const ms = raw < SECONDS_VS_MS_THRESHOLD ? raw * 1000 : raw;
+	return Number.isNaN(new Date(ms).getTime()) ? undefined : ms;
 }
 
 function percentage(value: unknown): number | undefined {
@@ -304,6 +305,7 @@ export class UsageService {
 	 */
 	async get(ctx: ExtensionContext, provider: string, options: UsageGetOptions = {}): Promise<UsageSnapshot> {
 		const now = this.transport.now();
+		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
 		const cached = this.cache.get(provider);
 		const force = options.force === true;
 		if (!force && cached?.status === "available") {
@@ -322,14 +324,8 @@ export class UsageService {
 			}
 			this.lastManualRefreshAt.set(provider, now);
 		}
-		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
 		const snapshot = await waitForCaller(this.refresh(ctx, provider, now, options.notBefore), options.signal);
 		if (!snapshot) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
-		if (snapshot.status !== "available" && cached) {
-			const stale = this.withStale(cached, provider, now, snapshot.message);
-			this.cache.set(provider, stale);
-			return stale;
-		}
 		return snapshot;
 	}
 
@@ -427,11 +423,29 @@ export class UsageService {
 		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing.read;
 		const refresh = this.fetchSnapshot(ctx, provider, now)
 			.then((outcome) => {
+				// A post-failure read may supersede a slow warm-up. Only the newest
+				// initiated read owns cache/backoff writes, regardless of completion order.
+				if (this.inFlight.get(provider)?.read !== refresh) {
+					// Confirmation consults the shared cache after get(). Do not certify
+					// an unstored response against another read's (possibly stale) state.
+					return errorSnapshot(
+						provider,
+						"error",
+						this.transport.now(),
+						"Usage request was superseded by a newer read.",
+					);
+				}
 				if (outcome.snapshot.status === "available") {
 					this.cache.set(provider, outcome.snapshot);
 					this.backoff.delete(provider);
 				} else if (outcome.failed) {
 					this.recordFailure(provider, outcome.retryAfterMs);
+				}
+				const cached = this.cache.get(provider);
+				if (outcome.snapshot.status !== "available" && cached) {
+					const stale = this.withStale(cached, provider, this.transport.now(), outcome.snapshot.message);
+					this.cache.set(provider, stale);
+					return stale;
 				}
 				return outcome.snapshot;
 			})
@@ -454,13 +468,28 @@ export class UsageService {
 			snapshot: errorSnapshot(provider, status, now, message),
 			failed: false,
 		});
-		const collector = COLLECTORS[provider];
+		const collector = Object.hasOwn(COLLECTORS, provider) ? COLLECTORS[provider] : undefined;
 		if (!collector) return unfetched("unavailable", "No subscription usage collector exists for this provider.");
 		let token: string | undefined;
+		const lookupTimedOut = Symbol("credential lookup timeout");
+		let lookupTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			token = await this.transport.getAccessToken(ctx, provider);
+			// Core owns refresh/persistence. Bound only our wait; its API has no
+			// cancellation parameter, so a late owner result is ignored, not aborted.
+			const result = await Promise.race([
+				this.transport.getAccessToken(ctx, provider),
+				new Promise<typeof lookupTimedOut>((resolve) => {
+					lookupTimer = setTimeout(() => resolve(lookupTimedOut), REQUEST_TIMEOUT_MS);
+				}),
+			]);
+			if (result === lookupTimedOut) {
+				return { ...unfetched("error", "OAuth credential lookup timed out."), failed: true };
+			}
+			token = result;
 		} catch {
 			return unfetched("error", "OAuth credential lookup failed.");
+		} finally {
+			clearTimeout(lookupTimer);
 		}
 		if (!token) return unfetched("unavailable", "No OAuth credential is available for this provider.");
 		if (collector.acceptsToken?.(token) === false) {
