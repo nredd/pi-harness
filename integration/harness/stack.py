@@ -396,6 +396,94 @@ def stack_digest(path: Path) -> str:
     return hashlib.sha256(canonical_stack_bytes(load_stack(path))).hexdigest()
 
 
+def install_overrides(stack: Stack, package: str | PackageSource) -> dict[str, str]:
+    """Return the npm environment one `pi install` of a declared source needs.
+
+    A disabled extension is still installed, but without lifecycle scripts: its native helper
+    must never be built or launched implicitly.
+
+    Parameters:
+        stack (Stack): validated exclusion policy.
+        package (str | PackageSource): declared stack entry.
+
+    Returns:
+        dict[str, str]: environment additions, empty for an enabled source.
+    """
+    if source_string(package) in stack.disabled_extensions:
+        return {"npm_config_ignore_scripts": "true"}
+    return {}
+
+
+def package_declarations(stack: Stack, sources: list[str]) -> list[str | dict[str, Any]]:
+    """Return the `settings.json` `packages` entries that reproduce a stack, in stack order.
+
+    `pi install` accepts a source string and persists its own declaration. The stack's exact
+    object is restored afterward: Pi, not the installer, interprets filters. `exclude_unset`
+    preserves omitted (inherit) versus `[]` (disable) resource kinds. A disabled extension
+    stays installed and declared, with `extensions: []` so Pi never loads it.
+
+    Parameters:
+        stack (Stack): validated filters and exclusions.
+        sources (list[str]): resolved install arguments, one per `stack.sources` entry.
+
+    Returns:
+        list[str | dict[str, Any]]: declarations for Pi's `packages` setting.
+    """
+    declarations: list[str | dict[str, Any]] = []
+    for original, resolved in zip(stack.sources, sources, strict=True):
+        package: str | dict[str, Any] = (
+            original.model_dump(exclude_unset=True) | {"source": resolved}
+            if isinstance(original, PackageSource)
+            else resolved
+        )
+        if source_string(original) in stack.disabled_extensions:
+            package = (package if isinstance(package, dict) else {"source": package}) | {"extensions": []}
+        declarations.append(package)
+    return declarations
+
+
+def installed_identities(stack: Stack, sources: list[str], agent_dir: Path) -> list[dict[str, str]]:
+    """Read every installed package manifest and require npm versions to equal their pins.
+
+    Parameters:
+        stack (Stack): validated stack.
+        sources (list[str]): resolved install arguments, one per `stack.sources` entry.
+        agent_dir (Path): agent tree the sources were installed into.
+
+    Returns:
+        list[dict[str, str]]: `name`, `version` and `source` per package, in stack order.
+
+    Raises:
+        FileNotFoundError: a declared source is not installed.
+        ValueError: an installed npm version differs from its pin.
+    """
+    identities = []
+    for _, resolved in zip(stack.sources, sources, strict=True):
+        manifest = json.loads((package_directory(resolved, agent_dir) / "package.json").read_text())
+        if resolved.startswith("npm:") and manifest["version"] != resolved.rsplit("@", 1)[1]:
+            raise ValueError(f"Installed npm version differs from '{resolved}': '{manifest['version']}'")
+        identities.append({"name": manifest["name"], "version": manifest["version"], "source": resolved})
+    return identities
+
+
+def package_agents_policy(stack: Stack) -> dict[str, bool]:
+    """Return the `subagents.json` setting a stack's resource filters depend on.
+
+    Pi's four source filters do not control pi-subagents' separate package-agent loader, so any
+    filtered (object) source needs `packageAgents: false` or its agents leak back in. An
+    unfiltered stack (e.g. local) keeps full-preset agent discovery on purpose.
+
+    Parameters:
+        stack (Stack): validated stack document.
+
+    Returns:
+        dict[str, bool]: `{"packageAgents": False}` for a filtered stack, otherwise empty.
+    """
+    if any(isinstance(source, PackageSource) for source in stack.sources):
+        return {"packageAgents": False}
+    return {}
+
+
 def package_directory(source: str, agent_dir: Path) -> Path:
     """Resolve only a declared source inside an explicitly installed agent tree.
 

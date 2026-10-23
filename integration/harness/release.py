@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import os
 import platform
@@ -19,9 +20,10 @@ import re
 import shutil
 import subprocess
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
 from types import MappingProxyType
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from harness.paths import GH_BIN, GIT_BIN, NPM_BIN
 
@@ -75,7 +77,10 @@ LEGACY_CHECKSUMS = MappingProxyType(
 LEGACY_RELEASE_TAGS = frozenset(LEGACY_CHECKSUMS)
 # Every asset the harness consumes, coding-agent and tui first: they are the ones npm installs.
 RELEASE_PACKAGES = ("pi-coding-agent", "pi-tui", "pi-agent-core", "pi-ai")
-ATTESTATION_WORKFLOW = "nredd/pi/.github/workflows/fork-release.yml"
+CORE_REPO = "nredd/pi"
+ATTESTATION_WORKFLOW = f"{CORE_REPO}/.github/workflows/fork-release.yml"
+ATTESTATIONS_API = "https://api.github.com"
+ProvenanceCheck = Callable[[Path, str], None]
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -167,19 +172,58 @@ def _error_tail(error: subprocess.CalledProcessError | subprocess.TimeoutExpired
     return output[-6000:]
 
 
-def verify_provenance(path: Path, tag: str) -> None:
-    """Require GitHub provenance from the dedicated core-release workflow.
+def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
+    """Download the public GitHub attestation bundles for one artifact digest, without credentials.
+
+    The attestations API answers anonymously for public repositories, so a verifier needs no
+    GitHub login and no token ever leaves the machine. The bundles are only inputs to
+    `gh attestation verify --bundle`, which checks them; they are trusted for nothing else.
 
     Parameters:
-        path (Path): downloaded release artifact.
-        tag (str): exact core tag bound to the source ref.
+        repo (str): `owner/name` that must have produced the attestation.
+        path (Path): artifact whose SHA-256 selects the attestations.
+        destination (Path): JSON Lines file to write, one Sigstore bundle per line.
+
+    Returns:
+        Path: `destination`.
+
+    Raises:
+        RuntimeError: the API could not be read, answered malformed JSON, or lists no attestation.
+    """
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    url = f"{ATTESTATIONS_API}/repos/{repo}/attestations/sha256:{digest}"
+    request = Request(url, headers={"Accept": "application/vnd.github+json"})
+    try:
+        with urlopen(request, timeout=120) as response:
+            document = json.loads(response.read())
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"Could not read attestations for '{path.name}' from '{url}': {error}") from error
+    attestations = document.get("attestations") if isinstance(document, dict) else None
+    bundles = [item.get("bundle") for item in attestations or [] if isinstance(item, dict)]
+    if not bundles or not all(isinstance(bundle, dict) for bundle in bundles):
+        raise RuntimeError(f"No attestation bundle for '{path.name}' (sha256 '{digest}') in '{repo}'")
+    destination.write_text("".join(json.dumps(bundle) + "\n" for bundle in bundles))
+    return destination
+
+
+def verify_attestation(
+    path: Path, repo: str, signer_workflow: str, source_ref: str, bundle: Path | None = None
+) -> None:
+    """Require GitHub build provenance for one artifact from an exact repository, workflow and ref.
+
+    Parameters:
+        path (Path): artifact to verify.
+        repo (str): `owner/name` the attestation must belong to.
+        signer_workflow (str): `owner/name/.github/workflows/<file>` that must have signed it.
+        source_ref (str): exact Git ref the signing run must have built.
+        bundle (Path | None): local bundle file; absent, `gh` fetches with its own login.
 
     Raises:
         FileNotFoundError: GitHub CLI is unavailable.
         RuntimeError: the artifact lacks the required provenance identity.
     """
     if not Path(GH_BIN).is_file():
-        raise FileNotFoundError(f"Core release verification requires `gh` at '{GH_BIN}'")
+        raise FileNotFoundError(f"Attestation verification requires `gh` at '{GH_BIN}'")
     try:
         subprocess.check_output(
             [
@@ -187,12 +231,13 @@ def verify_provenance(path: Path, tag: str) -> None:
                 "attestation",
                 "verify",
                 str(path),
+                *(["--bundle", str(bundle)] if bundle is not None else []),
                 "--repo",
-                "nredd/pi",
+                repo,
                 "--signer-workflow",
-                ATTESTATION_WORKFLOW,
+                signer_workflow,
                 "--source-ref",
-                f"refs/tags/{tag}",
+                source_ref,
                 "--deny-self-hosted-runners",
             ],
             text=True,
@@ -201,8 +246,38 @@ def verify_provenance(path: Path, tag: str) -> None:
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(
-            f"Core release provenance verification failed for '{path}': {_error_tail(error)}"
+            f"GitHub provenance verification failed for '{path}': {_error_tail(error)}"
         ) from error
+
+
+def verify_provenance(path: Path, tag: str, bundle: Path | None = None) -> None:
+    """Require GitHub provenance from the dedicated core-release workflow.
+
+    Parameters:
+        path (Path): downloaded release artifact.
+        tag (str): exact core tag bound to the source ref.
+        bundle (Path | None): local attestation bundle; absent, `gh` fetches with its own login.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: the artifact lacks the required provenance identity.
+    """
+    verify_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}", bundle)
+
+
+def verify_provenance_anonymously(path: Path, tag: str) -> None:
+    """Verify core provenance from the public attestation bundle, needing no GitHub login.
+
+    Parameters:
+        path (Path): downloaded release artifact.
+        tag (str): exact core tag bound to the source ref.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: no bundle exists or it does not prove the required identity.
+    """
+    bundle = attestation_bundle(CORE_REPO, path, path.with_name(f"{path.name}.sigstore.jsonl"))
+    verify_provenance(path, tag, bundle)
 
 
 def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
@@ -243,7 +318,7 @@ def prune_native(node_modules: Path, system: str, arch: str) -> None:
                 shutil.rmtree(directory)
 
 
-def fetch_release(tag: str, prefix: Path) -> Path:
+def fetch_release(tag: str, prefix: Path, provenance: ProvenanceCheck | None = None) -> Path:
     """Verify every consumed release asset, then install into a new private prefix, never the live one.
 
     New tags must publish all of `RELEASE_PACKAGES`. Legacy tags are verified for exactly the assets
@@ -253,6 +328,8 @@ def fetch_release(tag: str, prefix: Path) -> Path:
     Parameters:
         tag (str): released core tag.
         prefix (Path): empty installation prefix.
+        provenance (ProvenanceCheck | None): per-asset verifier taking the asset and tag;
+            defaults to `verify_provenance` (the caller's `gh` login).
 
     Returns:
         Path: private pi executable.
@@ -297,7 +374,7 @@ def fetch_release(tag: str, prefix: Path) -> Path:
             asset.write_bytes(response.read())
         verify_asset(asset, url, checksums)
         if tag not in LEGACY_RELEASE_TAGS:
-            verify_provenance(asset, tag)
+            (provenance or verify_provenance)(asset, tag)
         assets.append(asset)
     try:
         subprocess.check_output(
