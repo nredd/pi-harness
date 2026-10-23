@@ -123,6 +123,8 @@ class PackageContract:
             must equal the workspace's own `LICENSE` instead of the repository root one.
         standalone_artifacts (frozenset[str]): Files that must import only Node builtins when packed.
         packed_files (tuple[str, ...]): Exact packed paths, when the package has a fixed public payload.
+        library (bool): Compiled ESM library, with no Pi entrypoint or host dependency permissions.
+        node_probe (str): Fixed ESM consumer program executed against the isolated installed tarball.
         packed_patterns (tuple[tuple[re.Pattern[str], int], ...]): (pattern, exact count) pairs for packed
             paths with build-hashed names; together with `packed_files` they must cover the tarball exactly.
     """
@@ -136,9 +138,51 @@ class PackageContract:
     runtime_dependencies: tuple[tuple[str, str], ...] = ()
     peer_ranges: tuple[tuple[str, str], ...] = ()
     own_license: bool = False
+    library: bool = False
+    node_probe: str = ""
     standalone_artifacts: frozenset[str] = frozenset()
     packed_files: tuple[str, ...] = ()
     packed_patterns: tuple[tuple[re.Pattern[str], int], ...] = ()
+
+
+RESOURCE_SAMPLER_FILES = (
+    "LICENSE",
+    "README.md",
+    "package.json",
+    *(
+        f"dist/{module}.{suffix}"
+        for module in ("index", "types", "counters", "collect")
+        for suffix in ("js", "d.ts")
+    ),
+)
+RESOURCE_SAMPLER_CONTRACT = PackageContract(
+    name="@nredd/pi-resource-sampler",
+    directory="resource-sampler",
+    required=RESOURCE_SAMPLER_FILES,
+    allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^dist/[a-z]+\.(js|d\.ts)$")),
+    exposes_tools=frozenset(),
+    packed_files=RESOURCE_SAMPLER_FILES,
+    library=True,
+    node_probe="""
+import assert from 'node:assert/strict';
+import { setTimeout } from 'node:timers/promises';
+import { createResourceSampler } from '@nredd/pi-resource-sampler';
+const sampler = createResourceSampler({maxDurationMs: 2000});
+try {
+    const first = await sampler.sample();
+    assert.equal(first.cpu.state, 'warming');
+    await setTimeout(60);
+    const second = await sampler.sample();
+    assert.equal(second.cpu.state, 'available');
+    assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
+    assert.ok(second.processes.some(p => p.pid === process.pid));
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(sampler.sample(controller.signal));
+} finally { await sampler.dispose(); }
+await assert.rejects(sampler.sample(), /disposed/);
+""",
+)
 
 
 CONTRACTS = (
@@ -1552,6 +1596,23 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
         expected_range = dict(contract.peer_ranges).get(name, "*")
         if declared_range != expected_range:
             problems.append(f"peer '{name}' must use the range '{expected_range}', not '{declared_range}'")
+    if contract.library:
+        if not isinstance(manifest, dict):
+            return [*problems, "library manifest must be an object"]
+        if "pi" in manifest or peers:
+            problems.append("library must not declare `pi` resources or host peers")
+        expected = {
+            "type": "module",
+            "types": "./dist/index.d.ts",
+            "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
+            "files": ["dist", "LICENSE", "README.md"],
+        }
+        problems += [
+            f"library `{key}` must equal {value!r}"
+            for key, value in expected.items()
+            if manifest.get(key) != value
+        ]
+        return problems
     extensions = parsed.pi.extensions
     if not extensions:
         problems.append("`pi.extensions` is empty")
@@ -1627,6 +1688,8 @@ def classify_imports(
     files: Sequence[str],
     dependencies: Collection[str] = (),
     standalone_artifacts: Collection[str] = (),
+    *,
+    library: bool = False,
 ) -> list[str]:
     """Classify the parsed imports of one packed source file.
 
@@ -1641,6 +1704,7 @@ def classify_imports(
         found (FileImports): Parser output for the file.
         files (Sequence[str]): All tarball paths, to resolve relative imports.
         dependencies (Collection[str]): Declared runtime dependency names that may be imported.
+        library (bool): Forbid host imports, retaining relative and Node builtin imports.
         standalone_artifacts (Collection[str]): Files permitted to import only `node:` builtins.
 
     Returns:
@@ -1648,6 +1712,7 @@ def classify_imports(
     """
     problems = list(found.diagnostics)
     standalone = path in standalone_artifacts
+    host_modules = () if library else HOST_MODULES
     for spec in found.specifiers:
         if spec.startswith("node:"):
             continue
@@ -1664,8 +1729,8 @@ def classify_imports(
                 f == target or PurePosixPath(f).with_suffix("").as_posix() == stem for f in files
             ):
                 problems.append(f"{path}: relative import '{spec}' leaves the package or is missing")
-        elif spec not in {*HOST_MODULES, *dependencies} and not any(
-            spec.startswith(f"{module}/") for module in (*HOST_MODULES, *dependencies)
+        elif spec not in {*host_modules, *dependencies} and not any(
+            spec.startswith(f"{module}/") for module in (*host_modules, *dependencies)
         ):
             problems.append(
                 f"{path}: imports '{spec}', which is neither a Node builtin nor a host module "
@@ -1735,6 +1800,7 @@ def audit_tarball(artifact: PackedArtifact, root_license: bytes, node: Path | No
             artifact.files,
             [dependency for dependency, _ in contract.runtime_dependencies],
             contract.standalone_artifacts,
+            library=contract.library,
         )
     if contract.packed_patterns:
         problems += audit_chunk_graph(contract, artifact.files, scanned)
@@ -3297,6 +3363,13 @@ def run_audit_gate(
             f"Tarball audit failed for '{contract.name}':\n" + "\n".join(f"  - {p}" for p in problems)
         )
     install_alone(artifact, sandbox, work / "install")
+    if contract.node_probe:
+        run(
+            [tools.node, "--input-type=module", "-e", contract.node_probe],
+            env=sandbox.env(),
+            cwd=work / "install",
+            timeout=30,
+        )
     return {
         "name": contract.name,
         "version": artifact.version,
@@ -3333,6 +3406,11 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--audit-preset", action="store_true", help="Only audit and install the packed `@nredd/pi-preset`"
     )
+    parser.add_argument(
+        "--audit-resource-sampler",
+        action="store_true",
+        help="Audit and exercise the packed resource sampler library",
+    )
     return parser.parse_args(argv)
 
 
@@ -3353,13 +3431,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     work = args.work_dir or Path(tempfile.mkdtemp(prefix="pi-package-contracts-"))
     work.mkdir(parents=True, exist_ok=True)
     try:
-        if args.audit_preset:
-            evidence = run_audit_gate(work.resolve(), PRESET_CONTRACT)
+        if args.audit_preset or args.audit_resource_sampler:
+            contract = RESOURCE_SAMPLER_CONTRACT if args.audit_resource_sampler else PRESET_CONTRACT
+            evidence = run_audit_gate(work.resolve(), contract)
             text = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
             if args.report:
                 args.report.write_text(text)
             sys.stdout.write(text)
-            LOGGER.info("preset package audit: passed")
+            LOGGER.info(f"'{contract.name}' package audit: passed")
             return 0
         supplied = parse_tarballs(args.tarball, CONTRACTS)
         only = args.package or (list(supplied) if supplied else None)

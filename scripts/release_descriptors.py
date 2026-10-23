@@ -47,6 +47,16 @@ class ReleaseDescriptor:
 # gates byte-for-byte. New packages add a descriptor, never a publisher branch.
 DESCRIPTORS = (
     ReleaseDescriptor(
+        name="@nredd/pi-resource-sampler",
+        workspace=PurePosixPath("packages/resource-sampler"),
+        verify_commands=(
+            ("npm", "ci", "--ignore-scripts"),
+            ("npm", "run", "check", "--workspace", "@nredd/pi-resource-sampler"),
+        ),
+        contract=pc.RESOURCE_SAMPLER_CONTRACT,
+        contract_gates=("audit",),
+    ),
+    ReleaseDescriptor(
         name="@nredd/pi-computer-use",
         workspace=PurePosixPath("packages/computer-use"),
         verify_commands=(
