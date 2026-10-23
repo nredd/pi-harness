@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -161,7 +162,7 @@ RESOURCE_SAMPLER_FILES = (
     ),
 )
 # Exact published release consumers install from the registry; never a range, workspace or file spec.
-RESOURCE_SAMPLER_VERSION = "0.1.0"
+RESOURCE_SAMPLER_VERSION = "0.1.1"
 RESOURCE_SAMPLER_CONTRACT = PackageContract(
     name="@nredd/pi-resource-sampler",
     directory="resource-sampler",
@@ -2748,16 +2749,30 @@ def installed_sampler_integrity(installed: Path, published: PublishedDist) -> st
 
 
 # Run from the installed plugin directory, so the specifier resolves exactly as the packed plugin's own import
-# does. One full, unranked scan; prints only PIDs and coverage counters, never names.
+# does. One full, unranked scan, then a real in-flight cancellation. Prints PIDs, coverage counters, the
+# marker child's own name and whether any 12-char window of the secret appears in the scan; never other names.
 SAMPLER_DISCOVERY_PROBE = """
 import { fileURLToPath } from 'node:url';
 import { createResourceSampler } from '@nredd/pi-resource-sampler';
-const pid = Number(process.argv[1]);
+const [pid, secret] = [Number(process.argv[1]), process.argv[2]];
 const sampler = createResourceSampler({ maxDurationMs: 5000 });
 try {
     const sample = await sampler.sample();
     const found = sample.processes.filter((entry) => entry.pid === pid);
+    const text = JSON.stringify(sample);
+    const leaked = Array.from({ length: secret.length - 11 }, (_, i) => secret.slice(i, i + 12))
+        .some((window) => text.includes(window));
+    const controller = new AbortController();
+    const reason = new Error('probe cancel');
+    const pending = sampler.sample(controller.signal);
+    controller.abort(reason);
+    const cancelled = await pending.then(
+        () => 'resolved',
+        (error) => (error === reason ? 'rejected' : `${error}`),
+    );
     console.log(JSON.stringify({
+        cancelled,
+        leaked,
         resolved: fileURLToPath(import.meta.resolve('@nredd/pi-resource-sampler')),
         coverage: {
             complete: sample.coverage.complete,
@@ -2765,7 +2780,7 @@ try {
             sampled: sample.coverage.sampled,
             reasons: sample.coverage.reasons,
         },
-        found: found.map((entry) => ({ pid: entry.pid, parentPid: entry.parentPid })),
+        found: found.map((entry) => ({ pid: entry.pid, parentPid: entry.parentPid, name: entry.name })),
     }));
 } finally {
     await sampler.dispose();
@@ -2777,6 +2792,7 @@ class DiscoveredProcess(BaseModel):
     model_config = LENIENT_STRICT_MODEL
     pid: int = Field(description="Sampled PID")
     parentPid: int = Field(description="Sampled parent PID")
+    name: str = Field(description="Sampled executable basename of the marker child (never another process)")
 
 
 class ScanCoverage(BaseModel):
@@ -2792,9 +2808,95 @@ class SamplerDiscovery(BaseModel):
     resolved: NonEmptyText = Field(description="Real path the plugin directory resolves the sampler to")
     coverage: ScanCoverage = Field(description="Coverage of the scan")
     found: list[DiscoveredProcess] = Field(description="Scan entries with the marker PID")
+    leaked: bool = Field(description="Whether any 12-char window of the marker secret appeared in the scan")
+    cancelled: str = Field(description="`rejected` when an in-flight sample rejected with the abort reason")
 
 
-def discover_child_with_installed_sampler(ctx: Context, child: int) -> None:
+def secret_windows(secret: str) -> list[str]:
+    """Every 12-char window of `secret`, shorter than Linux comm (15 bytes) and Darwin `p_comm` (16 bytes).
+
+    Parameters:
+        secret (str): Marker secret.
+
+    Returns:
+        list[str]: Overlapping windows; any one in an output means a name leaked argv, title or comm.
+    """
+    return [secret[i : i + 12] for i in range(len(secret) - 11)]
+
+
+def kernel_executable_names(node: Path) -> set[str]:
+    """Names sampler 0.1.1 may report for a child exec'd from `node`, and nothing invented.
+
+    Linux reads the `/proc/PID/exe` target, so the resolved basename. Darwin reports kinfo `p_comm`, the
+    exec'd file name truncated to 16 bytes; both the invoked and resolved basenames are accepted there.
+
+    Parameters:
+        node (Path): Executable the child was started from.
+
+    Returns:
+        set[str]: Acceptable executable basenames.
+    """
+    resolved = node.resolve().name
+    if sys.platform.startswith("linux"):
+        return {resolved}
+    return {name.encode()[:16].decode(errors="ignore") for name in (node.name, resolved)}
+
+
+def start_hostile_child(ctx: Context, project: Path, secret: str) -> subprocess.Popen[bytes]:
+    """Start an idle `node` child whose argv[0], process title and Linux comm hold `secret`.
+
+    Negative control: the sampler 0.1.0 name source (Darwin `ps -c` comm, Linux `/proc/PID/comm`) must
+    really carry the secret, so a clean snapshot proves the 0.1.1 source and not an inert marker.
+
+    Parameters:
+        ctx (Context): Scenario context.
+        project (Path): Working directory.
+        secret (str): Random marker secret.
+
+    Returns:
+        subprocess.Popen[bytes]: The running child; the caller kills it.
+
+    Raises:
+        ContractError: If the child does not start or the legacy source does not show the secret.
+    """
+    script = (
+        "process.title = process.env.S;"
+        "if (process.platform === 'linux')"
+        " require('node:fs').writeFileSync('/proc/self/comm', process.env.S);"
+        "console.log('ready'); setInterval(() => {}, 1 << 30);"
+    )
+    child = subprocess.Popen(
+        [secret, "-e", script],
+        executable=str(ctx.sandbox.tools.node),
+        env=ctx.sandbox.env() | {"S": secret},
+        cwd=project,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    assert child.stdout is not None  # `stdout=PIPE` above.
+    ready = child.stdout.readline()
+    try:
+        require(ready.strip() == b"ready", f"hostile marker child did not start: {ready!r}")
+        if sys.platform.startswith("linux"):
+            legacy = Path(f"/proc/{child.pid}/comm").read_text().strip() == secret[:15]
+        else:
+            ps = run(
+                [Path("/bin/ps"), "-c", "-o", "comm=", "-p", str(child.pid)],
+                env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+                cwd=ctx.work,
+                timeout=30,
+            )
+            legacy = secret in ps.stdout
+        require(legacy, "hostile marker child does not expose its secret through the 0.1.0 name source")
+    except BaseException:
+        child.kill()
+        child.wait(timeout=30)
+        raise
+    return child
+
+
+def discover_child_with_installed_sampler(ctx: Context, child: int, secret: str) -> None:
     """Find `child` under this process in one unranked scan by the plugin's installed sampler.
 
     Inclusion is checked against the full scan, not the tool's top-50 ranking, so it does not depend on
@@ -2802,17 +2904,21 @@ def discover_child_with_installed_sampler(ctx: Context, child: int) -> None:
     mid-scan marks it partial on any busy host, and requiring completeness would make the gate host-flaky.
     The target is the known child, which must be in it; a miss names the scan's coverage, so a truncated
     scan (`deadline`, `pid-limit`, `byte-limit`) is reported as such, never as a missing child. An
-    independent `ps` confirms the parent.
+    independent `ps` confirms the parent. The child's name must be its kernel executable basename, no
+    window of its argv[0]/title/comm secret may appear anywhere in the scan, and a real in-flight sample
+    must reject with the abort reason.
 
     Parameters:
         ctx (Context): Scenario context.
         child (int): Marker child PID, started by this process.
+        secret (str): The child's argv[0], title and Linux comm.
 
     Raises:
-        ContractError: If the sampler resolves elsewhere, the scan fails, or the child or parent is wrong.
+        ContractError: If the sampler resolves elsewhere, the scan fails or leaks, cancellation does not
+            reject, or the child, its name or its parent is wrong.
     """
     done = run(
-        [ctx.sandbox.tools.node, "--input-type=module", "-e", SAMPLER_DISCOVERY_PROBE, str(child)],
+        [ctx.sandbox.tools.node, "--input-type=module", "-e", SAMPLER_DISCOVERY_PROBE, str(child), secret],
         env=ctx.sandbox.env(),
         cwd=ctx.installed,
         timeout=30,
@@ -2839,9 +2945,13 @@ def discover_child_with_installed_sampler(ctx: Context, child: int) -> None:
         else f"a PARTIAL scan ({coverage.sampled}/{coverage.enumerated} sampled, reasons {coverage.reasons})"
     )
     require(
-        report.found == [DiscoveredProcess(pid=child, parentPid=os.getpid())],
+        [(found.pid, found.parentPid) for found in report.found] == [(child, os.getpid())],
         f"marker child {child} under parent {os.getpid()} not in {scope}: {report.found}",
     )
+    names = kernel_executable_names(ctx.sandbox.tools.node)
+    require(report.found[0].name in names, f"marker child named {report.found[0].name!r}, not one of {names}")
+    require(not report.leaked, "installed sampler names expose the marker's argv[0], title or comm")
+    require(report.cancelled == "rejected", f"in-flight sample cancellation: {report.cancelled}")
     ps = run(
         [Path("/bin/ps"), "-o", "ppid=", "-p", str(child)],
         env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
@@ -2854,9 +2964,11 @@ def discover_child_with_installed_sampler(ctx: Context, child: int) -> None:
 def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
     """Run `resource_snapshot` through the packed plugin around a real marker child, then a refused call.
 
-    The child is idle and small; its discovery is proven against the installed sampler's full scan
+    The child is idle and small, with a random secret as argv[0], title and Linux comm
+    (`start_hostile_child`); its discovery is proven against the installed sampler's full scan
     (`discover_child_with_installed_sampler`), and the tool output must be the bounded projection of
-    such a scan: exactly `min(50, sampled)` entries with only the documented fields.
+    such a scan: exactly `min(50, sampled)` entries with only the documented fields, and no window of the
+    secret anywhere in the tool record.
 
     Parameters:
         ctx (Context): Scenario context.
@@ -2870,16 +2982,10 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
     project = ctx.work / "resource"
     project.mkdir()
     argv = ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"]
-    child = subprocess.Popen(
-        [str(ctx.sandbox.tools.node), "-e", "setInterval(() => {}, 1 << 30)"],
-        env=ctx.sandbox.env(),
-        cwd=project,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    secret = secrets.token_hex(16)
+    child = start_hostile_child(ctx, project, secret)
     try:
-        discover_child_with_installed_sampler(ctx, child.pid)
+        discover_child_with_installed_sampler(ctx, child.pid, secret)
         script = [ToolStep("resource_snapshot", {"process_limit": 50, "interval_ms": 300}), TextStep("done")]
         with ctx.provider_session(script):
             ok = run_pi(ctx.pi_bin, ctx.sandbox, ctx.installed, project, argv)
@@ -2889,6 +2995,11 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
     require_clean_run(ok, "dev-tools resource_snapshot")
     record = ok.single_tool_result("resource_snapshot")
     require(not tool_is_error(record), f"resource_snapshot failed: {tool_text(record)}")
+    dumped = json.dumps(record)
+    require(
+        not any(window in dumped for window in secret_windows(secret)),
+        "resource_snapshot output exposes the marker's argv[0], title or comm",
+    )
     structured = parse_tool_record(record).result.structuredContent or {}
     processes = structured.get("processes")
     require(

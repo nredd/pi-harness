@@ -14,7 +14,7 @@
   },
   "keywords": ["pi-package", "pi-extension"],
   "dependencies": {
-    "@nredd/pi-resource-sampler": "0.1.0"
+    "@nredd/pi-resource-sampler": "0.1.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

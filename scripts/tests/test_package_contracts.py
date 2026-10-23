@@ -650,19 +650,33 @@ def discovery_context(root: Path, sandbox: pc.Sandbox) -> pc.Context:
 
 
 @pytest.mark.parametrize(
-    ("complete", "reasons", "found", "message"),
+    ("complete", "reasons", "found", "message", "probe_extra"),
     [
-        (False, ["process-unreadable-or-changed"], True, None),
-        (True, [], False, "not in the complete scan"),
+        (False, ["process-unreadable-or-changed"], True, None, {}),
+        (True, [], False, "not in the complete scan", {}),
         (
             False,
             ["deadline", "pid-limit"],
             False,
             r"PARTIAL scan \(3/9 sampled, reasons \['deadline', 'pid-limit'\]\)",
+            {},
         ),
-        (False, ["process-collection-unavailable"], True, "sampler scan failed"),
+        (False, ["process-collection-unavailable"], True, "sampler scan failed", {}),
+        (True, [], True, "marker child named 'node-MainThread'", {"name": "node-MainThread"}),
+        (True, [], True, "marker child named ''", {"name": ""}),
+        (True, [], True, "expose the marker", {"leaked": True}),
+        (True, [], True, "in-flight sample cancellation: resolved", {"cancelled": "resolved"}),
     ],
-    ids=["partial-but-found", "complete-miss", "truncated-miss", "unavailable"],
+    ids=[
+        "partial-but-found",
+        "complete-miss",
+        "truncated-miss",
+        "unavailable",
+        "comm-name",
+        "invented-empty",
+        "leak",
+        "uncancelled",
+    ],
 )
 def test_discovery_targets_the_known_child_and_names_a_partial_scan(
     monkeypatch: pytest.MonkeyPatch,
@@ -671,10 +685,14 @@ def test_discovery_targets_the_known_child_and_names_a_partial_scan(
     reasons: list[str],
     message: str | None,
     *,
+    probe_extra: dict[str, Any],
     complete: bool,
     found: bool,
 ) -> None:
     """A partial scan that holds the child passes; a miss says whether the scan was truncated.
+
+    The child must carry its kernel executable name (not comm, not `""`), the scan must hold no window
+    of the secret, and the in-flight cancellation must reject.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): Patches `run` for the probe and `ps`.
@@ -684,21 +702,51 @@ def test_discovery_targets_the_known_child_and_names_a_partial_scan(
         message (str | None): Expected error pattern, or None for a pass.
         complete (bool): Coverage completeness the probe reports.
         found (bool): Whether the probe found the child.
+        probe_extra (dict[str, Any]): Overrides for the child's name, `leaked` or `cancelled`.
     """
     ctx = discovery_context(tmp_path, sandbox)
     child, parent = 4242, os.getpid()
+    name = probe_extra.get("name", min(pc.kernel_executable_names(sandbox.tools.node)))
     probe = {
         "resolved": str(ctx.installed.parents[2] / "node_modules" / SAMPLER / "dist" / "index.js"),
         "coverage": {"complete": complete, "enumerated": 9, "sampled": 3, "reasons": reasons},
-        "found": [{"pid": child, "parentPid": parent}] if found else [],
+        "found": [{"pid": child, "parentPid": parent, "name": name}] if found else [],
+        "leaked": probe_extra.get("leaked", False),
+        "cancelled": probe_extra.get("cancelled", "rejected"),
     }
     outputs = iter([json.dumps(probe), f"{parent}\n"])
     monkeypatch.setattr(pc, "run", lambda *_args, **_kwargs: type("Done", (), {"stdout": next(outputs)})())
     if message is None:
-        pc.discover_child_with_installed_sampler(ctx, child)
+        pc.discover_child_with_installed_sampler(ctx, child, "0" * 32)
     else:
         with pytest.raises(pc.ContractError, match=message):
-            pc.discover_child_with_installed_sampler(ctx, child)
+            pc.discover_child_with_installed_sampler(ctx, child, "0" * 32)
+
+
+def test_secret_windows_cover_every_twelve_char_fragment() -> None:
+    """32 hex chars give 21 overlapping 12-char windows, each shorter than any kernel name field."""
+    windows = pc.secret_windows("0123456789abcdef0123456789abcdef")
+    assert len(windows) == 21
+    assert windows[0] == "0123456789ab"
+    assert windows[-1] == "456789abcdef"
+    assert all(len(window) == 12 for window in windows)
+
+
+def test_kernel_executable_names_never_invent(tmp_path: Path) -> None:
+    """Linux takes only the resolved exe basename; Darwin also the invoked one, truncated to 16 bytes.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    target = tmp_path / "a-very-long-node-binary-name"
+    target.write_text("")
+    link = tmp_path / "node"
+    link.symlink_to(target)
+    names = pc.kernel_executable_names(link)
+    if sys.platform.startswith("linux"):
+        assert names == {"a-very-long-node-binary-name"}
+    else:
+        assert names == {"node", "a-very-long-node"}
 
 
 def test_published_sampler_dist_rejects_malformed_metadata(

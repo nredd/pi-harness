@@ -1,6 +1,8 @@
-import { execFile, spawn, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { readFileSync, realpathSync } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -18,6 +20,8 @@ import { createMockPi } from "./support.ts";
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const INTERVAL_MS = 100;
+/** What sampler 0.1.1 reports for a child exec'd from `process.execPath`: Darwin `p_comm` holds 16 bytes. */
+const EXECUTABLE = basename(realpathSync(process.execPath)).slice(0, process.platform === "darwin" ? 16 : undefined);
 
 function completed(stdout: string): RunResult {
 	return {
@@ -159,7 +163,7 @@ function directChildren(): number[] {
 describe("resource_snapshot on the real host through the published sampler", () => {
 	it("resolves the exact registry sampler, never the workspace copy", async () => {
 		const manifest = JSON.parse(await readFile(join(PACKAGE_ROOT, "package.json"), "utf8"));
-		expect(manifest.dependencies).toEqual({ "@nredd/pi-resource-sampler": "0.1.0" });
+		expect(manifest.dependencies).toEqual({ "@nredd/pi-resource-sampler": "0.1.1" });
 		const { stdout } = await execFileAsync(
 			process.execPath,
 			["--input-type=module", "-e", "console.log(import.meta.resolve('@nredd/pi-resource-sampler'))"],
@@ -169,7 +173,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		const installed = join(PACKAGE_ROOT, "node_modules", "@nredd", "pi-resource-sampler");
 		expect(resolved).toBe(join(installed, "dist", "index.js"));
 		expect((await lstat(installed)).isSymbolicLink()).toBe(false);
-		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe("0.1.0");
+		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe("0.1.1");
 	});
 
 	it("smokes the real host through tool execution and output schema validation", async () => {
@@ -217,9 +221,8 @@ describe("resource_snapshot on the real host through the published sampler", () 
 					`child ${pid} absent from ${raw.processes.length} sampled processes, coverage ${JSON.stringify(raw.coverage)}`,
 				).toBeDefined();
 				expect(found?.parentPid).toBe(process.pid);
-				// Linux reports the main thread's comm (e.g. `node-MainThread`), never a path.
-				expect(found?.name).toMatch(/^node/);
-				expect(found?.name).not.toContain("/");
+				// The kernel's executable basename (`node`), not Linux comm (`node-MainThread`) or a path.
+				expect(found?.name).toBe(EXECUTABLE);
 				const ps = await execFileAsync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { env: { LC_ALL: "C" } });
 				expect(Number(ps.stdout.trim())).toBe(found?.parentPid);
 				// Present in both scans, so Linux measures it; Darwin never can.
@@ -239,6 +242,52 @@ describe("resource_snapshot on the real host through the published sampler", () 
 					});
 				}
 				if (raw.processes.length <= 50) expect(entries.map((entry) => entry.pid)).toContain(pid);
+			} finally {
+				child.kill("SIGKILL");
+				await exited(child);
+			}
+		},
+		20_000,
+	);
+
+	it.runIf(process.platform === "darwin" || process.platform === "linux")(
+		"never exposes a child's argv[0], title or Linux comm through the installed sampler or the tool",
+		async () => {
+			// argv[0], process title and Linux comm all hold a random secret. The 0.1.0 name source exposed it.
+			const secret = randomBytes(16).toString("hex");
+			const child = spawn(
+				process.execPath,
+				[
+					"-e",
+					`process.title = process.env.S;
+if (process.platform === "linux") require("node:fs").writeFileSync("/proc/self/comm", process.env.S);
+console.log("ready"); setInterval(() => {}, 1 << 30);`,
+				],
+				{ argv0: secret, env: { S: secret }, stdio: ["ignore", "pipe", "ignore"] },
+			);
+			try {
+				await new Promise((resolve, reject) => {
+					child.stdout?.once("data", resolve);
+					child.once("exit", reject);
+				});
+				const pid = child.pid;
+				if (pid === undefined) throw new Error("child did not start");
+				// Negative control: Darwin `ps -c` comm (argv[0]) or Linux comm really carries the secret.
+				const legacy =
+					process.platform === "linux"
+						? readFileSync(`/proc/${pid}/comm`, "utf8").trim() === secret.slice(0, 15)
+						: execFileSync("/bin/ps", ["-c", "-o", "comm=", "-p", String(pid)], { encoding: "utf8" }).includes(secret);
+				expect(legacy).toBe(true);
+				const real = realSampler();
+				const mock = createMockPi();
+				registerResourceTools(mock.pi, { createSampler: real.createSampler });
+				const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
+				expect(result.isError).toBe(false);
+				const found = real.state.samples.at(-1)?.processes.find((entry) => entry.pid === pid);
+				expect(found?.name).toBe(EXECUTABLE);
+				// Every 12-char window: shorter than the Linux comm (15 bytes) and Darwin p_comm (16 bytes) fragments.
+				const text = JSON.stringify([real.state.samples, result.structuredContent, mock.text(result)]);
+				for (let i = 0; i + 12 <= secret.length; i++) expect(text).not.toContain(secret.slice(i, i + 12));
 			} finally {
 				child.kill("SIGKILL");
 				await exited(child);
@@ -381,6 +430,22 @@ describe("resource_snapshot mapping", () => {
 			executable: "tester",
 		});
 		expect(snapshot.processes.cpuSemantics).toContain("interval CPU");
+	});
+
+	it('keeps an unknown executable as "" and never fills it in', async () => {
+		const mock = createMockPi();
+		const { resolved } = options(fixture("linux", [proc(7, 200, measured(3), ""), proc(8, 100, measured(1), "bash")]));
+		registerResourceTools(mock.pi, resolved);
+		const result = await mock.call("resource_snapshot", { process_limit: 2, interval_ms: INTERVAL_MS }, "/tmp");
+		expect(result.structuredContent).toMatchObject({
+			processes: {
+				entries: [
+					{ pid: 7, executable: "" },
+					{ pid: 8, executable: "bash" },
+				],
+			},
+		});
+		expect(mock.text(result)).toContain("\n7 1 3.0% 200 (unknown)\n8 1 1.0% 100 bash");
 	});
 
 	it("bounds 60 entries to the limit and reports incomplete coverage as truncated", async () => {
@@ -599,14 +664,17 @@ describe("resource_snapshot mapping", () => {
 		registerResourceTools(mock.pi, resolved);
 		const tool = mock.tools.get("resource_snapshot");
 		expect(tool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
-		expect(tool?.description).toContain("does not request command arguments or environments");
-		expect(tool?.description).toContain("can be a process-set title that includes argument text");
+		expect(tool?.description).toContain(
+			"never command arguments, process titles, Linux comm or environments. Whoever names the executable file chooses it",
+		);
 		expect(tool?.description).toContain("cannot attribute OS processes to agents");
 		const result = await mock.call("resource_snapshot", { process_limit: 1, interval_ms: INTERVAL_MS }, "/tmp");
 		expect(result.isError).toBe(false);
 		expect(mock.text(result)).toContain("7 1 12.5% 102400 tester");
 		expect(mock.text(result)).toContain("interval utilization 37.5% over 120ms");
-		expect(mock.text(result)).toContain("may include process-set titles; no process-to-agent attribution");
+		expect(mock.text(result)).toContain(
+			"Executables are untrusted kernel-reported basenames ((unknown) when unreadable), never arguments, titles or environments; no process-to-agent attribution",
+		);
 		for (const params of [{ process_limit: 51 }, { process_limit: 0 }, { interval_ms: 99 }, { interval_ms: 5_001 }]) {
 			await expect(mock.call("resource_snapshot", params, "/tmp")).rejects.toThrow("params rejected");
 		}
