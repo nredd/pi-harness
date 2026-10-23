@@ -17,8 +17,10 @@ import {
 	type MonSort,
 	percent,
 	SORTS,
+	share,
 	sortProcesses,
 	timeHistory,
+	timeHistoryRows,
 } from "./model.ts";
 
 export interface MonViewOptions {
@@ -26,6 +28,58 @@ export interface MonViewOptions {
 	rows: () => number;
 	requestRender: () => void;
 	onClose: () => void;
+}
+
+type Color = Parameters<Theme["fg"]>[0];
+
+/** Cards need this much room; below it a three-line summary keeps the process list usable. */
+const CARD_MIN_WIDTH = 72;
+const CARD_MIN_HEIGHT = 18;
+const HISTORY_LIMIT = 120;
+
+const HELP = [
+	"*Keys",
+	" j/k or arrows   select process",
+	" PgUp/PgDn       move one page",
+	" g/G             first/last",
+	" c CPU  m RSS    descending",
+	" p PID           ascending",
+	" s               cycle sort",
+	" ?               back to dashboard",
+	" q/Esc           close",
+	"",
+	"*Reading it",
+	" LIVE: the last collection succeeded;",
+	" `updated` is when, on this clock.",
+	" CPU warming: first interval baseline,",
+	" not a stale or failed sample.",
+	" CPU is interval usage, not lifetime.",
+	" Process CPU can exceed 100% (one core).",
+	" -- is unavailable, never zero.",
+	" RAM is total minus free, not pressure.",
+	" MEM% is RSS over total RAM.",
+	" Load 1/5/15 min: not percent.",
+	" History: elapsed time, newest right;",
+	" dots are gaps, blank is no data yet.",
+	"",
+	"*Processes",
+	" Names are executable files, never",
+	" arguments; still untrusted text.",
+	" (unknown): no access, e.g. another",
+	" user's process on Linux.",
+	" macOS keeps 16 bytes of a name;",
+	" a trailing … marks a possible cut.",
+	" macOS: ps start time is whole seconds,",
+	" so process CPU stays -- (sort: RSS).",
+	" Lists can be partial; notices say why.",
+	" Selection follows identity, not row.",
+	" No kill, locks or scheduling.",
+];
+
+/** Local wall clock `HH:MM:SS`, display only. */
+function clock(ms: number): string {
+	const d = new Date(ms);
+	return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
 /** Single-interaction view; update is the sole ingress for sampler data. */
@@ -60,7 +114,7 @@ export class MonView implements Component {
 			// Leading samples without a CPU value are "no data yet" (blank), not gaps.
 			if (snapshot.cpuPercent !== null || this.history.length > 0) {
 				this.history.push({ sampledAtMs: snapshot.sampledAtMs, value: snapshot.cpuPercent });
-				if (this.history.length > 120) this.history.shift();
+				if (this.history.length > HISTORY_LIMIT) this.history.shift();
 			}
 		}
 		// Never rank by a column that is unavailable for every row, unless the user asked for it.
@@ -132,6 +186,21 @@ export class MonView implements Component {
 		this.refresh();
 	}
 
+	/** `--` reads as absent, not as a value: dim it everywhere. */
+	private value(text: string, width: number, color: Color = "text"): string {
+		const padded = text.padStart(width);
+		return text === "--"
+			? this.options.theme.fg("dim", padded)
+			: color === "text"
+				? padded
+				: this.options.theme.fg(color, padded);
+	}
+
+	/** Host CPU severity, always paired with the number so meaning never depends on color. */
+	private cpuColor(value: number | null): Color {
+		return value === null ? "dim" : value >= 85 ? "error" : value >= 50 ? "warning" : "success";
+	}
+
 	private panel(title: string, lines: string[], width: number): string[] {
 		const { theme } = this.options;
 		const inner = Math.max(0, width - 2);
@@ -145,22 +214,41 @@ export class MonView implements Component {
 		];
 	}
 
+	/** `-- warming · 12 logical CPUs` or `36.2% of 12 logical CPUs`; capacity is omitted when compact. */
+	private cpuSummary(capacity = true): string {
+		const t = this.options.theme;
+		const s = this.snapshot;
+		const value = s?.cpuPercent ?? null;
+		const state = this.cpuState();
+		const head = value === null ? t.fg("dim", "--") : t.bold(t.fg(this.cpuColor(value), percent(value)));
+		if (!capacity) return `${head}${state}`;
+		return `${head}${state} ${t.fg("muted", `${state ? "·" : "of"} ${s?.logicalCpus || "--"} logical CPUs`)}`;
+	}
+
+	private loads(): string {
+		const load = this.snapshot?.load ?? [];
+		return load.length ? load.map((n) => (Number.isFinite(n) ? n.toFixed(2) : "--")).join(" ") : "--";
+	}
+
 	private cards(width: number): string[] {
 		const s = this.snapshot;
 		const t = this.options.theme;
-		const wide = width >= 100;
-		const leftWidth = wide ? Math.floor((width - 2) * 0.58) : width;
+		const leftWidth = Math.floor((width - 2) * 0.58);
+		const rightWidth = width - leftWidth - 2;
+		const chartWidth = leftWidth - 4;
 		const total = s?.memoryTotalBytes ?? null;
 		const used = s?.memoryUsedBytes ?? null;
 		const ratio = total && used !== null ? Math.max(0, Math.min(1, used / total)) : null;
-		const meterWidth = Math.max(1, Math.min(24, (wide ? width - leftWidth - 2 : width) - 8));
+		const meterWidth = Math.max(1, Math.min(28, rightWidth - 9));
 		const full = ratio === null ? 0 : Math.round(ratio * meterWidth);
+		const load1 = s?.load[0];
+		const perCpu =
+			typeof load1 === "number" && Number.isFinite(load1) && s?.logicalCpus ? (load1 / s.logicalCpus).toFixed(2) : "--";
 		const cpu = this.panel(
 			"CPU / interval",
 			[
-				// "-- warming of 10 logical CPUs" misreads; a separator keeps state and capacity apart.
-				` ${t.bold(percent(s?.cpuPercent ?? null))}${this.cpuState()} ${t.fg("muted", `${this.cpuState() ? "·" : "of"} ${s?.logicalCpus ?? "--"} logical CPUs`)}`,
-				` ${t.fg("accent", fitCols(timeHistory(this.history, leftWidth - 4), leftWidth - 4))}`,
+				` ${this.cpuSummary()}`,
+				...timeHistoryRows(this.history, chartWidth, 2).map((row) => ` ${t.fg("accent", row)}`),
 				` ${t.fg("dim", this.historyLabel())}`,
 			],
 			leftWidth,
@@ -169,18 +257,27 @@ export class MonView implements Component {
 			"MEMORY / load",
 			[
 				` ${t.bold(bytes(used))} ${t.fg("muted", `/ ${bytes(total)} non-free`)}`,
-				` ${t.fg("accent", "━".repeat(full))}${t.fg("dim", "─".repeat(meterWidth - full))} ${ratio === null ? "--" : `${Math.round(ratio * 100)}%`}`,
-				` ${t.fg("muted", "load 1 / 5 / 15")}  ${s?.load.map((n) => (Number.isFinite(n) ? n.toFixed(2) : "--")).join("  ") || "--"}`,
+				` ${t.fg("accent", "━".repeat(full))}${t.fg("borderMuted", "─".repeat(meterWidth - full))} ${ratio === null ? t.fg("dim", "--") : `${Math.round(ratio * 100)}%`}`,
+				` ${t.fg("muted", "load")} ${this.loads()}`,
+				` ${t.fg("muted", "1/5/15 min ·")} ${perCpu === "--" ? t.fg("dim", perCpu) : perCpu} ${t.fg("muted", "per CPU")}`,
 			],
-			wide ? width - leftWidth - 2 : width,
+			rightWidth,
 		);
-		return wide ? cpu.map((line, i) => `${line}  ${memory[i] ?? ""}`) : [...cpu, ...memory];
+		return cpu.map((line, i) => `${line}  ${memory[i] ?? ""}`);
 	}
 
-	/** Scan cost is only shown when measured and the line has room for it. */
-	private scanLabel(width: number): string {
-		const scan = this.snapshot?.scanMs;
-		return width >= 80 && typeof scan === "number" && Number.isFinite(scan) ? `  scan ${Math.round(scan)}ms` : "";
+	/** Compact three-line summary when cards do not fit. */
+	private summary(width: number): string[] {
+		const s = this.snapshot;
+		const t = this.options.theme;
+		const total = s?.memoryTotalBytes ?? null;
+		const used = s?.memoryUsedBytes ?? null;
+		const ram = `${bytes(used)}/${bytes(total)}`;
+		return [
+			` ${t.fg("muted", "CPU")} ${this.cpuSummary(false)}  ${t.fg("muted", "RAM")} ${ram}  ${t.fg("muted", "load")} ${this.loads().split(" ")[0]}`,
+			` ${t.fg("accent", timeHistory(this.history, width - 2))}`,
+			` ${t.fg("dim", this.historyLabel())}`,
+		];
 	}
 
 	/** Why host CPU reads `--`; textual, so meaning never depends on color. */
@@ -194,56 +291,77 @@ export class MonView implements Component {
 		return `0..100% · ${(span / 1000).toFixed(1)}s span · time →`;
 	}
 
+	/** Title, collector state, and when the shown data was collected. */
+	private header(width: number): string {
+		const t = this.options.theme;
+		const status = this.snapshot?.status ?? "waiting";
+		const [mark, color]: [string, Color] =
+			status === "live" ? ["●", "success"] : status === "stale" ? ["▲", "warning"] : ["○", "warning"];
+		const left =
+			t.bold(t.fg("accent", " MON")) +
+			`  ${t.fg(color, `${mark} ${status.toUpperCase()}`)}` +
+			// Narrow terminals keep freshness over the tagline.
+			(width >= 60 ? t.fg("dim", "  local resources · read only") : "");
+		const scan = this.snapshot?.scanMs;
+		const parts: string[] = [];
+		if (this.lastSuccess !== undefined)
+			parts.push(
+				width >= 60
+					? `${status === "stale" ? "last ok" : "updated"} ${clock(this.lastSuccess)}`
+					: clock(this.lastSuccess),
+			);
+		if (width >= 80 && typeof scan === "number" && Number.isFinite(scan) && status === "live")
+			parts.push(`scan ${Math.round(scan)}ms`);
+		const right = parts.length ? t.fg("muted", `${parts.join(" · ")} `) : "";
+		const gap = width - visibleWidth(left) - visibleWidth(right);
+		return gap >= 2 ? `${left}${" ".repeat(gap)}${right}` : left;
+	}
+
+	private footer(width: number): string {
+		const t = this.options.theme;
+		const keys: [string, string][] = this.help
+			? [
+					["q/Esc", "close"],
+					["?", "help"],
+					["j/k PgDn", "scroll"],
+				]
+			: width < 60
+				? [
+						["q/Esc", "close"],
+						["?", "help"],
+						["s", "sort"],
+					]
+				: [
+						["q/Esc", "close"],
+						["?", "help"],
+						["j/k", "move"],
+						["PgUp/PgDn", "page"],
+						["c/m/p", "sort"],
+					];
+		return ` ${keys.map(([key, label]) => `${t.fg("accent", key)} ${t.fg("muted", label)}`).join("  ")}`;
+	}
+
+	/** Process name cell: dim `(unknown)` for no name, dim `…` where the OS may have cut it. */
+	private nameCell(p: MonProcess): string {
+		const t = this.options.theme;
+		if (p.nameState === "unknown" || p.name === "") return t.fg("dim", "(unknown)");
+		const name = sanitize(p.name);
+		return p.nameState === "truncated" ? `${name}${t.fg("dim", "…")}` : name;
+	}
+
 	render(width: number): string[] {
 		const height = Math.max(1, this.options.rows());
 		width = Math.max(1, width);
 		if (this.cache?.width === width && this.cache.height === height) return this.cache.lines;
 		const t = this.options.theme;
 		const status = this.snapshot?.status ?? "waiting";
-		const statusColor = status === "live" ? "success" : "warning";
-		const footer = t.fg(
-			"muted",
-			this.help
-				? " q/Esc close  ? help  j/k PgDn scroll"
-				: width < 60
-					? " q/Esc close  ? help  s sort"
-					: " q/Esc close  ? help  j/k move  PgUp/PgDn page  c/m/p sort",
-		);
+		const footer = this.footer(width);
 		if (height === 1) return [fitCols(footer, width)];
-		const lines = [
-			t.bold(t.fg("accent", " MON")) +
-				`  ${t.fg(statusColor, status.toUpperCase())}` +
-				t.fg("dim", width >= 60 ? "  LOCAL RESOURCES / read only" : "  read only") +
-				t.fg("dim", this.scanLabel(width)),
-		];
+		const lines = [this.header(width)];
 		if (this.help) {
-			const help = [
-				t.bold(" Navigation"),
-				" j/k or arrows   select process",
-				" PgUp/PgDn       move one page",
-				" g/G             first/last",
-				" c CPU  m RSS    descending",
-				" p PID           ascending",
-				" s               cycle sort",
-				" ?               return to dashboard",
-				" q/Esc           close",
-				"",
-				" CPU is interval usage, not lifetime.",
-				" Process CPU can exceed 100% (one core).",
-				" -- is unavailable, never zero.",
-				" CPU warming: first interval baseline.",
-				" LIVE means collection succeeded,",
-				" even while CPU is warming.",
-				" Selection follows identity, not row.",
-				" RAM is total minus free, not pressure.",
-				" Load 1/5/15 min: not percent.",
-				" Lists can be partial; notices say why.",
-				" History: elapsed time, newest right;",
-				" dots are gaps, blank is no data yet.",
-				" macOS: ps start time is whole seconds,",
-				" so process CPU stays -- (sort: RSS).",
-				" No kill, locks or scheduling.",
-			].flatMap((line) => wrapTextWithAnsi(line, width));
+			const help = HELP.map((line) =>
+				line.startsWith("*") ? t.bold(t.fg("accent", ` ${line.slice(1)}`)) : line,
+			).flatMap((line) => wrapTextWithAnsi(line, width));
 			this.helpPageSize = Math.max(1, height - 3);
 			this.helpLength = help.length;
 			this.helpScroll = Math.max(0, Math.min(this.helpScroll, help.length - this.helpPageSize));
@@ -255,57 +373,26 @@ export class MonView implements Component {
 			);
 			lines.push(...help.slice(this.helpScroll, this.helpScroll + this.helpPageSize));
 		} else {
-			const diagnosticRows = Number(status === "stale") + Number(Boolean(this.snapshot?.notice));
-			if (height >= (width >= 100 ? 16 : 20) && width >= 60) lines.push(...this.cards(width));
-			else if (height >= 8 + diagnosticRows) {
-				lines.push(
-					` CPU ${t.fg("accent", percent(this.snapshot?.cpuPercent ?? null))}${this.cpuState()}  RAM ${bytes(this.snapshot?.memoryUsedBytes ?? null)}/${bytes(this.snapshot?.memoryTotalBytes ?? null)}`,
-				);
-				lines.push(` ${t.fg("accent", timeHistory(this.history, width - 2))}`);
-				lines.push(t.fg("dim", ` ${this.historyLabel()}`));
+			const notice = this.snapshot?.notice;
+			const hint = this.snapshot?.hint;
+			const diagnosticRows = Number(status === "stale") + Number(Boolean(notice)) + Number(Boolean(hint));
+			if (height >= CARD_MIN_HEIGHT + diagnosticRows && width >= CARD_MIN_WIDTH) lines.push(...this.cards(width));
+			else if (height >= 8 + diagnosticRows) lines.push(...this.summary(width));
+			if (height >= 8) {
+				if (status === "stale")
+					lines.push(
+						t.fg(
+							"warning",
+							` Last success: ${this.lastSuccess === undefined ? "none" : new Date(this.lastSuccess).toISOString()}`,
+						),
+					);
+				if (notice) lines.push(t.fg("warning", ` ▲ ${sanitize(notice)}`));
+				if (hint) lines.push(t.fg("muted", ` ${sanitize(hint)}`));
 			}
-			if (status === "stale" && height >= 8)
-				lines.push(
-					t.fg(
-						"warning",
-						` Last success: ${this.lastSuccess === undefined ? "none" : new Date(this.lastSuccess).toISOString()}`,
-					),
-				);
-			if (this.snapshot?.notice && height >= 8) lines.push(t.fg("warning", ` ${sanitize(this.snapshot.notice)}`));
 			lines.push(
-				t.fg(
-					"accent",
-					` BUSY PROCESSES  ${this.processes.length} sampled  ${this.sort.toUpperCase()} ${this.sort === "pid" ? "↑" : "↓"}`,
-				),
+				`${t.bold(t.fg("accent", " PROCESSES"))}  ${t.fg("muted", `${this.processes.length} sampled`)}  ${t.fg("accent", `${this.sort.toUpperCase()} ${this.sort === "pid" ? "↑" : "↓"}`)}`,
 			);
-			const compact = width < 60;
-			const pidWidth = compact ? 6 : 8;
-			const cpuWidth = 8;
-			const rssWidth = compact ? 6 : 9;
-			const nameWidth = Math.max(1, width - pidWidth - cpuWidth - rssWidth - 3);
-			const row = (pid: string, name: string, cpu: string, rss: string) =>
-				` ${fitCols(pid, pidWidth)} ${fitCols(name, nameWidth)}${cpu.padStart(cpuWidth)}${rss.padStart(rssWidth)}`;
-			lines.push(t.fg("muted", row("PID", "PROCESS", "CPU%", "RSS")));
-			this.pageSize = Math.max(1, height - lines.length - 2);
-			const index = Math.max(
-				0,
-				this.processes.findIndex((p) => p.identity === this.selected),
-			);
-			this.scroll = Math.min(this.scroll, Math.max(0, this.processes.length - this.pageSize));
-			if (index < this.scroll) this.scroll = index;
-			if (index >= this.scroll + this.pageSize) this.scroll = index - this.pageSize + 1;
-			for (const p of this.processes.slice(this.scroll, this.scroll + this.pageSize)) {
-				const text = fitCols(row(String(p.pid), sanitize(p.name), percent(p.cpuPercent), bytes(p.rssBytes)), width);
-				lines.push(p.identity === this.selected ? t.bg("selectedBg", t.fg("text", text)) : text);
-			}
-			if (this.processes.length === 0) lines.push(t.fg("dim", " Waiting for process sample..."));
-			if (lines.length < height - 1)
-				lines.push(
-					t.fg(
-						"dim",
-						` ${this.processes.length ? index + 1 : 0}/${this.processes.length} selected · CPU: one core = 100%`,
-					),
-				);
+			this.table(lines, width, height);
 		}
 		const clipped = lines.slice(0, height - 1);
 		while (clipped.length < height - 1) clipped.push("");
@@ -313,5 +400,67 @@ export class MonView implements Component {
 		const result = clipped.map((line) => fitCols(line, width));
 		this.cache = { width, height, lines: result };
 		return result;
+	}
+
+	/** Column header, the visible page of rows with a scrollbar when it overflows, and a position line. */
+	private table(lines: string[], width: number, height: number): void {
+		const t = this.options.theme;
+		const compact = width < 60;
+		const pidWidth = compact ? 6 : 7;
+		const cpuWidth = compact ? 7 : 8;
+		const rssWidth = compact ? 6 : 8;
+		const memWidth = compact ? 0 : 6;
+		// Rows after the header: position line and footer stay reserved.
+		this.pageSize = Math.max(1, height - lines.length - 3);
+		const overflow = this.processes.length > this.pageSize;
+		const rowWidth = width - (overflow ? 1 : 0);
+		const nameWidth = Math.max(1, rowWidth - 1 - pidWidth - cpuWidth - rssWidth - memWidth - 2);
+		const row = (mark: string, pid: string, cpu: string, rss: string, mem: string, name: string) =>
+			fitCols(
+				`${mark}${fitCols(pid, pidWidth)}${cpu}${rss}${memWidth ? mem : ""}  ${fitCols(name, nameWidth)}`,
+				rowWidth,
+			);
+		lines.push(
+			t.fg(
+				"muted",
+				row(" ", "PID", "CPU%".padStart(cpuWidth), "RSS".padStart(rssWidth), "MEM%".padStart(memWidth), "NAME"),
+			),
+		);
+		const index = Math.max(
+			0,
+			this.processes.findIndex((p) => p.identity === this.selected),
+		);
+		this.scroll = Math.min(this.scroll, Math.max(0, this.processes.length - this.pageSize));
+		if (index < this.scroll) this.scroll = index;
+		if (index >= this.scroll + this.pageSize) this.scroll = index - this.pageSize + 1;
+		const total = this.snapshot?.memoryTotalBytes ?? null;
+		const visible = this.processes.slice(this.scroll, this.scroll + this.pageSize);
+		const thumbSize = Math.max(1, Math.round((this.pageSize * this.pageSize) / Math.max(1, this.processes.length)));
+		const thumbAt = Math.round(
+			(this.scroll / Math.max(1, this.processes.length - this.pageSize)) * (this.pageSize - thumbSize),
+		);
+		visible.forEach((p, i) => {
+			const selected = p.identity === this.selected;
+			let text = row(
+				selected ? t.fg("accent", "▸") : " ",
+				String(p.pid),
+				this.value(percent(p.cpuPercent).replace("%", ""), cpuWidth),
+				this.value(bytes(p.rssBytes), rssWidth),
+				this.value(share(p.rssBytes, total), memWidth),
+				this.nameCell(p),
+			);
+			if (selected) text = t.bg("selectedBg", text);
+			if (overflow)
+				text += i >= thumbAt && i < thumbAt + thumbSize ? t.fg("scrollbarThumb", "┃") : t.fg("scrollbarTrack", "│");
+			lines.push(text);
+		});
+		if (this.processes.length === 0) lines.push(t.fg("dim", " Waiting for process sample..."));
+		if (lines.length < height - 1)
+			lines.push(
+				t.fg(
+					"dim",
+					` ${this.processes.length ? index + 1 : 0}/${this.processes.length} selected · CPU% 100 = one core${memWidth && total ? ` · MEM% of ${bytes(total)}` : ""}`,
+				),
+			);
 	}
 }

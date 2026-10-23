@@ -3,25 +3,25 @@
 Published to npm as `@nredd/pi-session-kit` (public). From `0.4.0`, each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-session-kit@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`); earlier versions were published manually without provenance. `0.4.0` adds `createSessionKit(options)` (explicit `config`, `agentDir`, `monitorRoot`, injectable `clock` and `spawnMonitor`; the default export is unchanged) and fixes leaderless orphan-group sweeps at `ps` start-time resolution. `0.5.0` redesigns `/stats` around the full pane (pinned header, aligned stat cells, a Models table on wide panes) and gives every chart a clock- or calendar-aligned time axis, including the 5h and 24h hourly views.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and standalone harness
 references below describe the legacy deployment, not installation or candidate verification of
-this package. `0.6.0` keeps passive monitor output only in the monitor ring buffer rather than adding it to the transcript or model context; `monitor_read` is the explicit output surface, and match/exit/timeout wakes are compact summaries with a cursor. `0.7.0` adds the `/stats` Machines tab with per-machine producer export age, separate from the viewer's last import, and the collapsible monitors widget.
+this package. `0.6.0` keeps passive monitor output only in the monitor ring buffer rather than adding it to the transcript or model context; `monitor_read` is the explicit output surface, and match/exit/timeout wakes are compact summaries with a cursor. `0.7.0` adds the `/stats` Machines tab with per-machine producer export age, separate from the viewer's last import, and the collapsible monitors widget. `0.8.0` adds `/mon`.
 
 ## Standalone use
 
-The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency is the exact published `@nredd/pi-resource-sampler@0.1.0` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency is the exact published `@nredd/pi-resource-sampler@0.1.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 Session-scoped pi extensions for tmux users. No daemon, supervisor, core patch or cross-pane
 registry. Each runtime owns its goal, loops and monitors; persisted goal state follows the active
 session branch. Closing pi stops its work.
 
-`/mon` opens a read-only, full-pane view of local CPU, memory, load and busy processes, sampled
+`/mon` opens a read-only, full-pane view of local CPU, memory, load and processes, sampled
 every ~2s by the shared `@nredd/pi-resource-sampler` library only while it is open. Details and
-limits (macOS process CPU is unavailable, memory is non-free, partial coverage) are in
+limits (macOS process CPU is unavailable, macOS names keep 16 bytes, memory is non-free, partial coverage) are in
 [docs/mon-dashboard.md](docs/mon-dashboard.md). It is not a second `/monitor` process runner.
 
 ## Install and config
 
 ```sh
-pi install npm:@nredd/pi-session-kit@0.7.0
+pi install npm:@nredd/pi-session-kit@0.8.0
 ```
 
 Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):

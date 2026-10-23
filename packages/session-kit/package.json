@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-session-kit",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publishConfig": {
     "access": "public"
   },
@@ -27,7 +27,7 @@
     "pi-extension"
   ],
   "dependencies": {
-    "@nredd/pi-resource-sampler": "0.1.0"
+    "@nredd/pi-resource-sampler": "0.1.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

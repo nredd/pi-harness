@@ -2,11 +2,14 @@
 
 ## [Unreleased]
 
+## 0.8.0
+
 - Add `/mon`: a read-only TUI dashboard of host CPU history, non-free memory, load and sampled processes, on by default (`mon.enabled`)
-- Depend on the exact published `@nredd/pi-resource-sampler@0.1.0`; one sampler per open view, disposed (children reaped, no timers) on close, session shutdown or replacement
-- Map warming/unavailable metrics to `--`, never zero; explain partial coverage, persistent warming and macOS's unavailable process CPU (default RSS order there)
-- Draw CPU history newest-right at the observed monotonic sampling interval, so only real gaps render as `·` and the warming baseline stays blank
-- Treat every resolved sample as a live collection, separate from host CPU `warming`/`unavailable`, so last success stays fresh
+- Depend on the exact published `@nredd/pi-resource-sampler@0.1.1` (executable names, never argv or process titles; Bun host CPU measured), locked as a nested registry install so tests never borrow the workspace copy; one sampler per open view, disposed (children reaped, no timers) on close, session shutdown or replacement
+- Map warming/unavailable metrics to `--`, never zero; split warnings (budget-limited lists, unavailable host CPU) from muted platform hints (Linux kernel-thread skips, unknown names, macOS process CPU)
+- Render unreadable names as `(unknown)` and mark macOS names that may be cut at 16 bytes with `…`
+- Header shows collector state with the last successful collection's local time; every resolved sample counts as live, separate from host CPU `warming`/`unavailable`
+- Side-by-side cards from 72 columns with a two-row CPU history at the observed monotonic interval; process table `PID CPU% RSS MEM% NAME` with a selection marker and overflow scrollbar
 - Pack `docs/mon-dashboard.md`, which the README links
 
 ## 0.7.0

@@ -25,7 +25,7 @@ for (let i = 0; i < 90; i++) {
 		...(i === 0 ? { cpuPercent: null, cpuState: "warming" as const } : {}),
 		capturedAt: Date.UTC(2026, 9, 22, 22, 0, 0) + elapsed,
 		sampledAtMs: 10_000 + elapsed,
-		notice: "FIXTURE / macOS process CPU unavailable",
+		notice: "FIXTURE DATA: synthetic values and names, not this host",
 	});
 }
 // Match ctx.ui.custom's focused overlay, so Pi yields paging keys to the dashboard.

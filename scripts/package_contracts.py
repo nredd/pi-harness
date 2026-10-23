@@ -44,6 +44,7 @@ from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Annotated, Any, Literal, Self, TypedDict
 
 from pydantic import (
@@ -156,7 +157,7 @@ RESOURCE_SAMPLER_FILES = (
     ),
 )
 # Exact published release consumers install from the registry; never a range, workspace or file spec.
-RESOURCE_SAMPLER_VERSION = "0.1.0"
+RESOURCE_SAMPLER_VERSION = "0.1.1"
 RESOURCE_SAMPLER_CONTRACT = PackageContract(
     name="@nredd/pi-resource-sampler",
     directory="resource-sampler",
@@ -209,9 +210,14 @@ try {
 await assert.rejects(sampler.sample(), /disposed/);
 """,
 )
-# Compiled, Pi-independent `@nredd/` libraries a plugin may import, only when its contract declares the
-# exact registry release. Plugins remain banned from importing each other.
-SHARED_LIBRARIES = frozenset({RESOURCE_SAMPLER_CONTRACT.name})
+
+# Compiled, Pi-independent `@nredd/` libraries a plugin may import, mapped to the ONE exact registry
+# release every consumer must declare (`shared_library_pin_problems`). The single definition for both
+# sampler consumers (dev-tools `resource_snapshot`, session-kit `/mon`); `classify_imports` still refuses
+# it in library and standalone-artifact files. Plugins remain banned from importing each other.
+SHARED_LIBRARIES: Mapping[str, str] = MappingProxyType(
+    {RESOURCE_SAMPLER_CONTRACT.name: RESOURCE_SAMPLER_VERSION}
+)
 
 
 CONTRACTS = (
@@ -1571,6 +1577,26 @@ def audit_license(tarball: Path, expected_license: bytes) -> list[str]:
     return [] if packed == expected_license else ["packed `LICENSE` differs from the expected `LICENSE`"]
 
 
+def shared_library_pin_problems(contract: PackageContract) -> list[str]:
+    """Check that every `SHARED_LIBRARIES` dependency the contract declares uses the common pin.
+
+    `classify_imports` only sees dependency names, so without this a second consumer could declare
+    the sampler at another exact version and still import it.
+
+    Parameters:
+        contract (PackageContract): Expectations to check.
+
+    Returns:
+        list[str]: Violations; empty when every shared library is pinned at its common version.
+    """
+    return [
+        f"'{contract.name}' declares shared library '{name}' at '{declared}', "
+        f"not the common pin '{SHARED_LIBRARIES[name]}'"
+        for name, declared in contract.runtime_dependencies
+        if name in SHARED_LIBRARIES and declared != SHARED_LIBRARIES[name]
+    ]
+
+
 def audit_manifest(contract: PackageContract, manifest: object, expected_files: Sequence[str]) -> list[str]:
     """Check the packed `package.json` for independence and publication safety.
 
@@ -1593,7 +1619,7 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
             f"is malformed: {item['msg']}"
             for item in e.errors()
         ]
-    problems: list[str] = []
+    problems = shared_library_pin_problems(contract)
     if parsed.name != contract.name:
         problems.append(f"name is '{parsed.name}', expected '{contract.name}'")
     if parsed.private is True:
@@ -1734,8 +1760,9 @@ def classify_imports(
 
     Allowed: Node builtins (`node:` prefix), host-provided Pi modules, the contract's declared runtime
     dependencies, and relative paths that stay inside the package. Everything else, including any
-    `@nredd/` sibling plugin and any specifier the parser could not resolve to a literal, is a violation.
-    A declared dependency in `SHARED_LIBRARIES` is the only allowed `@nredd/` import.
+    `@nredd/` sibling and any specifier the parser could not resolve to a literal, is a violation.
+    The one sibling exception is an exact `SHARED_LIBRARIES` specifier that is also a declared
+    dependency of a non-library, non-standalone file.
     Files in `standalone_artifacts` (the bundled stats `dist/` artifact) may import `node:` builtins
     only; relative imports are forbidden too, because it is copied alone.
 
@@ -1756,8 +1783,9 @@ def classify_imports(
     for spec in found.specifiers:
         if spec.startswith("node:"):
             continue
-        if spec.startswith(SIBLING_SCOPE) and not (spec in dependencies and spec in SHARED_LIBRARIES):
-            problems.append(f"{path}: imports sibling plugin '{spec}'")
+        if spec.startswith(SIBLING_SCOPE):
+            if library or standalone or spec not in SHARED_LIBRARIES or spec not in dependencies:
+                problems.append(f"{path}: imports sibling plugin '{spec}'")
         elif standalone:
             problems.append(
                 f"{path}: standalone artifact imports '{spec}', only `node:` builtins are allowed"

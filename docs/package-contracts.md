@@ -77,10 +77,17 @@ What each package must satisfy:
   dependencies, peers only from the Pi host set (`@earendil-works/pi-ai`,
   `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) with range `*`, `pi.extensions` present
 - Every import is a `node:` builtin, a host module, a declared runtime dependency, or a relative path
-  inside the package. No
-  `@nredd/*` sibling, except a compiled Pi-independent library in `SHARED_LIBRARIES` that the
-  contract declares as an exact runtime dependency (today only session-kit ->
-  `@nredd/pi-resource-sampler` `RESOURCE_SAMPLER_VERSION`; bare specifier only, no subpaths). The stats artifact (`dist/`) may import only `node:` builtins: the standalone
+  inside the package. No `@nredd/*` sibling, with one narrow exception: an exact `SHARED_LIBRARIES`
+  specifier (only the `library=True` `@nredd/pi-resource-sampler`) that the importing plugin's
+  contract also declares as an exact runtime dependency at `RESOURCE_SAMPLER_VERSION`.
+  `SHARED_LIBRARIES` maps each library to that common pin, and `shared_library_pin_problems` (run by
+  `audit_manifest`, and over every contract in the tests) refuses a consumer declaring any other exact
+  version, so the two consumers cannot drift apart. Both constants are defined once, in `scripts/package_contracts.py`, and serve both consumers: dev-tools'
+  `resource_snapshot` (#128) and session-kit's `/mon` (#123). Bare specifier only. Deep imports,
+  undeclared or ranged dependencies, `workspace:`/`file:` specs, imports from a library and imports
+  from a standalone artifact (session-kit's stats `dist/`) all stay violations; whichever PR lands
+  second keeps this one definition and the library/standalone guard. The stats artifact (`dist/`)
+  may import only `node:` builtins: the standalone
   check runs before relative-import resolution, so `../src/index.ts` is rejected even if it exists
 - Imports are read with the repository's installed TypeScript 7.0.2 parser (`scripts/import_audit.ts`
   via `typescript/unstable/sync`, which drives the bundled `tsgo`; no new dependency, one batched
@@ -183,8 +190,12 @@ descriptor uses the same audit/isolated execution gate; no npm publication or bo
 The new npm name requires owner-controlled staged publication/2FA and trusted-publisher setup before
 release. Consumers declare the exact registry release (`RESOURCE_SAMPLER_VERSION`, never a range,
 `workspace:` or `file:` spec) as a contract `runtime_dependencies` entry; their stock gate installs it
-from npm next to the packed plugin. In the monorepo npm links the same-version workspace instead, so
-the session-kit release descriptor builds the sampler's `dist` before its package check.
+from npm next to the packed plugin. In the monorepo npm would link the same-version workspace, so the
+root lock carries a nested registry entry per consumer (e.g.
+`packages/session-kit/node_modules/@nredd/pi-resource-sampler`) and package tests run the published
+bytes, never the workspace copy. `npm dedupe` would drop that entry;
+`test_session_kit_locks_the_registry_sampler_not_the_workspace` and session-kit's own resolution test
+fail if it does.
 
 ## Packed preset audit (no standalone Pi behavior)
 

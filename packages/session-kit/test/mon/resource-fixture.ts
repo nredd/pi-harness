@@ -16,7 +16,8 @@ export function resourceFixture(platform: "linux" | "darwin" = "linux", cpuPerce
 			pid: 1000 + i,
 			parentPid: 1,
 			identity: `${1000 + i}:start-1`,
-			name: ["pi", "vitest", "tsc", "WindowServer", "node", "cargo", "python", "Safari"][i % 8] ?? "process",
+			// Deliberately unlike any real executable, so fixture renders cannot pass for host data.
+			name: `fixture-${["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"][i % 8]}`,
 			cpu:
 				platform === "darwin"
 					? { state: "unavailable" as const, reason: "Darwin process start identity has only second precision" }
