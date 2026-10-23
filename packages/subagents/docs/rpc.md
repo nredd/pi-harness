@@ -86,6 +86,7 @@ Every failure reaches the caller as `{ success: false, error }`, where `error` i
 | `SpawnOptions.cwd is not a directory: "<cwd>"` | `assertValidSpawnCwd` |
 | `Cannot run with isolation: "worktree": <cause>. <hint>` | `AgentManager.startAgent`, surfaced through `awaitStartup`. `<cause>` names the directory tried and why: not inside a git repository, no commits yet, a git timeout, or `git worktree add`'s stderr |
 | git plumbing failures | `src/worktree.ts` |
+| `Subagent queue is full (128 waiting for the process-wide maxActiveSubagents limit). ...` | `AgentManager.spawn`, `BUDGET_QUEUE_FULL_ERROR` in `src/process-budget.ts` — only with `maxActiveSubagents` on. Short of that, an RPC spawn at the cap returns its id and waits as `queued`, whatever `isBackground` says |
 | `Agent not found` | stop handler, `src/cross-extension-rpc.ts` |
 | `Agent is owned by another agent or workflow` | stop handler |
 | `Agent is not running` | stop handler. The record exists, so it has already settled |

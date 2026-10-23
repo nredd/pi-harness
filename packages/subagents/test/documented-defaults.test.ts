@@ -33,6 +33,14 @@ describe("documented defaults (README:441)", () => {
     expect(getDefaultMaxTurns()).toBeUndefined();
   }, HEAVY_REIMPORT_MS);
 
+  // Off: nothing above the per-session pools ever bounded the process, and the
+  // 12-with-reserve-2 policy is an opt-in in global settings, not a default.
+  it("the process budget is off by default with a reserve of 2", async () => {
+    delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:process-budget")];
+    const { getBudgetPolicy } = await import("../src/process-budget.js");
+    expect(getBudgetPolicy()).toEqual({ maxActive: 0, nestedReserve: 2 });
+  });
+
   it("nested subagent depth defaults to 2", async () => {
     const { getMaxSubagentDepth } = await import("../src/nested-tools.js");
     expect(getMaxSubagentDepth()).toBe(2);

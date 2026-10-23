@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { encodeCwd } from "../src/output-file.js";
+import { budgetUsage, resetBudgetForTests, setBudgetPolicy } from "../src/process-budget.js";
 import {
   agentCall,
   type FauxReply,
@@ -88,6 +89,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
   afterEach(async () => {
     await run?.dispose();
     run = undefined;
+    resetBudgetForTests();
     for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
 
@@ -249,5 +251,52 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
     } finally {
       rmSync(transcriptRoot, { recursive: true, force: true });
     }
+  });
+  // Depth-2 review delegation under the process budget, through the real
+  // stack: three parallel foreground implementers, each blocking on its own
+  // reviewer. With a cap of 3 and a reserve of 1 only two implementers hold
+  // slots at once; each keeps its slot while its reviewer runs, and the
+  // reserve is what lets a reviewer start with both implementer slots taken.
+  it("three implementers each wait on a depth-2 reviewer under a cap of 3 and all finish", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "nested-e2e-budget-"));
+    tmpDirs.push(cwd);
+    writeAgents(cwd);
+    let maxActive = 0;
+
+    const respond = (context: Context): FauxReply => {
+      maxActive = Math.max(maxActive, budgetUsage().active);
+      const text = firstUserText(context);
+      if (text.includes("Do the leaf work")) return WORKER_MARKER;
+      if (text.includes("Delegate this downward")) {
+        const spawned = toolResultTexts(context).find((r) => r.name === "Agent")?.text;
+        if (spawned !== undefined) return `orchestrator got: ${spawned}`;
+        return agentCall({ subagent_type: "worker", description: "review", prompt: "Do the leaf work." });
+      }
+      const results = toolResultTexts(context).filter((r) => r.name === "Agent");
+      if (results.length > 0) return `parent saw ${results.length}`;
+      return [1, 2, 3].map(n => agentCall({
+        subagent_type: "orchestrator",
+        description: `implement ${n}`,
+        prompt: `Delegate this downward (${n}).`,
+        run_in_background: false,
+      }, { id: `impl-${n}` }));
+    };
+
+    run = await runPrintMode({
+      prompt: "Delegate the work.",
+      cwd,
+      respond,
+      live: false,
+      beforeRun: () => {
+        registerAgents(loadCustomAgents(cwd));
+        setBudgetPolicy({ maxActive: 3, nestedReserve: 1 });
+      },
+    });
+
+    const results = toolResultTexts({ messages: run.parentSession.messages } as Context).filter((r) => r.name === "Agent");
+    expect(results).toHaveLength(3);
+    for (const r of results) expect(r.text).toContain(WORKER_MARKER);
+    expect(maxActive).toBe(3);
+    expect(budgetUsage()).toMatchObject({ active: 0, pending: 0 });
   });
 });

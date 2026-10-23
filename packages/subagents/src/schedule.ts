@@ -357,7 +357,11 @@ export class SubagentScheduler {
     // Terminal states: completed/steered = success; error/aborted/stopped = error.
     // awaitStartup first: with isolation: "worktree" the run promise only exists
     // once the repo copy is made, and a failed copy rejects here.
-    manager.awaitStartup(agentId)
+    // The start gate comes first: `bypassQueue` skips the pool but not the
+    // process budget (`maxActiveSubagents`), so a fired job can sit "queued"
+    // with no startup and no promise yet, and would otherwise finalize at once.
+    Promise.resolve(manager.getRecord(agentId)?.startGate)
+      .then(() => manager.awaitStartup(agentId))
       .then(() => manager.getRecord(agentId)?.promise)
       .then(() => {
         const r = manager.getRecord(agentId);

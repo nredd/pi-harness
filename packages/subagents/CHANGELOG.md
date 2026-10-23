@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Process-wide subagent budget (`maxActiveSubagents`, off by default).** One ceiling on running subagents across every agent manager in the pi process, covering nested, workflow, scheduled, RPC and resumed runs and managers a `/reload` left running, which the per-session pools never counted. Parents keep their slot while waiting on a child, and `nestedSubagentReserve` (default 2) holds slots back for deeper levels so that cannot deadlock. Global configuration only; process-wide, not machine-wide.
+
 ### Changed
+- **A resume of a `running` or `queued` agent is refused in the foreground too.** Only a background resume was; two resumes of one agent in the same message could run two prompts on one session.
 - **An explicit `Agent({ thinking })` now overrides an agent frontmatter thinking default.** Specialist definitions keep supplying their declared level when the caller omits one, then the parent session supplies the fallback. Top-level, nested, scheduled and workflow/RPC programmatic dispatches preserve their existing explicit-effort semantics; resuming an existing session still uses that session's model and thinking level.
 
 ## [0.22.0-nredd.6] - 2026-10-21
