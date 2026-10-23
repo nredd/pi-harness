@@ -48,8 +48,12 @@ exhaustion fails open. A fresh unlimited snapshot does not bypass a tracker bloc
 
 These statements deliberately distinguish selection-time guarantees from accounting
 models. The deterministic simulator calls the real `Router.route`, `Router.pick`,
-`ExhaustionTracker` and `UsageService.decisionFor`; only quota observations, clock and
-physical resolution are fixtures. It does not implement another routing algorithm.
+`ExhaustionTracker` and `UsageService.decisionFor`; quota observations, clock and
+physical resolution are fixtures. `CachedUsage.peek` is also substituted: it returns
+mutable snapshots without production `peek`'s expiry-to-stale conversion. These tests
+therefore exercise real dispatch/eligibility and scoring, not the production cache
+lifecycle; usage tests cover that lifecycle separately. The reset test refreshes only
+snapshot expiry to isolate passed-window scoring. No second routing algorithm is used.
 
 ### G1: best eligible candidate, without affinity
 
@@ -91,20 +95,26 @@ measured entry obeys `r_selected >= r_max / 1.2`: either it is the maximum, or t
 challenger did not beat the incumbent threshold. This holds before the next debit, not
 after an arbitrarily large response.
 
-For two initially equal accounts, no exclusions/exhaustion, fresh observations on every
-new user prompt, no external debits and normalized per-dispatch debit bounded by `delta`,
-the post-dispatch remaining-fraction gap is at most `1/6 + delta` while remaining
-fractions stay in `[0,1]`. If the selected account has the lower remaining fraction,
-its pre-debit gap is at most `r_max - r_max/1.2 <= 1/6`; the debit adds at most `delta`.
-If it has the higher fraction, the new absolute gap is at most the maximum of the old
-gap and `delta`. Induction from equal fractions proves the bound. This is a finite
-interval invariant, not convergence to equal counts or a no-starvation guarantee.
+For any finite number of initially equal accounts, no exclusions/exhaustion, fresh
+observations on every new user prompt, no external debits and normalized per-dispatch
+debit bounded by `delta`,
+the post-dispatch range of remaining fractions is at most `1/6 + delta` while remaining
+fractions stay in `[0,1]`. Only the selected fraction decreases. If it becomes a new
+minimum, the new maximum is at most the old `r_max`, so the new range is at most
+`r_max - r_selected + delta <= 1/6 + delta`. Otherwise the minimum is unchanged
+and the maximum cannot increase, so the range cannot grow. Induction from equal
+fractions proves the bound for both the two-account simulator and three-provider Pi
+scenario. This is a finite interval invariant, not convergence to equal counts or a
+no-starvation guarantee.
 
 The implementation allows a small numerical tolerance `E` when comparing
 `s_max - 1.2*s_incumbent`; the precise selection inequality is
 `s_max <= 1.2*s_selected + E` when retained (zero has its special branch). For a common
-factor `f`, the gap proof gains at most `f*E/1.2` at a lower-account selection. The
-power-of-two fixtures avoid ambiguous boundaries; they do not erase that qualification.
+factor `f`, the range proof gains at most `f*E/1.2` when selection creates a new minimum.
+Power-of-two capacities do not avoid exact 20% boundaries: the sixteenth grid contains
+remaining units `5:6` and `10:12`, where it explicitly asserts incumbent retention.
+`selection.test.ts` also checks strict twenty-percent ties, just-over-margin switching
+and percentage roundoff; these cases do not erase the numerical qualification.
 For two capacities of 64, the actual router sends the first **eleven** prompts to the
 first account, then switches on prompt twelve. Thus even fully fresh symmetric inputs
 do not imply one-request skew when the incumbent is present. A real Pi faux-provider
@@ -149,6 +159,9 @@ of every over-capacity request. The provider may reject excess requests.
 `test/fairness-simulator.ts` accounts synthetic debits, publishes or withholds telemetry,
 and calls production dispatch. `test/fairness.test.ts` covers G1-G4, external usage,
 long-tail debits, unlimited/stale/missing observations, model windows and reset exclusions.
+The expensive-prompt case exceeds the unit-cost premise (`delta = 1/64`), then checks
+that fresh telemetry redirects the next independent dispatch. It does not refute the
+bound with `delta = 2` or claim the provider would accept that oversized debit.
 `test/scenarios/fairness.test.ts` exercises real Pi with credential-free faux providers
 under both Vitest and Bun; it asserts physical dispatch and keeps the selected model
 virtual. Existing selection/router/usage suites cover confirmation, exact boundaries,
