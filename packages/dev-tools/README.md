@@ -1,6 +1,6 @@
 # pi-dev-tools
 
-Published to npm as `@nredd/pi-dev-tools` (public). From `0.5.1`, each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-dev-tools@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`); earlier versions were published manually without provenance. `0.5.1` adds `createDevTools(options)` (injectable `ssh`, `py`, `cargo` tool options; the default export is unchanged) and fixes process output that dropped a short line sharing a chunk with an oversized one.
+Published to npm as `@nredd/pi-dev-tools` (public). From `0.5.1`, each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-dev-tools@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`); earlier versions were published manually without provenance. `0.6.0` moves `resource_snapshot` onto the published `@nredd/pi-resource-sampler` `0.1.1` (breaking `structuredContent`, see [Resource awareness](#resource-awareness)). `0.5.1` adds `createDevTools(options)` (injectable `ssh`, `py`, `cargo` tool options; the default export is unchanged) and fixes process output that dropped a short line sharing a chunk with an oversized one.
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). References below to standalone repositories,
 chezmoi pins, and installed-runtime harness gates describe the legacy deployment, not verification
 of this package.
@@ -61,7 +61,7 @@ Tool groups land one per PR. Current state is in the table below.
 
 API change from 0.5.x (`structuredContent`): entries drop `cpuPercent` (ps average) and `elapsed`, which the sampler does not measure, and gain `parentPid` plus the `cpu` metric. Additive: `interval`, `cpu.utilization`, `processes.ranking`, `processes.coverage`, and the `interval_ms` parameter. `cpuSemantics`, `truncated`, `limit` and the memory fields keep their names. The `resourceSnapshot(limit, options, signal, intervalMs?)` seams are now `createSampler`, `readFile` and `run`; the per-OS-primitive seams are gone.
 
-Release: removing `structuredContent` fields is breaking, so this ships only as `@nredd/pi-dev-tools` `0.6.0`, never a 0.5.x patch. The manifest stays `0.5.2` here; the `0.6.0` bump is its own reviewed PR, then the signed-tag `publish.yml` flow in [releases](../../docs/releases.md). The pin is the published sampler `0.1.1` (registry integrity `sha512-rPwZxqqG...wisdwg==`), whose process-name privacy and Bun CPU fixes this API depends on; `0.1.0` must never be pinned again.
+Release: removing `structuredContent` fields is breaking, so this ships only as `@nredd/pi-dev-tools` `0.6.0`, never a 0.5.x patch (`0.5.2` was never published). It is cut by the signed-tag `publish.yml` flow in [releases](../../docs/releases.md). The pin is the published sampler `0.1.1` (registry integrity `sha512-rPwZxqqG...wisdwg==`), whose process-name privacy and Bun CPU fixes this API depends on; `0.1.0` must never be pinned again.
 
 ## git
 
