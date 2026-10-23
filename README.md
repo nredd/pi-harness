@@ -20,7 +20,8 @@ including documentation, fork, dotfiles, and automated promotion changes.
 `packages/resource-sampler` is the Pi-independent `@nredd/pi-resource-sampler` ESM library for
 bounded, privacy-safe interval host sampling. It has no Pi entrypoint or runtime dependencies.
 Its [README](packages/resource-sampler/README.md) defines CPU/coverage semantics and Darwin's
-explicit process-CPU precision limitation. No consumer migration or publication is included.
+explicit process-CPU precision limitation. Releases are recorded in [releases](docs/releases.md); no
+consumer migration is included.
 
 Layout:
 
