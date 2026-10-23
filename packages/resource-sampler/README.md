@@ -78,9 +78,7 @@ Bounds:
   A target filling the 4096-byte buffer may be truncated: Node returns it silently, the name is
   dropped (`""`, `file-byte-limit`) and the process is kept. Bun's readlink source refuses such a
   target with `ENAMETOOLONG`, which would take the unreadable-link path (`""`, no reason); that Bun
-  path was read in source only, never executed here. The README inside the published `0.1.1`
-  tarball still says such a process is kept with an empty name; this corrected text ships with the
-  next release.
+  path was read in source only, never executed here.
 - `coverage.complete`, `enumerated`, `sampled`, `skipped`, `bytesRead` and reasons describe partial
   coverage explicitly. `enumerated` is encountered rows, not total processes when partial. Truncation
   is not a host-wide top-process ranking. OS enumeration order may favor the same subset each time.
@@ -106,7 +104,10 @@ random secret, proves the 0.1.0 source exposes it, then requires the child in th
 included, is followed by SIGTERM, then SIGKILL, with a bounded wait for the runtime's exit status
 of that exact child (never a PID probe); a cleanup failure is reported alongside the original error
 (`AggregateError`), never instead of it. Regressions make readiness and the negative control fail
-and require the child reaped, including a child that ignores SIGTERM and needs SIGKILL. The privacy
+and require the child reaped, including a child that ignores SIGTERM and needs SIGKILL, and inject a
+cleanup failure to require both errors. This cleanup is in-process only: if the test worker itself
+is SIGKILLed, no JavaScript runs and the child outlives it. The packed contract probe below instead
+runs in its own process group, which the gate kills on timeout or interruption. The privacy
 check samples with the library maxima (5s, 16384 PIDs, 16MiB) and never accepts a missing child as
 a pass: on a host whose processes exceed those bounds, or whose enumeration reaches the child only
 after them, it fails with the snapshot's coverage in the error. On Linux each process costs two
@@ -114,5 +115,5 @@ after them, it fails with the snapshot's coverage in the error. On Linux each pr
 PID bound. `make check-resource-sampler-contract` builds and exercises an isolated installed
 tarball, with no Pi or siblings. Both run on existing macOS/Linux CI jobs.
 `dist` contains compiled ESM and declarations; the exact packed payload is contract-pinned. No install
-scripts or runtime dependencies. `0.1.1` and later publish through `publish.yml` with npm provenance;
-see [releases](../../docs/releases.md).
+scripts or runtime dependencies. Releases publish through `publish.yml` with npm provenance; see
+[releases](../../docs/releases.md).

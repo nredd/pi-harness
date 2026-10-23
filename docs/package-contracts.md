@@ -174,10 +174,19 @@ child's exit status; a cleanup failure is reported alongside the original error,
 it. `resource_sampler_probe` builds the program; `test_library_probe_reaps_child_when_setup_fails`
 runs it with a silent, an exiting, an undisguised and a SIGTERM-ignoring child and requires the
 expected failure plus `hostile child reaped` with the expected status (SIGKILL for the last). The
-gate runs the probe with `run(..., own_group=True)`: its own session, and on the 30s timeout the
-whole process group is killed, so a hung probe cannot orphan the child.
-`test_probe_timeout_kills_its_whole_process_group` times out the real probe and requires EOF on a
-FIFO only the child holds.
+legacy `ps` call is bounded too. `test_probe_reports_cleanup_failure_with_the_primary_error` patches
+its own copy of the program so `stop` reaps and then throws, and requires the `AggregateError` text.
+The gate runs the probe with `run(..., own_group=True)` (`run_own_group`): its own session, and on
+the 30s timeout or an interruption of the gate the whole process group is killed, so a hung probe
+cannot orphan the child. The group is signalled only while its leader is unreaped, so the group id
+cannot have been reused; if `communicate` already reaped the leader, nothing is signalled and the
+original exception carries a note. Default `run` stays plain `subprocess.run`, which kills only the
+child. `test_probe_timeout_kills_its_whole_process_group` and
+`test_probe_interrupt_kills_its_whole_process_group` time out or interrupt the real probe and require
+EOF on a FIFO only the child holds (`FifoWitness`; the child exits on its own after 20s, so a
+regression cannot leave it behind); `test_reaped_leader_group_is_never_signalled` and the
+`test_run_default_*` timeout/interrupt tests cover the guard and the unchanged default path. A
+SIGKILLed gate runs no cleanup at all; that boundary is not covered.
 Existing `owned` macOS/Linux jobs run the native package tests; existing `contracts` jobs run this
 packed consumer. No new runner matrix or Pi load is needed for a Pi-independent library.
 
