@@ -143,16 +143,6 @@ export function resolveAgentInvocationConfig(
   runInBackground: boolean;
   isolated: boolean;
   isolation?: IsolationMode;
-  /**
-   * Caller thinking levels an agent file's frontmatter outranked, so surfaces
-   * can say "(asked X)" instead of presenting the effective value as requested.
-   * `model` deliberately does not behave this way: an explicit `Agent` model is
-   * an intentional dispatch choice and takes precedence over an agent default.
-   *
-   * `max_turns` is deliberately absent: no surface renders a requested-vs-
-   * effective turn limit, so recording one would be dead data.
-   */
-  overridden?: { thinking?: ThinkingLevel };
 } {
   // Precedence first, collapse second — reversing these loses the veto, since
   // an agent file's "off" only outranks a caller's "worktree" while it is still
@@ -160,10 +150,6 @@ export function resolveAgentInvocationConfig(
   const requested = agentConfig?.isolation ?? params.isolation;
   const isolation = requested === "worktree" && opts?.worktreeAllowed !== false ? "worktree" : undefined;
 
-  const overriddenThinking = agentConfig?.thinking != null && params.thinking != null
-    && agentConfig.thinking !== params.thinking
-    ? params.thinking as ThinkingLevel
-    : undefined;
   return {
     // A frontmatter model is a portable default, not a policy boundary. An
     // explicit model on the Agent call must win so an orchestrator can select a
@@ -171,16 +157,16 @@ export function resolveAgentInvocationConfig(
     // it, the global `agentModels` setting outranks the definition's own default.
     modelInput: params.model ?? configuredAgentModel(opts?.agentType ?? agentConfig?.name ?? "", agentConfig?.model),
     modelFromParams: params.model != null,
-    thinking: (agentConfig?.thinking ?? params.thinking) as ThinkingLevel | undefined,
+    // A specialist's frontmatter is a reusable default, not a policy boundary:
+    // an explicit dispatch chooses the effort for this run. Pi still clamps the
+    // selected level to the resolved model, and agent-manager records that
+    // requested-versus-effective difference after the session starts.
+    thinking: (params.thinking ?? agentConfig?.thinking) as ThinkingLevel | undefined,
     maxTurns: agentConfig?.maxTurns ?? params.max_turns,
     inheritContext: agentConfig?.inheritContext ?? params.inherit_context ?? false,
     runInBackground: agentConfig?.runInBackground ?? params.run_in_background ?? opts?.defaultRunInBackground ?? false,
     isolated: agentConfig?.isolated ?? params.isolated ?? false,
     isolation,
-    // Undefined rather than an empty object when nothing was overridden: callers
-    // spread this into the invocation snapshot, and an always-present key would
-    // put `requestedThinking: undefined` on every record.
-    overridden: overriddenThinking ? { thinking: overriddenThinking } : undefined,
   };
 }
 
