@@ -13,6 +13,9 @@ Session-scoped pi extensions for tmux users. No daemon, supervisor, core patch o
 registry. Each runtime owns its goal, loops and monitors; persisted goal state follows the active
 session branch. Closing pi stops its work.
 
+The fixture-first resource dashboard foundation is documented in [docs/mon-dashboard.md](docs/mon-dashboard.md).
+`/mon` is **not enabled** until its shared sampler is published and integrated; this is not a second `/monitor` process runner.
+
 ## Install and config
 
 ```sh
