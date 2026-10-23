@@ -58,8 +58,11 @@ export function toMonSnapshot(snapshot: ResourceSnapshot, baseline = true): MonS
 			rssBytes: finite(p.rssBytes),
 		})),
 		capturedAt: snapshot.wallTimeMs,
+		sampledAtMs: snapshot.monotonicTimeMs,
 		scanMs: finite(snapshot.durationMs),
-		status: snapshot.cpu.state === "warming" ? "warming" : "live",
+		// A resolved sample is a successful collection, whatever its CPU state.
+		status: "live",
+		cpuState: snapshot.cpu.state,
 		...(processCpuUnavailable(snapshot) ? { processCpu: "unavailable" as const } : {}),
 		...(text ? { notice: text } : {}),
 	};

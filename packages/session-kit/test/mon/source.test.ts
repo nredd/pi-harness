@@ -1,7 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { platform } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { ResourceSampler, ResourceSnapshot } from "@nredd/pi-resource-sampler";
+import {
+	createResourceSampler,
+	type ResourceSampler,
+	type ResourceSnapshot,
+	type SamplerOptions,
+} from "@nredd/pi-resource-sampler";
 import { describe, expect, it, vi } from "vitest";
 import { MonView } from "../../src/mon/component.ts";
 import { MonPoll } from "../../src/mon/poll.ts";
@@ -34,14 +39,19 @@ describe("published sampler source on this host", () => {
 		const signal = new AbortController().signal;
 		try {
 			const first = await source.sample(signal);
-			expect(first.status).toBe("warming");
+			// The baseline is a successful collection whose host CPU has no interval yet.
+			expect(first.status).toBe("live");
+			expect(first.cpuState).toBe("warming");
 			expect(first.cpuPercent).toBeNull();
+			expect(first.memoryTotalBytes).toBeGreaterThan(0);
 			await sleep(150);
 			const second = await source.sample(signal);
 			expect(second.status).toBe("live");
+			expect(second.cpuState).toBe("available");
 			expect(second.cpuPercent).toBeGreaterThanOrEqual(0);
 			expect(second.cpuPercent).toBeLessThanOrEqual(100);
 			expect(second.capturedAt).toBeGreaterThan(first.capturedAt);
+			expect(second.sampledAtMs - first.sampledAtMs).toBeGreaterThanOrEqual(150);
 			expect(second.memoryTotalBytes).toBeGreaterThan(0);
 			expect(second.scanMs).toBeGreaterThanOrEqual(0);
 			const self = second.processes.find((p) => p.pid === process.pid);
@@ -61,11 +71,37 @@ describe("published sampler source on this host", () => {
 		await expect(source.sample(signal)).rejects.toThrow(/disposed/);
 	});
 
-	it("reaps collection when closed mid-sample, leaving no child or timer", async () => {
+	it("cancels an in-flight real sample on close, reaping its provider work", async () => {
 		const before = timers();
-		const poll = new MonPoll(createSamplerSource(), vi.fn());
+		// Controlled seam: the real published sampler, wrapped only to observe the in-flight promise.
+		let inFlight: Promise<ResourceSnapshot> | undefined;
+		const create = (options?: SamplerOptions): ResourceSampler => {
+			const real = createResourceSampler(options);
+			return {
+				sample: (signal) => {
+					inFlight = real.sample(signal);
+					return inFlight;
+				},
+				dispose: () => real.dispose(),
+			};
+		};
+		const update = vi.fn();
+		const poll = new MonPoll(createSamplerSource(create), update);
 		poll.start();
+		expect(inFlight).toBeDefined();
+		const outcome = inFlight?.then(
+			() => "resolved",
+			(error: unknown) => (error instanceof Error ? error.name : "non-error"),
+		);
+		// Let the sampler reach its provider: on macOS that is a spawned `ps` child.
+		await new Promise((resolve) => setImmediate(resolve));
+		const during = children();
+		if (platform() === "darwin") expect(during.length).toBeGreaterThan(0);
+		// Linux reads /proc in-process (one `getconf` child on the first sample, possibly already gone), so
+		// no child is asserted there; the AbortError below is the provider's own cancellation evidence.
 		await poll.dispose();
+		expect(await outcome).toBe("AbortError");
+		expect(update).not.toHaveBeenCalled();
 		expect(children()).toEqual([]);
 		expect(timers()).toBeLessThanOrEqual(before);
 	});
@@ -73,11 +109,11 @@ describe("published sampler source on this host", () => {
 	it("drives a real poll for two updates, then closes cleanly", async () => {
 		const updates: string[] = [];
 		const before = timers();
-		const poll = new MonPoll(createSamplerSource(), (s) => updates.push(s.status), undefined, 100);
+		const poll = new MonPoll(createSamplerSource(), (s) => updates.push(`${s.status}/${s.cpuState}`), undefined, 100);
 		poll.start();
 		for (let i = 0; i < 100 && updates.length < 2; i++) await sleep(20);
 		await poll.dispose();
-		expect(updates.slice(0, 2)).toEqual(["warming", "live"]);
+		expect(updates.slice(0, 2)).toEqual(["live/warming", "live/available"]);
 		expect(children()).toEqual([]);
 		expect(timers()).toBeLessThanOrEqual(before);
 	});
@@ -95,13 +131,16 @@ describe("published sampler source on this host", () => {
 describe("sampler snapshot mapping", () => {
 	it("keeps warming and unavailable metrics unknown, never zero", () => {
 		const warming = toMonSnapshot(raw({ cpu: { state: "warming", reason: "first sample" } }));
-		expect(warming.status).toBe("warming");
+		expect(warming.status).toBe("live");
+		expect(warming.cpuState).toBe("warming");
+		expect(warming.sampledAtMs).toBe(10_000);
 		expect(warming.cpuPercent).toBeNull();
 		expect(warming.notice).toBeUndefined();
 		const frozen = toMonSnapshot(raw({ cpu: { state: "warming", reason: "CPU counters have not advanced" } }), false);
 		expect(frozen.notice).toBe("Host CPU warming: CPU counters have not advanced");
 		const unavailable = toMonSnapshot(raw({ cpu: { state: "unavailable", reason: "x" } }));
 		expect(unavailable.status).toBe("live");
+		expect(unavailable.cpuState).toBe("unavailable");
 		expect(unavailable.cpuPercent).toBeNull();
 		expect(unavailable.notice).toContain("Host CPU unavailable");
 		const linux = toMonSnapshot(raw());

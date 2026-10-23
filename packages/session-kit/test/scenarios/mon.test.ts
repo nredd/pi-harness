@@ -61,7 +61,7 @@ it("/mon shows two real observations, every size, then releases sampling on clos
 	fixture = new TerminalFixture();
 	const host = await fixture.startTerminal(configFor("mon"));
 	await fixture.open("/mon");
-	await until((s) => s.includes("WARMING") && SAMPLED.test(s));
+	await until((s) => s.includes("LIVE") && s.includes("-- warming") && SAMPLED.test(s));
 	expect(fixture.clock.pending).toBe(1);
 	await sleep(150);
 	fixture.clock.advance(2000);
@@ -112,7 +112,7 @@ it("/mon reopens after close with a fresh warming baseline", async () => {
 	await fixture.startTerminal(configFor("mon"));
 	for (let round = 0; round < 2; round++) {
 		await fixture.open("/mon");
-		await until((s) => s.includes("WARMING") && SAMPLED.test(s));
+		await until((s) => s.includes("LIVE") && s.includes("-- warming") && SAMPLED.test(s));
 		await fixture.close(round ? "\x1b" : "q");
 		expect(fixture.clock.pending).toBe(0);
 	}

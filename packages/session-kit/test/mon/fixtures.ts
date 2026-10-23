@@ -11,7 +11,9 @@ export function snapshot(cpuPercent = 36.2, platform: "linux" | "darwin" = "linu
 		memoryTotalBytes: raw.memory.totalBytes,
 		load: raw.loadAverage,
 		capturedAt: raw.wallTimeMs,
+		sampledAtMs: raw.monotonicTimeMs,
 		status: "live",
+		cpuState: "available",
 		processes: raw.processes.map((p) => ({
 			identity: p.identity,
 			pid: p.pid,

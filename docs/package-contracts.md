@@ -64,7 +64,9 @@ appends to the session branch; discovery alone is not sufficient evidence.
 What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
-  `CHANGELOG.md` (router), `dist/pi-stats-export.mjs` + `docs/stats-snapshots.md` (session-kit) and
+  `CHANGELOG.md` (router), `dist/pi-stats-export.mjs`, `docs/stats-snapshots.md` and
+  `docs/mon-dashboard.md` (session-kit, all required: the README links both docs, see
+  `test_session_kit_readme_links_only_packed_files`) and
   `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`). computer-use is
   also pinned by exact `packed_files` (45 paths).
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
