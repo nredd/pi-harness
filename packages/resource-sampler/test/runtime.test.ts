@@ -1,6 +1,7 @@
 // Real-host privacy and CPU checks. Runs under Vitest (Node) and `bun test` (Bun): both runtimes ship it.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { readFileSync, realpathSync } from "node:fs";
 import { basename } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -9,31 +10,90 @@ import { createResourceSampler } from "../src/index.js";
 
 const runtime = typeof process.versions.bun === "string" ? `bun ${process.versions.bun}` : `node ${process.version}`;
 
-/** A child whose argv[0], argv, environment, process title and (Linux) comm all carry the secret. */
-async function hostileChild(secret: string): Promise<ChildProcess> {
-	const script = [
-		"const secret = process.env.SAMPLER_SENTINEL;",
-		// biome-ignore lint/suspicious/noTemplateCurlyInString: the child evaluates this template itself.
-		"process.title = `npm exec ${secret} mcp`;",
-		'if (process.platform === "linux") require("node:fs").writeFileSync("/proc/self/comm", secret);',
-		'process.stdout.write("ready\\n");',
-		"setInterval(() => {}, 1000);",
-	].join("\n");
-	const child = spawn(process.execPath, ["-e", script, secret], {
-		argv0: `npm exec ${secret} mcp`,
+/** Library maxima, so a busy host fails with explicit coverage instead of silently missing the child. */
+const BOUNDS = { maxDurationMs: 5000, maxPids: 16384, maxBytes: 16_777_216 };
+const READY_MS = 5000;
+const STOP_MS = 2000;
+
+/** argv[0], argv, environment, process title and (Linux) comm all carry the secret. */
+const HOSTILE = [
+	"const secret = process.env.SAMPLER_SENTINEL;",
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: the child evaluates this template itself.
+	"process.title = `npm exec ${secret} mcp`;",
+	'if (process.platform === "linux") require("node:fs").writeFileSync("/proc/self/comm", secret);',
+	'process.stdout.write("ready\\n");',
+	"setInterval(() => {}, 1000);",
+].join("\n");
+
+/** Spawn only; the caller must hand the child to `supervise` before anything else can throw. */
+function launch(secret: string, script = HOSTILE, disguise = true): ChildProcess {
+	return spawn(process.execPath, ["-e", script, secret], {
+		argv0: disguise ? `npm exec ${secret} mcp` : process.execPath,
 		env: { PATH: "/usr/bin:/bin", SAMPLER_SENTINEL: secret },
 		stdio: ["ignore", "pipe", "ignore"],
 	});
-	let output = "";
-	child.stdout?.on("data", (data: Buffer) => {
-		output += data.toString("utf8");
+}
+
+/** True once the runtime reaped this exact child: its own wait status, never a reusable PID probe. */
+function exited(child: ChildProcess): boolean {
+	return child.exitCode !== null || child.signalCode !== null;
+}
+
+/** Wait for `child` to exit, at most `ms`, like `integration/inprocess/support.ts`. */
+async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
+	if (exited(child)) return true;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<false>((resolve) => {
+		timer = setTimeout(() => resolve(false), ms);
 	});
-	const deadline = Date.now() + 5000;
-	while (!output.includes("ready\n")) {
-		if (Date.now() > deadline || child.exitCode !== null) throw new Error("hostile child did not start");
-		await delay(10);
+	try {
+		return await Promise.race([once(child, "exit").then(() => true as const), timeout]);
+	} finally {
+		clearTimeout(timer);
 	}
-	return child;
+}
+
+/** SIGTERM, bounded wait, then SIGKILL and one more bounded wait; a survivor fails the test. */
+async function stop(child: ChildProcess): Promise<void> {
+	if (child.pid === undefined || exited(child)) return;
+	child.kill("SIGTERM");
+	if (await exitedWithin(child, STOP_MS)) return;
+	child.kill("SIGKILL");
+	if (!(await exitedWithin(child, STOP_MS))) throw new Error(`child ${child.pid} survived SIGKILL`);
+}
+
+/** Resolve on the child's `ready` line; reject on exit, spawn error or `ms`. */
+function ready(child: ChildProcess, ms: number): Promise<void> {
+	return new Promise((resolve, reject) => {
+		let output = "";
+		const finish = (error?: Error) => {
+			clearTimeout(timer);
+			child.stdout?.off("data", data);
+			child.off("exit", exit);
+			child.off("error", finish);
+			if (error) reject(error);
+			else resolve();
+		};
+		const data = (chunk: Buffer) => {
+			output += chunk.toString("utf8");
+			if (output.includes("ready\n")) finish();
+		};
+		const exit = () => finish(new Error("child exited before readiness"));
+		const timer = setTimeout(() => finish(new Error(`child not ready within ${ms} ms`)), ms);
+		child.stdout?.on("data", data);
+		child.once("exit", exit);
+		child.once("error", finish);
+	});
+}
+
+/** Every step after spawn, readiness included, runs inside the try that reaps the child. */
+async function supervise<T>(child: ChildProcess, readyMs: number, body: (pid: number) => Promise<T>): Promise<T> {
+	try {
+		await ready(child, readyMs);
+		return await body(child.pid as number);
+	} finally {
+		await stop(child);
+	}
 }
 
 /** The pre-0.1.1 name sources must really carry the secret, or this test proves nothing. */
@@ -42,30 +102,48 @@ function legacySourceLeaks(pid: number, secret: string): boolean {
 	return execFileSync("/bin/ps", ["-c", "-o", "comm=", "-p", String(pid)], { encoding: "utf8" }).includes(secret);
 }
 
+/** Negative control, then the privacy check against the actual sampler. */
+async function privacy(pid: number, secret: string): Promise<void> {
+	if (!legacySourceLeaks(pid, secret)) throw new Error("0.1.0 name source does not carry the secret");
+	const sampler = createResourceSampler(BOUNDS);
+	try {
+		const snapshot = await sampler.sample();
+		const serialized = JSON.stringify(snapshot);
+		// 12 hex characters: any comm-length (15 byte) or p_comm (16 byte) fragment of the secret.
+		for (let i = 0; i + 12 <= secret.length; i++) expect(serialized).not.toContain(secret.slice(i, i + 12));
+		const own = snapshot.processes.find((entry) => entry.pid === pid);
+		if (!own) throw new Error(`child ${pid} not observed within sampler bounds: ${JSON.stringify(snapshot.coverage)}`);
+		const names = [process.execPath, realpathSync(process.execPath)].map((path) =>
+			process.platform === "darwin" ? basename(path).slice(0, 16) : basename(path),
+		);
+		expect(names).toContain(own.name);
+		for (const reason of snapshot.coverage.reasons) expect(reason).toMatch(/^[a-z-]+$/);
+		console.info(JSON.stringify({ runtime, childName: own.name, coverage: snapshot.coverage }));
+	} finally {
+		await sampler.dispose();
+	}
+}
+
 describe(`actual sampler on ${runtime}`, () => {
 	it("never reports argv, environment, process title or writable comm, even for a hostile process", async () => {
 		const secret = randomBytes(16).toString("hex");
-		const child = await hostileChild(secret);
-		const sampler = createResourceSampler({ maxDurationMs: 2000 });
-		try {
-			const pid = child.pid as number;
-			expect(legacySourceLeaks(pid, secret)).toBe(true);
-			const snapshot = await sampler.sample();
-			const serialized = JSON.stringify(snapshot);
-			// 12 hex characters: any comm-length (15 byte) or p_comm (16 byte) fragment of the secret.
-			for (let i = 0; i + 12 <= secret.length; i++) expect(serialized).not.toContain(secret.slice(i, i + 12));
-			const own = snapshot.processes.find((entry) => entry.pid === pid);
-			const names = [process.execPath, realpathSync(process.execPath)].map((path) =>
-				process.platform === "darwin" ? basename(path).slice(0, 16) : basename(path),
-			);
-			expect(names).toContain(own?.name);
-			for (const reason of snapshot.coverage.reasons) expect(reason).toMatch(/^[a-z-]+$/);
-			console.info(JSON.stringify({ runtime, childName: own?.name, coverage: snapshot.coverage }));
-		} finally {
-			child.kill("SIGKILL");
-			await sampler.dispose();
-		}
-	});
+		const child = launch(secret);
+		await supervise(child, READY_MS, (pid) => privacy(pid, secret));
+		expect(exited(child)).toBe(true);
+	}, 20_000);
+	it("reaps a child that never becomes ready", async () => {
+		const child = launch(randomBytes(16).toString("hex"), "setInterval(() => {}, 1000);");
+		await expect(supervise(child, 300, async () => {})).rejects.toThrow("child not ready within 300 ms");
+		expect(child.signalCode).toBe("SIGTERM");
+	}, 10_000);
+	it("reaps the child when the negative control fails", async () => {
+		const secret = randomBytes(16).toString("hex");
+		const child = launch(secret, 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);', false);
+		await expect(supervise(child, READY_MS, (pid) => privacy(pid, secret))).rejects.toThrow(
+			"0.1.0 name source does not carry the secret",
+		);
+		expect(child.signalCode).toBe("SIGTERM");
+	}, 15_000);
 	it("measures host CPU from the second sample on, without stale runtime counters", async () => {
 		const sampler = createResourceSampler({ maxDurationMs: 2000 });
 		try {

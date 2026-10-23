@@ -155,6 +155,128 @@ RESOURCE_SAMPLER_FILES = (
         for suffix in ("js", "d.ts")
     ),
 )
+# The hostile child puts a random secret in argv[0], its process title and (Linux) comm.
+SAMPLER_HOSTILE_CHILD = """process.title = process.env.S;
+if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
+console.log('ready'); setInterval(() => {}, 1000);"""
+# Every process the library can bound, so a busy host fails with explicit coverage, never a silent pass.
+SAMPLER_PROBE_BOUNDS = {"maxDurationMs": 5000, "maxPids": 16384, "maxBytes": 16_777_216}
+SAMPLER_PROBE_BODY = """
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+const STOP_MS = 2000;
+const exited = child => child.exitCode !== null || child.signalCode !== null;
+// Wait for this exact ChildProcess's reaped exit status, never a PID probe that reuse could fool.
+async function exitedWithin(child, ms) {
+    if (exited(child)) return true;
+    const timer = new AbortController();
+    try {
+        const exit = once(child, 'exit').then(() => true);
+        return await Promise.race([exit, delay(ms, false, {signal: timer.signal})]);
+    } finally { timer.abort(); }
+}
+// SIGTERM, bounded wait, then SIGKILL and one more bounded wait, like integration/inprocess/support.ts.
+async function stop(child) {
+    if (child.pid === undefined || exited(child)) return;
+    child.kill('SIGTERM');
+    if (await exitedWithin(child, STOP_MS)) return;
+    child.kill('SIGKILL');
+    if (!(await exitedWithin(child, STOP_MS))) throw new Error(`hostile child ${child.pid} survived SIGKILL`);
+}
+function ready(child, ms) {
+    return new Promise((resolve, reject) => {
+        let output = '';
+        const finish = error => {
+            clearTimeout(timer);
+            child.stdout.off('data', data);
+            child.off('exit', exit);
+            child.off('error', finish);
+            if (error) reject(error); else resolve();
+        };
+        const data = chunk => { output += chunk; if (output.includes('ready\\n')) finish(); };
+        const exit = () => finish(new Error('hostile child exited before readiness'));
+        const timer = setTimeout(() => finish(new Error(`hostile child not ready within ${ms} ms`)), ms);
+        child.stdout.on('data', data);
+        child.once('exit', exit);
+        child.once('error', finish);
+    });
+}
+const secret = randomBytes(16).toString('hex');
+const hostile = spawn(process.execPath, ['-e', CHILD_SCRIPT], {
+    argv0: DISGUISE ? secret : process.execPath, env: {S: secret}, stdio: ['ignore', 'pipe', 'ignore'],
+});
+// Everything after spawn is inside this try, so readiness or negative-control failures still reap it.
+try {
+    await ready(hostile, READY_MS);
+    // Negative control: the 0.1.0 name source (Darwin `ps -c` comm, Linux comm) really carries the secret.
+    const legacy = process.platform === 'linux'
+        ? readFileSync(`/proc/${hostile.pid}/comm`, 'utf8').trim() === secret.slice(0, 15)
+        : execFileSync('/bin/ps', ['-c', '-o', 'comm=', '-p', `${hostile.pid}`]).toString().includes(secret);
+    assert.ok(legacy, 'hostile child does not expose the secret through the 0.1.0 name source');
+    const { createResourceSampler } = await import('@nredd/pi-resource-sampler');
+    const sampler = createResourceSampler(BOUNDS);
+    try {
+        const first = await sampler.sample();
+        assert.equal(first.cpu.state, 'warming');
+        await delay(60);
+        const second = await sampler.sample();
+        assert.equal(second.cpu.state, 'available');
+        assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
+        const coverage = JSON.stringify(second.coverage);
+        const seen = pid => second.processes.some(p => p.pid === pid);
+        assert.ok(seen(process.pid), `probe not observed within bounds: ${coverage}`);
+        assert.ok(seen(hostile.pid), `hostile child not observed within bounds: ${coverage}`);
+        // Every 12-char window: shorter than Linux comm (15 bytes) and Darwin p_comm (16 bytes) fragments.
+        const text = JSON.stringify([first, second]);
+        for (let i = 0; i + 12 <= secret.length; i++)
+            assert.ok(!text.includes(secret.slice(i, i + 12)), 'process names expose argv, title or comm');
+        const controller = new AbortController();
+        controller.abort();
+        await assert.rejects(sampler.sample(controller.signal));
+    } finally { await sampler.dispose(); }
+    await assert.rejects(sampler.sample(), /disposed/);
+} finally {
+    await stop(hostile);
+    const status = hostile.signalCode ?? hostile.exitCode;
+    console.error(exited(hostile) ? `hostile child reaped: ${status}` : 'hostile child never spawned');
+}
+"""
+
+
+def resource_sampler_probe(
+    child_script: str = SAMPLER_HOSTILE_CHILD, *, disguise: bool = True, ready_ms: int = 5000
+) -> str:
+    """Build the installed-library probe around one disposable child.
+
+    The defaults are the shipped contract. Tests inject a silent, exiting or undisguised child to prove
+    readiness and negative-control failures still reap it.
+
+    Parameters:
+        child_script (str): Node program the child evaluates; it prints `ready` once observable.
+        disguise (bool): Whether the child's argv[0] is the secret rather than the Node executable.
+        ready_ms (int): Readiness bound in milliseconds.
+
+    Returns:
+        str: ESM program for `node --input-type=module -e`.
+
+    Raises:
+        ValueError: If `ready_ms` is not positive.
+    """
+    if ready_ms <= 0:
+        raise ValueError(f"`ready_ms` must be positive: '{ready_ms}'")
+    config = (
+        f"const CHILD_SCRIPT = {json.dumps(child_script)};\n"
+        f"const DISGUISE = {json.dumps(disguise)};\n"
+        f"const READY_MS = {ready_ms};\n"
+        f"const BOUNDS = {json.dumps(SAMPLER_PROBE_BOUNDS)};\n"
+    )
+    return config + SAMPLER_PROBE_BODY
+
+
 RESOURCE_SAMPLER_CONTRACT = PackageContract(
     name="@nredd/pi-resource-sampler",
     directory="resource-sampler",
@@ -163,49 +285,7 @@ RESOURCE_SAMPLER_CONTRACT = PackageContract(
     exposes_tools=frozenset(),
     packed_files=RESOURCE_SAMPLER_FILES,
     library=True,
-    node_probe="""
-import assert from 'node:assert/strict';
-import { setTimeout } from 'node:timers/promises';
-import { execFileSync, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { createResourceSampler } from '@nredd/pi-resource-sampler';
-// argv[0], process title and Linux comm all carry a random secret that names must never expose.
-const secret = randomBytes(16).toString('hex');
-const hostile = spawn(process.execPath, ['-e', `process.title = process.env.S;
-if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
-console.log('ready'); setInterval(() => {}, 1000);`], {
-    argv0: secret, env: {S: secret}, stdio: ['ignore', 'pipe', 'ignore'],
-});
-await new Promise((resolve, reject) => {
-    hostile.stdout.once('data', resolve);
-    hostile.once('exit', reject);
-});
-// Negative control: the 0.1.0 name source (Darwin `ps -c` comm, Linux comm) really carries the secret.
-const legacy = process.platform === 'linux'
-    ? readFileSync(`/proc/${hostile.pid}/comm`, 'utf8').trim() === secret.slice(0, 15)
-    : execFileSync('/bin/ps', ['-c', '-o', 'comm=', '-p', `${hostile.pid}`]).toString().includes(secret);
-assert.ok(legacy, 'hostile child does not expose the secret through the 0.1.0 name source');
-const sampler = createResourceSampler({maxDurationMs: 2000});
-try {
-    const first = await sampler.sample();
-    assert.equal(first.cpu.state, 'warming');
-    await setTimeout(60);
-    const second = await sampler.sample();
-    assert.equal(second.cpu.state, 'available');
-    assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
-    assert.ok(second.processes.some(p => p.pid === process.pid));
-    assert.ok(second.processes.some(p => p.pid === hostile.pid));
-    // Every 12-char window: shorter than Linux comm (15 bytes) and Darwin p_comm (16 bytes) fragments.
-    const text = JSON.stringify([first, second]);
-    for (let i = 0; i + 12 <= secret.length; i++)
-        assert.ok(!text.includes(secret.slice(i, i + 12)), 'process names expose argv, title or comm');
-    const controller = new AbortController();
-    controller.abort();
-    await assert.rejects(sampler.sample(controller.signal));
-} finally { hostile.kill('SIGKILL'); await sampler.dispose(); }
-await assert.rejects(sampler.sample(), /disposed/);
-""",
+    node_probe=resource_sampler_probe(),
 )
 
 
