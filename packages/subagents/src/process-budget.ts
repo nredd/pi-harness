@@ -107,8 +107,6 @@ export const BUDGET_QUEUE_FULL_ERROR =
   `Subagent queue is full (${MAX_PENDING_SUBAGENTS} waiting for the process-wide maxActiveSubagents limit). `
   + "Wait for running agents to finish, or do the work directly.";
 
-let privateState: BudgetState | undefined;
-
 function freshState(): BudgetState {
   return {
     version: BUDGET_VERSION,
@@ -123,8 +121,8 @@ function freshState(): BudgetState {
 
 /**
  * The process's budget state. An incompatible version (a `/reload` onto a
- * build that changed the shape) gets a private budget instead of corrupting
- * the shared one; restarting pi restores a single count.
+ * build that changed the shape) refuses budget operations until pi restarts.
+ * Never fork the state: two private counts could each admit the whole cap.
  */
 function state(): BudgetState {
   const g = globalThis as Record<symbol, unknown>;
@@ -135,13 +133,10 @@ function state(): BudgetState {
     return created;
   }
   if (existing.version === BUDGET_VERSION) return existing;
-  if (privateState === undefined) {
-    console.warn(
-      `[pi-subagents] process budget v${String(existing.version)} already loaded; this instance uses a private budget until pi restarts`,
-    );
-    privateState = freshState();
-  }
-  return privateState;
+  throw new Error(
+    `[pi-subagents] Incompatible process budget v${String(existing.version)} already loaded (this build uses v${String(BUDGET_VERSION)}). `
+    + "Restart pi before starting more subagents; no private budget will be created.",
+  );
 }
 
 /** The deepest level `policy` reserves for; nesting off still means one level. */
@@ -209,6 +204,11 @@ export function setBudgetPolicy(next: BudgetPolicy): void {
     pumpBudget();
   } else {
     s.pendingPolicy = policy;
+    console.warn(
+      `[pi-subagents] Process budget change deferred until all running subagents settle: `
+      + `maxActiveSubagents=${String(policy.maxActive)}, nestedSubagentReserve=${String(policy.nestedReserve)}, `
+      + `maxSubagentDepth=${String(policy.maxDepth)}. The previous policy remains in force; continuous work can delay this indefinitely.`,
+    );
   }
 }
 
@@ -263,13 +263,14 @@ function newLease(s: BudgetState, depth: number): BudgetLease {
 }
 
 /**
- * Take a lease now, or undefined when this depth is at its limit. Never jumps
- * the queue: `pumpBudget` runs after every change, so no waiter is eligible
- * between calls, and a caller here competes only with ineligible waiters.
+ * Take a lease now, or undefined when this depth is at its limit or an earlier
+ * eligible waiter has first claim. Completion listeners can spawn synchronously
+ * between release and drain; re-entrant grant callbacks can do the same.
  */
 export function tryAcquireBudget(depth: number): BudgetLease | undefined {
   const s = state();
-  return admits(s, depth) ? newLease(s, depth) : undefined;
+  if (!admits(s, depth) || s.waiters.some(waiter => admits(s, waiter.depth) && waiter.ready())) return undefined;
+  return newLease(s, depth);
 }
 
 /** Whether another waiter fits. Always true while the budget is off. */
@@ -339,5 +340,4 @@ export function pumpBudget(): void {
 export function resetBudgetForTests(): void {
   const g = globalThis as Record<symbol, unknown>;
   g[BUDGET_KEY] = freshState();
-  privateState = undefined;
 }
