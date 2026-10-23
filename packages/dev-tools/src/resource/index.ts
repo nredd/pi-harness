@@ -190,8 +190,13 @@ export async function resourceSnapshot(
 	try {
 		snapshot = await collectSnapshot(sampler, options, limit, intervalMs, signal);
 	} catch (error) {
-		// The caller needs the sample, abort or probe failure, not a secondary cleanup failure.
-		await sampler.dispose().catch(() => undefined);
+		// The caller needs the sample, abort or probe failure, not a secondary cleanup failure, whether an
+		// injected `dispose` rejects or throws synchronously.
+		try {
+			await sampler.dispose();
+		} catch {
+			// Deliberately dropped: `error` is the primary failure.
+		}
 		throw error;
 	}
 	await sampler.dispose();

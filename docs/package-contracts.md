@@ -77,8 +77,10 @@ What each package must satisfy:
 - Every import is a `node:` builtin, a host module, a declared runtime dependency, or a relative path
   inside the package. No `@nredd/*` sibling, with one narrow exception: an exact `SHARED_LIBRARIES`
   specifier (only the `library=True` `@nredd/pi-resource-sampler`) that the importing plugin's
-  contract also declares as an exact runtime dependency at `RESOURCE_SAMPLER_VERSION`. Both constants
-  are defined once, in `scripts/package_contracts.py`, and serve both consumers: dev-tools'
+  contract also declares as an exact runtime dependency at `RESOURCE_SAMPLER_VERSION`.
+  `SHARED_LIBRARIES` maps each library to that common pin, and `shared_library_pin_problems` (run by
+  `audit_manifest`, and over every contract in the tests) refuses a consumer declaring any other exact
+  version, so the two consumers cannot drift apart. Both constants are defined once, in `scripts/package_contracts.py`, and serve both consumers: dev-tools'
   `resource_snapshot` (#128) and session-kit's `/mon` (#123). Bare specifier only. Deep imports,
   undeclared or ranged dependencies, `workspace:`/`file:` specs, imports from a library and imports
   from a standalone artifact (session-kit's stats `dist/`) all stay violations; whichever PR lands
@@ -113,10 +115,16 @@ What each package must satisfy:
   `--no-mcp`, `--offline`, no skills/templates/themes/context files, `--no-approve`:
   - dev-tools: a real `git_status` result on a disposable repo (`untracked.txt`), and an error result
     outside a repository. Then a real parent-child discovery: the gate starts an idle, small `node`
-    child, and one complete, unranked scan by the sampler the installed plugin directory resolves
-    (checked to be the installed registry copy) must contain exactly that PID with `parentPid` equal to
-    the gate process, confirmed by an independent `/bin/ps`. Inclusion is not tied to the tool's top-50
-    ranking, so a host with many larger or busier processes cannot hide it; the probe prints only PIDs.
+    child, and one unranked scan by the sampler the installed plugin directory resolves (checked to be
+    the installed registry copy) must contain exactly that PID with `parentPid` equal to the gate
+    process, confirmed by an independent `/bin/ps`. Inclusion is not tied to the tool's top-50
+    ranking, so a host with many larger or busier processes cannot hide it. The scan need NOT be
+    complete: any process exiting mid-scan marks it partial, so requiring `coverage.complete` would
+    make the gate host-flaky. Only `process-collection-unavailable` fails it outright; otherwise the
+    target is the known child, and a miss reports the scan's `coverage` (complete or PARTIAL with
+    sampled/enumerated counts and reasons such as `deadline`, `pid-limit`, `byte-limit`), so a
+    truncated scan is never reported as a missing child. The probe prints only PIDs and coverage
+    counters, never names.
     With the child still running, `resource_snapshot` with `process_limit: 50` must return exactly
     `min(50, coverage.sampled)` entries carrying only `pid`/`parentPid`/`cpu`/`rssBytes`/`executable`,
     ranked `interval-cpu` on Linux and `rss` on Darwin. `process_limit: 51` must be an error result.
@@ -125,8 +133,10 @@ What each package must satisfy:
     the lock's `resolved` equal to the published tarball URL (queried through the credential-free
     sandbox; URLs in errors drop userinfo and query). Cancellation is not driven through headless Pi.
     The package tests cancel the registry-installed sampler while its first scan is in flight (checked
-    pending at abort, no helper child left) and mid-interval; faked samplers cover a pre-aborted call,
-    cancellation after the second sample, and disposal failures (the primary error or abort wins)
+    pending at abort, the sampler's own scan rejected with the exact abort reason rather than a later
+    interval wait, no helper child left) and mid-interval; faked samplers cover a pre-aborted call,
+    cancellation after the second sample, and disposal failures, rejected or thrown synchronously (the
+    primary error or abort wins)
   - session-kit: real `monitor_start`/`monitor_read` output, then the exact packed bytes of
     `dist/pi-stats-export.mjs` copied ALONE into a fresh directory (no `src/`, package or
     `node_modules` beside or above it) and run with only `node` from another unrelated directory,
