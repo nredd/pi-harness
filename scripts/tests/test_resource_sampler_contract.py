@@ -7,6 +7,8 @@ References:
 from __future__ import annotations
 
 import json
+import os
+import select
 import subprocess
 from pathlib import Path
 
@@ -100,28 +102,44 @@ def test_library_probe_runs_on_installed_bytes(tmp_path: Path, monkeypatch: pyte
     assert calls[1]["cwd"] == tmp_path / "install"
 
 
+NEGATIVE_CONTROL = "hostile child does not expose the secret through the 0.1.0 name source"
+SILENT = "setInterval(() => {}, 1000);"
+READY = "console.log('ready'); setInterval(() => {}, 1000);"
+
+
 @pytest.mark.parametrize(
-    ("child_script", "disguise", "failure", "status"),
+    ("probe", "failure", "status"),
     [
+        # Only the deliberately never-ready child gets a short deadline; the rest keep the shipped one.
         pytest.param(
-            "setInterval(() => {}, 1000);",
-            True,
+            pc.resource_sampler_probe(SILENT, ready_ms=300),
             "hostile child not ready within 300 ms",
             "SIGTERM",
             id="silent",
         ),
-        pytest.param("process.exit(3);", True, "hostile child exited before readiness", "3", id="exits"),
         pytest.param(
-            "console.log('ready'); setInterval(() => {}, 1000);",
-            False,
-            "hostile child does not expose the secret through the 0.1.0 name source",
+            pc.resource_sampler_probe("process.exit(3);"),
+            "hostile child exited before readiness",
+            "3",
+            id="exits",
+        ),
+        pytest.param(
+            pc.resource_sampler_probe(READY, disguise=False),
+            NEGATIVE_CONTROL,
             "SIGTERM",
             id="negative-control",
+        ),
+        # Installs its handler before `ready`, so SIGTERM is really ignored and only SIGKILL reaps it.
+        pytest.param(
+            pc.resource_sampler_probe(f"process.on('SIGTERM', () => {{}}); {READY}", disguise=False),
+            NEGATIVE_CONTROL,
+            "SIGKILL",
+            id="ignores-sigterm",
         ),
     ],
 )
 def test_library_probe_reaps_child_when_setup_fails(
-    tmp_path: Path, child_script: str, disguise: bool, failure: str, status: str
+    tmp_path: Path, probe: str, failure: str, status: str
 ) -> None:
     """Run the real probe with a broken child: it must fail for that reason and still reap the child.
 
@@ -131,12 +149,10 @@ def test_library_probe_reaps_child_when_setup_fails(
 
     Parameters:
         tmp_path (Path): Empty working directory without the library installed.
-        child_script (str): Broken child program.
-        disguise (bool): Whether the child's argv[0] carries the secret.
+        probe (str): Probe program around a broken child.
         failure (str): Expected setup failure.
         status (str): Expected exit code or terminating signal of the reaped child.
     """
-    probe = pc.resource_sampler_probe(child_script, disguise=disguise, ready_ms=300)
     result = subprocess.run(
         [str(pc.locate_tools().node), "--input-type=module", "-e", probe],
         cwd=tmp_path,
@@ -148,6 +164,38 @@ def test_library_probe_reaps_child_when_setup_fails(
     assert result.returncode != 0
     assert failure in result.stderr
     assert f"hostile child reaped: {status}\n" in result.stderr
+
+
+def test_probe_timeout_kills_its_whole_process_group(tmp_path: Path) -> None:
+    """Time out the real probe while its child waits for readiness: no grandchild may survive.
+
+    The child holds the only writer of a FIFO and never prints `ready`, so the probe outlives the
+    `run` deadline. EOF on the FIFO after `run` returns proves every writer exited, without a
+    reusable PID probe; the first byte proves the child really opened it.
+
+    Parameters:
+        tmp_path (Path): Probe working directory holding the FIFO.
+    """
+    fifo = tmp_path / "alive.fifo"
+    os.mkfifo(fifo)
+    child = f"const fs = require('node:fs'); fs.writeSync(fs.openSync('alive.fifo', 'w'), 'x'); {SILENT}"
+    probe = pc.resource_sampler_probe(child, ready_ms=60_000)
+    reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        with pytest.raises(pc.ContractError, match="timed out after 2s"):
+            pc.run(
+                [pc.locate_tools().node, "--input-type=module", "-e", probe],
+                env={"PATH": "/usr/bin:/bin"},
+                cwd=tmp_path,
+                timeout=2,
+                own_group=True,
+            )
+        assert select.select([reader], [], [], 5)[0], "child never wrote to the FIFO"
+        assert os.read(reader, 1) == b"x"
+        assert select.select([reader], [], [], 5)[0], "grandchild still holds the FIFO 5s after the timeout"
+        assert os.read(reader, 1) == b""
+    finally:
+        os.close(reader)
 
 
 def test_library_probe_rejects_non_positive_readiness() -> None:
