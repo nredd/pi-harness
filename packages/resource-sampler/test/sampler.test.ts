@@ -1,7 +1,9 @@
-import type { CpuInfo } from "node:os";
+import { mkdtemp, readlink, rm, symlink } from "node:fs/promises";
+import { type CpuInfo, tmpdir } from "node:os";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Budget, command } from "../src/collect.js";
 import {
 	cpuSnapshot,
@@ -169,6 +171,40 @@ describe("bounded child lifecycle", () => {
 		const failed = new Budget(performance.now() + 1000, 4096, 10, new AbortController().signal);
 		expect((await command("/nonexistent-resource-sampler-fixture", [], failed)).complete).toBe(false);
 		expect(failed.reasons.has("command-unavailable")).toBe(true);
+	});
+});
+
+// Real readlink, except where a test forces a runtime result no real symlink can produce.
+vi.mock("node:fs/promises", async (original) => {
+	const actual = await original<typeof import("node:fs/promises")>();
+	return { ...actual, readlink: vi.fn(actual.readlink) };
+});
+
+describe("bounded executable links", () => {
+	it("charges readlink to the remaining byte budget and drops names beyond it", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "resource-sampler-"));
+		try {
+			const target = `/opt/${"d".repeat(100)}/tool`;
+			const link = join(dir, "exe");
+			await symlink(target, link);
+			const roomy = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
+			expect(await roomy.executable(link)).toBe("tool");
+			expect(roomy.bytesRead).toBe(target.length);
+			const tight = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
+			tight.bytesRead = 4096 - 50;
+			expect(await tight.executable(link)).toBe("");
+			expect(tight.bytesRead).toBe(4096);
+			expect([...tight.reasons]).toEqual(["byte-limit"]);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+	it("drops a target that fills Node's PATH_MAX readlink buffer, which may be truncated", async () => {
+		vi.mocked(readlink).mockResolvedValueOnce(Buffer.alloc(4096, "a"));
+		const budget = new Budget(performance.now() + 2000, 1 << 20, 10, new AbortController().signal);
+		expect(await budget.executable("/proc/1/exe")).toBe("");
+		expect(budget.bytesRead).toBe(4096);
+		expect([...budget.reasons]).toEqual(["file-byte-limit"]);
 	});
 });
 

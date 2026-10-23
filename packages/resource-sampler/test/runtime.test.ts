@@ -13,6 +13,7 @@ const runtime = typeof process.versions.bun === "string" ? `bun ${process.versio
 async function hostileChild(secret: string): Promise<ChildProcess> {
 	const script = [
 		"const secret = process.env.SAMPLER_SENTINEL;",
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: the child evaluates this template itself.
 		"process.title = `npm exec ${secret} mcp`;",
 		'if (process.platform === "linux") require("node:fs").writeFileSync("/proc/self/comm", secret);',
 		'process.stdout.write("ready\\n");',
