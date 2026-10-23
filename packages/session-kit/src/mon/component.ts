@@ -34,7 +34,7 @@ type Color = Parameters<Theme["fg"]>[0];
 
 /** Cards need this much room; below it a three-line summary keeps the process list usable. */
 const CARD_MIN_WIDTH = 72;
-const CARD_MIN_HEIGHT = 18;
+const CARD_MIN_HEIGHT = 17;
 const HISTORY_LIMIT = 120;
 
 const HELP = [
