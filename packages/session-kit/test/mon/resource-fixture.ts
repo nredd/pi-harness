@@ -1,6 +1,6 @@
-/** Deterministic ResourceSnapshot v1 fixture, checked against PR122's actual exported type.
- * No runtime/workspace sampler dependency: the published-package adapter remains a separate gate.
- */
+/** Deterministic ResourceSnapshot v1 fixture, type-checked against the published package's export. */
+import type { ResourceSnapshot } from "@nredd/pi-resource-sampler";
+
 export function resourceFixture(platform: "linux" | "darwin" = "linux", cpuPercent = 36.2) {
 	return {
 		version: 1 as const,
@@ -27,5 +27,5 @@ export function resourceFixture(platform: "linux" | "darwin" = "linux", cpuPerce
 		})),
 		coverage: { complete: true, enumerated: 40, sampled: 40, skipped: 0, bytesRead: 2000, reasons: [] as string[] },
 		pressure: { source: "unsupported" as const, reason: "Not part of this display fixture" },
-	};
+	} satisfies ResourceSnapshot;
 }

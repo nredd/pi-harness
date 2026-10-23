@@ -18,7 +18,11 @@ export interface MonSnapshot {
 	processes: readonly MonProcess[];
 	/** Local display time, never persisted. */
 	capturedAt: number;
+	/** Collection time of this capture, when the adapter measured it. */
+	scanMs?: number | null;
 	status: "live" | "warming" | "stale";
+	/** Process interval CPU cannot exist for this platform; the view then defaults to RSS order. */
+	processCpu?: "unavailable";
 	/** Safe, bounded diagnostic supplied by the adapter. */
 	notice?: string;
 }
@@ -53,22 +57,34 @@ export interface MonHistoryPoint {
 	value: number | null;
 }
 
-/** Time-proportional buckets; empty intervals stay gaps, never interpolated CPU. */
+/**
+ * Time-proportional buckets, newest on the right. A column is the typical sampling interval (lower
+ * median of consecutive captures), widened only when the history spans more than the width. Columns
+ * after the first capture with no sample are real gaps (`·`), never interpolated CPU; columns before
+ * it are blank because no history exists yet. The latest sample in a bucket wins.
+ */
 export function timeHistory(history: readonly MonHistoryPoint[], width: number): string {
 	const first = history[0];
 	const last = history.at(-1);
 	if (!first || !last || width < 1) return "";
 	const span = last.capturedAt - first.capturedAt;
-	if (span <= 0) return sparkline([last.value], width);
+	if (span <= 0) return sparkline([last.value], 1).padStart(width);
+	const deltas = history
+		.slice(1)
+		.map((point, i) => point.capturedAt - (history[i]?.capturedAt ?? point.capturedAt))
+		.filter((delta) => delta > 0)
+		.sort((a, b) => a - b);
+	const typical = deltas[Math.floor((deltas.length - 1) / 2)] ?? span;
+	const step = Math.max(typical, span / Math.max(1, width - 1));
 	const buckets: (number | null)[] = Array.from({ length: width }, () => null);
+	let oldest = width - 1;
 	for (const point of history) {
-		const index = Math.max(
-			0,
-			Math.min(width - 1, Math.round(((point.capturedAt - first.capturedAt) / span) * (width - 1))),
-		);
+		const index = width - 1 - Math.round((last.capturedAt - point.capturedAt) / step);
+		if (index < 0 || index >= width) continue;
 		buckets[index] = point.value;
+		oldest = Math.min(oldest, index);
 	}
-	return sparkline(buckets, width);
+	return " ".repeat(oldest) + sparkline(buckets.slice(oldest), width - oldest);
 }
 
 /** Fixed 0..100 host CPU scale: a quiet history must not look saturated. */

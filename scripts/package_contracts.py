@@ -155,6 +155,8 @@ RESOURCE_SAMPLER_FILES = (
         for suffix in ("js", "d.ts")
     ),
 )
+# Exact published release consumers install from the registry; never a range, workspace or file spec.
+RESOURCE_SAMPLER_VERSION = "0.1.0"
 RESOURCE_SAMPLER_CONTRACT = PackageContract(
     name="@nredd/pi-resource-sampler",
     directory="resource-sampler",
@@ -183,6 +185,9 @@ try {
 await assert.rejects(sampler.sample(), /disposed/);
 """,
 )
+# Compiled, Pi-independent `@nredd/` libraries a plugin may import, only when its contract declares the
+# exact registry release. Plugins remain banned from importing each other.
+SHARED_LIBRARIES = frozenset({RESOURCE_SAMPLER_CONTRACT.name})
 
 
 CONTRACTS = (
@@ -204,6 +209,7 @@ CONTRACTS = (
             re.compile(r"^docs/stats-snapshots\.md$"),
         ),
         exposes_tools=frozenset({"monitor_start", "monitor_read", "monitor_stop"}),
+        runtime_dependencies=((RESOURCE_SAMPLER_CONTRACT.name, RESOURCE_SAMPLER_VERSION),),
         standalone_artifacts=frozenset({STATS_ARTIFACT}),
     ),
     PackageContract(
@@ -1695,7 +1701,8 @@ def classify_imports(
 
     Allowed: Node builtins (`node:` prefix), host-provided Pi modules, the contract's declared runtime
     dependencies, and relative paths that stay inside the package. Everything else, including any
-    `@nredd/` sibling and any specifier the parser could not resolve to a literal, is a violation.
+    `@nredd/` sibling plugin and any specifier the parser could not resolve to a literal, is a violation.
+    A declared dependency in `SHARED_LIBRARIES` is the only allowed `@nredd/` import.
     Files in `standalone_artifacts` (the bundled stats `dist/` artifact) may import `node:` builtins
     only; relative imports are forbidden too, because it is copied alone.
 
@@ -1716,7 +1723,7 @@ def classify_imports(
     for spec in found.specifiers:
         if spec.startswith("node:"):
             continue
-        if spec.startswith(SIBLING_SCOPE):
+        if spec.startswith(SIBLING_SCOPE) and not (spec in dependencies and spec in SHARED_LIBRARIES):
             problems.append(f"{path}: imports sibling plugin '{spec}'")
         elif standalone:
             problems.append(

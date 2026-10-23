@@ -97,3 +97,48 @@ def test_library_probe_runs_on_installed_bytes(tmp_path: Path, monkeypatch: pyte
     assert calls[0] == {"kind": "install"}
     assert calls[1]["argv"] == [tools.node, "--input-type=module", "-e", contract.node_probe]
     assert calls[1]["cwd"] == tmp_path / "install"
+
+
+def session_kit() -> pc.PackageContract:
+    """Return the session-kit contract, the only declared consumer of the shared sampler.
+
+    Returns:
+        pc.PackageContract: Session-kit packaging contract.
+    """
+    return next(c for c in pc.CONTRACTS if c.name == "@nredd/pi-session-kit")
+
+
+def test_session_kit_declares_the_exact_published_sampler() -> None:
+    """The consumer pins one exact registry release, never a range, workspace or file spec."""
+    contract = session_kit()
+    assert contract.runtime_dependencies == (("@nredd/pi-resource-sampler", pc.RESOURCE_SAMPLER_VERSION),)
+    actual = json.loads((pc.REPO_ROOT / "packages/session-kit/package.json").read_text())
+    assert actual["dependencies"] == {"@nredd/pi-resource-sampler": pc.RESOURCE_SAMPLER_VERSION}
+    files = list(contract.required)
+    assert pc.audit_manifest(contract, actual, files) == []
+    for spec in ["^0.1.0", "workspace:*", "file:../resource-sampler", "0.0.0-bootstrap.0"]:
+        mutated = actual | {"dependencies": {"@nredd/pi-resource-sampler": spec}}
+        assert pc.audit_manifest(contract, mutated, files), spec
+
+
+def test_only_declared_shared_library_is_an_allowed_sibling_import() -> None:
+    """A declared shared library is importable; plugins, subpaths and undeclared use stay banned."""
+    files = ["src/a.ts"]
+    declared = ["@nredd/pi-resource-sampler"]
+
+    def problems(spec: str, dependencies: list[str]) -> list[str]:
+        found = pc.FileImports(specifiers=[spec], diagnostics=[])
+        return pc.classify_imports("src/a.ts", found, files, dependencies)
+
+    assert problems("@nredd/pi-resource-sampler", declared) == []
+    assert problems("@nredd/pi-resource-sampler", [])
+    assert problems("@nredd/pi-resource-sampler/dist/collect.js", declared)
+    assert problems("@nredd/pi-dev-tools", ["@nredd/pi-dev-tools"])
+    standalone = pc.classify_imports(
+        "dist/x.mjs",
+        pc.FileImports(specifiers=["@nredd/pi-resource-sampler"], diagnostics=[]),
+        ["dist/x.mjs"],
+        declared,
+        standalone_artifacts=["dist/x.mjs"],
+    )
+    assert standalone

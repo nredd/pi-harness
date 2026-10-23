@@ -1,4 +1,4 @@
-/** Command/lifecycle shell. Production registration awaits the published shared sampler adapter. */
+/** Command/lifecycle shell. Production wiring passes `createSamplerSource` (`source.ts`). */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Clock } from "../clock.ts";
 import { MonView } from "./component.ts";
