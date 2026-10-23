@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **An explicit `Agent({ thinking })` now overrides an agent frontmatter thinking default.** Specialist definitions keep supplying their declared level when the caller omits one, then the parent session supplies the fallback. Top-level, nested, scheduled and workflow/RPC programmatic dispatches preserve their existing explicit-effort semantics; resuming an existing session still uses that session's model and thinking level.
+
 ## [0.22.0-nredd.6] - 2026-10-21
 
 > **⚠️ Breaking: `strictAgentFiles: true` now requires a pi host that exports `ExtensionStartupError`.** On an older supported host, activation refuses before reading agent files. Upgrade pi or set `strictAgentFiles: false`.

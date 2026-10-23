@@ -163,7 +163,7 @@ Schedule formats:
 - **One-shot relative** — `"+10m"`, `"+2h"`, `"+1d"`. Fires once at that future time.
 - **One-shot absolute** — full ISO timestamp, e.g. `"2026-12-25T09:00:00.000Z"`.
 
-When a schedule fires, the spawn runs in background and its completion notification arrives the same way as a manually-spawned background agent's — your parent agent reasons about the result the same way.
+When a schedule fires, the spawn runs in background and its completion notification arrives the same way as a manually-spawned background agent's — your parent agent reasons about the result the same way. The job stores the resolved thinking level when you create it: an explicit `Agent({ thinking })` wins over the agent definition then, while an omitted value keeps the definition's default. Editing the agent file later does not replace that stored level.
 
 **Session switches.** `/new`, `/resume`, `/fork` and `/reload` do not stop running background agents. They keep showing in the fleet list of the reloaded session while they run (open, stop and steer work from there), finish on their own, and the session that spawned them gets the completion notification when you return to it (immediately if it is already open). Held notices survive the switch too: unread results are transferred to the session spool and re-enter the same boundary outbox on return, without repeating their history entries. The preview is in the notification; the full output is in the transcript file it names, since `get_subagent_result` cannot reach an agent from a previous session. Quitting pi still aborts everything.
 
@@ -437,7 +437,7 @@ All fields are optional — sensible defaults for everything.
 | `disallowed_tools` | — | Comma-separated tools to deny even if extensions provide them |
 | `isolation` | — | Set to `worktree` to run in an isolated git worktree, or `off` to refuse one even when the caller passes `isolation: "worktree"` (frontmatter is authoritative). Workflow scripts are the exception: as in Claude Code, only their `agent()` option decides. `none`, `no`, and `false` are accepted spellings of `off` |
 | `model` | inherit parent | Default model — `provider/modelId`, [machine-local alias](#machine-local-model-aliases), or fuzzy name (`"haiku"`, `"sonnet"`). An explicit `Agent({ model })` selection overrides this default. Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
-| `thinking` | inherit | off, minimal, low, medium, high, xhigh, max — actual availability depends on your pi version and model; pi clamps unsupported levels down |
+| `thinking` | inherit | Default thinking level: off, minimal, low, medium, high, xhigh, max — an explicit `Agent({ thinking })` overrides it for that run. Actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
 | `persist_session` | `subagents.json` `rememberAgents` (default `true`) | Persist this subagent as a normal pi session instead of keeping the session in memory only; overrides the `rememberAgents` project default in both directions. It records its spawning session as parent, so it nests under it in `/resume`. The subagent's `.output` transcript is still written either way unless `output_transcript: false` |
 | `output_transcript` | `true` (or `subagents.json` `outputTranscript`) | Write this subagent's `.output` transcript; when set, overrides the `subagents.json` `outputTranscript` default. Set `false` to write no transcript file or path. Governs only the transcript — independent of `persist_session`, `isolation: worktree`, and `memory:` |
@@ -449,7 +449,7 @@ All fields are optional — sensible defaults for everything.
 | `isolated` | `false` | Hermetic specialist mode: forces `extensions: false` + `skills: false` + drops `ext:` selectors. Only built-in tools. Distinct from `isolation: worktree` (filesystem) |
 | `enabled` | `true` | Set to `false` to disable an agent (useful for hiding a default agent per-project) |
 
-Frontmatter is authoritative for `thinking`, `max_turns`, `inherit_context`, `run_in_background`, `isolated`, and `isolation`. An agent file's `model` is its portable default; an explicit `Agent({ model })` selection overrides it. Other `Agent` tool parameters only fill fields the agent config leaves unspecified. Other spawn paths differ per field:
+Frontmatter is authoritative for `max_turns`, `inherit_context`, `run_in_background`, `isolated`, and `isolation`. An agent file's `model` and `thinking` are portable defaults: an explicit `Agent({ model, thinking })` selection overrides either for that run. With no explicit thinking level, the definition wins, then the parent session supplies the fallback; model selection additionally follows the [`agentModels`](#per-agent-models) precedence. Other `Agent` tool parameters only fill fields the agent config leaves unspecified. Other spawn paths differ per field:
 
 - `isolated` holds on every spawn path, including `@handle` mentions, workflows and [cross-extension RPC](https://github.com/tintinweb/pi-subagents/blob/master/docs/rpc.md).
 - `isolation` holds on every path except workflows: as in Claude Code, only the script's `agent()` option decides there.
@@ -587,7 +587,7 @@ Launch a sub-agent.
 | `thinking` | string | no | Thinking level: off, minimal, low, medium, high, xhigh, max (availability depends on pi version and model) |
 | `max_turns` | number | no | Max agentic turns. Omit for unlimited (default) |
 | `run_in_background` | boolean | no | Defaults to `true`; `false` blocks and returns the result inline, until [`ctrl+b`](#sending-a-foreground-agent-to-the-background) hands it to the background |
-| `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget |
+| `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget; its existing model and thinking level remain in effect, so this call's `model` and `thinking` are ignored |
 | `isolated` | boolean | no | No extension/MCP tools |
 | `isolation` | `"off"` \| `"worktree"` | no | `worktree` runs in an isolated git worktree; `off` (the default) does not. Absent from the schema entirely when `worktreeIsolation: false` |
 | `cwd` | string | no | Working directory for the agent: absolute, `~/`-prefixed, or relative to the session cwd. Default: the session cwd. With `isolation: "worktree"`, the worktree comes from the repo containing it; see [Worktree Isolation](#worktree-isolation). Not combinable with `schedule` |
@@ -872,7 +872,7 @@ Independent of `reportUsage`: this one is what you read, that one is what your s
 
 Off by default because the row already carries the description, turns, tool uses, tokens and elapsed time, and every character it gains is one the description loses on a narrow terminal. The other surfaces show the pair either way: the `Agent` tool result names the model beside its tags, and the conversation viewer's `↳` row spells out the canonical `provider/model-id`.
 
-Both places report what the run *actually* used, read back from the child session once pi has resolved its defaults and clamped the level to what the model supports — not what the call asked for. Where the thinking level differs from the request, because pi clamped it or the agent file's frontmatter outranked it, the request is kept beside the effective value rather than dropped. An explicit `model` always wins over frontmatter, so there's no model request to disclose:
+Both places report what the run *actually* used, read back from the child session once pi has resolved its defaults and clamped the level to what the model supports — not what the call asked for. Where Pi clamps the requested thinking level, the request is kept beside the effective value rather than dropped. An explicit `model` selection also overrides a frontmatter default; model resolution has no requested-versus-effective display:
 
 ```text
   ↳ anthropic/claude-haiku-4-5 · thinking: low (asked max) · background
