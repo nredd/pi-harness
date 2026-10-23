@@ -158,6 +158,27 @@ and every desktop tool (needs an interactive desktop with Accessibility/Screen R
 needs the registry for stock Pi; postinstall and native desktop behavior are NOT RUN, as the evidence records) runs the same gate through `npm_release.run_stock_contract`; CI's `contracts` job runs it on
 both OSes and uploads its report with the other `*contracts*.json` artifacts.
 
+## Compiled resource sampler library
+
+`make check-resource-sampler-contract` (also a prerequisite of `make check-package-contracts`)
+builds, packs, audits and installs `@nredd/pi-resource-sampler` alone, then runs the descriptor's
+fixed Node ESM consumer against those exact installed bytes. It samples the real host twice,
+checks aggregate CPU range and self-process visibility, and exercises cancellation and disposal. A
+child's argv[0], process title and Linux comm hold a random 32-hex secret; the probe first proves the
+0.1.0 name source (`ps -c` comm on Darwin, `/proc/PID/comm` on Linux) shows it, then requires the
+child in the second snapshot and no 12-character window of the secret anywhere in either snapshot.
+Existing `owned` macOS/Linux jobs run the native package tests; existing `contracts` jobs run this
+packed consumer. No new runner matrix or Pi load is needed for a Pi-independent library.
+
+`RESOURCE_SAMPLER_CONTRACT` explicitly opts into `library=True`: exact ESM `exports`, `types`,
+`files`, and eleven packed paths (four `.js`/`.d.ts` pairs plus manifest/README/LICENSE). No `pi`
+field, peers or runtime dependencies are allowed. Import auditing permits Node builtins and
+in-package relative imports, never host modules or sibling extensions. The default extension
+contract still requires `pi.extensions` and retains its original host-module rules. The release
+descriptor uses the same audit/isolated execution gate; no npm publication or bootstrap is performed.
+The new npm name requires owner-controlled staged publication/2FA and trusted-publisher setup before
+release. Consumer dependencies and migration are separate work, not a relaxed sibling import rule.
+
 ## Packed preset audit (no standalone Pi behavior)
 
 `@nredd/pi-preset` ships agents and themes only, so there is nothing to execute through stock Pi alone.
