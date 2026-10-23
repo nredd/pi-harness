@@ -320,6 +320,38 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({ graceTurns: 10, maxConcurrent: 2 });
   });
 
+  describe("process budget", () => {
+    it("loads maxActiveSubagents and nestedSubagentReserve from global, dropping invalid values", () => {
+      writeGlobal({ maxActiveSubagents: 12, nestedSubagentReserve: 2 });
+      expect(loadSettings(projectDir)).toEqual({ maxActiveSubagents: 12, nestedSubagentReserve: 2 });
+      writeGlobal({ maxActiveSubagents: -1, nestedSubagentReserve: 1.5 });
+      expect(loadSettings(projectDir)).toEqual({});
+      writeGlobal({ maxActiveSubagents: 0 });
+      expect(loadSettings(projectDir)).toEqual({ maxActiveSubagents: 0 });
+    });
+
+    it("ignores a project file's budget: it spans every session in the process", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      writeGlobal({ maxActiveSubagents: 12 });
+      writeProject({ maxActiveSubagents: 1024, nestedSubagentReserve: 0, maxConcurrent: 2 });
+      expect(loadSettings(projectDir)).toEqual({ maxActiveSubagents: 12, maxConcurrent: 2 });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring maxActiveSubagents/nestedSubagentReserve in project"));
+      warn.mockRestore();
+    });
+
+    it("applies both through their appliers", () => {
+      const appliers = {
+        setMaxActiveSubagents: vi.fn(),
+        setNestedSubagentReserve: vi.fn(),
+        setModelAliases: vi.fn(),
+        setAgentModels: vi.fn(),
+      } as unknown as Parameters<typeof applySettings>[1];
+      applySettings({ maxActiveSubagents: 12, nestedSubagentReserve: 2 }, appliers);
+      expect(appliers.setMaxActiveSubagents).toHaveBeenCalledWith(12);
+      expect(appliers.setNestedSubagentReserve).toHaveBeenCalledWith(2);
+    });
+  });
+
   describe("modelAliases", () => {
     const manifestFile = () => join(globalDir, "enterprise.local.json");
     function writeManifest(obj: unknown, mode = 0o600) {
@@ -671,6 +703,8 @@ describe("settings persistence", () => {
       appliers = {
         setMaxConcurrent: vi.fn(),
         setMaxConcurrentForeground: vi.fn(),
+        setMaxActiveSubagents: vi.fn(),
+        setNestedSubagentReserve: vi.fn(),
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
         setDefaultJoinMode: vi.fn(),
@@ -942,6 +976,8 @@ describe("settings persistence", () => {
       appliers = {
         setMaxConcurrent: vi.fn(),
         setMaxConcurrentForeground: vi.fn(),
+        setMaxActiveSubagents: vi.fn(),
+        setNestedSubagentReserve: vi.fn(),
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
         setDefaultJoinMode: vi.fn(),

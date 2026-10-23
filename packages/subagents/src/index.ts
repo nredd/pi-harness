@@ -48,6 +48,7 @@ import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
+import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
@@ -1683,6 +1684,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     return name.replace(/-\d{8}$/, "");
   }
 
+  /** The "queued" line of a background result; names the process budget only when it is on. */
+  const queuedPositionLine = (): string => {
+    const { maxActive } = getBudgetPolicy();
+    const budget = maxActive > 0 ? `, ${maxActive} process-wide` : "";
+    return `Position: queued (max ${manager.getMaxConcurrent()} concurrent${budget})\n`;
+  };
+
   // Apply persisted settings on startup and emit `subagents:settings_loaded`.
   // Global + project merged; missing → defaults; corrupt file emits a warning
   // to stderr and falls back to defaults.
@@ -1690,6 +1698,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     {
       setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
       setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
+      setMaxActiveSubagents: (n) => setBudgetPolicy({ maxActive: n }),
+      setNestedSubagentReserve: (n) => setBudgetPolicy({ nestedReserve: n }),
       setDefaultMaxTurns,
       setGraceTurns,
       setDefaultJoinMode,
@@ -2203,19 +2213,21 @@ Terse command-style prompts produce shallow, generic work.
         // a background spawn. Previously run_in_background was silently ignored
         // on resume (this branch returned before the background branch below),
         // so a resumed agent always blocked the main loop until it finished.
+        // A detached resume hands control back while the record stays
+        // "running", and parallel tool calls can resume one agent twice in a
+        // turn, so nothing stops the model from resuming an agent mid-run.
+        // manager.resume() refuses that on both paths (it would orphan the live
+        // run's abort controller); say why here, where the model can act on it,
+        // instead of letting it read as a generic failure.
+        if (existing.status === "running" || existing.status === "queued") {
+          return textResult(
+            `Agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
+            `Use steer_subagent to send it a message mid-run, or get_subagent_result to wait for it.`,
+          );
+        }
+
         if (runInBackground) {
           const id = existing.id;
-          // A detached resume hands control back while the record stays
-          // "running", so nothing stops the model from resuming the same agent
-          // again mid-run. manager.resume() refuses that (it would orphan the
-          // live run's abort controller); say why here, where the model can act
-          // on it, instead of letting it read as a generic failure.
-          if (existing.status === "running" || existing.status === "queued") {
-            return textResult(
-              `Agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
-              `Use steer_subagent to send it a message mid-run, or get_subagent_result to wait for it.`,
-            );
-          }
 
           const record = await startBackgroundResume(ctx, existing, params.prompt, {
             outputTranscript,
@@ -2232,7 +2244,7 @@ Terse command-style prompts produce shallow, generic work.
             `Agent ID: ${id}\n` +
             `Type: ${existing.type}\n` +
             (record.outputFile ? `Output file: ${record.outputFile}\n` : "") +
-            (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
+            (isQueued ? queuedPositionLine() : "") +
             `\nYou will be notified when this agent completes.\n` +
             `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.`,
             { ...detailBaseFor(record), toolUses: record.toolUses, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
@@ -2289,7 +2301,7 @@ Terse command-style prompts produce shallow, generic work.
           `Type: ${displayName}\n` +
           `Description: ${params.description}\n` +
           (record?.outputFile ? `Output file: ${record.outputFile}\n` : "") +
-          (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
+          (isQueued ? queuedPositionLine() : "") +
           `\nYou will be notified when this agent completes.\n` +
           `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +
           `Do not duplicate this agent's work.`,
@@ -3835,6 +3847,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
       // goes away. undefined is dropped by JSON.stringify.
       fallbackSubagent: getFallbackSubagent(),
       // Global-only (see loadSettings): never written into the project file.
+      maxActiveSubagents: undefined,
+      nestedSubagentReserve: undefined,
       modelAliases: undefined,
       agentModels: undefined,
       reportUsage: isReportUsageEnabled(),
