@@ -169,10 +169,15 @@ child's argv[0], process title and Linux comm hold a random 32-hex secret; the p
 child in the second snapshot and no 12-character window of the secret anywhere in either snapshot.
 The probe samples with the library maxima (5s, 16384 PIDs, 16MiB); a child the bounded scan misses
 fails with the snapshot coverage, never passes vacuously. Everything after spawn, readiness and the
-negative control included, runs inside the `try` whose `finally` sends SIGTERM, then SIGKILL, and
-awaits that exact child's exit status with a bound. `resource_sampler_probe` builds the program;
-`test_library_probe_reaps_child_when_setup_fails` runs it with a silent, an exiting and an
-undisguised child and requires the expected failure plus `hostile child reaped`.
+negative control included, is followed by SIGTERM, then SIGKILL, and a bounded await of that exact
+child's exit status; a cleanup failure is reported alongside the original error, never instead of
+it. `resource_sampler_probe` builds the program; `test_library_probe_reaps_child_when_setup_fails`
+runs it with a silent, an exiting, an undisguised and a SIGTERM-ignoring child and requires the
+expected failure plus `hostile child reaped` with the expected status (SIGKILL for the last). The
+gate runs the probe with `run(..., own_group=True)`: its own session, and on the 30s timeout the
+whole process group is killed, so a hung probe cannot orphan the child.
+`test_probe_timeout_kills_its_whole_process_group` times out the real probe and requires EOF on a
+FIFO only the child holds.
 Existing `owned` macOS/Linux jobs run the native package tests; existing `contracts` jobs run this
 packed consumer. No new runner matrix or Pi load is needed for a Pi-independent library.
 

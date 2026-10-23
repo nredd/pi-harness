@@ -36,12 +36,14 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self, TypedDict
@@ -205,12 +207,28 @@ function ready(child, ms) {
         child.once('error', finish);
     });
 }
+const message = error => (error instanceof Error ? error.message : String(error));
+// Run `body`, then always reap the child; a cleanup failure is reported with, never instead of, `body`'s.
+async function supervise(child, body) {
+    let failure;
+    try { await body(); } catch (error) { failure = {error}; }
+    try { await stop(child); } catch (cleanup) {
+        if (!failure) throw cleanup;
+        const text = `${message(failure.error)}; cleanup also failed: ${message(cleanup)}`;
+        throw new AggregateError([failure.error, cleanup], text);
+    } finally {
+        const status = child.signalCode ?? child.exitCode;
+        const pid = child.pid ?? 'never spawned';
+        console.error(exited(child) ? `hostile child reaped: ${status}` : `hostile child ${pid} not reaped`);
+    }
+    if (failure) throw failure.error;
+}
 const secret = randomBytes(16).toString('hex');
 const hostile = spawn(process.execPath, ['-e', CHILD_SCRIPT], {
     argv0: DISGUISE ? secret : process.execPath, env: {S: secret}, stdio: ['ignore', 'pipe', 'ignore'],
 });
-// Everything after spawn is inside this try, so readiness or negative-control failures still reap it.
-try {
+// Everything after spawn runs inside `supervise`, so readiness or negative-control failures still reap it.
+await supervise(hostile, async () => {
     await ready(hostile, READY_MS);
     // Negative control: the 0.1.0 name source (Darwin `ps -c` comm, Linux comm) really carries the secret.
     const legacy = process.platform === 'linux'
@@ -239,11 +257,7 @@ try {
         await assert.rejects(sampler.sample(controller.signal));
     } finally { await sampler.dispose(); }
     await assert.rejects(sampler.sample(), /disposed/);
-} finally {
-    await stop(hostile);
-    const status = hostile.signalCode ?? hostile.exitCode;
-    console.error(exited(hostile) ? `hostile child reaped: ${status}` : 'hostile child never spawned');
-}
+});
 """
 
 
@@ -1192,6 +1206,7 @@ def run(
     cwd: Path,
     timeout: int,
     check: bool = True,
+    own_group: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run an absolute-path command without a shell.
 
@@ -1201,6 +1216,8 @@ def run(
         cwd (Path): Working directory.
         timeout (int): Seconds before the child is killed.
         check (bool): Raise `ContractError` on a nonzero exit.
+        own_group (bool): Start the child in its own session and, on timeout or interruption, kill
+            that whole process group, so grandchildren it spawned cannot outlive it.
 
     Returns:
         subprocess.CompletedProcess[str]: Captured text output.
@@ -1211,19 +1228,31 @@ def run(
     argv = [str(part) for part in cmd]
     if not Path(argv[0]).is_absolute():
         raise ValueError(f"Executable must be an absolute path: '{argv[0]}'")
-    try:
-        done = subprocess.run(
-            argv,
-            env=env,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise ContractError(f"`{' '.join(argv[:3])}` timed out after {timeout}s") from e
+    with subprocess.Popen(
+        argv,
+        env=env,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=own_group,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException as e:
+            # The leader is not reaped yet, so its group id cannot have been reused, like
+            # `integration/harness/headless.py` `kill_process_group`.
+            if own_group:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            process.wait()
+            if isinstance(e, subprocess.TimeoutExpired):
+                raise ContractError(f"`{' '.join(argv[:3])}` timed out after {timeout}s") from e
+            raise
+    done = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if check and done.returncode != 0:
         raise ContractError(
             f"`{' '.join(argv[:3])}` exited {done.returncode}\n"
@@ -3473,6 +3502,7 @@ def run_audit_gate(
             env=sandbox.env(),
             cwd=work / "install",
             timeout=30,
+            own_group=True,
         )
     return {
         "name": contract.name,

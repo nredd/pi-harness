@@ -86,14 +86,31 @@ function ready(child: ChildProcess, ms: number): Promise<void> {
 	});
 }
 
-/** Every step after spawn, readiness included, runs inside the try that reaps the child. */
+function message(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** Every step after spawn, readiness included, is followed by reaping the child; a cleanup failure is
+ * reported with, never instead of, the step's own error. */
 async function supervise<T>(child: ChildProcess, readyMs: number, body: (pid: number) => Promise<T>): Promise<T> {
+	let outcome: { value: T } | { error: unknown };
 	try {
 		await ready(child, readyMs);
-		return await body(child.pid as number);
-	} finally {
-		await stop(child);
+		outcome = { value: await body(child.pid as number) };
+	} catch (error) {
+		outcome = { error };
 	}
+	try {
+		await stop(child);
+	} catch (cleanup) {
+		if (!("error" in outcome)) throw cleanup;
+		throw new AggregateError(
+			[outcome.error, cleanup],
+			`${message(outcome.error)}; cleanup also failed: ${message(cleanup)}`,
+		);
+	}
+	if ("error" in outcome) throw outcome.error;
+	return outcome.value;
 }
 
 /** The pre-0.1.1 name sources must really carry the secret, or this test proves nothing. */
@@ -143,6 +160,16 @@ describe(`actual sampler on ${runtime}`, () => {
 			"0.1.0 name source does not carry the secret",
 		);
 		expect(child.signalCode).toBe("SIGTERM");
+	}, 15_000);
+	it("escalates to SIGKILL for a child that ignores SIGTERM", async () => {
+		const secret = randomBytes(16).toString("hex");
+		// The handler is installed before `ready`, so SIGTERM really is ignored.
+		const script = 'process.on("SIGTERM", () => {}); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);';
+		const child = launch(secret, script, false);
+		await expect(supervise(child, READY_MS, (pid) => privacy(pid, secret))).rejects.toThrow(
+			"0.1.0 name source does not carry the secret",
+		);
+		expect(child.signalCode).toBe("SIGKILL");
 	}, 15_000);
 	it("measures host CPU from the second sample on, without stale runtime counters", async () => {
 		const sampler = createResourceSampler({ maxDurationMs: 2000 });
