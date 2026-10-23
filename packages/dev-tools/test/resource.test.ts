@@ -1,5 +1,6 @@
-import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { readFileSync, realpathSync } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -143,9 +144,69 @@ function realSampler() {
 	return { state, createSampler };
 }
 
-async function exited(child: ReturnType<typeof spawn>): Promise<void> {
-	if (child.exitCode !== null || child.signalCode !== null) return;
-	await new Promise((resolve) => child.once("exit", resolve));
+/** Wait for this exact child's exit status, never a reusable PID probe, for at most `ms`. */
+async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
+	if (child.exitCode !== null || child.signalCode !== null) return true;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			once(child, "exit").then(() => true),
+			new Promise<false>((resolve) => {
+				timer = setTimeout(() => resolve(false), ms);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** Reap after the caller's SIGKILL with a deadline, rather than hanging the test worker. */
+async function exited(child: ChildProcess): Promise<void> {
+	if (child.pid === undefined) return;
+	if (!(await exitedWithin(child, 2000))) throw new Error(`child ${child.pid} survived SIGKILL`);
+}
+
+/** Resolve a readiness line; reject silent, exited and unspawnable fixtures within `ms`. */
+function ready(child: ChildProcess, ms: number): Promise<void> {
+	return new Promise((resolve, reject) => {
+		let output = "";
+		const finish = (error?: Error) => {
+			clearTimeout(timer);
+			child.stdout?.off("data", data);
+			child.off("exit", exit);
+			child.off("error", finish);
+			if (error) reject(error);
+			else resolve();
+		};
+		const data = (chunk: Buffer) => {
+			output += chunk.toString("utf8");
+			if (output.includes("ready\n")) finish();
+		};
+		const exit = () => finish(new Error("child exited before readiness"));
+		const timer = setTimeout(() => finish(new Error(`child not ready within ${ms} ms`)), ms);
+		child.stdout?.on("data", data);
+		child.once("exit", exit);
+		child.once("error", finish);
+	});
+}
+
+/** Own startup and work under the same cleanup boundary; preserve a simultaneous cleanup failure. */
+async function supervise(child: ChildProcess, ms: number, body: () => Promise<void>): Promise<void> {
+	let failure: { error: unknown } | undefined;
+	try {
+		await ready(child, ms);
+		await body();
+	} catch (error) {
+		failure = { error };
+	}
+	try {
+		child.kill("SIGKILL");
+		await exited(child);
+	} catch (cleanup) {
+		if (failure) throw new AggregateError([failure.error, cleanup], "fixture and cleanup failed");
+		throw cleanup;
+	}
+	if (failure) throw failure.error;
 }
 
 /** Live direct children of this process from an independent `ps`, excluding that `ps` itself. */
@@ -159,6 +220,40 @@ function directChildren(): number[] {
 		.filter(([pid, ppid]) => ppid === process.pid && pid !== ps.pid)
 		.map(([pid]) => pid as number);
 }
+
+describe("resource fixture ownership", () => {
+	it.each([
+		["silent", "setInterval(() => {}, 1000)"],
+		["partial readiness", "process.stdout.write('rea'); setInterval(() => {}, 1000)"],
+	])("reaps a real %s child after bounded readiness failure", async (_name, script) => {
+		const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "ignore"] });
+		const started = performance.now();
+		await expect(supervise(child, 300, async () => {})).rejects.toThrow("child not ready within 300 ms");
+		expect(child.signalCode).toBe("SIGKILL");
+		expect(performance.now() - started).toBeLessThan(3000);
+	});
+
+	it("handles an actual spawn error without waiting for readiness", async () => {
+		const child = spawn(`/nonexistent-resource-fixture-${randomBytes(16).toString("hex")}`, [], {
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		await expect(supervise(child, 5000, async () => {})).rejects.toThrow("ENOENT");
+		expect(child.pid).toBeUndefined();
+	});
+
+	it("reaps a real ready child when the body fails", async () => {
+		const child = spawn(process.execPath, ["-e", "console.log('ready'); setInterval(() => {}, 1000)"], {
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		const primary = new Error("injected body failure");
+		await expect(
+			supervise(child, 5000, async () => {
+				throw primary;
+			}),
+		).rejects.toBe(primary);
+		expect(child.signalCode).toBe("SIGKILL");
+	});
+});
 
 describe("resource_snapshot on the real host through the published sampler", () => {
 	it("resolves the exact registry sampler, never the workspace copy", async () => {
@@ -265,11 +360,7 @@ console.log("ready"); setInterval(() => {}, 1 << 30);`,
 				],
 				{ argv0: secret, env: { S: secret }, stdio: ["ignore", "pipe", "ignore"] },
 			);
-			try {
-				await new Promise((resolve, reject) => {
-					child.stdout?.once("data", resolve);
-					child.once("exit", reject);
-				});
+			await supervise(child, 5000, async () => {
 				const pid = child.pid;
 				if (pid === undefined) throw new Error("child did not start");
 				// Negative control: Darwin `ps -c` comm (argv[0]) or Linux comm really carries the secret.
@@ -288,10 +379,7 @@ console.log("ready"); setInterval(() => {}, 1 << 30);`,
 				// Every 12-char window: shorter than the Linux comm (15 bytes) and Darwin p_comm (16 bytes) fragments.
 				const text = JSON.stringify([real.state.samples, result.structuredContent, mock.text(result)]);
 				for (let i = 0; i + 12 <= secret.length; i++) expect(text).not.toContain(secret.slice(i, i + 12));
-			} finally {
-				child.kill("SIGKILL");
-				await exited(child);
-			}
+			});
 		},
 		20_000,
 	);
