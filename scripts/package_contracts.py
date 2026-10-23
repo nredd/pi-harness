@@ -48,6 +48,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self, TypedDict
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -190,7 +191,9 @@ await assert.rejects(sampler.sample(), /disposed/);
 )
 
 # Compiled, Pi-independent `@nredd/` libraries a plugin may import, only when its contract declares the
-# exact registry release. Plugins remain banned from importing each other.
+# exact registry release. The single definition for both sampler consumers (dev-tools `resource_snapshot`,
+# session-kit `/mon`); `classify_imports` still refuses it in library and standalone-artifact files.
+# Plugins remain banned from importing each other.
 SHARED_LIBRARIES = frozenset({RESOURCE_SAMPLER_CONTRACT.name})
 
 
@@ -363,7 +366,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
 )
 
 # `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` installs its plugins
-# offline except for one exact published `SHARED_LIBRARIES` pin (dev-tools -> resource sampler), while
+# offline except for exact published `SHARED_LIBRARIES` pins (the resource sampler), while
 # this package has third-party runtime dependencies that must come from the registry. It is audited,
 # installed and run through stock Pi by the release `verify` stage (descriptor `stock_gate`), by
 # CI's `make check-subagents-package-contract` and by the pack-vs-contract test, not by that target.
@@ -696,8 +699,17 @@ class LockEntry(BaseModel):
     model_config = LENIENT_STRICT_MODEL
     version: str | None = Field(default=None, description="Locked version")
     integrity: str | None = Field(default=None, description="Locked registry integrity")
+    resolved: str | None = Field(default=None, description="Locked tarball URL")
     optional: bool = Field(default=False, description="npm marked this entry optional")
     dependencies: dict[str, str] = Field(default_factory=dict, description="Direct locked dependencies")
+
+
+class PublishedDist(BaseModel):
+    """`npm view <name>@<version> dist --json`: the registry's own tarball identity."""
+
+    model_config = LENIENT_STRICT_MODEL
+    tarball: NonEmptyText = Field(description="Published tarball URL")
+    integrity: Sha512Integrity = Field(description="Published npm `sha512-` integrity")
 
 
 class LockFile(BaseModel):
@@ -2599,43 +2611,182 @@ def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
         "untracked": ["untracked.txt"],
         "failure_path": tool_text(failed)[:200],
         "resource_ranking": ranking,
-        "resource_sampler_integrity": installed_sampler_integrity(ctx.installed),
+        "resource_sampler_integrity": installed_sampler_integrity(
+            ctx.installed, published_sampler_dist(ctx.sandbox, ctx.work)
+        ),
         "resource_failure_path": resource_failure[:200],
     }
 
 
-def installed_sampler_integrity(installed: Path) -> str:
+def redact_url(url: str | None) -> str:
+    """Drop credentials, query and fragment from a URL before it reaches an error or report.
+
+    Parameters:
+        url (str | None): URL from a lockfile or registry response.
+
+    Returns:
+        str: `scheme://host[:port]/path`, or a placeholder when absent or unparseable.
+    """
+    if not url:
+        return "<missing>"
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port is not None else ""
+    except ValueError:
+        return "<unparseable>"
+    return f"{parts.scheme}://{host}{port}{parts.path}"
+
+
+def published_sampler_dist(sandbox: Sandbox, cwd: Path) -> PublishedDist:
+    """Ask the public registry for the exact sampler release's tarball URL and integrity.
+
+    Runs with the scrubbed sandbox environment (no npm credentials) and no proxy.
+
+    Parameters:
+        sandbox (Sandbox): Environment and tools for `npm`.
+        cwd (Path): Scratch directory without an `.npmrc`.
+
+    Returns:
+        PublishedDist: Registry metadata for `RESOURCE_SAMPLER_VERSION`.
+
+    Raises:
+        ContractError: If the query fails or the response is malformed.
+    """
+    spec = f"{RESOURCE_SAMPLER_CONTRACT.name}@{RESOURCE_SAMPLER_VERSION}"
+    done = run(
+        [sandbox.tools.npm, "view", spec, "dist", "--json"],
+        env=sandbox.env() | REGISTRY_ENV,
+        cwd=cwd,
+        timeout=NPM_TIMEOUT_S,
+    )
+    try:
+        return PublishedDist.model_validate_json(done.stdout)
+    except ValidationError as e:
+        raise ContractError(f"Registry metadata for '{spec}' is malformed: {e}") from e
+
+
+def installed_sampler_integrity(installed: Path, published: PublishedDist) -> str:
     """Prove the installed plugin resolves the exact published sampler from the registry.
+
+    The lock entry must name the registry's own tarball URL and integrity for that version, not merely
+    carry some integrity.
 
     Parameters:
         installed (Path): Installed `@nredd/pi-dev-tools` directory inside `<project>/node_modules`.
+        published (PublishedDist): Registry metadata for the pinned version.
 
     Returns:
-        str: The locked registry integrity of the installed sampler.
+        str: The verified registry integrity.
 
     Raises:
-        ContractError: If the sampler is linked, missing, another version, or locked without integrity.
+        ContractError: If the sampler is linked, missing, another version, or locked to other bytes or origin.
     """
     name, version = RESOURCE_SAMPLER_CONTRACT.name, RESOURCE_SAMPLER_VERSION
     project = installed.parents[2]
     module = project / "node_modules" / name
     require(module.is_dir() and not module.is_symlink(), f"'{name}' is not a real installed directory")
-    entry = read_lockfile(project / "package-lock.json").packages.get(f"node_modules/{name}")
+    entry = read_lockfile(project / "package-lock.json").packages.get(f"node_modules/{name}", LockEntry())
+    require(entry.version == version, f"'{name}' is locked at {entry.version!r}, not exactly {version!r}")
     require(
-        entry is not None and entry.version == version and entry.integrity is not None,
-        f"'{name}' is not locked at exactly {version} with a registry integrity: {entry}",
+        entry.resolved == published.tarball,
+        f"'{name}' resolved from {redact_url(entry.resolved)}, not the published "
+        f"{redact_url(published.tarball)}",
     )
-    # Narrowed by `require` above.
-    assert entry is not None
-    assert entry.integrity is not None
-    return entry.integrity
+    require(
+        entry.integrity == published.integrity,
+        f"'{name}' locked integrity {entry.integrity!r} differs from the published {published.integrity!r}",
+    )
+    return published.integrity
+
+
+# Run from the installed plugin directory, so the specifier resolves exactly as the packed plugin's own import
+# does. One full, unranked scan; prints only PIDs, never names.
+SAMPLER_DISCOVERY_PROBE = """
+import { fileURLToPath } from 'node:url';
+import { createResourceSampler } from '@nredd/pi-resource-sampler';
+const pid = Number(process.argv[1]);
+const sampler = createResourceSampler({ maxDurationMs: 5000 });
+try {
+    const sample = await sampler.sample();
+    const found = sample.processes.filter((entry) => entry.pid === pid);
+    console.log(JSON.stringify({
+        resolved: fileURLToPath(import.meta.resolve('@nredd/pi-resource-sampler')),
+        reasons: sample.coverage.reasons,
+        found: found.map((entry) => ({ pid: entry.pid, parentPid: entry.parentPid })),
+    }));
+} finally {
+    await sampler.dispose();
+}
+"""
+
+
+class DiscoveredProcess(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    pid: int = Field(description="Sampled PID")
+    parentPid: int = Field(description="Sampled parent PID")
+
+
+class SamplerDiscovery(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    resolved: NonEmptyText = Field(description="Real path the plugin directory resolves the sampler to")
+    reasons: list[str] = Field(description="Coverage reasons of the scan")
+    found: list[DiscoveredProcess] = Field(description="Scan entries with the marker PID")
+
+
+def discover_child_with_installed_sampler(ctx: Context, child: int) -> None:
+    """Find `child` under this process in one complete scan by the plugin's installed sampler.
+
+    Inclusion is checked against the full scan, not the tool's top-50 ranking, so it does not depend on
+    how many larger or busier processes the host runs. An independent `ps` confirms the parent.
+
+    Parameters:
+        ctx (Context): Scenario context.
+        child (int): Marker child PID, started by this process.
+
+    Raises:
+        ContractError: If the sampler resolves elsewhere, the scan fails, or the child or parent is wrong.
+    """
+    done = run(
+        [ctx.sandbox.tools.node, "--input-type=module", "-e", SAMPLER_DISCOVERY_PROBE, str(child)],
+        env=ctx.sandbox.env(),
+        cwd=ctx.installed,
+        timeout=30,
+    )
+    try:
+        report = SamplerDiscovery.model_validate_json(done.stdout)
+    except ValidationError as e:
+        raise ContractError(f"Sampler discovery probe output is malformed: {e}") from e
+    expected = (
+        ctx.installed.parents[2] / "node_modules" / RESOURCE_SAMPLER_CONTRACT.name / "dist" / "index.js"
+    )
+    require(
+        Path(report.resolved) == expected.resolve(),
+        f"plugin resolves the sampler to {report.resolved}, not {expected}",
+    )
+    require(
+        "process-collection-unavailable" not in report.reasons,
+        f"sampler scan failed: {report.reasons}",
+    )
+    require(
+        report.found == [DiscoveredProcess(pid=child, parentPid=os.getpid())],
+        f"marker child {child} under parent {os.getpid()} not in the full scan: {report.found}",
+    )
+    ps = run(
+        [Path("/bin/ps"), "-o", "ppid=", "-p", str(child)],
+        env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        cwd=ctx.work,
+        timeout=30,
+    )
+    require(ps.stdout.strip() == str(os.getpid()), f"independent ps reports parent {ps.stdout.strip()!r}")
 
 
 def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
-    """Find a real marker child under this process through `resource_snapshot`, then a refused call.
+    """Run `resource_snapshot` through the packed plugin around a real marker child, then a refused call.
 
-    The child is busy (Linux ranks measured interval CPU first) and resident (Darwin has no
-    interval process CPU and ranks by RSS), so it is inside the 50-entry bound on either host.
+    The child is idle and small; its discovery is proven against the installed sampler's full scan
+    (`discover_child_with_installed_sampler`), and the tool output must be the bounded projection of
+    such a scan: exactly `min(50, sampled)` entries with only the documented fields.
 
     Parameters:
         ctx (Context): Scenario context.
@@ -2644,13 +2795,13 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
         tuple[str, str]: The reported ranking and the out-of-bounds call's error text.
 
     Raises:
-        ContractError: If the snapshot fails, misses the child or its parent, or the refusal succeeds.
+        ContractError: If the snapshot fails, the child is not discovered, or the refusal succeeds.
     """
     project = ctx.work / "resource"
     project.mkdir()
     argv = ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"]
     child = subprocess.Popen(
-        [str(ctx.sandbox.tools.node), "-e", "const b = Buffer.alloc(160 * 2 ** 20, 1); for (;;) b[0]++"],
+        [str(ctx.sandbox.tools.node), "-e", "setInterval(() => {}, 1 << 30)"],
         env=ctx.sandbox.env(),
         cwd=project,
         stdin=subprocess.DEVNULL,
@@ -2658,6 +2809,7 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
         stderr=subprocess.DEVNULL,
     )
     try:
+        discover_child_with_installed_sampler(ctx, child.pid)
         script = [ToolStep("resource_snapshot", {"process_limit": 50, "interval_ms": 300}), TextStep("done")]
         with ctx.provider_session(script):
             ok = run_pi(ctx.pi_bin, ctx.sandbox, ctx.installed, project, argv)
@@ -2674,17 +2826,22 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
         f"resource_snapshot has no process metadata: {structured}",
     )
     assert isinstance(processes, dict)  # Narrowed by `require` above.
-    entries = processes.get("entries")
-    require(isinstance(entries, list) and 0 < len(entries) <= 50, f"unbounded entries: {entries}")
-    assert isinstance(entries, list)
-    found = [entry for entry in entries if isinstance(entry, dict) and entry.get("pid") == child.pid]
+    entries, coverage = processes.get("entries"), processes.get("coverage")
     require(
-        len(found) == 1 and found[0].get("parentPid") == os.getpid(),
-        f"marker child {child.pid} under parent {os.getpid()} not discovered: {entries[:5]}",
+        isinstance(entries, list) and isinstance(coverage, dict) and isinstance(coverage.get("sampled"), int),
+        f"resource_snapshot entries or coverage malformed: {processes}",
+    )
+    assert isinstance(entries, list)
+    assert isinstance(coverage, dict)
+    require(
+        0 < len(entries) == min(50, coverage["sampled"]),
+        f"{len(entries)} entries is not the 50-bounded projection of {coverage['sampled']} sampled",
     )
     require(
         all(
-            isinstance(entry, dict) and set(entry) == {"pid", "parentPid", "cpu", "rssBytes", "executable"}
+            isinstance(entry, dict)
+            and set(entry) == {"pid", "parentPid", "cpu", "rssBytes", "executable"}
+            and isinstance(entry["parentPid"], int)
             for entry in entries
         ),
         f"resource_snapshot entries carry unexpected fields: {entries[:3]}",

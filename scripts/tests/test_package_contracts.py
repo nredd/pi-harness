@@ -17,7 +17,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +32,13 @@ import package_contracts as pc
 import stock_package_contract as spc
 
 DEV_TOOLS = pc.CONTRACTS[0]
+# The real published identity, as the repository lockfile pins it for dev-tools; never an invented hash.
+SAMPLER_LOCK = json.loads((pc.REPO_ROOT / "package-lock.json").read_text())["packages"][
+    "packages/dev-tools/node_modules/@nredd/pi-resource-sampler"
+]
 RESOURCE_EVIDENCE: dict[str, object] = {
     "resource_ranking": "rss",
-    "resource_sampler_integrity": "sha512-" + "B" * 86 + "==",
+    "resource_sampler_integrity": SAMPLER_LOCK["integrity"],
     "resource_failure_path": "process_limit 51 refused",
 }
 ROOT_LICENSE = (pc.REPO_ROOT / "LICENSE").read_bytes()
@@ -158,7 +162,7 @@ def test_stock_gate_audits_and_installs_supplied_bytes(
             "untracked": ["fixture"],
             "failure_path": "Pi boundary substituted",
             "resource_ranking": "rss",
-            "resource_sampler_integrity": "sha512-" + "B" * 86 + "==",
+            "resource_sampler_integrity": SAMPLER_LOCK["integrity"],
             "resource_failure_path": "process_limit 51 refused",
         }
 
@@ -477,6 +481,162 @@ def test_audit_imports_rejects_sibling_in_every_form(source: str) -> None:
     problems = pc.audit_imports("src/a.ts", source, ["src/a.ts"])
     assert len(problems) == 1
     assert "sibling plugin" in problems[0]
+
+
+def test_repository_lock_pins_the_published_sampler_for_dev_tools() -> None:
+    """The workspace lock entry is the registry release at the contract's exact version."""
+    assert SAMPLER_LOCK["version"] == pc.RESOURCE_SAMPLER_VERSION
+    assert SAMPLER_LOCK["resolved"] == (
+        f"https://registry.npmjs.org/@nredd/pi-resource-sampler/-/pi-resource-sampler-{pc.RESOURCE_SAMPLER_VERSION}.tgz"
+    )
+
+
+def sampler_install(tmp_path: Path, entry: Mapping[str, object], *, link: bool = False) -> Path:
+    """Lay out `<project>/node_modules` with the plugin, the sampler and a lockfile entry.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        entry (Mapping[str, object]): Lock entry for the sampler.
+        link (bool): Make the sampler a symlink, as a workspace link would be.
+
+    Returns:
+        Path: The installed plugin directory.
+    """
+    project = tmp_path / "project"
+    installed = project / "node_modules" / "@nredd" / "pi-dev-tools"
+    installed.mkdir(parents=True)
+    sampler = project / "node_modules" / "@nredd" / "pi-resource-sampler"
+    if link:
+        (tmp_path / "workspace").mkdir()
+        sampler.symlink_to(tmp_path / "workspace")
+    else:
+        sampler.mkdir()
+    lock = {"packages": {"node_modules/@nredd/pi-resource-sampler": entry}}
+    (project / "package-lock.json").write_text(json.dumps(lock))
+    return installed
+
+
+PUBLISHED = pc.PublishedDist(tarball=SAMPLER_LOCK["resolved"], integrity=SAMPLER_LOCK["integrity"])
+LOCKED = {
+    "version": pc.RESOURCE_SAMPLER_VERSION,
+    "resolved": PUBLISHED.tarball,
+    "integrity": PUBLISHED.integrity,
+}
+
+
+def test_installed_sampler_matches_published_registry_metadata(tmp_path: Path) -> None:
+    """The exact published tarball URL and integrity are accepted."""
+    assert pc.installed_sampler_integrity(sampler_install(tmp_path, LOCKED), PUBLISHED) == PUBLISHED.integrity
+
+
+# Shaped like a real integrity but not the published one: the check compares values, not shape.
+OTHER_INTEGRITY = "sha512-" + "A" * 86 + "=="
+
+
+@pytest.mark.parametrize(
+    ("entry", "link", "message"),
+    [
+        (LOCKED, True, "not a real installed directory"),
+        (LOCKED | {"version": "0.1.1"}, False, "not exactly '0.1.0'"),
+        (LOCKED | {"integrity": OTHER_INTEGRITY}, False, "differs from the published"),
+        ({k: v for k, v in LOCKED.items() if k != "integrity"}, False, "differs from the published"),
+        (LOCKED | {"resolved": "file:../resource-sampler"}, False, "not the published"),
+        ({k: v for k, v in LOCKED.items() if k != "resolved"}, False, "resolved from <missing>"),
+        (
+            LOCKED | {"resolved": "https://mirror.example/@nredd/pi-resource-sampler/-/x.tgz"},
+            False,
+            "resolved from https://mirror.example/",
+        ),
+    ],
+    ids=["linked", "version", "integrity", "no-integrity", "file", "no-resolved", "mirror"],
+)
+def test_installed_sampler_rejects_other_bytes_or_origin(
+    tmp_path: Path, entry: Mapping[str, object], *, link: bool, message: str
+) -> None:
+    """Any other version, origin, integrity or a link is refused, not merely a null integrity.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        entry (Mapping[str, object]): Lock entry for the sampler.
+        link (bool): Install the sampler as a symlink.
+        message (str): Expected error fragment.
+    """
+    with pytest.raises(pc.ContractError, match=message):
+        pc.installed_sampler_integrity(sampler_install(tmp_path, entry, link=link), PUBLISHED)
+
+
+def test_installed_sampler_errors_never_echo_registry_credentials(tmp_path: Path) -> None:
+    """A credentialed or tokenized resolved URL is reported without userinfo or query."""
+    secret = "https://user:hunter2@registry.example:8443/s/-/s.tgz?token=abc#frag"
+    installed = sampler_install(tmp_path, LOCKED | {"resolved": secret})
+    with pytest.raises(pc.ContractError) as raised:
+        pc.installed_sampler_integrity(installed, PUBLISHED)
+    assert "hunter2" not in str(raised.value)
+    assert "token" not in str(raised.value)
+    assert "https://registry.example:8443/s/-/s.tgz" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("url", "redacted"),
+    [
+        (None, "<missing>"),
+        ("", "<missing>"),
+        ("https://u:p@host/a?b=c#d", "https://host/a"),
+        ("https://host:99999/a", "<unparseable>"),
+    ],
+)
+def test_redact_url(url: str | None, redacted: str) -> None:
+    """Userinfo, query and fragment never survive.
+
+    Parameters:
+        url (str | None): Input URL.
+        redacted (str): Expected output.
+    """
+    assert pc.redact_url(url) == redacted
+
+
+def test_published_sampler_dist_queries_the_exact_release_without_credentials(
+    monkeypatch: pytest.MonkeyPatch, sandbox: pc.Sandbox, tmp_path: Path
+) -> None:
+    """The registry is asked for exactly the pinned version through the scrubbed environment."""
+    seen: dict[str, Any] = {}
+
+    def fake_run(cmd: list[Any], *, env: dict[str, str], cwd: Path, timeout: int) -> Any:
+        """Record the query and return registry-shaped JSON.
+
+        Parameters:
+            cmd (list[Any]): Argument vector.
+            env (dict[str, str]): Child environment.
+            cwd (Path): Working directory.
+            timeout (int): Seconds.
+
+        Returns:
+            Any: Completed process stand-in.
+        """
+        seen.update(cmd=[str(part) for part in cmd], env=env)
+        stdout = json.dumps({"tarball": PUBLISHED.tarball, "integrity": PUBLISHED.integrity, "fileCount": 9})
+        return type("Done", (), {"stdout": stdout})()
+
+    monkeypatch.setattr(pc, "run", fake_run)
+    assert pc.published_sampler_dist(sandbox, tmp_path) == PUBLISHED
+    assert seen["cmd"][1:] == [
+        "view",
+        f"@nredd/pi-resource-sampler@{pc.RESOURCE_SAMPLER_VERSION}",
+        "dist",
+        "--json",
+    ]
+    assert not any("TOKEN" in key or "AUTH" in key for key in seen["env"])
+    assert seen["env"]["HTTPS_PROXY"] == ""
+
+
+def test_published_sampler_dist_rejects_malformed_metadata(
+    monkeypatch: pytest.MonkeyPatch, sandbox: pc.Sandbox, tmp_path: Path
+) -> None:
+    """A response without a real integrity fails closed."""
+    done = type("Done", (), {"stdout": json.dumps({"tarball": PUBLISHED.tarball, "integrity": "sha1-x"})})()
+    monkeypatch.setattr(pc, "run", lambda *_args, **_kwargs: done)
+    with pytest.raises(pc.ContractError, match="malformed"):
+        pc.published_sampler_dist(sandbox, tmp_path)
 
 
 def test_dev_tools_pins_the_published_sampler_exactly() -> None:
