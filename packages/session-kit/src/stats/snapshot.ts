@@ -63,7 +63,14 @@ export interface GlobalCache {
 	machines: Record<string, MachineSnapshot>;
 	problems: string[];
 }
+/** Known sources only, including failed imports with no last-good snapshot. */
+export interface MachineCoverage extends Identity {
+	local: boolean;
+	exportedAt?: number;
+	incomplete: boolean;
+}
 export interface Coverage {
+	sources?: MachineCoverage[];
 	machines: number;
 	remoteMachines: number;
 	importedAt?: number;
@@ -484,6 +491,22 @@ export async function loadCombined(
 		sessionMetadata: [...sessions.values()],
 		sessions: [...sessions.values()].filter((s) => !s.child && owners.has(s.path)),
 		coverage: {
+			sources: [
+				{ ...identity, local: true, incomplete: local.errors > 0 || local.badLines > 0 },
+				...remotes.map(({ manifest }) => ({
+					machineId: manifest.machineId,
+					label: manifest.label,
+					local: false,
+					exportedAt: manifest.exportedAt,
+					incomplete: global.problems.some((p) => p.endsWith(` ${manifest.machineId}`)),
+				})),
+				...global.problems.flatMap((p) => {
+					const id = /^(?:Incomplete|Missing) snapshot (.+)$/.exec(p)?.[1];
+					return id && UUID.test(id) && id !== identity.machineId && !global.machines[id]
+						? [{ machineId: id, label: "Pi machine", local: false, incomplete: true }]
+						: [];
+				}),
+			],
 			machines: remotes.length + 1,
 			remoteMachines: remotes.length,
 			importedAt: global.importedAt || undefined,
@@ -493,5 +516,5 @@ export async function loadCombined(
 	};
 }
 export function coverageLabel(c: Coverage): string {
-	return `${c.incomplete ? "incomplete coverage · " : ""}${c.machines} machine${c.machines === 1 ? "" : "s"} · ${c.remoteMachines ? "cached" : "local-only"} · ${c.importedAt ? `last remote sync ${new Date(c.importedAt).toISOString()}` : "never synced"}`;
+	return `${c.incomplete ? "incomplete coverage · " : ""}${c.machines} machine${c.machines === 1 ? "" : "s"} · ${c.remoteMachines ? "cached" : "local-only"} · ${c.importedAt && positive(c.importedAt) ? `viewer last import ${new Date(c.importedAt).toISOString()}` : "viewer never imported"}`;
 }

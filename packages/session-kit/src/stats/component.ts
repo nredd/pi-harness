@@ -5,7 +5,15 @@
  */
 
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { type Color, type Component, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	type Color,
+	type Component,
+	Key,
+	matchesKey,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { sanitize } from "../diff/view.ts";
 import {
 	chartSeries,
@@ -39,8 +47,8 @@ import { seriesPalette } from "./palette.ts";
 import { timeAxis } from "./ticks.ts";
 
 type ThemeLike = Pick<Theme, "fg" | "bg" | "bold" | "style" | "colors">;
-export type Tab = "Overview" | "Models";
-const TABS: readonly Tab[] = ["Overview", "Models"];
+export type Tab = "Overview" | "Models" | "Machines";
+const TABS: readonly Tab[] = ["Overview", "Models", "Machines"];
 /** Chart lines, at most; their colours are shared by the chart, its legend and the model list. */
 const SERIES = 3;
 /** Narrowest plot `plot` can draw; only panes too narrow for a 6-week heatmap hit it. */
@@ -76,6 +84,8 @@ export interface StatsViewOptions {
 	today?: string;
 	now?: number;
 	coverage?: string;
+	/** Offline per-source provenance, rendered as a scrollable Machines tab. */
+	freshness?: readonly string[];
 	tab?: Tab;
 }
 
@@ -126,7 +136,8 @@ export class StatsView implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
-			this.tab = this.tab === "Overview" ? "Models" : "Overview";
+			const step = matchesKey(data, Key.shift("tab")) ? -1 : 1;
+			this.tab = TABS[(TABS.indexOf(this.tab) + step + TABS.length) % TABS.length] ?? "Overview";
 			this.scroll = 0;
 		} else if (data === "r") {
 			this.range = RANGES[(RANGES.indexOf(this.range) + 1) % RANGES.length] ?? "all";
@@ -155,6 +166,13 @@ export class StatsView implements Component {
 		let body: string[];
 		let hint = "";
 		if (this.tab === "Overview") body = this.scrolled(this.overviewBody(w, room), room);
+		else if (this.tab === "Machines")
+			body = this.scrolled(
+				(this.o.freshness ?? ["Per-machine freshness unknown (no source metadata)."]).flatMap((line) =>
+					wrapTextWithAnsi(this.paint("muted", line), contentWidth(w)),
+				),
+				room,
+			);
 		else {
 			const models = this.modelsBody(w, room);
 			body = this.scrolled(models.lines, room);
@@ -175,7 +193,7 @@ export class StatsView implements Component {
 		const joined = spread(tabs, coverage, inner);
 		const lines = [
 			joined ?? tabs,
-			...this.selectors(inner),
+			...(this.tab === "Machines" ? [] : this.selectors(inner)),
 			...(joined ? [] : [coverage]),
 			this.paint("dim", "─".repeat(inner)),
 		];
