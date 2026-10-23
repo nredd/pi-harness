@@ -104,7 +104,7 @@ describe("/stats command", () => {
 		await run("");
 		expect(custom).not.toHaveBeenCalled();
 		expect(ctx.ui.notify).toHaveBeenCalledWith(
-			"/stats: no usage recorded yet\n1 machine · local-only · never synced",
+			expect.stringContaining("/stats: no usage recorded yet\n1 machine · local-only · viewer never imported"),
 			"info",
 		);
 	});
@@ -156,7 +156,9 @@ describe("/stats command", () => {
 		expect(custom).not.toHaveBeenCalled();
 		expect(ctx.ui.notify).toHaveBeenCalledWith("/stats: ! 1 unreadable lines", "warning");
 		expect(ctx.ui.notify).toHaveBeenLastCalledWith(
-			"/stats: no usage recorded yet\nincomplete coverage · 1 machine · local-only · never synced",
+			expect.stringContaining(
+				"/stats: no usage recorded yet\nincomplete coverage · 1 machine · local-only · viewer never imported",
+			),
 			"info",
 		);
 	});
@@ -165,7 +167,7 @@ describe("/stats command", () => {
 		const { run, ctx } = setup("rpc");
 		await run("");
 		expect(ctx.ui.notify).toHaveBeenCalledWith(
-			"/stats: no usage recorded yet\n1 machine · local-only · never synced",
+			expect.stringContaining("/stats: no usage recorded yet\n1 machine · local-only · viewer never imported"),
 			"info",
 		);
 	});

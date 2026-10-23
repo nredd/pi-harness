@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-dev-tools",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publishConfig": {"access": "public"},
   "description": "Typed pi tools for git, ssh, Python (uv/ruff/ty/pytest) and Rust (cargo): compact structured results, explicit exit-code states, no-shell spawn, bounded output.",
   "author": "nredd",
