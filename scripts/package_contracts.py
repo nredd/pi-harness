@@ -166,7 +166,20 @@ RESOURCE_SAMPLER_CONTRACT = PackageContract(
     node_probe="""
 import assert from 'node:assert/strict';
 import { setTimeout } from 'node:timers/promises';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { createResourceSampler } from '@nredd/pi-resource-sampler';
+// argv[0], process title and Linux comm all carry a random secret that names must never expose.
+const secret = randomBytes(16).toString('hex');
+const hostile = spawn(process.execPath, ['-e', `process.title = process.env.S;
+if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
+console.log('ready'); setInterval(() => {}, 1000);`], {
+    argv0: secret, env: {S: secret}, stdio: ['ignore', 'pipe', 'ignore'],
+});
+await new Promise((resolve, reject) => {
+    hostile.stdout.once('data', resolve);
+    hostile.once('exit', reject);
+});
 const sampler = createResourceSampler({maxDurationMs: 2000});
 try {
     const first = await sampler.sample();
@@ -176,10 +189,12 @@ try {
     assert.equal(second.cpu.state, 'available');
     assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
     assert.ok(second.processes.some(p => p.pid === process.pid));
+    assert.ok(second.processes.some(p => p.pid === hostile.pid));
+    assert.ok(!JSON.stringify(second).includes(secret.slice(0, 12)), 'process names expose argv or title');
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(sampler.sample(controller.signal));
-} finally { await sampler.dispose(); }
+} finally { hostile.kill('SIGKILL'); await sampler.dispose(); }
 await assert.rejects(sampler.sample(), /disposed/);
 """,
 )

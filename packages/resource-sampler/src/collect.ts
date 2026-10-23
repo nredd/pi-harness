@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { open, opendir } from "node:fs/promises";
+import { open, opendir, readlink } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import { darwinProcess, linuxRss, linuxStat, type ProcessCounter, psi } from "./counters.js";
+import { darwinProcess, executableName, linuxRss, linuxStat, type ProcessCounter, psi } from "./counters.js";
 import type { ResourceSnapshot } from "./types.js";
 
 /** Per-scan mutable budget, never shared between sampler instances. */
@@ -43,6 +43,21 @@ export class Budget {
 			return buffer.toString("utf8", 0, bytesRead);
 		} finally {
 			await file.close();
+		}
+	}
+	/**
+	 * Linux executable basename, or "" when the exe link is unreadable (other users' processes without
+	 * ptrace read access, exited processes) or the budget is spent. Errors carry no detail outward.
+	 */
+	async executable(path: string): Promise<string> {
+		if (!this.ready()) return "";
+		try {
+			const target = await readlink(path, { encoding: "buffer" });
+			this.bytesRead += target.length;
+			return executableName(target.toString("utf8"));
+		} catch {
+			this.signal.throwIfAborted();
+			return "";
 		}
 	}
 }
@@ -127,11 +142,15 @@ export async function linuxProcesses(budget: Budget, hz: number): Promise<Proces
 		try {
 			const path = `/proc/${entry.name}`;
 			const first = linuxStat(await budget.read(`${path}/stat`), hz, performance.now());
+			if (!first) throw new Error("process incomplete");
+			const name = first.kernelThread ? first.name : await budget.executable(`${path}/exe`);
 			const rssBytes = linuxRss(await budget.read(`${path}/status`));
 			const last = linuxStat(await budget.read(`${path}/stat`), hz, performance.now());
-			if (!first || !last || first.pid !== Number(entry.name) || first.identity !== last.identity || rssBytes === null)
+			// The name and RSS reads sit between two stat reads, so PID reuse rejects both.
+			if (!last || first.pid !== Number(entry.name) || first.identity !== last.identity || rssBytes === null)
 				throw new Error("process changed or incomplete");
-			result.push({ ...last, rssBytes });
+			const { kernelThread: _, ...counter } = last;
+			result.push({ ...counter, name, rssBytes });
 		} catch {
 			budget.signal.throwIfAborted();
 			budget.skipped++;
@@ -141,11 +160,14 @@ export async function linuxProcesses(budget: Budget, hz: number): Promise<Proces
 	return result;
 }
 
-/** Fixed metadata-only ps format; -c suppresses executable paths and arguments on Darwin. */
+/**
+ * Fixed metadata-only ps format. `ucomm` prints kinfo `p_comm`, never `comm`: `ps -c -o comm` shows the
+ * basename of argv[0], which any launcher picks and Node's `process.title` rewrites in place.
+ */
 export async function darwinProcesses(budget: Budget): Promise<ProcessCounter[]> {
 	const { text } = await command(
 		"/bin/ps",
-		["-A", "-c", "-o", "pid=,ppid=,lstart=,time=,rss=,comm="],
+		["-A", "-o", "pid=,ppid=,lstart=,time=,rss=,ucomm="],
 		budget,
 		budget.maxPids,
 	);

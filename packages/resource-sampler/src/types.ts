@@ -5,6 +5,11 @@ export type Metric<T> = { state: "available"; value: T } | { state: "warming" | 
 export interface ProcessSample {
 	pid: number;
 	parentPid: number;
+	/**
+	 * Executable basename from kernel metadata, never argv, environment or process title: Darwin
+	 * `p_comm` (at most 16 bytes), Linux `/proc/PID/exe` or a kernel thread's comm. "" means unavailable,
+	 * e.g. another user's Linux process. Untrusted display text: whoever names the file chooses it.
+	 */
 	name: string;
 	identity: string;
 	rssBytes: number;
