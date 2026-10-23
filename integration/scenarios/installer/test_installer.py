@@ -22,7 +22,8 @@ import os
 import shutil
 import signal
 import subprocess
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -37,9 +38,6 @@ from harness.promotion import (
 )
 from harness.release import attestation_bundle, verify_attestation
 from harness.stack import package_declarations, source_string
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 pytestmark = pytest.mark.installer
 INSTALL_TIMEOUT = 1200
@@ -222,11 +220,16 @@ def test_missing_prerequisites_change_nothing(
     """Without `gh`, `node` and `npm` every missing tool is named and HOME stays empty of Pi."""
     tools = tmp_path / "tools"
     tools.mkdir()
-    # uv's tool launcher is a `/bin/sh` script that needs `realpath` and `dirname`.
-    for name in ("uv", "uvx", "git", "realpath", "dirname"):
-        found = shutil.which(name)
-        assert found is not None
-        (tools / name).symlink_to(found)
+    hidden = {"gh", "node", "npm"}
+    # Mirror every PATH executable except the three under test: uv, Git and the shell tools Git's
+    # submodule scripts need keep working, and only the prerequisites disappear.
+    for directory in [Path(entry) for entry in os.environ["PATH"].split(os.pathsep) if entry]:
+        if not directory.is_dir():
+            continue
+        for executable in sorted(directory.iterdir()):
+            link = tools / executable.name
+            if executable.name not in hidden and not link.exists() and not link.is_symlink():
+                link.symlink_to(executable)
     result = run(command(spec, stack_sha), environment(home, uv_cache, str(tools)))
     assert result.returncode == EXIT_UNSUPPORTED, result.stdout
     assert all(f"`{tool}` not found" in result.stdout for tool in ("gh", "node", "npm")), result.stdout
