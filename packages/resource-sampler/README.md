@@ -107,7 +107,9 @@ of that exact child (never a PID probe); a cleanup failure is reported alongside
 and require the child reaped, including a child that ignores SIGTERM and needs SIGKILL, and inject a
 cleanup failure to require both errors. This cleanup is in-process only: if the test worker itself
 is SIGKILLed, no JavaScript runs and the child outlives it. The packed contract probe below instead
-runs in its own process group, which the gate kills on timeout or interruption. The privacy
+runs in its own process group, which the gate kills on its Python timeout or `KeyboardInterrupt`
+while the leader is unreaped; an already reaped leader, or an unhandled SIGTERM/SIGHUP or SIGKILL of
+the gate, skips that cleanup and may leave members behind. The privacy
 check samples with the library maxima (5s, 16384 PIDs, 16MiB) and never accepts a missing child as
 a pass: on a host whose processes exceed those bounds, or whose enumeration reaches the child only
 after them, it fails with the snapshot's coverage in the error. On Linux each process costs two

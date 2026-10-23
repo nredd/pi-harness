@@ -1217,8 +1217,9 @@ def run(
         cwd (Path): Working directory.
         timeout (int): Seconds before the child is killed.
         check (bool): Raise `ContractError` on a nonzero exit.
-        own_group (bool): Run through `run_own_group`, so a timeout or interruption kills the
-            child's whole process group. Default `subprocess.run` kills only the child.
+        own_group (bool): Run through `run_own_group`, so a Python-level timeout or
+            `KeyboardInterrupt` kills the child's whole process group while its leader is
+            unreaped. Default `subprocess.run` kills only the child.
 
     Returns:
         subprocess.CompletedProcess[str]: Captured text output.
@@ -1262,7 +1263,10 @@ def run_own_group(
     `poll` that could reap it): until then its pid, the group id, cannot be reused, like
     `integration/harness/headless.py` `kill_process_group`. If `communicate` already reaped the
     leader (its SIGINT grace wait can), the id may be reused, so nothing is signalled and the
-    original exception says so. Members left after a normal exit are the program's own job.
+    original exception says so, and surviving members may outlive the gate. Members left after a
+    normal exit are the program's own job. Only exceptions raised in this process run the cleanup:
+    a SIGTERM or SIGHUP without a Python handler, or a SIGKILL, ends the gate with no cleanup and
+    the group may outlive it.
 
     Parameters:
         argv (list[str]): Argument vector; `argv[0]` is absolute.
