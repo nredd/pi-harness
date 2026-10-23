@@ -89,7 +89,7 @@ describe("/agents → Workflows", () => {
   // Workflows are opt-in, so every test that expects the feature to exist has
   // to turn it on — the same thing a user does once in /agents → Settings.
   beforeEach(() => { hermetic = hermeticDir({ settings: { workflowsEnabled: true } }); });
-  afterEach(() => { hermetic.restore(); });
+  afterEach(() => { vi.restoreAllMocks(); hermetic.restore(); });
 
   it("registers no top-level /workflows command", () => {
     // It lives under /agents instead, deliberately: pi renames a duplicate
@@ -161,6 +161,10 @@ describe("/agents → Workflows", () => {
     });
 
     it("asks which run when several exist, newest first", async () => {
+      // Sequential launches can share a wall-clock millisecond. Give each start
+      // a distinct timestamp so this checks newest-first, not unspecified ties.
+      let now = 1_700_000_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now++);
       const { command } = await withRuns(3);
       const ui = commandCtx();
       ui.setPick(undefined);

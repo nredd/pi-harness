@@ -101,8 +101,25 @@ Producer updates are invisible until the producer exports AND the viewer imports
 known machines, not undiscovered installations; it is not proof that every machine has synced.
 
 `/stats` freshly scans local sessions and combines them with this cache without network access.
-Its UI labels cached coverage, successful import time, local-only/never-synced state and incomplete
-coverage. Future calls are ignored in display totals, not removed from durable history. Statistics
+Its header labels cached coverage, **viewer last import**, local-only/never-imported state and
+incomplete coverage. Tab/Shift-Tab cycles Overview, Models and **Machines**. Machines lists each
+known installation's label plus full opaque UUID (default labels may repeat), fresh local scan
+status, and each remote producer's **exported-at** UTC instant and age at opening. Use j/k or
+arrows to scroll; narrow panes wrap details. Print/JSON output includes the same provenance;
+empty histories include it in the notification. Range/model filters do not filter provenance.
+
+The viewer import clock is NOT producer freshness: importing a ten-day-old export today still
+shows a ten-day producer age. Future export clocks say `future; clock skew`, never fresh.
+Absent/invalid display timestamps say `unknown`. Invalid v1 manifests still fail validation and
+retain last-good data; rejected known UUIDs without last-good data show unknown export time.
+Missing/rejected sources with retained data say `Incomplete import; retained last-good snapshot`.
+Existing v1 snapshots require no migration or re-export. Unreadable caches report incomplete
+coverage, not invented machine identities. Only known sources are listed; this cannot discover
+machines that have never supplied a snapshot. No freshness threshold implies fleet completeness.
+
+Labels come only from the existing local `machine.json`, never automatic hostname/environment
+collection. Keep custom labels non-sensitive: they are exported. No schema or sync cadence changes.
+Future calls are ignored in display totals, not removed from durable history. Statistics
 are not subscription quota measurements or router inputs.
 
 Harness API:
