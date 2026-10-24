@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Usage: merge-pr.sh <pr> <full-sha> <standards-task-id> <spec-task-id> [history-file] [repo]
 # Quotes each reviewer transcript's actual model, verdict and reads in a receipt comment, then merges
 # at the reviewed head once CI is green. Reviews are ours, not a CI gate: no commit statuses are posted.
@@ -17,10 +17,14 @@ python=${MERGE_PR_PYTHON:?Set MERGE_PR_PYTHON to the trusted absolute Python env
 summarize() {
   # Print "<provider/model[, ...]>\t<verdict, first paragraph>\t<what it read>" for one transcript.
   "$python" - "$1" "$sha" "$2" <<'EOF'
-import json, os, re, sys
+import json, re, sys
+from pathlib import Path
 models, final, reads = [], "", []
-home = os.path.expanduser("~")
-for line in open(sys.argv[1]):
+home = str(Path.home().resolve())
+transcript = Path(sys.argv[1]).resolve()
+if not transcript.is_file():
+    sys.exit(f"Transcript is not a file: '{transcript}'")
+for line in transcript.read_text(encoding="utf-8").splitlines():
     m = json.loads(line).get("message", {})
     if m.get("role") != "assistant":
         continue
@@ -58,14 +62,18 @@ EOF
 receipt_line() {
   # Validate one transcript and print its receipt suffix: model(s), short id, verdict.
   local t=$1 axis=$2 out models verdict
-  out=$(ls "$root"/*/tasks/"$t".output 2>/dev/null) || true
-  [[ -n "$out" && $(wc -l <<<"$out") -eq 1 ]] || { echo "transcript $t: expected one file, got: ${out:-none}" >&2; return 1; }
+  out=$(/bin/ls -d "$root"/*/tasks/"$t".output 2>/dev/null) || true
+  [[ -n "$out" && $(/usr/bin/wc -l <<<"$out") -eq 1 ]] || { echo "transcript $t: expected one file, got: ${out:-none}" >&2; return 1; }
   # A reviewer that could not resolve the reviewed commit must not count as clean. Only git tool
   # results count: a reviewer reading this script (or any file quoting these phrases) is not a failure.
   if "$python" - "$out" <<'EOF'
 import json, re, sys
+from pathlib import Path
 bad = re.compile(r"bad revision|unknown revision|ambiguous argument|Not a valid object")
-for line in open(sys.argv[1]):
+transcript = Path(sys.argv[1]).resolve()
+if not transcript.is_file():
+    sys.exit(f"Transcript is not a file: '{transcript}'")
+for line in transcript.read_text(encoding="utf-8").splitlines():
     m = json.loads(line).get("message", {})
     if m.get("role") == "toolResult" and str(m.get("toolName", "")).startswith("git_"):
         if bad.search("".join(c.get("text", "") for c in m.get("content", []))):
@@ -87,22 +95,22 @@ head=$("$gh" pr view "$pr" --repo "$repo" --json headRefOid -q .headRefOid)
 # SKIPPED is a job whose `if:` was false (e.g. a tag-only release job on a PR), not a failure.
 # dotfiles has no CI; there the local `node --test` result in the history file is the gate.
 if [[ "$repo" == nredd/pi-harness ]]; then
-  "$python" "$(dirname "$0")/merge_pr_checks.py" "$pr" "$sha" "$repo"
+  "$python" "$(/usr/bin/dirname "$0")/merge_pr_checks.py" "$pr" "$sha" "$repo"
 elif ! notpass=$("$gh" pr checks "$pr" --repo "$repo" --json name,state -q '.[] | select(.state != "SUCCESS" and .state != "SKIPPED") | "\(.state) \(.name)"' 2>&1); then
   [[ "$repo" != nredd/pi-harness && "$notpass" == *"no checks reported"* ]] || { echo "$notpass" >&2; exit 1; }
   notpass=
 fi
 [[ "$repo" == nredd/pi-harness ]] && notpass=
 [[ -z "$notpass" ]] || { echo "CI not green on $sha:" >&2; echo "$notpass" >&2; exit 1; }
-body=$(mktemp)
+body=$(/usr/bin/mktemp)
 {
   echo "Review receipt, final HEAD \`$sha\`:"
   echo
   echo "- Standards (\`code-reviewer\`, $std_line"
   echo "- Spec (\`code-reviewer\`, $spec_line"
-  [[ -n "$history" ]] && { echo; cat "$history"; }
+  [[ -n "$history" ]] && { echo; /bin/cat "$history"; }
 } >"$body"
-cat "$body"
+/bin/cat "$body"
 "$gh" pr comment "$pr" --repo "$repo" --body-file "$body"
 "$gh" pr merge "$pr" --repo "$repo" --merge --match-head-commit "$sha"
 "$gh" pr view "$pr" --repo "$repo" --json state -q .state

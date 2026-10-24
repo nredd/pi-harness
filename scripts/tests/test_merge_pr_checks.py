@@ -255,6 +255,53 @@ def test_cli_failures_and_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
         checks.GitHub.command(gh, "api", "repos/example")
 
 
+def corrupt_transcript(transcript: Path, mode: str) -> None:
+    """Replace a transcript with the requested invalid filesystem entry.
+
+    Parameters:
+        transcript (Path): Disposable reviewer transcript file.
+        mode (str): Requested path failure, or an unrelated unchanged mode.
+    """
+    if mode not in ("directory-transcript", "missing-transcript", "dangling-transcript"):
+        return
+    transcript.unlink()
+    if mode == "directory-transcript":
+        transcript.mkdir()
+    elif mode == "dangling-transcript":
+        transcript.symlink_to(transcript.parent / "missing")
+
+
+def poison_path(bin_dir: Path, tmp_path: Path, mode: str) -> Path:
+    """Install hostile utility candidates without touching trusted executable inputs.
+
+    Parameters:
+        bin_dir (Path): Disposable PATH prefix.
+        tmp_path (Path): Disposable test workspace.
+        mode (str): Utility attack to install.
+
+    Returns:
+        Path: Marker created if any hostile executable or redirected gate runs.
+    """
+    injected = bin_dir / "gh"
+    injected.write_text("#!/bin/sh\nexit 99\n")
+    injected.chmod(0o755)
+    poisoned = tmp_path / "poisoned"
+    bypass = tmp_path / "bypass"
+    bypass.mkdir()
+    (bypass / "merge_pr_checks.py").write_text(f"from pathlib import Path\nPath({str(poisoned)!r}).touch()\n")
+    utilities = {
+        "poisoned-dirname": ("dirname",),
+        "poisoned-path": ("dirname", "ls", "wc", "mktemp", "cat", "bash", "python3"),
+    }.get(mode, ())
+    for utility in utilities:
+        executable = bin_dir / utility
+        if executable.is_symlink():
+            executable.unlink()
+        executable.write_text(f"#!/bin/sh\n: > '{poisoned}'\nprintf '%s\\n' '{bypass}'\n")
+        executable.chmod(0o755)
+    return poisoned
+
+
 @pytest.mark.parametrize(
     "mode",
     [
@@ -272,6 +319,11 @@ def test_cli_failures_and_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
         "relative-gh",
         "relative-python",
         "final-wrong-head",
+        "poisoned-dirname",
+        "poisoned-path",
+        "directory-transcript",
+        "missing-transcript",
+        "dangling-transcript",
     ],
 )
 def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
@@ -336,13 +388,12 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
                 }
             )
         (tasks / f"{task}.output").write_text("\n".join(json.dumps(m) for m in messages) + "\n")
+    corrupt_transcript(tasks / "spec-id.output", mode)
     isolated = scripts / "merge-pr.sh"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "python3").symlink_to(sys.executable)
-    injected = bin_dir / "gh"
-    injected.write_text("#!/bin/sh\nexit 99\n")
-    injected.chmod(0o755)
+    poisoned = poison_path(bin_dir, tmp_path, mode)
     fake = tmp_path / "trusted-gh"
     fake.write_text(
         f"#!{sys.executable}\n"
@@ -360,7 +411,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
             with Path(os.environ["REPLAY_MUTATIONS"]).open("a") as out:
                 out.write(json.dumps(args) + "\\n")
         else:
-            if os.environ["REPLAY_MODE"] == "optional-failure":
+            if os.environ["REPLAY_MODE"] in ("optional-failure", "poisoned-dirname"):
                 gh.data["checks"].append({"name": "optional", "state": "FAILURE", "link": ""})
             print(json.dumps(gh.command(*args)))
     """)
@@ -390,7 +441,8 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
         text=True,
         check=False,
     )
-    if mode == "green":
+    assert not poisoned.exists(), result.stderr
+    if mode in ("green", "poisoned-path"):
         assert result.returncode == 0, result.stderr
         assert f"Review receipt, final HEAD `{sha}`" in result.stdout
         assert "`review/fixture`" in result.stdout
@@ -400,6 +452,8 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     else:
         assert result.returncode != 0
         assert not mutations.exists()
+        if mode in ("directory-transcript", "dangling-transcript"):
+            assert "not a file" in result.stderr
 
 
 @pytest.mark.parametrize("target", ["pr", "checks", "rules", "runs", "old_jobs", "new_jobs", "check_runs"])
