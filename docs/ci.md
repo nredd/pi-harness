@@ -104,8 +104,16 @@ These nine jobs are the required checks of ruleset `main required checks` (id `2
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
 - `scripts/merge-pr.sh` is the tracked source; `scripts/merge_pr_checks.py` owns its read-only CI
-  predicate. Invoke the helper from an exact reviewed checkout. It preserves transcript validation,
-  receipt posting and `--match-head-commit`. The unmanaged
+  predicate. Invoke the helper from an exact reviewed checkout. It validates distinct reviewer IDs,
+  exact final-report HEAD and axis, unresolved-revision errors, receipt posting and
+  `--match-head-commit`. Each reviewer's **final assistant report** must begin with these literal
+  lines (use `Axis: Spec` for the other axis), then its normal `Checked:` and `Findings:` sections:
+  ```text
+  Axis: Standards
+  Reviewed HEAD: <full-40-character-reviewed-sha>
+  ```
+  Missing, duplicate or conflicting declarations refuse. A SHA in an earlier request, tool call or
+  incidental prose is not a receipt. Renew the review rather than editing a transcript. The unmanaged
   `~/code/pi-harness-builds/merge-pr.sh` is a distribution copy, not source. Only after this PR is
   reviewed and merged may the parent copy **both** scripts together from the merged revision into
   that directory. Do not activate an unreviewed copy or change managed Pi config
@@ -118,12 +126,19 @@ These nine jobs are the required checks of ruleset `main required checks` (id `2
   PR/head/base (including repository identity), Actions app and SHA. All eight expected expanded
   matrix cells must individually succeed. The latest workflow execution must qualify; an intermediate
   green run cannot hide a later cancellation. Ordering uses `run_number`, then `run_attempt`, never
-  timestamps or API page order. Evidence is fully paginated; missing or ambiguous evidence refuses.
+  timestamps or API page order. Evidence is fully paginated and validated as strict Pydantic records;
+  missing, malformed or ambiguous evidence refuses.
   The bounded matrix contract test must change alongside any CI matrix change
 - Bootstrap this helper's own PR without replacing the scratch copy: after independent Standards +
   Spec reviews of its final HEAD and existing hosted checks are green, invoke its reviewed tracked
   helper directly from the candidate worktree:
+  Install the existing locked integration environment (`uv sync --locked` in `integration/`)
+  for Pydantic evidence validation. Select trusted absolute executables and the actual transcript
+  storage directory explicitly; there is no PATH-based or workstation-specific fallback:
   ```sh
+  MERGE_PR_TRANSCRIPT_ROOT=<absolute-transcript-store> \
+  MERGE_PR_GH=/opt/homebrew/bin/gh \
+  MERGE_PR_PYTHON=$HOME/code/pi-harness-merge-helper/integration/.venv/bin/python \
   bash ~/code/pi-harness-merge-helper/scripts/merge-pr.sh \
     <helper-pr> <full-reviewed-head> <standards-task-id> <spec-task-id> \
     <gate-history-file> nredd/pi-harness
