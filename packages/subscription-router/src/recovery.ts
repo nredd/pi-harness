@@ -21,7 +21,7 @@ import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentBeforeSettleEvent, BoundaryResult, ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Profile } from "./config.js";
 import { refKey, sameModel } from "./model-ref.js";
-import { ChainExhaustedError, isQuotaError, type RouteEnv, type Router } from "./router.js";
+import { ChainExhaustedError, hasPartialOutput, isQuotaError, type RouteEnv, type Router } from "./router.js";
 
 /** What happened at one settle boundary. */
 export type RecoveryOutcome =
@@ -65,7 +65,7 @@ export class SettleRecovery {
 		signal: AbortSignal | undefined,
 	): Promise<RecoveryOutcome> {
 		const failed = trailingError(event.context.contextEntries);
-		if (!failed || !isQuotaError(failed.message)) return { kind: "none" };
+		if (!failed || !isQuotaError(failed.message) || hasPartialOutput(failed.message)) return { kind: "none" };
 		const { provider, model: id } = failed.message;
 		const entry = profile.chain.find((item) => sameModel(item, { provider, id }));
 		if (!entry) return { kind: "none" };

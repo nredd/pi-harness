@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Refuse cross-model quota replay of partial streams without blocking core same-model recovery
+- Follow newer confirming reads with bounded, cancellable waits and exact-snapshot decisions; keep newest-only cache/backoff writes
+- Keep cancelled refreshes from consuming manual allowance; bound credential-owner waits
+- Reject inherited collector names and out-of-range reset timestamps
+- Exercise direct usage tools and packed multiprovider dispatch without live credentials
+- Remove nonexistent `e2e/` paths from formatting and lint commands
+
 - Retire the shell E2E runner and unused faux helpers after all 13 cases moved to native package, stack and pi-subagents suites
 
 ## 0.3.0

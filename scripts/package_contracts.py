@@ -66,7 +66,16 @@ from pydantic import (
     model_validator,
 )
 
-from faux_provider import FauxProvider, RecordedRequest, Route, Step, TextStep, ToolStep, models_json
+from faux_provider import (
+    ErrorStep,
+    FauxProvider,
+    RecordedRequest,
+    Route,
+    Step,
+    TextStep,
+    ToolStep,
+    models_json,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -896,6 +905,9 @@ class RouterEvidence(TypedDict):
 
     virtual_model: str
     dispatched: str
+    balanced: list[str]
+    fallback: list[str]
+    recovery: list[str]
 
 
 class SubagentsEvidence(TypedDict):
@@ -978,6 +990,16 @@ class RouterEvidenceModel(BaseModel):
     virtual_model: Literal["router/default"] = Field(description="Virtual model that was requested")
     dispatched: Annotated[str, StringConstraints(pattern=r"^[^/\s]+/[^/\s]+$")] = Field(
         description="`provider/model` the virtual model dispatched to"
+    )
+
+    balanced: list[Literal["openai-codex/m-b"]] = Field(
+        min_length=1, max_length=1, description="Balanced dispatch"
+    )
+    fallback: list[Literal["local/m-c"]] = Field(
+        min_length=1, max_length=1, description="Unmeasured fallback"
+    )
+    recovery: list[Literal["anthropic/m-a", "openai-codex/m-b"]] = Field(
+        min_length=2, max_length=2, description="Confirmed quota recovery attempts"
     )
 
 
@@ -3805,7 +3827,75 @@ def scenario_router(ctx: Context) -> RouterEvidence:
         "default" not in rejected.stdout and "Bad Id" not in rejected.stdout,
         f"rejected config registered models:\n{rejected.stdout}",
     )
-    return {"virtual_model": "router/default", "dispatched": f"{PROVIDER}/{PHYSICAL_MODEL}"}
+    return {
+        "virtual_model": "router/default",
+        "dispatched": f"{PROVIDER}/{PHYSICAL_MODEL}",
+        "balanced": exercise_packed_router(ctx, project, "balanced"),
+        "fallback": exercise_packed_router(ctx, project, "fallback"),
+        "recovery": exercise_packed_router(ctx, project, "recovery"),
+    }
+
+
+def exercise_packed_router(
+    ctx: Context, project: Path, mode: Literal["balanced", "fallback", "recovery"]
+) -> list[str]:
+    """Exercise installed factory bytes with real stock-Pi streams and three loopback providers.
+
+    Parameters:
+        ctx (Context): Isolated installed artifact and stock host.
+        project (Path): Disposable working directory.
+        mode (Literal["balanced", "fallback", "recovery"]): Scenario to execute.
+
+    Returns:
+        list[str]: Physical assistant attempts, including the failed recovery attempt.
+
+    Raises:
+        ContractError: If provider dispatch, tool isolation or recovery differs from the contract.
+    """
+    source = (REPO_ROOT / "scripts" / "router_contract.mjs").read_text()
+    wrapper = ctx.work / f"router-{mode}.mjs"
+    wrapper.write_text(
+        source.replace("PACKED_ROUTER_INDEX", json.dumps((ctx.installed / "src/index.ts").as_posix())[1:-1])
+        .replace("PACKED_ROUTER_USAGE", json.dumps((ctx.installed / "src/usage.ts").as_posix())[1:-1])
+        .replace("CONTRACT_MODE", mode)
+    )
+    first: Step = (
+        ErrorStep("insufficient_quota: synthetic exhausted subscription")
+        if mode == "recovery"
+        else TextStep("a")
+    )
+    with FauxProvider([first]) as a, FauxProvider([TextStep("b")]) as b, FauxProvider([TextStep("c")]) as c:
+        providers = {}
+        for server, name, model in [(a, "anthropic", "m-a"), (b, "openai-codex", "m-b"), (c, "local", "m-c")]:
+            providers |= json.loads(models_json(server.base_url, name, [model]))["providers"]
+        (ctx.sandbox.agent_dir / "models.json").write_text(json.dumps({"providers": providers}))
+        result = run_pi(
+            ctx.pi_bin, ctx.sandbox, wrapper, project, ["--model", "router/default", "--mode", "json", "go"]
+        )
+    require_clean_run(result, f"packed router {mode}")
+    expected = {
+        "balanced": ["openai-codex/m-b"],
+        "fallback": ["local/m-c"],
+        "recovery": ["anthropic/m-a", "openai-codex/m-b"],
+    }[mode]
+    attempts = [MessageEnvelope.model_validate(message) for message in result.assistant_messages()]
+    physical = [f"{message.provider}/{message.model}" for message in attempts]
+    require(physical == expected, f"packed router {mode}: expected {expected}, got {physical}")
+    require(
+        [len(a.requests), len(b.requests), len(c.requests)]
+        == {
+            "balanced": [0, 1, 0],
+            "fallback": [0, 0, 1],
+            "recovery": [1, 1, 0],
+        }[mode],
+        f"packed router {mode}: unexpected provider request count",
+    )
+    require_tools(result, ctx.artifact.contract, ctx.siblings, [*a.requests, *b.requests, *c.requests])
+    require(
+        result.assistant_messages()[-1].get("stopReason") == "stop",
+        "packed router did not settle successfully",
+    )
+    return physical
 
 
 def todo_snapshot_subject(record: dict[str, Any]) -> str | None:

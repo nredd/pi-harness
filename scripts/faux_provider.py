@@ -57,7 +57,18 @@ class TextStep:
     text: str
 
 
-Step = ToolStep | TextStep
+@dataclass(frozen=True)
+class ErrorStep:
+    """One provider SSE error, after transport establishment.
+
+    Parameters:
+        message (str): Synthetic error message delivered by the provider SDK.
+    """
+
+    message: str
+
+
+Step = ToolStep | TextStep | ErrorStep
 
 
 @dataclass(frozen=True)
@@ -183,6 +194,11 @@ def encode_step(step: Step, index: int) -> bytes:
     Returns:
         bytes: SSE frames ending with `[DONE]`.
     """
+    if isinstance(step, ErrorStep):
+        error = {
+            "error": {"message": step.message, "type": "insufficient_quota", "code": "insufficient_quota"}
+        }
+        return b"data: " + json.dumps(error).encode() + b"\n\ndata: [DONE]\n\n"
     if isinstance(step, ToolStep):
         call = {
             "index": 0,

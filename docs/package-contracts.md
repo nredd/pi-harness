@@ -166,7 +166,14 @@ What each package must satisfy:
     exporting that real session and importing it elsewhere; unknown flags exit nonzero. The copy is
     not a rebuild, so artifact identity is the tarball's
   - subscription-router: `router/default` is listed and a request dispatches to the physical
-    `local/m`; an invalid config registers nothing and does not crash Pi
+    `local/m`; an invalid config registers nothing and does not crash Pi. Three additional stock-Pi
+    processes embed the installed tarball's factory through `scripts/router_contract.mjs`: balanced
+    dispatch to B, exhausted A/B falling back to unmeasured C, and an SSE quota error on A confirmed
+    by a fresh usage read before recovery to B. Each asserts exact physical message order, provider
+    request counts, successful final settlement and sibling-tool absence. Quota HTTP responses and
+    credentials are synthetic injected transport dependencies; model streams use three real loopback
+    faux providers. No workspace router source or sibling plugin is loaded. The original default-entry
+    scenario remains separate, so the embedding fixture does not replace installation coverage
   - in every run the package's tools are declared and no other package's are (sibling absent)
 
 Isolation: the child environment is built from scratch, never inherited. `HOME`, `TMPDIR`/`TMP`/`TEMP`,
@@ -175,8 +182,9 @@ scratch directory (session-kit sweeps `os.tmpdir()` on startup, so nothing point
 state). No provider keys or loader variables (`NODE_OPTIONS`, ...) reach children; `HTTP(S)_PROXY`
 points at a dead port with loopback excluded as defense in depth for clients honoring proxy
 variables. This is not a network sandbox: direct sockets and clients ignoring those variables are
-not intercepted. The only configured model is a loopback scripted provider (`faux_provider.py`)
-registered through `models.json` with a dummy key.
+not intercepted. Configured models use loopback scripted providers (`faux_provider.py`)
+registered through `models.json` with dummy keys. The router's multiprovider cases configure three
+such providers, never live subscription endpoints.
 Scratch is deleted unless `--keep`.
 
 Limits: this is stock Pi only. It does not exercise `pi install npm:...`, the Plan-mode
