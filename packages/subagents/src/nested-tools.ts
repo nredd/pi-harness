@@ -221,6 +221,15 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         if (!ownsRecord(existing, context.parentAgentId)) {
           return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
         }
+        // Two resumes of one child in the same turn (parallel tool calls) would
+        // run two prompts on one session; the manager refuses the second, and
+        // this says why instead of a generic failure.
+        if (existing.status === "running" || existing.status === "queued") {
+          return textResult(
+            `Nested agent "${params.resume}" is still ${existing.status}; it can only be resumed once its current run finishes.`,
+            true,
+          );
+        }
         // Frontmatter authoritative, as on the spawn path; the manager falls
         // back to the limit the child was spawned with, then the default.
         const resumed = await context.manager.resume(params.resume, params.prompt, signal, {

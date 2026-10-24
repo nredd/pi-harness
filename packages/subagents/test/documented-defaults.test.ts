@@ -10,6 +10,7 @@
 // suites that hold module references across tests.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getBudgetPolicy, resetBudgetForTests } from "../src/process-budget.js";
 
 describe("documented defaults (README:441)", () => {
   beforeEach(() => {
@@ -32,6 +33,13 @@ describe("documented defaults (README:441)", () => {
     const { getDefaultMaxTurns } = await import("../src/agent-runner.js");
     expect(getDefaultMaxTurns()).toBeUndefined();
   }, HEAVY_REIMPORT_MS);
+
+  // Off: nothing above the per-session pools ever bounded the process, and the
+  // 12-with-reserve-2 policy is an opt-in in global settings, not a default.
+  it("the process budget is off by default with a reserve of 2 at depth 2", () => {
+    resetBudgetForTests();
+    expect(getBudgetPolicy()).toEqual({ maxActive: 0, nestedReserve: 2, maxDepth: 2 });
+  });
 
   it("nested subagent depth defaults to 2", async () => {
     const { getMaxSubagentDepth } = await import("../src/nested-tools.js");

@@ -264,6 +264,27 @@ describe("Agent tool — background resume wiring", () => {
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
 
+  // Parallel tool calls can resume one agent twice in a turn; the refusal
+  // covers a foreground resume of an in-flight run too.
+  it("refuses a foreground resume while a run is in flight", async () => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = makeCtx(cwd);
+    const id = await spawnSettled(tools, ctx);
+
+    vi.mocked(resumeAgent).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(resumeAgent).mockClear();
+
+    const background = { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: true };
+    await tools.get("Agent").execute("resume-1", background, undefined, undefined, ctx);
+    const second = await tools.get("Agent").execute("resume-2", { ...background, run_in_background: false }, undefined, undefined, ctx);
+
+    expect(resumeAgent).toHaveBeenCalledTimes(1);
+    expect(resultText(second)).toContain("still running");
+
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
+
   // Resume follows the same default as a fresh spawn — background — so
   // foreground is now the explicit case rather than the implicit one.
   it("still resumes in the foreground when run_in_background is false", async () => {
