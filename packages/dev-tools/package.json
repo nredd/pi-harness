@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-dev-tools",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "publishConfig": {"access": "public"},
   "description": "Typed pi tools for git, ssh, Python (uv/ruff/ty/pytest) and Rust (cargo): compact structured results, explicit exit-code states, no-shell spawn, bounded output.",
   "author": "nredd",
@@ -13,6 +13,9 @@
     "directory": "packages/dev-tools"
   },
   "keywords": ["pi-package", "pi-extension"],
+  "dependencies": {
+    "@nredd/pi-resource-sampler": "0.1.1"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
