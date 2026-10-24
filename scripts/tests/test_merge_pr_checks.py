@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -245,23 +246,53 @@ def test_cli_failures_and_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(checks.CheckError):
         gh.gate()
 
-    def failed(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def failed(cmd: list[str], **kwargs: Any) -> str:
         """Return a credential-free HTTP failure from the executable seam."""
-        return subprocess.CompletedProcess(args, 1, "", "HTTP 403")
+        raise subprocess.CalledProcessError(1, cmd, output="HTTP 403")
 
-    monkeypatch.setattr(subprocess, "run", failed)
+    monkeypatch.setattr(subprocess, "check_output", failed)
     with pytest.raises(checks.CheckError, match="HTTP 403"):
         checks.GitHub.command(gh, "api", "repos/example")
 
 
-@pytest.mark.parametrize("mode", ["green", "head-drift", "unresolved-review", "optional-failure"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "green",
+        "head-drift",
+        "unresolved-review",
+        "optional-failure",
+        "duplicate-id",
+        "stale-head",
+        "missing-head",
+        "wrong-axis",
+        "incidental-sha",
+        "conflicting-receipt",
+        "relative-root",
+        "relative-gh",
+        "relative-python",
+        "final-wrong-head",
+    ],
+)
 def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     """Run the actual shell and Python gate, with only GitHub/transcript storage isolated."""
     scripts = Path(__file__).resolve().parents[1]
     root = tmp_path / "transcripts"
     tasks = root / "session" / "tasks"
     tasks.mkdir(parents=True)
-    for task in ("standards-id", "spec-id"):
+    sha = Replay().data["pr"]["head"]["sha"]
+    for task, axis in (("standards-id", "Standards"), ("spec-id", "Spec")):
+        reviewed = "0" * 40 if mode in ("stale-head", "incidental-sha") else sha
+        header = f"Axis: {axis}\nReviewed HEAD: {reviewed}\n"
+        if mode == "missing-head":
+            header = f"Axis: {axis}\n"
+        elif mode == "wrong-axis":
+            header = f"Axis: Spec\nReviewed HEAD: {sha}\n"
+        elif mode == "conflicting-receipt":
+            header += f"Reviewed HEAD: {'0' * 40}\n"
+        report = header + "Checked:\n- Exact diff\nFindings:\nNone."
+        if mode == "incidental-sha":
+            report += f"\nPrior request mentioned {sha}; this conclusion reviews {reviewed}."
         messages = [
             {
                 "message": {
@@ -270,7 +301,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
                     "model": "fixture",
                     "content": [
                         {"type": "toolCall", "name": "git_diff", "arguments": {"base": "main...HEAD"}},
-                        {"type": "text", "text": "Checked:\n- Exact diff\nFindings:\nNone."},
+                        {"type": "text", "text": report},
                     ],
                 }
             }
@@ -287,15 +318,32 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
                     }
                 }
             )
+        if mode == "final-wrong-head":
+            messages.append(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "provider": "review",
+                        "model": "fixture",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Axis: {axis}\nReviewed HEAD: {'0' * 40}\n"
+                                "Checked:\n- Other HEAD\nFindings:\nNone.",
+                            }
+                        ],
+                    }
+                }
+            )
         (tasks / f"{task}.output").write_text("\n".join(json.dumps(m) for m in messages) + "\n")
-    shell = (scripts / "merge-pr.sh").read_text()
-    isolated = tmp_path / "merge-pr.sh"
-    isolated.write_text(re.sub(r"^root=.*$", f"root={root}", shell, flags=re.MULTILINE))
-    (tmp_path / "merge_pr_checks.py").symlink_to(scripts / "merge_pr_checks.py")
+    isolated = scripts / "merge-pr.sh"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "python3").symlink_to(sys.executable)
-    fake = bin_dir / "gh"
+    injected = bin_dir / "gh"
+    injected.write_text("#!/bin/sh\nexit 99\n")
+    injected.chmod(0o755)
+    fake = tmp_path / "trusted-gh"
     fake.write_text(
         f"#!{sys.executable}\n"
         + textwrap.dedent("""
@@ -319,15 +367,24 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     )
     fake.chmod(0o755)
     mutations = tmp_path / "mutations"
-    sha = Replay().data["pr"]["head"]["sha"]
     result = subprocess.run(
-        ["/bin/bash", str(isolated), "135", sha, "standards-id", "spec-id"],
+        [
+            "/bin/bash",
+            str(isolated),
+            "135",
+            sha,
+            "standards-id",
+            "standards-id" if mode == "duplicate-id" else "spec-id",
+        ],
         env=os.environ
         | {
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "REPLAY_TESTS": str(Path(__file__).parent),
             "REPLAY_MODE": mode,
             "REPLAY_MUTATIONS": str(mutations),
+            "MERGE_PR_TRANSCRIPT_ROOT": "relative" if mode == "relative-root" else str(root),
+            "MERGE_PR_GH": "gh" if mode == "relative-gh" else str(fake),
+            "MERGE_PR_PYTHON": "python3" if mode == "relative-python" else sys.executable,
         },
         capture_output=True,
         text=True,
@@ -343,3 +400,52 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     else:
         assert result.returncode != 0
         assert not mutations.exists()
+
+
+@pytest.mark.parametrize("target", ["pr", "checks", "rules", "runs", "old_jobs", "new_jobs", "check_runs"])
+def test_malformed_evidence_blocks(target: str) -> None:
+    """Malformed identity records cannot enter the gate as untyped JSON assumptions."""
+    gh = Replay()
+    if target == "pr":
+        gh.data[target]["head"]["repo"]["id"] = "not-an-integer"
+    elif target == "checks":
+        del gh.data[target][0]["link"]
+    elif target == "old_jobs":
+        next(j for j in gh.data[target] if j["name"].startswith("stack"))["head_sha"] = 17
+    elif target == "rules":
+        gh.data[target][0]["parameters"]["required_status_checks"][0]["integration_id"] = "15368"
+    else:
+        del gh.data[target][0]["app" if target == "check_runs" else "id"]
+    with pytest.raises(ValidationError):
+        gh.gate()
+
+
+@pytest.mark.parametrize("code", [0, 8, 1])
+def test_subprocess_pending_and_failure(monkeypatch: pytest.MonkeyPatch, code: int) -> None:
+    """Only pending `pr checks` may return parsed output after a nonzero CLI exit."""
+    gh = Replay()
+
+    def output(cmd: list[str], *, text: bool, stderr: int) -> str:
+        """Check the prescribed subprocess contract and return or raise fixture output."""
+        assert text is True
+        assert stderr == subprocess.STDOUT
+        if code:
+            raise subprocess.CalledProcessError(code, cmd, output='[{"state":"PENDING"}]')
+        return '[{"state":"SUCCESS"}]'
+
+    monkeypatch.setattr(subprocess, "check_output", output)
+    if code == 1:
+        with pytest.raises(checks.CheckError):
+            checks.GitHub.command(gh, "pr", "checks", "135")
+    else:
+        assert checks.GitHub.command(gh, "pr", "checks", "135")
+    if code == 8:
+        with pytest.raises(checks.CheckError):
+            checks.GitHub.command(gh, "api", "repos/example")
+
+
+@pytest.mark.parametrize("binary", ["gh", "/nonexistent/gh"])
+def test_explicit_binary_validation(binary: str) -> None:
+    """No PATH fallback can replace a missing explicit absolute executable."""
+    with pytest.raises(checks.CheckError, match="trusted"):
+        checks.GitHub(Path(binary))
