@@ -47,14 +47,17 @@ sample, including its `ps` child on macOS. Mapping rules:
 - From 72 columns and 17 rows (one more per diagnostic line), CPU and memory/load cards sit side
   by side; CPU history is two rows (16 levels) there. Narrower or shorter terminals get a
   three-line summary (`CPU`, `RAM`, 1-minute load, one-row history); at six rows summary/chrome
-  yields to the selected process. The last row reserves close/help. Below 60 columns the header
+  yields to the selected process, but a compact partial-list or stopped/retry warning remains visible.
+  At eight rows, core CPU/RAM/load metrics take priority over optional history and platform hints.
+  The last row reserves close/help. Below 60 columns the header
   keeps the update clock over the tagline.
 - Columns: `PID`, `CPU%` (100 = one core), `RSS`, `MEM%` (RSS over total RAM, 60+ columns),
   `NAME` last so long names never push numbers off screen. `--` is dimmed. A `▸` marks the
   selection; a theme scrollbar appears only when the list overflows. The memory card adds 1-minute
   load per logical CPU.
 - Host CPU severity colors the value (success under 50%, warning under 85%, error above) next to
-  the number itself.
+  the number itself. Stale CPU retains the last measured value with a muted `last value` label,
+  never the live severity color.
 - Host CPU history keeps each capture timestamp, uses a fixed 0..100% scale and at most 120
   samples, newest on the right. A column is the lower-median interval between captures, widened
   only when the history is longer than the width, so completion-paced drift never invents gaps.
@@ -108,6 +111,11 @@ no model tool, persists no history, sends no model messages and does no network 
     with fakes; `resource-fixture.ts` is type-checked against the package's `ResourceSnapshot`.
 - `make check-package-contracts` packs session-kit, installs it alone (sampler from npm, exact
   lockfile closure) and drives it through stock Pi.
+- Real macOS terminal recordings exercise the packed, registry-backed view, resize, navigation,
+  close and reopen. Empty direct-child lists before and after close show only that no child was
+  observed at those instants; they do NOT prove an in-flight helper was cancelled or reaped.
+  In-flight cancellation/reaping evidence comes from the deterministic real-sampler tests above,
+  not those terminal snapshots. No Linux terminal recording is claimed.
 - Manual fixture preview (no sampling): `bun test/mon/terminal.ts dark|light`. It is labelled
   `FIXTURE DATA` and uses `fixture-*` names, so a capture can never pass for host data; it is not
   evidence of real measurements.

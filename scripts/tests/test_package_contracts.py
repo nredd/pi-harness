@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -26,6 +29,8 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from contract_helpers import FifoWitness, node_writer, python_writer
 
 import faux_provider as fp
 import npm_release as nr
@@ -371,6 +376,65 @@ def test_run_reports_nonzero_exit(tmp_path: Path) -> None:
     """
     with pytest.raises(pc.ContractError, match="exited 3"):
         pc.run([Path("/bin/sh"), "-c", "echo boom >&2; exit 3"], env={}, cwd=tmp_path, timeout=5)
+
+
+def test_run_default_timeout_kills_the_child(tmp_path: Path) -> None:
+    """The default `subprocess.run` path still kills a hung child and reports `timed out`.
+
+    Parameters:
+        tmp_path (Path): Child working directory holding the FIFO.
+    """
+    with FifoWitness(tmp_path) as witness:
+        with pytest.raises(pc.ContractError, match="timed out after 1s"):
+            pc.run([sys.executable, "-c", FifoWitness.PYTHON_WRITER], env={}, cwd=tmp_path, timeout=1)
+        assert witness.started(), "child never wrote to the FIFO"
+        assert witness.gone(), "child survived the timeout"
+
+
+def test_run_default_interrupt_kills_the_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An interrupt during the default path propagates unchanged and still kills the child.
+
+    Parameters:
+        tmp_path (Path): Child working directory holding the FIFO.
+        monkeypatch (pytest.MonkeyPatch): Injects `KeyboardInterrupt` once the child is running.
+    """
+    with FifoWitness(tmp_path) as witness:
+
+        def interrupted(*_args: object, **_kwargs: object) -> None:
+            assert witness.started(), "child never wrote to the FIFO"
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(subprocess.Popen, "communicate", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            pc.run([sys.executable, "-c", FifoWitness.PYTHON_WRITER], env={}, cwd=tmp_path, timeout=30)
+        assert witness.gone(), "child survived the interrupt"
+
+
+@pytest.mark.parametrize("language", ["python", "node"])
+@pytest.mark.parametrize("reader", ["absent", "closed"])
+def test_fifo_writer_exits_without_a_reader(tmp_path: Path, language: str, reader: str) -> None:
+    """A writer whose reader never opened, or already closed, still exits on its own bound.
+
+    A blocking open would wait forever here, before the exit timer starts, and leak the writer.
+
+    Parameters:
+        tmp_path (Path): Writer working directory holding the FIFO.
+        language (str): Writer runtime.
+        reader (str): Whether the reader never opened or closed before the writer started.
+    """
+    if reader == "absent":
+        os.mkfifo(tmp_path / "alive.fifo")
+    else:
+        with FifoWitness(tmp_path):
+            pass
+    argv = (
+        [sys.executable, "-c", python_writer(1)]
+        if language == "python"
+        else [str(pc.locate_tools().node), "-e", node_writer(1)]
+    )
+    started = time.monotonic()
+    subprocess.run(argv, cwd=tmp_path, capture_output=True, timeout=10, check=False)
+    assert time.monotonic() - started < 5
 
 
 @pytest.mark.parametrize(

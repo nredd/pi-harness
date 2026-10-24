@@ -178,6 +178,31 @@ checks aggregate CPU range and self-process visibility, and exercises cancellati
 child's argv[0], process title and Linux comm hold a random 32-hex secret; the probe first proves the
 0.1.0 name source (`ps -c` comm on Darwin, `/proc/PID/comm` on Linux) shows it, then requires the
 child in the second snapshot and no 12-character window of the secret anywhere in either snapshot.
+The probe samples with the library maxima (5s, 16384 PIDs, 16MiB); a child the bounded scan misses
+fails with the snapshot coverage, never passes vacuously. Everything after spawn, readiness and the
+negative control included, is followed by SIGTERM, then SIGKILL, and a bounded await of that exact
+child's exit status; a cleanup failure is reported alongside the original error, never instead of
+it. `resource_sampler_probe` builds the program; `test_library_probe_reaps_child_when_setup_fails`
+runs it with a silent, an exiting, an undisguised and a SIGTERM-ignoring child and requires the
+expected failure plus `hostile child reaped` with the expected status (SIGKILL for the last). The
+legacy `ps` call is bounded too. `test_probe_reports_cleanup_failure_with_the_primary_error` patches
+its own copy of the program so `stop` reaps and then throws, and requires the `AggregateError` text.
+The gate runs the probe with `run(..., own_group=True)` (`run_own_group`): its own session, and on
+the 30s timeout or a `KeyboardInterrupt` in the gate the whole process group is killed while its
+leader is unreaped, so a hung probe cannot orphan the child. The group is signalled only while its
+leader is unreaped, so the group id cannot have been reused; if `communicate` already reaped the
+leader, nothing is signalled, the original exception carries a note, and surviving members may
+outlive the gate. Only Python exceptions reach this cleanup: a SIGTERM or SIGHUP the gate does not
+handle, or a SIGKILL, ends the worker with no cleanup and the group may outlive it. Default `run`
+stays plain `subprocess.run`, which kills only the child. `test_probe_timeout_kills_its_whole_process_group` and
+`test_probe_interrupt_kills_its_whole_process_group` time out or interrupt the real probe and require
+EOF within 10s on a FIFO only the child holds (`FifoWitness`; the child exits on its own 20s after
+it starts, opening included, so a regression cannot leave it behind). Its open is non-blocking and
+retried, since a blocking open waits for a reader before any exit timer starts;
+`test_fifo_writer_exits_without_a_reader` requires both writers to exit with no reader or a closed
+one. `test_reaped_leader_group_is_never_signalled` and the `test_run_default_*` timeout/interrupt
+tests cover the guard and the unchanged default path. The reaped-leader skip and unhandled
+SIGTERM/SIGHUP/SIGKILL of the gate are not covered by any cleanup.
 Existing `owned` macOS/Linux jobs run the native package tests; existing `contracts` jobs run this
 packed consumer. No new runner matrix or Pi load is needed for a Pi-independent library.
 
@@ -186,9 +211,8 @@ packed consumer. No new runner matrix or Pi load is needed for a Pi-independent 
 field, peers or runtime dependencies are allowed. Import auditing permits Node builtins and
 in-package relative imports, never host modules or sibling extensions. The default extension
 contract still requires `pi.extensions` and retains its original host-module rules. The release
-descriptor uses the same audit/isolated execution gate; no npm publication or bootstrap is performed.
-The new npm name requires owner-controlled staged publication/2FA and trusted-publisher setup before
-release. Consumers declare the exact registry release (`RESOURCE_SAMPLER_VERSION`, never a range,
+descriptor uses the same audit/isolated execution gate; `publish.yml` published `0.1.1` (see
+[releases](releases.md)). Consumers declare the exact registry release (`RESOURCE_SAMPLER_VERSION`, never a range,
 `workspace:` or `file:` spec) as a contract `runtime_dependencies` entry; their stock gate installs it
 from npm next to the packed plugin. In the monorepo npm would link the same-version workspace, so the
 root lock carries a nested registry entry per consumer (e.g.

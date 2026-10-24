@@ -216,7 +216,12 @@ export class MonView implements Component {
 		const s = this.snapshot;
 		const value = s?.cpuPercent ?? null;
 		const state = this.cpuState();
-		const head = value === null ? t.fg("dim", "--") : t.bold(t.fg(this.cpuColor(value), percent(value)));
+		const head =
+			value === null
+				? t.fg("dim", "--")
+				: s?.status === "stale"
+					? t.fg("muted", percent(value))
+					: t.bold(t.fg(this.cpuColor(value), percent(value)));
 		if (!capacity) return `${head}${state}`;
 		return `${head}${state} ${t.fg("muted", `${state ? "·" : "of"} ${s?.logicalCpus || "--"} logical CPUs`)}`;
 	}
@@ -278,6 +283,7 @@ export class MonView implements Component {
 
 	/** Why host CPU reads `--`; textual, so meaning never depends on color. */
 	private cpuState(): string {
+		if (this.snapshot?.status === "stale") return ` ${this.options.theme.fg("muted", "last value")}`;
 		const state = this.snapshot?.cpuState;
 		return state === "warming" || state === "unavailable" ? ` ${this.options.theme.fg("warning", state)}` : "";
 	}
@@ -371,9 +377,18 @@ export class MonView implements Component {
 		} else {
 			const notice = this.snapshot?.notice;
 			const hint = this.snapshot?.hint;
+			const compactNotice = notice?.startsWith("Partial list:")
+				? `Partial: ${notice.match(/\(([^)]+)\)/)?.[1] ?? "list incomplete"}`
+				: notice?.startsWith("Sampling stopped")
+					? "Stopped: reopen to retry"
+					: notice;
 			const diagnosticRows = Number(status === "stale") + Number(Boolean(notice)) + Number(Boolean(hint));
 			if (height >= CARD_MIN_HEIGHT + diagnosticRows && width >= CARD_MIN_WIDTH) lines.push(...this.cards(width));
-			else if (height >= 8 + diagnosticRows) lines.push(...this.summary(width));
+			else if (height >= 8) {
+				// Reserve a process row and actionable warnings before optional history/platform hints.
+				const warnings = Number(status === "stale") + Number(Boolean(notice));
+				lines.push(...this.summary(width).slice(0, Math.max(1, height - 5 - warnings)));
+			}
 			if (height >= 8) {
 				if (status === "stale")
 					lines.push(
@@ -382,8 +397,11 @@ export class MonView implements Component {
 							` Last success: ${this.lastSuccess === undefined ? "none" : new Date(this.lastSuccess).toISOString()}`,
 						),
 					);
-				if (notice) lines.push(t.fg("warning", ` ▲ ${sanitize(notice)}`));
-				if (hint) lines.push(t.fg("muted", ` ${sanitize(hint)}`));
+				if (notice) lines.push(t.fg("warning", ` ▲ ${sanitize(width < 60 ? (compactNotice ?? notice) : notice)}`));
+				if (hint && lines.length < height - 5) lines.push(t.fg("muted", ` ${sanitize(hint)}`));
+			} else if (notice && height >= 6) {
+				// One short warning must survive even when there is no room for the metric summary.
+				lines.push(t.fg("warning", ` ▲ ${sanitize(compactNotice ?? notice)}`));
 			}
 			lines.push(
 				`${t.bold(t.fg("accent", " PROCESSES"))}  ${t.fg("muted", `${this.processes.length} sampled`)}  ${t.fg("accent", `${this.sort.toUpperCase()} ${this.sort === "pid" ? "↑" : "↓"}`)}`,
