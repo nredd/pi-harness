@@ -28,18 +28,27 @@ Historical release receipts follow. They preserve their dated Gitlink and `forks
 - `@nredd/pi-resource-sampler@0.1.1` (signed tag at merged `main` `aebee47`, #130): process names come only from kernel executable metadata (Darwin `ucomm`, Linux `/proc/PID/exe` basename), never argv[0], process title or comm, and Bun host CPU copies its lazy counters. Published by `publish.yml` in one attempt (run [here](https://github.com/nredd/pi-harness/actions/runs/40008409935): verify, publish and release succeeded); release carries the four assets, tarball SHA-256 `300bb181a4e763373a41a10776deab75fce06b417d43907b1a364d9d9cde992d`, npm `dist.integrity` equals `identity.json`. `0.1.0` (`ca72d3c`, run [here](https://github.com/nredd/pi-harness/actions/runs/39989833686)) leaked launcher-chosen argv[0], process titles and Linux comm through `processes[].name` and is not deprecated on npm; upgrade. No stack or consumer pins it
   - Process gap: #130 merged and was released on one combined Standards+Spec review (`e72079cc`), not the two separate reviewers `AGENTS.md` requires. Separate Standards (`48b41de2`) and Spec (`bda892b9`) reviewers, both Opus 5.5, then reviewed the released `aebee47` retrospectively, after publication: no hard blocks. They are a retrospective record, NOT pre-release approval. Both found the hostile-child test fixtures leaked the child when readiness or the negative control failed, and Standards found the bounded scan could miss the child; the follow-up fixes the tests, the contract probe runner and the repository docs only, with no version bump or release. The README packed in the `0.1.1` tarball keeps its stale readlink Bounds text until the next release
 
-## Router 0.4.1 candidate
+## Router 0.4.1
 
-The registry's current router version is `0.4.0`. The next candidate is `0.4.1`: fixes to
-existing quota recovery, usage confirmation and cancellation behavior, plus fairness evidence.
-No public API, scoring formula, threshold, installation pin or configured strategy changes.
-The existing `ordered` and opt-in `balanced` policies remain available; configurable switch
-margins and anti-herding options are explicitly deferred pending the owner's policy decision.
+`@nredd/pi-subscription-router@0.4.1` was published from merged `main` `99cff46`
+by `publish.yml` (run [here](https://github.com/nredd/pi-harness/actions/runs/40085136129):
+verify, publish and release succeeded). It fixes existing quota recovery, usage confirmation
+and cancellation behavior, with fairness evidence. No public API, scoring formula, threshold
+or configured strategy changes. The existing `ordered` and opt-in `balanced` policies remain
+available; configurable switch margins and anti-herding options remain deferred pending the
+owner's policy decision. Publication is not live-provider acceptance or activation.
 
-This is release metadata, not publication or live-provider acceptance. Merge router hardening
-and fairness first, require separate Standards and Spec reviews on each exact final HEAD,
-then follow the owned npm procedure below for the reviewed merged version. Do not tag this
-stacked candidate branch. Promotion and live activation remain separately gated.
+## Combined stack selection
+
+`integration/stacks/personal.json` selects the published `@nredd/pi-dev-tools@0.6.0`,
+`@nredd/pi-subagents@0.22.0-nredd.7`, `@nredd/pi-session-kit@0.8.0` and
+`@nredd/pi-subscription-router@0.4.1` releases. Each passed
+`scripts/npm_release.py stack-check` against its tagged source: real npm SHA-512 integrity,
+registry signature, attestation and SLSA binding to `publish.yml`, the tag and the source
+commit. Router verification binds to `99cff464c48eca012f5028aba928419972c3b1db`.
+Core and the other package selections are unchanged. No unpublished version or placeholder
+integrity belongs in the stack or a release manifest. This selection is not a promotion or
+live activation. The matching assembled-stack CI and promotion gates still apply.
 
 ## Owned npm packages
 
