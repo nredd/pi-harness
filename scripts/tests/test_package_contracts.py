@@ -9,6 +9,7 @@ References:
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import os
@@ -21,7 +22,8 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,19 @@ import package_contracts as pc
 import stock_package_contract as spc
 
 DEV_TOOLS = pc.CONTRACTS[0]
+SAMPLER = pc.RESOURCE_SAMPLER_CONTRACT.name
+# Derived from the pin, so moving `RESOURCE_SAMPLER_VERSION` (e.g. to the `0.1.1` fix) needs no test edits.
+PIN = pc.RESOURCE_SAMPLER_VERSION
+OTHER_PIN = f"{PIN}-other"
+# The real published identity, as the repository lockfile pins it for dev-tools; never an invented hash.
+SAMPLER_LOCK = json.loads((pc.REPO_ROOT / "package-lock.json").read_text())["packages"][
+    "packages/dev-tools/node_modules/@nredd/pi-resource-sampler"
+]
+RESOURCE_EVIDENCE: dict[str, object] = {
+    "resource_ranking": "rss",
+    "resource_sampler_integrity": SAMPLER_LOCK["integrity"],
+    "resource_failure_path": "process_limit 51 refused",
+}
 ROOT_LICENSE = (pc.REPO_ROOT / "LICENSE").read_bytes()
 
 
@@ -154,7 +169,14 @@ def test_stock_gate_audits_and_installs_supplied_bytes(
         """
         assert ctx.artifact == artifact
         assert (ctx.installed / "src/index.ts").read_bytes() == pc.read_member(artifact.path, "src/index.ts")
-        return {"tool": "git_status", "untracked": ["fixture"], "failure_path": "Pi boundary substituted"}
+        return {
+            "tool": "git_status",
+            "untracked": ["fixture"],
+            "failure_path": "Pi boundary substituted",
+            "resource_ranking": "rss",
+            "resource_sampler_integrity": SAMPLER_LOCK["integrity"],
+            "resource_failure_path": "process_limit 51 refused",
+        }
 
     monkeypatch.setattr(pc, "pack", forbid)
     monkeypatch.setattr(pc, "ensure_stock_pi", lambda *_: tmp_path / "never-run-pi")
@@ -532,6 +554,452 @@ def test_audit_imports_rejects_sibling_in_every_form(source: str) -> None:
     assert "sibling plugin" in problems[0]
 
 
+def test_repository_lock_pins_the_published_sampler_for_dev_tools() -> None:
+    """The workspace lock entry is the registry release at the contract's exact version."""
+    assert SAMPLER_LOCK["version"] == pc.RESOURCE_SAMPLER_VERSION
+    assert SAMPLER_LOCK["resolved"] == (
+        f"https://registry.npmjs.org/@nredd/pi-resource-sampler/-/pi-resource-sampler-{pc.RESOURCE_SAMPLER_VERSION}.tgz"
+    )
+
+
+def sampler_install(tmp_path: Path, entry: Mapping[str, object], *, link: bool = False) -> Path:
+    """Lay out `<project>/node_modules` with the plugin, the sampler and a lockfile entry.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        entry (Mapping[str, object]): Lock entry for the sampler.
+        link (bool): Make the sampler a symlink, as a workspace link would be.
+
+    Returns:
+        Path: The installed plugin directory.
+    """
+    project = tmp_path / "project"
+    installed = project / "node_modules" / "@nredd" / "pi-dev-tools"
+    installed.mkdir(parents=True)
+    sampler = project / "node_modules" / "@nredd" / "pi-resource-sampler"
+    if link:
+        (tmp_path / "workspace").mkdir()
+        sampler.symlink_to(tmp_path / "workspace")
+    else:
+        sampler.mkdir()
+    lock = {"packages": {"node_modules/@nredd/pi-resource-sampler": entry}}
+    (project / "package-lock.json").write_text(json.dumps(lock))
+    return installed
+
+
+PUBLISHED = pc.PublishedDist(tarball=SAMPLER_LOCK["resolved"], integrity=SAMPLER_LOCK["integrity"])
+LOCKED = {
+    "version": pc.RESOURCE_SAMPLER_VERSION,
+    "resolved": PUBLISHED.tarball,
+    "integrity": PUBLISHED.integrity,
+}
+
+
+def test_installed_sampler_matches_published_registry_metadata(tmp_path: Path) -> None:
+    """The exact published tarball URL and integrity are accepted."""
+    assert pc.installed_sampler_integrity(sampler_install(tmp_path, LOCKED), PUBLISHED) == PUBLISHED.integrity
+
+
+# Shaped like a real integrity but not the published one: the check compares values, not shape.
+OTHER_INTEGRITY = "sha512-" + "A" * 86 + "=="
+
+
+@pytest.mark.parametrize(
+    ("entry", "link", "message"),
+    [
+        (LOCKED, True, "not a real installed directory"),
+        (LOCKED | {"version": OTHER_PIN}, False, f"not exactly '{PIN}'"),
+        (LOCKED | {"integrity": OTHER_INTEGRITY}, False, "differs from the published"),
+        ({k: v for k, v in LOCKED.items() if k != "integrity"}, False, "differs from the published"),
+        (LOCKED | {"resolved": "file:../resource-sampler"}, False, "not the published"),
+        ({k: v for k, v in LOCKED.items() if k != "resolved"}, False, "resolved from <missing>"),
+        (
+            LOCKED | {"resolved": "https://mirror.example/@nredd/pi-resource-sampler/-/x.tgz"},
+            False,
+            "resolved from https://mirror.example/",
+        ),
+    ],
+    ids=["linked", "version", "integrity", "no-integrity", "file", "no-resolved", "mirror"],
+)
+def test_installed_sampler_rejects_other_bytes_or_origin(
+    tmp_path: Path, entry: Mapping[str, object], *, link: bool, message: str
+) -> None:
+    """Any other version, origin, integrity or a link is refused, not merely a null integrity.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        entry (Mapping[str, object]): Lock entry for the sampler.
+        link (bool): Install the sampler as a symlink.
+        message (str): Expected error fragment.
+    """
+    with pytest.raises(pc.ContractError, match=message):
+        pc.installed_sampler_integrity(sampler_install(tmp_path, entry, link=link), PUBLISHED)
+
+
+def test_installed_sampler_errors_never_echo_registry_credentials(tmp_path: Path) -> None:
+    """A credentialed or tokenized resolved URL is reported without userinfo or query."""
+    secret = "https://user:hunter2@registry.example:8443/s/-/s.tgz?token=abc#frag"
+    installed = sampler_install(tmp_path, LOCKED | {"resolved": secret})
+    with pytest.raises(pc.ContractError) as raised:
+        pc.installed_sampler_integrity(installed, PUBLISHED)
+    assert "hunter2" not in str(raised.value)
+    assert "token" not in str(raised.value)
+    assert "https://registry.example:8443/s/-/s.tgz" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("url", "redacted"),
+    [
+        (None, "<missing>"),
+        ("", "<missing>"),
+        ("https://u:p@host/a?b=c#d", "https://host/a"),
+        ("https://host:99999/a", "<unparseable>"),
+    ],
+)
+def test_redact_url(url: str | None, redacted: str) -> None:
+    """Userinfo, query and fragment never survive.
+
+    Parameters:
+        url (str | None): Input URL.
+        redacted (str): Expected output.
+    """
+    assert pc.redact_url(url) == redacted
+
+
+def test_published_sampler_dist_queries_the_exact_release_without_credentials(
+    monkeypatch: pytest.MonkeyPatch, sandbox: pc.Sandbox, tmp_path: Path
+) -> None:
+    """The registry is asked for exactly the pinned version through the scrubbed environment."""
+    seen: dict[str, Any] = {}
+
+    def fake_run(cmd: list[Any], *, env: dict[str, str], cwd: Path, timeout: int) -> Any:
+        """Record the query and return registry-shaped JSON.
+
+        Parameters:
+            cmd (list[Any]): Argument vector.
+            env (dict[str, str]): Child environment.
+            cwd (Path): Working directory.
+            timeout (int): Seconds.
+
+        Returns:
+            Any: Completed process stand-in.
+        """
+        seen.update(cmd=[str(part) for part in cmd], env=env)
+        stdout = json.dumps({"tarball": PUBLISHED.tarball, "integrity": PUBLISHED.integrity, "fileCount": 9})
+        return type("Done", (), {"stdout": stdout})()
+
+    monkeypatch.setattr(pc, "run", fake_run)
+    assert pc.published_sampler_dist(sandbox, tmp_path) == PUBLISHED
+    assert seen["cmd"][1:] == [
+        "view",
+        f"@nredd/pi-resource-sampler@{pc.RESOURCE_SAMPLER_VERSION}",
+        "dist",
+        "--json",
+    ]
+    assert not any("TOKEN" in key or "AUTH" in key for key in seen["env"])
+    assert seen["env"]["HTTPS_PROXY"] == ""
+
+
+def discovery_context(root: Path, sandbox: pc.Sandbox) -> pc.Context:
+    """Return a dev-tools scenario context whose installed sampler path is predictable.
+
+    Parameters:
+        root (Path): Scratch directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+
+    Returns:
+        pc.Context: Context with `installed` three levels under `root`.
+    """
+    artifact = pc.PackedArtifact(DEV_TOOLS, root / "x.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ())
+    return pc.Context(Path("pi"), sandbox, root / "a" / "b" / "installed", artifact, root, ())
+
+
+@pytest.mark.parametrize(
+    ("script", "message", "status"),
+    [
+        ("setInterval(() => {}, 1000)", "readiness timed out", -9),
+        ("process.stdout.write('rea'); setInterval(() => {}, 1000)", "readiness timed out", -9),
+        ("process.exit(7)", "exited before readiness", 7),
+        (
+            "process.title='ordinary'; console.log('ready'); setInterval(() => {}, 1000)",
+            "does not expose its secret",
+            -9,
+        ),
+    ],
+)
+def test_hostile_marker_startup_failure_reaps_actual_child(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    script: str,
+    message: str,
+    *,
+    status: int,
+) -> None:
+    """Every startup failure owns and reaps a real marker, including a partial readiness line.
+
+    Parameters:
+        tmp_path (Path): Scratch project.
+        sandbox (pc.Sandbox): Scrubbed real tools.
+        monkeypatch (pytest.MonkeyPatch): Observe the real child without replacing its lifecycle.
+        script (str): Failing child program.
+        message (str): Expected startup failure.
+        status (int): Exact reaped exit code, including SIGKILL as -9.
+    """
+    seen: list[subprocess.Popen[bytes]] = []
+    wait_ready = pc.wait_hostile_ready
+
+    def observe(child: subprocess.Popen[bytes], timeout: float) -> None:
+        """Capture the exact child before running the actual bounded readiness wait."""
+        seen.append(child)
+        wait_ready(child, timeout)
+
+    monkeypatch.setattr(pc, "wait_hostile_ready", observe)
+    started = time.monotonic()
+    with (
+        pytest.raises(pc.ContractError, match=message),
+        pc.start_hostile_child(
+            discovery_context(tmp_path, sandbox), tmp_path, "ab" * 16, script=script, ready_timeout=0.5
+        ),
+    ):
+        pytest.fail("startup unexpectedly succeeded")
+    assert len(seen) == 1
+    assert seen[0].returncode == status
+    assert seen[0].stdout is not None
+    assert seen[0].stdout.closed
+    assert time.monotonic() - started < 4
+
+
+@pytest.mark.parametrize("stage", ["startup", "completed-probe", "success"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_marker_supervision_preserves_failures_and_reaps(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    *,
+    cleanup_fails: bool,
+) -> None:
+    """Startup and completed probes share cleanup, preserving both failures and the exact status.
+
+    The injected cleanup failure runs the real stop first: every case reaps its actual child and
+    closes its pipe before raising, so testing the timeout report cannot leave an orphan.
+
+    Parameters:
+        tmp_path (Path): Scratch project.
+        sandbox (pc.Sandbox): Scrubbed real tools.
+        monkeypatch (pytest.MonkeyPatch): Inject probe and post-reap cleanup failures.
+        stage (str): Startup failure, completed failing probe, or successful probe.
+        cleanup_fails (bool): Whether to raise a timeout after actually reaping.
+    """
+    ctx = discovery_context(tmp_path, sandbox)
+    primary = pc.ContractError(f"injected {stage} failure")
+    cleanup = subprocess.TimeoutExpired("marker cleanup", 2)
+    after_probe = pc.ContractError("reached output validation after successful probe")
+    seen: list[subprocess.Popen[bytes]] = []
+    real_stop = pc.stop_hostile_child
+    real_ready = pc.wait_hostile_ready
+
+    def ready(child: subprocess.Popen[bytes], timeout: float) -> None:
+        """Observe the real child and optionally fail startup after actual readiness."""
+        real_ready(child, timeout)
+        if stage == "startup":
+            raise primary
+
+    def stop(child: subprocess.Popen[bytes]) -> None:
+        """Really reap first, then optionally report a cleanup timeout."""
+        real_stop(child)
+        seen.append(child)
+        if cleanup_fails:
+            raise cleanup
+
+    def probe(*_args: object, **_kwargs: object) -> None:
+        """Complete the scenario probe, either successfully or with the primary failure."""
+        if stage == "completed-probe":
+            raise primary
+
+    def validated(*_args: object) -> None:
+        """Stop after cleanup, before unrelated tool-record validation."""
+        raise after_probe
+
+    monkeypatch.setattr(pc, "wait_hostile_ready", ready)
+    monkeypatch.setattr(pc, "stop_hostile_child", stop)
+    monkeypatch.setattr(pc, "discover_child_with_installed_sampler", lambda *_args: None)
+    monkeypatch.setattr(pc.Context, "provider_session", lambda *_args: nullcontext())
+    monkeypatch.setattr(pc, "run_pi", probe)
+    monkeypatch.setattr(pc, "require_clean_run", validated)
+    if cleanup_fails and stage != "success":
+        with pytest.raises(ExceptionGroup) as grouped:
+            pc.exercise_resource_snapshot(ctx)
+        assert grouped.value.exceptions == (primary, cleanup)
+        assert grouped.value.__cause__ is primary
+    else:
+        expected = cleanup if cleanup_fails else after_probe if stage == "success" else primary
+        with pytest.raises(type(expected)) as raised:
+            pc.exercise_resource_snapshot(ctx)
+        assert raised.value is expected
+    assert len(seen) == 1
+    assert seen[0].returncode == -9
+    assert seen[0].stdout is not None
+    assert seen[0].stdout.closed
+
+
+@pytest.mark.parametrize(
+    ("complete", "reasons", "found", "message", "probe_extra"),
+    [
+        (False, ["process-unreadable-or-changed"], True, None, {}),
+        (True, [], False, "not in the complete scan", {}),
+        (
+            False,
+            ["deadline", "pid-limit"],
+            False,
+            r"PARTIAL scan \(3/9 sampled, reasons \['deadline', 'pid-limit'\]\)",
+            {},
+        ),
+        (False, ["process-collection-unavailable"], True, "sampler scan failed", {}),
+        (True, [], True, "marker child named 'node-MainThread'", {"name": "node-MainThread"}),
+        (True, [], True, "marker child named ''", {"name": ""}),
+        (True, [], True, "expose the marker", {"leaked": True}),
+        (True, [], True, "in-flight sample cancellation: resolved", {"cancelled": "resolved"}),
+    ],
+    ids=[
+        "partial-but-found",
+        "complete-miss",
+        "truncated-miss",
+        "unavailable",
+        "comm-name",
+        "invented-empty",
+        "leak",
+        "uncancelled",
+    ],
+)
+def test_discovery_targets_the_known_child_and_names_a_partial_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    sandbox: pc.Sandbox,
+    tmp_path: Path,
+    reasons: list[str],
+    message: str | None,
+    *,
+    probe_extra: dict[str, Any],
+    complete: bool,
+    found: bool,
+) -> None:
+    """A partial scan that holds the child passes; a miss says whether the scan was truncated.
+
+    The child must carry its kernel executable name (not comm, not `""`), the scan must hold no window
+    of the secret, and the in-flight cancellation must reject.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Patches `run` for the probe and `ps`.
+        sandbox (pc.Sandbox): Scrubbed environment.
+        tmp_path (Path): Pytest temporary directory.
+        reasons (list[str]): Coverage reasons the probe reports.
+        message (str | None): Expected error pattern, or None for a pass.
+        complete (bool): Coverage completeness the probe reports.
+        found (bool): Whether the probe found the child.
+        probe_extra (dict[str, Any]): Overrides for the child's name, `leaked` or `cancelled`.
+    """
+    ctx = discovery_context(tmp_path, sandbox)
+    child, parent = 4242, os.getpid()
+    name = probe_extra.get("name", min(pc.kernel_executable_names(sandbox.tools.node)))
+    probe = {
+        "resolved": str(ctx.installed.parents[2] / "node_modules" / SAMPLER / "dist" / "index.js"),
+        "coverage": {"complete": complete, "enumerated": 9, "sampled": 3, "reasons": reasons},
+        "found": [{"pid": child, "parentPid": parent, "name": name}] if found else [],
+        "leaked": probe_extra.get("leaked", False),
+        "cancelled": probe_extra.get("cancelled", "rejected"),
+    }
+    outputs = iter([json.dumps(probe), f"{parent}\n"])
+    monkeypatch.setattr(pc, "run", lambda *_args, **_kwargs: type("Done", (), {"stdout": next(outputs)})())
+    if message is None:
+        pc.discover_child_with_installed_sampler(ctx, child, "0" * 32)
+    else:
+        with pytest.raises(pc.ContractError, match=message):
+            pc.discover_child_with_installed_sampler(ctx, child, "0" * 32)
+
+
+def test_secret_windows_cover_every_twelve_char_fragment() -> None:
+    """32 hex chars give 21 overlapping 12-char windows, each shorter than any kernel name field."""
+    windows = pc.secret_windows("0123456789abcdef0123456789abcdef")
+    assert len(windows) == 21
+    assert windows[0] == "0123456789ab"
+    assert windows[-1] == "456789abcdef"
+    assert all(len(window) == 12 for window in windows)
+
+
+def test_kernel_executable_names_never_invent(tmp_path: Path) -> None:
+    """Linux takes only the resolved exe basename; Darwin also the invoked one, truncated to 16 bytes.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    target = tmp_path / "a-very-long-node-binary-name"
+    target.write_text("")
+    link = tmp_path / "node"
+    link.symlink_to(target)
+    names = pc.kernel_executable_names(link)
+    if sys.platform.startswith("linux"):
+        assert names == {"a-very-long-node-binary-name"}
+    else:
+        assert names == {"node", "a-very-long-node"}
+
+
+def test_published_sampler_dist_rejects_malformed_metadata(
+    monkeypatch: pytest.MonkeyPatch, sandbox: pc.Sandbox, tmp_path: Path
+) -> None:
+    """A response without a real integrity fails closed."""
+    done = type("Done", (), {"stdout": json.dumps({"tarball": PUBLISHED.tarball, "integrity": "sha1-x"})})()
+    monkeypatch.setattr(pc, "run", lambda *_args, **_kwargs: done)
+    with pytest.raises(pc.ContractError, match="malformed"):
+        pc.published_sampler_dist(sandbox, tmp_path)
+
+
+def test_dev_tools_pins_the_published_sampler_exactly() -> None:
+    """The only sibling allowance is an exact published library version, never a range or link."""
+    assert dict(DEV_TOOLS.runtime_dependencies) == {SAMPLER: PIN}
+    assert pc.RESOURCE_SAMPLER_CONTRACT.library
+    assert dict(pc.SHARED_LIBRARIES) == {SAMPLER: PIN}
+    manifest = json.loads((pc.REPO_ROOT / "packages" / "dev-tools" / "package.json").read_text())
+    assert manifest["dependencies"] == dict(DEV_TOOLS.runtime_dependencies)
+
+
+@pytest.mark.parametrize(
+    ("specifier", "dependencies", "path", "library", "allowed"),
+    [
+        ("@nredd/pi-resource-sampler", ["@nredd/pi-resource-sampler"], "src/a.ts", False, True),
+        ("@nredd/pi-resource-sampler", [], "src/a.ts", False, False),
+        (
+            "@nredd/pi-resource-sampler/dist/collect.js",
+            ["@nredd/pi-resource-sampler"],
+            "src/a.ts",
+            False,
+            False,
+        ),
+        ("@nredd/pi-session-kit", ["@nredd/pi-session-kit"], "src/a.ts", False, False),
+        ("@nredd/pi-resource-sampler", ["@nredd/pi-resource-sampler"], "dist/index.js", True, False),
+        ("@nredd/pi-resource-sampler", ["@nredd/pi-resource-sampler"], pc.STATS_ARTIFACT, False, False),
+    ],
+    ids=["declared-library", "undeclared", "deep-import", "declared-plugin", "from-library", "standalone"],
+)
+def test_sibling_library_import_needs_an_exact_declared_dependency(
+    specifier: str, dependencies: list[str], path: str, *, library: bool, allowed: bool
+) -> None:
+    """Only a plugin source file may import a published sibling library it declares.
+
+    Parameters:
+        specifier (str): Imported module.
+        dependencies (list[str]): Declared runtime dependency names.
+        path (str): Importing packed file.
+        library (bool): Audit the file as part of a library contract.
+        allowed (bool): Whether the import is acceptable.
+    """
+    found = pc.FileImports(specifiers=[specifier], diagnostics=[])
+    problems = pc.classify_imports(
+        path, found, [path], dependencies, frozenset({pc.STATS_ARTIFACT}), library=library
+    )
+    assert (problems == []) is allowed, problems
+
+
 def test_audit_imports_ignores_import_text_in_comments_and_strings() -> None:
     """Text that merely looks like an import is not one."""
     source = (
@@ -648,6 +1116,7 @@ def good_manifest() -> dict[str, object]:
         "name": "@nredd/pi-dev-tools",
         "publishConfig": {"access": "public"},
         "license": "MIT",
+        "dependencies": dict(DEV_TOOLS.runtime_dependencies),
         "peerDependencies": {"@earendil-works/pi-coding-agent": "*", "typebox": "*"},
         "pi": {"extensions": ["./src/index.ts"]},
     }
@@ -674,6 +1143,10 @@ def test_audit_manifest_accepts_good() -> None:
         ({"publishConfig": {}}, "`publishConfig.access` must be `public`"),
         ({"license": "ISC"}, "`license`"),
         ({"dependencies": {"typebox": "1.0.0"}}, "not a declared runtime dependency"),
+        ({"dependencies": {SAMPLER: f"^{PIN}"}}, f"must use the range '{PIN}'"),
+        ({"dependencies": {SAMPLER: "workspace:*"}}, f"must use the range '{PIN}'"),
+        ({"dependencies": {SAMPLER: "file:../resource-sampler"}}, f"must use the range '{PIN}'"),
+        ({"dependencies": {}}, "declared runtime dependency '@nredd/pi-resource-sampler' is missing"),
         ({"optionalDependencies": {"@nredd/pi-session-kit": "*"}}, "`optionalDependencies`"),
         ({"peerDependencies": {"@nredd/pi-session-kit": "*"}}, "not a host module"),
         ({"peerDependencies": {"typebox": ">=1"}}, "must use the range '*'"),
@@ -691,6 +1164,22 @@ def test_audit_manifest_rejects(mutation: dict[str, object], needle: str) -> Non
     """
     problems = pc.audit_manifest(DEV_TOOLS, good_manifest() | mutation, ["src/index.ts"])
     assert any(needle in problem for problem in problems), problems
+
+
+def test_every_contract_uses_the_common_shared_library_pin() -> None:
+    """No consumer of a shared library (dev-tools today, session-kit `/mon` next) may drift from its pin."""
+    assert {contract.name: pc.shared_library_pin_problems(contract) for contract in pc.CONTRACTS} == {
+        contract.name: [] for contract in pc.CONTRACTS
+    }
+
+
+def test_audit_manifest_rejects_a_consumer_at_another_exact_sampler_version() -> None:
+    """A contract and manifest that agree on a different exact version are still refused."""
+    drifted = dataclasses.replace(DEV_TOOLS, runtime_dependencies=((SAMPLER, OTHER_PIN),))
+    manifest = good_manifest() | {"dependencies": {SAMPLER: OTHER_PIN}}
+    assert pc.audit_manifest(drifted, manifest, ["src/index.ts"]) == [
+        f"'{DEV_TOOLS.name}' declares shared library '{SAMPLER}' at '{OTHER_PIN}', not the common pin '{PIN}'"
+    ]
 
 
 def test_audit_manifest_accepts_false_private() -> None:
@@ -1009,7 +1498,12 @@ GOOD_ENTRY: dict[str, object] = {
     "shasum": "a" * 40,
     "size": 1234,
     "files": ["LICENSE", "package.json"],
-    "evidence": {"tool": "git_status", "untracked": ["untracked.txt"], "failure_path": "not a repo"},
+    "evidence": {
+        "tool": "git_status",
+        "untracked": ["untracked.txt"],
+        "failure_path": "not a repo",
+        **RESOURCE_EVIDENCE,
+    },
 }
 
 
@@ -1080,10 +1574,28 @@ def test_validate_report_accepts_every_scenario_evidence() -> None:
         (with_entry(tarball="nredd-pi-dev-tools-9.9.9.tgz"), "is not"),
         (with_entry(files=[]), "files"),
         (with_entry(files=["a", "a"]), "duplicate files"),
-        (with_entry(evidence={"tool": "git_status", "untracked": [], "failure_path": "x"}), "untracked"),
-        (with_entry(evidence={"tool": "git_status", "untracked": ["a"], "failure_path": ""}), "failure_path"),
         (
-            with_entry(evidence={"tool": "git_status", "untracked": ["a"], "failure_path": "x", "extra": 1}),
+            with_entry(
+                evidence={"tool": "git_status", "untracked": [], "failure_path": "x", **RESOURCE_EVIDENCE}
+            ),
+            "untracked",
+        ),
+        (
+            with_entry(
+                evidence={"tool": "git_status", "untracked": ["a"], "failure_path": "", **RESOURCE_EVIDENCE}
+            ),
+            "failure_path",
+        ),
+        (
+            with_entry(
+                evidence={
+                    "tool": "git_status",
+                    "untracked": ["a"],
+                    "failure_path": "x",
+                    **RESOURCE_EVIDENCE,
+                    "extra": 1,
+                }
+            ),
             "extra",
         ),
         (with_entry(evidence={"tool": "monitor_start"}), "evidence"),
@@ -1563,6 +2075,7 @@ def preset_manifest() -> dict[str, object]:
     """
     return good_manifest() | {
         "name": "@nredd/pi-preset",
+        "dependencies": {},
         "license": "MIT AND Apache-2.0 AND CC-BY-SA-4.0",
         "peerDependencies": {"@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*"},
         "pi": {"extensions": ["./extensions/expanded-footer.ts"]},
@@ -2449,7 +2962,7 @@ def stub_npm_install(
     ("contract", "modules", "offline"),
     [
         (pc.SUBAGENTS_CONTRACT, ["@nredd/pi-subagents", "croner", "nanoid"], False),
-        (DEV_TOOLS, ["@nredd/pi-dev-tools"], True),
+        (pc.CONTRACTS[2], ["@nredd/pi-subscription-router"], True),
     ],
     ids=["registry", "offline"],
 )
