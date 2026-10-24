@@ -64,7 +64,9 @@ appends to the session branch; discovery alone is not sufficient evidence.
 What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
-  `CHANGELOG.md` (router), `dist/pi-stats-export.mjs` + `docs/stats-snapshots.md` (session-kit) and
+  `CHANGELOG.md` (router), `dist/pi-stats-export.mjs`, `docs/stats-snapshots.md` and
+  `docs/mon-dashboard.md` (session-kit, all required: the README links both docs, see
+  `test_session_kit_readme_links_only_packed_files`) and
   `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`). computer-use is
   also pinned by exact `packed_files` (45 paths).
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
@@ -254,8 +256,15 @@ field, peers or runtime dependencies are allowed. Import auditing permits Node b
 in-package relative imports, never host modules or sibling extensions. The default extension
 contract still requires `pi.extensions` and retains its original host-module rules. The release
 descriptor uses the same audit/isolated execution gate; `publish.yml` published `0.1.1` (see
-[releases](releases.md)). Consumers pin that exact published version and are admitted only through
-the narrow `SHARED_LIBRARIES` rule above, not a relaxed sibling import rule.
+[releases](releases.md)). Consumers declare the exact registry release (`RESOURCE_SAMPLER_VERSION`,
+never a range, `workspace:` or `file:` spec) as a contract `runtime_dependencies` entry and are admitted
+only through the narrow `SHARED_LIBRARIES` rule above, not a relaxed sibling import rule. Their stock
+gate installs it from npm next to the packed plugin. In the monorepo npm would link the same-version
+workspace, so the root lock carries a nested registry entry per consumer
+(`packages/dev-tools/node_modules/@nredd/pi-resource-sampler` and
+`packages/session-kit/node_modules/@nredd/pi-resource-sampler`) and package tests run the published
+bytes, never the workspace copy. `npm dedupe` would drop those entries; both consumers' registry
+resolution tests and the package-contract lock assertions fail if it does.
 
 ## Packed preset audit (no standalone Pi behavior)
 

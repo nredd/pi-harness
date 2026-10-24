@@ -334,14 +334,24 @@ CONTRACTS = (
     PackageContract(
         name="@nredd/pi-session-kit",
         directory="session-kit",
-        required=("LICENSE", "README.md", "package.json", "src/index.ts", "dist/pi-stats-export.mjs"),
+        # The README links both docs, so a tarball without them would ship dead links.
+        required=(
+            "LICENSE",
+            "README.md",
+            "package.json",
+            "src/index.ts",
+            "dist/pi-stats-export.mjs",
+            "docs/stats-snapshots.md",
+            "docs/mon-dashboard.md",
+        ),
         allowed=(
             re.compile(r"^(LICENSE|README\.md|CHANGELOG\.md|package\.json)$"),
             re.compile(r"^src/.+\.(ts|md)$"),
             re.compile(r"^dist/pi-stats-export\.mjs$"),
-            re.compile(r"^docs/stats-snapshots\.md$"),
+            re.compile(r"^docs/(stats-snapshots|mon-dashboard)\.md$"),
         ),
         exposes_tools=frozenset({"monitor_start", "monitor_read", "monitor_stop"}),
+        runtime_dependencies=((RESOURCE_SAMPLER_CONTRACT.name, RESOURCE_SAMPLER_VERSION),),
         standalone_artifacts=frozenset({STATS_ARTIFACT}),
     ),
     PackageContract(
