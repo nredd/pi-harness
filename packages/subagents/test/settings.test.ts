@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAndEmitLoaded,
   applySettings,
+  loadBudgetPolicy,
   loadSettings,
   persistToastFor,
   type SettingsAppliers,
@@ -318,6 +319,51 @@ describe("settings persistence", () => {
     writeGlobal({ graceTurns: 10 });
     writeProject({ maxConcurrent: 2 });
     expect(loadSettings(projectDir)).toEqual({ graceTurns: 10, maxConcurrent: 2 });
+  });
+
+  describe("process budget", () => {
+    it("loads maxActiveSubagents and nestedSubagentReserve from global, dropping invalid values", () => {
+      writeGlobal({ maxActiveSubagents: 12, nestedSubagentReserve: 2 });
+      expect(loadSettings(projectDir)).toEqual({ maxActiveSubagents: 12, nestedSubagentReserve: 2 });
+      writeGlobal({ maxActiveSubagents: -1, nestedSubagentReserve: 1.5 });
+      expect(loadSettings(projectDir)).toEqual({});
+      writeGlobal({ maxActiveSubagents: 0 });
+      expect(loadSettings(projectDir)).toEqual({ maxActiveSubagents: 0 });
+    });
+
+    it("ignores a project file's budget: it spans every session in the process", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      writeGlobal({ maxActiveSubagents: 12 });
+      writeProject({ maxActiveSubagents: 1024, nestedSubagentReserve: 0, maxConcurrent: 2 });
+      expect(loadSettings(projectDir)).toEqual({ maxActiveSubagents: 12, maxConcurrent: 2 });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring maxActiveSubagents/nestedSubagentReserve in project"));
+      warn.mockRestore();
+    });
+
+    it("builds the budget policy from trusted configuration only, depth included", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(loadBudgetPolicy()).toEqual({ maxActive: 0, nestedReserve: 2, maxDepth: 2 });
+      writeGlobal({ maxActiveSubagents: 12, nestedSubagentReserve: 3, maxSubagentDepth: 3 });
+      // A cloned repo deepening its own nesting must not reshape the process-wide reserve.
+      writeProject({ maxSubagentDepth: 8 });
+      expect(loadBudgetPolicy()).toEqual({ maxActive: 12, nestedReserve: 3, maxDepth: 3 });
+      expect(loadSettings(projectDir).maxSubagentDepth).toBe(8);
+      warn.mockRestore();
+    });
+
+    it("applies the budget once, through setBudgetPolicy, on load", () => {
+      writeGlobal({ maxActiveSubagents: 12 });
+      const appliers = {
+        setBudgetPolicy: vi.fn(),
+        setMaxSubagentDepth: vi.fn(),
+        setModelAliases: vi.fn(),
+        setAgentModels: vi.fn(),
+      } as unknown as Parameters<typeof applySettings>[1];
+      applySettings({ maxActiveSubagents: 12 }, appliers);
+      expect(appliers.setBudgetPolicy).not.toHaveBeenCalled();
+      applyAndEmitLoaded(appliers, vi.fn(), projectDir);
+      expect(appliers.setBudgetPolicy).toHaveBeenCalledExactlyOnceWith({ maxActive: 12, nestedReserve: 2, maxDepth: 2 });
+    });
   });
 
   describe("modelAliases", () => {
@@ -671,6 +717,7 @@ describe("settings persistence", () => {
       appliers = {
         setMaxConcurrent: vi.fn(),
         setMaxConcurrentForeground: vi.fn(),
+        setBudgetPolicy: vi.fn(),
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
         setDefaultJoinMode: vi.fn(),
@@ -942,6 +989,7 @@ describe("settings persistence", () => {
       appliers = {
         setMaxConcurrent: vi.fn(),
         setMaxConcurrentForeground: vi.fn(),
+        setBudgetPolicy: vi.fn(),
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
         setDefaultJoinMode: vi.fn(),
