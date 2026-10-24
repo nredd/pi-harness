@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -713,14 +714,15 @@ def discovery_context(root: Path, sandbox: pc.Sandbox) -> pc.Context:
 
 
 @pytest.mark.parametrize(
-    ("script", "message"),
+    ("script", "message", "status"),
     [
-        ("setInterval(() => {}, 1000)", "readiness timed out"),
-        ("process.stdout.write('rea'); setInterval(() => {}, 1000)", "readiness timed out"),
-        ("process.exit(7)", "exited before readiness"),
+        ("setInterval(() => {}, 1000)", "readiness timed out", -9),
+        ("process.stdout.write('rea'); setInterval(() => {}, 1000)", "readiness timed out", -9),
+        ("process.exit(7)", "exited before readiness", 7),
         (
             "process.title='ordinary'; console.log('ready'); setInterval(() => {}, 1000)",
             "does not expose its secret",
+            -9,
         ),
     ],
 )
@@ -730,6 +732,8 @@ def test_hostile_marker_startup_failure_reaps_actual_child(
     monkeypatch: pytest.MonkeyPatch,
     script: str,
     message: str,
+    *,
+    status: int,
 ) -> None:
     """Every startup failure owns and reaps a real marker, including a partial readiness line.
 
@@ -739,6 +743,7 @@ def test_hostile_marker_startup_failure_reaps_actual_child(
         monkeypatch (pytest.MonkeyPatch): Observe the real child without replacing its lifecycle.
         script (str): Failing child program.
         message (str): Expected startup failure.
+        status (int): Exact reaped exit code, including SIGKILL as -9.
     """
     seen: list[subprocess.Popen[bytes]] = []
     wait_ready = pc.wait_hostile_ready
@@ -750,15 +755,92 @@ def test_hostile_marker_startup_failure_reaps_actual_child(
 
     monkeypatch.setattr(pc, "wait_hostile_ready", observe)
     started = time.monotonic()
-    with pytest.raises(pc.ContractError, match=message):
+    with (
+        pytest.raises(pc.ContractError, match=message),
         pc.start_hostile_child(
             discovery_context(tmp_path, sandbox), tmp_path, "ab" * 16, script=script, ready_timeout=0.5
-        )
+        ),
+    ):
+        pytest.fail("startup unexpectedly succeeded")
     assert len(seen) == 1
-    assert seen[0].poll() is not None
+    assert seen[0].returncode == status
     assert seen[0].stdout is not None
     assert seen[0].stdout.closed
     assert time.monotonic() - started < 4
+
+
+@pytest.mark.parametrize("stage", ["startup", "completed-probe", "success"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_marker_supervision_preserves_failures_and_reaps(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    *,
+    cleanup_fails: bool,
+) -> None:
+    """Startup and completed probes share cleanup, preserving both failures and the exact status.
+
+    The injected cleanup failure runs the real stop first: every case reaps its actual child and
+    closes its pipe before raising, so testing the timeout report cannot leave an orphan.
+
+    Parameters:
+        tmp_path (Path): Scratch project.
+        sandbox (pc.Sandbox): Scrubbed real tools.
+        monkeypatch (pytest.MonkeyPatch): Inject probe and post-reap cleanup failures.
+        stage (str): Startup failure, completed failing probe, or successful probe.
+        cleanup_fails (bool): Whether to raise a timeout after actually reaping.
+    """
+    ctx = discovery_context(tmp_path, sandbox)
+    primary = pc.ContractError(f"injected {stage} failure")
+    cleanup = subprocess.TimeoutExpired("marker cleanup", 2)
+    after_probe = pc.ContractError("reached output validation after successful probe")
+    seen: list[subprocess.Popen[bytes]] = []
+    real_stop = pc.stop_hostile_child
+    real_ready = pc.wait_hostile_ready
+
+    def ready(child: subprocess.Popen[bytes], timeout: float) -> None:
+        """Observe the real child and optionally fail startup after actual readiness."""
+        real_ready(child, timeout)
+        if stage == "startup":
+            raise primary
+
+    def stop(child: subprocess.Popen[bytes]) -> None:
+        """Really reap first, then optionally report a cleanup timeout."""
+        real_stop(child)
+        seen.append(child)
+        if cleanup_fails:
+            raise cleanup
+
+    def probe(*_args: object, **_kwargs: object) -> None:
+        """Complete the scenario probe, either successfully or with the primary failure."""
+        if stage == "completed-probe":
+            raise primary
+
+    def validated(*_args: object) -> None:
+        """Stop after cleanup, before unrelated tool-record validation."""
+        raise after_probe
+
+    monkeypatch.setattr(pc, "wait_hostile_ready", ready)
+    monkeypatch.setattr(pc, "stop_hostile_child", stop)
+    monkeypatch.setattr(pc, "discover_child_with_installed_sampler", lambda *_args: None)
+    monkeypatch.setattr(pc.Context, "provider_session", lambda *_args: nullcontext())
+    monkeypatch.setattr(pc, "run_pi", probe)
+    monkeypatch.setattr(pc, "require_clean_run", validated)
+    if cleanup_fails and stage != "success":
+        with pytest.raises(ExceptionGroup) as grouped:
+            pc.exercise_resource_snapshot(ctx)
+        assert grouped.value.exceptions == (primary, cleanup)
+        assert grouped.value.__cause__ is primary
+    else:
+        expected = cleanup if cleanup_fails else after_probe if stage == "success" else primary
+        with pytest.raises(type(expected)) as raised:
+            pc.exercise_resource_snapshot(ctx)
+        assert raised.value is expected
+    assert len(seen) == 1
+    assert seen[0].returncode == -9
+    assert seen[0].stdout is not None
+    assert seen[0].stdout.closed
 
 
 @pytest.mark.parametrize(

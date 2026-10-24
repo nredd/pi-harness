@@ -48,8 +48,8 @@ import tarfile
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Callable, Collection, Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -3039,6 +3039,7 @@ def stop_hostile_child(child: subprocess.Popen[bytes]) -> None:
             child.stdout.close()
 
 
+@contextmanager
 def start_hostile_child(
     ctx: Context,
     project: Path,
@@ -3046,8 +3047,8 @@ def start_hostile_child(
     *,
     script: str = SAMPLER_HOSTILE_CHILD,
     ready_timeout: float = 5,
-) -> subprocess.Popen[bytes]:
-    """Start an idle `node` child whose argv[0], process title and Linux comm hold `secret`.
+) -> Iterator[subprocess.Popen[bytes]]:
+    """Own an idle `node` child whose argv[0], process title and Linux comm hold `secret`.
 
     Negative control: the sampler 0.1.0 name source (Darwin `ps -c` comm, Linux `/proc/PID/comm`) must
     really carry the secret, so a clean snapshot proves the 0.1.1 source and not an inert marker.
@@ -3059,11 +3060,13 @@ def start_hostile_child(
         script (str): Child script, injectable for real startup-failure tests.
         ready_timeout (float): Maximum startup wait in seconds.
 
-    Returns:
-        subprocess.Popen[bytes]: The running child; the caller uses `stop_hostile_child`.
+    Yields:
+        subprocess.Popen[bytes]: The running child, reaped on startup failure or context exit.
 
     Raises:
         ContractError: If the child does not start or the legacy source does not show the secret.
+        BaseExceptionGroup: If startup or the caller's body and cleanup both fail.
+        subprocess.TimeoutExpired: If cleanup alone fails to reap the child within two seconds.
     """
     child = subprocess.Popen(
         [secret, "-e", script],
@@ -3087,10 +3090,15 @@ def start_hostile_child(
             )
             legacy = secret in ps.stdout
         require(legacy, "hostile marker child does not expose its secret through the 0.1.0 name source")
-    except BaseException:
-        stop_hostile_child(child)
+        yield child
+    except BaseException as primary:
+        try:
+            stop_hostile_child(child)
+        except BaseException as cleanup:
+            raise BaseExceptionGroup("marker child and cleanup failed", [primary, cleanup]) from primary
         raise
-    return child
+    else:
+        stop_hostile_child(child)
 
 
 def discover_child_with_installed_sampler(ctx: Context, child: int, secret: str) -> None:
@@ -3180,14 +3188,11 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
     project.mkdir()
     argv = ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"]
     secret = secrets.token_hex(16)
-    child = start_hostile_child(ctx, project, secret)
-    try:
+    with start_hostile_child(ctx, project, secret) as child:
         discover_child_with_installed_sampler(ctx, child.pid, secret)
         script = [ToolStep("resource_snapshot", {"process_limit": 50, "interval_ms": 300}), TextStep("done")]
         with ctx.provider_session(script):
             ok = run_pi(ctx.pi_bin, ctx.sandbox, ctx.installed, project, argv)
-    finally:
-        stop_hostile_child(child)
     require_clean_run(ok, "dev-tools resource_snapshot")
     record = ok.single_tool_result("resource_snapshot")
     require(not tool_is_error(record), f"resource_snapshot failed: {tool_text(record)}")
