@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0-nredd.7] - 2026-10-23
+
 ### Added
 - **Process-wide subagent budget (`maxActiveSubagents`, off by default).** One ceiling on running subagents across every agent manager in the pi process, covering nested, workflow, scheduled, RPC and resumed runs and managers a `/reload` left running, which the per-session pools never counted. Parents keep their slot while waiting on a child, and `nestedSubagentReserve` (default 2) holds slots back per level up to the global `maxSubagentDepth` so that cannot deadlock; a policy that could deadlock is refused, and tightening waits for an idle process with a warning that continuous work can defer it indefinitely. An incompatible budget-state reload fails closed before registering tools or commands and requires restarting pi; it never creates a second counter or continues unbudgeted. Because a waiting resume now shows as `queued`, a resume of a `running` or `queued` agent is refused on the foreground path too. Global configuration only; process-wide, not machine-wide.
 
