@@ -67,13 +67,27 @@ leaves Opus eligible. A block lasts until the reset the provider reported. Witho
 
 Confirmation needs live data read after the failure: a cached or in-flight read from before the
 error's timestamp doesn't count, while simultaneous failures still share one request. A failed or
-backed-off read confirms nothing.
+backed-off read confirms nothing. If a later failure supersedes an in-flight read, earlier callers
+follow the newer read (or its fresh cached result), rather than treating supersession as failure.
+If that newer read is unavailable, an earlier caller may use its own successful snapshot started at
+or after its `notBefore` boundary. This fallback never writes shared cache or backoff state: the
+newer failure's backoff remains in force. A newer successful snapshot remains authoritative.
+At the caller's 20-second deadline, a still-pending newer read cannot hide already completed live
+evidence: the caller uses the newest qualifying success in its supersession chain (or cache).
+Cancellation never uses this fallback, and neither deadline fallback nor supersession extends the wait.
+Confirmation evaluates that exact returned snapshot, not a potentially different shared cache entry.
 
 Mid-run recovery: upstream doesn't retry terminal quota errors (`insufficient_quota`, billing,
 `subscription_sharing_usage_limit_exceeded`), so they end the run. At `agent_before_settle` the
 router confirms the block, omits the failed assistant message with a `context_edit` (pi won't
 continue a context ending in an assistant message), and continues once on the next chain model.
-Each chain model gets at most one recovery per user prompt.
+Each chain model gets at most one recovery per user prompt. Router quota failover refuses failed
+messages containing nonempty text/thinking or any tool call: emitted output cannot be retracted
+safely, so retry explicitly instead of switching models. Core's same-model transient retries and
+recoverable length/overflow retries are unchanged, including partial attempts core already omitted.
+A retryable partial quota error is confirmed and marked before refusing failover; terminal partial
+quota errors are refused before confirmation. Prior successful tool turns remain in context and
+are not re-executed by router recovery.
 
 Usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
 auth has no subscription window and is never blocked. Codex window names follow the reported
@@ -91,7 +105,19 @@ Surfaces:
   - `router:rpc:admit` `{ model }` -> `{ ok, resolvedModel?, resetAt?, wait? }` (`wait`, only when refused: the caller may park until `resetAt`, see `exhaustionPolicy`; a physical model uses the default `wait` policy). Unknown models are admitted. A `router/*` profile is refused only when a quota block leaves no entry eligible; a chain unusable for config or credential reasons is admitted so the child reports the real cause. Before the first `session_start`, everything is admitted
   - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads both collected providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model
 
-Usage and block state is process-global, so in-process subagent sessions share it.
+Usage and block state is process-global, so in-process subagent sessions share it. A newer
+confirmation read supersedes older in-flight reads for cache and backoff writes, even when the older
+read finishes last. Superseded callers only follow later owners, so no cyclic wait is possible;
+each caller waits at most 20 seconds total, even across repeated supersessions. Cancelled callers
+detach without aborting shared reads; pre-cancelled requests return cancellation even with a usable
+cache, and neither read credentials nor consume the manual refresh allowance. An initiated manual
+refresh consumes its allowance even if later superseded or cancelled. Unsupported collector names never
+resolve credentials. Out-of-range reset timestamps normalize to an unknown reset.
+
+Core owns OAuth acquisition, refresh and persistence. The router bounds its wait for credential
+lookup to 10 seconds, then reports a sanitized error and backs off; it cannot cancel core's lookup.
+The subsequent usage HTTP request has its own 10-second timeout. No token or response body appears
+in usage errors. These bounds do not prove live OAuth refresh or revocation behavior.
 
 Development:
 
@@ -101,7 +127,10 @@ make install
 npm run check --workspace @nredd/pi-subscription-router  # biome, tsc, vitest, bun scenarios
 ```
 
-`test/scenarios/` covers terminal/retry/unconfirmed recovery and all six balanced cases through the real router factory and core session harness, under Vitest and Bun.
+`test/scenarios/` covers terminal/retry/unconfirmed recovery, partial-stream refusal, cancellation,
+bounded retries, direct `subscription_usage` execution and all six balanced cases through the real
+router factory and core session harness, under Vitest and Bun. The coverage/ownership matrix and
+live-smoke proposal are [here](https://github.com/nredd/pi-harness/blob/main/packages/subscription-router/docs/hardening.md).
 
 `createSubscriptionRouter({ config, usage, tracker?, now? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.
 

@@ -1556,7 +1556,13 @@ def test_validate_report_accepts_every_scenario_evidence() -> None:
         "@nredd/pi-subscription-router": GOOD_ENTRY
         | {
             "tarball": "nredd-pi-subscription-router-0.3.0.tgz",
-            "evidence": {"virtual_model": "router/default", "dispatched": "local/m"},
+            "evidence": {
+                "virtual_model": "router/default",
+                "dispatched": "local/m",
+                "balanced": ["openai-codex/m-b"],
+                "fallback": ["local/m-c"],
+                "recovery": ["anthropic/m-a", "openai-codex/m-b"],
+            },
         },
     }
     assert len(pc.validate_report(good_report(packages)).packages) == 3

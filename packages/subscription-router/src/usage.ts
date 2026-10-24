@@ -126,7 +126,8 @@ function timestamp(value: unknown): number | undefined {
 	}
 	const raw = finiteNumber(value);
 	if (raw === undefined) return undefined;
-	return raw < SECONDS_VS_MS_THRESHOLD ? raw * 1000 : raw;
+	const ms = raw < SECONDS_VS_MS_THRESHOLD ? raw * 1000 : raw;
+	return Number.isNaN(new Date(ms).getTime()) ? undefined : ms;
 }
 
 function percentage(value: unknown): number | undefined {
@@ -281,11 +282,19 @@ export interface UsageGetOptions {
 	signal?: AbortSignal;
 }
 
+/** Initiation-ordered reads retain local evidence without publishing superseded results. */
+interface UsageRead {
+	startedAt: number;
+	read: Promise<UsageSnapshot>;
+	snapshot?: UsageSnapshot;
+	newer?: UsageRead;
+}
+
 /** Subscription quota state for OAuth-backed consumer plans. */
 export class UsageService {
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly lastManualRefreshAt = new Map<string, number>();
-	private readonly inFlight = new Map<string, { startedAt: number; read: Promise<UsageSnapshot> }>();
+	private readonly inFlight = new Map<string, UsageRead>();
 	private readonly backoff = new Map<string, { failures: number; until: number }>();
 
 	constructor(
@@ -304,6 +313,7 @@ export class UsageService {
 	 */
 	async get(ctx: ExtensionContext, provider: string, options: UsageGetOptions = {}): Promise<UsageSnapshot> {
 		const now = this.transport.now();
+		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
 		const cached = this.cache.get(provider);
 		const force = options.force === true;
 		if (!force && cached?.status === "available") {
@@ -322,13 +332,30 @@ export class UsageService {
 			}
 			this.lastManualRefreshAt.set(provider, now);
 		}
-		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
-		const snapshot = await waitForCaller(this.refresh(ctx, provider, now, options.notBefore), options.signal);
-		if (!snapshot) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
-		if (snapshot.status !== "available" && cached) {
-			const stale = this.withStale(cached, provider, now, snapshot.message);
-			this.cache.set(provider, stale);
-			return stale;
+		const refresh = this.refresh(ctx, provider, now, options.notBefore);
+		const snapshot = await waitForCaller(refresh.read, options.signal, () => {
+			// The one outer deadline owns fallback selection. Inner waits must not
+			// race it with separate timers or extend it for each newer owner.
+			let fallback: UsageSnapshot | undefined;
+			const consider = (candidate: UsageSnapshot | undefined) => {
+				if (
+					candidate?.status === "available" &&
+					candidate.retrievedAt >= Math.max(refresh.startedAt, options.notBefore ?? refresh.startedAt) &&
+					(!fallback || candidate.retrievedAt >= fallback.retrievedAt)
+				)
+					fallback = candidate;
+			};
+			for (let entry: UsageRead | undefined = refresh; entry; entry = entry.newer) consider(entry.snapshot);
+			consider(this.cache.get(provider));
+			return fallback;
+		});
+		if (!snapshot) {
+			return errorSnapshot(
+				provider,
+				"error",
+				now,
+				options.signal?.aborted ? "Usage request was cancelled." : "Usage request timed out.",
+			);
 		}
 		return snapshot;
 	}
@@ -348,8 +375,7 @@ export class UsageService {
 	 * data with an unknown or past reset, missing data, and failed reads fail open.
 	 * An unlimited plan never blocks; a credit balance never bypasses a window.
 	 */
-	decisionFor(model: ModelRef): UsageDecision {
-		const snapshot = this.peek(model.provider);
+	decisionFor(model: ModelRef, snapshot = this.peek(model.provider)): UsageDecision {
 		if (!snapshot || (snapshot.status !== "available" && snapshot.status !== "stale")) return { block: false };
 		if (snapshot.credits?.unlimited === true) return { block: false };
 		const now = this.transport.now();
@@ -422,24 +448,54 @@ export class UsageService {
 		return { ...cached, status: "stale", expiresAt: now, message };
 	}
 
-	private refresh(ctx: ExtensionContext, provider: string, now: number, notBefore?: number): Promise<UsageSnapshot> {
+	private refresh(ctx: ExtensionContext, provider: string, now: number, notBefore?: number): UsageRead {
 		const existing = this.inFlight.get(provider);
-		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing.read;
+		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing;
 		const refresh = this.fetchSnapshot(ctx, provider, now)
-			.then((outcome) => {
+			.then(async (outcome) => {
+				entry.snapshot = outcome.snapshot;
+				// A post-failure read may supersede a slow warm-up. Only the newest
+				// initiated read owns cache/backoff writes, regardless of completion order.
+				if (this.inFlight.get(provider)?.read !== refresh) {
+					// Follow only later owners, never older reads: the dependency graph
+					// is acyclic. The caller's total wait is bounded across supersessions.
+					const newer = this.inFlight.get(provider);
+					const latest = newer ? await newer.read : this.cache.get(provider);
+					const freshEnough = (snapshot: UsageSnapshot | undefined): snapshot is UsageSnapshot =>
+						snapshot?.status === "available" && snapshot.retrievedAt >= Math.max(now, notBefore ?? now);
+					if (freshEnough(latest)) return latest;
+					// This caller can use its exact live result, but must not overwrite
+					// the newer owner's cache or clear the newer failure's backoff.
+					if (freshEnough(outcome.snapshot)) return outcome.snapshot;
+					if (latest) return latest;
+					return errorSnapshot(
+						provider,
+						"error",
+						this.transport.now(),
+						"Usage request was superseded by a newer read.",
+					);
+				}
 				if (outcome.snapshot.status === "available") {
 					this.cache.set(provider, outcome.snapshot);
 					this.backoff.delete(provider);
 				} else if (outcome.failed) {
 					this.recordFailure(provider, outcome.retryAfterMs);
 				}
+				const cached = this.cache.get(provider);
+				if (outcome.snapshot.status !== "available" && cached) {
+					const stale = this.withStale(cached, provider, this.transport.now(), outcome.snapshot.message);
+					this.cache.set(provider, stale);
+					return stale;
+				}
 				return outcome.snapshot;
 			})
 			.finally(() => {
 				if (this.inFlight.get(provider)?.read === refresh) this.inFlight.delete(provider);
 			});
-		this.inFlight.set(provider, { startedAt: now, read: refresh });
-		return refresh;
+		const entry: UsageRead = { startedAt: now, read: refresh };
+		if (existing) existing.newer = entry;
+		this.inFlight.set(provider, entry);
+		return entry;
 	}
 
 	private recordFailure(provider: string, retryAfter: number | undefined): void {
@@ -454,13 +510,28 @@ export class UsageService {
 			snapshot: errorSnapshot(provider, status, now, message),
 			failed: false,
 		});
-		const collector = COLLECTORS[provider];
+		const collector = Object.hasOwn(COLLECTORS, provider) ? COLLECTORS[provider] : undefined;
 		if (!collector) return unfetched("unavailable", "No subscription usage collector exists for this provider.");
 		let token: string | undefined;
+		const lookupTimedOut = Symbol("credential lookup timeout");
+		let lookupTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			token = await this.transport.getAccessToken(ctx, provider);
+			// Core owns refresh/persistence. Bound only our wait; its API has no
+			// cancellation parameter, so a late owner result is ignored, not aborted.
+			const result = await Promise.race([
+				this.transport.getAccessToken(ctx, provider),
+				new Promise<typeof lookupTimedOut>((resolve) => {
+					lookupTimer = setTimeout(() => resolve(lookupTimedOut), REQUEST_TIMEOUT_MS);
+				}),
+			]);
+			if (result === lookupTimedOut) {
+				return { ...unfetched("error", "OAuth credential lookup timed out."), failed: true };
+			}
+			token = result;
 		} catch {
 			return unfetched("error", "OAuth credential lookup failed.");
+		} finally {
+			clearTimeout(lookupTimer);
 		}
 		if (!token) return unfetched("unavailable", "No OAuth credential is available for this provider.");
 		if (collector.acceptsToken?.(token) === false) {
@@ -505,19 +576,26 @@ export class UsageService {
 	}
 }
 
-/** Resolve with `refresh`, or undefined as soon as `signal` aborts. */
+/** Prefer the completed read; at the total deadline use live evidence, never on abort. */
 function waitForCaller(
 	refresh: Promise<UsageSnapshot>,
 	signal: AbortSignal | undefined,
+	onTimeout: () => UsageSnapshot | undefined,
 ): Promise<UsageSnapshot | undefined> {
-	if (!signal) return refresh;
-	if (signal.aborted) return Promise.resolve(undefined);
+	if (signal?.aborted) return Promise.resolve(undefined);
 	return new Promise((resolve) => {
-		const abort = () => resolve(undefined);
-		signal.addEventListener("abort", abort, { once: true });
-		void refresh.then((snapshot) => {
-			signal.removeEventListener("abort", abort);
+		let settled = false;
+		const finish = (snapshot?: UsageSnapshot) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", abort);
 			resolve(snapshot);
-		});
+		};
+		const abort = () => finish();
+		// One credential lookup plus one fetch, regardless of supersession count.
+		const timer = setTimeout(() => finish(signal?.aborted ? undefined : onTimeout()), 2 * REQUEST_TIMEOUT_MS);
+		signal?.addEventListener("abort", abort, { once: true });
+		void refresh.then(finish);
 	});
 }

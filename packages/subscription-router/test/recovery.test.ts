@@ -22,10 +22,10 @@ function harness(live: Record<string, UsageDecision>, snapshots: Record<string, 
 	);
 	const env: RouteEnv = {
 		resolve: (entry) => ({ provider: entry.provider, id: entry.id, api: "test" }) as unknown as Model<Api>,
-		refresh: async (provider) => {
+		refresh: async ({ provider }) => {
 			const decision = live[provider];
 			if (decision) cached[provider] = decision;
-			return true;
+			return decision;
 		},
 	};
 	return { recovery: new SettleRecovery(router), env, tracker };
@@ -56,6 +56,7 @@ function settle(tail: ProjectedSessionEntry): Pick<AgentBeforeSettleEvent, "entr
 function quotaError(chain: ChainEntry, text = "insufficient_quota"): ProjectedSessionEntry {
 	return entry("a1", {
 		role: "assistant",
+		content: [],
 		provider: chain.provider,
 		model: chain.id,
 		stopReason: "error",
