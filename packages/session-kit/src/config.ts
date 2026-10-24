@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const FEATURES = ["titles", "rules", "goal", "loop", "monitor", "diff", "stats"] as const;
+export const FEATURES = ["titles", "rules", "goal", "loop", "monitor", "diff", "stats", "mon"] as const;
 export type Feature = (typeof FEATURES)[number];
 
 export interface KitConfig {
