@@ -210,12 +210,12 @@ export class MonView implements Component {
 		];
 	}
 
-	/** `-- warming · 12 logical CPUs` or `36.2% of 12 logical CPUs`; capacity is omitted when compact. */
+	/** Compact mode omits capacity and the stale suffix; the header already labels every metric STALE. */
 	private cpuSummary(capacity = true): string {
 		const t = this.options.theme;
 		const s = this.snapshot;
 		const value = s?.cpuPercent ?? null;
-		const state = this.cpuState();
+		const state = !capacity && s?.status === "stale" ? "" : this.cpuState();
 		const head =
 			value === null
 				? t.fg("dim", "--")
@@ -274,8 +274,14 @@ export class MonView implements Component {
 		const total = s?.memoryTotalBytes ?? null;
 		const used = s?.memoryUsedBytes ?? null;
 		const ram = `${bytes(used)}/${bytes(total)}`;
+		const metrics = [
+			`${t.fg("muted", "CPU")} ${this.cpuSummary(false)}`,
+			`${t.fg("muted", "RAM")} ${ram}`,
+			`${t.fg("muted", "load")} ${this.loads().split(" ")[0]}`,
+		];
+		const spaced = ` ${metrics.join("  ")}`;
 		return [
-			` ${t.fg("muted", "CPU")} ${this.cpuSummary(false)}  ${t.fg("muted", "RAM")} ${ram}  ${t.fg("muted", "load")} ${this.loads().split(" ")[0]}`,
+			visibleWidth(spaced) <= width ? spaced : metrics.join(" "),
 			` ${t.fg("accent", timeHistory(this.history, width - 2))}`,
 			` ${t.fg("dim", this.historyLabel())}`,
 		];

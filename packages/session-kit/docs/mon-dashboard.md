@@ -49,6 +49,7 @@ sample, including its `ps` child on macOS. Mapping rules:
   three-line summary (`CPU`, `RAM`, 1-minute load, one-row history); at six rows summary/chrome
   yields to the selected process, but a compact partial-list or stopped/retry warning remains visible.
   At eight rows, core CPU/RAM/load metrics take priority over optional history and platform hints.
+  Compact metrics tighten spacing when needed to keep CPU, RAM and the 1-minute load visible.
   The last row reserves close/help. Below 60 columns the header
   keeps the update clock over the tagline.
 - Columns: `PID`, `CPU%` (100 = one core), `RSS`, `MEM%` (RSS over total RAM, 60+ columns),
@@ -56,8 +57,9 @@ sample, including its `ps` child on macOS. Mapping rules:
   selection; a theme scrollbar appears only when the list overflows. The memory card adds 1-minute
   load per logical CPU.
 - Host CPU severity colors the value (success under 50%, warning under 85%, error above) next to
-  the number itself. Stale CPU retains the last measured value with a muted `last value` label,
-  never the live severity color.
+  the number itself. Stale CPU retains the last measured value, muted rather than live severity-colored.
+  Cards add a `last value` label; compact summaries rely on the `STALE` header instead, reserving
+  the metric row for CPU, RAM and load.
 - Host CPU history keeps each capture timestamp, uses a fixed 0..100% scale and at most 120
   samples, newest on the right. A column is the lower-median interval between captures, widened
   only when the history is longer than the width, so completion-paced drift never invents gaps.

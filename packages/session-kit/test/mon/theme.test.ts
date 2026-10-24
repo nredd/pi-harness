@@ -66,6 +66,41 @@ describe("mon with built-in themes", () => {
 		expect(text).not.toContain("macOS:");
 	});
 
+	it.each(["dark", "light"] as const)("%s keeps stale metrics visible at 40x8", (name) => {
+		const theme = getThemeByName(name);
+		if (!theme) throw new Error(`Missing built-in ${name} theme`);
+		for (const notice of [undefined, "Sampling stopped. Close and reopen to retry."]) {
+			for (const long of [false, true]) {
+				const measured = {
+					...snapshot(long ? 100 : 95),
+					...(long ? { memoryUsedBytes: 128 * 1024 ** 3, memoryTotalBytes: 256 * 1024 ** 3, load: [123.45] } : {}),
+				};
+				const view = new MonView({ theme, rows: () => 8, requestRender: vi.fn(), onClose: vi.fn() });
+				view.update(measured);
+				view.update({ ...measured, status: "stale", notice });
+				const lines = view.render(40);
+				const plain = lines.map(stripVTControlCharacters);
+				const summary = plain[1] ?? "";
+				for (const metric of [
+					`CPU ${long ? "100.0%" : "95.0%"}`,
+					`RAM ${long ? "128.0G/256.0G" : "10.4G/24.0G"}`,
+					`load ${long ? "123.45" : "3.21"}`,
+				])
+					expect(summary).toContain(metric);
+				expect(plain[0]).toContain("STALE");
+				expect(plain.join("\n")).toContain("Last success:");
+				if (notice) expect(plain.join("\n")).toContain("reopen to retry");
+				expect(plain.join("\n")).toContain("▸");
+				expect(plain.at(-1)).toContain("q/Esc close");
+				expect(lines[1]).toContain(theme.fg("muted", long ? "100.0%" : "95.0%"));
+				expect(lines[1]).not.toContain(theme.fg("error", long ? "100.0%" : "95.0%"));
+				expect(view.state.historyLength).toBe(1);
+				expect(lines).toHaveLength(8);
+				for (const line of lines) expect(visibleWidth(line)).toBe(40);
+			}
+		}
+	});
+
 	it.each(["dark", "light"] as const)(
 		"%s explicitly mutes stale CPU last values, never severity-colors them",
 		(name) => {
