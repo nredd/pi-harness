@@ -1,10 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## 0.4.1
+
+- Document conditional normalized-quota fairness guarantees and deterministic counterexamples without changing routing policy
 
 - Refuse cross-model quota replay of partial streams without blocking core same-model recovery
 - Follow newer confirming reads with bounded, cancellable waits and exact-snapshot decisions; keep newest-only cache/backoff writes
-- Keep cancelled refreshes from consuming manual allowance; bound credential-owner waits
+- Keep pre-cancelled refreshes from consuming manual allowance; bound credential-owner waits
 - Reject inherited collector names and out-of-range reset timestamps
 - Exercise direct usage tools and packed multiprovider dispatch without live credentials
 - Remove nonexistent `e2e/` paths from formatting and lint commands
