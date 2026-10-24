@@ -5,13 +5,16 @@ fresh project, and drives it through a real, exact-version stock Pi install:
 
 1. `npm pack`: file list must match a narrow allowlist; `LICENSE` must be byte-identical to the
    repository root; the packed manifest must be public-publishable, keep host modules as `*` peers,
-   and have no dependencies.
-2. Source audit: every import in the tarball is relative (inside the package), a Node builtin, or a
-   host-provided Pi module. No sibling plugin, no bundled host copy. Imports come from the installed
-   TypeScript parser (`import_audit.ts`, one batched `node` run per package) rather than a regex;
-   computed specifiers are rejected, not skipped. It is a syntactic audit, not a proof about `eval`.
-3. Fresh install (`--ignore-scripts --legacy-peer-deps --offline`, like Pi's managed installs that
-   suppress peer installation): `node_modules` holds only the package, never a host duplicate.
+   and declare exactly the contract's runtime dependencies (none for most plugins).
+2. Source audit: every import in the tarball is relative (inside the package), a Node builtin, a
+   host-provided Pi module or a declared runtime dependency. No sibling plugin (only a published
+   `SHARED_LIBRARIES` entry declared at its common exact pin), no bundled host copy. Imports
+   come from the installed TypeScript parser (`import_audit.ts`, one batched `node` run per
+   package) rather than a regex; computed specifiers are rejected, not skipped. It is a syntactic
+   audit, not a proof about `eval`.
+3. Fresh install (`--ignore-scripts --legacy-peer-deps`, like Pi's managed installs that suppress
+   peer installation; `--offline` unless the contract declares registry runtime dependencies):
+   `node_modules` holds only the package and its declared closure, never a host duplicate.
 4. Stock Pi `--mode json` with only that package loaded (`--no-extensions --extension DIR`), a
    scrubbed environment, a temporary `HOME` and agent directory, no credentials, and a loopback
    scripted provider. The package must do real work: a dev tool result, a session-kit monitor and
@@ -35,16 +38,23 @@ import json
 import logging
 import os
 import re
+import secrets
+import selectors
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from collections import Counter
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Annotated, Any, Literal, Self, TypedDict
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -164,6 +174,143 @@ RESOURCE_SAMPLER_FILES = (
         for suffix in ("js", "d.ts")
     ),
 )
+# Exact published release consumers install from the registry; never a range, workspace or file spec.
+RESOURCE_SAMPLER_VERSION = "0.1.1"
+# The hostile child puts a random secret in argv[0], its process title and (Linux) comm.
+SAMPLER_HOSTILE_CHILD = """process.title = process.env.S;
+if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
+console.log('ready'); setInterval(() => {}, 1000);"""
+# Every process the library can bound, so a busy host fails with explicit coverage, never a silent pass.
+SAMPLER_PROBE_BOUNDS = {"maxDurationMs": 5000, "maxPids": 16384, "maxBytes": 16_777_216}
+SAMPLER_PROBE_BODY = """
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+const STOP_MS = 2000;
+const exited = child => child.exitCode !== null || child.signalCode !== null;
+// Wait for this exact ChildProcess's reaped exit status, never a PID probe that reuse could fool.
+async function exitedWithin(child, ms) {
+    if (exited(child)) return true;
+    const timer = new AbortController();
+    try {
+        const exit = once(child, 'exit').then(() => true);
+        return await Promise.race([exit, delay(ms, false, {signal: timer.signal})]);
+    } finally { timer.abort(); }
+}
+// SIGTERM, bounded wait, then SIGKILL and one more bounded wait, like integration/inprocess/support.ts.
+async function stop(child) {
+    if (child.pid === undefined || exited(child)) return;
+    child.kill('SIGTERM');
+    if (await exitedWithin(child, STOP_MS)) return;
+    child.kill('SIGKILL');
+    if (!(await exitedWithin(child, STOP_MS))) throw new Error(`hostile child ${child.pid} survived SIGKILL`);
+}
+function ready(child, ms) {
+    return new Promise((resolve, reject) => {
+        let output = '';
+        const finish = error => {
+            clearTimeout(timer);
+            child.stdout.off('data', data);
+            child.off('exit', exit);
+            child.off('error', finish);
+            if (error) reject(error); else resolve();
+        };
+        const data = chunk => { output += chunk; if (output.includes('ready\\n')) finish(); };
+        const exit = () => finish(new Error('hostile child exited before readiness'));
+        const timer = setTimeout(() => finish(new Error(`hostile child not ready within ${ms} ms`)), ms);
+        child.stdout.on('data', data);
+        child.once('exit', exit);
+        child.once('error', finish);
+    });
+}
+const message = error => (error instanceof Error ? error.message : String(error));
+// Run `body`, then always reap the child; a cleanup failure is reported with, never instead of, `body`'s.
+async function supervise(child, body) {
+    let failure;
+    try { await body(); } catch (error) { failure = {error}; }
+    try { await stop(child); } catch (cleanup) {
+        if (!failure) throw cleanup;
+        const text = `${message(failure.error)}; cleanup also failed: ${message(cleanup)}`;
+        throw new AggregateError([failure.error, cleanup], text);
+    } finally {
+        const status = child.signalCode ?? child.exitCode;
+        const pid = child.pid ?? 'never spawned';
+        console.error(exited(child) ? `hostile child reaped: ${status}` : `hostile child ${pid} not reaped`);
+    }
+    if (failure) throw failure.error;
+}
+const secret = randomBytes(16).toString('hex');
+const hostile = spawn(process.execPath, ['-e', CHILD_SCRIPT], {
+    argv0: DISGUISE ? secret : process.execPath, env: {S: secret}, stdio: ['ignore', 'pipe', 'ignore'],
+});
+// Everything after spawn runs inside `supervise`, so readiness or negative-control failures still reap it.
+await supervise(hostile, async () => {
+    await ready(hostile, READY_MS);
+    // Negative control: the 0.1.0 name source (Darwin `ps -c` comm, Linux comm) really carries the secret.
+    const legacy = process.platform === 'linux'
+        ? readFileSync(`/proc/${hostile.pid}/comm`, 'utf8').trim() === secret.slice(0, 15)
+        : execFileSync('/bin/ps', ['-c', '-o', 'comm=', '-p', `${hostile.pid}`], {timeout: STOP_MS})
+            .toString().includes(secret);
+    assert.ok(legacy, 'hostile child does not expose the secret through the 0.1.0 name source');
+    const { createResourceSampler } = await import('@nredd/pi-resource-sampler');
+    const sampler = createResourceSampler(BOUNDS);
+    try {
+        const first = await sampler.sample();
+        assert.equal(first.cpu.state, 'warming');
+        await delay(60);
+        const second = await sampler.sample();
+        assert.equal(second.cpu.state, 'available');
+        assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
+        const coverage = JSON.stringify(second.coverage);
+        const seen = pid => second.processes.some(p => p.pid === pid);
+        assert.ok(seen(process.pid), `probe not observed within bounds: ${coverage}`);
+        assert.ok(seen(hostile.pid), `hostile child not observed within bounds: ${coverage}`);
+        // Every 12-char window: shorter than Linux comm (15 bytes) and Darwin p_comm (16 bytes) fragments.
+        const text = JSON.stringify([first, second]);
+        for (let i = 0; i + 12 <= secret.length; i++)
+            assert.ok(!text.includes(secret.slice(i, i + 12)), 'process names expose argv, title or comm');
+        const controller = new AbortController();
+        controller.abort();
+        await assert.rejects(sampler.sample(controller.signal));
+    } finally { await sampler.dispose(); }
+    await assert.rejects(sampler.sample(), /disposed/);
+});
+"""
+
+
+def resource_sampler_probe(
+    child_script: str = SAMPLER_HOSTILE_CHILD, *, disguise: bool = True, ready_ms: int = 5000
+) -> str:
+    """Build the installed-library probe around one disposable child.
+
+    The defaults are the shipped contract. Tests inject a silent, an exiting, an undisguised and a
+    SIGTERM-ignoring child to prove readiness and negative-control failures still reap it.
+
+    Parameters:
+        child_script (str): Node program the child evaluates; it prints `ready` once observable.
+        disguise (bool): Whether the child's argv[0] is the secret rather than the Node executable.
+        ready_ms (int): Readiness bound in milliseconds.
+
+    Returns:
+        str: ESM program for `node --input-type=module -e`.
+
+    Raises:
+        ValueError: If `ready_ms` is not positive.
+    """
+    if ready_ms <= 0:
+        raise ValueError(f"`ready_ms` must be positive: '{ready_ms}'")
+    config = (
+        f"const CHILD_SCRIPT = {json.dumps(child_script)};\n"
+        f"const DISGUISE = {json.dumps(disguise)};\n"
+        f"const READY_MS = {ready_ms};\n"
+        f"const BOUNDS = {json.dumps(SAMPLER_PROBE_BOUNDS)};\n"
+    )
+    return config + SAMPLER_PROBE_BODY
+
+
 RESOURCE_SAMPLER_CONTRACT = PackageContract(
     name="@nredd/pi-resource-sampler",
     directory="resource-sampler",
@@ -172,25 +319,15 @@ RESOURCE_SAMPLER_CONTRACT = PackageContract(
     exposes_tools=frozenset(),
     packed_files=RESOURCE_SAMPLER_FILES,
     library=True,
-    node_probe="""
-import assert from 'node:assert/strict';
-import { setTimeout } from 'node:timers/promises';
-import { createResourceSampler } from '@nredd/pi-resource-sampler';
-const sampler = createResourceSampler({maxDurationMs: 2000});
-try {
-    const first = await sampler.sample();
-    assert.equal(first.cpu.state, 'warming');
-    await setTimeout(60);
-    const second = await sampler.sample();
-    assert.equal(second.cpu.state, 'available');
-    assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
-    assert.ok(second.processes.some(p => p.pid === process.pid));
-    const controller = new AbortController();
-    controller.abort();
-    await assert.rejects(sampler.sample(controller.signal));
-} finally { await sampler.dispose(); }
-await assert.rejects(sampler.sample(), /disposed/);
-""",
+    node_probe=resource_sampler_probe(),
+)
+
+# Compiled, Pi-independent `@nredd/` libraries a plugin may import, mapped to the ONE exact registry
+# release every consumer must declare (`shared_library_pin_problems`). The single definition for both
+# sampler consumers (dev-tools `resource_snapshot`, session-kit `/mon`); `classify_imports` still refuses
+# it in library and standalone-artifact files. Plugins remain banned from importing each other.
+SHARED_LIBRARIES: Mapping[str, str] = MappingProxyType(
+    {RESOURCE_SAMPLER_CONTRACT.name: RESOURCE_SAMPLER_VERSION}
 )
 
 
@@ -200,7 +337,8 @@ CONTRACTS = (
         directory="dev-tools",
         required=("LICENSE", "README.md", "package.json", "src/index.ts"),
         allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^src/.+\.ts$")),
-        exposes_tools=frozenset({"git_status"}),
+        exposes_tools=frozenset({"git_status", "resource_snapshot"}),
+        runtime_dependencies=((RESOURCE_SAMPLER_CONTRACT.name, RESOURCE_SAMPLER_VERSION),),
     ),
     PackageContract(
         name="@nredd/pi-session-kit",
@@ -361,12 +499,12 @@ COMPUTER_USE_CONTRACT = PackageContract(
     ),
 )
 
-# `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` is hermetic
-# (`npm install --offline`, nothing but the tarball), while this package has real runtime dependencies
-# that must come from the registry. It is audited, installed and run through stock Pi by the release
-# `verify` stage (descriptor `stock_gate`), by CI's `make check-subagents-package-contract` and by the
-# pack-vs-contract test, not by that target. The
-# `files` allowlist in `packages/subagents/package.json` and `allowed`/`required` below must enumerate
+# `pi-subagents` is deliberately NOT in `CONTRACTS`: `make check-package-contracts` installs its plugins
+# offline except for exact published `SHARED_LIBRARIES` pins (the resource sampler), while
+# this package has third-party runtime dependencies that must come from the registry. It is audited,
+# installed and run through stock Pi by the release `verify` stage (descriptor `stock_gate`), by
+# CI's `make check-subagents-package-contract` and by the pack-vs-contract test, not by that target.
+# The `files` allowlist in `packages/subagents/package.json` and `allowed`/`required` below must enumerate
 # the same set; `test_subagents_pack_matches_contract` enforces it. Peers keep the fork's `>=1.1.0`
 # floor (it needs 1.x host APIs) rather than `*`. `SubagentWorkflow` is registered unless the
 # `workflowsEnabled` setting is off, which a clean sandbox never sets.
@@ -695,8 +833,17 @@ class LockEntry(BaseModel):
     model_config = LENIENT_STRICT_MODEL
     version: str | None = Field(default=None, description="Locked version")
     integrity: str | None = Field(default=None, description="Locked registry integrity")
+    resolved: str | None = Field(default=None, description="Locked tarball URL")
     optional: bool = Field(default=False, description="npm marked this entry optional")
     dependencies: dict[str, str] = Field(default_factory=dict, description="Direct locked dependencies")
+
+
+class PublishedDist(BaseModel):
+    """`npm view <name>@<version> dist --json`: the registry's own tarball identity."""
+
+    model_config = LENIENT_STRICT_MODEL
+    tarball: NonEmptyText = Field(description="Published tarball URL")
+    integrity: Sha512Integrity = Field(description="Published npm `sha512-` integrity")
 
 
 class LockFile(BaseModel):
@@ -730,6 +877,9 @@ class DevToolsEvidence(TypedDict):
     tool: str
     untracked: list[str]
     failure_path: str
+    resource_ranking: str
+    resource_sampler_integrity: str
+    resource_failure_path: str
 
 
 class SessionKitEvidence(TypedDict):
@@ -805,6 +955,15 @@ class DevToolsEvidenceModel(BaseModel):
     tool: Literal["git_status"] = Field(description="Tool the scenario ran")
     untracked: list[str] = Field(min_length=1, description="Untracked paths the real tool reported")
     failure_path: NonEmptyText = Field(description="Error text from the outside-a-repository run")
+    resource_ranking: Literal["interval-cpu", "rss"] = Field(
+        description="`resource_snapshot` ranking on the host that found the marker child under its parent"
+    )
+    resource_sampler_integrity: Sha512Integrity = Field(
+        description="Locked registry integrity of the installed `@nredd/pi-resource-sampler`"
+    )
+    resource_failure_path: NonEmptyText = Field(
+        description="Error text from an out-of-bounds `process_limit`"
+    )
 
 
 class SessionKitEvidenceModel(BaseModel):
@@ -1110,6 +1269,7 @@ def run(
     cwd: Path,
     timeout: int,
     check: bool = True,
+    own_group: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run an absolute-path command without a shell.
 
@@ -1119,6 +1279,9 @@ def run(
         cwd (Path): Working directory.
         timeout (int): Seconds before the child is killed.
         check (bool): Raise `ContractError` on a nonzero exit.
+        own_group (bool): Run through `run_own_group`, so a Python-level timeout or
+            `KeyboardInterrupt` kills the child's whole process group while its leader is
+            unreaped. Default `subprocess.run` kills only the child.
 
     Returns:
         subprocess.CompletedProcess[str]: Captured text output.
@@ -1130,16 +1293,19 @@ def run(
     if not Path(argv[0]).is_absolute():
         raise ValueError(f"Executable must be an absolute path: '{argv[0]}'")
     try:
-        done = subprocess.run(
-            argv,
-            env=env,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
+        if own_group:
+            done = run_own_group(argv, env=env, cwd=cwd, timeout=timeout)
+        else:
+            done = subprocess.run(
+                argv,
+                env=env,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
     except subprocess.TimeoutExpired as e:
         raise ContractError(f"`{' '.join(argv[:3])}` timed out after {timeout}s") from e
     if check and done.returncode != 0:
@@ -1148,6 +1314,55 @@ def run(
             f"stdout: {done.stdout[-2000:]}\nstderr: {done.stderr[-2000:]}"
         )
     return done
+
+
+def run_own_group(
+    argv: list[str], *, env: dict[str, str], cwd: Path, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    """Run `argv` as the leader of a new session; on timeout or interruption kill its whole group.
+
+    The group is signalled only while the leader is unreaped (`returncode` unset, read without a
+    `poll` that could reap it): until then its pid, the group id, cannot be reused, like
+    `integration/harness/headless.py` `kill_process_group`. If `communicate` already reaped the
+    leader (its SIGINT grace wait can), the id may be reused, so nothing is signalled and the
+    original exception says so, and surviving members may outlive the gate. Members left after a
+    normal exit are the program's own job. Only exceptions raised in this process run the cleanup:
+    a SIGTERM or SIGHUP without a Python handler, or a SIGKILL, ends the gate with no cleanup and
+    the group may outlive it.
+
+    Parameters:
+        argv (list[str]): Argument vector; `argv[0]` is absolute.
+        env (dict[str, str]): Complete child environment.
+        cwd (Path): Working directory.
+        timeout (int): Seconds before the group is killed.
+
+    Returns:
+        subprocess.CompletedProcess[str]: Captured text output.
+
+    Raises:
+        subprocess.TimeoutExpired: After the group was killed and the leader reaped.
+    """
+    with subprocess.Popen(
+        argv,
+        env=env,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException as e:
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            else:
+                e.add_note(f"process group {process.pid} not signalled: its leader was already reaped")
+            raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def locate_tools() -> Tools:
@@ -1554,6 +1769,26 @@ def audit_license(tarball: Path, expected_license: bytes) -> list[str]:
     return [] if packed == expected_license else ["packed `LICENSE` differs from the expected `LICENSE`"]
 
 
+def shared_library_pin_problems(contract: PackageContract) -> list[str]:
+    """Check that every `SHARED_LIBRARIES` dependency the contract declares uses the common pin.
+
+    `classify_imports` only sees dependency names, so without this a second consumer could declare
+    the sampler at another exact version and still import it.
+
+    Parameters:
+        contract (PackageContract): Expectations to check.
+
+    Returns:
+        list[str]: Violations; empty when every shared library is pinned at its common version.
+    """
+    return [
+        f"'{contract.name}' declares shared library '{name}' at '{declared}', "
+        f"not the common pin '{SHARED_LIBRARIES[name]}'"
+        for name, declared in contract.runtime_dependencies
+        if name in SHARED_LIBRARIES and declared != SHARED_LIBRARIES[name]
+    ]
+
+
 def audit_manifest(contract: PackageContract, manifest: object, expected_files: Sequence[str]) -> list[str]:
     """Check the packed `package.json` for independence and publication safety.
 
@@ -1576,7 +1811,7 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
             f"is malformed: {item['msg']}"
             for item in e.errors()
         ]
-    problems: list[str] = []
+    problems = shared_library_pin_problems(contract)
     if parsed.name != contract.name:
         problems.append(f"name is '{parsed.name}', expected '{contract.name}'")
     if parsed.private is True:
@@ -1718,6 +1953,8 @@ def classify_imports(
     Allowed: Node builtins (`node:` prefix), host-provided Pi modules, the contract's declared runtime
     dependencies, and relative paths that stay inside the package. Everything else, including any
     `@nredd/` sibling and any specifier the parser could not resolve to a literal, is a violation.
+    The one sibling exception is an exact `SHARED_LIBRARIES` specifier that is also a declared
+    dependency of a non-library, non-standalone file.
     Files in `standalone_artifacts` (the bundled stats `dist/` artifact) may import `node:` builtins
     only; relative imports are forbidden too, because it is copied alone.
 
@@ -1739,7 +1976,8 @@ def classify_imports(
         if spec.startswith("node:"):
             continue
         if spec.startswith(SIBLING_SCOPE):
-            problems.append(f"{path}: imports sibling plugin '{spec}'")
+            if library or standalone or spec not in SHARED_LIBRARIES or spec not in dependencies:
+                problems.append(f"{path}: imports sibling plugin '{spec}'")
         elif standalone:
             problems.append(
                 f"{path}: standalone artifact imports '{spec}', only `node:` builtins are allowed"
@@ -2590,7 +2828,441 @@ def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
         tool_is_error(failed),
         f"git_status outside a repository must be an error result: {failed.get('result')}",
     )
-    return {"tool": "git_status", "untracked": ["untracked.txt"], "failure_path": tool_text(failed)[:200]}
+    ranking, resource_failure = exercise_resource_snapshot(ctx)
+    return {
+        "tool": "git_status",
+        "untracked": ["untracked.txt"],
+        "failure_path": tool_text(failed)[:200],
+        "resource_ranking": ranking,
+        "resource_sampler_integrity": installed_sampler_integrity(
+            ctx.installed, published_sampler_dist(ctx.sandbox, ctx.work)
+        ),
+        "resource_failure_path": resource_failure[:200],
+    }
+
+
+def redact_url(url: str | None) -> str:
+    """Drop credentials, query and fragment from a URL before it reaches an error or report.
+
+    Parameters:
+        url (str | None): URL from a lockfile or registry response.
+
+    Returns:
+        str: `scheme://host[:port]/path`, or a placeholder when absent or unparseable.
+    """
+    if not url:
+        return "<missing>"
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port is not None else ""
+    except ValueError:
+        return "<unparseable>"
+    return f"{parts.scheme}://{host}{port}{parts.path}"
+
+
+def published_sampler_dist(sandbox: Sandbox, cwd: Path) -> PublishedDist:
+    """Ask the public registry for the exact sampler release's tarball URL and integrity.
+
+    Runs with the scrubbed sandbox environment (no npm credentials) and no proxy.
+
+    Parameters:
+        sandbox (Sandbox): Environment and tools for `npm`.
+        cwd (Path): Scratch directory without an `.npmrc`.
+
+    Returns:
+        PublishedDist: Registry metadata for `RESOURCE_SAMPLER_VERSION`.
+
+    Raises:
+        ContractError: If the query fails or the response is malformed.
+    """
+    spec = f"{RESOURCE_SAMPLER_CONTRACT.name}@{RESOURCE_SAMPLER_VERSION}"
+    done = run(
+        [sandbox.tools.npm, "view", spec, "dist", "--json"],
+        env=sandbox.env() | REGISTRY_ENV,
+        cwd=cwd,
+        timeout=NPM_TIMEOUT_S,
+    )
+    try:
+        return PublishedDist.model_validate_json(done.stdout)
+    except ValidationError as e:
+        raise ContractError(f"Registry metadata for '{spec}' is malformed: {e}") from e
+
+
+def installed_sampler_integrity(installed: Path, published: PublishedDist) -> str:
+    """Prove the installed plugin resolves the exact published sampler from the registry.
+
+    The lock entry must name the registry's own tarball URL and integrity for that version, not merely
+    carry some integrity.
+
+    Parameters:
+        installed (Path): Installed `@nredd/pi-dev-tools` directory inside `<project>/node_modules`.
+        published (PublishedDist): Registry metadata for the pinned version.
+
+    Returns:
+        str: The verified registry integrity.
+
+    Raises:
+        ContractError: If the sampler is linked, missing, another version, or locked to other bytes or origin.
+    """
+    name, version = RESOURCE_SAMPLER_CONTRACT.name, RESOURCE_SAMPLER_VERSION
+    project = installed.parents[2]
+    module = project / "node_modules" / name
+    require(module.is_dir() and not module.is_symlink(), f"'{name}' is not a real installed directory")
+    entry = read_lockfile(project / "package-lock.json").packages.get(f"node_modules/{name}", LockEntry())
+    require(entry.version == version, f"'{name}' is locked at {entry.version!r}, not exactly {version!r}")
+    require(
+        entry.resolved == published.tarball,
+        f"'{name}' resolved from {redact_url(entry.resolved)}, not the published "
+        f"{redact_url(published.tarball)}",
+    )
+    require(
+        entry.integrity == published.integrity,
+        f"'{name}' locked integrity {entry.integrity!r} differs from the published {published.integrity!r}",
+    )
+    return published.integrity
+
+
+# Run from the installed plugin directory, so the specifier resolves exactly as the packed plugin's own import
+# does. One full, unranked scan, then a real in-flight cancellation. Prints PIDs, coverage counters, the
+# marker child's own name and whether any 12-char window of the secret appears in the scan; never other names.
+SAMPLER_DISCOVERY_PROBE = """
+import { fileURLToPath } from 'node:url';
+import { createResourceSampler } from '@nredd/pi-resource-sampler';
+const [pid, secret] = [Number(process.argv[1]), process.argv[2]];
+const sampler = createResourceSampler({ maxDurationMs: 5000 });
+try {
+    const sample = await sampler.sample();
+    const found = sample.processes.filter((entry) => entry.pid === pid);
+    const text = JSON.stringify(sample);
+    const leaked = Array.from({ length: secret.length - 11 }, (_, i) => secret.slice(i, i + 12))
+        .some((window) => text.includes(window));
+    const controller = new AbortController();
+    const reason = new Error('probe cancel');
+    const pending = sampler.sample(controller.signal);
+    controller.abort(reason);
+    const cancelled = await pending.then(
+        () => 'resolved',
+        (error) => (error === reason ? 'rejected' : `${error}`),
+    );
+    console.log(JSON.stringify({
+        cancelled,
+        leaked,
+        resolved: fileURLToPath(import.meta.resolve('@nredd/pi-resource-sampler')),
+        coverage: {
+            complete: sample.coverage.complete,
+            enumerated: sample.coverage.enumerated,
+            sampled: sample.coverage.sampled,
+            reasons: sample.coverage.reasons,
+        },
+        found: found.map((entry) => ({ pid: entry.pid, parentPid: entry.parentPid, name: entry.name })),
+    }));
+} finally {
+    await sampler.dispose();
+}
+"""
+
+
+class DiscoveredProcess(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    pid: int = Field(description="Sampled PID")
+    parentPid: int = Field(description="Sampled parent PID")
+    name: str = Field(description="Sampled executable basename of the marker child (never another process)")
+
+
+class ScanCoverage(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    complete: bool = Field(description="True only when the scan recorded no limit or skip reason")
+    enumerated: int = Field(description="Process entries encountered")
+    sampled: int = Field(description="Process entries returned")
+    reasons: list[str] = Field(description="Why the scan is partial, e.g. `deadline`, `pid-limit`")
+
+
+class SamplerDiscovery(BaseModel):
+    model_config = LENIENT_STRICT_MODEL
+    resolved: NonEmptyText = Field(description="Real path the plugin directory resolves the sampler to")
+    coverage: ScanCoverage = Field(description="Coverage of the scan")
+    found: list[DiscoveredProcess] = Field(description="Scan entries with the marker PID")
+    leaked: bool = Field(description="Whether any 12-char window of the marker secret appeared in the scan")
+    cancelled: str = Field(description="`rejected` when an in-flight sample rejected with the abort reason")
+
+
+def secret_windows(secret: str) -> list[str]:
+    """Every 12-char window of `secret`, shorter than Linux comm (15 bytes) and Darwin `p_comm` (16 bytes).
+
+    Parameters:
+        secret (str): Marker secret.
+
+    Returns:
+        list[str]: Overlapping windows; any one in an output means a name leaked argv, title or comm.
+    """
+    return [secret[i : i + 12] for i in range(len(secret) - 11)]
+
+
+def kernel_executable_names(node: Path) -> set[str]:
+    """Names sampler 0.1.1 may report for a child exec'd from `node`, and nothing invented.
+
+    Linux reads the `/proc/PID/exe` target, so the resolved basename. Darwin reports kinfo `p_comm`, the
+    exec'd file name truncated to 16 bytes; both the invoked and resolved basenames are accepted there.
+
+    Parameters:
+        node (Path): Executable the child was started from.
+
+    Returns:
+        set[str]: Acceptable executable basenames.
+    """
+    resolved = node.resolve().name
+    if sys.platform.startswith("linux"):
+        return {resolved}
+    return {name.encode()[:16].decode(errors="ignore") for name in (node.name, resolved)}
+
+
+def wait_hostile_ready(child: subprocess.Popen[bytes], timeout: float) -> None:
+    """Read a bounded readiness line without blocking on a silent or partial-line child.
+
+    Parameters:
+        child (subprocess.Popen[bytes]): Child with piped stdout, owned by the caller.
+        timeout (float): Maximum readiness wait in seconds.
+
+    Raises:
+        ContractError: If readiness times out, stdout closes or its line is malformed.
+    """
+    assert child.stdout is not None
+    deadline = time.monotonic() + timeout
+    output = b""
+    with selectors.DefaultSelector() as selector:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        while b"\n" not in output:
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, "hostile marker child readiness timed out")
+            require(bool(selector.select(remaining)), "hostile marker child readiness timed out")
+            chunk = os.read(child.stdout.fileno(), 1024)
+            require(bool(chunk), "hostile marker child exited before readiness")
+            output += chunk
+            require(len(output) <= 1024, "hostile marker child readiness line is too long")
+    require(output.split(b"\n", 1)[0] == b"ready", "hostile marker child readiness is malformed")
+
+
+def stop_hostile_child(child: subprocess.Popen[bytes]) -> None:
+    """Kill and reap the owned marker child within two seconds and close its pipe.
+
+    Parameters:
+        child (subprocess.Popen[bytes]): Marker child owned by this gate.
+
+    Raises:
+        subprocess.TimeoutExpired: If the exact child survives SIGKILL for two seconds.
+    """
+    try:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=2)
+    finally:
+        if child.stdout is not None:
+            child.stdout.close()
+
+
+@contextmanager
+def start_hostile_child(
+    ctx: Context,
+    project: Path,
+    secret: str,
+    *,
+    script: str = SAMPLER_HOSTILE_CHILD,
+    ready_timeout: float = 5,
+) -> Iterator[subprocess.Popen[bytes]]:
+    """Own an idle `node` child whose argv[0], process title and Linux comm hold `secret`.
+
+    Negative control: the sampler 0.1.0 name source (Darwin `ps -c` comm, Linux `/proc/PID/comm`) must
+    really carry the secret, so a clean snapshot proves the 0.1.1 source and not an inert marker.
+
+    Parameters:
+        ctx (Context): Scenario context.
+        project (Path): Working directory.
+        secret (str): Random marker secret.
+        script (str): Child script, injectable for real startup-failure tests.
+        ready_timeout (float): Maximum startup wait in seconds.
+
+    Yields:
+        subprocess.Popen[bytes]: The running child, reaped on startup failure or context exit.
+
+    Raises:
+        ContractError: If the child does not start or the legacy source does not show the secret.
+        BaseExceptionGroup: If startup or the caller's body and cleanup both fail.
+        subprocess.TimeoutExpired: If cleanup alone fails to reap the child within two seconds.
+    """
+    child = subprocess.Popen(
+        [secret, "-e", script],
+        executable=str(ctx.sandbox.tools.node),
+        env=ctx.sandbox.env() | {"S": secret},
+        cwd=project,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        wait_hostile_ready(child, ready_timeout)
+        if sys.platform.startswith("linux"):
+            legacy = Path(f"/proc/{child.pid}/comm").read_text().strip() == secret[:15]
+        else:
+            ps = run(
+                [Path("/bin/ps"), "-c", "-o", "comm=", "-p", str(child.pid)],
+                env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+                cwd=ctx.work,
+                timeout=30,
+            )
+            legacy = secret in ps.stdout
+        require(legacy, "hostile marker child does not expose its secret through the 0.1.0 name source")
+        yield child
+    except BaseException as primary:
+        try:
+            stop_hostile_child(child)
+        except BaseException as cleanup:
+            raise BaseExceptionGroup("marker child and cleanup failed", [primary, cleanup]) from primary
+        raise
+    else:
+        stop_hostile_child(child)
+
+
+def discover_child_with_installed_sampler(ctx: Context, child: int, secret: str) -> None:
+    """Find `child` under this process in one unranked scan by the plugin's installed sampler.
+
+    Inclusion is checked against the full scan, not the tool's top-50 ranking, so it does not depend on
+    how many larger or busier processes the host runs. The scan need not be complete: a process exiting
+    mid-scan marks it partial on any busy host, and requiring completeness would make the gate host-flaky.
+    The target is the known child, which must be in it; a miss names the scan's coverage, so a truncated
+    scan (`deadline`, `pid-limit`, `byte-limit`) is reported as such, never as a missing child. An
+    independent `ps` confirms the parent. The child's name must be its kernel executable basename, no
+    window of its argv[0]/title/comm secret may appear anywhere in the scan, and a real in-flight sample
+    must reject with the abort reason.
+
+    Parameters:
+        ctx (Context): Scenario context.
+        child (int): Marker child PID, started by this process.
+        secret (str): The child's argv[0], title and Linux comm.
+
+    Raises:
+        ContractError: If the sampler resolves elsewhere, the scan fails or leaks, cancellation does not
+            reject, or the child, its name or its parent is wrong.
+    """
+    done = run(
+        [ctx.sandbox.tools.node, "--input-type=module", "-e", SAMPLER_DISCOVERY_PROBE, str(child), secret],
+        env=ctx.sandbox.env(),
+        cwd=ctx.installed,
+        timeout=30,
+    )
+    try:
+        report = SamplerDiscovery.model_validate_json(done.stdout)
+    except ValidationError as e:
+        raise ContractError(f"Sampler discovery probe output is malformed: {e}") from e
+    expected = (
+        ctx.installed.parents[2] / "node_modules" / RESOURCE_SAMPLER_CONTRACT.name / "dist" / "index.js"
+    )
+    require(
+        Path(report.resolved) == expected.resolve(),
+        f"plugin resolves the sampler to {report.resolved}, not {expected}",
+    )
+    coverage = report.coverage
+    require(
+        "process-collection-unavailable" not in coverage.reasons,
+        f"sampler scan failed: {coverage.reasons}",
+    )
+    scope = (
+        "the complete scan"
+        if coverage.complete
+        else f"a PARTIAL scan ({coverage.sampled}/{coverage.enumerated} sampled, reasons {coverage.reasons})"
+    )
+    require(
+        [(found.pid, found.parentPid) for found in report.found] == [(child, os.getpid())],
+        f"marker child {child} under parent {os.getpid()} not in {scope}: {report.found}",
+    )
+    names = kernel_executable_names(ctx.sandbox.tools.node)
+    require(report.found[0].name in names, f"marker child named {report.found[0].name!r}, not one of {names}")
+    require(not report.leaked, "installed sampler names expose the marker's argv[0], title or comm")
+    require(report.cancelled == "rejected", f"in-flight sample cancellation: {report.cancelled}")
+    ps = run(
+        [Path("/bin/ps"), "-o", "ppid=", "-p", str(child)],
+        env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        cwd=ctx.work,
+        timeout=30,
+    )
+    require(ps.stdout.strip() == str(os.getpid()), f"independent ps reports parent {ps.stdout.strip()!r}")
+
+
+def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
+    """Run `resource_snapshot` through the packed plugin around a real marker child, then a refused call.
+
+    The child is idle and small, with a random secret as argv[0], title and Linux comm
+    (`start_hostile_child`); its discovery is proven against the installed sampler's full scan
+    (`discover_child_with_installed_sampler`), and the tool output must be the bounded projection of
+    such a scan: exactly `min(50, sampled)` entries with only the documented fields, and no window of the
+    secret anywhere in the tool record.
+
+    Parameters:
+        ctx (Context): Scenario context.
+
+    Returns:
+        tuple[str, str]: The reported ranking and the out-of-bounds call's error text.
+
+    Raises:
+        ContractError: If the snapshot fails, the child is not discovered, or the refusal succeeds.
+    """
+    project = ctx.work / "resource"
+    project.mkdir()
+    argv = ["--model", f"{PROVIDER}/{PHYSICAL_MODEL}", "--mode", "json", "go"]
+    secret = secrets.token_hex(16)
+    with start_hostile_child(ctx, project, secret) as child:
+        discover_child_with_installed_sampler(ctx, child.pid, secret)
+        script = [ToolStep("resource_snapshot", {"process_limit": 50, "interval_ms": 300}), TextStep("done")]
+        with ctx.provider_session(script):
+            ok = run_pi(ctx.pi_bin, ctx.sandbox, ctx.installed, project, argv)
+    require_clean_run(ok, "dev-tools resource_snapshot")
+    record = ok.single_tool_result("resource_snapshot")
+    require(not tool_is_error(record), f"resource_snapshot failed: {tool_text(record)}")
+    dumped = json.dumps(record)
+    require(
+        not any(window in dumped for window in secret_windows(secret)),
+        "resource_snapshot output exposes the marker's argv[0], title or comm",
+    )
+    structured = parse_tool_record(record).result.structuredContent or {}
+    processes = structured.get("processes")
+    require(
+        isinstance(processes, dict) and processes.get("status") == "available",
+        f"resource_snapshot has no process metadata: {structured}",
+    )
+    assert isinstance(processes, dict)  # Narrowed by `require` above.
+    entries, coverage = processes.get("entries"), processes.get("coverage")
+    require(
+        isinstance(entries, list) and isinstance(coverage, dict) and isinstance(coverage.get("sampled"), int),
+        f"resource_snapshot entries or coverage malformed: {processes}",
+    )
+    assert isinstance(entries, list)
+    assert isinstance(coverage, dict)
+    require(
+        0 < len(entries) == min(50, coverage["sampled"]),
+        f"{len(entries)} entries is not the 50-bounded projection of {coverage['sampled']} sampled",
+    )
+    require(
+        all(
+            isinstance(entry, dict)
+            and set(entry) == {"pid", "parentPid", "cpu", "rssBytes", "executable"}
+            and isinstance(entry["parentPid"], int)
+            for entry in entries
+        ),
+        f"resource_snapshot entries carry unexpected fields: {entries[:3]}",
+    )
+    ranking = processes.get("ranking")
+    expected = "interval-cpu" if sys.platform.startswith("linux") else "rss"
+    require(
+        ranking == expected, f"resource_snapshot ranking {ranking!r} is not {expected!r} on {sys.platform}"
+    )
+
+    refused_script = [ToolStep("resource_snapshot", {"process_limit": 51}), TextStep("done")]
+    with ctx.provider_session(refused_script):
+        bad = run_pi(ctx.pi_bin, ctx.sandbox, ctx.installed, project, argv)
+    require_clean_run(bad, "dev-tools resource_snapshot out of bounds")
+    refused = bad.single_tool_result("resource_snapshot")
+    require(tool_is_error(refused), f"process_limit 51 must be an error result: {refused.get('result')}")
+    return expected, tool_text(refused)
 
 
 def scenario_subagents(ctx: Context) -> SubagentsEvidence:
@@ -3459,6 +4131,7 @@ def run_audit_gate(
             env=sandbox.env(),
             cwd=work / "install",
             timeout=30,
+            own_group=True,
         )
     return {
         "name": contract.name,
