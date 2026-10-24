@@ -233,6 +233,13 @@ describe("resource fixture ownership", () => {
 		expect(performance.now() - started).toBeLessThan(3000);
 	});
 
+	it("retains a real child's exit status before readiness", async () => {
+		const child = spawn(process.execPath, ["-e", "process.exit(7)"], { stdio: ["ignore", "pipe", "ignore"] });
+		await expect(supervise(child, 5000, async () => {})).rejects.toThrow("child exited before readiness");
+		expect(child.exitCode).toBe(7);
+		expect(child.signalCode).toBeNull();
+	});
+
 	it("handles an actual spawn error without waiting for readiness", async () => {
 		const child = spawn(`/nonexistent-resource-fixture-${randomBytes(16).toString("hex")}`, [], {
 			stdio: ["ignore", "pipe", "ignore"],
@@ -300,11 +307,12 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			// Idle and small: inclusion is asserted against the sampler's full unranked scan, not a host-dependent top-50
 			// rank. The scan need not be complete (a process exiting mid-scan marks it partial); the known child must be
 			// in it, and a miss reports the coverage so a truncated scan is never mistaken for a missing child.
-			const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], { stdio: "ignore" });
-			try {
+			const child = spawn(process.execPath, ["-e", "console.log('ready'); setInterval(() => {}, 1 << 30)"], {
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+			await supervise(child, 5000, async () => {
 				const pid = child.pid;
 				if (pid === undefined) throw new Error("child did not start");
-				await new Promise((resolve) => setTimeout(resolve, 300));
 				const real = realSampler();
 				const snapshot = await resourceSnapshot(50, { createSampler: real.createSampler }, undefined, 200);
 				const raw = real.state.samples.at(-1);
@@ -337,10 +345,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 					});
 				}
 				if (raw.processes.length <= 50) expect(entries.map((entry) => entry.pid)).toContain(pid);
-			} finally {
-				child.kill("SIGKILL");
-				await exited(child);
-			}
+			});
 		},
 		20_000,
 	);
