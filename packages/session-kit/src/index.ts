@@ -9,6 +9,8 @@ import { configPath, type Feature, type KitConfig, loadConfig } from "./config.t
 import { register as registerDiff } from "./diff/index.ts";
 import { register as registerGoal } from "./goal/index.ts";
 import { register as registerLoop } from "./loop/index.ts";
+import { registerMon } from "./mon/index.ts";
+import { createSamplerSource } from "./mon/source.ts";
 import { register as registerMonitor } from "./monitor/index.ts";
 import type { MonitorProcess, SpawnOptions } from "./monitor/process.ts";
 import { register as registerRules } from "./rules/index.ts";
@@ -20,7 +22,7 @@ export interface SessionKitOptions {
 	config?: KitConfig;
 	agentDir?: string;
 	monitorRoot?: string;
-	/** Time for stats ranges, loops, goal wakes and monitor batching/timeouts. Defaults to real time. */
+	/** Time for stats ranges, loops, goal wakes, monitor batching/timeouts and /mon cadence. Defaults to real time. */
 	clock?: Clock;
 	/** Child boundary only; validation, matching, ring buffering and message delivery stay in the manager. */
 	spawnMonitor?: (argv: readonly string[], options: SpawnOptions) => Promise<MonitorProcess>;
@@ -37,6 +39,7 @@ const MODULES: Record<Feature, Register> = {
 		registerMonitor(pi, config, options.monitorRoot, { clock: options.clock, spawnMonitor: options.spawnMonitor }),
 	diff: registerDiff,
 	stats: (pi, config, options) => registerStats(pi, config, options),
+	mon: (pi, _config, options) => registerMon(pi, { createSource: () => createSamplerSource(), clock: options.clock }),
 };
 
 /** Create the real kit without requiring a machine-local agent configuration. */

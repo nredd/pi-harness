@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-session-kit",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publishConfig": {
     "access": "public"
   },
@@ -12,6 +12,7 @@
     "src",
     "dist/pi-stats-export.mjs",
     "docs/stats-snapshots.md",
+    "docs/mon-dashboard.md",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"
@@ -25,6 +26,9 @@
     "pi-package",
     "pi-extension"
   ],
+  "dependencies": {
+    "@nredd/pi-resource-sampler": "0.1.1"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
