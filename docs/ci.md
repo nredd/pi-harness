@@ -113,7 +113,11 @@ These nine jobs are the required checks of ruleset `main required checks` (id `2
   Reviewed HEAD: <full-40-character-reviewed-sha>
   ```
   Missing, duplicate or conflicting declarations refuse. A SHA in an earlier request, tool call or
-  incidental prose is not a receipt. Renew the review rather than editing a transcript. The unmanaged
+  incidental prose is not a receipt. Git diagnostic detection requires explicit boolean `isError`
+  metadata: successful source reads/diffs may quote every failure pattern without invalidating the
+  review. An actual failed unresolved-revision result blocks even if a later call succeeds. Missing
+  or malformed Git-result status/content and reader errors fail closed. Renew the review rather than
+  editing a transcript. The unmanaged
   `~/code/pi-harness-builds/merge-pr.sh` is a distribution copy, not source. Only after this PR is
   reviewed and merged may the parent copy **both** scripts together from the merged revision into
   that directory. Do not activate an unreviewed copy or change managed Pi config

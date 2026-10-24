@@ -64,9 +64,9 @@ receipt_line() {
   local t=$1 axis=$2 out models verdict
   out=$(/bin/ls -d "$root"/*/tasks/"$t".output 2>/dev/null) || true
   [[ -n "$out" && $(/usr/bin/wc -l <<<"$out") -eq 1 ]] || { echo "transcript $t: expected one file, got: ${out:-none}" >&2; return 1; }
-  # A reviewer that could not resolve the reviewed commit must not count as clean. Only git tool
-  # results count: a reviewer reading this script (or any file quoting these phrases) is not a failure.
-  if "$python" - "$out" <<'EOF'
+  # Check failed Git results, not diagnostics quoted by successful source reads/diffs.
+  # Missing/malformed result metadata and reader errors fail closed; later success cannot erase failure.
+  if ! "$python" - "$out" <<'EOF'
 import json, re, sys
 from pathlib import Path
 bad = re.compile(r"bad revision|unknown revision|ambiguous argument|Not a valid object")
@@ -76,12 +76,19 @@ if not transcript.is_file():
 for line in transcript.read_text(encoding="utf-8").splitlines():
     m = json.loads(line).get("message", {})
     if m.get("role") == "toolResult" and str(m.get("toolName", "")).startswith("git_"):
-        if bad.search("".join(c.get("text", "") for c in m.get("content", []))):
-            sys.exit(0)
-sys.exit(1)
+        content = m.get("content")
+        if type(m.get("isError")) is not bool or not isinstance(content, list):
+            sys.exit("Git result lacks boolean isError or content metadata")
+        if any(not isinstance(c, dict) or c.get("type") != "text"
+               or not isinstance(c.get("text"), str) for c in content):
+            sys.exit("Git result contains malformed text content")
+        text = "".join(c["text"] for c in content)
+        if m["isError"] and (not text.strip() or bad.search(text)):
+            sys.exit("Failed Git result has an unresolved revision or missing diagnostic")
+sys.exit(0)
 EOF
   then
-    echo "transcript $t hit an unresolved revision; fetch the head and re-review" >&2; return 1
+    echo "transcript $t: failed or unverifiable Git evidence; fetch the head and re-review" >&2; return 1
   fi
   IFS=$'\t' read -r models verdict reads < <(summarize "$out" "$axis")
   [[ -n "$models" && -n "$verdict" && -n "$reads" ]] || { echo "transcript $t: no model, verdict or reads" >&2; return 1; }
