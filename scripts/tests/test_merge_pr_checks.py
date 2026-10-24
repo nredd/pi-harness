@@ -433,6 +433,60 @@ def poison_path(bin_dir: Path, tmp_path: Path, mode: str) -> Path:
     return poisoned
 
 
+def git_results(mode: str, source: Path) -> list[dict[str, Any]]:
+    """Build real-shaped transcript results, including successful reads of this guard.
+
+    Parameters:
+        mode (str): Result outcome or malformed metadata case to exercise.
+        source (Path): Actual helper source containing every negative diagnostic pattern.
+
+    Returns:
+        list[dict[str, Any]]: Transcript rows using the captured toolResult/isError contract.
+
+    Raises:
+        OSError: The actual helper source cannot be read.
+    """
+    diagnostics = {
+        "unresolved-review": "fatal: bad revision HEAD",
+        "git-unknown-revision": "git_diff: unknown revision",
+        "git-ambiguous-argument": "fatal: ambiguous argument HEAD",
+        "git-invalid-object": "fatal: Not a valid object HEAD",
+        "git-corrected": "fatal: bad revision HEAD",
+    }
+    if mode not in diagnostics and mode not in (
+        "git-quoted-source",
+        "read-quoted-source",
+        "git-no-status",
+        "git-string-status",
+        "git-null-status",
+        "git-malformed-content",
+    ):
+        return []
+    message: dict[str, Any] = {
+        "role": "toolResult",
+        "toolCallId": "review-diff",
+        "toolName": "git_diff",
+        "isError": mode in diagnostics,
+        "content": [{"type": "text", "text": diagnostics.get(mode, source.read_text())}],
+        "details": {},
+    }
+    if mode == "read-quoted-source":
+        message["toolName"] = "read"
+        del message["isError"]
+    elif mode == "git-no-status":
+        del message["isError"]
+    elif mode in ("git-string-status", "git-null-status"):
+        message["isError"] = "false" if mode == "git-string-status" else None
+    elif mode == "git-malformed-content":
+        message["content"] = [{"type": "text", "text": None}]
+    rows = [{"message": message}]
+    if mode == "git-corrected":
+        rows.append(
+            {"message": message | {"isError": False, "content": [{"type": "text", "text": "valid diff"}]}}
+        )
+    return rows
+
+
 @pytest.mark.parametrize(
     "mode",
     [
@@ -455,6 +509,16 @@ def poison_path(bin_dir: Path, tmp_path: Path, mode: str) -> Path:
         "directory-transcript",
         "missing-transcript",
         "dangling-transcript",
+        "git-quoted-source",
+        "read-quoted-source",
+        "git-unknown-revision",
+        "git-ambiguous-argument",
+        "git-invalid-object",
+        "git-corrected",
+        "git-no-status",
+        "git-string-status",
+        "git-null-status",
+        "git-malformed-content",
     ],
 )
 def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
@@ -491,24 +555,27 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
                     "provider": "review",
                     "model": "fixture",
                     "content": [
-                        {"type": "toolCall", "name": "git_diff", "arguments": {"base": "main...HEAD"}},
-                        {"type": "text", "text": report},
+                        {
+                            "type": "toolCall",
+                            "id": "review-diff",
+                            "name": "git_diff",
+                            "arguments": {"base": "main...HEAD"},
+                        },
                     ],
                 }
             }
         ]
-        if mode == "unresolved-review":
-            messages.append(
-                {
-                    "message": {
-                        "role": "toolResult",
-                        "toolName": "git_diff",
-                        "content": [
-                            {"type": "text", "text": "fatal: bad revision HEAD"},
-                        ],
-                    }
+        messages.extend(git_results(mode, scripts / "merge-pr.sh"))
+        messages.append(
+            {
+                "message": {
+                    "role": "assistant",
+                    "provider": "review",
+                    "model": "fixture",
+                    "content": [{"type": "text", "text": report}],
                 }
-            )
+            }
+        )
         if mode == "final-wrong-head":
             messages.append(
                 {
@@ -581,7 +648,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
         check=False,
     )
     assert not poisoned.exists(), result.stderr
-    if mode in ("green", "poisoned-path"):
+    if mode in ("green", "poisoned-path", "git-quoted-source", "read-quoted-source"):
         assert result.returncode == 0, result.stderr
         assert f"Review receipt, final HEAD `{sha}`" in result.stdout
         assert "`review/fixture`" in result.stdout
