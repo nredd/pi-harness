@@ -368,6 +368,18 @@ describe("child-safe nested Agent tools", () => {
     expect(manager.resume).toHaveBeenCalledWith("child-1", "Continue", undefined, expect.objectContaining({ maxTurns: 3 }));
   });
 
+  it("refuses to resume a child that is still running, naming why", async () => {
+    const [agent] = tools(["scout"]);
+    await execute(agent, { subagent_type: "scout", description: "find files", prompt: "Find them" });
+    manager.getRecord("child-1").status = "running";
+
+    const result = await execute(agent, { resume: "child-1", subagent_type: "scout", description: "again", prompt: "Again" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("is still running");
+    expect(manager.resume).not.toHaveBeenCalled();
+  });
+
   it("waits for a queued owned child to start and settle", async () => {
     const [, getResult] = tools();
     const record = {
