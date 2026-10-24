@@ -134,7 +134,11 @@ These nine jobs are the required checks of ruleset `main required checks` (id `2
   helper directly from the candidate worktree:
   Install the existing locked integration environment (`uv sync --locked` in `integration/`)
   for Pydantic evidence validation. Select trusted absolute executables and the actual transcript
-  storage directory explicitly; there is no PATH-based or workstation-specific fallback:
+  storage directory explicitly; there is no PATH-based or workstation-specific fallback.
+  The shell uses `/bin/bash` and absolute native `ls`, `wc`, `dirname`, `mktemp` and `cat` paths;
+  embedded readers resolve transcript paths with `Path` and require regular files before reading.
+  The poisoned-PATH regression covers every external utility, including gate-path selection:
+
   ```sh
   MERGE_PR_TRANSCRIPT_ROOT=<absolute-transcript-store> \
   MERGE_PR_GH=/opt/homebrew/bin/gh \
