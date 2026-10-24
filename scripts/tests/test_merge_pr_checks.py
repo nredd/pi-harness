@@ -32,14 +32,32 @@ class Replay(checks.GitHub):
     """Serve projected real REST/CLI captures without credentials or mutations."""
 
     def __init__(self) -> None:
-        """Load independent fixture state for each test."""
+        """Load independent fixture state for each test.
+
+        Returns:
+            None: Initializes independent capture state and the recorded CLI call list.
+
+        Raises:
+            OSError: The captured fixture cannot be read.
+            ValueError: The captured fixture contains invalid JSON.
+        """
         self.data = json.loads(FIXTURE.read_text())
         self.old_run = self.data["runs"][1]
         self.commands: list[tuple[str, ...]] = []
         self.binary = "/fixture/gh"
 
     def command(self, *args: str) -> Any:
-        """Replay exact read-only endpoints; unexpected requests fail the test."""
+        """Replay exact read-only endpoints; unexpected requests fail the test.
+
+        Parameters:
+            *args (str): Read-only CLI arguments identifying the captured endpoint.
+
+        Returns:
+            Any: Captured JSON evidence for the requested endpoint.
+
+        Raises:
+            pytest.fail.Exception: The request has no captured response.
+        """
         self.commands.append(args)
         if args[:2] == ("pr", "checks"):
             return self.data["checks"]
@@ -61,7 +79,17 @@ class Replay(checks.GitHub):
         pytest.fail(f"Unexpected request: {args}")
 
     def page_response(self, endpoint: str) -> Any:
-        """Return split captures to exercise real production pagination flattening."""
+        """Return split captures to exercise real production pagination flattening.
+
+        Parameters:
+            endpoint (str): REST collection endpoint, including query parameters.
+
+        Returns:
+            Any: Captured records split into synthetic REST response pages.
+
+        Raises:
+            pytest.fail.Exception: The collection endpoint is unsupported.
+        """
         if "/check-runs?" in endpoint:
             return [{"check_runs": self.data["check_runs"][:5]}, {"check_runs": self.data["check_runs"][5:]}]
         if "/actions/runs?" in endpoint:
@@ -72,12 +100,24 @@ class Replay(checks.GitHub):
         pytest.fail(f"Unexpected page request: {endpoint}")
 
     def gate(self) -> None:
-        """Exercise the production gate, not a separate fixture classifier."""
+        """Exercise the production gate, not a separate fixture classifier.
+
+        Returns:
+            None: Completes when the captured evidence permits admission.
+
+        Raises:
+            checks.CheckError: The replayed evidence does not permit merging.
+            ValidationError: The replayed evidence has an invalid record shape.
+        """
         checks.gate(self, REPO, "135", self.data["pr"]["head"]["sha"])
 
 
 def test_captured_superseded_placeholders() -> None:
-    """Real same-second runs and split pages pass only with complete successor proof."""
+    """Real same-second runs and split pages pass only with complete successor proof.
+
+    Returns:
+        None: Completes after validating captured supersession and all nine contexts.
+    """
     gh = Replay()
     assert gh.data["runs"][0]["created_at"] == gh.data["runs"][1]["created_at"]
     assert len([c for c in gh.data["checks"] if c["state"] == "CANCELLED"]) == 3
@@ -99,7 +139,15 @@ def test_captured_superseded_placeholders() -> None:
     ],
 )
 def test_wrong_or_unsuccessful_successor(field: str, value: Any) -> None:
-    """Pending, failed, latest cancelled and different-context executions block."""
+    """Pending, failed, latest cancelled and different-context executions block.
+
+    Parameters:
+        field (str): Successor execution field to corrupt.
+        value (Any): Replacement value representing an inadmissible execution.
+
+    Returns:
+        None: Completes after the production gate refuses the successor.
+    """
     gh = Replay()
     gh.data["runs"][0][field] = value
     with pytest.raises(checks.CheckError):
@@ -110,7 +158,15 @@ def test_wrong_or_unsuccessful_successor(field: str, value: Any) -> None:
     ("side", "field"), [("base", "sha"), ("head", "sha"), ("base", "ref"), ("head", "ref")]
 )
 def test_wrong_pr_context(side: str, field: str) -> None:
-    """Never use successes from a different base/head context."""
+    """Never use successes from a different base/head context.
+
+    Parameters:
+        side (str): PR side whose identity is changed, head or base.
+        field (str): Branch identity field to corrupt, SHA or ref.
+
+    Returns:
+        None: Completes after the mismatched PR context is refused.
+    """
     gh = Replay()
     gh.data["runs"][0]["pull_requests"][0][side][field] = "wrong"
     with pytest.raises(checks.CheckError):
@@ -119,7 +175,14 @@ def test_wrong_pr_context(side: str, field: str) -> None:
 
 @pytest.mark.parametrize("change", ["missing", "pending", "failed", "skipped", "wrong_attempt", "wrong_sha"])
 def test_incomplete_matrix(change: str) -> None:
-    """A successful run summary cannot substitute for every actual matrix cell."""
+    """A successful run summary cannot substitute for every actual matrix cell.
+
+    Parameters:
+        change (str): Missing-cell or unsuccessful-cell mutation to apply.
+
+    Returns:
+        None: Completes after incomplete matrix coverage is refused.
+    """
     gh = Replay()
     job = next(j for j in gh.data["new_jobs"] if j["name"] in checks.EXPECTED_MATRIX)
     if change == "missing":
@@ -136,7 +199,14 @@ def test_incomplete_matrix(change: str) -> None:
 
 @pytest.mark.parametrize("target", ["old", "new"])
 def test_wrong_app(target: str) -> None:
-    """Same workflow labels from another app do not establish replacement."""
+    """Same workflow labels from another app do not establish replacement.
+
+    Parameters:
+        target (str): Old or new execution whose producing app is changed.
+
+    Returns:
+        None: Completes after the wrong app identity is refused.
+    """
     gh = Replay()
     run = gh.data["runs"][0 if target == "new" else 1]
     gh.data["suites"][str(run["check_suite_id"])]["app"]["id"] = 42
@@ -146,7 +216,14 @@ def test_wrong_app(target: str) -> None:
 
 @pytest.mark.parametrize("state", ["FAILURE", "PENDING", "CANCELLED", "TIMED_OUT"])
 def test_optional_failure_blocks(state: str) -> None:
-    """Required-only success never bypasses triggered optional workflow failures."""
+    """Required-only success never bypasses triggered optional workflow failures.
+
+    Parameters:
+        state (str): Non-success outcome of the additional optional check.
+
+    Returns:
+        None: Completes after the optional check blocks admission.
+    """
     gh = Replay()
     gh.data["checks"].append({"name": "core (forks/pi)", "state": state, "link": "https://example.invalid"})
     with pytest.raises(checks.CheckError):
@@ -155,7 +232,14 @@ def test_optional_failure_blocks(state: str) -> None:
 
 @pytest.mark.parametrize("change", ["executed", "ordinary", "not_cancelled", "wrong_job_sha"])
 def test_not_a_stale_placeholder(change: str) -> None:
-    """Only the exact zero-step cancelled matrix template gets special treatment."""
+    """Only the exact zero-step cancelled matrix template gets special treatment.
+
+    Parameters:
+        change (str): Mutation that invalidates the historical placeholder proof.
+
+    Returns:
+        None: Completes after an executed, ordinary or mismatched job is refused.
+    """
     gh = Replay()
     job = next(j for j in gh.data["old_jobs"] if j["name"].startswith("stack"))
     if change == "executed":
@@ -172,7 +256,14 @@ def test_not_a_stale_placeholder(change: str) -> None:
 
 @pytest.mark.parametrize("change", ["missing", "app", "failure", "pending", "sha"])
 def test_required_contexts_independent(change: str) -> None:
-    """All nine app-bound contexts must independently succeed on the reviewed SHA."""
+    """All nine app-bound contexts must independently succeed on the reviewed SHA.
+
+    Parameters:
+        change (str): Missing or invalid required-context evidence to introduce.
+
+    Returns:
+        None: Completes after the invalid required context blocks admission.
+    """
     gh = Replay()
     job = next(j for j in gh.data["check_runs"] if j["name"].startswith("wsl2"))
     if change == "missing":
@@ -188,7 +279,11 @@ def test_required_contexts_independent(change: str) -> None:
 
 
 def test_newest_cancellation_after_success_blocks() -> None:
-    """Do not choose an intermediate successful run when the newest run cancels."""
+    """Do not choose an intermediate successful run when the newest run cancels.
+
+    Returns:
+        None: Completes after a later cancellation prevents stale-green admission.
+    """
     gh = Replay()
     later = copy.deepcopy(gh.data["runs"][0])
     later["run_number"] += 1
@@ -199,7 +294,11 @@ def test_newest_cancellation_after_success_blocks() -> None:
 
 
 def test_rerun_attempt_order() -> None:
-    """A later attempt of the same workflow run can prove supersession."""
+    """A later attempt of the same workflow run can prove supersession.
+
+    Returns:
+        None: Completes after the later successful attempt is admitted.
+    """
     gh = Replay()
     new, old = gh.data["runs"]
     new["id"], new["run_number"], new["run_attempt"] = old["id"], old["run_number"], 2
@@ -209,7 +308,11 @@ def test_rerun_attempt_order() -> None:
 
 
 def test_expected_head_and_no_checks() -> None:
-    """Head drift and absent checks refuse before any admission."""
+    """Head drift and absent checks refuse before any admission.
+
+    Returns:
+        None: Completes after both head drift and missing checks are refused.
+    """
     gh = Replay()
     with pytest.raises(checks.CheckError, match="reviewed"):
         checks.gate(gh, REPO, "135", "wrong")
@@ -219,7 +322,11 @@ def test_expected_head_and_no_checks() -> None:
 
 
 def test_workflow_matrix_contract() -> None:
-    """CI matrix changes must update the bounded replacement proof explicitly."""
+    """CI matrix changes must update the bounded replacement proof explicitly.
+
+    Returns:
+        None: Completes after comparing the workflow matrices with the gate contract.
+    """
     workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
     matrices = re.findall(r"      matrix:\n(.*?)(?=    runs-on:)", workflow, re.DOTALL)
     os_matrix = "        os: [ubuntu-24.04, macos-14]\n"
@@ -240,14 +347,29 @@ def test_workflow_matrix_contract() -> None:
 
 
 def test_cli_failures_and_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
-    """API failures are fatal; all returned pages, including empty pages, are consumed."""
+    """API failures are fatal; all returned pages, including empty pages, are consumed.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Fixture replacing the CLI subprocess seam.
+
+    Returns:
+        None: Completes after empty evidence and CLI failure are refused.
+    """
     gh = Replay()
     gh.data["runs"] = []
     with pytest.raises(checks.CheckError):
         gh.gate()
 
     def failed(cmd: list[str], **kwargs: Any) -> str:
-        """Return a credential-free HTTP failure from the executable seam."""
+        """Return a credential-free HTTP failure from the executable seam.
+
+        Parameters:
+            cmd (list[str]): CLI argument vector supplied by the gate.
+            **kwargs (Any): Subprocess options accepted by the fixture replacement.
+
+        Raises:
+            subprocess.CalledProcessError: Always reports the captured HTTP refusal.
+        """
         raise subprocess.CalledProcessError(1, cmd, output="HTTP 403")
 
     monkeypatch.setattr(subprocess, "check_output", failed)
@@ -261,6 +383,12 @@ def corrupt_transcript(transcript: Path, mode: str) -> None:
     Parameters:
         transcript (Path): Disposable reviewer transcript file.
         mode (str): Requested path failure, or an unrelated unchanged mode.
+
+    Returns:
+        None: Leaves the requested invalid entry, or preserves unrelated modes.
+
+    Raises:
+        OSError: A disposable transcript entry cannot be replaced.
     """
     if mode not in ("directory-transcript", "missing-transcript", "dangling-transcript"):
         return
@@ -281,6 +409,9 @@ def poison_path(bin_dir: Path, tmp_path: Path, mode: str) -> Path:
 
     Returns:
         Path: Marker created if any hostile executable or redirected gate runs.
+
+    Raises:
+        OSError: A disposable utility or redirected gate cannot be created.
     """
     injected = bin_dir / "gh"
     injected.write_text("#!/bin/sh\nexit 99\n")
@@ -327,7 +458,15 @@ def poison_path(bin_dir: Path, tmp_path: Path, mode: str) -> Path:
     ],
 )
 def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
-    """Run the actual shell and Python gate, with only GitHub/transcript storage isolated."""
+    """Run the actual shell and Python gate, with only GitHub/transcript storage isolated.
+
+    Parameters:
+        tmp_path (Path): Fixture workspace for transcripts, fake GitHub and hostile utilities.
+        mode (str): Receipt, executable, path or CI condition to exercise.
+
+    Returns:
+        None: Completes after checking receipt output and the exact mutation boundary.
+    """
     scripts = Path(__file__).resolve().parents[1]
     root = tmp_path / "transcripts"
     tasks = root / "session" / "tasks"
@@ -458,7 +597,14 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
 
 @pytest.mark.parametrize("target", ["pr", "checks", "rules", "runs", "old_jobs", "new_jobs", "check_runs"])
 def test_malformed_evidence_blocks(target: str) -> None:
-    """Malformed identity records cannot enter the gate as untyped JSON assumptions."""
+    """Malformed identity records cannot enter the gate as untyped JSON assumptions.
+
+    Parameters:
+        target (str): Captured REST or CLI record collection to corrupt.
+
+    Returns:
+        None: Completes after typed evidence validation rejects the malformed record.
+    """
     gh = Replay()
     if target == "pr":
         gh.data[target]["head"]["repo"]["id"] = "not-an-integer"
@@ -476,11 +622,31 @@ def test_malformed_evidence_blocks(target: str) -> None:
 
 @pytest.mark.parametrize("code", [0, 8, 1])
 def test_subprocess_pending_and_failure(monkeypatch: pytest.MonkeyPatch, code: int) -> None:
-    """Only pending `pr checks` may return parsed output after a nonzero CLI exit."""
+    """Only pending `pr checks` may return parsed output after a nonzero CLI exit.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Fixture replacing subprocess output collection.
+        code (int): CLI exit code, zero, pending-check eight or fatal one.
+
+    Returns:
+        None: Completes after validating successful, pending and fatal CLI handling.
+    """
     gh = Replay()
 
     def output(cmd: list[str], *, text: bool, stderr: int) -> str:
-        """Check the prescribed subprocess contract and return or raise fixture output."""
+        """Check the prescribed subprocess contract and return or raise fixture output.
+
+        Parameters:
+            cmd (list[str]): Absolute executable and CLI argument vector.
+            text (bool): Whether the subprocess returns decoded text.
+            stderr (int): Requested stderr redirection, required to be STDOUT.
+
+        Returns:
+            str: Successful check JSON when the selected exit code is zero.
+
+        Raises:
+            subprocess.CalledProcessError: The selected CLI exit code is nonzero.
+        """
         assert text is True
         assert stderr == subprocess.STDOUT
         if code:
@@ -500,6 +666,13 @@ def test_subprocess_pending_and_failure(monkeypatch: pytest.MonkeyPatch, code: i
 
 @pytest.mark.parametrize("binary", ["gh", "/nonexistent/gh"])
 def test_explicit_binary_validation(binary: str) -> None:
-    """No PATH fallback can replace a missing explicit absolute executable."""
+    """No PATH fallback can replace a missing explicit absolute executable.
+
+    Parameters:
+        binary (str): Relative or nonexistent executable path to refuse.
+
+    Returns:
+        None: Completes after the explicit executable validation fails closed.
+    """
     with pytest.raises(checks.CheckError, match="trusted"):
         checks.GitHub(Path(binary))
