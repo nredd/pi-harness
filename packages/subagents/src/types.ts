@@ -4,6 +4,7 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { BudgetLease } from "./process-budget.js";
 import type { LifetimeUsage } from "./usage.js";
 
 export type { ThinkingLevel };
@@ -204,6 +205,11 @@ export interface AgentRecord {
    * thing that moves it, together with the counters.
    */
   chargedPool?: Pool;
+  /**
+   * This run's process-wide budget lease (`process-budget.ts`), held from
+   * admission until the run settles. Spawns and resumes alike; cleared on release.
+   */
+  budgetLease?: BudgetLease;
   /**
    * Removes the listener that stops this run when its caller's signal aborts.
    * At most one is armed at a time — queueing arms one, starting replaces it.
