@@ -337,6 +337,20 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // injected as scoped custom tools by the existing manager instead.
   if (inChildSessionContext()) return;
 
+  // A factory throw is only a load warning. Check shared-state compatibility
+  // before registering anything, and make an incompatible reload fail the
+  // bind through the host's fatal session_start path instead of loading half
+  // an extension (or continuing without the process-wide budget).
+  const StartupError = hostStartupErrorClass();
+  try {
+    getBudgetPolicy();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!StartupError) throw new Error(message + " This host also lacks ExtensionStartupError; upgrade pi before retrying.", { cause: error });
+    pi.on("session_start", async () => { throw new StartupError(message, { cause: error }); });
+    return;
+  }
+
   // ---- Register custom notification renderer ----
   // Core collapses a custom message to this renderer's first line and draws the
   // ▸/▾ gutter itself; see ui/notification-view.ts.
@@ -378,7 +392,6 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // Strict agent files fail a bind by throwing the host's `ExtensionStartupError`
   // from `session_start`. A host without that class would silently degrade to
   // warnings, so refuse here, before any project agent definition is read.
-  const StartupError = hostStartupErrorClass();
   if (strictAgentFiles && !StartupError) {
     throw new Error(
       "[pi-subagents] strictAgentFiles requires a pi host that exports ExtensionStartupError, which this host lacks. " +
