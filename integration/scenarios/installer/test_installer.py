@@ -333,11 +333,82 @@ def test_existing_config_needs_consent_and_survives(
     assert json.loads((backup / "settings.json").read_text())["packages"] == ["npm:pi-mine@1.0.0"]
 
 
+def group_has_live_members(pgid: int, timeout: float) -> bool:
+    """Check owned-group liveness without mistaking unreaped zombies for writers.
+
+    Parameters:
+        pgid (int): process group created by this test.
+        timeout (float): remaining cleanup deadline in seconds.
+
+    Returns:
+        bool: a non-zombie process remains in the group.
+    """
+    output = subprocess.check_output(["/bin/ps", "-axo", "pgid=,stat="], text=True, timeout=timeout)
+    return any(
+        fields[0] == str(pgid) and not fields[1].startswith("Z")
+        for line in output.splitlines()
+        if len(fields := line.split()) == 2
+    )
+
+
+def cleanup_group(process: subprocess.Popen[str], timeout: float = 60) -> None:
+    """Quiesce an owned session, retaining its unreaped leader as the PGID anchor.
+
+    Parameters:
+        process (subprocess.Popen[str]): session leader; no caller may poll or reap it.
+        timeout (float): shared deadline for signalling, process-table checks and reaping.
+
+    Raises:
+        BaseExceptionGroup: multiple cleanup steps failed; all failures are retained.
+    """
+    deadline = time.monotonic() + timeout
+    errors: list[BaseException] = []
+    try:
+        assert process.returncode is None, "Process group ownership anchor was already reaped"
+        while True:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                # macOS rejects signals to some zombie-only groups. A live member is
+                # still a real permission failure; zombies cannot fork or write.
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
+                if group_has_live_members(process.pid, remaining):
+                    raise
+                break
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
+            if not group_has_live_members(process.pid, remaining):
+                break
+            # Never poll/wait here: even a zombie leader reserves the PGID while a
+            # fork racing SIGKILL can require another signal. Reap only after the
+            # last possible signal, including on failed cleanup paths.
+    except BaseException as error:
+        errors.append(error)
+    try:
+        process.wait(timeout=max(deadline - time.monotonic(), 0))
+    except BaseException as error:
+        errors.append(error)
+    try:
+        if process.stdout is not None:
+            process.stdout.close()
+    except BaseException as error:
+        errors.append(error)
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise BaseExceptionGroup("Process group cleanup failed", errors)
+
+
 def kill_at_marker(process: subprocess.Popen[str], marker: str, timeout: float) -> str:
     """Wait at most `timeout` seconds for a line prefix, always kill and reap the group.
 
     Parameters:
-        process (subprocess.Popen[str]): child started in its own session with piped stdout.
+        process (subprocess.Popen[str]): unreaped child in its own session with piped stdout.
         marker (str): line prefix at which to interrupt staging.
         timeout (float): marker detection deadline in seconds.
 
@@ -349,6 +420,7 @@ def kill_at_marker(process: subprocess.Popen[str], marker: str, timeout: float) 
     """
     output = bytearray()
     deadline = time.monotonic() + timeout
+    marker_error: BaseException | None = None
     try:
         assert process.stdout is not None, "child stdout must be piped"
         with selectors.DefaultSelector() as selector:
@@ -364,17 +436,18 @@ def kill_at_marker(process: subprocess.Popen[str], marker: str, timeout: float) 
                 assert len(output) <= 1024 * 1024, "Child output exceeded one MiB before marker"
                 if any(line.startswith(marker.encode()) for line in output.split(b"\n")):
                     return output.decode(errors="replace")
+    except BaseException as error:
+        marker_error = error
+        raise
     finally:
-        # Reap an already-exited leader first: macOS may reject signals to its zombie-only group.
-        process.poll()
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        finally:
-            process.wait(timeout=60)
-            if process.stdout is not None:
-                process.stdout.close()
+            cleanup_group(process)
+        except BaseException as cleanup_error:
+            if marker_error is not None:
+                raise BaseExceptionGroup(
+                    "Marker wait and process group cleanup failed", [marker_error, cleanup_error]
+                ) from None
+            raise
 
 
 def test_killed_install_changes_nothing_and_rerun_completes(
