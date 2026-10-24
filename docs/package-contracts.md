@@ -135,9 +135,15 @@ What each package must satisfy:
     the marker child's own name and a leak flag, never other names.
     Marker readiness is owned by cleanup: a five-second selector deadline rejects silent, partial-line
     and exited children; startup failures and the completed probe SIGKILL and reap that exact child
-    within two seconds, then close its pipe. Real-child tests cover these startup failures and a
-    failed negative control. The dev-tools native privacy fixture likewise bounds readiness, handles
-    spawn errors and reaps within two seconds, including failure-path tests.
+    within two seconds, then close its pipe. `start_hostile_child` owns both startup and the scenario
+    body in one context manager; simultaneous primary and cleanup failures raise an `ExceptionGroup`
+    (a `BaseExceptionGroup` for interrupts), chained from the primary failure. Real-child tests check
+    exact exit codes (-9 for killed markers, 7 for early exit), startup and completed-probe failures,
+    and successful probe cleanup. Injected cleanup timeouts really reap and close the pipe before
+    raising, and tests require both original exception objects when both fail.
+    Both dev-tools native discovery and privacy fixtures use the same readiness/cleanup supervisor:
+    spawn errors and real exit-before-ready failures reject, cleanup reaps within two seconds, and
+    simultaneous body/cleanup failures retain both errors in an `AggregateError`.
     With the child still running, `resource_snapshot` with `process_limit: 50` must return exactly
     `min(50, coverage.sampled)` entries carrying only `pid`/`parentPid`/`cpu`/`rssBytes`/`executable`,
     ranked `interval-cpu` on Linux and `rss` on Darwin, and no window of the secret may appear in the
