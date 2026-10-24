@@ -44,7 +44,7 @@ it("guides the parent while deferred, then discovers and executes the real obser
 	expect(searched.text).toContain("resource_snapshot");
 	const [snapshot] = await runTools(h, [{ name: "resource_snapshot", args: { process_limit: 1 } }]);
 	expect(snapshot.isError, snapshot.text).toBe(false);
-	expect(snapshot.text).toContain("No arguments, environments, or process-to-agent attribution");
+	expect(snapshot.text).toContain("no process-to-agent attribution");
 });
 
 it("puts resource guidance in a genuine child provider request", async () => {
