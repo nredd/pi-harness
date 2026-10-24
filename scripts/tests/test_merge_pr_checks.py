@@ -1,0 +1,345 @@
+"""Replay PR135's captured GitHub evidence and fail-closed counterexamples.
+
+References:
+    https://github.com/nredd/pi-harness/actions/runs/40072686016
+    https://github.com/nredd/pi-harness/actions/runs/40072686131
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import re
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import merge_pr_checks as checks
+
+FIXTURE = Path(__file__).parent / "fixtures" / "merge-pr-135.json"
+REPO = "nredd/pi-harness"
+
+
+class Replay(checks.GitHub):
+    """Serve projected real REST/CLI captures without credentials or mutations."""
+
+    def __init__(self) -> None:
+        """Load independent fixture state for each test."""
+        self.data = json.loads(FIXTURE.read_text())
+        self.old_run = self.data["runs"][1]
+        self.commands: list[tuple[str, ...]] = []
+        self.binary = "/fixture/gh"
+
+    def command(self, *args: str) -> Any:
+        """Replay exact read-only endpoints; unexpected requests fail the test."""
+        self.commands.append(args)
+        if args[:2] == ("pr", "checks"):
+            return self.data["checks"]
+        endpoint = args[-1]
+        if args[:3] == ("api", "--paginate", "--slurp"):
+            return self.page_response(endpoint)
+        objects = {
+            f"repos/{REPO}/pulls/135": self.data["pr"],
+            f"repos/{REPO}/rules/branches/main": self.data["rules"],
+        }
+        if endpoint in objects:
+            return objects[endpoint]
+        if "/actions/jobs/" in endpoint:
+            return next(j for j in self.data["old_jobs"] if str(j["id"]) == endpoint.rsplit("/", 1)[1])
+        if "/actions/runs/" in endpoint:
+            return self.old_run
+        if "/check-suites/" in endpoint:
+            return self.data["suites"][endpoint.rsplit("/", 1)[1]]
+        pytest.fail(f"Unexpected request: {args}")
+
+    def page_response(self, endpoint: str) -> Any:
+        """Return split captures to exercise real production pagination flattening."""
+        if "/check-runs?" in endpoint:
+            return [{"check_runs": self.data["check_runs"][:5]}, {"check_runs": self.data["check_runs"][5:]}]
+        if "/actions/runs?" in endpoint:
+            # Newest first is NOT an admission assumption; deliberately put it on page two.
+            return [{"workflow_runs": self.data["runs"][1:]}, {"workflow_runs": self.data["runs"][:1]}]
+        if endpoint.endswith("/jobs?per_page=100"):
+            return [{"jobs": self.data["new_jobs"][:3]}, {"jobs": self.data["new_jobs"][3:]}]
+        pytest.fail(f"Unexpected page request: {endpoint}")
+
+    def gate(self) -> None:
+        """Exercise the production gate, not a separate fixture classifier."""
+        checks.gate(self, REPO, "135", self.data["pr"]["head"]["sha"])
+
+
+def test_captured_superseded_placeholders() -> None:
+    """Real same-second runs and split pages pass only with complete successor proof."""
+    gh = Replay()
+    assert gh.data["runs"][0]["created_at"] == gh.data["runs"][1]["created_at"]
+    assert len([c for c in gh.data["checks"] if c["state"] == "CANCELLED"]) == 3
+    gh.gate()
+    assert len(gh.data["rules"][0]["parameters"]["required_status_checks"]) == 9
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("conclusion", "cancelled"),
+        ("conclusion", "failure"),
+        ("status", "in_progress"),
+        ("workflow_id", 42),
+        ("path", ".github/workflows/other.yml"),
+        ("event", "push"),
+        ("head_sha", "wrong"),
+        ("run_number", 434),
+    ],
+)
+def test_wrong_or_unsuccessful_successor(field: str, value: Any) -> None:
+    """Pending, failed, latest cancelled and different-context executions block."""
+    gh = Replay()
+    gh.data["runs"][0][field] = value
+    with pytest.raises(checks.CheckError):
+        gh.gate()
+
+
+@pytest.mark.parametrize(
+    ("side", "field"), [("base", "sha"), ("head", "sha"), ("base", "ref"), ("head", "ref")]
+)
+def test_wrong_pr_context(side: str, field: str) -> None:
+    """Never use successes from a different base/head context."""
+    gh = Replay()
+    gh.data["runs"][0]["pull_requests"][0][side][field] = "wrong"
+    with pytest.raises(checks.CheckError):
+        gh.gate()
+
+
+@pytest.mark.parametrize("change", ["missing", "pending", "failed", "skipped", "wrong_attempt", "wrong_sha"])
+def test_incomplete_matrix(change: str) -> None:
+    """A successful run summary cannot substitute for every actual matrix cell."""
+    gh = Replay()
+    job = next(j for j in gh.data["new_jobs"] if j["name"] in checks.EXPECTED_MATRIX)
+    if change == "missing":
+        gh.data["new_jobs"].remove(job)
+    elif change == "wrong_attempt":
+        job["run_attempt"] += 1
+    elif change == "wrong_sha":
+        job["head_sha"] = "wrong"
+    else:
+        job["conclusion"] = {"pending": None, "failed": "failure", "skipped": "skipped"}[change]
+    with pytest.raises(checks.CheckError, match="matrix coverage"):
+        gh.gate()
+
+
+@pytest.mark.parametrize("target", ["old", "new"])
+def test_wrong_app(target: str) -> None:
+    """Same workflow labels from another app do not establish replacement."""
+    gh = Replay()
+    run = gh.data["runs"][0 if target == "new" else 1]
+    gh.data["suites"][str(run["check_suite_id"])]["app"]["id"] = 42
+    with pytest.raises(checks.CheckError, match="app mismatch"):
+        gh.gate()
+
+
+@pytest.mark.parametrize("state", ["FAILURE", "PENDING", "CANCELLED", "TIMED_OUT"])
+def test_optional_failure_blocks(state: str) -> None:
+    """Required-only success never bypasses triggered optional workflow failures."""
+    gh = Replay()
+    gh.data["checks"].append({"name": "core (forks/pi)", "state": state, "link": "https://example.invalid"})
+    with pytest.raises(checks.CheckError):
+        gh.gate()
+
+
+@pytest.mark.parametrize("change", ["executed", "ordinary", "not_cancelled", "wrong_job_sha"])
+def test_not_a_stale_placeholder(change: str) -> None:
+    """Only the exact zero-step cancelled matrix template gets special treatment."""
+    gh = Replay()
+    job = next(j for j in gh.data["old_jobs"] if j["name"].startswith("stack"))
+    if change == "executed":
+        job["steps"] = [{"name": "started"}]
+    elif change == "ordinary":
+        gh.data["checks"][0]["name"] = "stack (ubuntu-24.04, personal)"
+    elif change == "not_cancelled":
+        job["conclusion"] = "failure"
+    else:
+        job["head_sha"] = "wrong"
+    with pytest.raises(checks.CheckError):
+        gh.gate()
+
+
+@pytest.mark.parametrize("change", ["missing", "app", "failure", "pending", "sha"])
+def test_required_contexts_independent(change: str) -> None:
+    """All nine app-bound contexts must independently succeed on the reviewed SHA."""
+    gh = Replay()
+    job = next(j for j in gh.data["check_runs"] if j["name"].startswith("wsl2"))
+    if change == "missing":
+        gh.data["check_runs"].remove(job)
+    elif change == "app":
+        job["app"]["id"] = 42
+    elif change == "sha":
+        job["head_sha"] = "wrong"
+    else:
+        job["conclusion"] = "failure" if change == "failure" else None
+    with pytest.raises(checks.CheckError, match="Required context"):
+        gh.gate()
+
+
+def test_newest_cancellation_after_success_blocks() -> None:
+    """Do not choose an intermediate successful run when the newest run cancels."""
+    gh = Replay()
+    later = copy.deepcopy(gh.data["runs"][0])
+    later["run_number"] += 1
+    later["conclusion"] = "cancelled"
+    gh.data["runs"].append(later)
+    with pytest.raises(checks.CheckError, match="Latest workflow"):
+        gh.gate()
+
+
+def test_rerun_attempt_order() -> None:
+    """A later attempt of the same workflow run can prove supersession."""
+    gh = Replay()
+    new, old = gh.data["runs"]
+    new["id"], new["run_number"], new["run_attempt"] = old["id"], old["run_number"], 2
+    for job in gh.data["new_jobs"]:
+        job["run_id"], job["run_attempt"] = new["id"], 2
+    gh.gate()
+
+
+def test_expected_head_and_no_checks() -> None:
+    """Head drift and absent checks refuse before any admission."""
+    gh = Replay()
+    with pytest.raises(checks.CheckError, match="reviewed"):
+        checks.gate(gh, REPO, "135", "wrong")
+    gh.data["checks"] = []
+    with pytest.raises(checks.CheckError, match="No checks"):
+        gh.gate()
+
+
+def test_workflow_matrix_contract() -> None:
+    """CI matrix changes must update the bounded replacement proof explicitly."""
+    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+    matrices = re.findall(r"      matrix:\n(.*?)(?=    runs-on:)", workflow, re.DOTALL)
+    os_matrix = "        os: [ubuntu-24.04, macos-14]\n"
+    assert matrices == [
+        os_matrix,
+        os_matrix,
+        os_matrix
+        + (
+            "        stack: [personal, local]\n"
+            "        include:\n"
+            "          - os: ubuntu-24.04\n"
+            "            platform: linux-x64\n"
+            "          - os: macos-14\n"
+            "            platform: darwin-arm64\n"
+        ),
+    ]
+    assert all(f"    name: {name}\n" in workflow for name in checks.MATRIX)
+
+
+def test_cli_failures_and_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+    """API failures are fatal; all returned pages, including empty pages, are consumed."""
+    gh = Replay()
+    gh.data["runs"] = []
+    with pytest.raises(checks.CheckError):
+        gh.gate()
+
+    def failed(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Return a credential-free HTTP failure from the executable seam."""
+        return subprocess.CompletedProcess(args, 1, "", "HTTP 403")
+
+    monkeypatch.setattr(subprocess, "run", failed)
+    with pytest.raises(checks.CheckError, match="HTTP 403"):
+        checks.GitHub.command(gh, "api", "repos/example")
+
+
+@pytest.mark.parametrize("mode", ["green", "head-drift", "unresolved-review", "optional-failure"])
+def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
+    """Run the actual shell and Python gate, with only GitHub/transcript storage isolated."""
+    scripts = Path(__file__).resolve().parents[1]
+    root = tmp_path / "transcripts"
+    tasks = root / "session" / "tasks"
+    tasks.mkdir(parents=True)
+    for task in ("standards-id", "spec-id"):
+        messages = [
+            {
+                "message": {
+                    "role": "assistant",
+                    "provider": "review",
+                    "model": "fixture",
+                    "content": [
+                        {"type": "toolCall", "name": "git_diff", "arguments": {"base": "main...HEAD"}},
+                        {"type": "text", "text": "Checked:\n- Exact diff\nFindings:\nNone."},
+                    ],
+                }
+            }
+        ]
+        if mode == "unresolved-review":
+            messages.append(
+                {
+                    "message": {
+                        "role": "toolResult",
+                        "toolName": "git_diff",
+                        "content": [
+                            {"type": "text", "text": "fatal: bad revision HEAD"},
+                        ],
+                    }
+                }
+            )
+        (tasks / f"{task}.output").write_text("\n".join(json.dumps(m) for m in messages) + "\n")
+    shell = (scripts / "merge-pr.sh").read_text()
+    isolated = tmp_path / "merge-pr.sh"
+    isolated.write_text(re.sub(r"^root=.*$", f"root={root}", shell, flags=re.MULTILINE))
+    (tmp_path / "merge_pr_checks.py").symlink_to(scripts / "merge_pr_checks.py")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
+    fake = bin_dir / "gh"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        + textwrap.dedent("""
+        import json, os, sys
+        from pathlib import Path
+        sys.path.insert(0, os.environ["REPLAY_TESTS"])
+        from test_merge_pr_checks import Replay
+        gh = Replay()
+        args = tuple(sys.argv[1:])
+        if args[:2] == ("pr", "view"):
+            print("wrong" if os.environ["REPLAY_MODE"] == "head-drift" else
+                  "MERGED" if "state" in args else gh.data["pr"]["head"]["sha"])
+        elif args[:2] in (("pr", "comment"), ("pr", "merge")):
+            with Path(os.environ["REPLAY_MUTATIONS"]).open("a") as out:
+                out.write(json.dumps(args) + "\\n")
+        else:
+            if os.environ["REPLAY_MODE"] == "optional-failure":
+                gh.data["checks"].append({"name": "optional", "state": "FAILURE", "link": ""})
+            print(json.dumps(gh.command(*args)))
+    """)
+    )
+    fake.chmod(0o755)
+    mutations = tmp_path / "mutations"
+    sha = Replay().data["pr"]["head"]["sha"]
+    result = subprocess.run(
+        ["/bin/bash", str(isolated), "135", sha, "standards-id", "spec-id"],
+        env=os.environ
+        | {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "REPLAY_TESTS": str(Path(__file__).parent),
+            "REPLAY_MODE": mode,
+            "REPLAY_MUTATIONS": str(mutations),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if mode == "green":
+        assert result.returncode == 0, result.stderr
+        assert f"Review receipt, final HEAD `{sha}`" in result.stdout
+        assert "`review/fixture`" in result.stdout
+        calls = [json.loads(line) for line in mutations.read_text().splitlines()]
+        assert calls[0][:2] == ["pr", "comment"]
+        assert calls[1] == ["pr", "merge", "135", "--repo", REPO, "--merge", "--match-head-commit", sha]
+    else:
+        assert result.returncode != 0
+        assert not mutations.exists()
