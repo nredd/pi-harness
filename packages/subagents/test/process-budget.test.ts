@@ -8,9 +8,10 @@
  * A separate static-import fixture checks shared state across module copies.
  */
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ModuleKind, transpileModule } from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -278,6 +279,35 @@ describe("process budget across managers", () => {
     expect(barged).toBe(false);
     expect(budgetUsage()).toMatchObject({ active: 1, pending: 0 });
     releaseBudget(held);
+  });
+
+  it("settles an old manager to wake a genuine reloaded manager's waiter", () => {
+    const dir = mkdtempSync(join(tmpdir(), "manager-reload-"));
+    const sourceDir = fileURLToPath(new URL("../src/", import.meta.url));
+    try {
+      // Compile the actual trees into separate ESM identities. Only the LLM
+      // runner is scripted, as in the in-process manager tests above.
+      symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), join(dir, "node_modules"), "dir");
+      for (const name of ["old", "fresh"]) {
+        const root = join(dir, name);
+        mkdirSync(root);
+        writeFileSync(join(root, "package.json"), '{"type":"module"}');
+        for (const entry of readdirSync(sourceDir, { recursive: true, withFileTypes: true })) {
+          if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+          const sourcePath = join(entry.parentPath, entry.name);
+          const outputPath = join(root, relative(sourceDir, sourcePath).replace(/\.ts$/, ".js"));
+          mkdirSync(dirname(outputPath), { recursive: true });
+          writeFileSync(outputPath, transpileModule(readFileSync(sourcePath, "utf8"), {
+            compilerOptions: { module: ModuleKind.ESNext },
+          }).outputText);
+        }
+        copyFileSync(new URL("./fixtures/budget-scripted-runner.mjs", import.meta.url), join(root, "agent-runner.js"));
+      }
+      copyFileSync(new URL("./fixtures/budget-manager-reload.mjs", import.meta.url), join(dir, "check.mjs"));
+      expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("shares the cap and waiters with a separately loaded copy of the budget module", () => {
