@@ -195,6 +195,8 @@ describe("bounded executable links", () => {
 			expect(await tight.executable(link)).toBe("");
 			expect(tight.bytesRead).toBe(4096);
 			expect([...tight.reasons]).toEqual(["byte-limit"]);
+			// The scan's next `status` read is refused, so the whole process is skipped, not kept unnamed.
+			await expect(tight.read(link)).rejects.toThrow("budget exhausted");
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}

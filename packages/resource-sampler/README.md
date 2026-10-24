@@ -72,9 +72,13 @@ Bounds:
 - `/proc/PID/exe` is a `readlink`, which Node and Bun cannot cap: each call copies up to PATH_MAX
   (4096) bytes into a fixed runtime buffer before the length is known. That fixed per-call syscall
   copy can exceed the remaining budget; the logical budget cannot. A target longer than the remainder
-  is charged the remainder and its name dropped (`""`, `byte-limit`), so `bytesRead <= maxBytes`. A
-  target filling the 4096-byte buffer may be truncated: Node returns it silently and the name is
-  dropped too (`file-byte-limit`); Bun refuses it with `ENAMETOOLONG`, so the name is `""`.
+  is charged the remainder, so `bytesRead <= maxBytes`, and the budget is then exhausted: that
+  process's `status` read is refused, so the whole process is skipped
+  (`process-unreadable-or-changed`, `byte-limit`), not kept with an empty name, and the scan stops.
+  A target filling the 4096-byte buffer may be truncated: Node returns it silently, the name is
+  dropped (`""`, `file-byte-limit`) and the process is kept. Bun's readlink source refuses such a
+  target with `ENAMETOOLONG`, which would take the unreadable-link path (`""`, no reason); that Bun
+  path was read in source only, never executed here.
 - `coverage.complete`, `enumerated`, `sampled`, `skipped`, `bytesRead` and reasons describe partial
   coverage explicitly. `enumerated` is encountered rows, not total processes when partial. Truncation
   is not a host-wide top-process ranking. OS enumeration order may favor the same subset each time.
@@ -95,9 +99,23 @@ real-input gate and reports its snapshot duration/coverage.
 Development: `npm run check --workspace @nredd/pi-resource-sampler` (single-worker tests, including
 actual host samples and child cleanup). `test/runtime.test.ts` runs under both Vitest (Node) and
 `bun test`: it starts a child whose argv[0], argv, environment, process title and (Linux) comm hold a
-random secret, proves the 0.1.0 source exposes it, then requires no 12-character fragment in the
-snapshot, plus three real CPU samples. `make check-resource-sampler-contract` builds and exercises
-an isolated installed tarball, with no Pi or siblings. Both run on existing macOS/Linux CI jobs.
+random secret, proves the 0.1.0 source exposes it, then requires the child in the snapshot and no
+12-character fragment of the secret, plus three real CPU samples. Everything after spawn, readiness
+included, is followed by SIGTERM, then SIGKILL, with a bounded wait for the runtime's exit status
+of that exact child (never a PID probe); a cleanup failure is reported alongside the original error
+(`AggregateError`), never instead of it. Regressions make readiness and the negative control fail
+and require the child reaped, including a child that ignores SIGTERM and needs SIGKILL, and inject a
+cleanup failure to require both errors. This cleanup is in-process only: if the test worker itself
+is SIGKILLed, no JavaScript runs and the child outlives it. The packed contract probe below instead
+runs in its own process group, which the gate kills on its Python timeout or `KeyboardInterrupt`
+while the leader is unreaped; an already reaped leader, or an unhandled SIGTERM/SIGHUP or SIGKILL of
+the gate, skips that cleanup and may leave members behind. The privacy
+check samples with the library maxima (5s, 16384 PIDs, 16MiB) and never accepts a missing child as
+a pass: on a host whose processes exceed those bounds, or whose enumeration reaches the child only
+after them, it fails with the snapshot's coverage in the error. On Linux each process costs two
+`stat` reads, the `/proc/PID/exe` target bytes and `status`, so the byte bound can bind before the
+PID bound. `make check-resource-sampler-contract` builds and exercises an isolated installed
+tarball, with no Pi or siblings. Both run on existing macOS/Linux CI jobs.
 `dist` contains compiled ESM and declarations; the exact packed payload is contract-pinned. No install
-scripts or runtime dependencies. New npm-name ownership bootstrap requires the owner's interactive
-2FA/staged publication and trusted-publisher setup; nothing is published automatically by this PR.
+scripts or runtime dependencies. Releases publish through `publish.yml` with npm provenance; see
+[releases](../../docs/releases.md).
