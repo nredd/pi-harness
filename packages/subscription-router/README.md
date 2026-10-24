@@ -50,7 +50,7 @@ Routing:
 - `retry` (upstream auto-retry, e.g. a 429): refreshes usage. Confirmed -> mark and advance. Otherwise retry the same model
 - All blocked: the request fails with the earliest known reset
 
-Balanced scoring:
+Balanced scoring (conditional fairness guarantees and exclusions [here](https://github.com/nredd/pi-harness/blob/main/packages/subscription-router/docs/fairness.md)):
 
 - For each applicable provider/family window, `remaining = 1 - usedPercent / 100`, `timeLeft = clamp((resetAt - now) / durationMs, 0.05, 1)`, `score = remaining / timeLeft`. The tightest (minimum-score) window limits the model. Past/equal reset windows are ignored; missing usable reset/duration uses `timeLeft = 1`
 - Fresh unlimited ranks above fresh measured, then missing/stale/failed/empty or non-applicable usage. Ties retain chain order. Stale unlimited is still fallback, not unlimited
