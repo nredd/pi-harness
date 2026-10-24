@@ -468,6 +468,39 @@ describe("SubagentScheduler — fire path", () => {
       expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("success");
     });
 
+    it("waits out a fired job queued on the process budget instead of finalizing it at once", async () => {
+      // `bypassQueue` skips the pool, not `maxActiveSubagents`: the record can
+      // come back "queued" with a start gate and no promise yet.
+      let openGate!: () => void;
+      const startGate = new Promise<void>(r => { openGate = r; });
+      let resolveRun!: () => void;
+      const record: { status: string; startGate?: Promise<void>; promise?: Promise<string> } = {
+        status: "queued",
+        startGate,
+      };
+      manager.spawn.mockImplementation(() => "agent-queued");
+      manager.getRecord.mockImplementation(() => record);
+      const job = scheduler.addJob({
+        name: "queued-job", description: "x", schedule: "+1s",
+        subagent_type: "general-purpose", prompt: "x",
+      });
+
+      vi.advanceTimersByTime(2_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("running");
+
+      record.status = "running";
+      record.promise = new Promise<string>(r => { resolveRun = () => r(""); });
+      openGate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("running");
+
+      record.status = "completed";
+      resolveRun();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("success");
+    });
+
     it("treats aborted and stopped as errors (terminal failure states)", async () => {
       const records = installFaithfulMock();
       const a = scheduler.addJob({

@@ -20,7 +20,8 @@ including documentation, fork, dotfiles, and automated promotion changes.
 `packages/resource-sampler` is the Pi-independent `@nredd/pi-resource-sampler` ESM library for
 bounded, privacy-safe interval host sampling. It has no Pi entrypoint or runtime dependencies.
 Its [README](packages/resource-sampler/README.md) defines CPU/coverage semantics and Darwin's
-explicit process-CPU precision limitation. No consumer migration or publication is included.
+explicit process-CPU precision limitation. Releases are recorded in [releases](docs/releases.md); no
+consumer migration is included.
 
 Layout:
 
@@ -79,7 +80,7 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
   `integration/inprocess/` stack suite under Vitest and Bun (published packages:
-  `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.6.0`,
+  `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.7.0`,
   `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`; `@nredd/pi-todo@2.13.10` is pending its first CI-attested release)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract

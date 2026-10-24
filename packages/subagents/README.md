@@ -479,7 +479,18 @@ allowed_subagents: support-file-finder, support-callsite-tracer   # or `all`
 
 The hard cap is depth 2 by default: main session (0) → subagent (1) → nested child (2). Change it project-wide with `maxSubagentDepth` in `subagents.json` (or `/agents → Settings → Nested depth`); `0` or `1` turns nesting off everywhere. An agent already at the cap gets no nested tools at all — not even `get_subagent_result`, since it can never own a child. A child must independently set `allowed_subagents` to delegate again; isolated agents never receive nested tools.
 
-Nested children occupy no concurrency slot, in either pool — their parent already holds one, and queueing them behind it would deadlock a parent waiting on its own child. The depth cap bounds how *deep* nesting goes, not how *wide*: a parent's only limit on concurrent children is that each spawn costs it a turn. Pair `allowed_subagents` with a `max_turns` on that agent if you want a hard ceiling on its fan-out.
+Nested children occupy no slot in either per-session pool — their parent already holds one, and queueing them behind it would deadlock a parent waiting on its own child. They do take a lease from the [process budget](#process-budget) when it is on, which reserves slots for them so that cannot deadlock. The depth cap bounds how *deep* nesting goes, not how *wide*: a parent's only limit on concurrent children is that each spawn costs it a turn. Pair `allowed_subagents` with a `max_turns` on that agent if you want a hard ceiling on its fan-out.
+
+**Depth-2 review delegation.** The default depth already allows main session (0) → implementation agent (1) → reviewer (2). Give the implementation agent an explicit allowlist naming only the reviewer, and leave the reviewer without `allowed_subagents`, so it is a leaf:
+
+```yaml
+---
+# ~/.pi/agent/agents/implementer.md
+allowed_subagents: code-reviewer
+---
+```
+
+The implementer then calls `Agent({ subagent_type: "code-reviewer", ... })` in the foreground and gets the review inline. With the process budget on, its slot stays held while the reviewer runs, and the reserve keeps reviewers startable when every top-level slot is an implementer waiting on one.
 
 Because a subagent session never activates this extension (that is what keeps a child from building a second agent manager, and it is why nested tools are injected directly instead), a subagent also gets none of the extension's other surfaces: no `/agents` command, no cross-extension RPC handlers, no `subagents:ready` event.
 
@@ -748,9 +759,25 @@ There are two independent pools.
 
 The two are deliberately **not** one limit. A foreground agent blocks the parent anyway — the parent could have done that work itself without paying a slot — so charging it to the background pool would let a saturated pool starve the main session.
 
-The foreground pool does not cover `resume`: a foreground resume reopens an existing session and never reaches the spawn path, so several blocking resumes in one message can still run at once. A *background* resume does take a background slot and queues behind them like any other background agent.
+The foreground pool does not cover `resume`: a foreground resume reopens an existing session and never reaches the spawn path, so several blocking resumes in one message can still run at once (the process budget below does cover them). A *background* resume does take a background slot and queues behind them like any other background agent. A resume of an agent that is still `running` or `queued` is refused on either path, including two resumes of one agent in the same message.
 
 Nested children and a [workflow](#subagentworkflow)'s agents are outside the pool entirely. A nested child would deadlock behind a parent waiting on it; a workflow already bounds its own fan-out at `max(1, min(16, cpus - 2))`, and counting its agents twice would let one run fill the session's pool and starve everything else.
+
+### Process budget
+
+**Process-wide** (`maxActiveSubagents`, default `0` = off; `nestedSubagentReserve`, default `2`). One ceiling on running subagents for the whole pi *process* — not the machine: a second pi process has its own. Unlike the two pools it counts every start, in every agent manager in the process: top-level, nested, workflow, scheduled, RPC and `@handle` spawns, foreground and background resumes, and agents a `/new`, `/resume`, `/fork` or `/reload` left running in the previous instance. It bounds running agents only; it does not look at CPU or memory and does not serialize commands.
+
+A run holds its slot until it actually settles, worktree cleanup included, and a parent keeps its slot while it waits on a child: pi runs a turn's tool calls in parallel, so the parent's other tools may still be executing. Shutting a session down does not free its runs' slots either; each run frees its own when it returns. To keep held slots from deadlocking, `nestedSubagentReserve` slots are held back per nesting level, up to the *global* `maxSubagentDepth` `L`. With `limit(j) = maxActiveSubagents - nestedSubagentReserve × (L - j)`, a run at depth `d` (top-level, workflow and scheduled runs are depth 1) starts only while, for every level `j` from `d` to `L`, fewer than `limit(j)` runs at depth ≤ `j` hold slots. With `maxActiveSubagents: 12`, the default reserve and the default depth 2, at most 10 top-level runs hold slots and the last 2 only ever go to depth-2 children. With `maxSubagentDepth` 0 or 1 top-level runs get all 12.
+
+The guarantee needs a coherent policy: with nesting on, a reserve of at least 1 and `maxActiveSubagents ≥ nestedSubagentReserve × (L - 1) + 1`. A budget that breaks that (`nestedSubagentReserve: 0`, or 12 and 2 at depth 8) is ignored with a warning and the previous policy stays in force. A project file can still deepen its own nesting, but the reserve covers only `L`: while the budget is on, a nested `Agent` call deeper than `L` fails at the call instead of waiting behind its own ancestors.
+
+Waiting starts are served first come, first served among those that fit: a child may pass an earlier top-level start that has to wait for the reserve. A waiting `Agent` call or resume shows as `queued` and can be cancelled with Esc or `/agents` as usual. `bypassQueue` starts (scheduled jobs, the `/agents` agent generator) skip the per-session pools but not this budget, so a scheduled job can start late. At most 128 starts wait at once while the budget is on; the next spawn or resume fails at the call.
+
+Both settings are read from global configuration only (`~/.pi/agent/subagents.json` or the enterprise manifest); a project file's value is ignored with a warning, since the budget spans every session in the process. The same goes for the depth it reserves for: the global `maxSubagentDepth`, not a project's. The last activation to apply its settings wins, and removing the key turns the budget off. Turning it off or raising a limit applies at once; turning it on, lowering a limit or changing the global depth waits until no subagent in the process holds a slot, since running parents were admitted under the old limits. A stderr warning names a deferred policy; the previous policy remains in force, and continuous work can delay the change indefinitely. Stop starting work and let the process become idle to apply it safely.
+
+Managers loaded from a pi-subagents build without the budget are not counted; restart pi after upgrading for a complete count. A reload between builds with incompatible budget state versions refuses the entire new activation: no tools, commands or manager are registered, and `session_start` fails the bind with the host's `ExtensionStartupError` and an explicit restart diagnostic, even if the requested policy is off. On an older host without that fatal-bind API, the factory refuses immediately with the restart and host-upgrade diagnostic. It never continues unbudgeted or creates a parallel private count; existing runs in the old build can still settle under their original state.
+
+### Sending to the background
 
 Sending a foreground agent to the background moves its slot: it gives up the foreground slot (so a queued blocking `Agent` call can start) and takes a background one. If the background pool is already full it runs above capacity rather than being suspended, and queued background work waits until the count drops back under the limit.
 
@@ -826,6 +853,8 @@ Runtime tuning values set via `/agents` → Settings (max concurrency, max foreg
 - **Project:** `<cwd>/.pi/subagents.json` — per-project overrides. Written by `/agents` → Settings.
 
 **Precedence:** project overrides global on any field present in both. Missing fields fall back to the hardcoded defaults (max concurrency `10`, max foreground concurrency `0` = unlimited, default max turns unlimited, grace turns `5`, nested depth `2`, join mode `smart`, defaults enabled).
+
+**Process budget** (`maxActiveSubagents`, default `0` = off; `nestedSubagentReserve`, default `2`): the process-wide ceiling described under [Process budget](#process-budget). Global configuration only — not written by `/agents`, and ignored with a warning in a project file.
 
 **Nested depth** (`maxSubagentDepth`, default `2`): the hard ceiling on [nested delegation](#nested-subagents), counted from the main session (main = 0, its subagents = 1). `0` or `1` disables nesting project-wide regardless of any agent's `allowed_subagents`. Read when a subagent session is built, so a change applies to agents started after it.
 
@@ -1012,7 +1041,7 @@ pi.events.emit("subagents:rpc:spawn", {
 });
 ```
 
-`options` is the manager's spawn-option object, not the `Agent` tool's parameter schema — the background flag is `isBackground`, and the tool's snake_case `run_in_background` is forwarded verbatim and ignored. Every RPC spawn returns its id immediately and runs detached either way; `isBackground: true` is what makes the agent occupy one of the `maxConcurrent` slots (and queue behind them when they are full). It does not affect `subagents:created`, which is never emitted for an RPC spawn at all — the first event you see for one is `subagents:started`. Leaving it unset starts the agent immediately regardless of the limit. `maxConcurrentForeground` never applies here whatever `isBackground` says: it bounds only spawns a caller is blocking on inline, and every RPC spawn is detached. A top-level RPC spawn renders in the widget and FleetView while it runs, with the same live tool activity and turn counter an `Agent`-tool spawn gets — only an explicit `isBackground: false` is dropped by the widget's default `background` mode, the way a foreground `Agent` call is. Nested spawns stay hidden from both.
+`options` is the manager's spawn-option object, not the `Agent` tool's parameter schema — the background flag is `isBackground`, and the tool's snake_case `run_in_background` is forwarded verbatim and ignored. Every RPC spawn returns its id immediately and runs detached either way; `isBackground: true` is what makes the agent occupy one of the `maxConcurrent` slots (and queue behind them when they are full). It does not affect `subagents:created`, which is never emitted for an RPC spawn at all — the first event you see for one is `subagents:started`. Leaving it unset starts the agent immediately regardless of that limit, though not of the [process budget](#process-budget) when it is on. `maxConcurrentForeground` never applies here whatever `isBackground` says: it bounds only spawns a caller is blocking on inline, and every RPC spawn is detached. A top-level RPC spawn renders in the widget and FleetView while it runs, with the same live tool activity and turn counter an `Agent`-tool spawn gets — only an explicit `isBackground: false` is dropped by the widget's default `background` mode, the way a foreground `Agent` call is. Nested spawns stay hidden from both.
 
 `options.model` accepts either a `Model` object (e.g. `ctx.model`) or a `"provider/modelId"` string — strings are resolved against `ctx.modelRegistry` at the RPC boundary, so cross-extension callers can forward serializable values without losing auth context. Resolution is fuzzy, so a bare `"sonnet"` can land on a provider you never named: with [Model Scope](#model-scope) on, an override that resolves outside `enabledModels` is refused with an error envelope listing the allowed models, exactly as a caller-supplied `Agent({ model })` is. `null` means unset — the agent inherits, same as omitting the field.
 
@@ -1185,6 +1214,7 @@ src/
   agent-runner.ts     # Session creation, execution, graceful max_turns, steer/resume
   agent-manager.ts    # Agent lifecycle, concurrency queue, completion notifications
   nested-tools.ts     # Delegation tools handed to subagents (nested spawn/collect/steer)
+  process-budget.ts   # Process-wide running-agent budget shared by every manager (maxActiveSubagents)
   child-context.ts    # AsyncLocalStorage flag marking work done for a child session
   abortable.ts        # Race a wait against Esc without cancelling the background child
   model-call.ts       # In-flight model call tracking: thinking / writing / stalled?

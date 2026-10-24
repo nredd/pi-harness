@@ -1,7 +1,7 @@
 import { type CpuInfo, cpus, freemem, loadavg, platform, totalmem } from "node:os";
 import { performance } from "node:perf_hooks";
 import { Budget, command, darwinProcesses, linuxProcesses, pressure } from "./collect.js";
-import { hostCpu, type ProcessCounter, processCpu } from "./counters.js";
+import { cpuSnapshot, hostCpu, type ProcessCounter, processCpu } from "./counters.js";
 import type { ResourceSampler, ResourceSnapshot, SamplerOptions } from "./types.js";
 
 export type { Metric, ProcessSample, PsiLine, ResourceSampler, ResourceSnapshot, SamplerOptions } from "./types.js";
@@ -33,7 +33,7 @@ export function createResourceSampler(options: SamplerOptions = {}): ResourceSam
 		const wallTimeMs = Date.now();
 		const budget = new Budget(start + duration, maxBytes, maxPids, signal);
 		signal.throwIfAborted();
-		const currentCpus = cpus();
+		const currentCpus = cpuSnapshot(cpus());
 		const cpu =
 			previousTime !== undefined && start <= previousTime
 				? { state: "warming" as const, reason: "invalid monotonic interval" }

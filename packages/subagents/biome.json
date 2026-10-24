@@ -20,7 +20,9 @@
 	"files": {
 		"includes": [
 			"src/**/*.ts",
-			"test/**/*.ts"
+			"test/**/*.ts",
+			"test/fixtures/process-budget-reload.mjs",
+			"test/fixtures/budget-*.mjs"
 		]
 	}
 }

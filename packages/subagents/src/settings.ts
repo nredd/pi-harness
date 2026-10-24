@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
 import { readEnterpriseLocalManifest } from "./enterprise-local.js";
+import { type BudgetPolicy, DEFAULT_BUDGET_POLICY } from "./process-budget.js";
 import type { AgentMentionMode, JoinMode, ViewerMarkdownMode, WidgetMode } from "./types.js";
 
 export interface SubagentsSettings {
@@ -33,6 +34,30 @@ export interface SubagentsSettings {
    * several blocking resumes in one message can still exceed the limit.
    */
   maxConcurrentForeground?: number;
+  /**
+   * Process-wide ceiling on running subagents, across every manager in this pi
+   * process: top-level, nested, workflow, scheduled, RPC and mention spawns,
+   * and resumes, in the root session and in sessions a `/new`, `/resume`,
+   * `/fork` or `/reload` left running. `0` = off, the default. The process,
+   * not the machine: two pi processes each get their own. See
+   * `process-budget.ts`.
+   *
+   * Global configuration only, like `modelAliases`: a project file's value is
+   * ignored with a warning. Shared by every activation in the process, so the
+   * last one to apply its settings wins. A change that tightens it waits until
+   * no subagent in the process holds a slot (`setBudgetPolicy`).
+   */
+  maxActiveSubagents?: number;
+  /**
+   * Slots of `maxActiveSubagents` held back per nesting level below a run, so
+   * parents that keep their slot while they wait can never starve their own
+   * children. Defaults to `2`; with the global `maxSubagentDepth: 2` that
+   * leaves `maxActiveSubagents - 2` for top-level runs. With nesting on it
+   * must be at least `1`, and `maxActiveSubagents` at least
+   * `nestedSubagentReserve * (maxSubagentDepth - 1) + 1`; a budget that
+   * breaks either is ignored with a warning, since it could deadlock.
+   */
+  nestedSubagentReserve?: number;
   /**
    * 0 = unlimited — the extension's single source of truth for that convention:
    * `normalizeMaxTurns()` in agent-runner.ts treats 0 → `undefined`, and the
@@ -357,6 +382,8 @@ export type ToolDescriptionMode = "full" | "compact" | "custom";
 export interface SettingsAppliers {
   setMaxConcurrent: (n: number) => void;
   setMaxConcurrentForeground: (n: number) => void;
+  /** The process budget, from `loadBudgetPolicy`: global configuration only. */
+  setBudgetPolicy: (policy: BudgetPolicy) => void;
   setDefaultMaxTurns: (n: number) => void;
   setGraceTurns: (n: number) => void;
   setDefaultJoinMode: (mode: JoinMode) => void;
@@ -441,6 +468,20 @@ function sanitize(raw: unknown): SubagentsSettings {
     (r.maxConcurrentForeground as number) <= MAX_CONCURRENT_CEILING
   ) {
     out.maxConcurrentForeground = r.maxConcurrentForeground as number;
+  }
+  if (
+    Number.isInteger(r.maxActiveSubagents) &&
+    (r.maxActiveSubagents as number) >= 0 &&
+    (r.maxActiveSubagents as number) <= MAX_CONCURRENT_CEILING
+  ) {
+    out.maxActiveSubagents = r.maxActiveSubagents as number;
+  }
+  if (
+    Number.isInteger(r.nestedSubagentReserve) &&
+    (r.nestedSubagentReserve as number) >= 0 &&
+    (r.nestedSubagentReserve as number) <= MAX_CONCURRENT_CEILING
+  ) {
+    out.nestedSubagentReserve = r.nestedSubagentReserve as number;
   }
   if (
     Number.isInteger(r.defaultMaxTurns) &&
@@ -617,16 +658,47 @@ function readSettingsFile(path: string): SubagentsSettings {
 export function loadSettings(cwd: string = process.cwd()): SubagentsSettings {
   // Aliases pick the provider a subagent runs on, so they are machine
   // configuration: a cloned repo's project file must not redirect them.
-  const { modelAliases: projectModelAliases, agentModels: projectAgentModels, ...project } = readSettingsFile(projectPath(cwd));
+  const {
+    modelAliases: projectModelAliases,
+    agentModels: projectAgentModels,
+    maxActiveSubagents: projectMaxActive,
+    nestedSubagentReserve: projectReserve,
+    ...project
+  } = readSettingsFile(projectPath(cwd));
   if (projectModelAliases !== undefined) {
     console.warn("[pi-subagents] Ignoring modelAliases in project .pi/subagents.json: aliases are read from trusted global configuration only.");
   }
   if (projectAgentModels !== undefined) {
     console.warn("[pi-subagents] Ignoring agentModels in project .pi/subagents.json: per-agent models are read from trusted global configuration only.");
   }
+  // The process budget spans every session in the process, so no one
+  // project's file may set it, least of all a cloned one lifting the cap.
+  if (projectMaxActive !== undefined || projectReserve !== undefined) {
+    console.warn("[pi-subagents] Ignoring maxActiveSubagents/nestedSubagentReserve in project .pi/subagents.json: the process-wide budget is read from global configuration only.");
+  }
+  return { ...trustedSettings(), ...project };
+}
+
+/** Global settings with the enterprise manifest over them: the layer a project file cannot touch. */
+function trustedSettings(): SubagentsSettings {
   const enterprise = readEnterpriseLocalManifest()?.subagents;
   const enterpriseSettings = enterprise === undefined ? {} : sanitize(enterprise);
-  return { ...readSettingsFile(globalPath()), ...enterpriseSettings, ...project };
+  return { ...readSettingsFile(globalPath()), ...enterpriseSettings };
+}
+
+/**
+ * The process budget's policy, from trusted configuration only -- including
+ * its depth, the GLOBAL `maxSubagentDepth`: a project file may still change
+ * how deep its own sessions nest, but not what the process-wide reserve
+ * covers. A missing key means its default, so removing the cap turns it off.
+ */
+export function loadBudgetPolicy(): BudgetPolicy {
+  const trusted = trustedSettings();
+  return {
+    maxActive: trusted.maxActiveSubagents ?? DEFAULT_BUDGET_POLICY.maxActive,
+    nestedReserve: trusted.nestedSubagentReserve ?? DEFAULT_BUDGET_POLICY.nestedReserve,
+    maxDepth: trusted.maxSubagentDepth ?? DEFAULT_BUDGET_POLICY.maxDepth,
+  };
 }
 
 /**
@@ -706,6 +778,7 @@ export function applyAndEmitLoaded(
 ): SubagentsSettings {
   const settings = loadSettings(cwd);
   applySettings(settings, appliers);
+  appliers.setBudgetPolicy(loadBudgetPolicy());
   emit("subagents:settings_loaded", { settings });
   return settings;
 }
