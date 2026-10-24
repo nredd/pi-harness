@@ -20,7 +20,7 @@ No consumer migration, publication, extra CI job or runner is added.
 
 ## Capacity controls
 
-`classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all eight required matrix jobs start and report a terminal status. A docs-only change skips their expensive steps, and every skipped job writes a notice plus a step summary containing the changed-file list. Each job's `plan` step emits `run=true` or `run=false`, logs the changed files when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates.
+`classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all eight required matrix jobs and `wsl2 (windows-2022)` start and report a terminal status. A docs-only change skips their expensive steps, and every skipped job writes a notice plus a step summary containing the changed-file list. Each job's `plan` step emits `run=true` or `run=false`, logs the changed files when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates.
 
 The allowed docs-only paths are Markdown under `docs/`, root Markdown, `PLAN.md`, and a package-root `README.md` or `CHANGELOG.md`. The classifier is deliberately narrower than "all Markdown": workflow files, manifests, lockfiles, Gitlinks, `integration/**`, `scripts/**`, and `releases/*.json` are code because they do not match an allowed path. It also treats root `README.md` and `packages/preset/README.md` as code because repository tests read their text. A mixed change is code.
 
@@ -97,12 +97,64 @@ Required checks on `main`:
 - `contracts (ubuntu-24.04)` and `contracts (macos-14)`
 - `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
 
-These eight jobs are the required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
+- `wsl2 (windows-2022)` from `.github/workflows/wsl2.yml`
+
+These nine jobs are the required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
-- `~/code/pi-harness-builds/merge-pr.sh` checks that HEAD, both transcripts and green CI, then posts
-  the review receipt as a PR comment and merges. It does not post commit statuses
+- `scripts/merge-pr.sh` is the tracked source; `scripts/merge_pr_checks.py` owns its read-only CI
+  predicate. Invoke the helper from an exact reviewed checkout. It validates distinct reviewer IDs,
+  exact final-report HEAD and axis, unresolved-revision errors, receipt posting and
+  `--match-head-commit`. Each reviewer's **final assistant report** must begin with these literal
+  lines (use `Axis: Spec` for the other axis), then its normal `Checked:` and `Findings:` sections:
+  ```text
+  Axis: Standards
+  Reviewed HEAD: <full-40-character-reviewed-sha>
+  ```
+  Missing, duplicate or conflicting declarations refuse. A SHA in an earlier request, tool call or
+  incidental prose is not a receipt. Git diagnostic detection requires explicit boolean `isError`
+  metadata: successful source reads/diffs may quote every failure pattern without invalidating the
+  review. An actual failed unresolved-revision result blocks even if a later call succeeds. Missing
+  or malformed Git-result status/content and reader errors fail closed. Renew the review rather than
+  editing a transcript. The unmanaged
+  `~/code/pi-harness-builds/merge-pr.sh` is a distribution copy, not source. Only after this PR is
+  reviewed and merged may the parent copy **both** scripts together from the merged revision into
+  that directory. Do not activate an unreviewed copy or change managed Pi config
+- The helper gates **all** reported checks, including optional fork jobs, not just required contexts.
+  It independently verifies every ruleset context against its bound app and reviewed SHA. Missing,
+  pending, failed and current cancelled checks refuse. `SKIPPED` remains accepted for non-required
+  conditional jobs
+- A zero-step completed/cancelled literal CI matrix placeholder (`owned`, `contracts`, `stack`)
+  is stale only with a later completed/successful execution of the same workflow ID/path, event,
+  PR/head/base (including repository identity), Actions app and SHA. All eight expected expanded
+  matrix cells must individually succeed. The latest workflow execution must qualify; an intermediate
+  green run cannot hide a later cancellation. Ordering uses `run_number`, then `run_attempt`, never
+  timestamps or API page order. Evidence is fully paginated and validated as strict Pydantic records;
+  missing, malformed or ambiguous evidence refuses.
+  The bounded matrix contract test must change alongside any CI matrix change
+- Bootstrap this helper's own PR without replacing the scratch copy: after independent Standards +
+  Spec reviews of its final HEAD and existing hosted checks are green, invoke its reviewed tracked
+  helper directly from the candidate worktree:
+  Install the existing locked integration environment (`uv sync --locked` in `integration/`)
+  for Pydantic evidence validation. Select trusted absolute executables and the actual transcript
+  storage directory explicitly; there is no PATH-based or workstation-specific fallback.
+  The shell uses `/bin/bash` and absolute native `ls`, `wc`, `dirname`, `mktemp` and `cat` paths;
+  embedded readers resolve transcript paths with `Path` and require regular files before reading.
+  The poisoned-PATH regression covers every external utility, including gate-path selection:
+
+  ```sh
+  MERGE_PR_TRANSCRIPT_ROOT=<absolute-transcript-store> \
+  MERGE_PR_GH=/opt/homebrew/bin/gh \
+  MERGE_PR_PYTHON=$HOME/code/pi-harness-merge-helper/integration/.venv/bin/python \
+  bash ~/code/pi-harness-merge-helper/scripts/merge-pr.sh \
+    <helper-pr> <full-reviewed-head> <standards-task-id> <spec-task-id> \
+    <gate-history-file> nredd/pi-harness
+  ```
+  This uses real green checks and the same receipt/expected-head enforcement, not a bypass.
+  Any update for strict base freshness invalidates both reviews. Refresh the distribution copy
+  only after that reviewed merge. This procedure does not authorize merging router PR135,
+  publishing packages, or activating live configuration
 - `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
 
 Flake policy (migration plan section 7):
