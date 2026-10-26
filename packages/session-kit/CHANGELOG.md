@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Raise the `monitor_start` `timeout_s` cap from 24h to 7 days (`604800`) so monitors can outlive long jobs
+
 ## 0.8.0
 
 - Add `/mon`: a read-only TUI dashboard of host CPU history, non-free memory, load and sampled processes, on by default (`mon.enabled`)
