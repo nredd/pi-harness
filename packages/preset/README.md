@@ -123,6 +123,9 @@ Agents carry no `model:` field. `code-review` keeps its explicit reviewer model,
 `opus`). These stay as-is during the migration. The migration's own PR reviews continue to
 select Sol explicitly; a future configurable role is not permission to substitute reviewers.
 
+`critic` carries no `thinking:` pin, so it inherits the session level. An `Agent` call's `thinking`
+parameter overrides frontmatter, so callers can still ask for `high` per dispatch.
+
 No `role:` references are introduced. Logical-role conversion needs strict required-role support
 in the pinned pi-subagents fork (exact available candidates, no fuzzy/provider/parent fallback,
 across dispatch, parking, and schedule paths). **Pending.** Enterprise role mapping and
