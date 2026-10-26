@@ -46,8 +46,10 @@ scores are older observations of the same account-wide percentages.
 
 ### Decision log
 
-Each scored pick (not sticky continuations or same-model retries) appends a
-`router:decision` custom session entry (`RouteDecision` in `router.ts`): time, profile,
+Each scored pick (not sticky continuations or same-model retries) is recorded in memory;
+a profile's first pick and each change of chosen model also append a `router:decision`
+custom session entry (entries are never pruned, so repeats are not persisted). A
+`RouteDecision` (`router.ts`) holds time, profile,
 strategy, reason, chosen `provider/id`, every candidate's score (kind, score, limiting
 window, `stale` age) with snapshot age, and ineligible entries with reasons. `/router
 status` prints the last five of this process. The entries are the durable record for

@@ -122,9 +122,14 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			? { usage: options.usage, tracker: options.tracker ?? new ExhaustionTracker(now) }
 			: shared();
 		const recent: RouteDecision[] = [];
+		const persisted = new Map<string, string>();
 		const record = (decision: RouteDecision): void => {
 			recent.push(decision);
 			if (recent.length > RECENT_DECISIONS) recent.shift();
+			// Session entries are never pruned, so persist only a profile's first decision and each
+			// change of chosen model (the moments a reader needs explained), not every route.
+			if (persisted.get(decision.profile) === decision.chosen) return;
+			persisted.set(decision.profile, decision.chosen);
 			// Logging must never fail a route.
 			try {
 				pi.appendEntry(DECISION_ENTRY, decision);

@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("router usage RPC", () => {
-	it("persists each routing decision as a session entry and lists the last ones in status", async () => {
+	it("records the historical decision in full, and status renders it apart from the forecast", async () => {
 		vi.useFakeTimers({ now: 1_700_000_000_000 });
 		const profile: Profile = {
 			id: "default",
@@ -86,20 +86,132 @@ describe("router usage RPC", () => {
 		expect(notify.mock.calls[0]?.[0]).not.toContain("last decisions");
 		await h.usage.get(ctx, "anthropic");
 		await h.usage.get(ctx, "openai-codex");
+		// Both snapshots are 6 minutes old (past the 5 minute TTL) when the route happens.
+		h.advance(6 * MINUTE);
+		vi.setSystemTime(Date.now() + 6 * MINUTE);
 		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
 		const route = await registration?.route({ reason: "user", thinkingLevel: "off" } as never, ctx);
-		const chosen = `${route?.model.provider}/${route?.model.id}`;
-		expect(h.pi.appendEntry).toHaveBeenCalledWith(
-			"router:decision",
-			expect.objectContaining({ profile: "default", chosen, reason: "user" }),
-		);
+		expect(route?.model).toMatchObject({ provider: "openai-codex", id: "terra" });
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		const [type, entry] = vi.mocked(h.pi.appendEntry).mock.calls[0] ?? [];
+		expect(type).toBe("router:decision");
+		expect(entry).toMatchObject({
+			at: 1_700_000_000_000 + 6 * MINUTE,
+			profile: "default",
+			strategy: "balanced",
+			reason: "user",
+			chosen: "openai-codex/terra",
+			candidates: [
+				{
+					model: "anthropic/sonnet",
+					ageMs: 6 * MINUTE,
+					quota: { kind: "measured", score: expect.closeTo(0.58), window: "seven_day", stale: 6 * MINUTE },
+				},
+				{
+					model: "openai-codex/terra",
+					ageMs: 6 * MINUTE,
+					quota: { kind: "measured", score: expect.closeTo(0.63), window: "7d", stale: 6 * MINUTE },
+				},
+			],
+			blocked: [],
+		});
+
+		// Move well past the grace window: the forecast now says fallback, history must not change.
+		h.advance(30 * MINUTE);
+		vi.setSystemTime(Date.now() + 30 * MINUTE);
 		await h.status(ctx);
-		const text = notify.mock.calls[1]?.[0];
-		expect(text).toContain("last decisions");
-		expect(text).toContain(`router/default user -> ${chosen}`);
-		expect(text).toContain("anthropic/sonnet: score");
-		expect(text).toContain("data 0m old");
-		vi.useRealTimers();
+		const text: string = notify.mock.calls[1]?.[0];
+		const [forecast, history] = text.split("last decisions (newest last):");
+		expect(forecast).toContain("anthropic/sonnet: fallback: usage stale");
+		expect(forecast).not.toContain("score 0.");
+		expect(history).toContain("router/default user -> openai-codex/terra (balanced)");
+		expect(history).toContain("anthropic/sonnet: score 0.580, limiting seven_day, stale 6m, data 6m old");
+		expect(history).toContain("openai-codex/terra: score 0.630, limiting 7d, stale 6m, data 6m old");
+		expect(history).not.toContain("fallback");
+	});
+
+	/** Two-provider balanced profile with both usage snapshots cached, plus a `route()` and `status()` driver. */
+	async function routed() {
+		vi.useFakeTimers({ now: 1_700_000_000_000 });
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			strategy: "balanced",
+			chain: [
+				{ provider: "anthropic", id: "sonnet" },
+				{ provider: "openai-codex", id: "terra" },
+			],
+		};
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		await h.usage.get(ctx, "anthropic");
+		await h.usage.get(ctx, "openai-codex");
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const tick = (ms: number) => {
+			h.advance(ms);
+			vi.setSystemTime(Date.now() + ms);
+		};
+		const route = async () => {
+			const result = await registration?.route({ reason: "user", thinkingLevel: "off" } as never, ctx);
+			return `${result?.model.provider}/${result?.model.id}`;
+		};
+		return { h, ctx, notify, tick, route };
+	}
+
+	it("status keeps only the last five decisions", async () => {
+		const { h, ctx, notify, tick, route } = await routed();
+		for (let i = 0; i < 7; i++) {
+			tick(MINUTE);
+			await route();
+		}
+		await h.status(ctx);
+		const history: string = notify.mock.calls[0]?.[0].split("last decisions (newest last):")[1];
+		const headers = history.split("\n").filter((line) => line.includes("router/default user ->"));
+		expect(headers).toHaveLength(5);
+		// Routes 3..7 happened at T0 + 3..7 minutes; routes 1 and 2 were evicted.
+		expect(headers[0]).toContain("2023-11-14T22:16:20Z");
+		expect(history).not.toContain("2023-11-14T22:14:20Z");
+		expect(history).not.toContain("2023-11-14T22:15:20Z");
+	});
+
+	it("persists a profile's first decision and each change of chosen model, not every route", async () => {
+		const { h, ctx, tick, route } = await routed();
+		for (let i = 0; i < 3; i++) {
+			tick(MINUTE);
+			expect(await route()).toBe("openai-codex/terra");
+		}
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		// Anthropic reports a nearly idle account on a forced refresh, so the pick flips.
+		tick(2 * MINUTE);
+		h.fetch.mockImplementation(
+			async () => new Response(JSON.stringify({ five_hour: { utilization: 1 }, seven_day: { utilization: 1 } })),
+		);
+		await h.usage.get(ctx, "anthropic", { force: true });
+		expect(await route()).toBe("anthropic/sonnet");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(2);
+		expect(await route()).toBe("anthropic/sonnet");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(2);
+		expect(vi.mocked(h.pi.appendEntry).mock.calls.map(([, entry]) => (entry as { chosen: string }).chosen)).toEqual([
+			"openai-codex/terra",
+			"anthropic/sonnet",
+		]);
+	});
+
+	it("a throwing appendEntry neither fails the route nor drops the in-memory decision", async () => {
+		const { h, ctx, notify, tick, route } = await routed();
+		vi.mocked(h.pi.appendEntry).mockImplementation(() => {
+			throw new Error("session write failed");
+		});
+		tick(MINUTE);
+		await expect(route()).resolves.toBe("openai-codex/terra");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		await h.status(ctx);
+		expect(notify.mock.calls[0]?.[0]).toContain("router/default user -> openai-codex/terra");
 	});
 
 	it("forecasts status from cached-only shared selection and shows scores/fallbacks", async () => {

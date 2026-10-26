@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Score snapshots expired by up to `STALE_GRACE_MS` (15 min) as measured, flagged `stale`, instead of fallback; fixes balanced routing favouring `chain[0]` when a new child's first route races the background refresh. No network read added before routing
-- Record each scored routing decision (candidates, scores, limiting window, data age, chosen model) as a `router:decision` session entry and list the last five in `/router status`
+- Score expired snapshots no older than `STALE_GRACE_MS` (15 min after retrieval, about 10 min past the TTL) as measured, flagged `stale`, instead of fallback; fixes balanced routing favouring `chain[0]` when a new child's first route races the background refresh. No network read added before routing
+- Record each scored routing decision (candidates, scores, limiting window, data age, chosen model) as a `router:decision` session entry (a profile's first pick and each change of chosen model only, to bound session growth) and list the last five in `/router status`
 
 ## 0.4.1
 
