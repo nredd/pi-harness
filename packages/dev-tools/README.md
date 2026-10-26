@@ -78,7 +78,8 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
 
 - `paths` is required; the repo root in any spelling, `..` segments, pathspec magic (`:/`) and
   flags are rejected. The commit is `git commit -- <paths>`, so it contains exactly those files;
-  anything else already staged stays in the index. A rename needs both the old and the new path.
+  anything else already staged stays in the index. A rename needs both the old and the new path;
+  a deletion (unstaged or already staged) is named like any other path
   Nothing to commit is its own state
 - The subject must be a capitalized imperative, <= 72 chars, no trailing period, no
   conventional-commit prefix, no em or en dash. An `area:` prefix is fine
@@ -86,7 +87,9 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
   `Co-Authored-By: Claude <noreply@anthropic.com>`, passed on stdin with `-F -`
 - Never `--no-verify`, `--amend` or `--no-gpg-sign`. Hook output is relayed on failure, and
   `files were modified by this hook` is flagged as "re-stage and call again". Nothing retries
-- Push is `git push <upstream remote> HEAD`, or `-u origin HEAD` for a branch without an upstream.
+- Push is `git push <remote> HEAD` where `<remote>` is `branch.<n>.pushRemote`, else
+  `remote.pushDefault`, else `branch.<n>.remote`, else the only remote (with `-u`). Several remotes
+  and none configured fails closed at `stage: "push"`; it never defaults to `origin`.
   A push failure returns `stage: "push"` with the sha so the caller fixes the push instead of
   committing twice. `signed` is true for `%G?` in `G`, `U`, `X`, `Y`
 

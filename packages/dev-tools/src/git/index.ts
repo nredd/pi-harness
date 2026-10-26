@@ -4,6 +4,8 @@
  * Reads (and `git_worktree_list`) are annotated read-only so Plan mode admits them. Mutations are not.
  */
 
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type TSchema, Type } from "typebox";
 import { abnormalExit, bound, seconds, toolResult } from "../core/index.ts";
@@ -29,6 +31,32 @@ const failed = (error: string) => toolResult({ text: error, structured: { error 
 
 const cwdOf = (params: { cwd?: string }, ctx: { cwd: string }) => params.cwd ?? ctx.cwd;
 const readTimeout = (params: { timeout_s?: number }) => (params.timeout_s ? params.timeout_s * 1000 : READ_TIMEOUT_MS);
+
+/** Where `git_commit` pushes HEAD: the configured push remote, else the sole remote, else an error. */
+async function resolvePushRemote(
+	cwd: string,
+	signal: AbortSignal | undefined,
+	timeoutMs: number,
+): Promise<{ remote: string; setUpstream: boolean } | { error: string }> {
+	const opts = { cwd, signal, timeoutMs };
+	const config = async (key: string): Promise<string | undefined> => {
+		const r = await git(["config", "--get", key], opts);
+		const value = r.exitCode === 0 ? r.stdout.trim() : "";
+		return value || undefined;
+	};
+	const ref = await git(["symbolic-ref", "--short", "-q", "HEAD"], opts);
+	const branch = ref.exitCode === 0 ? ref.stdout.trim() : "";
+	if (!branch) return { error: "HEAD is detached, so there is no branch to push; do NOT commit again." };
+	const tracked = await config(`branch.${branch}.remote`);
+	const remote = (await config(`branch.${branch}.pushRemote`)) ?? (await config("remote.pushDefault")) ?? tracked;
+	if (remote) return { remote, setUpstream: false };
+	const remotes = await git(["remote"], opts);
+	const names = remotes.stdout.split("\n").filter(Boolean);
+	if (remotes.exitCode === 0 && names.length === 1) return { remote: names[0] as string, setUpstream: true };
+	return {
+		error: `no push remote for \`${branch}\` and ${names.length ? `remotes are ambiguous (${names.join(", ")})` : "there are no remotes"}; set \`branch.${branch}.pushRemote\` or \`remote.pushDefault\`. Do NOT commit again.`,
+	};
+}
 
 export function registerGitTools(pi: ExtensionAPI): void {
 	registerWorktreeTools(pi);
@@ -304,8 +332,21 @@ export function registerGitTools(pi: ExtensionAPI): void {
 				return fail("validate", (e as Error).message);
 			}
 
-			const add = await git(["add", "--", ...params.paths], { cwd, signal, timeoutMs });
-			const addFailure = gitFailure(add, "git add");
+			// A path whose deletion is already staged is unknown to the index and the worktree, so `git add`
+			// rejects it; `commit -- <path>` still resolves it against HEAD. Everything else goes through
+			// `add -A`, which also stages worktree deletions.
+			const toAdd: string[] = [];
+			for (const path of params.paths) {
+				if (!existsSync(resolve(cwd, path))) {
+					const inIndex = await git(["ls-files", "--", path], { cwd, signal, timeoutMs });
+					const inHead = await git(["ls-tree", "--name-only", "HEAD", "--", path], { cwd, signal, timeoutMs });
+					if (inIndex.exitCode === 0 && !inIndex.stdout.trim() && inHead.exitCode === 0 && inHead.stdout.trim())
+						continue;
+				}
+				toAdd.push(path);
+			}
+			const add = toAdd.length ? await git(["add", "-A", "--", ...toAdd], { cwd, signal, timeoutMs }) : undefined;
+			const addFailure = add && gitFailure(add, "git add");
 			if (addFailure) return fail("add", addFailure);
 
 			// `commit -- <paths>` commits exactly the named paths; anything else already in the index stays there.
@@ -346,14 +387,14 @@ export function registerGitTools(pi: ExtensionAPI): void {
 					structured: { stage: "done", sha, signed, pushed: false, hookModifiedFiles: false },
 				});
 			}
-			// Push only the current branch: to its upstream's remote when it has one, else set origin up.
-			const upstream = await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
-				cwd,
-				signal,
-				timeoutMs,
-			});
-			const remote = upstream.exitCode === 0 ? upstream.stdout.trim().split("/")[0] : undefined;
-			const pushArgs = remote ? ["push", "-q", remote, "HEAD"] : ["push", "-q", "-u", "origin", "HEAD"];
+			// Push only the current branch, to the remote git itself would pick for it:
+			// branch.<n>.pushRemote, then remote.pushDefault, then branch.<n>.remote, then the sole remote.
+			// Several remotes and no setting is ambiguous: fail closed rather than guess `origin`.
+			const target = await resolvePushRemote(cwd, signal, timeoutMs);
+			if ("error" in target) return fail("push", `committed ${short} but ${target.error}`, { sha, signed });
+			const pushArgs = target.setUpstream
+				? ["push", "-q", "-u", target.remote, "HEAD"]
+				: ["push", "-q", target.remote, "HEAD"];
 			const push = await git(pushArgs, { cwd, signal, timeoutMs });
 			const pushFailure = gitFailure(push, "git push");
 			if (pushFailure) {
@@ -364,7 +405,7 @@ export function registerGitTools(pi: ExtensionAPI): void {
 				});
 			}
 			return toolResult({
-				text: `committed ${short}${signed ? " (signed)" : ""} and pushed in ${seconds(add.durationMs + commit.durationMs + push.durationMs)}`,
+				text: `committed ${short}${signed ? " (signed)" : ""} and pushed in ${seconds((add?.durationMs ?? 0) + commit.durationMs + push.durationMs)}`,
 				structured: { stage: "done", sha, signed, pushed: true, hookModifiedFiles: false },
 			});
 		},
