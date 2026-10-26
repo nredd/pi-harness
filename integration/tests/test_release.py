@@ -750,7 +750,15 @@ def test_root_override_gate_rejects_resolved_url_mismatch_before_any_download(
     root, gh_calls = new_release
 
     def forbidden(*_args: Any, **_kwargs: Any) -> None:
-        """Fail if the gate downloads anything."""
+        """Fail if the gate downloads anything.
+
+        Parameters:
+            *_args (Any): ignored positional arguments.
+            **_kwargs (Any): ignored keyword arguments.
+
+        Raises:
+            AssertionError: always.
+        """
         raise AssertionError("downloaded before the lockfile agreed")
 
     monkeypatch.setattr(release, "urlopen", forbidden)
@@ -837,7 +845,15 @@ def test_root_override_gate_fails_on_provenance_failure_or_missing_gh(
         return
 
     def refuse(argv: list[str], **_kwargs: Any) -> str:
-        """Simulate `gh attestation verify` rejecting the artifact."""
+        """Simulate `gh attestation verify` rejecting the artifact.
+
+        Parameters:
+            argv (list[str]): GitHub CLI command.
+            **_kwargs (Any): ignored subprocess options.
+
+        Raises:
+            subprocess.CalledProcessError: always.
+        """
         raise subprocess.CalledProcessError(1, argv, output="no matching attestation")
 
     monkeypatch.setattr(subprocess, "check_output", refuse)
@@ -907,7 +923,7 @@ def test_root_override_gate_runs_before_install_and_blocks_it(tmp_path: Path) ->
     commands, marker = tmp_path / "commands", tmp_path / "ran"
     commands.mkdir()
     for tool in ("npm", "uv"):
-        (commands / tool).write_text(f"#!/bin/sh\necho {tool} >> {marker}\n")
+        (commands / tool).write_text(f"#!/bin/sh\necho {shlex.quote(tool)} >> {shlex.quote(str(marker))}\n")
         (commands / tool).chmod(0o755)
     env = os.environ | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"}
     completed = subprocess.run(

@@ -274,6 +274,7 @@ def download_verified_asset(url: str, tag: str, checksums: dict[str, str], desti
         ValueError: no recorded checksum or the bytes disagree.
         RuntimeError: a non-legacy asset lacks the required provenance.
         FileNotFoundError: a non-legacy asset needs `gh`, which is unavailable.
+        OSError: the download (including `URLError`) or the write to `destination` failed.
     """
     with urlopen(url, timeout=120) as response:
         destination.write_bytes(response.read())
@@ -393,8 +394,9 @@ def verify_root_overrides(root: Path) -> None:
 
     Raises:
         ValueError: any override, lock entry, checksum or integrity disagrees.
-        RuntimeError: provenance verification or a download failed.
+        RuntimeError: a non-legacy asset lacks the required provenance.
         FileNotFoundError: a non-legacy tag needs `gh`, which is unavailable.
+        OSError: an asset download (including `URLError`) or scratch write failed.
     """
     pins = _root_override_pins(_read_json_object(root / "package.json"))
     packages = _read_json_object(root / "package-lock.json").get("packages")
