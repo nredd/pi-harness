@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { findWorkspaceRoot, registerCargoTools } from "../../src/cargo/index.ts";
 import { createMockPi } from "../support.ts";
@@ -179,13 +179,14 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 		}, 180_000);
 
 		it.each(["absolute", "relative"])(
-			"reads junit with a %s Cargo target and custom nextest store",
+			"reads junit with an external %s Cargo target and custom nextest store",
 			async (kind) => {
 				const dir = buildWorkspace();
-				mkdirSync(join(dir, ".config"));
-				writeFileSync(join(dir, ".config", "nextest.toml"), '[store]\ndir = "custom nextest store"\n');
-				vi.stubEnv("CARGO_TARGET_DIR", kind === "absolute" ? join(dir, "build artifacts") : "build artifacts");
+				const target = mkdtempSync(join(tmpdir(), "pi-dev-tools-cargo-target-"));
 				try {
+					mkdirSync(join(dir, ".config"));
+					writeFileSync(join(dir, ".config", "nextest.toml"), '[store]\ndir = "custom nextest store"\n');
+					vi.stubEnv("CARGO_TARGET_DIR", kind === "absolute" ? target : relative(dir, target));
 					const r = await mock.call("cargo_test", { package: "good", doc: false }, dir);
 					expect(r.structuredContent, mock.text(r)).toMatchObject({
 						state: "failed",
@@ -204,6 +205,7 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 				} finally {
 					vi.unstubAllEnvs();
 					rmSync(dir, { recursive: true, force: true });
+					rmSync(target, { recursive: true, force: true });
 				}
 			},
 			180_000,
