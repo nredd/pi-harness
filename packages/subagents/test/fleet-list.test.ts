@@ -313,13 +313,13 @@ describe("FleetList navigation", () => {
     // Selection marker keeps accent color; row content uses primary text color.
     expect(selected).toContain("<accent>●</accent>");
     expect(selected).toContain("<text>one</text>");
-    expect(selected).toMatch(/<text>\d+s · ↓ [\d.]+k? tokens<\/text>/);
+    expect(selected).toMatch(/<text>.*· \d+s · ↓ [\d.]+k? tokens<\/text>/);
     // Agent display name rendered with the text token too (this type has no badge).
     expect(selected).toContain(`<text>${getDisplayName("general-purpose")}</text>`);
     // Inactive rows keep the muted/dim treatment.
     const unselected = h.render().find(l => l.includes("two"))!;
     expect(unselected).toContain("<dim>○</dim>");
-    expect(unselected).toMatch(/<dim>\d+s · ↓ [\d.]+k? tokens<\/dim>/);
+    expect(unselected).toMatch(/<dim>.*· \d+s · ↓ [\d.]+k? tokens<\/dim>/);
     expect(unselected).not.toContain("<text>");
   });
 
@@ -888,13 +888,13 @@ describe("FleetList model and activity", () => {
   it("names the model and thinking level under showModel", () => {
     const out = row(withModel(), true);
     expect(out).toContain("opus 4.6");
-    expect(out).toContain("thinking: high");
+    expect(out).toContain("think:high");
   });
 
   it("renders the row exactly as before when showModel is off", () => {
     const out = row(withModel(), false);
     expect(out).not.toContain("opus 4.6");
-    expect(out).not.toContain("thinking: high");
+    expect(out).not.toContain("think:high");
   });
 
   it("aligns populated tail columns with Unicode and truncation", () => {
@@ -954,7 +954,7 @@ describe("FleetList model and activity", () => {
       expect(emoji).toContain("...");
       expect(cjk).not.toContain("deliberately long description");
       expect(emoji).not.toContain("different long description");
-      expect(cellStart(cjk, "thinking: low")).toBe(cellStart(emoji, "thinking: ultrathink"));
+      expect(cellStart(cjk, "think:low")).toBe(cellStart(emoji, "think:ultrathink"));
       expect(cellStart(cjk, "tokens")).toBe(cellStart(emoji, "tokens"));
       expect(cellStart(cjk, "~$0.0042") + visibleWidth("~$0.0042"))
         .toBe(cellStart(emoji, "~$12.34") + visibleWidth("~$12.34"));
@@ -971,7 +971,7 @@ describe("FleetList model and activity", () => {
     expect(cellStart(a, "↓ 13.1k tokens") + visibleWidth("↓ 13.1k tokens"))
       .toBe(cellStart(b, "↓ 987.7k tokens") + visibleWidth("↓ 987.7k tokens"));
     expect(cellStart(a, "銀河 4.6")).toBe(cellStart(b, "🧠 opus"));
-    expect(cellStart(a, "thinking: low")).toBe(cellStart(b, "thinking: ultrathink"));
+    expect(cellStart(a, "think:low")).toBe(cellStart(b, "think:ultrathink"));
   });
 
   it("copes with a record that has no invocation yet", () => {
@@ -1007,6 +1007,102 @@ describe("FleetList model and activity", () => {
     }]]);
     const out = row(withModel({ status: "completed", completedAt: now - 100 }), false, activity);
     expect(out).not.toContain("writing");
+  });
+});
+
+describe("FleetList layout at real terminal sizes (#144)", () => {
+  const plainTheme = { fg: (_c: string, text: string) => text, bold: (text: string) => text };
+  const NOW = 1_000_000;
+
+  /** One agent per state, plus aliased and activity-less rows; start order = array order. */
+  function mixed(): AgentRecord[] {
+    const usage = (input: number) => ({ input, output: 0, cacheWrite: 0 });
+    const base = { startedAt: NOW - 60_000, lifetimeUsage: usage(13_100) };
+    return [
+      makeRecord({ ...base, id: "p", type: "Plan", description: "Plan the migration", invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" } }),
+      makeRecord({ ...base, id: "c1", alias: "pr-1412", description: "Spec review of the harness change", startedAt: NOW - 50_000, lifetimeUsage: usage(250_000) }),
+      makeRecord({ ...base, id: "c2", alias: "pr-1413", description: "Spec review of the harness change", startedAt: NOW - 40_000 }),
+      makeRecord({ ...base, id: "q", status: "queued", description: "Waiting for a slot", startedAt: NOW - 30_000 }),
+      makeRecord({ ...base, id: "d", status: "completed", completedAt: NOW - 1_000, description: "Finished fix", startedAt: NOW - 20_000 }),
+      makeRecord({ ...base, id: "f", status: "error", completedAt: NOW - 1_000, description: "Broken build", startedAt: NOW - 15_000 }),
+      makeRecord({ ...base, id: "s", status: "stopped", completedAt: NOW - 1_000, description: "Stopped by user", startedAt: NOW - 10_000 }),
+    ];
+  }
+
+  function renderAt(agents: AgentRecord[], columns: number, rows: number, selected = 0, showModel = true): string[] {
+    const activity = new Map<string, AgentActivity>([["c1", {
+      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
+      modelCall: { startedAt: NOW - 4_000, lastEventAt: NOW - 100, kind: "thinking", writtenChars: 0 },
+    }]]);
+    const clock = { now: () => NOW, setInterval: () => ({ cancel() {}, unref() {} }), setTimeout: () => ({ cancel() {}, unref() {} }) };
+    const fleet = new FleetList(fakeManager(agents), activity, () => false, undefined, undefined, undefined, undefined, () => showModel, () => [], clock as never);
+    let factory: WidgetFactory | undefined;
+    let input: ((data: string) => unknown) | undefined;
+    const ui: FleetUICtx = {
+      setWidget: (_k, c) => { factory = c; },
+      onTerminalInput: h => { input = h; return () => {}; },
+      getEditorText: () => "",
+      notify: () => {},
+      custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+    };
+    fleet.setUICtx(ui);
+    fleet.update();
+    for (let i = 0; i <= selected; i++) input?.(DOWN);
+    return factory!({ requestRender: () => {}, terminal: { columns, rows } }, plainTheme).render(columns).map(plain);
+  }
+
+  it("gives every state a glyph and a word, at 120x40", () => {
+    const lines = renderAt(mixed().slice(0, 1).concat(mixed().slice(3, 7)), 120, 40);
+    const text = lines.join("\n");
+    expect(text).toContain("▶ running");
+    expect(text).toContain("◦ queued");
+    expect(text).toContain("✓ done");
+    expect(text).toContain("✗ failed");
+    expect(text).toContain("■ stopped");
+  });
+
+  it("aligns every column across rows with and without activity, at 120x40", () => {
+    const lines = renderAt(mixed().slice(0, 3), 120, 40);
+    const rows = lines.filter(l => /▶ running/.test(l));
+    expect(rows).toHaveLength(3);
+    const col = (line: string, cell: string) => visibleWidth(line.split(cell, 1)[0]);
+    // The activity-less Plan row pads the activity slot, so elapsed and tokens still line up.
+    expect(new Set(rows.map(l => col(l, "tokens"))).size).toBe(1);
+    expect(new Set(rows.map(l => l.search(/\d\ds · +↓/))).size).toBe(1);
+    expect(new Set(rows.map(l => visibleWidth(l.trimEnd()))).size).toBe(1);
+    expect(rows[0]).toContain("think:high");
+    expect(rows[1]).toContain("thinking · 4s");
+  });
+
+  it("keeps the name handle ahead of a truncated description, at 80x24", () => {
+    const lines = renderAt(mixed().slice(0, 3), 80, 24);
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+    const critics = lines.filter(l => /pr-141\d/.test(l));
+    expect(critics.map(l => l.match(/pr-141\d/)?.[0])).toEqual(["pr-1412", "pr-1413"]);
+  });
+
+  it("drops optional columns, never the tokens, at 80x24", () => {
+    const lines = renderAt(mixed().slice(0, 3), 80, 24);
+    const agentRows = lines.filter(l => /▶ running/.test(l));
+    for (const line of agentRows) {
+      expect(line).toMatch(/↓ [\d.]+k? tokens\s*$/);
+      expect(line).not.toContain("think:");
+      expect(line).not.toContain("thinking ·");
+    }
+  });
+
+  it.each([[80, 24], [120, 40]])("summarizes hidden agents by state at %ix%i", (columns, rows) => {
+    // 7 agents: 5 visible rows - 2 indicators = 3 shown, 4 hidden below.
+    const lines = renderAt(mixed(), columns, rows);
+    const more = lines.find(l => /↓ \d+ more/.test(l));
+    expect(more?.trim()).toBe("↓ 4 more: 1 queued, 1 failed, 1 stopped, 1 done");
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+  });
+
+  it("summarizes rows scrolled above the window too", () => {
+    const lines = renderAt(mixed(), 120, 40, 7);
+    const above = lines.find(l => /↑ \d+ more/.test(l));
+    expect(above?.trim()).toMatch(/^↑ \d+ more: .*running/);
   });
 });
 

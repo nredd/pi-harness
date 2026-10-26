@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **FleetView rows show state as a glyph plus a word, and overflow says what it hides ([#144](https://github.com/nredd/pi-harness/issues/144)).** Rows gain a fixed first state column (`▶ running`, `◦ queued`, `✓ done`, `✗ failed`, `■ stopped`) instead of every unselected row reading `○`. `↑ N more` / `↓ N more` now list hidden rows by state (`↓ 4 more: 3 running, 1 failed`). A spawner's `name` leads the description so similar rows stay distinguishable once truncated, the configured level reads `think:high` rather than echoing the live `thinking · 4s`, column widths come from every row so scrolling does not shift them, and a narrow terminal drops the activity, thinking and model columns before it truncates elapsed, tokens or cost.
+
 ## [0.22.0-nredd.7] - 2026-10-23
 
 ### Added
