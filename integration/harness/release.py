@@ -3,15 +3,22 @@
 No tap is read at runtime. The copied recipe installs the coding-agent tgz globally, replaces
 its nested pi-tui with the release tgz, and prunes foreign native prebuilds.
 
+`--verify-root-overrides` gates the root `package.json` overrides the same way before any
+`npm ci`: this module and `harness.paths` are standard library only, so it runs under a bare
+`PYTHONPATH=integration python3 -m harness.release` with no `uv sync`.
+
 References:
 - https://github.com/nredd/homebrew-tap/blob/main/Formula/pi-coding-agent.rb
 - https://github.com/nredd/pi/releases
+- https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import json
 import logging
 import os
 import platform
@@ -19,15 +26,17 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 from pathlib import Path
 from types import MappingProxyType
 from urllib.request import urlopen
 
-from harness.paths import GH_BIN, GIT_BIN, NPM_BIN
+from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
 
 LOGGER = logging.getLogger(__name__)
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+SRI_SHA512 = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
 CODING_AGENT_TARBALL = "earendil-works-pi-coding-agent-1.3.0.tgz"
 TUI_TARBALL = "earendil-works-pi-tui-1.3.0.tgz"
 AGENT_CORE_TARBALL = "earendil-works-pi-agent-core-1.3.0.tgz"
@@ -76,6 +85,8 @@ LEGACY_RELEASE_TAGS = frozenset(LEGACY_CHECKSUMS)
 # Every asset the harness consumes, coding-agent and tui first: they are the ones npm installs.
 RELEASE_PACKAGES = ("pi-coding-agent", "pi-tui", "pi-agent-core", "pi-ai")
 ATTESTATION_WORKFLOW = "nredd/pi/.github/workflows/fork-release.yml"
+RELEASE_URL_PREFIX = "https://github.com/nredd/pi/releases/download/"
+ROOT_OVERRIDE_SCOPE = "@earendil-works/"
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -112,7 +123,28 @@ def release_asset_url(tag: str, name: str) -> str:
     Returns:
         str: download URL.
     """
-    return f"https://github.com/nredd/pi/releases/download/{tag}/{name}"
+    return f"{RELEASE_URL_PREFIX}{tag}/{name}"
+
+
+def release_package_urls(tag: str) -> dict[str, str]:
+    """Return the asset URL of every `RELEASE_PACKAGES` tarball at a core tag.
+
+    Parameters:
+        tag (str): core fork release tag.
+
+    Returns:
+        dict[str, str]: package (e.g. `pi-tui`) -> release asset URL.
+
+    Raises:
+        ValueError: `tag` is not a core fork release tag.
+    """
+    match = TAG.fullmatch(tag)
+    if match is None:
+        raise ValueError(f"Not a core fork release tag: '{tag}'")
+    return {
+        package: release_asset_url(tag, f"earendil-works-{package}-{match['version']}.tgz")
+        for package in RELEASE_PACKAGES
+    }
 
 
 def release_checksums(tag: str) -> dict[str, str]:
@@ -226,6 +258,169 @@ def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
     LOGGER.info(f"Release asset '{url}' sha256={actual}")
 
 
+def download_verified_asset(url: str, tag: str, checksums: dict[str, str], destination: Path) -> Path:
+    """Download one release asset, then require its recorded sha256 and, for new tags, provenance.
+
+    Parameters:
+        url (str): canonical release URL.
+        tag (str): exact core tag the URL belongs to.
+        checksums (dict[str, str]): the tag's recorded assets.
+        destination (Path): file to write.
+
+    Returns:
+        Path: `destination`, whose bytes are verified.
+
+    Raises:
+        ValueError: no recorded checksum or the bytes disagree.
+        RuntimeError: a non-legacy asset lacks the required provenance.
+        FileNotFoundError: a non-legacy asset needs `gh`, which is unavailable.
+        OSError: the download (including `URLError`) or the write to `destination` failed.
+    """
+    with urlopen(url, timeout=120) as response:
+        destination.write_bytes(response.read())
+    verify_asset(destination, url, checksums)
+    if tag not in LEGACY_RELEASE_TAGS:
+        verify_provenance(destination, tag)
+    return destination
+
+
+def _npm_integrity(path: Path) -> str:
+    """Return the npm SRI string (`sha512-<base64>`) of a file's bytes.
+
+    Parameters:
+        path (Path): file to digest.
+
+    Returns:
+        str: SRI integrity value as written in `package-lock.json`.
+    """
+    return "sha512-" + base64.b64encode(hashlib.sha512(path.read_bytes()).digest()).decode("ascii")
+
+
+def _read_json_object(path: Path) -> dict[str, object]:
+    """Read a JSON file that must hold an object.
+
+    Parameters:
+        path (Path): `package.json` or `package-lock.json`.
+
+    Returns:
+        dict[str, object]: parsed object.
+
+    Raises:
+        ValueError: unreadable, invalid JSON, or not an object.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Could not read JSON from '{path}': {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a JSON object in '{path}'")
+    return data
+
+
+def _root_override_pins(manifest: dict[str, object]) -> dict[str, tuple[str, str]]:
+    """Parse the four required core overrides into exact `(tag, url)` pins.
+
+    Parameters:
+        manifest (dict[str, object]): root `package.json`.
+
+    Returns:
+        dict[str, tuple[str, str]]: package name -> (release tag, asset URL), in `RELEASE_PACKAGES` order.
+
+    Raises:
+        ValueError: a core override is missing, extra, not a plain release URL, or names a foreign asset.
+    """
+    overrides = manifest.get("overrides")
+    if not isinstance(overrides, dict):
+        raise ValueError("Root `package.json` has no `overrides` object")
+    expected = [f"{ROOT_OVERRIDE_SCOPE}{package}" for package in RELEASE_PACKAGES]
+    scoped = sorted(name for name in overrides if name.startswith(ROOT_OVERRIDE_SCOPE))
+    if scoped != sorted(expected):
+        raise ValueError(
+            f"Root `{ROOT_OVERRIDE_SCOPE}*` overrides must be exactly {expected}, found {scoped}"
+        )
+    pins: dict[str, tuple[str, str]] = {}
+    for package, name in zip(RELEASE_PACKAGES, expected, strict=True):
+        url = overrides[name]
+        if not isinstance(url, str) or not url.startswith(RELEASE_URL_PREFIX):
+            raise ValueError(f"Override '{name}' must be a `{RELEASE_URL_PREFIX}` URL, found '{url}'")
+        tag = url.removeprefix(RELEASE_URL_PREFIX).partition("/")[0]
+        if TAG.fullmatch(tag) is None or url != release_package_urls(tag)[package]:
+            raise ValueError(
+                f"Override '{name}' is not the canonical '{package}' asset of a core tag: '{url}'"
+            )
+        pins[name] = (tag, url)
+    return pins
+
+
+def _locked_integrity(packages: dict[str, object], name: str, url: str) -> str:
+    """Return the lockfile sha512 SRI of one override, requiring the lock to resolve exactly `url`.
+
+    Parameters:
+        packages (dict[str, object]): the lockfile's `packages` object.
+        name (str): overridden package name.
+        url (str): the override URL.
+
+    Returns:
+        str: the lockfile `integrity` value.
+
+    Raises:
+        ValueError: nested copies, a missing entry, a different `resolved`, or non-sha512 integrity.
+    """
+    nested = [path for path in packages if path.endswith(f"/node_modules/{name}")]
+    if nested:
+        raise ValueError(f"Nested lock entries {nested} bypass the override for '{name}'")
+    entry = packages.get(f"node_modules/{name}")
+    if not isinstance(entry, dict):
+        raise ValueError(f"Lockfile has no `packages` entry for 'node_modules/{name}'")
+    if entry.get("resolved") != url:
+        raise ValueError(f"Lockfile `resolved` for '{name}' is '{entry.get('resolved')}', expected '{url}'")
+    integrity = entry.get("integrity")
+    if not isinstance(integrity, str) or not SRI_SHA512.fullmatch(integrity):
+        raise ValueError(f"Lockfile `integrity` for '{name}' is not sha512 SRI: '{integrity}'")
+    return integrity
+
+
+def verify_root_overrides(root: Path) -> None:
+    """Verify every root core override against the lockfile and the recorded release, before `npm ci`.
+
+    For each of the four `@earendil-works` overrides: the lockfile `resolved` equals the override
+    URL, its `integrity` is sha512 SRI, the downloaded tarball matches the tag's recorded sha256
+    (frozen `LEGACY_CHECKSUMS` for legacy tags, a published `SHA256SUMS` covering all of
+    `RELEASE_PACKAGES` otherwise) and the lockfile sha512, and non-legacy tags also pass
+    `verify_provenance` at the exact tag. Tags come only from `package.json`, never a Gitlink.
+
+    Parameters:
+        root (Path): repository root holding `package.json` and `package-lock.json`.
+
+    Raises:
+        ValueError: any override, lock entry, checksum or integrity disagrees.
+        RuntimeError: a non-legacy asset lacks the required provenance.
+        FileNotFoundError: a non-legacy tag needs `gh`, which is unavailable.
+        OSError: an asset download (including `URLError`) or scratch write failed.
+    """
+    pins = _root_override_pins(_read_json_object(root / "package.json"))
+    packages = _read_json_object(root / "package-lock.json").get("packages")
+    if not isinstance(packages, dict):
+        raise ValueError(f"Lockfile '{root / 'package-lock.json'}' has no `packages` metadata")
+    integrities = {name: _locked_integrity(packages, name, url) for name, (_tag, url) in pins.items()}
+    checksums_by_tag: dict[str, dict[str, str]] = {}
+    with tempfile.TemporaryDirectory(prefix="root-overrides-") as scratch:
+        for name, (tag, url) in pins.items():
+            if tag not in checksums_by_tag:
+                checksums_by_tag[tag] = release_checksums(tag)
+                missing = [u for u in release_package_urls(tag).values() if u not in checksums_by_tag[tag]]
+                if missing and tag not in LEGACY_RELEASE_TAGS:
+                    raise ValueError(f"Release '{tag}' does not publish checksums for {missing}")
+            asset = Path(scratch) / name.removeprefix(ROOT_OVERRIDE_SCOPE)
+            download_verified_asset(url, tag, checksums_by_tag[tag], asset)
+            actual = _npm_integrity(asset)
+            if actual != integrities[name]:
+                raise ValueError(
+                    f"Lockfile `integrity` mismatch for '{name}': '{actual}', expected '{integrities[name]}'"
+                )
+            LOGGER.info(f"Root override '{name}' verified at '{tag}'")
+
+
 def prune_native(node_modules: Path, system: str, arch: str) -> None:
     """Keep only host-native prebuild directories, matching the formula.
 
@@ -262,14 +457,11 @@ def fetch_release(tag: str, prefix: Path) -> Path:
         RuntimeError: provenance or npm installation failed.
         FileNotFoundError: npm is unavailable.
     """
-    match = TAG.fullmatch(tag)
-    if match is None:
-        raise ValueError(f"Not a core fork release tag: '{tag}'")
+    release_package_urls(tag)
     if prefix.exists() and any(prefix.iterdir()):
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
     checksums = release_checksums(tag)
-    version = match["version"]
-    urls = [release_asset_url(tag, f"earendil-works-{package}-{version}.tgz") for package in RELEASE_PACKAGES]
+    urls = list(release_package_urls(tag).values())
     if tag in LEGACY_RELEASE_TAGS:
         urls = [url for url in urls if url in checksums]
     for url in urls:
@@ -293,12 +485,7 @@ def fetch_release(tag: str, prefix: Path) -> Path:
     assets = []
     for url in urls:
         asset = prefix / url.rsplit("/", 1)[1]
-        with urlopen(url, timeout=120) as response:
-            asset.write_bytes(response.read())
-        verify_asset(asset, url, checksums)
-        if tag not in LEGACY_RELEASE_TAGS:
-            verify_provenance(asset, tag)
-        assets.append(asset)
+        assets.append(download_verified_asset(url, tag, checksums, asset))
     try:
         subprocess.check_output(
             [
@@ -339,14 +526,32 @@ def fetch_release(tag: str, prefix: Path) -> Path:
 
 
 def main() -> None:
-    """Fetch a supplied tag or the exact initialized Gitlink tag."""
+    """Fetch a supplied tag or Gitlink tag, or verify the root overrides before `npm ci`."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0] if __doc__ else None)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--tag")
     source.add_argument("--gitlink", type=Path)
-    parser.add_argument("--prefix", type=Path, required=True)
+    source.add_argument(
+        "--verify-root-overrides",
+        action="store_true",
+        help="verify the root `package.json` core overrides against the lockfile and release",
+    )
+    parser.add_argument("--prefix", type=Path, help="empty install prefix (with --tag or --gitlink)")
+    parser.add_argument(
+        "--root", type=Path, default=REPO_ROOT.parent, help="repository root for --verify-root-overrides"
+    )
     args = parser.parse_args()
+    if args.verify_root_overrides:
+        if args.prefix is not None:
+            parser.error("`--prefix` does not apply to `--verify-root-overrides`")
+        try:
+            verify_root_overrides(args.root.resolve())
+        except (ValueError, RuntimeError, OSError) as error:
+            raise SystemExit(f"Root core override verification failed: {error}") from error
+        return
+    if args.prefix is None:
+        parser.error("`--prefix` is required with `--tag` or `--gitlink`")
     tag = args.tag or gitlink_tag(args.gitlink.resolve())
     fetch_release(tag, args.prefix.resolve())
 

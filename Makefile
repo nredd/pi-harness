@@ -1,14 +1,18 @@
-.PHONY: help install check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
+.PHONY: help verify-root-overrides install check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
 help:  ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
-install:  ## Install owned dependencies (npm ci --ignore-scripts, uv sync --locked). Never touches forks/
-	npm ci --ignore-scripts
-	cd integration && uv sync --locked
-	cd benchmarks/comparison && uv sync --locked --all-extras
+# Standard library only, so it runs before `uv sync`. Non-legacy core tags also need `gh` >= 2.49 (authenticated).
+verify-root-overrides:  ## Verify root core overrides against the lockfile, SHA256SUMS/legacy pins and provenance
+	PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
+
+install: verify-root-overrides  ## Verify root core overrides, then install owned dependencies (npm ci --ignore-scripts, uv sync --locked). Never touches forks/
+	env -u GH_TOKEN npm ci --ignore-scripts
+	cd integration && env -u GH_TOKEN uv sync --locked
+	cd benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
 
 check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
 

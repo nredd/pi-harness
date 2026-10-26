@@ -44,6 +44,10 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: uv run --locked --project integration python scripts/npm_release.py preflight --tag "$RELEASE_TAG"
+      - name: Verify root core overrides before install
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
       - name: Install, check package, pack once, exercise tarball and generate manifest
         env:
           RELEASE_TAG: ${{ github.ref_name }}

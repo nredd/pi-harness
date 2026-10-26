@@ -39,7 +39,7 @@ jobs:
           distribution: Ubuntu-24.04
           wsl-version: '2'
           update: 'true'
-          additional-packages: curl git libatomic1 tmux unzip xz-utils
+          additional-packages: curl git libatomic1 python3 tmux unzip xz-utils
 
       # setup-wsl does not forward GitHub's Windows-only environment into Linux.
       - name: Record Windows checkout path for WSL
@@ -75,6 +75,11 @@ jobs:
 
       - name: Run the existing stack harness from the Linux filesystem
         shell: wsl-bash_Ubuntu-24.04 {0}
+        # The read-only job token reaches native Linux `gh` only through WSLENV (Windows env is not
+        # forwarded automatically). It is never written to a file or echoed, and is unset after the fetch.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WSLENV: GH_TOKEN/u
         run: |
           set -euo pipefail
 
@@ -146,10 +151,18 @@ jobs:
               ;;
           esac
 
-          npm ci --ignore-scripts
+          # Ubuntu 24.04's apt `gh` (2.45) has no `attestation`: install the pinned official release.
+          test -n "${GH_TOKEN:-}" || { echo "GH_TOKEN was not forwarded into WSL via WSLENV" >&2; exit 1; }
+          env -u GH_TOKEN bash "$worktree/scripts/install_gh_linux.sh" "$tool_dir/gh"
+          export PATH="$tool_dir/gh/bin:$PATH"
+          # Standard library only: verify the root core overrides before any `npm ci`.
+          PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
+
+          env -u GH_TOKEN npm ci --ignore-scripts
           cd integration
-          uv sync --locked --python "$(tr -d '\r\n' < ../.python-version)"
+          env -u GH_TOKEN uv sync --locked --python "$(tr -d '\r\n' < ../.python-version)"
           uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$worktree/pi-release"
+          unset GH_TOKEN
           export PI_BIN="$worktree/pi-release/bin/pi"
           pi_version=$("$PI_BIN" --version)
           printf 'Pi release: %s\nCore Gitlink: %s\n' "$pi_version" "$(git -C ../forks/pi describe --tags --exact-match)" \
