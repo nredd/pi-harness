@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { type Component, hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { NotificationDetails } from "../types.js";
 import { formatCost, formatMs, formatTokens, formatTurns, type Theme } from "./agent-widget.js";
+import { fallbackFlag, fallbackFlagText, hasFallback } from "./fallback-flag.js";
 
 /** Lines of the result preview shown when expanded. */
 const EXPANDED_PREVIEW_LINES = 30;
@@ -43,7 +44,7 @@ export function noticeSummary(d: NotificationDetails, theme: Theme, showCost: bo
   const dot = ` ${theme.fg("dim", "·")} `;
   // Leading, before the unbounded description: the collapsed line is truncated
   // from the right, and a substituted model must not be what gets cut.
-  const flag = d.modelNote ? `${theme.fg("warning", "[fallback]")} ` : "";
+  const flag = fallbackFlag(theme, d) ? `${fallbackFlag(theme, d)} ` : "";
   const head = `${icon(d, theme)} ${flag}${theme.bold(d.description)}`;
   const stats = statParts(d, showCost).map(p => theme.fg("dim", p));
   return [head, ...stats].join(dot);
@@ -54,8 +55,8 @@ export function groupSummary(all: NotificationDetails[], theme: Theme): string {
   const names = all.map(d => `${icon(d, theme)} ${d.description}`).join(theme.fg("dim", ", "));
   // In the heading, ahead of the member list that truncation eats from the end,
   // so a fallback member listed last is still counted.
-  const fellBack = all.filter(d => d.modelNote).length;
-  const flag = fellBack > 0 ? ` ${theme.fg("warning", `[fallback x${fellBack}]`)}` : "";
+  const fellBack = all.filter(d => hasFallback(d)).length;
+  const flag = fellBack > 0 ? ` ${theme.fg("warning", fallbackFlagText(fellBack))}` : "";
   return `${theme.bold(`${all.length} agents finished`)}${flag} ${theme.fg("dim", "·")} ${names}`;
 }
 

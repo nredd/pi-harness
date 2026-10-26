@@ -120,13 +120,12 @@ describe("AgentResultView", () => {
     expect(new AgentResultView(details, "", false, live(record), theme).render(200).join("\n")).not.toContain("did not resolve");
   });
 
-  it("labels the model fallback on the collapsed summary, from the record or the details", () => {
+  it("flags the model fallback on the collapsed summary, from the record or the details", () => {
     const fallback = { input: "ghost", used: "anthropic/x" };
-    const label = 'fallback: "ghost" -> anthropic/x';
     const fromRecord = new AgentResultView(makeDetails(), "", false, live(makeRecord({ status: "running", modelFallback: fallback })), theme).render(200);
-    expect(fromRecord.join("\n")).toContain(label);
+    expect(fromRecord.join("\n")).toContain("[fallback]");
     const fromDetails = new AgentResultView(makeDetails({ modelFallback: fallback }), "", false, live(undefined), theme).render(200);
-    expect(fromDetails.join("\n")).toContain(label);
+    expect(fromDetails.join("\n")).toContain("[fallback]");
   });
 
   const record = makeRecord({ status: "completed", completedAt: NOW - 1, outputFile: "/tmp/t/a1.output" });

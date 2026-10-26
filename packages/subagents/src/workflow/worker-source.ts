@@ -555,7 +555,7 @@ async function agentIn(scope, prompt, opts) {
     // object payload as a sibling \`_modelNote\` the script can read.
     if (modelNote !== undefined) {
       logIn(scope, modelNote);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && !declaresModelNote(schema) && !Object.prototype.hasOwnProperty.call(parsed, "_modelNote")) parsed._modelNote = modelNote;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && canCarryModelNote(schema) && !Object.prototype.hasOwnProperty.call(parsed, "_modelNote")) parsed._modelNote = modelNote;
     }
     return parsed;
   } catch (error) {
@@ -565,13 +565,31 @@ async function agentIn(scope, prompt, opts) {
 }
 
 /**
- * Whether the schema itself declares a \`_modelNote\` property, in any form. A
- * schema that names it owns the field, even when the child omitted it (an
- * optional property of another type must not receive our string).
+ * Whether the host may add a sibling \`_modelNote\` to a schema'd payload.
+ *
+ * Deliberately conservative: only a PLAIN object-with-properties schema, using
+ * nothing but the keywords below, qualifies. Anything that could declare the
+ * field somewhere we do not look (allOf/anyOf/oneOf/$ref/patternProperties/
+ * if-then-else/dependent schemas/a schema-valued additionalProperties) or forbid
+ * it (additionalProperties: false) never gets an injected field, and the note
+ * goes to the run log instead.
  */
-function declaresModelNote(schema) {
-  const props = schema && typeof schema === "object" ? schema.properties : undefined;
-  return !!props && typeof props === "object" && Object.prototype.hasOwnProperty.call(props, "_modelNote");
+var PLAIN_SCHEMA_KEYS = ["$schema", "type", "properties", "required", "description", "title"];
+function canCarryModelNote(schema) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return false;
+  if (schema.type !== "object") return false;
+  const props = schema.properties;
+  if (!props || typeof props !== "object" || Array.isArray(props)) return false;
+  if (Object.prototype.hasOwnProperty.call(props, "_modelNote")) return false;
+  const keys = Object.keys(schema);
+  for (let i = 0; i < keys.length; i++) {
+    if (PLAIN_SCHEMA_KEYS.indexOf(keys[i]) === -1) {
+      // \`additionalProperties: true\` changes nothing, so it stays plain.
+      if (keys[i] === "additionalProperties" && schema.additionalProperties === true) continue;
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

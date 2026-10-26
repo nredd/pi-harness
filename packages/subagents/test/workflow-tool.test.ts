@@ -70,7 +70,7 @@ function stubManager(
       return { id: settled.id, record: settled };
     },
   );
-  return { manager: { spawnAndWait, abort, resume } as unknown as AgentManager, spawnAndWait, abort, resume };
+  return { manager: { spawnAndWait, abort, resume, getRecord: () => undefined } as unknown as AgentManager, spawnAndWait, abort, resume };
 }
 
 const request = (overrides: Partial<WorkflowSpawnRequest> = {}): WorkflowSpawnRequest => ({

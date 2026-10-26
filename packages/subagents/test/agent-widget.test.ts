@@ -96,7 +96,7 @@ describe("AgentWidget", () => {
 
   it("labels a model fallback on a running row and a finished row, even with showModel off", () => {
     const fallback = { input: "ghost", used: "anthropic/x" };
-    const label = 'fallback: "ghost" -> anthropic/x';
+    const label = "[fallback]";
     const running = { listAgents: () => [{ ...makeRecord("r", { isBackground: true }), modelFallback: fallback }] };
     expect(renderLines(running, "r")).toContain(label);
     expect(renderLines({ listAgents: () => [makeRecord("r", { isBackground: true })] }, "r")).not.toContain("fallback");

@@ -380,6 +380,12 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       if (id === undefined) {
         return { ok: false, error: `Cannot resume "${agentId}" — it never started.` };
       }
+      // The provenance is already on the record, so the running row shows it
+      // now rather than only once the resume has finished.
+      const existing = manager.getRecord(id);
+      if (existing?.modelFallback) {
+        onResolved?.({ recordId: id, modelNote: modelFallbackNote(existing.modelFallback) });
+      }
       const record = await manager.resume(id, prompt, deps.signal);
       if (record === undefined) {
         return {

@@ -1115,6 +1115,23 @@ describe("structured output", () => {
       expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
     });
 
+    it("never injects into a schema that composes (allOf/anyOf/$ref/patternProperties) or forbids extras; logs instead", async () => {
+      const composed = [
+        { type: "object", allOf: [{ properties: { _modelNote: { type: "number" } } }], properties: { findings: { type: "array" } } },
+        { type: "object", anyOf: [{ properties: { _modelNote: { type: "number" } } }, { type: "object" }], properties: { findings: { type: "array" } } },
+        { type: "object", patternProperties: { "^_": { type: "number" } }, properties: { findings: { type: "array" } } },
+        { type: "object", additionalProperties: false, properties: { findings: { type: "array" } } },
+        { type: "object", properties: { findings: { type: "array" } }, additionalProperties: { type: "number" } },
+      ];
+      for (const schema of composed) {
+        const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}', modelNote }));
+        const result = await run(`return await agent('go', { schema: ${JSON.stringify(schema)} });`, { host: stub.host });
+
+        expect(result.value, JSON.stringify(schema)).toEqual({ findings: [] });
+        expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+      }
+    });
+
     it("journals the note and replays it: _modelNote, log line and row all survive a resume", async () => {
       const script = `return await agent('go', { schema: ${schemaLiteral} });`;
       const entries: WorkflowJournalEntry[] = [];

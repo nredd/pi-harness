@@ -218,6 +218,27 @@ describe("workflow host", () => {
     });
   });
 
+  describe("resume reports the known provenance BEFORE awaiting completion", () => {
+    it("the running row has the note while the resume is still in flight", async () => {
+      registerAgents(new Map([agent("scout", "claude-haiku-4-5")]));
+      vi.mocked(runAgent).mockImplementation(runnerResolution() as any);
+      let release!: () => void;
+      vi.mocked(resumeAgent).mockImplementation((() => new Promise((resolve) => {
+        release = () => resolve({ text: "later", aborted: false, steered: false });
+      })) as any);
+      const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: new AgentManager() });
+      await host.spawnAgent(request());
+
+      const reports: Record<string, unknown>[] = [];
+      const pending = host.resumeAgent!("wf-0", "more", (info) => reports.push(info as Record<string, unknown>));
+      await Promise.resolve();
+
+      expect(reports.find(r => r.modelNote !== undefined)).toMatchObject({ modelNote: NOTE });
+      release();
+      await pending;
+    });
+  });
+
   describe("resuming a schema-origin child", () => {
     it("returns the resumed prose with the note, never the stale structured JSON", async () => {
       registerAgents(new Map([agent("scout", "claude-haiku-4-5")]));

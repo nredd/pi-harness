@@ -897,10 +897,10 @@ describe("FleetList model and activity", () => {
     expect(out).not.toContain("thinking: high");
   });
 
-  it("flags a model fallback even with showModel off", () => {
+  it("flags a model fallback first on the row, even with showModel off", () => {
     const fallback = { input: "ghost", used: "anthropic/x" };
-    expect(row(withModel({ modelFallback: fallback }), true)).toContain("opus 4.6 (fallback)");
-    expect(row(withModel({ modelFallback: fallback }), false)).toContain("fallback");
+    expect(row(withModel({ modelFallback: fallback }), true)).toContain("[fallback]");
+    expect(row(withModel({ modelFallback: fallback }), false)).toContain("[fallback]");
     expect(row(withModel(), false)).not.toContain("fallback");
   });
 

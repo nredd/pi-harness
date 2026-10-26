@@ -21,6 +21,7 @@ import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, buildInvocationTags, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
+import { fallbackFlag, withLeadingFlag } from "./fallback-flag.js";
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -634,9 +635,6 @@ export class FleetList {
       model = modelName ?? "";
       thinking = tags.find(tag => tag.startsWith("thinking: ")) ?? "";
     }
-    // The tail is cell-sized, so only the fact; `/agents` viewer names both models.
-    // Shown even with `showModel` off: a substituted model is not cosmetic.
-    if (record.modelFallback) model = model ? `${model} (fallback)` : "fallback";
     // What the in-flight model call is doing, only while the agent is running:
     // a finished row has no call to describe.
     const call = record.status === "running"
@@ -664,7 +662,8 @@ export class FleetList {
       ? { fallbackColor: "text", bold: hasAgentBadge(record.type) }
       : { fallbackColor: "muted" });
     const description = selected ? theme.fg("text", record.description) : record.description;
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
+    const prefix = `  ${this.bullet(rosterIndex, sel, theme)} `;
+    const left = `${name}  ${description}`;
     // Fixed-width slots (blank where a row has no value) keep each column at the
     // same cells on every row; an all-empty column is dropped.
     const stats = TAIL_SLOTS.map((slot, i) => {
@@ -673,6 +672,8 @@ export class FleetList {
       return slot.align === "end" ? (cells[i] ?? "") + pad : pad + (cells[i] ?? "");
     }).filter((c): c is string => c !== undefined).join(" · ");
     const right = selected ? theme.fg("text", stats) : theme.fg("dim", stats);
-    return rightAlign(left, right, width);
+    // The flag leads the row (even with `showModel` off: a substituted model is
+    // not cosmetic) and the name/description/tail are laid out in what is left.
+    return withLeadingFlag(prefix, fallbackFlag(theme, record), inner => rightAlign(left, right, inner), width);
   }
 }

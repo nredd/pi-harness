@@ -10,11 +10,11 @@ import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, 
 import { renderAgentName } from "../agent-color.js";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import { extractText } from "../context.js";
-import { modelFallbackLabel } from "../model-resolver.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
 import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
+import { fallbackFlag } from "./fallback-flag.js";
 import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
 
 /** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
@@ -728,10 +728,11 @@ export class ConversationViewer implements Component, Focusable {
     // models whose short names read alike.
     const { modelName, modelId, tags } = buildInvocationTags(this.record.invocation);
     const model = modelId ?? modelName;
-    const fallback = this.record.modelFallback;
-    const parts = [...(model ? [model] : []), ...(fallback ? [modelFallbackLabel(fallback)] : []), ...tags];
-    if (parts.length === 0) return undefined;
-    return this.theme.fg("dim", `  ↳ ${parts.join(" · ")}`);
+    const flag = fallbackFlag(this.theme, this.record);
+    const parts = [...(model ? [model] : []), ...tags];
+    if (parts.length === 0 && !flag) return undefined;
+    // The flag leads the (possibly very long) canonical model id.
+    return `${this.theme.fg("dim", "  ↳")} ${flag ? `${flag} ` : ""}${this.theme.fg("dim", parts.join(" · "))}`;
   }
 
   private buildContentLines(width: number): string[] {
