@@ -56,6 +56,18 @@ describe("selectModel", () => {
     expect(select(undefined, "router/default")).toMatchObject({ model: { api: "pi-virtual", provider: "router", id: "default" } });
   });
 
+  it("treats a registered but unauthenticated pin as unavailable through the real registry", () => {
+    registry.registerProvider("selection-unavailable", {
+      api: "openai-completions", baseUrl: "http://localhost:1",
+      models: [{ id: "unavailable-pin", name: "Unavailable pin", reasoning: false, input: ["text"],
+        contextWindow: 1000, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    });
+    expect(registry.find("selection-unavailable", "unavailable-pin")).toBeDefined();
+    expect(registry.getAvailable().some(model => model.provider === "selection-unavailable")).toBe(false);
+    expect(select("selection-unavailable/unavailable-pin")).toMatchObject({ outcome: "fallback", model: { id: "parent" } });
+    expect(select(undefined, "selection-unavailable/unavailable-pin")).toContain("Model not found");
+  });
+
   it("discloses an unresolved config without falling through to another config source", () => {
     setAgentModels({ scout: "does-not-exist", "*": ref("wildcard") });
     expect(select(ref("definition"))).toMatchObject({
