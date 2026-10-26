@@ -46,7 +46,7 @@ import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
 import { describeModel, describeVirtualModel, isVirtualModel, type ModelFallback, type ModelRegistry, modelFallbackNote, modelFallbackTo, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
 import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
-import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import { appendModelFallbackEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
@@ -586,6 +586,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    */
   let detachedSessionFile: string | undefined;
 
+  /** `modelFallback` + `modelNote` event fields, or nothing. Only what is KNOWN when the event fires. */
+  function fallbackFields(record: AgentRecord | undefined): Record<string, unknown> {
+    return record?.modelFallback
+      ? { modelFallback: record.modelFallback, modelNote: modelFallbackNote(record.modelFallback) }
+      : {};
+  }
+
   /** The `subagents:record` history entry; the ONE builder, shared by live completion and the detached spool. */
   function historyRecord(record: AgentRecord): Record<string, unknown> {
     return {
@@ -693,6 +700,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id,
       type: record.type,
       description: record.description,
+      ...fallbackFields(record),
     });
   }, (record, info) => {
     if (!isTopLevelAgent(record)) return;
@@ -704,6 +712,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       reason: info.reason,
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
+      ...fallbackFields(record),
     });
   }, (record, usage) => {
     // Every assistant message from every agent — nested included, exactly once.
@@ -739,7 +748,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       // clamped it to the model, or an agent file outranked it), so a ledger
       // can show `low (asked minimal)` instead of silently relabelling.
       ...(invocation?.requestedThinking !== undefined ? { requestedThinking: invocation.requestedThinking } : {}),
-      ...(record.modelFallback ? { modelFallback: record.modelFallback, modelNote: modelFallbackNote(record.modelFallback) } : {}),
+      ...fallbackFields(record),
       depth: record.depth ?? 1,
       ...(record.parentAgentId !== undefined ? { parentAgentId: record.parentAgentId } : {}),
       ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
@@ -1362,6 +1371,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           type: record.type,
           description: record.description,
           isBackground: true,
+          ...fallbackFields(record),
         });
       }
     }
@@ -1598,6 +1608,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     if (opts.outputTranscript) {
       existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
       ensureOutputFile(existing.outputFile);
+      // A fresh transcript for a later resume must still say what the agent ran on.
+      if (existing.modelFallback) appendModelFallbackEntry(existing.outputFile, id, existing.modelFallback);
     }
     // Anchor streaming past the turns already on disk, captured BEFORE the
     // run starts. The resumed prompt lands as an ordinary user message at
@@ -1656,6 +1668,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       type: existing.type,
       description: existing.description,
       isBackground: true,
+      ...fallbackFields(existing),
     });
 
     return record;
@@ -2463,6 +2476,7 @@ Terse command-style prompts produce shallow, generic work.
           type: subagentType,
           description: params.description,
           isBackground: true,
+          ...fallbackFields(manager.getRecord(id)),
         });
 
         return backgroundResult(id, record);
