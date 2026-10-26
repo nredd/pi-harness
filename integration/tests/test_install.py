@@ -961,6 +961,36 @@ def set_backup(name: str, backup: str) -> Callable[[dict[str, Any]], None]:
     return change
 
 
+def tamper_core(harness: Harness, outside: Path, case: str) -> None:
+    """Make the pending journal name an untrusted versioned core prefix in one way.
+
+    Parameters:
+        harness (Harness): HOME with a pending journal.
+        outside (Path): an unrelated directory the journal must never reach.
+        case (str): which core tampering.
+
+    Raises:
+        ValueError: unknown case.
+    """
+    layout = harness.layout
+    tag = harness.snapshot.stack.core.tag
+    backup = layout.root / "backups" / "b" / f"core-{tag}"
+    match case:
+        case "core-unversioned-target":
+            edit_journal(harness, add_step(layout.root / "core" / "main"))
+        case "core-nested-target":
+            edit_journal(harness, add_step(layout.core(tag) / "bin"))
+        case "core-parent-symlink":
+            shutil.rmtree(layout.root / "core", ignore_errors=True)
+            (layout.root / "core").symlink_to(outside)
+            edit_journal(harness, add_step(layout.core(tag)))
+        case "core-file-backup":
+            backup.write_text("not a directory")
+            edit_journal(harness, add_step(layout.core(tag), backup))
+        case _:
+            raise ValueError(f"Unknown core tampering '{case}'")
+
+
 def tamper(harness: Harness, outside: Path, case: str) -> None:
     """Make the pending journal untrusted in one way.
 
@@ -984,6 +1014,8 @@ def tamper(harness: Harness, outside: Path, case: str) -> None:
             edit_journal(harness, add_step(f"{agent / 'npm'}/../auth.json"))
         case "duplicate-target":
             edit_journal(harness, add_step(agent / "npm"))
+        case "core-unversioned-target" | "core-nested-target" | "core-parent-symlink" | "core-file-backup":
+            tamper_core(harness, outside, case)
         case "outside-backup":
             edit_journal(harness, set_backup("settings.json", str(outside / "settings.json")))
         case "traversal-backup":
@@ -1025,6 +1057,10 @@ def tamper(harness: Harness, outside: Path, case: str) -> None:
         "credentials-target",
         "traversal-target",
         "duplicate-target",
+        "core-unversioned-target",
+        "core-nested-target",
+        "core-parent-symlink",
+        "core-file-backup",
         "outside-backup",
         "traversal-backup",
         "traversal-backups-dir",

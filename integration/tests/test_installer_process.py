@@ -142,6 +142,33 @@ def test_cleanup_preserves_marker_and_cleanup_errors(monkeypatch: pytest.MonkeyP
         process.wait(timeout=3)
 
 
+def test_cleanup_tolerates_permission_denied_on_zombie_only_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS answers `EPERM` for a group holding only zombies: no live member, so cleanup succeeds."""
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"], stdout=subprocess.PIPE, text=True, start_new_session=True
+    )
+    signalled: list[int] = []
+
+    def denied(pgid: int, sig: int) -> None:
+        """Model the zombie-only group refusal without signalling another group."""
+        assert pgid == process.pid
+        signalled.append(sig)
+        raise PermissionError("zombie-only group")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "killpg", denied)
+            patch.setattr(installer, "group_has_live_members", lambda pgid, timeout: False)
+            installer.cleanup_group(process, timeout=5)
+        assert signalled == [signal.SIGKILL]
+        assert process.returncode == 0
+        assert process.stdout is not None
+        assert process.stdout.closed
+    finally:
+        process.kill()
+        process.wait(timeout=3)
+
+
 def test_group_cleanup_deadline_is_shared_and_reaps(monkeypatch: pytest.MonkeyPatch) -> None:
     """A persistently live snapshot fails closed without extending the cleanup deadline."""
     process = subprocess.Popen(
