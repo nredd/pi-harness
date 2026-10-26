@@ -123,8 +123,10 @@ Agents carry no `model:` field. `code-review` keeps its explicit reviewer model,
 `opus`). These stay as-is during the migration. The migration's own PR reviews continue to
 select Sol explicitly; a future configurable role is not permission to substitute reviewers.
 
-`critic` carries no `thinking:` pin, so it inherits the session level. An `Agent` call's `thinking`
-parameter overrides frontmatter, so callers can still ask for `high` per dispatch.
+No preset agent pins `thinking:`. With no `thinking` on the `Agent` call, pi-subagents passes no level
+to the child session, so pi picks it: the per-model setting, else `defaultThinkingLevel`, clamped to the
+model (not the parent's live level if changed mid-session). An `Agent` call's `thinking` overrides
+frontmatter, so callers can still ask for e.g. `high` per dispatch.
 
 No `role:` references are introduced. Logical-role conversion needs strict required-role support
 in the pinned pi-subagents fork (exact available candidates, no fuzzy/provider/parent fallback,

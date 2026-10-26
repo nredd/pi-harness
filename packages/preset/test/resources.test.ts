@@ -87,9 +87,11 @@ test("agent extension selectors use short names, never the scoped form", () => {
 	}
 });
 
-test("critic does not pin thinking, so it inherits the session level", () => {
-	const { frontmatter } = frontmatterOf("agents/critic.md");
-	assert.equal(frontmatter.thinking, undefined);
+test("no preset agent pins thinking, so callers and pi defaults decide", () => {
+	for (const agent of AGENTS) {
+		const { frontmatter } = frontmatterOf(`agents/${agent}.md`);
+		assert.ok(!("thinking" in frontmatter), `${agent}: pins thinking`);
+	}
 });
 
 test("every selector's extension is a declared external extension and the declaration matches usage", () => {
