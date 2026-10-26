@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { Type } from "typebox";
-import { configuredAgentModel } from "./model-resolver.js";
+import { modelRequest } from "./model-selection.js";
 import type { AgentConfig, IsolationMode, JoinMode, ThinkingLevel } from "./types.js";
 
 /**
@@ -155,7 +155,7 @@ export function resolveAgentInvocationConfig(
     // explicit model on the Agent call must win so an orchestrator can select a
     // specific model (e.g. a `router/*` virtual model) for this dispatch. Below
     // it, the global `agentModels` setting outranks the definition's own default.
-    modelInput: params.model ?? configuredAgentModel(opts?.agentType ?? agentConfig?.name ?? "", agentConfig?.model),
+    modelInput: modelRequest(opts?.agentType ?? agentConfig?.name ?? "", agentConfig?.model, params.model).requested,
     modelFromParams: params.model != null,
     // A specialist's frontmatter is a reusable default, not a policy boundary:
     // an explicit dispatch chooses the effort for this run. Pi still clamps the
