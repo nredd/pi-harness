@@ -30,7 +30,7 @@ import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import type { ModelCallEvent } from "./model-call.js";
-import { type ModelFallback, modelFallbackTo } from "./model-resolver.js";
+import { type ModelFallback, selectConfiguredModel } from "./model-resolver.js";
 import {
   createNestedSubagentTools,
   getMaxSubagentDepth,
@@ -474,47 +474,6 @@ const FINAL_REPORT_PROMPT =
   "You are out of turns and have no tools left. Do NOT call any tool or say what you would do next. "
   + "Write your complete final report now: everything you found, concrete file paths and line numbers, "
   + "what you changed or concluded, and anything unfinished or unverified.";
-
-/**
- * Try to find the right model for an agent type.
- * Priority: explicit option > config.model > parent model.
- */
-export function resolveDefaultModel(
-  parentModel: Model<any> | undefined,
-  registry: { find(provider: string, modelId: string): Model<any> | undefined; getAvailable?(): Model<any>[] },
-  configModel?: string,
-): Model<any> | undefined {
-  return resolveDefaultModelOutcome(parentModel, registry, configModel).model;
-}
-
-/** {@link resolveDefaultModel}, plus the fallback it took when `configModel` did not resolve. */
-export function resolveDefaultModelOutcome(
-  parentModel: Model<any> | undefined,
-  registry: { find(provider: string, modelId: string): Model<any> | undefined; getAvailable?(): Model<any>[] },
-  configModel?: string,
-): { model: Model<any> | undefined; fallback?: ModelFallback } {
-  if (configModel) {
-    const slashIdx = configModel.indexOf("/");
-    if (slashIdx !== -1) {
-      const provider = configModel.slice(0, slashIdx);
-      const modelId = configModel.slice(slashIdx + 1);
-
-      // Build a set of available model keys for fast lookup
-      const available = registry.getAvailable?.();
-      const availableKeys = available
-        ? new Set(available.map((m: any) => `${m.provider}/${m.id}`))
-        : undefined;
-      const isAvailable = (p: string, id: string) =>
-        !availableKeys || availableKeys.has(`${p}/${id}`);
-
-      const found = registry.find(provider, modelId);
-      if (found && isAvailable(provider, modelId)) return { model: found };
-    }
-    return { model: parentModel, fallback: modelFallbackTo(configModel, parentModel) };
-  }
-
-  return { model: parentModel };
-}
 
 /** Info about a tool event in the subagent. */
 export interface ToolActivity {
@@ -1195,9 +1154,9 @@ export async function runAgent(
   // the caller; only this path can fall back unseen, so it reports itself.
   let model = options.model;
   if (model === undefined) {
-    const outcome = resolveDefaultModelOutcome(ctx.model, ctx.modelRegistry, agentConfig?.model);
-    model = outcome.model;
-    if (outcome.fallback) options.onModelFallback?.(outcome.fallback);
+    const selection = selectConfiguredModel(type, agentConfig?.model, ctx.model, ctx.modelRegistry);
+    model = selection.model;
+    if (selection.fallback) options.onModelFallback?.(selection.fallback);
   }
 
   // Resolve thinking level: explicit option > agent config > undefined (inherit)

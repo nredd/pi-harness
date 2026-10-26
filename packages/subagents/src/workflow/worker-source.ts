@@ -96,13 +96,13 @@ const pendingCalls = new Map();
  */
 let spentOutput = 0;
 
-function callHost(method, payload) {
+function callHost(method, payload, onModelNote) {
   // Drain first, so the phase() that named this agent reaches the host ahead of
   // the agent entry rather than a tick behind it.
   flushProgress();
   return new Promise(function (resolve, reject) {
     const callId = nextCallId++;
-    pendingCalls.set(callId, { resolve: resolve, reject: reject });
+    pendingCalls.set(callId, { resolve: resolve, reject: reject, onModelNote: onModelNote });
     port.postMessage({ type: "call", callId: callId, method: method, payload: payload });
   });
 }
@@ -114,6 +114,7 @@ port.on("message", function (message) {
   if (!waiter) return;
   pendingCalls.delete(message.callId);
   if (message.ok) {
+    if (message.modelNote !== undefined && waiter.onModelNote) waiter.onModelNote(message.modelNote);
     waiter.resolve(message.value);
     return;
   }
@@ -523,6 +524,8 @@ async function agentIn(scope, prompt, opts) {
   const phaseIndex = phaseName !== undefined ? definePhaseIn(scope, phaseName) : scope.ambientPhaseIndex;
   const phaseTitle = phaseName !== undefined ? scopedTitle(scope, phaseName) : scope.ambientPhaseTitle;
 
+  // Set when the host ran the child on another model than configured.
+  let modelNote;
   const result = await callHost("agent", {
     prompt: text,
     label: label,
@@ -535,14 +538,26 @@ async function agentIn(scope, prompt, opts) {
     resume: resume,
     effort: effort,
     schema: schema,
-  });
-  if (result === undefined || result === null) return null;
+  }, function (note) { modelNote = note; });
+  if (result === undefined || result === null) {
+    // A failed child is a null; its note would otherwise be lost with it.
+    if (modelNote !== undefined) logIn(scope, modelNote);
+    return null;
+  }
   if (schema === undefined) return result;
   // Parsed with the realm's own JSON.parse so the script gets an object whose
   // prototype is its own — \`x instanceof Object\` and \`x.list instanceof Array\`
   // both hold, and it survives assertBoundary if the script returns it.
   try {
-    return realmParse(result);
+    const parsed = realmParse(result);
+    // A schema'd payload must stay exactly what the schema describes, so the
+    // note cannot lead it as text. It goes to the run log, and onto a plain
+    // object payload as a sibling \`_modelNote\` the script can read.
+    if (modelNote !== undefined) {
+      logIn(scope, modelNote);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) parsed._modelNote = modelNote;
+    }
+    return parsed;
   } catch (error) {
     logIn(scope, "agent(): the host returned a structured result that is not JSON");
     return null;

@@ -1075,6 +1075,33 @@ describe("structured output", () => {
     expect(JSON.parse(result.value as string)).toEqual(["object", true, true, 2]);
   });
 
+  describe("model fallback disclosure at the script boundary", () => {
+    const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+
+    it("a schema'd payload keeps its shape, gains a sibling _modelNote, and the run log carries the note", async () => {
+      const stub = stubHost(() => ({ ok: true, text: '{"findings":["a"]}', modelNote }));
+      const result = await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });
+
+      expect(result.value).toEqual({ findings: ["a"], _modelNote: modelNote });
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+    });
+
+    it("a failed agent is still a null, with the note in the run log", async () => {
+      const stub = stubHost(() => ({ ok: false, error: "boom", modelNote }));
+      const result = await run("return await agent('go') === null;", { host: stub.host });
+
+      expect(result.value).toBe(true);
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+    });
+
+    it("adds nothing when the host reports no note", async () => {
+      const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}' }));
+      const result = await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });
+
+      expect(result.value).toEqual({ findings: [] });
+    });
+  });
+
   it("passes the compiled schema to the host", async () => {
     const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}' }));
     await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });

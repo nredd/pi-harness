@@ -110,6 +110,16 @@ describe("scheduler at fire time", () => {
     expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
   });
 
+  it("a job with no stored model honors an unavailable agentModels override and discloses it", async () => {
+    registerAgents(new Map([agent("scout", "anthropic/claude-sonnet-5-5")]));
+    setAgentModels({ scout: "claude-haiku-4-5" });
+
+    const record = await fire();
+
+    // The override outranks the (resolving) definition model, so nothing silently ran it.
+    expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
+  });
+
   it("a stored model that does not resolve is still disclosed when the definition's own model took over", async () => {
     // Selection is unchanged (the definition's model runs), but the failed stored
     // input is named, along with what actually ran.
@@ -118,10 +128,10 @@ describe("scheduler at fire time", () => {
     const record = await fire("claude-haiku-4-5");
 
     expect(record.modelFallback).toEqual({
-      input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5", via: "definition",
+      input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5", via: "agent",
     });
     expect(modelFallbackNote(record.modelFallback)).toBe(
-      'Note: configured model "claude-haiku-4-5" did not resolve; running on agent definition model anthropic/claude-sonnet-5-5.',
+      'Note: configured model "claude-haiku-4-5" did not resolve; running on the agent\'s own model anthropic/claude-sonnet-5-5.',
     );
     expect(vi.mocked(runAgent).mock.calls[0]?.[3].model).toBeUndefined();
   });

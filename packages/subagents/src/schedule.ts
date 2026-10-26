@@ -20,10 +20,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
 import type { AgentManager } from "./agent-manager.js";
-import { normalizeMaxTurns, resolveDefaultModelOutcome } from "./agent-runner.js";
+import { normalizeMaxTurns } from "./agent-runner.js";
 import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
-import { type ModelFallback, modelFallbackTo, resolveModel } from "./model-resolver.js";
+import { configuredAgentModel, type ModelFallback, modelFallbackTo, resolveModel, selectConfiguredModel } from "./model-resolver.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
 import type { ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
@@ -283,9 +283,9 @@ export class SubagentScheduler {
   /** What the runner will pick for a spawn with no model, as a fallback away from `input`. */
   private selectionAfterUnresolved(input: string, type: string): ModelFallback {
     const definitionModel = getAgentConfig(type)?.model;
-    const outcome = resolveDefaultModelOutcome(this.ctx?.model, this.ctx?.modelRegistry as never, definitionModel);
-    const via = definitionModel && !outcome.fallback ? "definition" : "parent";
-    return { ...modelFallbackTo(input, outcome.model), via };
+    const selection = selectConfiguredModel(type, definitionModel, this.ctx?.model, this.ctx?.modelRegistry as never);
+    const agentsOwn = configuredAgentModel(type, definitionModel) !== undefined && !selection.fallback;
+    return { ...modelFallbackTo(input, selection.model), via: agentsOwn ? "agent" : "parent" };
   }
 
   /** Re-arm a quota-parked one-shot at a later reset instead of starting it. */

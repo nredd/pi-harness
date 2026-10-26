@@ -737,14 +737,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       options.onProgress?.(entries);
     };
 
-    const respond = (callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean) => {
+    const respond = (callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean, modelNote?: string) => {
       // Cleared before the settled check: a launch answered by a run that is
       // already finishing is not an unawaited launch either.
       openLaunches.delete(callId);
       if (settled) return;
       // `spent` rides on every response, so the worker's `budget.spent()` is a
       // mirror of this number rather than a second tally of its own.
-      worker.postMessage({ type: "response", callId, ok, value, error, fatal, spent: spentOutputTokens });
+      worker.postMessage({ type: "response", callId, ok, value, error, fatal, modelNote, spent: spentOutputTokens });
     };
 
     const finish = (result: Omit<WorkflowRunResult, "meta" | "progress" | "agentCount" | "replayedCount">) => {
@@ -1104,7 +1104,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             const text = result.text ?? "";
             emit([{ ...common, state: "done", resultPreview: preview(text) }]);
             recordJournal?.({ index, key, ok: true, text, ...resumeMark });
-            respond(callId, true, text);
+            respond(callId, true, text, undefined, undefined, result.modelNote);
             return;
           }
           // Recorded as a failure rather than left out: a gap would be read as an
@@ -1125,7 +1125,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
               ...(result.skipped ? { skipped: true } : {}),
             },
           ]);
-          respond(callId, true, null);
+          respond(callId, true, null, undefined, undefined, result.modelNote);
           return;
         }
       } finally {
