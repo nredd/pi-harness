@@ -164,6 +164,14 @@ Flake policy (migration plan section 7):
   failed. The rerun must pass. Both attempts stay in the run's attempt history; name the flake in the PR
 - Known timing-sensitive suites: session-kit `monitor` and `diff` reaping, dev-tools kill escalation,
   core `chord`/`durable` 5 s timeouts. They were green alone and flaky on a loaded laptop
+- Subagents' genuine manager-reload fixture also includes synchronous TypeScript preparation and child
+  imports inside its 5 s test deadline. PR #138's macOS failure reported that deadline at 5597 ms
+  ([here](https://github.com/nredd/pi-harness/actions/runs/40369078357/job/121734701111)). Controlled
+  compiler/import delays reproduce the same timeout on the unchanged `origin/main` source while the
+  child passes every budget assertion and exits successfully. Vitest checks elapsed time even after
+  a synchronous test returns. Compile each source once and write its output to two physical ESM trees;
+  the test pins that operation count and retains distinct managers, shared waiters and final zero usage.
+  Neither the 5 s test deadline nor the 10 s child watchdog changes. This does not authorize a rerun
 - Never rerun until green, never relabel NOT RUN as a pass
 
 Both assembled stacks use `npm:@gotgenes/pi-anthropic-auth@3.4.3`, not the retained auth Gitlink.

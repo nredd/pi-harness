@@ -12,8 +12,14 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import type * as TypeScript from "typescript";
 import { ModuleKind, transpileModule } from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("typescript", async importOriginal => {
+  const actual = await importOriginal<typeof TypeScript>();
+  return { ...actual, transpileModule: vi.fn(actual.transpileModule) };
+});
 
 vi.mock("../src/agent-runner.js", () => ({
   runAgent: vi.fn(),
@@ -284,27 +290,36 @@ describe("process budget across managers", () => {
   it("settles an old manager to wake a genuine reloaded manager's waiter", () => {
     const dir = mkdtempSync(join(tmpdir(), "manager-reload-"));
     const sourceDir = fileURLToPath(new URL("../src/", import.meta.url));
+    vi.mocked(transpileModule).mockClear();
     try {
-      // Compile the actual trees into separate ESM identities. Only the LLM
-      // runner is scripted, as in the in-process manager tests above.
+      const sources = readdirSync(sourceDir, { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith(".ts"));
+      // Compile once, then write separate ESM identities. Compiling the whole
+      // tree for each identity needlessly burns the test's wall-clock budget.
+      // Only the LLM runner is scripted, as in the manager tests above.
       symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), join(dir, "node_modules"), "dir");
-      for (const name of ["old", "fresh"]) {
-        const root = join(dir, name);
+      const roots = ["old", "fresh"].map(name => join(dir, name));
+      for (const root of roots) {
         mkdirSync(root);
         writeFileSync(join(root, "package.json"), '{"type":"module"}');
-        for (const entry of readdirSync(sourceDir, { recursive: true, withFileTypes: true })) {
-          if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
-          const sourcePath = join(entry.parentPath, entry.name);
+      }
+      for (const entry of sources) {
+        const sourcePath = join(entry.parentPath, entry.name);
+        const { outputText } = transpileModule(readFileSync(sourcePath, "utf8"), {
+          compilerOptions: { module: ModuleKind.ESNext },
+        });
+        for (const root of roots) {
           const outputPath = join(root, relative(sourceDir, sourcePath).replace(/\.ts$/, ".js"));
           mkdirSync(dirname(outputPath), { recursive: true });
-          writeFileSync(outputPath, transpileModule(readFileSync(sourcePath, "utf8"), {
-            compilerOptions: { module: ModuleKind.ESNext },
-          }).outputText);
+          writeFileSync(outputPath, outputText);
         }
+      }
+      for (const root of roots) {
         copyFileSync(new URL("./fixtures/budget-scripted-runner.mjs", import.meta.url), join(root, "agent-runner.js"));
       }
       copyFileSync(new URL("./fixtures/budget-manager-reload.mjs", import.meta.url), join(dir, "check.mjs"));
       expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
+      expect(transpileModule).toHaveBeenCalledTimes(sources.length);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
