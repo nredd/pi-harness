@@ -83,6 +83,24 @@ describe("git_commit push target", () => {
 		expect(subjectOn(upstream)).toBe("Push upstream");
 	});
 
+	it("pushes a new branch to branch.<n>.remote when its tracking ref does not exist yet", async () => {
+		const { repo, upstream, fork } = fixture();
+		// `origin` is the decoy the old code fell back to: it is the upstream repo we must not write to.
+		sh(repo, ["remote", "add", "origin", upstream]);
+		sh(repo, ["checkout", "-q", "-b", "feat"]);
+		sh(repo, ["config", "branch.feat.remote", "fork"]);
+		sh(repo, ["config", "branch.feat.merge", "refs/heads/feat"]);
+		expect(() => sh(repo, ["rev-parse", "--verify", "-q", "refs/remotes/fork/feat"])).toThrow();
+		expect(() => sh(repo, ["rev-parse", "--abbrev-ref", "@{u}"])).toThrow();
+		change(repo, 13);
+		const r = await mock.call("git_commit", { subject: "First push of feat", paths: ["a.txt"] }, repo);
+		expect(r.isError, mock.text(r)).toBe(false);
+		expect(sh(fork, ["log", "-1", "--format=%s", "feat"])).toBe("First push of feat");
+		expect(sh(upstream, ["branch", "--list", "feat"])).toBe("");
+		expect(subjectOn(upstream)).toBe("Initial");
+		expect(sh(repo, ["rev-parse", "--abbrev-ref", "@{u}"])).toBe("fork/feat");
+	});
+
 	it("fails closed with several remotes and no configured target", async () => {
 		const { repo, upstream, fork } = fixture();
 		sh(repo, ["branch", "--unset-upstream"]);
