@@ -5,6 +5,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ModelFallback } from "./model-resolver.js";
+import type { ModelSelection } from "./model-selection.js";
 import type { BudgetLease } from "./process-budget.js";
 import type { LifetimeUsage } from "./usage.js";
 
@@ -279,6 +280,8 @@ export interface AgentRecord {
    * as is, never recomputes it from the resuming call's config.
    */
   modelFallback?: ModelFallback;
+  /** Original selection outcome, retained across resumes and physical relabelling. */
+  modelSelection?: ModelSelection;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
   /**

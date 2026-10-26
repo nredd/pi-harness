@@ -43,8 +43,9 @@ import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
-import { describeModel, describeVirtualModel, isVirtualModel, type ModelFallback, type ModelRegistry, modelFallbackNote, modelFallbackTo, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
-import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
+import { describeModel, describeVirtualModel, isVirtualModel, type ModelRegistry, modelFallbackNote, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
+import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
+import { modelRequest, selectModel } from "./model-selection.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { appendModelFallbackEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
@@ -835,6 +836,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // The spawn path's own disclosure; a caller-supplied one could hide a
     // fallback or invent one. The runner reports the real outcome itself.
     delete safeOptions.modelFallback;
+    delete safeOptions.modelSelection;
     return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
   };
 
@@ -2082,33 +2084,16 @@ Terse command-style prompts produce shallow, generic work.
         defaultRunInBackground: getBackgroundByDefault(),
       });
 
-      // Resolve an explicit tool-call model first; agent config supplies only a default.
-      let model = ctx.model;
-      let modelFallback: ModelFallback | undefined;
-      if (resolvedConfig.modelInput) {
-        const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
-        if (typeof resolved === "string") {
-          if (resolvedConfig.modelFromParams) return textResult(resolved);
-          // Config-specified: still falls back to the parent, but says so.
-          modelFallback = modelFallbackTo(resolvedConfig.modelInput, ctx.model);
-        } else {
-          model = resolved;
-        }
-      }
-
-      // Scope validation: the effective resolved model is checked against the
-      // user's enabledModels list. Policy (hard error vs warn-and-proceed) lives
-      // in model-scope.ts so the nested delegation tools apply the same rule.
-      const scopeVerdict = checkModelScope({
-        model,
-        cwd: ctx.cwd,
-        modelRegistry: ctx.modelRegistry,
-        callerSupplied: resolvedConfig.modelFromParams,
-        agentLabel: customConfig?.displayName ?? subagentType,
-        modelInput: resolvedConfig.modelInput,
+      // A live resume keeps its record's selection, ignoring new model inputs.
+      const selection = params.resume ? undefined : selectModel({
+        agentType: subagentType, definitionModel: customConfig?.model, paramModel: params.model,
+        parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: customConfig?.displayName,
       });
-      if (scopeVerdict.kind === "error") return textResult(scopeVerdict.message);
-      if (scopeVerdict.kind === "warn") ctx.ui.notify(scopeVerdict.message, "warning");
+      if (typeof selection === "string") return textResult(selection);
+      const model = selection?.model;
+      const modelFallback = selection?.fallback;
+
+      if (selection?.scopeWarning) ctx.ui.notify(selection.scopeWarning, "warning");
 
       const thinking = resolvedConfig.thinking;
       const inheritContext = resolvedConfig.inheritContext;
@@ -2396,7 +2381,9 @@ Terse command-style prompts produce shallow, generic work.
           schedule: new Date(quotaBlock.resetAt + QUOTA_RESTART_GRACE_MS).toISOString(),
           subagent_type: requestedType,
           prompt: params.prompt as string,
-          model: dispatchModel ? modelRef(dispatchModel) : undefined,
+          // Keep the request, not today's configured/parent pick. Fire-time
+          // selection must still apply agentModels and aliases.
+          model: params.model,
           thinking,
           max_turns: effectiveMaxTurns,
           isolated,
@@ -2430,10 +2417,10 @@ Terse command-style prompts produce shallow, generic work.
         // tool call failed, whereas a returned message reads to the model as a
         // subagent that ran and reported this (#179).
         id = manager.spawn(pi, ctx, subagentType, params.prompt, {
+          modelSelection: selection,
           description: params.description,
           name: params.name as string | undefined,
           model,
-          modelFallback,
           maxTurns: effectiveMaxTurns,
           isolated,
           inheritContext,
@@ -2585,10 +2572,10 @@ Terse command-style prompts produce shallow, generic work.
       let fgResult: { record: AgentRecord } | undefined;
       try {
         fgResult = await Promise.race([manager.spawnAndWait(pi, ctx, subagentType, params.prompt, {
+          modelSelection: selection,
           description: params.description,
           name: params.name as string | undefined,
           model,
-          modelFallback,
           maxTurns: effectiveMaxTurns,
           isolated,
           inheritContext,
@@ -3305,19 +3292,21 @@ Terse command-style prompts produce shallow, generic work.
 
   function getModelLabel(type: string, registry?: ModelRegistry): string {
     const cfg = getAgentConfig(type);
-    if (!cfg?.model) return "inherit"; // no model configured → really inherits parent
-    const label = getModelLabelFromConfig(cfg.model);
+    const input = modelRequest(type, cfg?.model).requested;
+    if (!input) return "inherit";
+    const label = getModelLabelFromConfig(input);
     if (!registry) return label;
-    const resolved = resolveModel(cfg.model, registry);
+    const selection = selectModel({ agentType: type, definitionModel: cfg?.model, parentModel: undefined, registry, cwd: currentCtx?.cwd ?? process.cwd() });
+    const resolved = typeof selection === "string" || selection.outcome === "fallback" ? "unavailable" : selection.model;
     // Configured but unresolvable: the runtime silently falls back to the parent
     // model, so flag it (and the fallback) rather than hiding the config.
-    if (typeof resolved === "string") return `${label} (unavailable, fallback: inherit)`;
+    if (typeof resolved === "string" || !resolved) return `${label} (unavailable, fallback: inherit)`;
     // Surface what it actually resolved to when that differs from the config —
     // e.g. a provider fallback or a looser version pin. Cosmetic separator/date
     // differences are normalized away so an effectively-identical match stays quiet.
     const resolvedFull = `${resolved.provider}/${resolved.id}`;
     const norm = (s: string) => s.toLowerCase().replace(/\./g, "-").replace(/-\d{8}$/, "");
-    if (norm(cfg.model) === norm(resolvedFull)) return label;
+    if (norm(input) === norm(resolvedFull)) return label;
     return `${label} (→ ${resolvedFull.replace(/-\d{8}$/, "")})`;
   }
 
