@@ -459,7 +459,7 @@ describe("cross-extension RPC", () => {
       deps = { events, pi: { events }, getCtx: () => ctx, manager };
     });
 
-    it("resolves a string model to a Model instance before manager.spawn", async () => {
+    it("validates a string model and preserves its original request for shared spawn", async () => {
       registerRpcHandlers(deps);
       const reply = vi.fn();
       events.on("subagents:rpc:spawn:reply:req-m1", reply);
@@ -472,7 +472,7 @@ describe("cross-extension RPC", () => {
       expect(reply).toHaveBeenCalledWith({ success: true, data: { id: "agent-42" } });
       expect(manager.spawn).toHaveBeenCalledWith(
         deps.pi, ctx, "general-purpose", "x",
-        { model: fakeModel },
+        { model: "openai-codex/gpt-5.5" },
       );
     });
 
@@ -625,7 +625,7 @@ describe("cross-extension RPC", () => {
       const call = await spawn("req-sc3", "openai-codex/gpt-5.5");
       expect(call).toEqual({ success: true, data: { id: "agent-42" } });
       expect(manager.spawn).toHaveBeenCalledWith(
-        deps.pi, ctx, "general-purpose", "x", { model: ALLOWED },
+        deps.pi, ctx, "general-purpose", "x", { model: "openai-codex/gpt-5.5" },
       );
     });
 
@@ -634,7 +634,7 @@ describe("cross-extension RPC", () => {
       const call = await spawn("req-sc4", "sonnet");
       expect(call).toEqual({ success: true, data: { id: "agent-42" } });
       expect(manager.spawn).toHaveBeenCalledWith(
-        deps.pi, ctx, "general-purpose", "x", { model: BLOCKED },
+        deps.pi, ctx, "general-purpose", "x", { model: "sonnet" },
       );
     });
   });
