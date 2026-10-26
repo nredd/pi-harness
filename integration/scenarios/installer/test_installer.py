@@ -143,7 +143,7 @@ def gh_config_shim(directory: Path, cfg: Path, gh: Path) -> Path:
 
 
 def configure_gh_login(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Expose CI's temporary login only through gh, never through uvx or package builds.
+    """Select CI's temporary gh login; the PATH shim also grants same-UID children its capability.
 
     Parameters:
         tmp_path (Path): private scratch directory.
@@ -170,8 +170,9 @@ def isolated_gh_login(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def environment(home: Path, uv_cache: Path, path: str | None = None) -> dict[str, str]:
     """Build a clean environment: only PATH, the throwaway HOME and uv's cache.
 
-    No token or login-config environment is forwarded, including to uvx and its build children.
-    In CI, PATH contains a gh-only wrapper for the separately provisioned temporary login.
+    No token or login-config variable is forwarded, including to uvx and its build children.
+    KNOWN RESIDUAL: PATH retains the gh wrapper, so same-UID children can still invoke it or read
+    its embedded config path and hosts.yml. This is environment hygiene, not capability isolation.
 
     Parameters:
         home (Path): throwaway HOME.

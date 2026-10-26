@@ -91,7 +91,9 @@ jobs:
       # workflow to request writes or secrets; these permissions constrain this submitted workflow,
       # not arbitrary same-repo PR code. Fork PRs and non-main dispatches stay anonymous.
       # Only this login step sees the token. Acceptance uses a gh-only config shim, so make,
-      # pytest, uvx, Git and package builds never inherit it. Hosted IPs share the anonymous
+      # pytest, uvx, Git and package builds never inherit its environment value. The PATH shim
+      # still grants same-UID package code the login capability (KNOWN RESIDUAL in docs/ci.md).
+      # Hosted IPs share the anonymous
       # 60 requests/hour limit. `test_installer_workflow_token_policy` pins the expression.
       - name: Authenticate gh attestation fallback
         env:

@@ -129,12 +129,21 @@ def gitlink_tag(directory: Path) -> str:
         RuntimeError: the Gitlink is untagged.
     """
     try:
-        return subprocess.check_output(
-            [GIT_BIN, "-C", str(directory), "describe", "--tags", "--exact-match"],
-            env=without_github_tokens(os.environ),
-            text=True,
-            stderr=subprocess.STDOUT,
-        ).strip()
+        # Match the sandbox's explicit-environment/isolated-HOME policy. No inherited GIT_*,
+        # askpass, credential configuration, XDG config, or token can redirect this checkout.
+        with tempfile.TemporaryDirectory(prefix="pi-gitlink-home-") as home:
+            return subprocess.check_output(
+                [GIT_BIN, "-C", str(directory), "describe", "--tags", "--exact-match"],
+                env={
+                    "PATH": os.defpath,
+                    "HOME": home,
+                    "XDG_CONFIG_HOME": home,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_TERMINAL_PROMPT": "0",
+                },
+                text=True,
+                stderr=subprocess.STDOUT,
+            ).strip()
     except subprocess.CalledProcessError as error:
         raise RuntimeError(
             f"Core Gitlink at '{directory}' is untagged; release it before gating pins: {error.output}"

@@ -1729,22 +1729,44 @@ def test_installer_workflow_token_is_confined_to_gh_login() -> None:
     assert cleanup["run"] == 'rm -rf -- "$GH_CONFIG_DIR"'
 
 
-def test_acceptance_token_never_reaches_uvx_or_builds(
+def write_ci_gh_login(cfg: Path) -> None:
+    """Model gh's insecure hosts.yml, including host-level and active-user token slots.
+
+    Parameters:
+        cfg (Path): existing private login directory.
+
+    References:
+        https://github.com/cli/cli/blob/trunk/internal/config/config.go
+    """
+    cfg.chmod(0o700)
+    hosts = cfg / "hosts.yml"
+    hosts.write_text(
+        yaml.safe_dump(
+            {
+                "github.com": {
+                    "user": "installer-ci",
+                    "git_protocol": "https",
+                    "oauth_token": SENTINEL,
+                    "users": {"installer-ci": {"oauth_token": SENTINEL}},
+                }
+            }
+        )
+    )
+    hosts.chmod(0o600)
+
+
+def test_acceptance_token_environment_is_clean_but_gh_capability_remains(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A real uvx-shaped launcher/build child sees no sentinel; only gh can read the login file."""
+    """No token is inherited, but same-UID build code can use the PATH shim and read real hosts.yml."""
     cfg, tools, home = tmp_path / "login", tmp_path / "tools", tmp_path / "home"
     for directory in (cfg, tools, home):
         directory.mkdir()
-    (cfg / "token").write_text(SENTINEL)
-    gh = tools / "real-gh"
-    gh.write_text(
-        f"#!{sys.executable}\nimport os,pathlib\n"
-        f"assert not set(os.environ).intersection({sorted(GITHUB_TOKEN_VARIABLES)!r})\n"
-        "print((pathlib.Path(os.environ['GH_CONFIG_DIR']) / 'token').read_text())\n"
-    )
-    gh.chmod(0o700)
-    shim = acceptance.gh_config_shim(tmp_path / "shim", cfg, gh)
+    write_ci_gh_login(cfg)
+    assert yaml.safe_load((cfg / "hosts.yml").read_text())["github.com"]["oauth_token"] == SENTINEL
+    gh = shutil.which("gh")
+    assert gh is not None, "Offline gh config interoperability requires the GitHub CLI"
+    shim = acceptance.gh_config_shim(tmp_path / "shim", cfg, Path(gh))
     for token in GITHUB_TOKEN_VARIABLES:
         monkeypatch.setenv(token, SENTINEL)
     monkeypatch.setenv("GH_CONFIG_DIR", str(cfg))
@@ -1757,9 +1779,17 @@ def test_acceptance_token_never_reaches_uvx_or_builds(
         "assert 'INSTALLER_GH_CONFIG_DIR' not in os.environ\n"
         f"assert not set(os.environ).intersection({sorted(GITHUB_TOKEN_VARIABLES)!r})\n"
         "subprocess.run([sys.executable,'-c',sys.argv[1]],check=True)\n"
-        "subprocess.run(['gh'],check=True)\n"
+        "subprocess.run(['gh','auth','token','--hostname','github.com'],check=True)\n"
     )
-    build = f"import os; assert {SENTINEL!r} not in repr(dict(os.environ))"
+    build = (
+        "import os,pathlib,shlex,shutil,subprocess\n"
+        f"assert {SENTINEL!r} not in repr(dict(os.environ))\n"
+        "shim = pathlib.Path(shutil.which('gh'))\n"
+        "cfg = shlex.split(shim.read_text().splitlines()[1])[1].split('=',1)[1]\n"
+        f"assert {SENTINEL!r} in (pathlib.Path(cfg) / 'hosts.yml').read_text()\n"
+        "token = subprocess.check_output(['gh','auth','token','--hostname','github.com'],text=True)\n"
+        f"assert token.strip() == {SENTINEL!r}\n"
+    )
     result = subprocess.run(
         [sys.executable, "-c", script, build], env=env, capture_output=True, text=True, check=False
     )
@@ -1774,14 +1804,12 @@ def test_acceptance_login_wraps_eager_parent_gh_lookup(
     cfg, tools = tmp_path / "login", tmp_path / "tools"
     cfg.mkdir()
     tools.mkdir()
-    (cfg / "token").write_text(SENTINEL)
+    write_ci_gh_login(cfg)
+    assert yaml.safe_load((cfg / "hosts.yml").read_text())["github.com"]["oauth_token"] == SENTINEL
+    real_gh = shutil.which("gh")
+    assert real_gh is not None, "Offline gh config interoperability requires the GitHub CLI"
     gh = tools / "gh"
-    gh.write_text(
-        f"#!{sys.executable}\nimport os,pathlib\n"
-        f"assert not set(os.environ).intersection({sorted(GITHUB_TOKEN_VARIABLES)!r})\n"
-        f"assert (pathlib.Path(os.environ['GH_CONFIG_DIR']) / 'token').read_text() == {SENTINEL!r}\n"
-    )
-    gh.chmod(0o700)
+    gh.symlink_to(real_gh)
     for name in GITHUB_TOKEN_VARIABLES | {"GH_CONFIG_DIR"}:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("INSTALLER_GH_CONFIG_DIR", str(cfg))
@@ -1789,8 +1817,26 @@ def test_acceptance_login_wraps_eager_parent_gh_lookup(
     monkeypatch.setattr(acceptance.release, "GH_BIN", str(gh))
     acceptance.configure_gh_login(tmp_path, monkeypatch)
     assert Path(acceptance.release.GH_BIN) == tmp_path / "gh-shim" / "gh"
-    acceptance.verify_attestation(tmp_path / "snapshot", "repo", "workflow", "ref")
+    token = subprocess.check_output(
+        [acceptance.release.GH_BIN, "auth", "token", "--hostname", "github.com"],
+        env=acceptance.environment(tmp_path, tmp_path / "cache"),
+        text=True,
+        stderr=subprocess.STDOUT,
+    )
+    assert token.strip() == SENTINEL
     assert "GH_CONFIG_DIR" not in os.environ
+
+
+def test_ci_documents_residual_gh_capability() -> None:
+    """Environment hygiene must not be advertised as denying same-UID package credential access."""
+    for name in ("AGENTS.md", "docs/ci.md"):
+        text = (INTEGRATION.parent / name).read_text()
+        assert "KNOWN RESIDUAL" in text
+        assert "same-UID package code" in text
+        assert "PATH" in text
+        assert "hosts.yml" in text
+        assert "read-only" in text
+        assert "TRUST assumption" in text
 
 
 def test_installer_workflow_token_permissions_are_read_only() -> None:

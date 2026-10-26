@@ -126,20 +126,77 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
     assert isinstance(caught.value.__cause__, subprocess.CalledProcessError)
 
 
-def test_gitlink_tag_scrubs_github_tokens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real git child receives no GitHub token variables, but keeps unrelated environment."""
+def test_gitlink_tag_scrubs_hostile_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An independent literal denylist catches Git redirects, askpass and credentials in the child."""
+    hostile = (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+    )
     binary = tmp_path / "git"
     binary.write_text(
-        "#!/bin/sh\n"
-        + "\n".join(f'test -z "${{{name}+set}}" || exit 97' for name in sorted(GITHUB_TOKEN_VARIABLES))
-        + '\ntest "$KEEP_ME" = kept || exit 98\nprintf "v1.3.0-nredd.7\\n"\n'
+        f"#!{sys.executable}\nimport os,pathlib\n"
+        f"assert not set(os.environ).intersection({hostile!r})\n"
+        f"assert os.environ['HOME'] != {str(tmp_path)!r}\n"
+        "assert list(pathlib.Path(os.environ['HOME']).iterdir()) == []\n"
+        "assert os.environ['XDG_CONFIG_HOME'] == os.environ['HOME']\n"
+        "assert os.environ['GIT_CONFIG_NOSYSTEM'] == '1'\n"
+        "assert os.environ['GIT_TERMINAL_PROMPT'] == '0'\n"
+        "print('v1.3.0-nredd.7')\n"
     )
     binary.chmod(0o700)
     monkeypatch.setattr(release, "GIT_BIN", str(binary))
-    monkeypatch.setenv("KEEP_ME", "kept")
-    for name in GITHUB_TOKEN_VARIABLES:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in hostile:
         monkeypatch.setenv(name, "sentinel-not-a-real-token")
     assert gitlink_tag(tmp_path) == "v1.3.0-nredd.7"
+
+
+@pytest.mark.parametrize("poison_home", [False, True])
+def test_gitlink_tag_ignores_decoy_git_dir_and_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, poison_home: bool
+) -> None:
+    """Real git must describe the requested core, never GIT_DIR's differently tagged decoy or HOME config."""
+    home, core, decoy = (tmp_path / name for name in ("home", "core", "decoy"))
+    home.mkdir()
+    env = {"PATH": os.defpath, "HOME": str(home), "XDG_CONFIG_HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+    for repo, tag in ((core, "v1.3.0-nredd.7"), (decoy, "v9.9.9-nredd.99")):
+        repo.mkdir()
+        for args in (
+            ["init", "-q"],
+            [
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ],
+            ["-c", "tag.gpgsign=false", "tag", tag],
+        ):
+            subprocess.check_output(
+                [release.GIT_BIN, "-C", str(repo), *args], env=env, text=True, stderr=subprocess.STDOUT
+            )
+    if poison_home:
+        (home / ".gitconfig").write_text("[invalid config\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+    assert gitlink_tag(core) == "v1.3.0-nredd.7"
 
 
 def test_verify_asset_fails_closed(tmp_path: Path) -> None:
