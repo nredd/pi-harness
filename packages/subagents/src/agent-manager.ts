@@ -30,7 +30,8 @@ import { getAgentConfig } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { ModelCallEvent } from "./model-call.js";
-import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback } from "./model-resolver.js";
+import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback, modelFallbackNote } from "./model-resolver.js";
+import { appendModelFallbackEntry } from "./output-file.js";
 import {
   assertWithinBudgetDepth,
   BUDGET_QUEUE_FULL_ERROR,
@@ -163,12 +164,15 @@ export interface EvictedNote {
   evictedAfterMin: number;
   /** The `.output` transcript when one was written, else the session file. */
   transcript?: string;
+  /** The run's model fallback, so even an evicted agent's id still discloses it. */
+  modelFallback?: ModelFallback;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
 export function describeEvicted(note: EvictedNote): string {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
-  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}`;
+  const fallback = note.modelFallback ? `\n${modelFallbackNote(note.modelFallback)}` : "";
+  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
 }
 
 /**
@@ -1127,6 +1131,8 @@ export class AgentManager {
             }
           }
         }
+        // The transcript says it too: it is what someone opens to find out what ran.
+        if (record.modelFallback && record.outputFile) appendModelFallbackEntry(record.outputFile, record.id, record.modelFallback);
         // Flush any steers that arrived before the session was ready
         if (record.pendingSteers?.length) {
           for (const msg of record.pendingSteers) {
@@ -1872,6 +1878,7 @@ export class AgentManager {
       description: record.description,
       sessionFile: record.sessionFile,
       completedAt: record.completedAt ?? this.clock.now(),
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
     // Bound the memory a long session can accumulate. Oldest first, since the
     // agent someone still wants to reach is the one they used most recently.
@@ -1892,6 +1899,7 @@ export class AgentManager {
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - completedAt) / 60_000)),
       transcript: record.outputFile ?? record.sessionFile,
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
     while (this.evictedNotes.size > MAX_EVICTED_NOTES) {
       const oldest = this.evictedNotes.keys().next().value;

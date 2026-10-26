@@ -9,6 +9,7 @@ import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { type ModelFallback, modelFallbackNote } from "./model-resolver.js";
 
 /**
  * Project/global default for writing a subagent's `.output` transcript; a custom
@@ -78,6 +79,17 @@ export function ensureOutputFile(path: string): void {
   try {
     appendFileSync(path, "", "utf-8");
   } catch { /* ignore — streaming writes are best-effort too */ }
+}
+
+/** Append the model-fallback disclosure as a transcript line (best effort, like streaming writes). */
+export function appendModelFallbackEntry(path: string, agentId: string, fallback: ModelFallback): void {
+  try {
+    appendFileSync(
+      path,
+      `${JSON.stringify({ isSidechain: true, agentId, type: "model-fallback", modelFallback: fallback, note: modelFallbackNote(fallback), timestamp: new Date().toISOString() })}\n`,
+      "utf-8",
+    );
+  } catch { /* ignore */ }
 }
 
 /** Write the initial user prompt entry. */

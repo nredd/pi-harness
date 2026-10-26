@@ -27,6 +27,7 @@ import {
   watchDetached,
 } from "../src/detached-results.js";
 import subagentsExtension from "../src/index.js";
+import { setAgentModels } from "../src/model-resolver.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -227,6 +228,31 @@ describe("session switch with a running background agent", () => {
     expect(opts).toEqual({ deliverAs: "steer", triggerTurn: true });
     expect(back.pi.appendEntry).toHaveBeenCalledWith("subagents:record", expect.objectContaining({ id: agent.id, status: "completed" }));
     await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("keeps the model fallback on the spooled history record and the notice details", async () => {
+    const first = makePi();
+    subagentsExtension(first.pi);
+    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    setAgentModels({ "general-purpose": "ghost-model" });
+    const agent = await spawnRunning(first.tools);
+
+    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "new" }, ctx(sessionFile));
+    agent.finish();
+    await flush();
+
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(back.pi.appendEntry).toHaveBeenCalledWith(
+      "subagents:record",
+      expect.objectContaining({ id: agent.id, modelFallback: { input: "ghost-model" } }),
+    );
+    const [msg] = back.pi.sendMessage.mock.calls[0];
+    expect(msg.details.modelNote).toContain('"ghost-model" did not resolve');
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    setAgentModels(undefined);
   });
 
   it("publishes the running agent for the next instance until it settles", async () => {
