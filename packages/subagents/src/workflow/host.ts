@@ -133,15 +133,22 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
     ...(cwd !== undefined ? { cwd } : {}),
   };
 
+  // Disclosed in the text/error the script reads AND as a field. A schema'd
+  // payload is JSON the script parses, so the note is only a field there.
+  const note = modelFallbackNote(record.modelFallback);
+  const lead = note ? `${note}\n\n` : "";
+  const modelNote = note ? { modelNote: note } : {};
+
   if (succeeded(record)) {
     return {
       ...common,
+      ...modelNote,
       ok: true,
       // The schema'd payload when there is one: `result` is prose, and for a
       // worktree child it has had the branch note appended, so it would not
       // parse. A child asked for a schema that produced none never reaches
       // here — `runAgent` reports that through `failure`.
-      text: record.structuredJson ?? record.result ?? "",
+      text: record.structuredJson ?? `${lead}${record.result ?? ""}`,
       ...(record.structuredRetried ? { structuredRetried: true } : {}),
     };
   }
@@ -149,9 +156,9 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
   // fleet list, a workflow abort. That is the same thing the workflows dialog's
   // skip action means, so it renders as skipped rather than failed.
   if (record.status === "stopped") {
-    return { ...common, ok: false, skipped: true, error: record.error ?? "Stopped." };
+    return { ...common, ...modelNote, ok: false, skipped: true, error: `${lead}${record.error ?? "Stopped."}` };
   }
-  return { ...common, ok: false, error: record.error ?? `Agent ${record.status}.` };
+  return { ...common, ...modelNote, ok: false, error: `${lead}${record.error ?? `Agent ${record.status}.`}` };
 }
 
 /** Shell used to run a `gate` command, mirroring how a user would type it. */

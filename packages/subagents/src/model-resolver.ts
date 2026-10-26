@@ -95,8 +95,10 @@ export function describeModel(
 export interface ModelFallback {
   /** The configured input that failed to resolve. */
   input: string;
-  /** `provider/id` of the parent model actually used; absent when the parent has none. */
+  /** `provider/id` of the model actually used; absent when the session default (a parent with no model) ran. */
   used?: string;
+  /** Whose model `used` is: the parent's (default) or the agent definition's, which took over from an unresolved stored model. */
+  via?: "parent" | "definition";
 }
 
 /** The fallback outcome for `input` when the spawn ran on `parent`. */
@@ -110,8 +112,14 @@ export function modelFallbackTo(input: string, parent: { provider: string; id: s
  */
 export function modelFallbackNote(fallback: ModelFallback | undefined): string {
   if (!fallback) return "";
-  const used = fallback.used ? `parent model ${fallback.used}` : "the session default model";
+  const whose = fallback.via === "definition" ? "agent definition model" : "parent model";
+  const used = fallback.used ? `${whose} ${fallback.used}` : "the session default model";
   return `Note: configured model "${fallback.input}" did not resolve; running on ${used}.`;
+}
+
+/** The short form of {@link modelFallbackNote} for one-line surfaces (widget, fleet, row). */
+export function modelFallbackLabel(fallback: ModelFallback): string {
+  return `fallback: "${fallback.input}" -> ${fallback.used ?? "session default"}`;
 }
 
 /** API id pi gives virtual catalog entries such as `router/default`; they never reach a provider. */

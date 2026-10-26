@@ -9,9 +9,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as AgentRunner from "../src/agent-runner.js";
 
 vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
+  const actual = await vi.importActual<typeof AgentRunner>("../src/agent-runner.js");
   return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
@@ -25,7 +26,7 @@ vi.mock("../src/worktree.js", () => ({
 import { AgentManager } from "../src/agent-manager.js";
 import { runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
-import { setAgentModels } from "../src/model-resolver.js";
+import { modelFallbackNote, setAgentModels } from "../src/model-resolver.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
 import type { AgentConfig } from "../src/types.js";
@@ -98,7 +99,7 @@ describe("scheduler at fire time", () => {
 
     const record = await fire("claude-haiku-4-5");
 
-    expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
+    expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5", via: "parent" });
   });
 
   it("a job on an agent whose definition `model:` does not resolve says so, from the runner", async () => {
@@ -109,13 +110,20 @@ describe("scheduler at fire time", () => {
     expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
   });
 
-  it("a stored model that does not resolve is not blamed when the definition's own model took over", async () => {
-    // The runner picks the definition's model, so the parent was never used.
+  it("a stored model that does not resolve is still disclosed when the definition's own model took over", async () => {
+    // Selection is unchanged (the definition's model runs), but the failed stored
+    // input is named, along with what actually ran.
     registerAgents(new Map([agent("scout", "anthropic/claude-sonnet-5-5")]));
 
     const record = await fire("claude-haiku-4-5");
 
-    expect(record.modelFallback).toBeUndefined();
+    expect(record.modelFallback).toEqual({
+      input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5", via: "definition",
+    });
+    expect(modelFallbackNote(record.modelFallback)).toBe(
+      'Note: configured model "claude-haiku-4-5" did not resolve; running on agent definition model anthropic/claude-sonnet-5-5.',
+    );
+    expect(vi.mocked(runAgent).mock.calls[0]?.[3].model).toBeUndefined();
   });
 });
 
@@ -154,5 +162,59 @@ describe("workflow host", () => {
 
     expect(result.ok).toBe(false);
     expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  describe("the result the script reads", () => {
+    it("leads the text with the note and carries it as a field", async () => {
+      registerAgents(new Map([agent("scout", "claude-haiku-4-5")]));
+      const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: new AgentManager() });
+
+      const result = await host.spawnAgent(request());
+
+      expect(result.ok).toBe(true);
+      expect(result.text?.startsWith(NOTE)).toBe(true);
+      expect(result.text).toContain("done");
+      expect(result.modelNote).toBe(NOTE);
+    });
+
+    it("leads the error with the note", async () => {
+      registerAgents(new Map([agent("scout", "claude-haiku-4-5")]));
+      vi.mocked(runAgent).mockImplementation((async (c: any, t: string, p: string, o: any) => {
+        await runnerResolution()(c, t, p, o);
+        throw new Error("boom");
+      }) as any);
+      const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: new AgentManager() });
+
+      const result = await host.spawnAgent(request());
+
+      expect(result.ok).toBe(false);
+      expect(result.error?.startsWith(NOTE)).toBe(true);
+      expect(result.error).toContain("boom");
+    });
+
+    it("leaves a schema'd payload parseable and carries the note as a field only", async () => {
+      registerAgents(new Map([agent("scout", "claude-haiku-4-5")]));
+      const manager = new AgentManager();
+      const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager });
+      vi.mocked(runAgent).mockImplementation((async (c: any, t: string, p: string, o: any) => {
+        const out = await runnerResolution()(c, t, p, o);
+        return { ...out, structuredJson: '{"a":1}' };
+      }) as any);
+
+      const result = await host.spawnAgent(request({ schema: { compiled: true } }));
+
+      expect(result.text).toBe('{"a":1}');
+      expect(result.modelNote).toBe(NOTE);
+    });
+
+    it("adds nothing when the model resolved", async () => {
+      registerAgents(new Map([agent("scout", "anthropic/claude-sonnet-5-5")]));
+      const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: new AgentManager() });
+
+      const result = await host.spawnAgent(request());
+
+      expect(result.text).toBe("done");
+      expect(result.modelNote).toBeUndefined();
+    });
   });
 });

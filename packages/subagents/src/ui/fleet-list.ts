@@ -634,6 +634,9 @@ export class FleetList {
       model = modelName ?? "";
       thinking = tags.find(tag => tag.startsWith("thinking: ")) ?? "";
     }
+    // The tail is cell-sized, so only the fact; `/agents` viewer names both models.
+    // Shown even with `showModel` off: a substituted model is not cosmetic.
+    if (record.modelFallback) model = model ? `${model} (fallback)` : "fallback";
     // What the in-flight model call is doing, only while the agent is running:
     // a finished row has no call to describe.
     const call = record.status === "running"

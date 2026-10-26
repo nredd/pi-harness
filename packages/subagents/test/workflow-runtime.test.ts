@@ -567,6 +567,39 @@ describe("abort", () => {
       expect(rows.at(-1)?.model).toBe("haiku 4.5");
     });
 
+    it("forwards the model fallback note onto the row while the agent is still running", async () => {
+      const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+      const seen: WorkflowEntry[][] = [];
+      const host = {
+        async spawnAgent(request: any) {
+          request.onResolved?.({ modelName: "sonnet 4.6", modelNote });
+          // The result deliberately carries no note, so only the `onResolved`
+          // forwarding can put it on the in-flight row.
+          return { ok: true, text: "done", outputTokens: 1 };
+        },
+        abortAgent() {},
+      };
+
+      await run('return await agent("go");', { host, onProgress(entries) { seen.push([...entries]); } });
+
+      const inFlight = rowsFor(seen, 0).find(r => r.modelNote !== undefined);
+      expect(inFlight?.modelNote).toBe(modelNote);
+      expect(inFlight?.state).not.toBe("done");
+    });
+
+    it("puts the note a settled result carries on the final row", async () => {
+      const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+      const seen: WorkflowEntry[][] = [];
+      const host = {
+        async spawnAgent() { return { ok: true, text: "done", outputTokens: 1, modelNote }; },
+        abortAgent() {},
+      };
+
+      await run('return await agent("go");', { host, onProgress(entries) { seen.push([...entries]); } });
+
+      expect(rowsFor(seen, 0).at(-1)?.modelNote).toBe(modelNote);
+    });
+
     it("fills in a row for an agent that named no model at all", async () => {
       const seen: WorkflowEntry[][] = [];
       const host = {

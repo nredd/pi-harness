@@ -14,6 +14,7 @@ import { pathToFileURL } from "node:url";
 import { type Component, hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import { formatClock } from "../model-call.js";
+import { modelFallbackLabel } from "../model-resolver.js";
 import type { AgentRecord } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import {
@@ -103,6 +104,8 @@ export function agentRowSummary(
   const cost = live.showCost() ? formatCost(record ? getLifetimeCost(record.lifetimeUsage) : (details.cost ?? 0)) : "";
 
   const parts = [text, formatClock(elapsed)];
+  const fallback = record?.modelFallback ?? details.modelFallback;
+  if (fallback) parts.push(modelFallbackLabel(fallback));
   if (tokenText) parts.push(tokenText);
   if (cost) parts.push(cost);
   if (!finished && details.backgroundHint && elapsed >= 2000) parts.push("(ctrl+b to run in background)");
