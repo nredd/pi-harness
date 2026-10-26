@@ -43,12 +43,16 @@ export function noticeSummary(d: NotificationDetails, theme: Theme, showCost: bo
   const dot = ` ${theme.fg("dim", "·")} `;
   const head = `${icon(d, theme)} ${theme.bold(d.description)}`;
   const stats = statParts(d, showCost).map(p => theme.fg("dim", p));
-  return [head, ...stats].join(dot);
+  // Visible while collapsed: a substituted model is not an expanded-only detail.
+  const fallback = d.modelNote ? [theme.fg("warning", "model fallback")] : [];
+  return [head, ...stats, ...fallback].join(dot);
 }
 
 /** `3 agents finished · ✓ a, ✓ b, ✗ c`. */
 export function groupSummary(all: NotificationDetails[], theme: Theme): string {
-  const names = all.map(d => `${icon(d, theme)} ${d.description}`).join(theme.fg("dim", ", "));
+  const names = all
+    .map(d => `${icon(d, theme)} ${d.description}${d.modelNote ? ` ${theme.fg("warning", "(model fallback)")}` : ""}`)
+    .join(theme.fg("dim", ", "));
   return `${theme.bold(`${all.length} agents finished`)} ${theme.fg("dim", "·")} ${names}`;
 }
 

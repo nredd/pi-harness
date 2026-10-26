@@ -173,6 +173,8 @@ So: send `consume` unconditionally and ignore the outcome — an older build has
 
 The consequence is worth stating plainly: **a session that excludes pi-subagents is indistinguishable from pi-subagents not being installed.** It emits no `subagents:ready` and answers nothing. Give discovery a timeout and treat expiry as "not available here" rather than waiting indefinitely. The payload is `{}` — read nothing off it. Handlers are torn down and `rpcHandle` reset in the `session_shutdown` handler, so a later `session_start` re-registers and re-emits.
 
+**Model fallback provenance on events.** An RPC spawn that names no model resolves `agentModels` and the definition's `model:` inside the runner, after `subagents:started` has fired. If that model does not resolve, the agent runs on the parent and the fallback (`modelFallback`: `{ input, used, also?, via? }`, plus `modelNote`) appears on `subagents:usage` and `subagents:completed`/`failed`, not on `started`. Treat those two as authoritative. `created`, `started` and `compacted` carry it only when the spawn path already knew it. Callers cannot supply it (see the stripped-fields table).
+
 One more trap on the way in: an RPC-spawned agent emits **no `subagents:created`**. The only three emit sites, all in `src/index.ts`, are the `Agent` tool's `run_in_background` branch, a detached resume (`startBackgroundResume`), and a foreground `Agent` call handed to the background with ctrl+b or the viewer's `b` (`sendForegroundToBackground`) — that one fires after the agent's `subagents:started`, as resume does. Your first event for your own agent is `subagents:started` (the manager's start callback), so key your bookkeeping off the id that `spawn` handed you, not off `subagents:created`.
 
 ## What the tests pin

@@ -6,7 +6,7 @@
  * the persisted history entry and completion event in
  * config-model-fallback-wiring.test.ts.)
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
-import { runAgent } from "../src/agent-runner.js";
+import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
 import { setAgentModels } from "../src/model-resolver.js";
@@ -55,6 +55,7 @@ beforeEach(() => {
   sessionFile = join(cwd, "session.jsonl");
   writeFileSync(sessionFile, "");
   vi.mocked(runAgent).mockReset();
+  vi.mocked(resumeAgent).mockReset();
 });
 
 afterEach(() => {
@@ -157,5 +158,70 @@ describe("subagents:usage event", () => {
     expect(usage.length).toBeGreaterThan(0);
     expect(usage[0].modelFallback).toEqual(FALLBACK);
     expect(usage[0].modelNote).toBe(NOTE);
+  });
+});
+
+describe("lifecycle events", () => {
+  const eventsNamed = (pi: any, name: string) => pi.events.emit.mock.calls.filter((c: any[]) => c[0] === name).map((c: any[]) => c[1]);
+
+  it("created, started and compacted carry a fallback the spawn path already resolved", async () => {
+    const { pi, tools } = await boot();
+    vi.mocked(runAgent).mockImplementation((async (c: any, t: string, p: string, o: any) => {
+      o.onCompaction?.({ reason: "manual", tokensBefore: 10 });
+      return runnerResolution()(c, t, p, o);
+    }) as any);
+
+    await tools.get("Agent").execute(
+      "tc", { prompt: "go", description: "d", subagent_type: "scout", run_in_background: true }, undefined, undefined, ctx(),
+    );
+    await flush();
+
+    for (const name of ["subagents:created", "subagents:started", "subagents:compacted"]) {
+      const [event] = eventsNamed(pi, name);
+      expect(event?.modelFallback, name).toEqual(FALLBACK);
+      expect(event?.modelNote, name).toBe(NOTE);
+    }
+  });
+
+  it("a runner-selected fallback is NOT on `started` (it precedes discovery) but IS on completed and usage", async () => {
+    const { pi } = await boot();
+    vi.mocked(runAgent).mockImplementation((async (c: any, t: string, p: string, o: any) => {
+      const out = await runnerResolution()(c, t, p, o);
+      o.onAssistantUsage?.({ input: 1, output: 1, cacheWrite: 0, cost: 0.001 });
+      return out;
+    }) as any);
+    // RPC/registry spawn: no tool-side resolution, so only the runner can find it.
+    const id = (globalThis as any)[Symbol.for("pi-subagents:manager")].spawn(pi, ctx(), "scout", "go", { description: "rpc" });
+    await flush();
+
+    expect(eventsNamed(pi, "subagents:started").find((e: any) => e.id === id)?.modelFallback).toBeUndefined();
+    expect(eventsNamed(pi, "subagents:usage").find((e: any) => e.id === id)?.modelFallback).toEqual(FALLBACK);
+    expect(eventsNamed(pi, "subagents:completed").find((e: any) => e.id === id)?.modelFallback).toEqual(FALLBACK);
+  });
+});
+
+describe("background resume transcript", () => {
+  it("a transcript created for a later resume still records the original fallback", async () => {
+    const { tools } = await boot();
+    vi.mocked(runAgent).mockImplementation(runnerResolution() as any);
+    vi.mocked(resumeAgent).mockResolvedValue({ text: "again", aborted: false, steered: false } as any);
+
+    const first = await tools.get("Agent").execute(
+      "tc", { prompt: "go", description: "d", subagent_type: "scout", run_in_background: true }, undefined, undefined, ctx(),
+    );
+    await flush();
+    const file = /Output file: (\S+)/.exec(textOf(first))![1];
+    // Transcripts were off for the first run in the scenario: the resume creates a fresh file.
+    rmSync(file);
+    expect(existsSync(file)).toBe(false);
+
+    const resumed = await tools.get("Agent").execute(
+      "tc2", { prompt: "more", description: "d", subagent_type: "scout", resume: first.details.agentId, run_in_background: true }, undefined, undefined, ctx(),
+    );
+    await flush();
+
+    expect(textOf(resumed)).toContain("resumed in background");
+    const lines = readFileSync(file, "utf-8").trim().split("\n").map(l => JSON.parse(l));
+    expect(lines.find(l => l.type === "model-fallback")?.modelFallback).toEqual(FALLBACK);
   });
 });

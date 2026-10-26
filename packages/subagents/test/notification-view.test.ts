@@ -59,10 +59,20 @@ describe("collapsed notice", () => {
 describe("model fallback", () => {
   const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
 
-  it("appears in the expanded notice, not the collapsed one", () => {
+  it("is spelled out in the expanded notice and flagged in the collapsed one", () => {
     expect(render(details({ modelNote }), true).join("\n")).toContain(modelNote);
-    expect(render(details({ modelNote }), false).join("\n")).not.toContain("did not resolve");
+    expect(render(details({ modelNote }), false)).toEqual([expect.stringContaining("model fallback")]);
+    expect(render(details(), false).join("")).not.toContain("fallback");
     expect(render(details(), true).join("\n")).not.toContain("did not resolve");
+  });
+
+  it("flags only the agents that fell back in a collapsed group", () => {
+    const first = details({ id: "a", description: "one", modelNote });
+    const summary = groupSummary([first, details({ id: "b", description: "two" })], theme);
+    expect(summary).toContain("one (model fallback)");
+    expect(summary).not.toContain("two (model fallback)");
+    const viaRender = renderNotification({ ...first, others: [details({ id: "b", description: "two" })] }, false, theme, true).render(200);
+    expect(viaRender).toEqual([expect.stringContaining("one (model fallback)")]);
   });
 });
 
