@@ -119,6 +119,20 @@ describe("real runAgent honors and discloses an unavailable agentModels override
     await lifecycle.get("session_shutdown")?.({} as any, ctxFor(faux.getModel()));
   });
 
+  it("cross-extension RPC with `model: null` (inherit) still selects the configured model and discloses", async () => {
+    writeScout(parentRef());
+    const { bus, lifecycle } = await bootWithBus();
+    setAgentModels({ scout: "claude-haiku-4-5" });
+
+    const reply = new Promise<any>((resolve) => bus.on("subagents:rpc:spawn:reply:r1", resolve));
+    bus.emit("subagents:rpc:spawn", { requestId: "r1", type: "scout", prompt: "go", options: { description: "rpc", model: null } });
+    const id = (await reply).data.id;
+
+    await vi.waitFor(() => expect(manager().getRecord(id).modelFallback).toBeDefined());
+    expect(modelFallbackNote(manager().getRecord(id).modelFallback)).toBe(NOTE());
+    await lifecycle.get("session_shutdown")?.({} as any, ctxFor(faux.getModel()));
+  });
+
   it("direct @mention", async () => {
     writeScout(parentRef());
     mkdirSync(join(cwd, "agent-dir"), { recursive: true });

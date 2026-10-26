@@ -586,6 +586,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    */
   let detachedSessionFile: string | undefined;
 
+  /** The `subagents:record` history entry; the ONE builder, shared by live completion and the detached spool. */
+  function historyRecord(record: AgentRecord): Record<string, unknown> {
+    return {
+      id: record.id, type: record.type, description: record.description,
+      status: record.status, result: record.result, error: record.error,
+      startedAt: record.startedAt, completedAt: record.completedAt,
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
+    };
+  }
+
   function spoolDetachedResult(sessionFile: string, record: AgentRecord) {
     if (record.resultConsumed) return;
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : "";
@@ -594,11 +604,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         id: record.id,
         content: formatTaskNotification(record, 500, showCost) + footer,
         details: buildNotificationDetails(record, 500),
-        record: {
-          id: record.id, type: record.type, description: record.description,
-          status: record.status, result: record.result, error: record.error,
-          startedAt: record.startedAt, completedAt: record.completedAt,
-        },
+        record: historyRecord(record),
       });
     } catch { /* spool unwritable: the transcript file still has the result */ }
   }
@@ -647,12 +653,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     }
 
     // Persist final record for cross-extension history reconstruction
-    pi.appendEntry("subagents:record", {
-      id: record.id, type: record.type, description: record.description,
-      status: record.status, result: record.result, error: record.error,
-      startedAt: record.startedAt, completedAt: record.completedAt,
-      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
-    });
+    pi.appendEntry("subagents:record", historyRecord(record));
 
     // Skip notification if result was already consumed via get_subagent_result
     if (record.resultConsumed) {
@@ -738,6 +739,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       // clamped it to the model, or an agent file outranked it), so a ledger
       // can show `low (asked minimal)` instead of silently relabelling.
       ...(invocation?.requestedThinking !== undefined ? { requestedThinking: invocation.requestedThinking } : {}),
+      ...(record.modelFallback ? { modelFallback: record.modelFallback, modelNote: modelFallbackNote(record.modelFallback) } : {}),
       depth: record.depth ?? 1,
       ...(record.parentAgentId !== undefined ? { parentAgentId: record.parentAgentId } : {}),
       ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
@@ -1126,6 +1128,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           description: entry.description,
           reclaim: { handle: entry.handle, alias: entry.alias },
           resumeSessionFile: entry.sessionFile,
+          // The original failure, not whatever the CURRENT config would say.
+          ...(entry.modelFallback ? { modelFallback: entry.modelFallback } : {}),
           isBackground: true,
         });
         // The agent may still be starting — wait, so a startup failure lands in

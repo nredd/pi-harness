@@ -148,6 +148,8 @@ export interface AgentTombstone {
   description: string;
   /** Always set — a record with no session file is never tombstoned. */
   sessionFile: string;
+  /** The evicted run's model fallback, handed back to the record `@handle` reopens it as. */
+  modelFallback?: ModelFallback;
   completedAt: number;
 }
 

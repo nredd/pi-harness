@@ -1152,7 +1152,9 @@ export async function runAgent(
   // Resolve model: explicit option > config.model > parent model
   // An explicit option was already resolved (and any fallback disclosed) by
   // the caller; only this path can fall back unseen, so it reports itself.
-  let model = options.model;
+  // Nullish, not `=== undefined`: an RPC caller may forward `model: null`, which
+  // means "inherit" (see cross-extension-rpc.ts).
+  let model = options.model ?? undefined;
   if (model === undefined) {
     const selection = selectConfiguredModel(type, agentConfig?.model, ctx.model, ctx.modelRegistry);
     model = selection.model;
