@@ -81,7 +81,9 @@ beforeEach(async () => {
   vi.mocked(runner.runAgent).mockReset();
   vi.mocked(runner.resumeAgent).mockReset();
   vi.mocked(runner.runAgent).mockImplementation(async (_ctx, _type, _prompt, options) => {
-    const session = { model: options.model, dispose: vi.fn() } as unknown as AgentSession;
+    const sessionFile = join(sandbox.dir, `${options.agentId}.jsonl`);
+    writeFileSync(sessionFile, "{}");
+    const session = { model: options.model, dispose: vi.fn(), sessionManager: { getSessionFile: () => sessionFile } } as unknown as AgentSession;
     options.onSessionCreated?.(session);
     return { responseText: "done", session, aborted: false, steered: false };
   });
@@ -232,6 +234,41 @@ it("reselects quota-parked defaults at fire time instead of freezing the admitte
   clock.advance(120_000);
   await flush();
   expect(vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3].model).toMatchObject({ id: "typed" });
+});
+
+it("keeps an explicit quota-parked alias request and re-resolves it at fire time", async () => {
+  setModelAliases({ portable: ["router/default"] });
+  blockedUntil = clock.now() + 60_000;
+  await boot.tools.get("Agent").execute("park-explicit", {
+    subagent_type: "scout", description: "parked explicit", prompt: "go", model: "portable", run_in_background: true,
+  }, undefined, undefined, context);
+  const [job] = new ScheduleStore(resolveStorePath(sandbox.dir, "s1")).list();
+  expect(job.quotaParked).toBe(true);
+  expect(job.model).toBe("portable");
+  setModelAliases({ portable: [ref("explicit")] });
+  setAgentModels({ scout: ref("typed") });
+  blockedUntil = undefined;
+  clock.advance(120_000);
+  await flush();
+  const options = vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3];
+  expect(options?.model).toMatchObject({ id: "explicit" });
+  expect(options?.modelSelection).toMatchObject({ requested: "portable", source: "param" });
+});
+
+it("reopens an evicted mention with current configuration and a new recorded selection", async () => {
+  setAgentModels({ scout: ref("typed") });
+  const { record } = await invoke("Agent");
+  const root = (globalThis as Record<symbol, { getRecord(id: string): unknown }>)[Symbol.for("pi-subagents:manager")];
+  expect(record?.sessionFile).toBeDefined();
+  clock.advance(11 * 60_000);
+  expect(root.getRecord(record!.id)).toBeUndefined();
+  setAgentModels({ scout: "router/default" });
+  await boot.lifecycle.get("input")?.({ type: "input", text: "@scout again", source: "interactive" } as never, context);
+  await flush();
+  const options = vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3];
+  expect(options?.resumeSessionFile).toBe(record?.sessionFile);
+  expect(options?.model).toMatchObject({ provider: "router", id: "default" });
+  expect(options?.modelSelection).toMatchObject({ requested: "router/default", source: "agentModels:type" });
 });
 
 it("ignores new model inputs on Agent resume and reads the original record disclosure", async () => {

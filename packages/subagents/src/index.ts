@@ -2079,7 +2079,6 @@ Terse command-style prompts produce shallow, generic work.
       const customConfig = getAgentConfig(subagentType);
 
       const resolvedConfig = resolveAgentInvocationConfig(customConfig, params, {
-        agentType: subagentType,
         worktreeAllowed: isWorktreeIsolationEnabled(),
         defaultRunInBackground: getBackgroundByDefault(),
       });
@@ -3297,10 +3296,10 @@ Terse command-style prompts produce shallow, generic work.
     const label = getModelLabelFromConfig(input);
     if (!registry) return label;
     const selection = selectModel({ agentType: type, definitionModel: cfg?.model, parentModel: undefined, registry, cwd: currentCtx?.cwd ?? process.cwd() });
-    const resolved = typeof selection === "string" || selection.outcome === "fallback" ? "unavailable" : selection.model;
-    // Configured but unresolvable: the runtime silently falls back to the parent
-    // model, so flag it (and the fallback) rather than hiding the config.
-    if (typeof resolved === "string" || !resolved) return `${label} (unavailable, fallback: inherit)`;
+    if (typeof selection === "string" || selection.outcome === "fallback" || !selection.model) {
+      return `${label} (unavailable, fallback: inherit)`;
+    }
+    const resolved = selection.model;
     // Surface what it actually resolved to when that differs from the config —
     // e.g. a provider fallback or a looser version pin. Cosmetic separator/date
     // differences are normalized away so an effectively-identical match stays quiet.
