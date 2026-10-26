@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { findWorkspaceRoot, registerCargoTools } from "../../src/cargo/index.ts";
 import { createMockPi } from "../support.ts";
 
@@ -177,6 +177,37 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 			const after = readdirSync(tmpdir()).filter((d) => d.startsWith("pi-dev-tools-nextest-")).length;
 			expect(after).toBe(before);
 		}, 180_000);
+
+		it.each(["absolute", "relative"])(
+			"reads junit with a %s Cargo target and custom nextest store",
+			async (kind) => {
+				const dir = buildWorkspace();
+				mkdirSync(join(dir, ".config"));
+				writeFileSync(join(dir, ".config", "nextest.toml"), '[store]\ndir = "custom nextest store"\n');
+				vi.stubEnv("CARGO_TARGET_DIR", kind === "absolute" ? join(dir, "build artifacts") : "build artifacts");
+				try {
+					const r = await mock.call("cargo_test", { package: "good", doc: false }, dir);
+					expect(r.structuredContent, mock.text(r)).toMatchObject({
+						state: "failed",
+						tests: 2,
+						failures: 1,
+						failed: [{ name: "good tests::fails" }],
+					});
+					expect(mock.text(r)).toContain("math is hard");
+					const passing = await mock.call("cargo_test", { package: "good", filter: "passes", doc: false }, dir);
+					expect(passing.structuredContent, mock.text(passing)).toMatchObject({
+						state: "passed",
+						tests: 1,
+						failures: 0,
+						failed: [],
+					});
+				} finally {
+					vi.unstubAllEnvs();
+					rmSync(dir, { recursive: true, force: true });
+				}
+			},
+			180_000,
+		);
 
 		it("routes filterset expressions to -E and substrings to --", async () => {
 			const expr = await mock.call("cargo_test", { package: "good", filter: "test(passes)", doc: false }, root);
