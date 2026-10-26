@@ -39,22 +39,38 @@ async function resolvePushRemote(
 	timeoutMs: number,
 ): Promise<{ remote: string; setUpstream: boolean } | { error: string }> {
 	const opts = { cwd, signal, timeoutMs };
-	const config = async (key: string): Promise<string | undefined> => {
+	const problem = (what: string, r: { stderr: string }) =>
+		({ error: `${what}: ${r.stderr.trim() || "unknown error"}. Do NOT commit again.` }) as const;
+	/** `git config --get` exits 1 for an unset key; any other failure (e.g. 128, corrupt config) is real. */
+	const config = async (key: string): Promise<{ value?: string } | { error: string }> => {
 		const r = await git(["config", "--get", key], opts);
-		const value = r.exitCode === 0 ? r.stdout.trim() : "";
-		return value || undefined;
+		if (r.exitCode === 1) return {};
+		if (r.exitCode !== 0) return problem(`git config --get ${key} failed (${gitState(r)})`, r);
+		return { value: r.stdout.trim() || undefined };
 	};
 	const ref = await git(["symbolic-ref", "--short", "-q", "HEAD"], opts);
-	const branch = ref.exitCode === 0 ? ref.stdout.trim() : "";
-	if (!branch) return { error: "HEAD is detached, so there is no branch to push; do NOT commit again." };
-	const tracked = await config(`branch.${branch}.remote`);
-	const remote = (await config(`branch.${branch}.pushRemote`)) ?? (await config("remote.pushDefault")) ?? tracked;
+	if (ref.exitCode === 1) return { error: "HEAD is detached, so there is no branch to push; do NOT commit again." };
+	if (ref.exitCode !== 0) return problem(`git symbolic-ref failed (${gitState(ref)})`, ref);
+	const branch = ref.stdout.trim();
+	const values: Array<string | undefined> = [];
+	for (const key of [`branch.${branch}.pushRemote`, "remote.pushDefault", `branch.${branch}.remote`]) {
+		const c = await config(key);
+		if ("error" in c) return { error: `${c.error}` };
+		values.push(c.value);
+	}
+	const [pushRemote, pushDefault, tracked] = values;
+	// `.` means "tracks a local branch": `git push . HEAD` would push into this repo, never a real target.
+	const remote = pushRemote ?? pushDefault ?? (tracked === "." ? undefined : tracked);
 	if (remote) return { remote, setUpstream: false };
+	const hint = `set \`branch.${branch}.pushRemote\` or \`remote.pushDefault\`. Do NOT commit again.`;
+	if (tracked === ".")
+		return { error: `\`branch.${branch}.remote\` is \`.\` (a local branch), so there is no push remote; ${hint}` };
 	const remotes = await git(["remote"], opts);
+	if (remotes.exitCode !== 0) return problem(`git remote failed (${gitState(remotes)})`, remotes);
 	const names = remotes.stdout.split("\n").filter(Boolean);
-	if (remotes.exitCode === 0 && names.length === 1) return { remote: names[0] as string, setUpstream: true };
+	if (names.length === 1) return { remote: names[0] as string, setUpstream: true };
 	return {
-		error: `no push remote for \`${branch}\` and ${names.length ? `remotes are ambiguous (${names.join(", ")})` : "there are no remotes"}; set \`branch.${branch}.pushRemote\` or \`remote.pushDefault\`. Do NOT commit again.`,
+		error: `no push remote for \`${branch}\` and ${names.length ? `remotes are ambiguous (${names.join(", ")})` : "there are no remotes"}; ${hint}`,
 	};
 }
 
