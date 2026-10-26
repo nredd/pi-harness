@@ -39,6 +39,7 @@ import {
 } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
+import { isStaleCtxError } from "./stale-ctx.js";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
 import type { SubagentType, ThinkingLevel } from "./types.js";
 import type { LifetimeUsage } from "./usage.js";
@@ -519,6 +520,8 @@ export interface AssistantMessageInfo {
 }
 
 export interface RunOptions {
+  /** Backoff before each stale-ctx re-prompt (#145); defaults to 1s, 3s, 9s. `[]` disables recovery. */
+  staleRetryDelaysMs?: readonly number[];
   /** ExtensionAPI instance — used for pi.exec() instead of execSync. */
   pi: ExtensionAPI;
   /** Manager-assigned id; suffixes session name to disambiguate parallel spawns (e.g. `Explore#a1b2c3d4`). */
@@ -801,15 +804,6 @@ function finalTurnError(session: AgentSession, startIndex = 0): string | undefin
   return undefined;
 }
 
-/**
- * pi invalidates an extension runner on reload and on session replacement
- * (/new, /fork, /resume). A child shares its parent's model runtime, and a
- * virtual model (`router/*`) routes through a closure over the PARENT's runner,
- * so a child step that routes while that runner is invalidated dies with this
- * message and zero usage (#145). Matched on the stable prefix.
- */
-const STALE_CTX_RE = /extension ctx is stale after session replacement or reload/i;
-
 /** Waits before each re-prompt of a step lost to a stale ctx: a reload re-registers within seconds. */
 const STALE_CTX_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000, 9_000];
 
@@ -840,7 +834,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * off between attempts so a reload in progress can re-register its routes.
  * Returns once the final step no longer fails that way, retries are spent, or
  * `signal` aborts. A permanently dead runtime (the parent session was replaced)
- * exhausts the retries and is reported by `staleCtxFailure`.
+ * exhausts the retries and is reported by `staleCtxOutcome`.
+ *
+ * Why appending a continue prompt is safe, and re-sending the task is not: the
+ * failed step died in model routing or an observer, before the model produced
+ * anything, so the transcript already holds every tool call and result the run
+ * made. Re-sending the task would show the model the same work twice and invite
+ * it to repeat side effects (a push, a PR). The continue prompt adds one user
+ * turn and nothing else, so the tool batch is never replayed; a tool that did
+ * run is in context as a result.
  */
 export async function retryStaleCtx(
   session: AgentSession,
@@ -849,11 +851,21 @@ export async function retryStaleCtx(
   delays: readonly number[] = STALE_CTX_RETRY_DELAYS_MS,
 ): Promise<void> {
   for (const delay of delays) {
-    if (signal?.aborted || !STALE_CTX_RE.test(finalTurnError(session, startIndex) ?? "")) return;
+    if (!isStaleCtxError(finalTurnError(session, startIndex))) return;
     await sleep(delay, signal);
     if (signal?.aborted) return;
     await session.prompt(STALE_CTX_RETRY_PROMPT);
   }
+}
+
+/**
+ * Whether a follow-up prompt (the structured-output retry, the forced final
+ * report) may still be sent. Not once the run was stopped, and not while the
+ * final step is still a stale ctx: the runtime is dead, so the prompt would
+ * fail the same way and mask the real outcome behind a doomed turn.
+ */
+function mayFollowUp(session: AgentSession, startIndex: number, signal: AbortSignal | undefined): boolean {
+  return !signal?.aborted && staleCtxOutcome(session, startIndex) === undefined;
 }
 
 /**
@@ -884,7 +896,7 @@ function partialProgress(session: AgentSession, startIndex: number): string {
  */
 export function staleCtxOutcome(session: AgentSession, startIndex: number): { failure: string; partial: string } | undefined {
   const error = finalTurnError(session, startIndex);
-  if (error === undefined || !STALE_CTX_RE.test(error)) return undefined;
+  if (!isStaleCtxError(error)) return undefined;
   return {
     failure: "interrupted by a session reload or replacement; the agent's model runtime went stale and retries did not recover it",
     partial: partialProgress(session, startIndex),
@@ -1507,13 +1519,13 @@ export async function runAgent(
     // pi's `session.abort()` is a no-op until a run is active — so a child whose
     // parent is already gone is not prompted at all.
     if (options.signal?.aborted !== true) await session.prompt(effectivePrompt);
-    await retryStaleCtx(session, startLen, options.signal);
+    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs);
 
     // A cap fired. The wrap-up steer is only a request: a model deep in a tool
     // loop keeps calling tools through the grace turns and is then aborted
     // mid-turn, leaving its last narration as the "result". Demand the report
     // in a turn that cannot call tools.
-    if (run.steered && options.signal?.aborted !== true && !endedWithReport(session, startLen)) {
+    if (run.steered && mayFollowUp(session, startLen, options.signal) && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       const reported = await forceFinalReport(session, startLen, options.signal);
       // A delivered report is a wrap-up, not a failure: the agent did hand back
@@ -1527,7 +1539,7 @@ export async function runAgent(
     // the abort forwarding are still live: torn down first, a retry would be
     // unkillable.
     if (structuredCapture !== undefined && structuredCapture.json === undefined
-      && !run.aborted && options.signal?.aborted !== true) {
+      && !run.aborted && mayFollowUp(session, startLen, options.signal)) {
       structuredRetried = true;
       await session.prompt(structuredRetryPrompt(structuredCapture));
     }
@@ -1567,7 +1579,7 @@ export async function runAgent(
 export async function resumeAgent(
   session: AgentSession,
   prompt: string,
-  options: Pick<RunOptions, "maxTurns" | "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction" | "signal"> & {
+  options: Pick<RunOptions, "staleRetryDelaysMs" | "maxTurns" | "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction" | "signal"> & {
     /** The agent's type, for its own `max_turns`. */
     type: SubagentType;
   },
@@ -1583,8 +1595,8 @@ export async function resumeAgent(
   try {
     // Already aborted: not prompted, as in `runAgent`.
     if (options.signal?.aborted !== true) await session.prompt(prompt);
-    await retryStaleCtx(session, startLen, options.signal);
-    if (run.steered && options.signal?.aborted !== true && !endedWithReport(session, startLen)) {
+    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs);
+    if (run.steered && mayFollowUp(session, startLen, options.signal) && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       if (await forceFinalReport(session, startLen, options.signal)) run.aborted = false;
     }

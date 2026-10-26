@@ -41,6 +41,7 @@ import {
   releaseBudget,
   tryAcquireBudget,
 } from "./process-budget.js";
+import { isStaleCtxError } from "./stale-ctx.js";
 import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, Pool, SubagentType, ThinkingLevel } from "./types.js";
 import { addUsage, type LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
@@ -495,13 +496,21 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
  * throw cannot reach that loop. pi records a throw from a session listener as
  * the turn's failure, so an observer closed over a replaced session's `pi`
  * ("This extension ctx is stale ...") used to end a detached child with an
- * empty error turn and "No output" (#145). The observation is dropped; the run
- * is not.
+ * empty error turn and "No output" (#145). That failure is expected after a
+ * reload and dropped silently. Any other throw is a real observer defect: it
+ * is logged once per observer and also kept from killing the run.
  */
-function guardObserver<A extends unknown[]>(observer: ((...args: A) => void) | undefined): ((...args: A) => void) | undefined {
+function guardObserver<A extends unknown[]>(name: string, observer: ((...args: A) => void) | undefined): ((...args: A) => void) | undefined {
   if (!observer) return undefined;
+  let logged = false;
   return (...args: A) => {
-    try { observer(...args); } catch { /* observers never fail the run */ }
+    try {
+      observer(...args);
+    } catch (error) {
+      if (isStaleCtxError(error) || logged) return;
+      logged = true;
+      console.error(`pi-subagents: ${name} observer failed; further failures are not logged`, error);
+    }
   };
 }
 
@@ -579,8 +588,8 @@ export class AgentManager {
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
-    this.onCompact = guardObserver(onCompact);
-    this.onUsage = guardObserver(onUsage);
+    this.onCompact = guardObserver("compaction", onCompact);
+    this.onUsage = guardObserver("usage", onUsage);
     this.onSteered = onSteered;
     this.maxConcurrent = maxConcurrent;
     // Sweep finished records past their retention window (see cleanup()).
