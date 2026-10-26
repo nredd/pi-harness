@@ -1776,7 +1776,7 @@ def swap_in_store(layout: Layout, kind: str, outside: Path) -> Path:
     Raises:
         ValueError: unknown kind.
     """
-    store = layout.root / "backups"
+    store = layout.backups
     layout.root.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(store, ignore_errors=True)
     match kind:
@@ -1823,20 +1823,6 @@ def test_backup_store_symlink_cannot_trap_a_failed_switch(
     seed_existing(harness.home)
     swap_in_store(harness.layout, "symlink", tmp_path / "outside")
     before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
-
-    def refuse(self: Path, target: Path | str) -> None:
-        """Fail the final link step.
-
-        Parameters:
-            self (Path): link path.
-            target (Path | str): link target.
-
-        Raises:
-            OSError: always.
-        """
-        raise OSError("disk full")
-
-    monkeypatch.setattr(install.Path, "symlink_to", refuse)
     with pytest.raises(UnsupportedError, match="backups"):
         harness.run(yes=True)
     assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
@@ -1945,6 +1931,9 @@ def test_wsl_is_refused_by_preflight_before_anything_changes(
     with pytest.raises(UnsupportedError, match="WSL"):
         REAL_PREFLIGHT("Linux", "x86_64", which, wsl=True)
     harness = Harness(tmp_path, monkeypatch)
+    # `install.main` reads `os.environ`: a host value would move the journal and agent directory.
+    for name in ("XDG_DATA_HOME", "PI_CODING_AGENT_DIR"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(install, "preflight", REAL_PREFLIGHT)
     monkeypatch.setattr(install, "is_wsl", lambda: True)
     monkeypatch.setattr(install.platform, "system", lambda: "Linux")
@@ -1991,6 +1980,24 @@ def test_agent_dir_expands_tilde_like_pi_with_the_injected_home(
     assert agent("/abs/~/x") == Path("/abs/~/x")
     unexpanded = Layout.from_env({"XDG_DATA_HOME": "~/share"}, home, None)
     assert unexpanded.root == (tmp_path / "~" / "share" / "pi-stack").resolve()
+    # Pi converts only `^file://` (case-sensitive) with `fileURLToPath`; other `file:` values are relative.
+    assert agent("file:x") == (tmp_path / "file:x").resolve()
+    assert agent("FILE:///x") == (tmp_path / "FILE:" / "x").resolve()
+
+
+@pytest.mark.parametrize("value", ["file:///abs/agent", "file://localhost/abs/agent", "file://~/agent"])
+def test_agent_dir_file_url_is_refused_before_anything_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Pi reads a `file://` agent directory through `fileURLToPath`; guessing it could write elsewhere."""
+    with pytest.raises(UnsupportedError, match="file://"):
+        Layout.from_env({"PI_CODING_AGENT_DIR": value}, tmp_path, None)
+    harness = Harness(tmp_path, monkeypatch)
+    before = tree(tmp_path)
+    with pytest.raises(UnsupportedError, match="PI_CODING_AGENT_DIR"):
+        install.run(Options(SHA, True, False, None), harness.env | {"PI_CODING_AGENT_DIR": value}, None)
+    assert tree(tmp_path) == before
+    assert harness.calls() == []
 
 
 MALFORMED_MANIFESTS = {
@@ -2100,8 +2107,10 @@ def test_failed_post_check_rolls_back_before_the_journal_commits(
     before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
     failing = [True]
     fail_post_check(monkeypatch, failing)
-    with pytest.raises(InstallError, match=r"rolled back.*does not run"):
+    with pytest.raises(InstallError, match=r"rolled back.*does not run") as raised:
         harness.run(yes=True)
+    # The core was installed by this run, so removing it is not the advice.
+    assert "was kept" not in str(raised.value)
     assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
     assert not harness.layout.journal.exists()
     failing[0] = False
@@ -2119,12 +2128,29 @@ def test_noop_rerun_still_runs_the_post_check(
     calls = fail_post_check(monkeypatch, failing)
     before = tree(harness.home)
     caplog.set_level("INFO")
-    with pytest.raises(InstallError, match="does not run"):
+    with pytest.raises(InstallError, match="does not run") as raised:
         harness.run()
+    assert f"Core '{harness.layout.core(harness.snapshot.stack.core.tag)}' was kept" in str(raised.value)
     assert calls == [1]
     assert "Already installed" not in caplog.text
     assert tree(harness.home) == before
     failing[0] = False
     assert harness.run() == ExitCode.OK
-    assert "Already installed" in caplog.text
-    assert "1.3.0" in caplog.text
+    assert f"Already installed: `stack/{SHA}`: 1.3.0, nothing to do" in caplog.messages
+
+
+def test_failed_post_check_with_a_kept_core_names_its_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A matching core marker is never reinstalled, so the error names the prefix to remove."""
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    harness.layout.link.unlink()
+    plan = plan_install(harness.layout, harness.verified)
+    assert not plan.empty
+    assert not plan.install_core
+    fail_post_check(monkeypatch, [True])
+    with pytest.raises(InstallError, match=r"rolled back.*does not run") as raised:
+        harness.run(yes=True)
+    assert f"Core '{harness.layout.core(harness.snapshot.stack.core.tag)}' was kept" in str(raised.value)
+    assert "remove it and rerun" in str(raised.value)

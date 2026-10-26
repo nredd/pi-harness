@@ -160,9 +160,12 @@ class RollbackError(InstallError):
 def expand_tilde(value: str, home: Path) -> Path:
     """Expand a leading `~` or `~/` the way Pi expands `PI_CODING_AGENT_DIR`.
 
-    Pi (`expandTildePath` in `packages/coding-agent/src/utils/paths.ts`) maps `~` to the home
+    Pi (`expandTildePath` in `packages/coding-agent/src/config.ts`, which delegates to
+    `normalizePath` in `packages/coding-agent/src/utils/paths.ts`) maps `~` to the home
     directory and `~/<rest>` to `<home>/<rest>`. Nothing else is expanded: not `~user`, not
-    `$VAR`, not a `~` anywhere but the start.
+    `$VAR`, not a `~` anywhere but the start. Pi also converts a value matching `^file://` with
+    Node's `fileURLToPath`; that is refused here rather than reimplemented, so the installer
+    never writes somewhere Pi does not read. Any other `file:` value is a relative path to both.
 
     Parameters:
         value (str): the raw environment value.
@@ -170,7 +173,14 @@ def expand_tilde(value: str, home: Path) -> Path:
 
     Returns:
         Path: the expanded path, or `value` unchanged.
+
+    Raises:
+        UnsupportedError: `value` is a `file://` URL.
     """
+    if value.startswith("file://"):
+        raise UnsupportedError(
+            f"`PI_CODING_AGENT_DIR` '{value}' is a `file://` URL; set it to the plain path, nothing changed"
+        )
     if value == "~":
         return home
     if value.startswith("~/"):
@@ -334,7 +344,8 @@ def preflight(
     if (system, machine) not in SUPPORTED_PLATFORMS:
         supported = ", ".join(f"{name} ({os_}/{arch})" for (os_, arch), name in SUPPORTED_PLATFORMS.items())
         problems.append(f"platform '{system}/{machine}' is not supported; tested: {supported}")
-    if (system == "Linux" and is_wsl()) if wsl is None else wsl:
+    detected = wsl if wsl is not None else system == "Linux" and is_wsl()
+    if detected:
         problems.append("Windows Subsystem for Linux (WSL) is not supported; use native Linux or macOS")
     tools = {}
     for name, reason in REQUIRED_TOOLS.items():
@@ -1148,7 +1159,7 @@ def load_journal(layout: Layout) -> list[Step]:
             f"Journal '{layout.journal}' is not trusted: {error}; nothing was restored. It only names the "
             "paths of the run that wrote it: if that run used another `--bin-dir` or "
             "`PI_CODING_AGENT_DIR`, rerun with the same ones. Otherwise restore by hand from "
-            f"'{layout.root / 'backups'}'"
+            f"'{layout.backups}'"
         ) from error
 
 
@@ -1382,7 +1393,7 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> tuple[Path, str]:
     """
     staging = layout.root / "staging" / uuid.uuid4().hex
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    backups = layout.root / "backups" / f"{stamp}-{verified.snapshot.source_sha[:12]}-{uuid.uuid4().hex[:6]}"
+    backups = layout.backups / f"{stamp}-{verified.snapshot.source_sha[:12]}-{uuid.uuid4().hex[:6]}"
     staging.mkdir(parents=True)
     try:
         staged_agent = stage(layout, verified, plan, staging)
@@ -1398,7 +1409,9 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> tuple[Path, str]:
                 journal,
                 staged_core=staging / "core" if plan.install_core else None,
             )
-            version = post_check(layout)
+            version = checked_version(
+                layout, None if plan.install_core else layout.core(verified.stack.core.tag)
+            )
         except BaseException as error:
             restored = rollback(layout)
             raise InstallError(
@@ -1434,6 +1447,33 @@ def post_check(layout: Layout) -> str:
         ).strip()
     except (OSError, subprocess.SubprocessError) as error:
         raise InstallError(f"Installed '{layout.link}' does not run: {error}") from error
+
+
+def checked_version(layout: Layout, kept_core: Path | None) -> str:
+    """Run `post_check`, naming a kept core prefix as the manual fix when it fails.
+
+    A core prefix whose marker matches the snapshot is never reinstalled, so a damaged one fails
+    every rerun until it is removed.
+
+    Parameters:
+        layout (Layout): installer paths.
+        kept_core (Path | None): core prefix this run did not reinstall, `None` when it did.
+
+    Returns:
+        str: version output.
+
+    Raises:
+        InstallError: the installed executable does not run.
+    """
+    try:
+        return post_check(layout)
+    except InstallError as error:
+        if kept_core is None:
+            raise
+        raise InstallError(
+            f"{error}. Core '{kept_core}' was kept because its marker matches the snapshot; if it is "
+            "damaged, remove it and rerun to reinstall it"
+        ) from error
 
 
 @contextmanager
@@ -1579,7 +1619,7 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
         if plan.empty:
             # Matching files are not a working install: it must still run.
             try:
-                version = post_check(layout)
+                version = checked_version(layout, layout.core(verified.stack.core.tag))
             except InstallError as error:
                 raise InstallError(
                     f"`stack/{opts.source_sha}` matches the snapshot but is not healthy, nothing was "
