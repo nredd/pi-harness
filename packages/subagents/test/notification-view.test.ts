@@ -59,20 +59,30 @@ describe("collapsed notice", () => {
 describe("model fallback", () => {
   const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
 
-  it("is spelled out in the expanded notice and flagged in the collapsed one", () => {
+  const long = "x".repeat(300);
+
+  it("is spelled out when expanded, and a LEADING flag survives a long description when collapsed", () => {
     expect(render(details({ modelNote }), true).join("\n")).toContain(modelNote);
-    expect(render(details({ modelNote }), false)).toEqual([expect.stringContaining("model fallback")]);
+    for (const width of [80, 120]) {
+      const [line] = render(details({ modelNote, description: long }), false, true, width);
+      expect(line).toContain("[fallback]");
+    }
     expect(render(details(), false).join("")).not.toContain("fallback");
     expect(render(details(), true).join("\n")).not.toContain("did not resolve");
   });
 
-  it("flags only the agents that fell back in a collapsed group", () => {
-    const first = details({ id: "a", description: "one", modelNote });
-    const summary = groupSummary([first, details({ id: "b", description: "two" })], theme);
-    expect(summary).toContain("one (model fallback)");
-    expect(summary).not.toContain("two (model fallback)");
-    const viaRender = renderNotification({ ...first, others: [details({ id: "b", description: "two" })] }, false, theme, true).render(200);
-    expect(viaRender).toEqual([expect.stringContaining("one (model fallback)")]);
+  it("counts fallback members in the group heading even when the fallback member is listed last", () => {
+    const members = [
+      details({ id: "a", description: long }),
+      details({ id: "b", description: long }),
+      details({ id: "c", description: "last", modelNote }),
+      details({ id: "d", description: "also", modelNote }),
+    ];
+    for (const width of [80, 120]) {
+      const [line] = renderNotification({ ...members[0]!, others: members.slice(1) }, false, theme, true).render(width);
+      expect(line).toContain("[fallback x2]");
+    }
+    expect(groupSummary([details(), details({ id: "z" })], theme)).not.toContain("fallback");
   });
 });
 

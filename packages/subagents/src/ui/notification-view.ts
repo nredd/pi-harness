@@ -41,19 +41,22 @@ function statParts(d: NotificationDetails, showCost: boolean): string[] {
 /** `✓ desc · 12 tools · 33.8k token · ~$0.0042 · 41.2s`. */
 export function noticeSummary(d: NotificationDetails, theme: Theme, showCost: boolean): string {
   const dot = ` ${theme.fg("dim", "·")} `;
-  const head = `${icon(d, theme)} ${theme.bold(d.description)}`;
+  // Leading, before the unbounded description: the collapsed line is truncated
+  // from the right, and a substituted model must not be what gets cut.
+  const flag = d.modelNote ? `${theme.fg("warning", "[fallback]")} ` : "";
+  const head = `${icon(d, theme)} ${flag}${theme.bold(d.description)}`;
   const stats = statParts(d, showCost).map(p => theme.fg("dim", p));
-  // Visible while collapsed: a substituted model is not an expanded-only detail.
-  const fallback = d.modelNote ? [theme.fg("warning", "model fallback")] : [];
-  return [head, ...stats, ...fallback].join(dot);
+  return [head, ...stats].join(dot);
 }
 
 /** `3 agents finished · ✓ a, ✓ b, ✗ c`. */
 export function groupSummary(all: NotificationDetails[], theme: Theme): string {
-  const names = all
-    .map(d => `${icon(d, theme)} ${d.description}${d.modelNote ? ` ${theme.fg("warning", "(model fallback)")}` : ""}`)
-    .join(theme.fg("dim", ", "));
-  return `${theme.bold(`${all.length} agents finished`)} ${theme.fg("dim", "·")} ${names}`;
+  const names = all.map(d => `${icon(d, theme)} ${d.description}`).join(theme.fg("dim", ", "));
+  // In the heading, ahead of the member list that truncation eats from the end,
+  // so a fallback member listed last is still counted.
+  const fellBack = all.filter(d => d.modelNote).length;
+  const flag = fellBack > 0 ? ` ${theme.fg("warning", `[fallback x${fellBack}]`)}` : "";
+  return `${theme.bold(`${all.length} agents finished`)}${flag} ${theme.fg("dim", "·")} ${names}`;
 }
 
 /** The transcript as an OSC 8 hyperlink, so a click opens it. */

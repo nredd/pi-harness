@@ -432,7 +432,7 @@ export class AgentWidget {
     if (costText) parts.push(costText);
     parts.push(duration);
 
-    const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
+    const modeTag = (modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "") + (a.modelFallback ? ` ${theme.fg("warning", "[fallback]")}` : "");
     return `${icon} ${renderAgentName(a.type, theme, { fallbackColor: "dim" })}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
   }
 
@@ -472,7 +472,7 @@ export class AgentWidget {
     const runningLines: string[][] = []; // each entry is [header, activity]
     for (const a of running) {
       const modeLabel = getPromptModeLabel(a.type);
-      const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
+      const modeTag = (modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "") + (a.modelFallback ? ` ${theme.fg("warning", "[fallback]")}` : "");
       const elapsed = formatMs(this.clock.now() - a.startedAt);
 
       const bg = this.agentActivity.get(a.id);

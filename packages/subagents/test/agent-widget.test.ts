@@ -107,6 +107,17 @@ describe("AgentWidget", () => {
     expect(renderLines(finished, "f")).toContain(label);
   });
 
+  it("keeps a LEADING [fallback] flag ahead of a long description that truncation would cut", () => {
+    const fallback = { input: "ghost", used: "anthropic/x" };
+    const longDescription = "y".repeat(300);
+    const running = { listAgents: () => [{ ...makeRecord("r", { isBackground: true }), description: longDescription, modelFallback: fallback }] };
+    expect(renderLines(running, "r")).toContain("[fallback]");
+    const finished = {
+      listAgents: () => [{ ...makeRecord("f", { isBackground: true }), description: longDescription, status: "completed", completedAt: Date.now(), modelFallback: fallback }],
+    };
+    expect(renderLines(finished, "f")).toContain("[fallback]");
+  });
+
   // "all" (and the no-policy constructor default) shows every agent.
   it("shows foreground agents in 'all' mode (and by default)", () => {
     const manager = { listAgents: () => [makeRecord("foreground", { isBackground: false })] };

@@ -1102,6 +1102,19 @@ describe("structured output", () => {
       expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
     });
 
+    it("never injects when the SCHEMA declares _modelNote, even if the child omitted the optional field; logs instead", async () => {
+      const schema = JSON.stringify({
+        type: "object",
+        properties: { findings: { type: "array", items: { type: "string" } }, _modelNote: { type: "number" } },
+        required: ["findings"],
+      });
+      const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}', modelNote }));
+      const result = await run(`return await agent('go', { schema: ${schema} });`, { host: stub.host });
+
+      expect(result.value).toEqual({ findings: [] });
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+    });
+
     it("journals the note and replays it: _modelNote, log line and row all survive a resume", async () => {
       const script = `return await agent('go', { schema: ${schemaLiteral} });`;
       const entries: WorkflowJournalEntry[] = [];

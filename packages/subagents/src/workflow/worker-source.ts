@@ -555,13 +555,23 @@ async function agentIn(scope, prompt, opts) {
     // object payload as a sibling \`_modelNote\` the script can read.
     if (modelNote !== undefined) {
       logIn(scope, modelNote);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && !Object.prototype.hasOwnProperty.call(parsed, "_modelNote")) parsed._modelNote = modelNote;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && !declaresModelNote(schema) && !Object.prototype.hasOwnProperty.call(parsed, "_modelNote")) parsed._modelNote = modelNote;
     }
     return parsed;
   } catch (error) {
     logIn(scope, "agent(): the host returned a structured result that is not JSON");
     return null;
   }
+}
+
+/**
+ * Whether the schema itself declares a \`_modelNote\` property, in any form. A
+ * schema that names it owns the field, even when the child omitted it (an
+ * optional property of another type must not receive our string).
+ */
+function declaresModelNote(schema) {
+  const props = schema && typeof schema === "object" ? schema.properties : undefined;
+  return !!props && typeof props === "object" && Object.prototype.hasOwnProperty.call(props, "_modelNote");
 }
 
 /**
