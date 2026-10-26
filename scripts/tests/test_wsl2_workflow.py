@@ -35,7 +35,7 @@ def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
     assert "runs-on: windows-2022" in workflow
     assert "timeout-minutes: 45" in workflow
     assert "contents: read" in workflow
-    assert "additional-packages: curl git libatomic1 tmux unzip xz-utils" in workflow
+    assert "additional-packages: curl git libatomic1 python3 tmux unzip xz-utils" in workflow
 
 
 def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
@@ -191,3 +191,79 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     assert "--gitlink ../forks/pi" in workflow
     assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in workflow
     assert "--stack stacks/personal.json -m stack -n 2 --dist loadfile" in workflow
+
+
+INSTALL_GH = CLEANUP.parent / "install_gh_linux.sh"
+
+
+def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> None:
+    """Install attestation-capable `gh`, forward the token via WSLENV, and gate `npm ci` on verification."""
+    workflow = workflow_text()
+    assert workflow.count("runs-on:") == 1
+    assert "python3" in workflow.split("additional-packages:")[1].splitlines()[0]
+    assert "GH_TOKEN: ${{ github.token }}" in workflow
+    assert "WSLENV: GH_TOKEN/u" in workflow
+    install = workflow.index('bash "$worktree/scripts/install_gh_linux.sh" "$tool_dir/gh"')
+    path = workflow.index('export PATH="$tool_dir/gh/bin:$PATH"')
+    verify = workflow.index("python3 -m harness.release --verify-root-overrides --root .")
+    npm_ci = workflow.index("npm ci --ignore-scripts")
+    fetch = workflow.index("uv run --locked python -m harness.release --gitlink")
+    unset = workflow.index("unset GH_TOKEN")
+    assert install < path < verify < npm_ci < fetch < unset
+    assert "echo $GH_TOKEN" not in workflow
+
+
+def run_install_gh(tmp_path: Path, system: str, machine: str) -> subprocess.CompletedProcess[str]:
+    """Run the real installer with `uname` and `curl` stubs, serving junk bytes as the tarball.
+
+    Parameters:
+        tmp_path: Scratch directory.
+        system: `uname -s` output.
+        machine: `uname -m` output.
+
+    Returns:
+        CompletedProcess[str]: Installer outcome.
+    """
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "uname").write_text(
+        f'#!/bin/sh\n[ "$1" = -s ] && echo {system} || echo {machine}\n', encoding="utf-8"
+    )
+    (commands / "curl").write_text(
+        '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --output ] && out=$2; shift; done\n'
+        'printf "not a gh tarball" > "$out"\n',
+        encoding="utf-8",
+    )
+    for command in commands.iterdir():
+        command.chmod(0o755)
+    env = dict(os.environ) | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"}
+    return subprocess.run(
+        ["/bin/bash", str(INSTALL_GH), str(tmp_path / "gh")],
+        capture_output=True,
+        check=False,
+        env=env,
+        text=True,
+    )
+
+
+def test_install_gh_refuses_a_tarball_that_does_not_match_the_pinned_sha256(tmp_path: Path) -> None:
+    """Never extract or run bytes whose digest differs from the pinned official release."""
+    completed = run_install_gh(tmp_path, "Linux", "x86_64")
+    assert completed.returncode == 1
+    assert "sha256 mismatch" in completed.stderr
+    assert not (tmp_path / "gh" / "bin").exists()
+
+
+def test_install_gh_refuses_unsupported_platforms_before_downloading(tmp_path: Path) -> None:
+    """Fail closed off linux/x86_64 instead of installing the wrong binary."""
+    completed = run_install_gh(tmp_path, "Linux", "aarch64")
+    assert completed.returncode == 1
+    assert "supports only linux/x86_64" in completed.stderr
+    assert not (tmp_path / "gh").exists()
+
+
+def test_install_gh_requires_one_directory_argument() -> None:
+    """Reject a missing install directory with a usage error."""
+    completed = subprocess.run(["/bin/bash", str(INSTALL_GH)], capture_output=True, check=False, text=True)
+    assert completed.returncode == 2
+    assert "usage:" in completed.stderr
