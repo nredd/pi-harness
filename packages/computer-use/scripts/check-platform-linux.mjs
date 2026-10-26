@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+const INVARIANTS = ["state-scoped-observations", "bounded-observation-history", "multi-root-forest", "progressive-disclosure", "atomic-physical-input", "concurrent-requests", "transactional-batching"];
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-platform-"));
 const fakeHelper = path.join(tempDir, "linux-bridge");
 await fs.writeFile(fakeHelper, `#!/usr/bin/env node
@@ -59,7 +60,8 @@ const readline = require("node:readline");
 fs.appendFileSync(process.env.PI_TEST_LINUX_START_COUNT, "start\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
-  process.stdout.write(JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result: request.args }) + "\\n");
+  const result = request.cmd === "diagnostics" ? { protocolVersion: 4, architectureVersion: 1, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
+  process.stdout.write(JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result }) + "\\n");
 });
 `);
 	await fs.chmod(concurrentHelper, 0o644);
@@ -76,6 +78,90 @@ setTimeout(() => fs.chmodSync(process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH, 0o7
 	assert.equal((await fs.readFile(installCount, "utf8")).trim().split("\n").length, 1, "concurrent commands share one helper installation");
 	assert.equal((await fs.readFile(startCount, "utf8")).trim().split("\n").length, 1, "concurrent commands share one helper process");
 	concurrentClient.dispose();
+
+	// ---- Helper acceptance, probing and replacement ----
+	const lines = async (file) => (await fs.readFile(file, "utf8").catch(() => "")).split("\n").filter(Boolean);
+	let caseIndex = 0;
+	/** A fake helper; `startFile` records each start, `protocol`/`architecture` model a stale build. */
+	const helperScript = ({ protocol = 4, architecture = 1, startFile }) => `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+fs.appendFileSync(${JSON.stringify(startFile)}, "start\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const request = JSON.parse(line);
+  const result = request.cmd === "diagnostics" ? { protocolVersion: ${protocol}, architectureVersion: ${architecture}, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
+  process.stdout.write(JSON.stringify({ protocolVersion: ${protocol}, id: request.id, ok: true, result }) + "\\n");
+});
+`;
+	/** Fresh case dir: helper path, counters and a setup script that installs `goodHelper` (or fails). */
+	const makeCase = async ({ installs = true } = {}) => {
+		const dir = path.join(tempDir, `case-${caseIndex++}`);
+		await fs.mkdir(dir);
+		const c = { dir, helper: path.join(dir, "linux-bridge"), starts: path.join(dir, "starts"), good: path.join(dir, "good-helper"), setupCount: path.join(dir, "setups"), envFile: path.join(dir, "env"), setup: path.join(dir, "setup.cjs") };
+		await fs.writeFile(c.good, helperScript({ startFile: c.starts }));
+		await fs.writeFile(c.setup, `
+const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(c.setupCount)}, "setup\\n");
+fs.writeFileSync(${JSON.stringify(c.envFile)}, process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + " " + process.argv.slice(2).join(" "));
+${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"; fs.copyFileSync(${JSON.stringify(c.good)}, tmp); fs.chmodSync(tmp, 0o755); fs.renameSync(tmp, process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH);` : `console.error("no prebuilt and PI_COMPUTER_USE_ALLOW_BUILD not set"); process.exit(1);`}
+`);
+		c.client = () => new LinuxHelperClient({ helperPath: c.helper, setupHelperScript: c.setup });
+		return c;
+	};
+
+	{ // A compatible cached helper is accepted with NO setup, shared by concurrent commands, started once.
+		const c = await makeCase({ installs: false });
+		await fs.copyFile(c.good, c.helper); await fs.chmod(c.helper, 0o755);
+		const client = c.client();
+		const results = await Promise.all(Array.from({ length: 12 }, (_, index) => client.command("echo", { index })));
+		assert.deepEqual(results.map((r) => r.index), Array.from({ length: 12 }, (_, index) => index));
+		assert.equal((await lines(c.setupCount)).length, 0, "compatible cached helper must not run setup");
+		assert.equal((await lines(c.starts)).length, 1, "the probed helper is the live helper");
+		client.dispose();
+	}
+
+	for (const [label, writeStale] of [
+		["protocol 3", (c) => fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: `${c.starts}.stale` }))],
+		["architecture version 2", (c) => fs.writeFile(c.helper, helperScript({ architecture: 2, startFile: `${c.starts}.stale` }))],
+		["non-executable-format file (ENOEXEC)", (c) => fs.writeFile(c.helper, "\u0000\u0001not an executable\n")],
+		["no file", async () => {}],
+	]) { // Stale/broken/missing -> exactly one setup shared by all callers, then one re-probe and normal use.
+		const c = await makeCase();
+		await writeStale(c);
+		if (label !== "no file") await fs.chmod(c.helper, 0o755);
+		const client = c.client();
+		const results = await Promise.all(Array.from({ length: 8 }, (_, index) => client.command("echo", { index })));
+		assert.deepEqual(results.map((r) => r.index), Array.from({ length: 8 }, (_, index) => index), label);
+		assert.equal((await lines(c.setupCount)).length, 1, `${label}: one shared setup`);
+		assert.match(await fs.readFile(c.envFile, "utf8"), new RegExp(`^${c.helper.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} --platform linux --runtime$`), `${label}: setup targets the custom helper path`);
+		assert.equal((await lines(c.starts)).length, 1, `${label}: only the replacement good helper started`);
+		client.dispose();
+	}
+
+	{ // Stale helper and setup unavailable: actionable error naming both causes; fixing it later recovers (retry).
+		const c = await makeCase({ installs: false });
+		await fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: c.starts })); await fs.chmod(c.helper, 0o755);
+		const client = c.client();
+		await assert.rejects(client.command("echo", {}), (error) => {
+			assert.match(error.message, /no prebuilt and PI_COMPUTER_USE_ALLOW_BUILD not set/);
+			assert.match(error.message, /Installed Linux helper .* was rejected: Linux helper protocol mismatch: expected 4, got 3\./);
+			return true;
+		});
+		await fs.writeFile(c.setup, `require("node:fs").appendFileSync(${JSON.stringify(c.setupCount)}, "setup\\n");
+const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH); fs.chmodSync(process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH, 0o755);`);
+		assert.equal((await client.command("echo", { ok: 1 })).ok, 1, "retry after a failed install re-probes and recovers");
+		assert.equal((await lines(c.setupCount)).length, 2);
+		client.dispose();
+	}
+
+	{ // Setup that "succeeds" but leaves an incompatible helper fails validation instead of looping.
+		const c = await makeCase();
+		await fs.writeFile(c.good, helperScript({ protocol: 3, startFile: c.starts }));
+		const client = c.client();
+		await assert.rejects(client.command("echo", {}), /installed at .* failed validation: Linux helper protocol mismatch: expected 4, got 3\./);
+		assert.equal((await lines(c.setupCount)).length, 1, "no recursive or repeated setup within one attempt");
+		client.dispose();
+	}
 	delete process.env.PI_TEST_LINUX_INSTALL_COUNT;
 	delete process.env.PI_TEST_LINUX_START_COUNT;
 	console.log("Linux platform checks passed");

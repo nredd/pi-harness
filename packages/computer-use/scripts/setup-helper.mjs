@@ -21,6 +21,8 @@ const windowsCrateDir = path.join(rootDir, "native", "windows", "bridge-rs");
 const windowsHelperDestPath = process.env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH || path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe");
 const linuxCrateDir = path.join(rootDir, "native", "linux", "bridge-rs");
 const linuxHelperDestPath = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH || path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
+// The packed crate lives in the (often root-owned, read-only) npm install, so cargo builds into the user's cache.
+const linuxBuildTargetDir = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "pi-computer-use", "linux-bridge-target");
 const helperSourcePaths = ["agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"]
 	.map((file) => path.join(rootDir, "native", "macos", file));
 const packageJsonPath = path.join(rootDir, "package.json");
@@ -124,6 +126,76 @@ async function run(command, commandArgs) {
 				return;
 			}
 			reject(new Error(`Command failed (${code}): ${command} ${commandArgs.join(" ")}`));
+		});
+	});
+}
+
+const GROUP_TERM_GRACE_MS = 800;
+const GROUP_KILL_WAIT_MS = 500;
+
+function processGroupAlive(pgid) {
+	try {
+		process.kill(-pgid, 0);
+		return true;
+	} catch (error) {
+		return error.code === "EPERM";
+	}
+}
+
+/**
+ * Drive the process group `pgid` (owned: it is the pid of the child we spawned detached) to empty:
+ * SIGTERM, a bounded grace, then SIGKILL, and return only once `kill(-pgid, 0)` reports ESRCH.
+ * While any member lives the pgid cannot be reused, so ownership is held until quiescence. The total
+ * (<= 1.3s) stays inside the caller's 2s SIGKILL backstop on this script's pid.
+ */
+async function reapProcessGroup(pgid) {
+	const signalGroup = (signal) => { try { process.kill(-pgid, signal); } catch { /* group already gone */ } };
+	const quiesce = async (timeoutMs) => {
+		for (const deadline = Date.now() + timeoutMs; processGroupAlive(pgid) && Date.now() < deadline;) await delay(20);
+		return !processGroupAlive(pgid);
+	};
+	if (!processGroupAlive(pgid)) return;
+	signalGroup("SIGTERM");
+	if (await quiesce(GROUP_TERM_GRACE_MS)) return;
+	signalGroup("SIGKILL");
+	await quiesce(GROUP_KILL_WAIT_MS);
+}
+
+/**
+ * Run a build tool in its own process group and reap the whole group, escalating to SIGKILL for
+ * descendants that ignore SIGTERM, before returning or exiting: on success or failure of the tool, and
+ * when this script is terminated (the Pi session's setup deadline sends SIGTERM). No compiler outlives it.
+ */
+export async function runCancellable(command, commandArgs) {
+	await new Promise((resolve, reject) => {
+		const child = spawn(command, commandArgs, { stdio: "inherit", detached: true });
+		let reaping;
+		const reap = () => (reaping ??= reapProcessGroup(child.pid));
+		const signals = ["SIGTERM", "SIGINT", "SIGHUP"];
+		// Last resort if we are exiting some other way: never leave the group running.
+		const onExit = () => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ } };
+		const onTerminate = (signal) => {
+			// Repeated signals while reaping must not fall through to the default action.
+			void reap().finally(() => process.exit(128 + (os.constants.signals[signal] ?? 15)));
+		};
+		for (const signal of signals) process.on(signal, onTerminate);
+		process.on("exit", onExit);
+		const cleanup = () => {
+			for (const signal of signals) process.off(signal, onTerminate);
+			process.off("exit", onExit);
+		};
+		child.on("error", (error) => {
+			cleanup();
+			reject(error.code === "ENOENT"
+				? new Error(`'${command}' was not found on PATH. Install the Rust toolchain (https://rustup.rs) and a C linker (e.g. build-essential), or install a package that ships prebuilt/linux/<arch>/linux-bridge.`)
+				: error);
+		});
+		child.on("close", (code, signal) => {
+			reap().then(() => {
+				cleanup();
+				if (code === 0) resolve();
+				else reject(new Error(`Command failed (${code ?? signal}): ${command} ${commandArgs.join(" ")}`));
+			});
 		});
 	});
 }
@@ -521,9 +593,10 @@ async function setupLinuxHelper() {
 	}
 	if (allowLinuxBuildFallback) {
 		if (process.platform !== "linux") throw new Error("The Linux helper source fallback must be built on Linux.");
-		console.log("[pi-computer-use] Linux prebuilt helper missing; attempting source build with cargo...");
-		await run("cargo", ["build", "--release", "--manifest-path", path.join(linuxCrateDir, "Cargo.toml")]);
-		const cargoOutput = path.join(linuxCrateDir, "target", "release", "linux-bridge");
+		if (!(await exists(path.join(linuxCrateDir, "Cargo.toml")))) throw new Error(`Linux helper source not found at ${linuxCrateDir}; reinstall @nredd/pi-computer-use.`);
+		console.log(`[pi-computer-use] Linux prebuilt helper missing; building from source with cargo (target dir ${linuxBuildTargetDir})...`);
+		await runCancellable("cargo", ["build", "--locked", "--release", "--manifest-path", path.join(linuxCrateDir, "Cargo.toml"), "--target-dir", linuxBuildTargetDir]);
+		const cargoOutput = path.join(linuxBuildTargetDir, "release", "linux-bridge");
 		const { changed } = await copyIfChanged(cargoOutput, linuxHelperDestPath);
 		console.log(changed ? `[pi-computer-use] built and installed Linux helper at ${linuxHelperDestPath}` : `[pi-computer-use] Linux helper already up to date at ${linuxHelperDestPath}`);
 		return;
