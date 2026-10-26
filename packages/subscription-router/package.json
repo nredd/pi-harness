@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-subscription-router",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publishConfig": {"access": "public"},
   "description": "Pi virtual models that route across included subscription quota: Anthropic and ChatGPT Codex usage collectors, confirmed per-family exhaustion, and mid-run quota recovery.",
   "author": "nredd",
@@ -19,8 +19,8 @@
     "typebox": "*"
   },
   "scripts": {
-    "lint": "biome check src/ test/ e2e/",
-    "format": "biome check --write src/ test/ e2e/",
+    "lint": "biome check src/ test/",
+    "format": "biome check --write src/ test/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:bun": "bun test test/scenarios",

@@ -64,7 +64,9 @@ appends to the session branch; discovery alone is not sufficient evidence.
 What each package must satisfy:
 
 - `npm pack` contents match a narrow allowlist: `src/`, `LICENSE`, `README.md`, `package.json`, plus
-  `CHANGELOG.md` (router), `dist/pi-stats-export.mjs` + `docs/stats-snapshots.md` (session-kit) and
+  `CHANGELOG.md` (router), `dist/pi-stats-export.mjs`, `docs/stats-snapshots.md` and
+  `docs/mon-dashboard.md` (session-kit, all required: the README links both docs, see
+  `test_session_kit_readme_links_only_packed_files`) and
   `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`). computer-use is
   also pinned by exact `packed_files` (45 paths).
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
@@ -164,7 +166,14 @@ What each package must satisfy:
     exporting that real session and importing it elsewhere; unknown flags exit nonzero. The copy is
     not a rebuild, so artifact identity is the tarball's
   - subscription-router: `router/default` is listed and a request dispatches to the physical
-    `local/m`; an invalid config registers nothing and does not crash Pi
+    `local/m`; an invalid config registers nothing and does not crash Pi. Three additional stock-Pi
+    processes embed the installed tarball's factory through `scripts/router_contract.mjs`: balanced
+    dispatch to B, exhausted A/B falling back to unmeasured C, and an SSE quota error on A confirmed
+    by a fresh usage read before recovery to B. Each asserts exact physical message order, provider
+    request counts, successful final settlement and sibling-tool absence. Quota HTTP responses and
+    credentials are synthetic injected transport dependencies; model streams use three real loopback
+    faux providers. No workspace router source or sibling plugin is loaded. The original default-entry
+    scenario remains separate, so the embedding fixture does not replace installation coverage
   - in every run the package's tools are declared and no other package's are (sibling absent)
 
 Isolation: the child environment is built from scratch, never inherited. `HOME`, `TMPDIR`/`TMP`/`TEMP`,
@@ -173,8 +182,9 @@ scratch directory (session-kit sweeps `os.tmpdir()` on startup, so nothing point
 state). No provider keys or loader variables (`NODE_OPTIONS`, ...) reach children; `HTTP(S)_PROXY`
 points at a dead port with loopback excluded as defense in depth for clients honoring proxy
 variables. This is not a network sandbox: direct sockets and clients ignoring those variables are
-not intercepted. The only configured model is a loopback scripted provider (`faux_provider.py`)
-registered through `models.json` with a dummy key.
+not intercepted. Configured models use loopback scripted providers (`faux_provider.py`)
+registered through `models.json` with dummy keys. The router's multiprovider cases configure three
+such providers, never live subscription endpoints.
 Scratch is deleted unless `--keep`.
 
 Limits: this is stock Pi only. It does not exercise `pi install npm:...`, the Plan-mode
@@ -254,8 +264,15 @@ field, peers or runtime dependencies are allowed. Import auditing permits Node b
 in-package relative imports, never host modules or sibling extensions. The default extension
 contract still requires `pi.extensions` and retains its original host-module rules. The release
 descriptor uses the same audit/isolated execution gate; `publish.yml` published `0.1.1` (see
-[releases](releases.md)). Consumers pin that exact published version and are admitted only through
-the narrow `SHARED_LIBRARIES` rule above, not a relaxed sibling import rule.
+[releases](releases.md)). Consumers declare the exact registry release (`RESOURCE_SAMPLER_VERSION`,
+never a range, `workspace:` or `file:` spec) as a contract `runtime_dependencies` entry and are admitted
+only through the narrow `SHARED_LIBRARIES` rule above, not a relaxed sibling import rule. Their stock
+gate installs it from npm next to the packed plugin. In the monorepo npm would link the same-version
+workspace, so the root lock carries a nested registry entry per consumer
+(`packages/dev-tools/node_modules/@nredd/pi-resource-sampler` and
+`packages/session-kit/node_modules/@nredd/pi-resource-sampler`) and package tests run the published
+bytes, never the workspace copy. `npm dedupe` would drop those entries; both consumers' registry
+resolution tests and the package-contract lock assertions fail if it does.
 
 ## Packed preset audit (no standalone Pi behavior)
 

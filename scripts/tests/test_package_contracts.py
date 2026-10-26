@@ -13,6 +13,7 @@ import dataclasses
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1075,6 +1076,22 @@ def test_audit_files_flags_leaks_and_gaps() -> None:
     assert "unexpected file 'src/x.test.snap'" in problems
 
 
+def test_session_kit_readme_links_only_packed_files() -> None:
+    """Every in-package README link is allowlisted for packing and required, so no tarball has dead links."""
+    contract = next(c for c in pc.CONTRACTS if c.name == "@nredd/pi-session-kit")
+    root = pc.REPO_ROOT / "packages" / contract.directory
+    targets = re.findall(r"\]\(([^)\s]+)\)", (root / "README.md").read_text())
+    links = {t.split("#")[0].removeprefix("./") for t in targets if not re.match(r"[a-z]+:|#", t)}
+    assert "docs/mon-dashboard.md" in links
+    allowlist = json.loads((root / "package.json").read_text())["files"]
+    for link in sorted(links):
+        assert (root / link).is_file(), link
+        assert link in contract.required, link
+        assert any(link == entry or link.startswith(f"{entry}/") for entry in allowlist), link
+    packed = [name for name in contract.required if name != "docs/mon-dashboard.md"]
+    assert pc.audit_files(contract, packed) == ["missing required file 'docs/mon-dashboard.md'"]
+
+
 def test_audit_license(tmp_path: Path) -> None:
     """Missing and divergent licenses fail; the identical one passes.
 
@@ -1539,7 +1556,13 @@ def test_validate_report_accepts_every_scenario_evidence() -> None:
         "@nredd/pi-subscription-router": GOOD_ENTRY
         | {
             "tarball": "nredd-pi-subscription-router-0.3.0.tgz",
-            "evidence": {"virtual_model": "router/default", "dispatched": "local/m"},
+            "evidence": {
+                "virtual_model": "router/default",
+                "dispatched": "local/m",
+                "balanced": ["openai-codex/m-b"],
+                "fallback": ["local/m-c"],
+                "recovery": ["anthropic/m-a", "openai-codex/m-b"],
+            },
         },
     }
     assert len(pc.validate_report(good_report(packages)).packages) == 3

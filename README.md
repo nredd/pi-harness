@@ -66,7 +66,7 @@ Stock Pi compatibility is `make check-package-contracts`' job, not the unit gate
 Development (Node with npm workspaces, `uv`, Git, macOS or Linux; the benchmark is macOS-only):
 
 ```sh
-make install               # npm ci --ignore-scripts; uv sync --locked (integration, benchmark)
+make install               # verify root core overrides (stdlib python3), then npm ci --ignore-scripts; uv sync --locked
 make check                 # owned-code gates, see below
 make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, see docs/package-contracts.md
 make check-todo-package-contract # explicit: packed todo tool through stock Pi 1.3.0
@@ -113,7 +113,11 @@ from the npm registry on first use and runs real Pi processes. Its tooling is un
 `check-scripts`. A pass says nothing about the Bun candidate or the full stack.
 
 `make check` is the owned-code unit gate *only*. Forks use their native gates, see
-[forks.md](docs/forks.md). The CI `stack` matrix is the assembled gate for tap/profile pin bumps:
+[forks.md](docs/forks.md). Audit the root lockfile with
+`npm audit --package-lock-only --omit=dev --json` and investigate every reported chain. Never run
+an unguarded `npm audit fix`: package sources and their exact test-host pins are deliberate. Keep
+compatible transitive repairs in `package-lock.json`; use `--ignore-scripts --legacy-peer-deps` only
+while resolving the lock and restore every manifest before committing. The CI `stack` matrix is the assembled gate for tap/profile pin bumps:
 exact Gitlinked core release, `integration/stacks/{personal,local}.json`, real `pi install`,
 throwaway HOME/agent directories, D boundaries and the one E tmux resize seam. It replaces local
 `pi-harness-e2e make verify`; no owner config or installed package state is read. Inputs and

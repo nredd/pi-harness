@@ -19,15 +19,15 @@
     "npm:@gotgenes/pi-anthropic-auth@3.4.3",
     "npm:pi-web-access@0.43.0",
     "npm:@nredd/pi-todo@2.13.10",
-    "npm:@nredd/pi-subagents@0.22.0-nredd.6",
-    "npm:@nredd/pi-subscription-router@0.4.0",
+    "npm:@nredd/pi-subagents@0.22.0-nredd.7",
+    "npm:@nredd/pi-subscription-router@0.4.1",
     "npm:@nredd/pi-plan-mode@0.59.3-nredd.2",
-    "npm:@nredd/pi-dev-tools@0.5.1",
+    "npm:@nredd/pi-dev-tools@0.6.0",
     "npm:pi-deferred-context-engine@0.5.0",
     "npm:@quintinshaw/pi-dynamic-workflows@3.14.0",
     "npm:pi-memory@0.4.2",
     "npm:@nredd/pi-computer-use@0.5.2",
-    "npm:@nredd/pi-session-kit@0.7.0"
+    "npm:@nredd/pi-session-kit@0.8.0"
   ],
   "settings": {"quietStartup": true, "fullscreen": true},
   "disabled_extensions": {
