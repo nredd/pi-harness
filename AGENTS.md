@@ -10,7 +10,11 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
 - Never change a dirty fork checkout during bootstrap. Parent worktrees do not isolate submodule edits automatically.
 - Run format checks, lint, type checks, tests, and relevant real-input/failure-path checks before review.
 - Do not regenerate baselines or relax thresholds to make a failing gate pass.
-- Never expose credentials to public PR code or the benchmark runner.
+- Keep credentials out of fork PR code and the benchmark runner. Installer CI alone may give
+  owner-reviewed same-repo PR branches a read-only job token (`contents: read`, `attestations: read`)
+  for `gh`'s attestation fallback: hosted runner IPs share GitHub's anonymous 60 requests/hour limit.
+  Main pushes/dispatches also qualify; non-main dispatches stay anonymous. The installer strips
+  GitHub tokens from every child except `gh` fetching attestations without a bundle.
 - Do not activate the distribution, alter the live Pi install, or archive old repositories as part of staging.
 
 # Mandatory PR review

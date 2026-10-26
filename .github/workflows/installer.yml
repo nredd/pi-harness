@@ -60,13 +60,14 @@ concurrency:
   group: installer-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  attestations: read
+permissions: {}
 
 jobs:
   installer:
     name: installer (${{ matrix.os }})
+    permissions:
+      contents: read
+      attestations: read # Required by the attestations API used by `gh`'s fallback.
     strategy:
       fail-fast: false
       matrix:
@@ -86,15 +87,14 @@ jobs:
       - name: Install harness dependencies
         working-directory: integration
         run: uv sync --locked
-      # PR code never gets a credential (AGENTS.md): a pull_request run is anonymous and fails
-      # honestly if GitHub's shared anonymous rate limit refuses it. Only reviewed `main` code (a
-      # push to it, or a dispatch on it) gets the job token; a dispatch on any other branch runs
-      # unreviewed code and stays anonymous. The token lets `gh` (only; the installer strips it
-      # from every other child) use the installer's rate-limit fallback.
-      # `test_installer_workflow_token_is_main_only` pins this expression.
+      # Same-repo PR branches are owner-reviewed code (AGENTS.md): like main pushes/dispatches,
+      # they get a read-only job token for `gh`'s fallback when hosted runner IPs exhaust GitHub's
+      # anonymous 60 requests/hour. Fork PRs and non-main dispatches stay anonymous. The installer
+      # strips the token from every child except `gh` fetching attestations without a bundle.
+      # `test_installer_workflow_token_policy` pins and evaluates this expression.
       - name: Run the documented one-shot command in throwaway HOMEs
         env:
-          GH_TOKEN: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.token || '' }}
+          GH_TOKEN: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main')) && github.token || '' }}
           INSTALLER_SPEC: git+https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}#subdirectory=integration
           STACK_SHA: ${{ inputs.stack_sha || '24889f7896be7157bf9077a41465a3b29620879f' }}
         run: make -C integration installer

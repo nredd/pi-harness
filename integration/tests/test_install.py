@@ -1548,8 +1548,21 @@ def test_installer_workflow_covers_its_inputs() -> None:
         assert all((INTEGRATION.parent / path).exists() for path in paths if "*" not in path), event
 
 
-def test_installer_workflow_token_is_main_only() -> None:
-    """Only reviewed `main` code gets the job token: never a PR, never a dispatch on another branch."""
+@pytest.mark.parametrize(
+    ("event", "ref", "head_repo", "expected"),
+    [
+        ("push", "refs/heads/main", "", "job-token"),
+        ("workflow_dispatch", "refs/heads/main", "", "job-token"),
+        ("pull_request", "refs/pull/126/merge", "nredd/pi-harness", "job-token"),
+        ("pull_request", "refs/pull/126/merge", "someone/pi-harness", ""),
+        ("pull_request", "refs/heads/main", "someone/pi-harness", ""),
+        ("workflow_dispatch", "refs/heads/topic", "nredd/pi-harness", ""),
+        ("push", "refs/heads/topic", "nredd/pi-harness", ""),
+        ("pull_request_target", "refs/heads/main", "nredd/pi-harness", ""),
+    ],
+)
+def test_installer_workflow_token_policy(event: str, ref: str, head_repo: str, expected: str) -> None:
+    """Only main pushes/dispatches and owner-reviewed same-repo PRs get a read-only fallback token."""
     text = INSTALLER_WORKFLOW.read_text()
     workflow = yaml.safe_load(text)
     tokens = [
@@ -1563,12 +1576,37 @@ def test_installer_workflow_token_is_main_only() -> None:
         (
             "Run the documented one-shot command in throwaway HOMEs",
             "GH_TOKEN",
-            "${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' "
-            "&& github.token || '' }}",
+            "${{ ((github.event_name == 'pull_request' && "
+            "github.event.pull_request.head.repo.full_name == github.repository) || "
+            "((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && "
+            "github.ref == 'refs/heads/main')) && github.token || '' }}",
         )
     ]
     assert text.count("github.token") == 1
     assert "secrets." not in text
+    # Evaluate the pinned, trusted expression with literal context values and no builtins.
+    expression = tokens[0][2].removeprefix("${{ ").removesuffix(" }}")
+    for name, value in {
+        "github.event.pull_request.head.repo.full_name": head_repo,
+        "github.repository": "nredd/pi-harness",
+        "github.event_name": event,
+        "github.ref": ref,
+        "github.token": "job-token",
+    }.items():
+        expression = expression.replace(name, repr(value))
+    assert eval(expression.replace("&&", "and").replace("||", "or"), {"__builtins__": {}}) == expected
+
+
+def test_installer_workflow_token_permissions_are_read_only() -> None:
+    """Explicit job permissions grant only checkout and attestation reads, never any write scope."""
+    workflow = yaml.safe_load(INSTALLER_WORKFLOW.read_text())
+    assert workflow["permissions"] == {}
+    assert workflow["jobs"]["installer"]["permissions"] == {"contents": "read", "attestations": "read"}
+    assert all(
+        step.get("with", {}).get("persist-credentials") is False
+        for step in workflow["jobs"]["installer"]["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
 
 
 @pytest.mark.parametrize("kind", ["fifo", "fifo-link", "socket"])
