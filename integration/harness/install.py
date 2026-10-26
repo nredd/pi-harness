@@ -1210,8 +1210,9 @@ def load_journal(layout: Layout) -> tuple[Path, list[Step]]:
     """
     try:
         document = read_journal(layout.journal)
+        if not isinstance(document, dict):
+            raise ValueError("journal is not a JSON object")
         steps = validate_journal(layout, document)
-        assert isinstance(document, dict)
         return Path(document["backups"]), steps
     except ValueError as error:
         raise RollbackError(
@@ -1257,10 +1258,8 @@ def rollback(layout: Layout) -> list[str]:
                         ) from error
             for step in reversed(steps):
                 journal.check_store()
-                if step.backup is None:
-                    remove(step.target)
-                else:
-                    remove(step.target)
+                remove(step.target)
+                if step.backup is not None:
                     os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
                 journal.check_store()
                 restored.append(str(step.target))

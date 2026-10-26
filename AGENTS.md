@@ -14,7 +14,8 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
   CI provisions a temporary `gh` login using a read-only job token (`contents: read`, `attestations: read`)
   for main pushes/dispatches and same-repo PRs; fork PRs and non-main dispatches stay anonymous.
   Hosted runner IPs share GitHub's anonymous 60 requests/hour limit. A gh-only shim uses that login;
-  `make`, pytest, `uvx`, Git and package builds receive no token or login-config environment.
+  `make`/pytest receive only its nonsecret directory path (`INSTALLER_GH_CONFIG_DIR`), not a token.
+  The shim alone sets `GH_CONFIG_DIR`; `uvx`, Git and package builds receive neither variable nor token.
   TRUST assumption: same-repo branches are owner-reviewed code, not fork-sandboxed. Their authors can
   edit the PR workflow to request write permissions or reference secrets; the read-only permissions
   constrain the submitted workflow only, not arbitrary same-repo PR code.

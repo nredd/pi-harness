@@ -1753,6 +1753,7 @@ def test_acceptance_token_never_reaches_uvx_or_builds(
         "import os,subprocess,sys\n"
         f"assert {SENTINEL!r} not in repr(dict(os.environ)), 'token reached non-gh child'\n"
         "assert 'GH_CONFIG_DIR' not in os.environ\n"
+        "assert 'INSTALLER_GH_CONFIG_DIR' not in os.environ\n"
         f"assert not set(os.environ).intersection({sorted(GITHUB_TOKEN_VARIABLES)!r})\n"
         "subprocess.run([sys.executable,'-c',sys.argv[1]],check=True)\n"
         "subprocess.run(['gh'],check=True)\n"
