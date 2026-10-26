@@ -50,6 +50,7 @@ from urllib.request import urlopen
 
 from harness.files import NonRegularFileError, entry_kind
 from harness.files import read_regular as read_regular_file
+from harness.paths import is_wsl
 from harness.promotion import (
     SHA_PATTERN,
     SNAPSHOT_ASSET,
@@ -156,6 +157,28 @@ class RollbackError(InstallError):
     """An interrupted switch could not be fully restored; the journal and backups are kept."""
 
 
+def expand_tilde(value: str, home: Path) -> Path:
+    """Expand a leading `~` or `~/` the way Pi expands `PI_CODING_AGENT_DIR`.
+
+    Pi (`expandTildePath` in `packages/coding-agent/src/utils/paths.ts`) maps `~` to the home
+    directory and `~/<rest>` to `<home>/<rest>`. Nothing else is expanded: not `~user`, not
+    `$VAR`, not a `~` anywhere but the start.
+
+    Parameters:
+        value (str): the raw environment value.
+        home (Path): the user's home directory, injected rather than read from the environment.
+
+    Returns:
+        Path: the expanded path, or `value` unchanged.
+    """
+    if value == "~":
+        return home
+    if value.startswith("~/"):
+        # Like `path.join(home, rest)`: a leading `/` in the rest must not make it absolute.
+        return home / value[2:].lstrip("/")
+    return Path(value)
+
+
 @dataclass(frozen=True)
 class Layout:
     """Every path the installer owns or edits."""
@@ -180,9 +203,18 @@ class Layout:
         # which would hide the packages it installed from the integrity check.
         home = home.resolve()
         data = Path(env["XDG_DATA_HOME"]) if env.get("XDG_DATA_HOME") else home / ".local" / "share"
-        agent = Path(env["PI_CODING_AGENT_DIR"]) if env.get("PI_CODING_AGENT_DIR") else home / ".pi" / "agent"
+        agent = (
+            expand_tilde(env["PI_CODING_AGENT_DIR"], home)
+            if env.get("PI_CODING_AGENT_DIR")
+            else home / ".pi" / "agent"
+        )
         links = bin_dir or home / ".local" / "bin"
         return cls((data / "pi-stack").resolve(), agent.resolve(), links.resolve())
+
+    @property
+    def backups(self) -> Path:
+        """Store holding one directory per run of everything that run replaced."""
+        return self.root / "backups"
 
     def core(self, tag: str) -> Path:
         """Return the immutable prefix of one core release.
@@ -274,31 +306,45 @@ def node_version(node: str) -> tuple[int, int, int]:
     return major, minor, patch
 
 
-def preflight(system: str, machine: str, which: Callable[[str], str | None] = shutil.which) -> dict[str, str]:
+def preflight(
+    system: str,
+    machine: str,
+    which: Callable[[str], str | None] = shutil.which,
+    *,
+    wsl: bool | None = None,
+) -> dict[str, str]:
     """Check the platform and every prerequisite, reporting all problems at once.
+
+    WSL reports `Linux/x86_64` but was never an installer acceptance platform, so the physical
+    check (`harness.paths.is_wsl`) refuses it. There is no flag to bypass it.
 
     Parameters:
         system (str): `platform.system()`.
         machine (str): `platform.machine()`.
         which (Callable[[str], str | None]): executable lookup.
+        wsl (bool | None): whether this is WSL; `None` detects it on Linux. Tests inject it.
 
     Returns:
-        dict[str, str]: tool name -> absolute path.
+        dict[str, str]: tool name -> absolute path as discovered, links not followed.
 
     Raises:
-        UnsupportedError: the platform is unsupported or a tool is missing.
+        UnsupportedError: the platform is unsupported, this is WSL, or a tool is missing.
     """
     problems = []
     if (system, machine) not in SUPPORTED_PLATFORMS:
         supported = ", ".join(f"{name} ({os_}/{arch})" for (os_, arch), name in SUPPORTED_PLATFORMS.items())
         problems.append(f"platform '{system}/{machine}' is not supported; tested: {supported}")
+    if (system == "Linux" and is_wsl()) if wsl is None else wsl:
+        problems.append("Windows Subsystem for Linux (WSL) is not supported; use native Linux or macOS")
     tools = {}
     for name, reason in REQUIRED_TOOLS.items():
         path = which(name)
         if path is None:
             problems.append(f"`{name}` not found on PATH: {reason}")
         else:
-            tools[name] = str(Path(path).resolve())
+            # Absolute, not resolved: Volta, mise and similar managers link `node` to one dispatcher
+            # that picks the runtime from its own name (`argv[0]`), so the link target is not Node.js.
+            tools[name] = str(Path(path).absolute())
     if problems:
         raise UnsupportedError("Prerequisites not met, nothing changed:\n- " + "\n- ".join(problems))
     return tools
@@ -462,12 +508,54 @@ def require_one_filesystem(layout: Layout) -> None:
     Raises:
         UnsupportedError: the installer root, agent dir and link dir are not on one filesystem.
     """
-    paths = (layout.root, layout.agent_dir, layout.bin_dir)
+    # The installer directory's own `staging`, `backups` and `core` may be mount points.
+    paths = (
+        layout.root,
+        layout.root / "staging",
+        layout.backups,
+        layout.root / "core",
+        layout.agent_dir,
+        layout.bin_dir,
+    )
     if len({device(path) for path in paths}) > 1:
         raise UnsupportedError(
-            "The installer directory, agent directory and link directory must be on one filesystem "
-            f"('{layout.root}', '{layout.agent_dir}', '{layout.bin_dir}'); move `XDG_DATA_HOME`, "
+            "The installer directory (with its `staging`, `backups` and `core`), agent directory and "
+            f"link directory must be on one filesystem ('{layout.root}', '{layout.agent_dir}', "
+            f"'{layout.bin_dir}'); move `XDG_DATA_HOME`, "
             "`PI_CODING_AGENT_DIR` or `--bin-dir` so they share one, nothing changed"
+        )
+
+
+def is_real_directory_or_absent(path: Path) -> bool:
+    """Report whether a path is a real directory (not a link) or does not exist yet.
+
+    Shared by the journal reader and the backup writer so they can never disagree.
+
+    Parameters:
+        path (Path): store or backup directory.
+
+    Returns:
+        bool: `True` for a directory or an absent path.
+    """
+    return entry_kind(path) in {None, "directory"}
+
+
+def require_backup_store(layout: Layout) -> None:
+    """Refuse a backup store the journal reader would refuse, before anything is written to it.
+
+    `Journal.backups.mkdir` follows a link, but `validate_journal` rejects one: a switch that
+    failed midway could then not be rolled back, and its journal would trap every later run.
+
+    Parameters:
+        layout (Layout): installer paths.
+
+    Raises:
+        UnsupportedError: the store exists as anything but a real directory.
+    """
+    if not is_real_directory_or_absent(layout.backups):
+        raise UnsupportedError(
+            f"Backup store '{layout.backups}' is a {entry_kind(layout.backups)}; the installer keeps "
+            "backups only in a real directory there. Move it aside yourself, nothing changed"
         )
 
 
@@ -663,6 +751,7 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
         # Before consent: a kind the journal cannot restore must never be moved into a backup.
         for target in replaced_targets(layout, plan):
             require_restorable_kind(layout, target)
+        require_backup_store(layout)
     return plan
 
 
@@ -737,14 +826,15 @@ def describe(path: Path) -> str:
     return "directory" if path.is_dir() else "file"
 
 
-def owned_lock_entries(agent_dir: Path) -> dict[str, dict[str, Any]]:
+def owned_lock_entries(agent_dir: Path) -> dict[str, Any]:
     """Read the npm lockfile of the agent's npm package tree.
 
     Parameters:
         agent_dir (Path): agent tree.
 
     Returns:
-        dict[str, dict[str, Any]]: lockfile `packages` entries keyed by `node_modules/<name>`.
+        dict[str, Any]: lockfile `packages` entries keyed by `node_modules/<name>`; a value need
+            not be an object in a malformed lockfile.
 
     Raises:
         InstallError: the lockfile is missing or malformed.
@@ -769,7 +859,9 @@ def verify_owned_integrity(snapshot: StackSnapshot, agent_dir: Path) -> None:
     entries = owned_lock_entries(agent_dir)
     for owned in snapshot.gates.owned_packages:
         name, version = owned.package.rsplit("@", 1)
-        entry = entries.get(f"node_modules/{name}", {})
+        entry = entries.get(f"node_modules/{name}")
+        if not isinstance(entry, dict):
+            entry = {}
         if entry.get("version") != version or entry.get("integrity") != owned.integrity:
             raise InstallError(
                 f"Installed '{name}' is '{entry.get('version')}' with integrity '{entry.get('integrity')}', "
@@ -1002,7 +1094,7 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
     if not isinstance(document, dict) or set(document) != {"backups", "steps"}:
         raise ValueError("it is not a `{backups, steps}` object")
     raw_backups, raw_steps = document["backups"], document["steps"]
-    store = layout.root / "backups"
+    store = layout.backups
     if not isinstance(raw_backups, str) or not isinstance(raw_steps, list):
         raise ValueError("`backups` is not a path or `steps` is not a list")
     backups = Path(raw_backups)
@@ -1010,7 +1102,7 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
     if str(backups) != raw_backups or backups.parent != store or backups.name in {"", ".", ".."}:
         raise ValueError(f"backup directory '{raw_backups}' is not directly inside '{store}'")
     for directory in (store, backups):
-        if entry_kind(directory) not in {None, "directory"}:
+        if not is_real_directory_or_absent(directory):
             raise ValueError(f"'{directory}' is not a real directory")
     if entry_kind(backups) == "directory" and backups.lstat().st_uid != os.getuid():
         raise ValueError(f"'{backups}' is not owned by the current user")
@@ -1267,8 +1359,11 @@ def replace_file(journal: Journal, live: Path, name: str, text: str) -> None:
     write_atomic(live, text)
 
 
-def apply(layout: Layout, verified: Verified, plan: Plan) -> Path:
-    """Stage, then switch under a journal; any failure restores the previous state.
+def apply(layout: Layout, verified: Verified, plan: Plan) -> tuple[Path, str]:
+    """Stage, switch under a journal and run the post-check; any failure restores the previous state.
+
+    The installed `pi --version` runs before the journal commits, so an install that does not
+    run is rolled back instead of being left in place and reported as healthy on the next run.
 
     Parameters:
         layout (Layout): installer paths.
@@ -1276,10 +1371,13 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> Path:
         plan (Plan): planned changes.
 
     Returns:
-        Path: backup directory holding everything that was replaced.
+        tuple[Path, str]: backup directory holding everything that was replaced, and the
+            installed `pi --version` output.
 
     Raises:
-        InstallError: staging failed (nothing changed) or the switch failed (previous state restored).
+        UnsupportedError: the backup store turned into a link while staging (nothing changed).
+        InstallError: staging failed (nothing changed), or the switch or post-check failed
+            (previous state restored).
         RollbackError: the switch failed and could not be fully restored.
     """
     staging = layout.root / "staging" / uuid.uuid4().hex
@@ -1288,6 +1386,8 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> Path:
     staging.mkdir(parents=True)
     try:
         staged_agent = stage(layout, verified, plan, staging)
+        # Staging is slow: check the store again just before the first journaled step.
+        require_backup_store(layout)
         journal = Journal(layout, backups)
         try:
             switch(
@@ -1298,6 +1398,7 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> Path:
                 journal,
                 staged_core=staging / "core" if plan.install_core else None,
             )
+            version = post_check(layout)
         except BaseException as error:
             restored = rollback(layout)
             raise InstallError(
@@ -1308,7 +1409,7 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> Path:
         remove(staging)
     if backups.exists() and not any(backups.iterdir()):
         backups.rmdir()
-    return backups
+    return backups, version
 
 
 def post_check(layout: Layout) -> str:
@@ -1476,11 +1577,19 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
         plan = plan_install(layout, verified)
         report_plan(plan, verified)
         if plan.empty:
-            LOGGER.info(f"Already installed: `stack/{opts.source_sha}`, nothing to do")
+            # Matching files are not a working install: it must still run.
+            try:
+                version = post_check(layout)
+            except InstallError as error:
+                raise InstallError(
+                    f"`stack/{opts.source_sha}` matches the snapshot but is not healthy, nothing was "
+                    f"changed: {error}"
+                ) from error
+            LOGGER.info(f"Already installed: `stack/{opts.source_sha}`: {version}, nothing to do")
             return ExitCode.OK
         consent(plan, opts.assume_yes, ask)
-        backups = apply(layout, verified, plan)
-    LOGGER.info(f"Installed `stack/{opts.source_sha}`: {post_check(layout)} at '{layout.link}'")
+        backups, version = apply(layout, verified, plan)
+    LOGGER.info(f"Installed `stack/{opts.source_sha}`: {version} at '{layout.link}'")
     if backups.exists():
         LOGGER.info(f"Replaced state is kept in '{backups}'")
     if not any(

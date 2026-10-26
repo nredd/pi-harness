@@ -301,8 +301,24 @@ def test_fresh_install_matches_the_promotion_and_reruns_cleanly(
     assert version.stdout.strip() == stack.core.tag.removeprefix("v").split("-")[0]
     listed = run([str(pi), "list"], env).stdout
     assert all(source in listed for source in sources), listed
-    assert "npm:@nredd/pi-preset@0.2.0 (filtered)" in listed
-    assert "npm:@nredd/pi-computer-use@0.5.2 (filtered)" in listed
+    # Versions come from the dispatched snapshot. The asserted filters are written out here, not
+    # derived through `package_declarations`, so a regression in that helper cannot hide itself.
+    preset = next(source for source in sources if source.startswith("npm:@nredd/pi-preset@"))
+    computer_use = next(source for source in sources if source.startswith("npm:@nredd/pi-computer-use@"))
+    assert {
+        "source": preset,
+        "extensions": ["extensions/expanded-footer.ts"],
+        "skills": [],
+        "prompts": [],
+        "themes": [],
+    } in settings["packages"]
+    assert {"source": computer_use, "extensions": []} in settings["packages"]
+    assert f"{preset} (filtered)" in listed
+    assert f"{computer_use} (filtered)" in listed
+    # The disabled package's native helper is never built: neither its macOS location
+    # (`~/Applications/pi-computer-use.app`) nor its Windows/Linux one exists in a fresh HOME.
+    assert not (home / "Applications").exists()
+    assert not (agent / "helpers").exists()
     assert not (agent / "auth.json").exists()
     before = digest_tree(home)
     again = run(command(spec, stack_sha), environment(home, uv_cache))

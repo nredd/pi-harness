@@ -456,11 +456,16 @@ def installed_identities(stack: Stack, sources: list[str], agent_dir: Path) -> l
 
     Raises:
         FileNotFoundError: a declared source is not installed.
-        ValueError: an installed npm version differs from its pin.
+        ValueError: a manifest has no string `name` and `version`, or an installed npm version
+            differs from its pin.
     """
     identities = []
     for _, resolved in zip(stack.sources, sources, strict=True):
         manifest = package_manifest(package_directory(resolved, agent_dir))
+        if not all(isinstance(manifest.get(key), str) and manifest[key] for key in ("name", "version")):
+            raise ValueError(
+                f"Installed manifest of '{resolved}' lacks a non-empty string `name` and `version`"
+            )
         if resolved.startswith("npm:") and manifest["version"] != resolved.rsplit("@", 1)[1]:
             raise ValueError(f"Installed npm version differs from '{resolved}': '{manifest['version']}'")
         identities.append({"name": manifest["name"], "version": manifest["version"], "source": resolved})

@@ -473,11 +473,12 @@ def test_preflight_accepts_tested_platforms(tmp_path: Path) -> None:
     tool = tmp_path / "tool"
     tool.touch()
     for system, machine in install.SUPPORTED_PLATFORMS:
-        assert preflight(system, machine, lambda name: str(tool)) == dict.fromkeys(
+        # Not detected: the unit gate also runs on WSL hosts, where `wsl=None` would refuse.
+        assert preflight(system, machine, lambda name: str(tool), wsl=False) == dict.fromkeys(
             install.REQUIRED_TOOLS, str(tool)
         )
     with pytest.raises(UnsupportedError, match="Linux/aarch64"):
-        preflight("Linux", "aarch64", lambda name: str(tool))
+        preflight("Linux", "aarch64", lambda name: str(tool), wsl=False)
 
 
 def make_tarball(path: Path, manifest: dict[str, Any]) -> Path:
@@ -1756,3 +1757,374 @@ def test_core_replacement_is_backed_up_and_offline_recoverable(
         assert (backups / f"core-{prefix.name}" / "mine").read_text() == "old core"
         assert not (prefix / "mine").exists()
         assert install.core_ready(harness.layout, harness.snapshot.stack)
+
+
+REAL_PREFLIGHT = install.preflight
+
+
+def swap_in_store(layout: Layout, kind: str, outside: Path) -> Path:
+    """Replace the backup store with an entry the journal reader refuses.
+
+    Parameters:
+        layout (Layout): installer paths.
+        kind (str): `symlink`, `dangling-symlink` or `file`.
+        outside (Path): directory a symlink points at.
+
+    Returns:
+        Path: the store path.
+
+    Raises:
+        ValueError: unknown kind.
+    """
+    store = layout.root / "backups"
+    layout.root.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(store, ignore_errors=True)
+    match kind:
+        case "symlink":
+            outside.mkdir(exist_ok=True)
+            store.symlink_to(outside)
+        case "dangling-symlink":
+            store.symlink_to(outside / "gone")
+        case "file":
+            store.write_text("mine")
+        case _:
+            raise ValueError(f"Unknown kind '{kind}'")
+    return store
+
+
+@pytest.mark.parametrize("kind", ["symlink", "dangling-symlink", "file"])
+def test_unsupported_backup_store_is_refused_before_consent_or_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """The reader refuses a non-directory `backups` store, so the writer must refuse it first."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    outside = tmp_path / "outside"
+    store = swap_in_store(harness.layout, kind, outside)
+    before = {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")}
+    prompts: list[str] = []
+    with pytest.raises(UnsupportedError, match="backups") as raised:
+        harness.run(ask=lambda prompt: prompts.append(prompt) or "y")
+    assert str(store) in str(raised.value)
+    with pytest.raises(UnsupportedError, match="backups"):
+        install.run(Options(SHA, False, True, None), harness.env, None)
+    assert prompts == []
+    assert harness.calls() == []
+    assert not harness.layout.journal.exists()
+    assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == before
+    assert not outside.exists() or not any(outside.iterdir())
+
+
+def test_backup_store_symlink_cannot_trap_a_failed_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symlinked store used to let a mid-switch failure strand a journal no run could restore."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    swap_in_store(harness.layout, "symlink", tmp_path / "outside")
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+
+    def refuse(self: Path, target: Path | str) -> None:
+        """Fail the final link step.
+
+        Parameters:
+            self (Path): link path.
+            target (Path | str): link target.
+
+        Raises:
+            OSError: always.
+        """
+        raise OSError("disk full")
+
+    monkeypatch.setattr(install.Path, "symlink_to", refuse)
+    with pytest.raises(UnsupportedError, match="backups"):
+        harness.run(yes=True)
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+    assert not harness.layout.journal.exists()
+
+
+def test_backup_store_swapped_after_planning_is_refused_before_the_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A store that turns into a link while staging runs is refused again before the first step."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    layout, outside = harness.layout, tmp_path / "outside"
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+    stage = install.stage
+
+    def swap_after_stage(*args: Any, **kwargs: Any) -> Path | None:
+        """Stage for real, then swap the store like a concurrent process.
+
+        Parameters:
+            *args (Any): `install.stage` arguments.
+            **kwargs (Any): `install.stage` options.
+
+        Returns:
+            Path | None: the staged agent tree.
+        """
+        staged = stage(*args, **kwargs)
+        swap_in_store(layout, "symlink", outside)
+        return staged
+
+    monkeypatch.setattr(install, "stage", swap_after_stage)
+    with pytest.raises(UnsupportedError, match="backups"):
+        harness.run(yes=True)
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+    assert not layout.journal.exists()
+    assert not any(outside.iterdir())
+
+
+def test_backup_store_on_another_filesystem_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real `backups` mount point would fail the switch with EXDEV, so the one-filesystem rule covers it."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    layout = harness.layout
+    (layout.root / "backups").mkdir(parents=True)
+    before = tree(harness.home)
+    monkeypatch.setattr(install, "device", lambda path: 2 if path == layout.root / "backups" else 1)
+    with pytest.raises(UnsupportedError, match="one filesystem"):
+        harness.run(yes=True)
+    assert tree(harness.home) == before
+    assert harness.calls() == []
+
+
+def fake_tools(directory: Path) -> Callable[[str], str | None]:
+    """Create `gh`, `npm` and a `node` that is a link to a version-manager style dispatcher.
+
+    The dispatcher answers by its own name (`$0`), like Volta or mise shims: run as `node` it is
+    Node.js, run under any other name it is the manager and prints a 2026 release.
+
+    Parameters:
+        directory (Path): empty directory.
+
+    Returns:
+        Callable[[str], str | None]: a `which` over that directory.
+    """
+    directory.mkdir()
+    dispatcher = directory.parent / "manager-dispatcher"
+    dispatcher.write_text(
+        '#!/bin/sh\ncase "${0##*/}" in\n  node) echo v22.19.0;;\n  *) echo "manager 2026.1.0";;\nesac\n'
+    )
+    dispatcher.chmod(0o755)
+    (directory / "node").symlink_to(dispatcher)
+    for name in ("gh", "npm"):
+        (directory / name).write_text("#!/bin/sh\n")
+        (directory / name).chmod(0o755)
+    return lambda name: str(directory / name) if (directory / name).exists() else None
+
+
+def test_preflight_keeps_the_discovered_path_not_the_dispatcher(tmp_path: Path) -> None:
+    """Resolving a version-manager link runs the manager, whose answer is not Node.js's."""
+    which = fake_tools(tmp_path / "shims")
+    tools = REAL_PREFLIGHT("Linux", "x86_64", which, wsl=False)
+    assert tools["node"] == str(tmp_path / "shims" / "node")
+    assert install.node_version(tools["node"]) == (22, 19, 0)
+
+
+def test_preflight_makes_a_relative_discovery_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative `PATH` entry still yields an absolute tool path, without resolving links."""
+    which = fake_tools(tmp_path / "shims")
+    monkeypatch.chdir(tmp_path)
+    tools = REAL_PREFLIGHT(
+        "Linux", "x86_64", lambda name: f"shims/{name}" if which(name) else None, wsl=False
+    )
+    assert tools["node"] == str(tmp_path / "shims" / "node")
+    assert install.node_version(tools["node"]) == (22, 19, 0)
+
+
+def test_wsl_is_refused_by_preflight_before_anything_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WSL reports `Linux/x86_64`; the documented refusal needs the physical WSL check, early."""
+    which = fake_tools(tmp_path / "shims")
+    with pytest.raises(UnsupportedError, match="WSL"):
+        REAL_PREFLIGHT("Linux", "x86_64", which, wsl=True)
+    harness = Harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(install, "preflight", REAL_PREFLIGHT)
+    monkeypatch.setattr(install, "is_wsl", lambda: True)
+    monkeypatch.setattr(install.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(install.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(install.shutil, "which", which)
+    before = tree(tmp_path)
+    with pytest.raises(UnsupportedError, match="WSL"):
+        harness.run(yes=True)
+    with pytest.raises(UnsupportedError, match="WSL"):
+        install.run(Options(SHA, False, True, None), harness.env, None)
+    assert install.main([SHA, "--yes"]) == ExitCode.UNSUPPORTED
+    assert tree(tmp_path) == before
+    assert not harness.layout.root.exists()
+    assert harness.calls() == []
+
+
+def test_agent_dir_expands_tilde_like_pi_with_the_injected_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`PI_CODING_AGENT_DIR` takes Pi's `~` and `~/` rule from the given home, nothing broader."""
+    home = (tmp_path / "home").resolve()
+    home.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "not-the-home"))
+
+    def agent(value: str) -> Path:
+        """Resolve the agent directory for one setting.
+
+        Parameters:
+            value (str): `PI_CODING_AGENT_DIR`.
+
+        Returns:
+            Path: the agent directory.
+        """
+        return Layout.from_env({"PI_CODING_AGENT_DIR": value}, home, None).agent_dir
+
+    assert agent("~/x") == home / "x"
+    assert agent("~") == home
+    assert agent("~/") == home
+    assert agent("~/a//b") == home / "a" / "b"
+    assert agent("~//x") == home / "x"
+    assert agent("~someone/x") == (tmp_path / "~someone" / "x").resolve()
+    assert agent("a~/x") == (tmp_path / "a~" / "x").resolve()
+    assert agent("/abs/~/x") == Path("/abs/~/x")
+    unexpanded = Layout.from_env({"XDG_DATA_HOME": "~/share"}, home, None)
+    assert unexpanded.root == (tmp_path / "~" / "share" / "pi-stack").resolve()
+
+
+MALFORMED_MANIFESTS = {
+    "empty-object": "{}",
+    "no-version": '{"name": "pi-memory"}',
+    "no-name": '{"version": "0.4.2"}',
+    "wrong-types": '{"name": 7, "version": ["0.4.2"]}',
+    "not-an-object": "[]",
+}
+MALFORMED_LOCK_ENTRIES = {"string": "x", "null": None, "list": [], "number": 3}
+
+
+def test_malformed_manifest_identity_is_a_value_error(tmp_path: Path) -> None:
+    """The shared identity reader raises `ValueError`, never `KeyError`, for every bad manifest."""
+    stack = real_snapshot().stack
+    source = next(s for s in (source_string(p) for p in stack.sources) if s.startswith("npm:pi-memory@"))
+    agent = tmp_path / "agent"
+    package = agent / "npm" / "node_modules" / "pi-memory"
+    package.mkdir(parents=True)
+    for text in MALFORMED_MANIFESTS.values():
+        (package / "package.json").write_text(text)
+        with pytest.raises(ValueError, match="pi-memory"):
+            install.installed_identities(stack, [source] * len(stack.sources), agent)
+
+
+@pytest.mark.parametrize("case", sorted(MALFORMED_MANIFESTS))
+def test_malformed_live_manifest_plans_repair_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """A parseable but incomplete live manifest means repair, not a traceback, and waits for consent."""
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    manifest = harness.layout.agent_dir / "npm" / "node_modules" / "pi-memory" / "package.json"
+    manifest.write_text(MALFORMED_MANIFESTS[case])
+    before = tree(harness.home)
+    assert not install.packages_ready(harness.layout, harness.verified)
+    assert plan_install(harness.layout, harness.verified).install_packages
+    with pytest.raises(ConsentError):
+        harness.run()
+    assert tree(harness.home) == before
+    assert harness.run(yes=True) == ExitCode.OK
+    assert json.loads(manifest.read_text()) == {"name": "pi-memory", "version": "0.4.2"}
+
+
+@pytest.mark.parametrize("case", sorted(MALFORMED_LOCK_ENTRIES))
+def test_malformed_lock_entry_plans_repair_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """A non-object lock `packages` entry for an owned package is a mismatch, not an `AttributeError`."""
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    lock = harness.layout.agent_dir / "npm" / "package-lock.json"
+    document = json.loads(lock.read_text())
+    document["packages"]["node_modules/@nredd/pi-todo"] = MALFORMED_LOCK_ENTRIES[case]
+    lock.write_text(json.dumps(document))
+    before = tree(harness.home)
+    with pytest.raises(InstallError, match="pi-todo"):
+        install.verify_owned_integrity(harness.snapshot, harness.layout.agent_dir)
+    assert not install.packages_ready(harness.layout, harness.verified)
+    with pytest.raises(ConsentError):
+        harness.run()
+    assert tree(harness.home) == before
+    assert harness.run(yes=True) == ExitCode.OK
+    assert json.loads(lock.read_text())["packages"]["node_modules/@nredd/pi-todo"]["version"] == "2.13.10"
+
+
+def fail_post_check(monkeypatch: pytest.MonkeyPatch, failing: list[bool]) -> list[int]:
+    """Make `post_check` fail while `failing[0]` is set, counting its calls.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): module patcher.
+        failing (list[bool]): one-element switch.
+
+    Returns:
+        list[int]: one entry per call.
+    """
+    calls: list[int] = []
+    original = install.post_check
+
+    def check(layout: Layout) -> str:
+        """Run the real check unless the failure is switched on.
+
+        Parameters:
+            layout (Layout): installer paths.
+
+        Returns:
+            str: version output.
+
+        Raises:
+            InstallError: while failing.
+        """
+        calls.append(1)
+        if failing[0]:
+            raise InstallError(f"Installed '{layout.link}' does not run: simulated")
+        return original(layout)
+
+    monkeypatch.setattr(install, "post_check", check)
+    return calls
+
+
+def test_failed_post_check_rolls_back_before_the_journal_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An install that does not run is restored, never left in place and then called installed."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+    failing = [True]
+    fail_post_check(monkeypatch, failing)
+    with pytest.raises(InstallError, match=r"rolled back.*does not run"):
+        harness.run(yes=True)
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+    assert not harness.layout.journal.exists()
+    failing[0] = False
+    assert harness.run(yes=True) == ExitCode.OK
+    assert harness.layout.link.is_symlink()
+
+
+def test_noop_rerun_still_runs_the_post_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A matching install whose `pi --version` fails is never reported healthy."""
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    failing = [True]
+    calls = fail_post_check(monkeypatch, failing)
+    before = tree(harness.home)
+    caplog.set_level("INFO")
+    with pytest.raises(InstallError, match="does not run"):
+        harness.run()
+    assert calls == [1]
+    assert "Already installed" not in caplog.text
+    assert tree(harness.home) == before
+    failing[0] = False
+    assert harness.run() == ExitCode.OK
+    assert "Already installed" in caplog.text
+    assert "1.3.0" in caplog.text
