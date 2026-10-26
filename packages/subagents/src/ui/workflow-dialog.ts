@@ -796,6 +796,10 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
     if (stats.length > 0) {
       detailRows.push(clampLine([{ text: ` ${stats.join(" · ")}`, color: "dim" }], rightWidth));
     }
+    // A substituted model is never cosmetic: name the failed input and what ran.
+    if (entry.modelNote) {
+      detailRows.push(clampLine([{ text: ` ${entry.modelNote}`, color: "warning" }], rightWidth));
+    }
 
     const prompt = previewLines(entry.promptPreview);
     const collapsed = !state.promptExpanded && prompt.length > PROMPT_COLLAPSED_LINES;

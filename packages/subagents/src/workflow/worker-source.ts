@@ -555,7 +555,7 @@ async function agentIn(scope, prompt, opts) {
     // object payload as a sibling \`_modelNote\` the script can read.
     if (modelNote !== undefined) {
       logIn(scope, modelNote);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) parsed._modelNote = modelNote;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && !Object.prototype.hasOwnProperty.call(parsed, "_modelNote")) parsed._modelNote = modelNote;
     }
     return parsed;
   } catch (error) {

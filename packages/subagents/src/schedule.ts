@@ -285,7 +285,10 @@ export class SubagentScheduler {
     const definitionModel = getAgentConfig(type)?.model;
     const selection = selectConfiguredModel(type, definitionModel, this.ctx?.model, this.ctx?.modelRegistry as never);
     const agentsOwn = configuredAgentModel(type, definitionModel) !== undefined && !selection.fallback;
-    return { ...modelFallbackTo(input, selection.model), via: agentsOwn ? "agent" : "parent" };
+    // Both failures are kept: the manager records only one fallback, and the
+    // stored model must not hide a failed `agentModels` override.
+    const also = selection.fallback && selection.fallback.input !== input ? [selection.fallback.input] : undefined;
+    return { ...modelFallbackTo(input, selection.model), via: agentsOwn ? "agent" : "parent", ...(also ? { also } : {}) };
   }
 
   /** Re-arm a quota-parked one-shot at a later reset instead of starting it. */

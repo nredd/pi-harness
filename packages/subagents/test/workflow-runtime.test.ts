@@ -1094,6 +1094,45 @@ describe("structured output", () => {
       expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
     });
 
+    it("leaves a payload's own _modelNote alone and still logs the note", async () => {
+      const stub = stubHost(() => ({ ok: true, text: '{"findings":[],"_modelNote":"mine"}', modelNote }));
+      const result = await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });
+
+      expect((result.value as any)._modelNote).toBe("mine");
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+    });
+
+    it("journals the note and replays it: _modelNote, log line and row all survive a resume", async () => {
+      const script = `return await agent('go', { schema: ${schemaLiteral} });`;
+      const entries: WorkflowJournalEntry[] = [];
+      const live = stubHost(() => ({ ok: true, text: '{"findings":["a"]}', modelNote }));
+      await run(script, { host: live.host, journal: { append: e => entries.push(e) } });
+      expect(entries[0]?.modelNote).toBe(modelNote);
+
+      const replayHost = stubHost();
+      const rerun: WorkflowJournalEntry[] = [];
+      const result = await run(script, { host: replayHost.host, journal: { entries, append: e => rerun.push(e) } });
+
+      expect(replayHost.calls).toHaveLength(0);
+      expect(result.value).toEqual({ findings: ["a"], _modelNote: modelNote });
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+      expect(agentEntries(result.progress).at(-1)?.modelNote).toBe(modelNote);
+      // Re-recorded, so a resume of a resume still has it.
+      expect(rerun[0]?.modelNote).toBe(modelNote);
+    });
+
+    it("replays a journal written before modelNote existed with no note and no error", async () => {
+      const script = `return await agent('go', { schema: ${schemaLiteral} });`;
+      const old: WorkflowJournalEntry[] = [];
+      await run(script, { host: stubHost(() => ({ ok: true, text: '{"findings":[]}' })).host, journal: { append: e => old.push(e) } });
+      expect("modelNote" in old[0]!).toBe(false);
+
+      const result = await run(script, { host: stubHost().host, journal: { entries: old } });
+
+      expect(result.status).toBe("completed");
+      expect(result.value).toEqual({ findings: [] });
+    });
+
     it("adds nothing when the host reports no note", async () => {
       const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}' }));
       const result = await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });

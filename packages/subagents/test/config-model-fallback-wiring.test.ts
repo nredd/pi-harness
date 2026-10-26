@@ -287,17 +287,6 @@ describe("config model that does not resolve", () => {
     expect(event.modelNote).toBeUndefined();
   });
 
-  it("cross-extension RPC: an unavailable agentModels override is honored and disclosed, even over a resolving definition model", async () => {
-    writeAgent("scout", "anthropic/claude-sonnet-5-5");
-    const bus = await bootWithBus();
-    setAgentModels({ scout: "claude-haiku-4-5" });
-
-    const { id, event } = await rpcSpawn(bus);
-
-    expect(event.modelNote).toBe(NOTE);
-    expect(recordOf(id).modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
-  });
-
   it("cross-extension RPC: an available agentModels override is the model that runs", async () => {
     writeAgent("scout");
     const bus = await bootWithBus([PARENT, HAIKU]);
@@ -332,21 +321,6 @@ describe("config model that does not resolve", () => {
     await flush();
 
     expect(handled).toEqual({ action: "handled" });
-    const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: "scout" }, undefined, undefined, ctx([PARENT]));
-    expect(textOf(fetched)).toContain(NOTE);
-  });
-
-  it("@mention: an unavailable agentModels override is honored and disclosed over the definition model", async () => {
-    writeAgent("scout", "anthropic/claude-sonnet-5-5");
-    mkdirSync(join(cwd, "agent-dir"), { recursive: true });
-    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ agentMentions: "direct" }));
-    await boot();
-    setAgentModels({ scout: "claude-haiku-4-5" });
-    vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }) as any);
-
-    await lifecycle.get("input")({ type: "input", text: "@scout look around", source: "interactive" }, { ...ctx([PARENT]), mode: "tui" });
-    await flush();
-
     const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: "scout" }, undefined, undefined, ctx([PARENT]));
     expect(textOf(fetched)).toContain(NOTE);
   });

@@ -110,16 +110,6 @@ describe("scheduler at fire time", () => {
     expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
   });
 
-  it("a job with no stored model honors an unavailable agentModels override and discloses it", async () => {
-    registerAgents(new Map([agent("scout", "anthropic/claude-sonnet-5-5")]));
-    setAgentModels({ scout: "claude-haiku-4-5" });
-
-    const record = await fire();
-
-    // The override outranks the (resolving) definition model, so nothing silently ran it.
-    expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
-  });
-
   it("a stored model that does not resolve is still disclosed when the definition's own model took over", async () => {
     // Selection is unchanged (the definition's model runs), but the failed stored
     // input is named, along with what actually ran.

@@ -4,7 +4,8 @@
  * over `agentModels` and the agent's config) and reports through the same `onModelFallback` hook,
  * then settles like a finished run. Entry-path tests use it so a spawn that names
  * no model reaches the real resolver, without spinning up a pi session.
- * `agent-runner-e2e.test.ts` pins the hook on the real `runAgent`.
+ * This stand-in is NOT evidence that production `runAgent` selects correctly:
+ * `config-model-fallback-real-runner.test.ts` covers that with the real runner.
  */
 import { vi } from "vitest";
 import { getAgentConfig } from "../../src/agent-types.js";
