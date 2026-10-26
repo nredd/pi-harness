@@ -153,14 +153,14 @@ jobs:
 
           # Ubuntu 24.04's apt `gh` (2.45) has no `attestation`: install the pinned official release.
           test -n "${GH_TOKEN:-}" || { echo "GH_TOKEN was not forwarded into WSL via WSLENV" >&2; exit 1; }
-          bash "$worktree/scripts/install_gh_linux.sh" "$tool_dir/gh"
+          env -u GH_TOKEN bash "$worktree/scripts/install_gh_linux.sh" "$tool_dir/gh"
           export PATH="$tool_dir/gh/bin:$PATH"
           # Standard library only: verify the root core overrides before any `npm ci`.
           PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
 
-          npm ci --ignore-scripts
+          env -u GH_TOKEN npm ci --ignore-scripts
           cd integration
-          uv sync --locked --python "$(tr -d '\r\n' < ../.python-version)"
+          env -u GH_TOKEN uv sync --locked --python "$(tr -d '\r\n' < ../.python-version)"
           uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$worktree/pi-release"
           unset GH_TOKEN
           export PI_BIN="$worktree/pi-release/bin/pi"

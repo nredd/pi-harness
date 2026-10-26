@@ -203,6 +203,9 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     assert "python3" in workflow.split("additional-packages:")[1].splitlines()[0]
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert "WSLENV: GH_TOKEN/u" in workflow
+    assert 'env -u GH_TOKEN bash "$worktree/scripts/install_gh_linux.sh"' in workflow
+    assert "env -u GH_TOKEN npm ci --ignore-scripts" in workflow
+    assert "env -u GH_TOKEN uv sync --locked --python" in workflow
     install = workflow.index('bash "$worktree/scripts/install_gh_linux.sh" "$tool_dir/gh"')
     path = workflow.index('export PATH="$tool_dir/gh/bin:$PATH"')
     verify = workflow.index("python3 -m harness.release --verify-root-overrides --root .")
