@@ -91,7 +91,8 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
   `remote.pushDefault`, else `branch.<n>.remote`, else the only remote (with `-u`). Several remotes
   and none configured fails closed at `stage: "push"`; it never defaults to `origin`. A
   `branch.<n>.remote` of `.` (local tracking) is not a push remote and counts as unconfigured and
-  ambiguous. Only an unset config key (exit 1) is tolerated; a broken config or `git remote` fails
+  ambiguous. Only an unset config key (exit 1) is tolerated, and all three keys are read eagerly, so an
+  unreadable one blocks the push even when a higher-precedence key is set; a broken config or `git remote` fails
   closed with git's stderr. `git push <remote> HEAD` pushes to the same-named branch on `<remote>`.
   A push failure returns `stage: "push"` with the sha so the caller fixes the push instead of
   committing twice. `signed` is true for `%G?` in `G`, `U`, `X`, `Y`

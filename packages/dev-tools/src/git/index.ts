@@ -11,6 +11,7 @@ import { type TSchema, Type } from "typebox";
 import { abnormalExit, bound, seconds, toolResult } from "../core/index.ts";
 import { buildCommitMessage, validateSubject } from "./commit-message.ts";
 import { findGuardViolation } from "./guard.ts";
+import { resolvePushRemote } from "./push-remote.ts";
 import { assertExplicitPaths, assertRef, git, gitFailure, gitState } from "./run.ts";
 import { formatStatus, parsePorcelainV2 } from "./status.ts";
 import { registerWorktreeTools } from "./worktree.ts";
@@ -31,48 +32,6 @@ const failed = (error: string) => toolResult({ text: error, structured: { error 
 
 const cwdOf = (params: { cwd?: string }, ctx: { cwd: string }) => params.cwd ?? ctx.cwd;
 const readTimeout = (params: { timeout_s?: number }) => (params.timeout_s ? params.timeout_s * 1000 : READ_TIMEOUT_MS);
-
-/** Where `git_commit` pushes HEAD: the configured push remote, else the sole remote, else an error. */
-async function resolvePushRemote(
-	cwd: string,
-	signal: AbortSignal | undefined,
-	timeoutMs: number,
-): Promise<{ remote: string; setUpstream: boolean } | { error: string }> {
-	const opts = { cwd, signal, timeoutMs };
-	const problem = (what: string, r: { stderr: string }) =>
-		({ error: `${what}: ${r.stderr.trim() || "unknown error"}. Do NOT commit again.` }) as const;
-	/** `git config --get` exits 1 for an unset key; any other failure (e.g. 128, corrupt config) is real. */
-	const config = async (key: string): Promise<{ value?: string } | { error: string }> => {
-		const r = await git(["config", "--get", key], opts);
-		if (r.exitCode === 1) return {};
-		if (r.exitCode !== 0) return problem(`git config --get ${key} failed (${gitState(r)})`, r);
-		return { value: r.stdout.trim() || undefined };
-	};
-	const ref = await git(["symbolic-ref", "--short", "-q", "HEAD"], opts);
-	if (ref.exitCode === 1) return { error: "HEAD is detached, so there is no branch to push; do NOT commit again." };
-	if (ref.exitCode !== 0) return problem(`git symbolic-ref failed (${gitState(ref)})`, ref);
-	const branch = ref.stdout.trim();
-	const values: Array<string | undefined> = [];
-	for (const key of [`branch.${branch}.pushRemote`, "remote.pushDefault", `branch.${branch}.remote`]) {
-		const c = await config(key);
-		if ("error" in c) return { error: `${c.error}` };
-		values.push(c.value);
-	}
-	const [pushRemote, pushDefault, tracked] = values;
-	// `.` means "tracks a local branch": `git push . HEAD` would push into this repo, never a real target.
-	const remote = pushRemote ?? pushDefault ?? (tracked === "." ? undefined : tracked);
-	if (remote) return { remote, setUpstream: false };
-	const hint = `set \`branch.${branch}.pushRemote\` or \`remote.pushDefault\`. Do NOT commit again.`;
-	if (tracked === ".")
-		return { error: `\`branch.${branch}.remote\` is \`.\` (a local branch), so there is no push remote; ${hint}` };
-	const remotes = await git(["remote"], opts);
-	if (remotes.exitCode !== 0) return problem(`git remote failed (${gitState(remotes)})`, remotes);
-	const names = remotes.stdout.split("\n").filter(Boolean);
-	if (names.length === 1) return { remote: names[0] as string, setUpstream: true };
-	return {
-		error: `no push remote for \`${branch}\` and ${names.length ? `remotes are ambiguous (${names.join(", ")})` : "there are no remotes"}; ${hint}`,
-	};
-}
 
 export function registerGitTools(pi: ExtensionAPI): void {
 	registerWorktreeTools(pi);
@@ -406,7 +365,7 @@ export function registerGitTools(pi: ExtensionAPI): void {
 			// Push only the current branch, to the remote git itself would pick for it:
 			// branch.<n>.pushRemote, then remote.pushDefault, then branch.<n>.remote, then the sole remote.
 			// Several remotes and no setting is ambiguous: fail closed rather than guess `origin`.
-			const target = await resolvePushRemote(cwd, signal, timeoutMs);
+			const target = await resolvePushRemote((args) => git(args, { cwd, signal, timeoutMs }));
 			if ("error" in target) return fail("push", `committed ${short} but ${target.error}`, { sha, signed });
 			const pushArgs = target.setUpstream
 				? ["push", "-q", "-u", target.remote, "HEAD"]
