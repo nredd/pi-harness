@@ -30,7 +30,8 @@ import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import type { ModelCallEvent } from "./model-call.js";
-import { type ModelFallback, selectConfiguredModel } from "./model-resolver.js";
+import type { ModelFallback } from "./model-resolver.js";
+import { type ModelSelection, selectModel } from "./model-selection.js";
 import {
   createNestedSubagentTools,
   getMaxSubagentDepth,
@@ -494,6 +495,8 @@ export interface RunOptions {
   /** Manager-assigned id; suffixes session name to disambiguate parallel spawns (e.g. `Explore#a1b2c3d4`). */
   agentId?: string;
   model?: Model<any>;
+  /** Shared spawn's outcome; direct runner callers use the same selector. */
+  modelSelection?: ModelSelection;
   maxTurns?: number;
   signal?: AbortSignal;
   /** Applies only when the agent file leaves `isolated:` unset — frontmatter is authoritative. */
@@ -562,7 +565,7 @@ export interface RunOptions {
   /** Called for every streaming event of each model call, so a UI can say what an in-flight call is doing. */
   onModelCall?: (event: ModelCallEvent) => void;
   onSessionCreated?: (session: AgentSession) => void;
-  /** Called when the agent definition's `model:` did not resolve and the parent model is used. */
+  /** Direct runner callers can observe the same configured fallback as the shared spawn. */
   onModelFallback?: (fallback: ModelFallback) => void;
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
@@ -1149,17 +1152,13 @@ export async function runAgent(
     }
   }
 
-  // Resolve model: explicit option > config.model > parent model
-  // An explicit option was already resolved (and any fallback disclosed) by
-  // the caller; only this path can fall back unseen, so it reports itself.
-  // Nullish, not `=== undefined`: an RPC caller may forward `model: null`, which
-  // means "inherit" (see cross-extension-rpc.ts).
-  let model = options.model ?? undefined;
-  if (model === undefined) {
-    const selection = selectConfiguredModel(type, agentConfig?.model, ctx.model, ctx.modelRegistry);
-    model = selection.model;
-    if (selection.fallback) options.onModelFallback?.(selection.fallback);
-  }
+  const selection = options.modelSelection ?? selectModel({
+    agentType: type, definitionModel: agentConfig?.model, paramModel: options.model,
+    parentModel: ctx.model, registry: ctx.modelRegistry, cwd: configCwd, agentLabel: agentConfig?.displayName,
+  });
+  if (typeof selection === "string") throw new Error(selection);
+  const model = selection.model;
+  if (selection.fallback) options.onModelFallback?.(selection.fallback);
 
   // Resolve thinking level: explicit option > agent config > undefined (inherit)
   const thinkingLevel = options.thinkingLevel ?? agentConfig?.thinking;
