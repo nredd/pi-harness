@@ -249,8 +249,9 @@ export class SubagentScheduler {
     // Resolve the original request at fire time, using the same type and model
     // policy as a manual dispatch. Never drop a failed explicit override.
     const dispatch = resolveSpawnType(job.subagent_type);
+    const config = dispatch.ok ? getAgentConfig(dispatch.type) : undefined;
     const selection = dispatch.ok ? selectModel({
-      agentType: dispatch.type, definitionModel: getAgentConfig(dispatch.type)?.model,
+      agentType: dispatch.type, definitionModel: config?.model, agentLabel: config?.displayName,
       paramModel: job.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd,
     }) : dispatch.message;
     if (typeof selection === "string") {

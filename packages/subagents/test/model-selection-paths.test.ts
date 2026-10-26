@@ -49,7 +49,7 @@ function bus() {
 
 beforeEach(async () => {
   sandbox = hermeticDir({ settings: { agentMentions: "direct", backgroundByDefault: false }, agentFiles: {
-    scout: `---\ndescription: scout\ntools: read\nmodel: ${ref("definition")}\n---\nScout.`,
+    scout: `---\ndescription: scout\ndisplay_name: Scout Label\ntools: read\nmodel: ${ref("definition")}\n---\nScout.`,
   } });
   const runtime = await ModelRuntime.create({ authPath: join(sandbox.dir, "auth.json"), modelsPath: null, refreshOnCreate: false });
   registry = new ModelRegistry(runtime);
@@ -172,7 +172,7 @@ describe.each(paths)("%s model selection parity", path => {
     setAgentModels({ scout: ref("typed") });
     const { invocation, record } = await invoke(path);
     expect(invocation?.[3].model).toMatchObject({ id: "typed" });
-    expect(record?.modelSelection?.scopeWarning).toContain("out-of-scope model");
+    expect(record?.modelSelection?.scopeWarning).toBe(`Agent "Scout Label" using out-of-scope model "${ref("typed")}"`);
   });
 
   if (path !== "mention") it("refuses an unresolved explicit model instead of inheriting or selecting config", async () => {
@@ -255,11 +255,12 @@ it("keeps an explicit quota-parked alias request and re-resolves it at fire time
   expect(options?.modelSelection).toMatchObject({ requested: "portable", source: "param" });
 });
 
-it("reopens an evicted mention with current configuration and a new recorded selection", async () => {
-  setAgentModels({ scout: ref("typed") });
+it("reopens an evicted mention with current selection and retained original fallback provenance", async () => {
+  setAgentModels({ scout: "missing-model" });
   const { record } = await invoke("Agent");
-  const root = (globalThis as Record<symbol, { getRecord(id: string): unknown }>)[Symbol.for("pi-subagents:manager")];
+  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
   expect(record?.sessionFile).toBeDefined();
+  expect(record?.modelFallback).toEqual({ input: "missing-model", used: ref("parent") });
   clock.advance(11 * 60_000);
   expect(root.getRecord(record!.id)).toBeUndefined();
   setAgentModels({ scout: "router/default" });
@@ -269,6 +270,8 @@ it("reopens an evicted mention with current configuration and a new recorded sel
   expect(options?.resumeSessionFile).toBe(record?.sessionFile);
   expect(options?.model).toMatchObject({ provider: "router", id: "default" });
   expect(options?.modelSelection).toMatchObject({ requested: "router/default", source: "agentModels:type" });
+  expect(options?.modelSelection?.fallback).toBeUndefined();
+  expect(root.getRecord(options!.agentId!)?.modelFallback).toEqual(record?.modelFallback);
 });
 
 it("ignores new model inputs on Agent resume and reads the original record disclosure", async () => {
