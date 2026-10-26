@@ -21,9 +21,9 @@ import { Cron } from "croner";
 import { nanoid } from "nanoid";
 import type { AgentManager } from "./agent-manager.js";
 import { normalizeMaxTurns } from "./agent-runner.js";
-import { resolveSpawnType } from "./agent-types.js";
+import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
-import { resolveModel } from "./model-resolver.js";
+import { modelFallbackTo, resolveModel } from "./model-resolver.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
 import type { ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
@@ -251,9 +251,11 @@ export class SubagentScheduler {
     // job was created (auth added/removed). Fall back silently to spawn-default
     // if resolution fails; the spawn path handles undefined model gracefully.
     let resolvedModel: Model<any> | undefined;
+    let unresolvedModel: string | undefined;
     if (job.model) {
       const r = resolveModel(job.model, ctx.modelRegistry);
       if (typeof r !== "string") resolvedModel = r;
+      else unresolvedModel = job.model;
     }
 
     // A quota-parked job re-asks the router before starting: the window it
@@ -262,7 +264,7 @@ export class SubagentScheduler {
     if (job.quotaParked && admissionModel) {
       void checkAdmission(pi.events, modelRef(admissionModel)).then(block => {
         if (!block) {
-          this.spawnJob(id, resolvedModel);
+          this.spawnJob(id, resolvedModel, unresolvedModel);
         } else if (mayPark(block) && block.resetAt > this.clock.now()) {
           this.repark(id, block.resetAt);
         } else {
@@ -275,7 +277,7 @@ export class SubagentScheduler {
       });
       return;
     }
-    this.spawnJob(id, resolvedModel);
+    this.spawnJob(id, resolvedModel, unresolvedModel);
   }
 
   /** Re-arm a quota-parked one-shot at a later reset instead of starting it. */
@@ -289,7 +291,7 @@ export class SubagentScheduler {
   }
 
   /** Spawn a fired job (bypassing the concurrency queue) and persist its outcome. */
-  private spawnJob(id: string, resolvedModel: Model<any> | undefined): void {
+  private spawnJob(id: string, resolvedModel: Model<any> | undefined, unresolvedModel?: string): void {
     const store = this.store;
     const pi = this.pi;
     const ctx = this.ctx;
@@ -313,6 +315,12 @@ export class SubagentScheduler {
         isBackground: true,
         bypassQueue: true,
         model: resolvedModel,
+        // An unresolved stored model leaves `model` unset, so the runner picks
+        // the definition's `model:` (and reports its own fallback) or else the
+        // parent. Only the latter is this job's to disclose.
+        ...(unresolvedModel !== undefined && !getAgentConfig(dispatch.type)?.model
+          ? { modelFallback: modelFallbackTo(unresolvedModel, ctx.model) }
+          : {}),
         maxTurns: job.max_turns,
         isolated: job.isolated,
         thinkingLevel: job.thinking,

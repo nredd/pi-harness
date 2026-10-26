@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { configuredAgentModel, describeModel, getModelAliases, type ModelRegistry, parseModelVersion, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider, unresolvedConfigModelNote } from "../src/model-resolver.js";
+import { configuredAgentModel, describeModel, getModelAliases, type ModelRegistry, modelFallbackNote, modelFallbackTo, parseModelVersion, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
 
 // Mock model entries matching typical pi model registry shape
 const MODELS = [
@@ -370,16 +370,22 @@ describe("configuredAgentModel", () => {
   });
 });
 
-describe("unresolvedConfigModelNote", () => {
+describe("modelFallbackNote", () => {
   it("names the unresolved input and the parent model actually used", () => {
-    expect(unresolvedConfigModelNote("claude-haiku-4-5", { provider: "anthropic", id: "claude-sonnet-5-5" })).toBe(
+    const fallback = modelFallbackTo("claude-haiku-4-5", { provider: "anthropic", id: "claude-sonnet-5-5" });
+    expect(fallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
+    expect(modelFallbackNote(fallback)).toBe(
       'Note: configured model "claude-haiku-4-5" did not resolve; running on parent model anthropic/claude-sonnet-5-5.',
     );
   });
 
   it("says so when the parent has no model either", () => {
-    expect(unresolvedConfigModelNote("ghost", undefined)).toBe(
+    expect(modelFallbackNote(modelFallbackTo("ghost", undefined))).toBe(
       'Note: configured model "ghost" did not resolve; running on the session default model.',
     );
+  });
+
+  it("is empty when there was no fallback", () => {
+    expect(modelFallbackNote(undefined)).toBe("");
   });
 });

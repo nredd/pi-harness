@@ -36,7 +36,7 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../agent-manager.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
-import { configuredAgentModel, resolveModel } from "../model-resolver.js";
+import { configuredAgentModel, type ModelFallback, modelFallbackNote, modelFallbackTo, resolveModel } from "../model-resolver.js";
 import { checkModelScope } from "../model-scope.js";
 import type { AgentRecord, ThinkingLevel } from "../types.js";
 import { getLifetimeTotal } from "../usage.js";
@@ -113,6 +113,8 @@ function resolvedInfo(record: AgentRecord | undefined) {
     modelId: invocation.modelId,
     thinking: invocation.thinking,
     requestedThinking: invocation.requestedThinking,
+    // From the record, so a resumed child reports the model it actually ran on.
+    ...(record?.modelFallback ? { modelNote: modelFallbackNote(record.modelFallback) } : {}),
   };
 }
 
@@ -200,14 +202,16 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       // `agentModels` setting, the agent definition's is next, and the parent's
       // is the floor. A model the script
       // named and we cannot resolve is an error; one the definition named falls
-      // back to the parent silently, because the script never asked for it.
+      // back to the parent, recorded on the child so the row says so.
       let model = ctx.model;
+      let modelFallback: ModelFallback | undefined;
       const config = getAgentConfig(dispatch.type);
       const modelInput = request.model ?? configuredAgentModel(dispatch.type, config?.model);
       if (modelInput !== undefined) {
         const resolved = resolveModel(modelInput, ctx.modelRegistry);
         if (typeof resolved === "string") {
           if (request.model !== undefined) return { ok: false, error: resolved };
+          modelFallback = modelFallbackTo(modelInput, ctx.model);
         } else {
           model = resolved;
         }
@@ -310,6 +314,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
             // never queued behind it.
             ...(deps.workflowId !== undefined ? { workflowId: deps.workflowId } : {}),
             ...(model !== undefined ? { model } : {}),
+            ...(modelFallback !== undefined ? { modelFallback } : {}),
             // Validated worker-side against the same list pi accepts, so the
             // cast asserts what the boundary has already checked. Left unset,
             // the agent definition's `thinking` (then the parent's) still wins —

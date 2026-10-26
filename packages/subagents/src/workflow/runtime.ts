@@ -95,6 +95,8 @@ export interface WorkflowSpawnRequest {
     modelId?: string;
     thinking?: string;
     requestedThinking?: string;
+    /** `Note:` line when the child ran on the parent model because its configured one did not resolve. */
+    modelNote?: string;
   }): void;
   /**
    * Compiled from the script's `agent({ schema })`.
@@ -992,12 +994,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             modelId?: string;
             thinking?: string;
             requestedThinking?: string;
+            modelNote?: string;
           }) => {
             if (info.recordId !== undefined) base.recordId = info.recordId;
             if (info.modelName !== undefined) base.model = info.modelName;
             if (info.modelId !== undefined) base.modelId = info.modelId;
             if (info.thinking !== undefined) base.thinking = info.thinking;
             if (info.requestedThinking !== undefined) base.requestedThinking = info.requestedThinking;
+            if (info.modelNote !== undefined) base.modelNote = info.modelNote;
             // `base.state` is still "start", so emitting after the row reached a
             // terminal state would revert it to running under last-write-wins.
             // Not reachable from this repo's host, which reports during startup

@@ -1,9 +1,16 @@
 /**
- * config-model-fallback-wiring.test.ts -- a CONFIG model (`agentModels` or an
- * agent definition's `model:`) that does not resolve still runs on the parent
- * model, but must say so in the tool result text and the row details. An
- * explicit tool-call `model` keeps its hard error. Drives the real Agent tool
- * and the real nested Agent tool against the real `resolveModel`.
+ * config-model-fallback-wiring.test.ts -- a CONFIG model (`agentModels`, an agent
+ * definition's `model:`) that does not resolve still runs on the parent model, but
+ * every entry path must say so, from ONE place: `AgentRecord.modelFallback`, set by
+ * the shared spawn path. An explicit tool-call `model` keeps its hard error, and a
+ * resume reports the record's own disclosure, never one recomputed from the
+ * resuming call's config.
+ *
+ * Entry paths covered here: Agent tool (foreground, background), the completion
+ * notice and `get_subagent_result`, nested Agent, resume (both directions),
+ * cross-extension RPC and a direct @mention. Scheduler fire and the workflow host
+ * are in config-model-fallback-spawn.test.ts. All run the real `resolveModel` and
+ * the real `resolveDefaultModelOutcome`; only the session itself is stubbed.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,16 +19,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
-  return { ...actual, runAgent: vi.fn() };
+  return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
-import { runAgent } from "../src/agent-runner.js";
+import { AgentManager } from "../src/agent-manager.js";
+import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import subagentsExtension from "../src/index.js";
 import { setAgentModels } from "../src/model-resolver.js";
 import { createNestedSubagentTools } from "../src/nested-tools.js";
-import { startSession } from "./helpers/boot-extension.js";
+import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
+import { runnerResolution } from "./helpers/runner-resolution.js";
 
 const PARENT = { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };
 const HAIKU = { provider: "anthropic", id: "claude-haiku-5-5", name: "Claude Haiku 5.5" };
@@ -55,9 +64,12 @@ function ctx(models: unknown[] = [PARENT, HAIKU]) {
   } as any;
 }
 
-const textOf = (r: any): string => r.content[0].text;
 
 describe("config model that does not resolve", () => {
+  let tools: Map<string, any>;
+  let pi: any;
+  let lifecycle: Map<string, any>;
+
   beforeEach(() => {
     originalCwd = process.cwd();
     cwd = mkdtempSync(join(tmpdir(), "config-model-fallback-"));
@@ -67,9 +79,9 @@ describe("config model that does not resolve", () => {
     process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
     process.env.HOME = cwd;
     vi.mocked(runAgent).mockReset();
-    vi.mocked(runAgent).mockResolvedValue({
-      responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false,
-    });
+    vi.mocked(resumeAgent).mockReset();
+    vi.mocked(runAgent).mockImplementation(runnerResolution() as any);
+    vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed", aborted: false, steered: false } as any);
   });
 
   afterEach(() => {
@@ -85,35 +97,23 @@ describe("config model that does not resolve", () => {
   });
 
   async function boot() {
-    const tools = new Map<string, any>();
-    const lifecycle = new Map<string, any>();
-    const pi = {
-      registerMessageRenderer: vi.fn(),
-      registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-      registerCommand: vi.fn(),
-      registerEntryRenderer: vi.fn(),
-      registerFlag: vi.fn(),
-      getFlag: vi.fn(),
-      on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-      events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
-      appendEntry: vi.fn(),
-      sendMessage: vi.fn(),
-    } as any;
+    const booted = makePi();
+    ({ tools, pi, lifecycle } = booted);
     subagentsExtension(pi);
     await startSession(lifecycle, true);
-    return tools;
   }
 
-  it("notes an unresolved agentModels entry in text and details, foreground", async () => {
+  const managerRegistry = () => (globalThis as any)[Symbol.for("pi-subagents:manager")];
+  const callAgent = (params: Record<string, unknown>, c = ctx([PARENT])) =>
+    tools.get("Agent").execute("tc", { prompt: "go", description: "d", subagent_type: "scout", ...params }, undefined, undefined, c);
+
+  it("Agent tool, foreground: agentModels entry is noted in text and details", async () => {
     writeAgent("scout");
-    const tools = await boot();
+    await boot();
     // After boot: session_start reloads agentModels from (absent) settings.
     setAgentModels({ scout: "claude-haiku-4-5" });
 
-    const result = await tools.get("Agent").execute(
-      "tc-1", { prompt: "go", description: "d", subagent_type: "scout", run_in_background: false },
-      undefined, undefined, ctx([PARENT]),
-    );
+    const result = await callAgent({ run_in_background: false });
 
     expect(textOf(result)).toContain(NOTE);
     expect(result.details.modelNote).toBe(NOTE);
@@ -121,29 +121,42 @@ describe("config model that does not resolve", () => {
     expect(vi.mocked(runAgent).mock.calls[0]?.[3]).toMatchObject({ model: PARENT });
   });
 
-  it("notes an unresolved definition `model:` on the background branch", async () => {
+  it("Agent tool, background: definition `model:` is noted at start and on get_subagent_result", async () => {
     writeAgent("scout", "claude-haiku-4-5");
-    vi.mocked(runAgent).mockReturnValue(new Promise(() => {}) as any);
-    const tools = await boot();
+    await boot();
 
-    const result = await tools.get("Agent").execute(
-      "tc-2", { prompt: "go", description: "d", subagent_type: "scout", run_in_background: true },
-      undefined, undefined, ctx([PARENT]),
+    const started = await callAgent({ run_in_background: true });
+    expect(textOf(started)).toContain(NOTE);
+    expect(textOf(started)).toContain("started in background");
+    expect(started.details.modelNote).toBe(NOTE);
+
+    await flush();
+    const fetched = await tools.get("get_subagent_result").execute(
+      "tc2", { agent_id: started.details.agentId, wait: true }, undefined, undefined, ctx([PARENT]),
     );
+    expect(textOf(fetched)).toContain(NOTE);
+  });
 
-    expect(textOf(result)).toContain(NOTE);
-    expect(textOf(result)).toContain("started in background");
-    expect(result.details.modelNote).toBe(NOTE);
+  it("completion notice: carries the note in its details and its text", async () => {
+    writeAgent("scout", "claude-haiku-4-5");
+    await boot();
+
+    const started = await callAgent({ run_in_background: true });
+    await vi.waitFor(() => {
+      const sent = pi.sendMessage.mock.calls.map((c: any[]) => c[0]);
+      expect(sent.some((m: any) => m.details?.id === started.details.agentId)).toBe(true);
+    });
+
+    const notice = pi.sendMessage.mock.calls.map((c: any[]) => c[0]).find((m: any) => m.details?.id === started.details.agentId);
+    expect(notice.details.modelNote).toBe(NOTE);
+    expect(notice.content).toContain(NOTE);
   });
 
   it("adds no note when the config model resolves", async () => {
-    writeAgent("scout", "claude-haiku-5-5");
-    const tools = await boot();
+    writeAgent("scout", "anthropic/claude-haiku-5-5");
+    await boot();
 
-    const result = await tools.get("Agent").execute(
-      "tc-3", { prompt: "go", description: "d", subagent_type: "scout", run_in_background: false },
-      undefined, undefined, ctx(),
-    );
+    const result = await callAgent({ run_in_background: false }, ctx());
 
     expect(textOf(result)).not.toContain("did not resolve");
     expect(result.details.modelNote).toBeUndefined();
@@ -151,39 +164,105 @@ describe("config model that does not resolve", () => {
 
   it("keeps the hard error for an explicit tool-call model", async () => {
     writeAgent("scout");
-    const tools = await boot();
+    await boot();
 
-    const result = await tools.get("Agent").execute(
-      "tc-4", { prompt: "go", description: "d", subagent_type: "scout", model: "claude-haiku-4-5" },
-      undefined, undefined, ctx([PARENT]),
-    );
+    const result = await callAgent({ model: "claude-haiku-4-5" });
 
     expect(textOf(result)).not.toContain("running on parent model");
     expect(runAgent).not.toHaveBeenCalled();
   });
 
-  describe("nested Agent tool", () => {
-    function nestedAgentTool(spawnAndWait: ReturnType<typeof vi.fn>) {
-      const manager = {
-        spawn: vi.fn(),
-        spawnAndWait,
-        awaitStartup: vi.fn(),
-        getRecord: vi.fn(),
-        resume: vi.fn(),
-      } as any;
+  describe("resume reports the record's disclosure, never a recomputed one", () => {
+    const OTHER_PARENT = { provider: "openai", id: "gpt-6", name: "GPT 6" };
+
+    it("a run that resolved is not reported as a fallback because the resuming call's config would not resolve", async () => {
+      writeAgent("scout");
+      await boot();
+      setAgentModels({ scout: "anthropic/claude-haiku-5-5" });
+      const first = await callAgent({ run_in_background: false }, ctx());
+      expect(first.details.modelNote).toBeUndefined();
+
+      // Resuming call: different parent, and the configured model is now unavailable.
+      const resumed = await callAgent(
+        { resume: first.details.agentId, run_in_background: false },
+        { ...ctx([OTHER_PARENT]), model: OTHER_PARENT },
+      );
+
+      expect(textOf(resumed)).not.toContain("did not resolve");
+      expect(resumed.details.modelNote).toBeUndefined();
+    });
+
+    it("a run that fell back keeps saying so, naming the model it really ran on", async () => {
+      writeAgent("scout");
+      await boot();
+      setAgentModels({ scout: "claude-haiku-4-5" });
+      const first = await callAgent({ run_in_background: false });
+      expect(first.details.modelNote).toBe(NOTE);
+
+      // Resuming call: a different parent, and the config would now resolve.
+      setAgentModels({ scout: "openai/gpt-6" });
+      const resumed = await callAgent(
+        { resume: first.details.agentId, run_in_background: false },
+        { ...ctx([OTHER_PARENT]), model: OTHER_PARENT },
+      );
+
+      expect(resumed.details.modelNote).toBe(NOTE);
+      expect(resumed.details.modelNote).not.toContain("openai/gpt-6");
+    });
+  });
+
+  it("cross-extension RPC: a spawn with no model reports the definition model's fallback on the record and get_subagent_result", async () => {
+    writeAgent("scout", "claude-haiku-4-5");
+    await boot();
+    const id = managerRegistry().spawn(pi, ctx([PARENT]), "scout", "go", {
+      description: "rpc",
+      // A forged disclosure must not survive spawnTopLevel.
+      modelFallback: { input: "forged", used: "nowhere/none" },
+    });
+    await flush();
+
+    expect(managerRegistry().getRecord(id).modelFallback).toEqual({
+      input: "claude-haiku-4-5",
+      used: "anthropic/claude-sonnet-5-5",
+    });
+    const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: id }, undefined, undefined, ctx([PARENT]));
+    expect(textOf(fetched)).toContain(NOTE);
+    expect(textOf(fetched)).not.toContain("forged");
+  });
+
+  it("@mention: an agent started by mention reports the definition model's fallback", async () => {
+    writeAgent("scout", "claude-haiku-4-5");
+    mkdirSync(join(cwd, "agent-dir"), { recursive: true });
+    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ agentMentions: "direct" }));
+    await boot();
+    // Direct mentions start the agent here, through the same spawn path.
+    vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }) as any);
+    const uiCtx = { ...ctx([PARENT]), mode: "tui" };
+
+    const handled = await lifecycle.get("input")({ type: "input", text: "@scout look around", source: "interactive" }, uiCtx);
+    await flush();
+
+    expect(handled).toEqual({ action: "handled" });
+    const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: "scout" }, undefined, undefined, ctx([PARENT]));
+    expect(textOf(fetched)).toContain(NOTE);
+  });
+
+  describe("nested Agent tool (real manager)", () => {
+    function nestedAgentTool(manager: AgentManager) {
       return createNestedSubagentTools({
-        manager, pi: {} as any, parentAgentId: "p", depth: 1, maxSubagentDepth: 2,
+        manager: manager as any, pi: {} as any, parentAgentId: "p", depth: 1, maxSubagentDepth: 2,
         allowedSubagents: "all", configCwd: cwd, projectTrusted: true,
       })[0] as any;
     }
-    const done = () => vi.fn(async () => ({ id: "c1", record: { id: "c1", type: "scout", status: "completed", result: "done" } }));
+    const run = (tool: any, c: any) =>
+      tool.execute("c", { subagent_type: "scout", description: "d", prompt: "p" }, undefined, undefined, c);
 
-    it("prefixes the note on the child result", async () => {
+    it("prefixes the note, read from the child's record", async () => {
       writeAgent("scout", "claude-haiku-4-5");
       registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
-      const tool = nestedAgentTool(done());
+      const manager = new AgentManager();
 
-      const result = await tool.execute("c", { subagent_type: "scout", description: "d", prompt: "p" }, undefined, undefined, ctx([PARENT]));
+      const result = await run(nestedAgentTool(manager), ctx([PARENT]));
 
       expect(result.isError).toBe(false);
       expect(result.content[0].text.startsWith(NOTE)).toBe(true);
@@ -191,11 +270,11 @@ describe("config model that does not resolve", () => {
     });
 
     it("adds nothing when the config model resolves", async () => {
-      writeAgent("scout", "claude-haiku-5-5");
+      writeAgent("scout", "anthropic/claude-haiku-5-5");
       registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
-      const tool = nestedAgentTool(done());
+      const manager = new AgentManager();
 
-      const result = await tool.execute("c", { subagent_type: "scout", description: "d", prompt: "p" }, undefined, undefined, ctx());
+      const result = await run(nestedAgentTool(manager), ctx());
 
       expect(result.content[0].text).not.toContain("did not resolve");
     });

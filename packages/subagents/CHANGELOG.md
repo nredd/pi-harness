@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **A configured model that does not resolve is disclosed.** When the model comes from `agentModels` or an agent definition's `model:` and does not resolve, the spawn still runs on the parent model, but the top-level `Agent` result text and row details, and the nested `Agent` result text, now start with `Note: configured model "<input>" did not resolve; running on parent model <provider>/<id>.` It used to fall back silently. An explicit `Agent({ model })` is still a hard error. No change to which model runs.
+- **A configured model that does not resolve is disclosed, on every spawn path.** When the model comes from `agentModels`, an agent definition's `model:` or a scheduled job and does not resolve, the agent still runs on the parent model, but `AgentRecord.modelFallback` now records the input and the model used, and the `Agent` result (text, expanded row), `get_subagent_result`, the completion notice, nested `Agent` results, workflow rows, and scheduler-fire, cross-extension RPC and `@mention` spawns say `Note: configured model "<input>" did not resolve; running on parent model <provider>/<id>.` A resume reports the original run's note rather than recomputing from its own config. An explicit `Agent({ model })` is still a hard error. No change to which model runs.
 
 ## [0.22.0-nredd.7] - 2026-10-23
 

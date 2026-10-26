@@ -68,6 +68,7 @@ function detailLines(d: NotificationDetails, theme: Theme, showCost: boolean, in
   stats.push(...statParts(d, showCost));
   if (stats.length > 0) lines.push(indent + theme.fg("dim", stats.join(" · ")));
   if (d.error) lines.push(indent + theme.fg("error", d.error));
+  if (d.modelNote) lines.push(indent + theme.fg("warning", d.modelNote));
   for (const line of d.resultPreview.split("\n").slice(0, EXPANDED_PREVIEW_LINES)) {
     lines.push(indent + theme.fg("dim", line));
   }

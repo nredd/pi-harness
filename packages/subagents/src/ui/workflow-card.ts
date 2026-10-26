@@ -240,6 +240,7 @@ export function agentStatSegments(entry: WorkflowAgentEntry): string[] {
   if (entry.agentType) parts.push(entry.agentType);
   const model = formatModel(entry);
   if (model) parts.push(model);
+  if (entry.modelNote) parts.push(entry.modelNote.replace(/^Note: /, ""));
   if (entry.tokens) parts.push(formatCompactTokens(entry.tokens));
   if (entry.toolCalls) parts.push(`${entry.toolCalls} tool call${entry.toolCalls === 1 ? "" : "s"}`);
   if (entry.durationMs) parts.push(formatDuration(entry.durationMs));

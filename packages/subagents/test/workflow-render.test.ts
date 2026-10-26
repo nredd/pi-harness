@@ -243,6 +243,14 @@ describe("stat segments", () => {
     expect(agentStatSegments(agentEntry({ index: 0, toolCalls: 1 }))).toEqual(["1 tool call"]);
   });
 
+  it("shows the model fallback note after the model", () => {
+    const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+    expect(agentStatSegments(agentEntry({ index: 0, model: "sonnet", modelNote }))).toEqual([
+      "sonnet",
+      'configured model "ghost" did not resolve; running on parent model anthropic/x.',
+    ]);
+  });
+
   it("merges the fallback model into the model segment", () => {
     expect(agentStatSegments(agentEntry({ index: 0, model: "haiku", fallbackModel: "sonnet" }))).toEqual([
       "haiku→sonnet",
