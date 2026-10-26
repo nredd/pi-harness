@@ -1446,6 +1446,9 @@ def ensure_stock_pi(prefix: Path, sandbox: Sandbox) -> Path:
     Raises:
         ContractError: If the installed version or registry integrity differs from the pins.
     """
+    # npm keys its lockfile by realpath; a symlinked prefix (macOS `/var` -> `/private/var`) would
+    # yield `../../private/...` keys that `verify_stock_pi` cannot find.
+    prefix = prefix.resolve()
     prefix.mkdir(parents=True, exist_ok=True)
     manifest = prefix / "package.json"
     if not manifest.exists():
