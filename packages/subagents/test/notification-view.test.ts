@@ -56,6 +56,16 @@ describe("collapsed notice", () => {
   });
 });
 
+describe("model fallback", () => {
+  const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+
+  it("appears in the expanded notice, not the collapsed one", () => {
+    expect(render(details({ modelNote }), true).join("\n")).toContain(modelNote);
+    expect(render(details({ modelNote }), false).join("\n")).not.toContain("did not resolve");
+    expect(render(details(), true).join("\n")).not.toContain("did not resolve");
+  });
+});
+
 describe("grouped notice", () => {
   const group = {
     ...details({ description: "a" }),

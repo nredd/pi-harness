@@ -127,6 +127,8 @@ export interface WorkflowSpawnResult {
   text?: string;
   /** Why it failed. Present when not `ok`. */
   error?: string;
+  /** `Note:` line when the child ran on a different model than configured; also leads `text`/`error` (not a schema'd payload). */
+  modelNote?: string;
   /** The user dismissed it rather than it failing; renders as skipped. */
   skipped?: boolean;
   tokens?: number;
@@ -1095,6 +1097,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             durationMs: finishedAt - startedAt,
             ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
             ...(result.toolCalls !== undefined ? { toolCalls: result.toolCalls } : {}),
+            ...(result.modelNote !== undefined ? { modelNote: result.modelNote } : {}),
           };
 
           if (result.ok) {

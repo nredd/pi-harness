@@ -10,6 +10,7 @@ import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, 
 import { renderAgentName } from "../agent-color.js";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import { extractText } from "../context.js";
+import { modelFallbackLabel } from "../model-resolver.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
@@ -727,7 +728,8 @@ export class ConversationViewer implements Component, Focusable {
     // models whose short names read alike.
     const { modelName, modelId, tags } = buildInvocationTags(this.record.invocation);
     const model = modelId ?? modelName;
-    const parts = model ? [model, ...tags] : tags;
+    const fallback = this.record.modelFallback;
+    const parts = [...(model ? [model] : []), ...(fallback ? [modelFallbackLabel(fallback)] : []), ...tags];
     if (parts.length === 0) return undefined;
     return this.theme.fg("dim", `  ↳ ${parts.join(" · ")}`);
   }

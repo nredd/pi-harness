@@ -16,9 +16,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as AgentRunner from "../src/agent-runner.js";
 
 vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
+  const actual = await vi.importActual<typeof AgentRunner>("../src/agent-runner.js");
   return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
@@ -103,7 +104,6 @@ describe("config model that does not resolve", () => {
     await startSession(lifecycle, true);
   }
 
-  const managerRegistry = () => (globalThis as any)[Symbol.for("pi-subagents:manager")];
   const callAgent = (params: Record<string, unknown>, c = ctx([PARENT])) =>
     tools.get("Agent").execute("tc", { prompt: "go", description: "d", subagent_type: "scout", ...params }, undefined, undefined, c);
 
@@ -208,23 +208,60 @@ describe("config model that does not resolve", () => {
 
       expect(resumed.details.modelNote).toBe(NOTE);
       expect(resumed.details.modelNote).not.toContain("openai/gpt-6");
+      // The text the model reads says it too, and still names the model that ran.
+      expect(textOf(resumed).startsWith(NOTE)).toBe(true);
+      expect(textOf(resumed)).not.toContain("openai/gpt-6");
+    });
+
+    it("the background and failed resume texts carry the record's note too", async () => {
+      writeAgent("scout");
+      await boot();
+      setAgentModels({ scout: "claude-haiku-4-5" });
+      const first = await callAgent({ run_in_background: false });
+      const id = first.details.agentId;
+
+      const background = await callAgent({ resume: id, run_in_background: true });
+      expect(textOf(background).startsWith(NOTE)).toBe(true);
+      expect(background.details.modelNote).toBe(NOTE);
+      await flush();
+
+      vi.mocked(resumeAgent).mockRejectedValue(new Error("boom"));
+      const failed = await callAgent({ resume: id, run_in_background: false });
+      expect(textOf(failed)).toContain("Agent failed");
+      expect(textOf(failed).startsWith(NOTE)).toBe(true);
     });
   });
 
-  it("cross-extension RPC: a spawn with no model reports the definition model's fallback on the record and get_subagent_result", async () => {
+  it("cross-extension RPC: the real event-bus spawn handler's agent reports the fallback on the completion event, record and get_subagent_result", async () => {
     writeAgent("scout", "claude-haiku-4-5");
-    await boot();
-    const id = managerRegistry().spawn(pi, ctx([PARENT]), "scout", "go", {
-      description: "rpc",
-      // A forged disclosure must not survive spawnTopLevel.
-      modelFallback: { input: "forged", used: "nowhere/none" },
-    });
-    await flush();
+    const handlers = new Map<string, Array<(data: unknown) => void>>();
+    const bus = {
+      on: (event: string, handler: (data: unknown) => void) => {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+        return () => {};
+      },
+      emit: (event: string, data: unknown) => { for (const h of handlers.get(event) ?? []) h(data); },
+    };
+    const booted = makePi();
+    ({ tools, pi, lifecycle } = booted);
+    pi.events = bus;
+    subagentsExtension(pi);
+    const sessionCtx = ctx([PARENT]);
+    await startSession(lifecycle, true, { model: sessionCtx.model, modelRegistry: sessionCtx.modelRegistry });
 
-    expect(managerRegistry().getRecord(id).modelFallback).toEqual({
-      input: "claude-haiku-4-5",
-      used: "anthropic/claude-sonnet-5-5",
+    const completed = new Promise<any>((resolve) => bus.on("subagents:completed", resolve));
+    const reply = new Promise<any>((resolve) => bus.on("subagents:rpc:spawn:reply:r1", resolve));
+    bus.emit("subagents:rpc:spawn", {
+      requestId: "r1", type: "scout", prompt: "go",
+      // A forged disclosure must not survive the RPC boundary.
+      options: { description: "rpc", modelFallback: { input: "forged", used: "nowhere/none" } },
     });
+    const id = (await reply).data.id;
+    const event = await completed;
+
+    expect(event.id).toBe(id);
+    expect(event.modelNote).toBe(NOTE);
+    expect(event.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
     const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: id }, undefined, undefined, ctx([PARENT]));
     expect(textOf(fetched)).toContain(NOTE);
     expect(textOf(fetched)).not.toContain("forged");

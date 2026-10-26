@@ -213,7 +213,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
 
 /** Build AgentDetails from a base + record-specific fields. */
 function buildDetails(
-  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "modelNote" | "tags">,
+  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "modelNote" | "modelFallback" | "tags">,
   record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; outputFile?: string; lifetimeUsage: LifetimeUsage },
   activity?: AgentActivity,
   overrides?: Partial<AgentDetails>,
@@ -573,6 +573,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       durationMs,
       tokens,
       usage,
+      // Present only on a fallback, so the payload keeps its shape otherwise.
+      ...(record.modelFallback
+        ? { modelFallback: record.modelFallback, modelNote: modelFallbackNote(record.modelFallback) }
+        : {}),
     };
   }
 
@@ -647,6 +651,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id, type: record.type, description: record.description,
       status: record.status, result: record.result, error: record.error,
       startedAt: record.startedAt, completedAt: record.completedAt,
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
 
     // Skip notification if result was already consumed via get_subagent_result
@@ -2141,6 +2146,13 @@ Terse command-style prompts produce shallow, generic work.
        */
       const modelNoteOf = (rec: AgentRecord | undefined): string | undefined =>
         modelFallbackNote(rec ? rec.modelFallback : modelFallback) || undefined;
+      const modelFallbackOf = (rec: AgentRecord | undefined): ModelFallback | undefined =>
+        rec ? rec.modelFallback : modelFallback;
+      /** A resume's lead-in: the record's note only (the type note describes a spawn, not a resume). */
+      const resumeNoteFor = (rec: AgentRecord): string => {
+        const note = modelNoteOf(rec);
+        return note ? `${note}\n\n` : "";
+      };
       const fallbackNoteFor = (rec: AgentRecord | undefined): string => {
         const modelNote = modelNoteOf(rec);
         return typeNote + (modelNote ? `${modelNote}\n\n` : "");
@@ -2151,6 +2163,7 @@ Terse command-style prompts produce shallow, generic work.
         subagentType,
         modelName,
         modelNote: modelNoteOf(undefined),
+        modelFallback: modelFallbackOf(undefined),
         tags: agentTags.length > 0 ? agentTags : undefined,
       };
 
@@ -2171,7 +2184,7 @@ Terse command-style prompts produce shallow, generic work.
         // A record's disclosure outranks this call's, even before its session
         // reports an invocation: resume reuses the old session, so this call's
         // config says nothing about what ran.
-        if (!rec?.invocation) return rec ? { ...detailBase, modelNote: modelNoteOf(rec) } : detailBase;
+        if (!rec?.invocation) return rec ? { ...detailBase, modelNote: modelNoteOf(rec), modelFallback: modelFallbackOf(rec) } : detailBase;
         const type = rec.type;
         const { modelName: recModelName, tags } = buildInvocationTags(rec.invocation);
         const recModeLabel = getPromptModeLabel(type);
@@ -2182,6 +2195,7 @@ Terse command-style prompts produce shallow, generic work.
           subagentType: type,
           modelName: recModelName,
           modelNote: modelNoteOf(rec),
+          modelFallback: modelFallbackOf(rec),
           tags: recTags.length > 0 ? recTags : undefined,
         };
       };
@@ -2276,7 +2290,7 @@ Terse command-style prompts produce shallow, generic work.
 
           const isQueued = record.status === "queued";
           return textResult(
-            `Agent ${isQueued ? "queued" : "resumed"} in background.\n` +
+            `${resumeNoteFor(record)}Agent ${isQueued ? "queued" : "resumed"} in background.\n` +
             `Agent ID: ${id}\n` +
             `Type: ${existing.type}\n` +
             (record.outputFile ? `Output file: ${record.outputFile}\n` : "") +
@@ -2318,10 +2332,10 @@ Terse command-style prompts produce shallow, generic work.
         // A failed resume surfaces the error, plus any partial output THIS
         // resume produced (never the previous turn's answer, #144).
         if (record.status === "error") {
-          return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record, resumeState));
+          return textResult(`${resumeNoteFor(record)}Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record, resumeState));
         }
         return textResult(
-          record.result?.trim() || "No output.",
+          `${resumeNoteFor(record)}${record.result?.trim() || "No output."}`,
           buildDetails(detailBaseFor(record), record, resumeState),
         );
       }

@@ -20,10 +20,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
 import type { AgentManager } from "./agent-manager.js";
-import { normalizeMaxTurns } from "./agent-runner.js";
+import { normalizeMaxTurns, resolveDefaultModelOutcome } from "./agent-runner.js";
 import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
-import { modelFallbackTo, resolveModel } from "./model-resolver.js";
+import { type ModelFallback, modelFallbackTo, resolveModel } from "./model-resolver.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
 import type { ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
@@ -280,6 +280,14 @@ export class SubagentScheduler {
     this.spawnJob(id, resolvedModel, unresolvedModel);
   }
 
+  /** What the runner will pick for a spawn with no model, as a fallback away from `input`. */
+  private selectionAfterUnresolved(input: string, type: string): ModelFallback {
+    const definitionModel = getAgentConfig(type)?.model;
+    const outcome = resolveDefaultModelOutcome(this.ctx?.model, this.ctx?.modelRegistry as never, definitionModel);
+    const via = definitionModel && !outcome.fallback ? "definition" : "parent";
+    return { ...modelFallbackTo(input, outcome.model), via };
+  }
+
   /** Re-arm a quota-parked one-shot at a later reset instead of starting it. */
   private repark(id: string, resetAt: number): void {
     if (!this.store?.get(id)) return;
@@ -315,12 +323,10 @@ export class SubagentScheduler {
         isBackground: true,
         bypassQueue: true,
         model: resolvedModel,
-        // An unresolved stored model leaves `model` unset, so the runner picks
-        // the definition's `model:` (and reports its own fallback) or else the
-        // parent. Only the latter is this job's to disclose.
-        ...(unresolvedModel !== undefined && !getAgentConfig(dispatch.type)?.model
-          ? { modelFallback: modelFallbackTo(unresolvedModel, ctx.model) }
-          : {}),
+        // An unresolved stored model leaves `model` unset, so selection is the
+        // runner's: the definition's `model:` when it resolves, else the parent.
+        // Selection is unchanged; the record names the failed input and what ran.
+        ...(unresolvedModel !== undefined ? { modelFallback: this.selectionAfterUnresolved(unresolvedModel, dispatch.type) } : {}),
         maxTurns: job.max_turns,
         isolated: job.isolated,
         thinkingLevel: job.thinking,
