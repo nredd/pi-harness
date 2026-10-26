@@ -11,6 +11,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "wsl2.yml"
@@ -220,21 +221,37 @@ def run_install_gh(tmp_path: Path, system: str, machine: str) -> subprocess.Comp
     """Run the real installer with `uname` and `curl` stubs, serving junk bytes as the tarball.
 
     Parameters:
-        tmp_path: Scratch directory.
-        system: `uname -s` output.
-        machine: `uname -m` output.
+        tmp_path (Path): Scratch directory.
+        system (str): `uname -s` output.
+        machine (str): `uname -m` output.
 
     Returns:
-        CompletedProcess[str]: Installer outcome.
+        subprocess.CompletedProcess[str]: Installer outcome.
     """
     commands = tmp_path / "commands"
     commands.mkdir()
     (commands / "uname").write_text(
-        f'#!/bin/sh\n[ "$1" = -s ] && echo {system} || echo {machine}\n', encoding="utf-8"
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env python3
+            import sys
+
+            print({system!r} if sys.argv[1] == "-s" else {machine!r})
+            """
+        ),
+        encoding="utf-8",
     )
     (commands / "curl").write_text(
-        '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --output ] && out=$2; shift; done\n'
-        'printf "not a gh tarball" > "$out"\n',
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import sys
+            from pathlib import Path
+
+            argv = sys.argv[1:]
+            Path(argv[argv.index("--output") + 1]).write_bytes(b"not a gh tarball")
+            """
+        ),
         encoding="utf-8",
     )
     for command in commands.iterdir():
