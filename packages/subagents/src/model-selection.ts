@@ -33,11 +33,6 @@ export function modelRequest(type: string, definitionModel?: string, paramModel?
   return { source: "parent" };
 }
 
-/** Compatibility view for invocation snapshots; selection uses the same request. */
-export function configuredAgentModel(type: string, definitionModel?: string): string | undefined {
-  return modelRequest(type, definitionModel).requested;
-}
-
 /**
  * Preserve current matching and fallback rules. Explicit failures are errors;
  * unavailable config inherits the parent with PR0's durable disclosure. The

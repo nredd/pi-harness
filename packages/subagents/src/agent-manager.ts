@@ -1105,7 +1105,6 @@ export class AgentManager {
         depth: record.depth ?? 1,
         maxSubagentDepth: record.maxSubagentDepth,
       },
-
       onSessionCreated: (session) => {
         record.session = session;
         // Capture now, while the session object exists: after eviction this
