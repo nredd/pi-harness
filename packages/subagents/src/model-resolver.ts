@@ -87,6 +87,20 @@ export function describeModel(
   };
 }
 
+/**
+ * The disclosure for a CONFIG model (`agentModels` or an agent's `model:`) that
+ * did not resolve: the spawn still runs on the parent model, but the caller is
+ * told which input failed and what actually ran. Same `Note:` prefix as the
+ * unknown-agent-type fallback note.
+ */
+export function unresolvedConfigModelNote(
+  modelInput: string,
+  parent: { provider: string; id: string } | undefined,
+): string {
+  const used = parent ? `parent model ${parent.provider}/${parent.id}` : "the session default model";
+  return `Note: configured model "${modelInput}" did not resolve; running on ${used}.`;
+}
+
 /** API id pi gives virtual catalog entries such as `router/default`; they never reach a provider. */
 const VIRTUAL_MODEL_API = "pi-virtual";
 

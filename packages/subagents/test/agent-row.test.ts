@@ -112,6 +112,14 @@ describe("AgentCallView", () => {
 });
 
 describe("AgentResultView", () => {
+  it("shows the model fallback note when expanded, not in the collapsed row", () => {
+    const note = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+    const record = makeRecord({ status: "running" });
+    const details = makeDetails({ modelNote: note });
+    expect(new AgentResultView(details, "", true, live(record), theme).render(200)).toContain(note);
+    expect(new AgentResultView(details, "", false, live(record), theme).render(200).join("\n")).not.toContain("did not resolve");
+  });
+
   const record = makeRecord({ status: "completed", completedAt: NOW - 1, outputFile: "/tmp/t/a1.output" });
   const details = makeDetails({ status: "completed", durationMs: 12_000, tokens: "3.2k token" });
 

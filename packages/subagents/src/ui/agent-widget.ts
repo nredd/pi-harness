@@ -83,6 +83,8 @@ export interface AgentDetails {
   backgroundHint?: boolean;
   /** Short label for the model the run used, e.g. "haiku 4.5". */
   modelName?: string;
+  /** Set when a configured model did not resolve and the run fell back to the parent model. */
+  modelNote?: string;
   /** Notable config tags (e.g. ["thinking: high", "isolated"]). */
   tags?: string[];
   /** Current turn count. */

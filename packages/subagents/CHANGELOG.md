@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **A configured model that does not resolve is disclosed.** When the model comes from `agentModels` or an agent definition's `model:` and does not resolve, the spawn still runs on the parent model, but the top-level `Agent` result text and row details, and the nested `Agent` result text, now start with `Note: configured model "<input>" did not resolve; running on parent model <provider>/<id>.` It used to fall back silently. An explicit `Agent({ model })` is still a hard error. No change to which model runs.
+
 ## [0.22.0-nredd.7] - 2026-10-23
 
 ### Added
