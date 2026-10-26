@@ -241,8 +241,8 @@ the workspace root, not the target dir); cargo's `Blocking waiting for file lock
 `Compiling` progress are relayed as updates. Every bare value the model supplies (`package`,
 `features`, `bin`, ...) must be a plain identifier-ish token; `crates` for `cargo_add` may
 also carry version requirements (`serde@^1`); filters only need to not start with `-`.
-A relative `CARGO_TARGET_DIR` resolves against the workspace root; `build.target-dir` from
-`.cargo/config.toml` is not consulted (junit and criterion lookups assume `target/`).
+A relative `CARGO_TARGET_DIR` resolves against the workspace root. Criterion lookups honor
+that environment variable, but do not consult `build.target-dir` from `.cargo/config.toml`.
 
 Compile diagnostics (`cargo_check`, `cargo_clippy`, `cargo_build`, `cargo_doc`) come from
 `--message-format=json-diagnostic-short`: keyed on `reason`, errors and warnings only, deduped
@@ -260,8 +260,11 @@ on (level, code, primary span, message) because cargo emits one copy per target,
   even when piped); `Diff in <file>:<line>:` blocks give the file list
 - `cargo_test {filter?, no_fail_fast?=true, doc?=true, retries?, nocapture?}`: `cargo nextest
   run` with a `pi-dev-tools` profile layered UNDER the repo's own nextest config via `--tool-config-file`
-  (repo retries, slow timeouts and groups still apply), junit parsed from
-  `target/nextest/pi-dev-tools/junit.xml` (`<failure>` and `<error>` both count, flaky retries do not);
+  (repo retries, slow timeouts and groups still apply), junit written to an absolute path in a
+  per-call temporary directory, removed after the run. Report lookup is independent of
+  `CARGO_TARGET_DIR`, Cargo's `build.target-dir` and nextest's `[store].dir` (nextest's store
+  does not follow Cargo's target directory). A repo override of the `pi-dev-tools` profile's
+  junit path is reported as missing output. `<failure>` and `<error>` both count, flaky retries do not;
   then `cargo test --doc --no-fail-fast`, skipped (and said so) when a `filter` is set. A
   filterset expression (any of `( ) | & !` or a leading `not`) goes to `-E`, a bare string is
   a substring match.
