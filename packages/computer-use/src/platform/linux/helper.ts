@@ -108,8 +108,8 @@ export class LinuxHelperClient {
 	private child?: ChildProcessWithoutNullStreams;
 	private processPromise?: Promise<ChildProcessWithoutNullStreams>;
 	private buffer = "";
-	/** Bumped by `dispose()`; an `install()` or start that began under an older value must abort. */
-	private generation = 0;
+	/** Set by `dispose()`, which is terminal: nothing may probe, set up, spawn or assign `child` afterwards. */
+	private disposed = false;
 	private setupAbort?: AbortController;
 	private pending = new Map<string, Pending<unknown>>();
 	private readonly helperPath: string;
@@ -120,8 +120,10 @@ export class LinuxHelperClient {
 		this.setupHelperScript = options.setupHelperScript ?? SETUP_HELPER_SCRIPT;
 	}
 
+	/** Terminal: in-flight work is aborted and every later `command()`/`ensureInstalled()` fails fast. */
 	dispose(): void {
-		this.generation += 1;
+		this.disposed = true;
+		this.installPromise = undefined;
 		this.setupAbort?.abort();
 		this.discardChild(new Error(SESSION_CLOSED_MESSAGE));
 	}
@@ -155,7 +157,12 @@ export class LinuxHelperClient {
 	 * Concurrent callers share one probe/setup.
 	 */
 	async ensureInstalled(signal?: AbortSignal): Promise<void> {
-		if (this.installChecked && (await isExecutable(this.helperPath))) return;
+		if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
+		if (this.installChecked && (await isExecutable(this.helperPath))) {
+			if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
+			return;
+		}
+		if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
 		if (!this.installPromise) {
 			const installPromise = this.install();
 			this.installPromise = installPromise;
@@ -168,9 +175,9 @@ export class LinuxHelperClient {
 	}
 
 	private async install(): Promise<void> {
-		const generation = this.generation;
-		// A dispose() during any await below aborts the install: no classification, no setup, no new child.
-		const abortIfDisposed = () => { if (this.generation !== generation) throw new Error(SESSION_CLOSED_MESSAGE); };
+		// A dispose() before or during any await below aborts the install: no classification, no setup, no new child.
+		const abortIfDisposed = () => { if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE); };
+		abortIfDisposed();
 		this.installChecked = false;
 		this.discardChild(new Error("Linux helper replaced during install."));
 		let rejected: string | undefined;
@@ -178,7 +185,7 @@ export class LinuxHelperClient {
 		abortIfDisposed();
 		if (present) {
 			try {
-				await this.probe(generation);
+				await this.probe();
 				abortIfDisposed();
 				this.installChecked = true;
 				return;
@@ -209,7 +216,7 @@ export class LinuxHelperClient {
 		abortIfDisposed();
 		if (!installed) throw new Error(`Failed to install Linux helper at ${this.helperPath}.`);
 		try {
-			await this.probe(generation);
+			await this.probe();
 		} catch (error) {
 			abortIfDisposed();
 			this.discardChild(new Error("Linux helper rejected."));
@@ -224,8 +231,8 @@ export class LinuxHelperClient {
 	 * The validated child stays as the live process, so a good helper starts exactly once. Bypasses
 	 * `process()` on purpose: that calls `ensureInstalled`, which is already running this probe.
 	 */
-	private async probe(generation: number): Promise<void> {
-		const child = await this.startProcess(generation);
+	private async probe(): Promise<void> {
+		const child = await this.startProcess();
 		const diagnostics = await this.send<PlatformDiagnostics>(child, "diagnostics", {}, HELPER_PROBE_TIMEOUT_MS);
 		if (diagnostics?.protocolVersion !== LINUX_HELPER_PROTOCOL_VERSION) {
 			throw new Error(`protocol mismatch: expected ${LINUX_HELPER_PROTOCOL_VERSION}, got ${diagnostics?.protocolVersion ?? "unknown"}`);
@@ -234,12 +241,11 @@ export class LinuxHelperClient {
 	}
 
 	private async process(signal?: AbortSignal): Promise<ChildProcessWithoutNullStreams> {
-		const generation = this.generation;
 		await this.ensureInstalled(signal);
 		if (this.processPromise) return await waitForShared(this.processPromise, signal);
 		if (this.child && this.child.exitCode === null && !this.child.killed) return this.child;
 		if (!this.processPromise) {
-			const processPromise = this.startProcess(generation);
+			const processPromise = this.startProcess();
 			this.processPromise = processPromise;
 			processPromise.then(
 				() => { if (this.processPromise === processPromise) this.processPromise = undefined; },
@@ -249,8 +255,8 @@ export class LinuxHelperClient {
 		return await waitForShared(this.processPromise, signal);
 	}
 
-	private async startProcess(generation: number): Promise<ChildProcessWithoutNullStreams> {
-		if (this.generation !== generation) throw new Error(SESSION_CLOSED_MESSAGE);
+	private async startProcess(): Promise<ChildProcessWithoutNullStreams> {
+		if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
 		const child = spawn(this.helperPath, [], { stdio: ["pipe", "pipe", "pipe"] });
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
@@ -335,4 +341,11 @@ export class LinuxHelperClient {
 	}
 }
 
-export const linuxHelper = new LinuxHelperClient();
+export let linuxHelper = new LinuxHelperClient();
+
+/** Session shutdown: dispose the shared client (terminal) and install a fresh one for the next session. */
+export function resetLinuxHelper(): void {
+	const old = linuxHelper;
+	linuxHelper = new LinuxHelperClient();
+	old.dispose();
+}

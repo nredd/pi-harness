@@ -101,7 +101,7 @@ if (process.platform !== "win32") {
 	const setupUrl = pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href;
 	const wrapper = path.join(groupDir, "wrapper.mjs");
 	await fs.writeFile(wrapper, `import { runCancellable } from ${JSON.stringify(setupUrl)};\nawait runCancellable("sh", [process.argv[2]]);\nconsole.log("wrapper-ok");\n`);
-	const { GROUP_TERM_GRACE_MS, GROUP_KILL_WAIT_MS } = await import(setupUrl);
+	const { GROUP_TERM_GRACE_MS, GROUP_KILL_WAIT_MS, reapProcessGroup } = await import(setupUrl);
 	// The reap budget must fit the caller's 2s SIGKILL backstop (`SETUP_KILL_GRACE_MS` in helper.ts), by construction.
 	const reapBudgetMs = GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
 	assert.ok(reapBudgetMs < 2000, `reap budget ${reapBudgetMs}ms no longer fits the 2s outer backstop`);
@@ -118,6 +118,35 @@ if (process.platform !== "win32") {
 	// The descendant ignores TERM (the disposition survives exec). The leader either waits (and dies on TERM) or exits first.
 	const fakeCargo = (name, leaderWaits) => `#!/bin/sh\necho $$ > ${groupDir}/${name}.leader\n( trap '' TERM; exec sleep 300 ) &\necho $! > ${groupDir}/${name}.desc\n${leaderWaits ? "wait" : "exit 0"}\n`;
 	const spawned = [];
+	{ // A missing build tool yields the install hint, which never points at a prebuilt no package ships.
+		const { runCancellable } = await import(setupUrl);
+		await assert.rejects(runCancellable("pi-cu-definitely-missing-tool", []), (error) => {
+			assert.match(error.message, /'pi-cu-definitely-missing-tool' was not found on PATH\. Install the Rust toolchain/);
+			assert.doesNotMatch(error.message, /prebuilt\/linux/);
+			return true;
+		});
+	}
+	{ // EPERM on a group we spawned means a foreign group reused the id: gone, and never signalled.
+		const calls = [];
+		const eperm = (pid, signal) => { calls.push([pid, signal]); throw Object.assign(new Error("EPERM"), { code: "EPERM" }); };
+		await reapProcessGroup(424242, eperm);
+		assert.deepEqual(calls, [[-424242, 0]], `a foreign (EPERM) group must only be probed, got ${JSON.stringify(calls)}`);
+	}
+	{ // After reaping, the wrapper's exit hook must not signal the (now reusable) group id again.
+		const trace = path.join(groupDir, "reaped-trace");
+		const pidFile = path.join(groupDir, "reaped.pid");
+		const reapedWrapper = path.join(groupDir, "reaped-wrapper.mjs");
+		await fs.writeFile(reapedWrapper, `import fs from "node:fs";\nimport { runCancellable } from ${JSON.stringify(setupUrl)};\nconst kill = (pid, signal) => { fs.appendFileSync(${JSON.stringify(trace)}, pid + " " + signal + "\\n"); return process.kill(pid, signal); };\nawait runCancellable("sh", ["-c", "echo $$ > ${pidFile}; exec sleep 300"], { kill });\n`);
+		const child = spawn(process.execPath, [reapedWrapper], { stdio: "ignore" });
+		const closed = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+		const leader = await waitFor(pidFile);
+		spawned.push(leader);
+		child.kill("SIGTERM");
+		assert.equal(await closed, 143);
+		const signals = (await fs.readFile(trace, "utf8")).split("\n").filter(Boolean);
+		assert.ok(signals.includes(`${-leader} SIGTERM`), `expected a group SIGTERM, got ${signals}`);
+		assert.deepEqual(signals.filter((line) => line.endsWith("SIGKILL")), [], `reaped group was signalled again with SIGKILL: ${signals}`);
+	}
 	try {
 		for (const [name, leaderWaits, terminate] of [["term-leader-waits", true, true], ["leader-exits-first", false, false]]) {
 			const script = path.join(groupDir, `${name}.sh`);

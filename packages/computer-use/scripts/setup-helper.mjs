@@ -133,28 +133,38 @@ async function run(command, commandArgs) {
 export const GROUP_TERM_GRACE_MS = 800;
 export const GROUP_KILL_WAIT_MS = 500;
 
-function processGroupAlive(pgid) {
+/**
+ * True while the group we spawned still has members. ESRCH means it is empty. EPERM means the id now
+ * belongs to a group we may not signal, which for a group we created can only be a foreign group that
+ * reused the id after ours emptied: treat it as gone and never signal it.
+ */
+function processGroupAlive(pgid, kill) {
 	try {
-		process.kill(-pgid, 0);
+		kill(-pgid, 0);
 		return true;
-	} catch (error) {
-		return error.code === "EPERM";
+	} catch {
+		return false;
 	}
 }
 
 /**
  * Drive the process group `pgid` (owned: it is the pid of the child we spawned detached) to empty:
- * SIGTERM, a bounded grace, then SIGKILL, and return only once `kill(-pgid, 0)` reports ESRCH.
+ * SIGTERM, a bounded grace, then SIGKILL, and return only once `kill(-pgid, 0)` reports the group empty (or no longer ours).
  * While any member lives the pgid cannot be reused, so ownership is held until quiescence. The total
  * (<= 1.3s) stays inside the caller's 2s SIGKILL backstop on this script's pid.
+ *
+ * Residual risk, inherent to POSIX: once the last member dies the id may be reused, so a signal sent in
+ * the instant between our liveness probe and `kill` could in theory hit a foreign group that got the same
+ * id. The probe-then-signal gap is microseconds and a reuse needs a full pid wraparound inside it; no
+ * signal is ever sent after the probe reports the group empty or foreign.
  */
-async function reapProcessGroup(pgid) {
-	const signalGroup = (signal) => { try { process.kill(-pgid, signal); } catch { /* group already gone */ } };
+export async function reapProcessGroup(pgid, kill = process.kill.bind(process)) {
+	const signalGroup = (signal) => { try { kill(-pgid, signal); } catch { /* group already gone */ } };
 	const quiesce = async (timeoutMs) => {
-		for (const deadline = Date.now() + timeoutMs; processGroupAlive(pgid) && Date.now() < deadline;) await delay(20);
-		return !processGroupAlive(pgid);
+		for (const deadline = Date.now() + timeoutMs; processGroupAlive(pgid, kill) && Date.now() < deadline;) await delay(20);
+		return !processGroupAlive(pgid, kill);
 	};
-	if (!processGroupAlive(pgid)) return;
+	if (!processGroupAlive(pgid, kill)) return;
 	signalGroup("SIGTERM");
 	if (await quiesce(GROUP_TERM_GRACE_MS)) return;
 	signalGroup("SIGKILL");
@@ -166,16 +176,16 @@ async function reapProcessGroup(pgid) {
  * descendants that ignore SIGTERM, before returning or exiting: on success or failure of the tool, and
  * when this script is terminated (the Pi session's setup deadline sends SIGTERM). No compiler outlives it.
  */
-export async function runCancellable(command, commandArgs) {
+export async function runCancellable(command, commandArgs, { kill = process.kill.bind(process) } = {}) {
 	await new Promise((resolve, reject) => {
 		const child = spawn(command, commandArgs, { stdio: "inherit", detached: true });
 		let reaping;
 		let reaped = false;
-		const reap = () => (reaping ??= reapProcessGroup(child.pid).finally(() => { reaped = true; }));
+		const reap = () => (reaping ??= reapProcessGroup(child.pid, kill).finally(() => { reaped = true; }));
 		const signals = ["SIGTERM", "SIGINT", "SIGHUP"];
 		// Last resort if we are exiting some other way: never leave the group running.
 		// Once reaped the group is empty and its id may be reused, so it must never be signalled again.
-		const onExit = () => { if (reaped) return; try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ } };
+		const onExit = () => { if (reaped) return; try { kill(-child.pid, "SIGKILL"); } catch { /* gone */ } };
 		const onTerminate = (signal) => {
 			// Repeated signals while reaping must not fall through to the default action.
 			void reap().finally(() => process.exit(128 + (os.constants.signals[signal] ?? 15)));

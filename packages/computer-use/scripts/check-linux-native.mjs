@@ -79,6 +79,7 @@ mkdir -p "$target/release" && printf '#!/bin/sh\\n' > "$target/release/linux-bri
 		const result = await runSetup(packageDir, { ...base, XDG_CACHE_HOME: path.join(work, "c2"), PI_COMPUTER_USE_LINUX_HELPER_PATH: path.join(work, "never", "linux-bridge"), PATH: empty }, ["--allow-build"]);
 		assert.equal(result.code, 1);
 		assert.match(result.output, /'cargo' was not found on PATH\. Install the Rust toolchain \(https:\/\/rustup\.rs\)/);
+		assert.doesNotMatch(result.output, /prebuilt\/linux/, "no package ships a Linux prebuilt; the hint must not suggest one");
 		assert.equal(await fs.stat(path.join(work, "never")).then(() => true, () => false), false, "no helper written when cargo is missing");
 	}
 	{

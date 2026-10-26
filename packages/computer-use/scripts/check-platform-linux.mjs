@@ -210,6 +210,42 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		assert.equal(client.child, undefined, "no child assigned after dispose");
 		assert.equal(await settled(pid), true, "probe child killed by dispose");
 	}
+	{ // dispose() is terminal: even with a cached good install nothing spawns or assigns a child afterwards.
+		const c = await makeCase({ installs: false });
+		await fs.copyFile(c.good, c.helper); await fs.chmod(c.helper, 0o755);
+		const client = c.client();
+		await client.command("echo", {});
+		const [pid] = (await lines(c.starts)).map(Number);
+		client.dispose();
+		assert.equal(await settled(pid), true);
+		await assert.rejects(client.command("echo", {}), /closed because the Pi session ended/);
+		await assert.rejects(client.ensureInstalled(), /closed because the Pi session ended/);
+		await assert.rejects(client.install(), /closed because the Pi session ended/);
+		await assert.rejects(client.probe(), /closed because the Pi session ended/);
+		await assert.rejects(client.startProcess(), /closed because the Pi session ended/);
+		assert.equal((await lines(c.starts)).length, 1, "no helper started after dispose");
+		assert.equal(client.child, undefined, "no child assigned after dispose");
+	}
+
+	{ // dispose() drops the shared install promise so nothing can join an old-generation install.
+		const c = await makeCase();
+		await fs.writeFile(c.setup, "setInterval(() => {}, 1000);\n"); // setup hangs
+		const client = c.client();
+		const waiter = client.command("echo", {}).then(() => "resolved", (error) => error.message);
+		for (const deadline = Date.now() + 5000; !client.installPromise && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 10));
+		assert.ok(client.installPromise, "install in flight");
+		client.dispose();
+		assert.equal(client.installPromise, undefined, "dispose must drop the shared install promise");
+		assert.match(await waiter, /closed because the Pi session ended|aborted/);
+	}
+
+	{ // Session shutdown replaces the shared client so the next session gets a live one.
+		const { linuxHelper: before, resetLinuxHelper } = await import("../src/platform/linux/helper.ts");
+		resetLinuxHelper();
+		const { linuxHelper: after } = await import("../src/platform/linux/helper.ts");
+		assert.notEqual(after, before);
+		await assert.rejects(before.ensureInstalled(), /closed because the Pi session ended/);
+	}
 	delete process.env.PI_TEST_LINUX_INSTALL_COUNT;
 	delete process.env.PI_TEST_LINUX_START_COUNT;
 	console.log("Linux platform checks passed");
