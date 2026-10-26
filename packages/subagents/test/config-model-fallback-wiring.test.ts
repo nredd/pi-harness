@@ -10,7 +10,7 @@
  * notice and `get_subagent_result`, nested Agent, resume (both directions),
  * cross-extension RPC and a direct @mention. Scheduler fire and the workflow host
  * are in config-model-fallback-spawn.test.ts. All run the real `resolveModel` and
- * the real `selectConfiguredModel`; only the session itself is stubbed.
+ * the real `selectModel`; only the session itself is stubbed.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
