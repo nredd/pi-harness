@@ -92,6 +92,14 @@ describe("journal files", () => {
     ]);
   });
 
+  it("round-trips a modelNote, and drops an entry whose modelNote is not a string", () => {
+    const path = join(dir, "note.jsonl");
+    appendJournal(path, { index: 0, key: "k0", ok: true, text: "a", modelNote: "Note: x" });
+    writeFileSync(path, `${JSON.stringify({ index: 1, key: "k1", ok: true, modelNote: 5 })}\n`, { flag: "a" });
+
+    expect(readJournal(path)).toEqual([{ index: 0, key: "k0", ok: true, text: "a", modelNote: "Note: x" }]);
+  });
+
   it("treats a missing journal as nothing to replay", () => {
     expect(readJournal(join(dir, "nope.jsonl"))).toEqual([]);
   });

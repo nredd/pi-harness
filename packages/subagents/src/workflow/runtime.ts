@@ -912,6 +912,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             // dialog to annotate it "from resume journal" rather than letting a
             // 0ms agent look like one that did the work impossibly fast.
             cached: true,
+            ...(replayed.modelNote !== undefined ? { modelNote: replayed.modelNote } : {}),
             resultPreview: preview(replayedText),
           },
         ]);
@@ -919,8 +920,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         // Re-recorded so this run's journal is complete on its own terms: a
         // resume of a resume must not have to walk back through a chain of
         // earlier files to find the prefix.
-        recordJournal?.({ index, key: replayed.key, ok: true, text: replayedText });
-        respond(callId, true, replayedText);
+        recordJournal?.({ index, key: replayed.key, ok: true, text: replayedText, ...(replayed.modelNote !== undefined ? { modelNote: replayed.modelNote } : {}) });
+        respond(callId, true, replayedText, undefined, undefined, replayed.modelNote);
         return;
       }
 
@@ -1103,7 +1104,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           if (result.ok) {
             const text = result.text ?? "";
             emit([{ ...common, state: "done", resultPreview: preview(text) }]);
-            recordJournal?.({ index, key, ok: true, text, ...resumeMark });
+            recordJournal?.({ index, key, ok: true, text, ...(result.modelNote !== undefined ? { modelNote: result.modelNote } : {}), ...resumeMark });
             respond(callId, true, text, undefined, undefined, result.modelNote);
             return;
           }
