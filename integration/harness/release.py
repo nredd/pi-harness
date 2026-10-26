@@ -123,7 +123,7 @@ def release_asset_url(tag: str, name: str) -> str:
     Returns:
         str: download URL.
     """
-    return f"https://github.com/nredd/pi/releases/download/{tag}/{name}"
+    return f"{RELEASE_URL_PREFIX}{tag}/{name}"
 
 
 def release_package_urls(tag: str) -> dict[str, str]:

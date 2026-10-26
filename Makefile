@@ -10,9 +10,9 @@ verify-root-overrides:  ## Verify root core overrides against the lockfile, SHA2
 	PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
 
 install: verify-root-overrides  ## Verify root core overrides, then install owned dependencies (npm ci --ignore-scripts, uv sync --locked). Never touches forks/
-	npm ci --ignore-scripts
-	cd integration && uv sync --locked
-	cd benchmarks/comparison && uv sync --locked --all-extras
+	env -u GH_TOKEN npm ci --ignore-scripts
+	cd integration && env -u GH_TOKEN uv sync --locked
+	cd benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
 
 check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
 
