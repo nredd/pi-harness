@@ -11,6 +11,8 @@ References:
 from __future__ import annotations
 
 import ast
+import builtins
+import hashlib
 import io
 import json
 import os
@@ -317,6 +319,36 @@ def test_existing_config_needs_consent_and_is_untouched(
     assert harness.calls() == []
 
 
+@pytest.mark.parametrize("recovering", [False, True])
+def test_eof_prompt_declines_without_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, recovering: bool
+) -> None:
+    """Both normal overwrite and interrupted-run recovery prompts map EOF to clean declined consent."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    if recovering:
+        interrupt(harness, monkeypatch)
+    before = {k: v for k, v in tree(harness.home).items() if not k.endswith("pi-stack/lock")}
+    calls = harness.calls()
+
+    def eof(prompt: str) -> str:
+        """Model a terminal closing while input waits for consent."""
+        raise EOFError
+
+    with pytest.raises(ConsentError, match="nothing changed"):
+        harness.run(ask=eof)
+    monkeypatch.setattr(builtins, "input", eof)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setenv("HOME", str(harness.home))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(harness.layout.agent_dir))
+    monkeypatch.setenv("XDG_DATA_HOME", str(harness.layout.root.parent))
+    assert install.main([SHA]) == ExitCode.CONSENT
+    assert "NOT APPLIED:" in caplog.text
+    assert "nothing changed" in caplog.text
+    assert {k: v for k, v in tree(harness.home).items() if not k.endswith("pi-stack/lock")} == before
+    assert harness.calls() == calls
+
+
 def test_existing_config_preserved_with_consent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Agreeing keeps credentials and unrelated settings, and backs up everything replaced."""
     harness = Harness(tmp_path, monkeypatch)
@@ -580,6 +612,40 @@ def test_preflight_reports_every_problem() -> None:
     assert all(f"`{tool}` not found" in message for tool in ("gh", "node", "npm"))
 
 
+@pytest.mark.parametrize("pending_journal", [False, True])
+def test_windows_without_fcntl_refuses_cleanly(tmp_path: Path, pending_journal: bool) -> None:
+    """Native Windows can import the entry point and refuse before creating even a lock."""
+    home = tmp_path / "home"
+    home.mkdir()
+    root = home / ".local" / "share" / "pi-stack"
+    if pending_journal:
+        root.mkdir(parents=True)
+        (root / "transaction.json").write_text("{}")
+    before = tree(home)
+    script = dedent("""\
+        import platform, sys
+        sys.modules['fcntl'] = None
+        platform.system = lambda: 'Windows'
+        platform.machine = lambda: 'AMD64'
+        from harness.install import main
+        sys.exit(main(sys.argv[1:]))
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script, SHA],
+        env={"HOME": str(home), "USERPROFILE": str(home), "PATH": os.defpath, "PYTHONPATH": str(INTEGRATION)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == ExitCode.UNSUPPORTED, result.stderr
+    assert "UNSUPPORTED:" in result.stderr
+    assert "Windows/AMD64" in result.stderr
+    assert "nothing changed" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert tree(home) == before
+
+
 def test_preflight_accepts_tested_platforms(tmp_path: Path) -> None:
     """Supported platforms with every tool present return absolute tool paths."""
     tool = tmp_path / "tool"
@@ -593,12 +659,26 @@ def test_preflight_accepts_tested_platforms(tmp_path: Path) -> None:
         preflight("Linux", "aarch64", lambda name: str(tool), wsl=False)
 
 
-def make_tarball(path: Path, manifest: dict[str, Any]) -> Path:
+def core_manifest() -> dict[str, Any]:
+    """Return the consumed fields of the shipped coding-agent package.json.
+
+    Returns:
+        dict[str, Any]: valid core metadata before a test mutates one field.
+    """
+    return {
+        "name": "@earendil-works/pi-coding-agent",
+        "version": "1.3.0",
+        "bin": {"pi": "dist/bundle/cli.js"},
+        "engines": {"node": ">=22.19.0"},
+    }
+
+
+def make_tarball(path: Path, manifest: object) -> Path:
     """Write a release-shaped tarball with one `package/package.json`.
 
     Parameters:
         path (Path): tarball path.
-        manifest (dict[str, Any]): manifest.
+        manifest (object): JSON document, including deliberately malformed test values.
 
     Returns:
         Path: `path`.
@@ -613,9 +693,46 @@ def make_tarball(path: Path, manifest: dict[str, Any]) -> Path:
 
 def test_required_node_reads_core_engines(tmp_path: Path) -> None:
     """The minimum Node.js comes from the verified core manifest; other range forms are refused."""
-    assert required_node(make_tarball(tmp_path / "a.tgz", {"engines": {"node": ">=22.19.0"}})) == (22, 19, 0)
+    assert required_node(make_tarball(tmp_path / "a.tgz", core_manifest())) == (22, 19, 0)
     with pytest.raises(VerificationError, match=r"engines\.node"):
-        required_node(make_tarball(tmp_path / "b.tgz", {"engines": {"node": "^22"}}))
+        required_node(make_tarball(tmp_path / "b.tgz", core_manifest() | {"engines": {"node": "^22"}}))
+
+
+@pytest.mark.parametrize("field", ["manifest", "name", "version", "engines", "engines.node", "bin", "bin.pi"])
+@pytest.mark.parametrize("value", [[], "", 1, None, {}, False])
+def test_malformed_verified_core_manifest_is_verification_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    field: str,
+    value: object,
+) -> None:
+    """Digest verification does not excuse bad metadata: every consumed shape fails cleanly with exit 3."""
+    manifest: Any = core_manifest()
+    if field == "manifest":
+        manifest = value
+    elif "." in field:
+        parent, key = field.split(".")
+        manifest[parent][key] = value
+    else:
+        manifest[field] = value
+    tarball = make_tarball(tmp_path / "core.tgz", manifest)
+    url = "https://example.invalid/core.tgz"
+    digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
+    before = tree(tmp_path)
+
+    def verify_metadata(opts: Options, env: object, ask: object) -> ExitCode:
+        """Exercise the real digest and manifest readers through the CLI outcome boundary."""
+        install.verify_asset(tarball, url, {url: digest})
+        required_node(tarball)
+        return ExitCode.OK
+
+    monkeypatch.setattr(install, "run", verify_metadata)
+    assert install.main([SHA]) == ExitCode.VERIFICATION
+    assert "VERIFICATION FAILED, nothing changed" in caplog.text
+    assert "package.json" in caplog.text
+    assert "Traceback" not in caplog.text
+    assert tree(tmp_path) == before
 
 
 def test_old_node_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -623,9 +740,7 @@ def test_old_node_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     snapshot = real_snapshot()
     workdir = tmp_path
     (workdir / "core").mkdir()
-    make_tarball(
-        workdir / "core" / "earendil-works-pi-coding-agent-1.3.0.tgz", {"engines": {"node": ">=22.19.0"}}
-    )
+    make_tarball(workdir / "core" / "earendil-works-pi-coding-agent-1.3.0.tgz", core_manifest())
     monkeypatch.setattr(install, "validate_release_identity", lambda stack, tag, checksums: None)
     monkeypatch.setattr(install, "release_checksums", lambda tag: {})
     monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
@@ -858,7 +973,7 @@ def test_verify_release_binds_staged_core_to_the_snapshot(
     (tmp_path / "work" / "core").mkdir(parents=True)
     make_tarball(
         tmp_path / "work" / "core" / "earendil-works-pi-coding-agent-1.3.0.tgz",
-        {"engines": {"node": ">=22.19.0"}},
+        core_manifest(),
     )
     recorded = {
         release_asset_url(tag, name): digest for name, digest in snapshot.stack.core.integrity.items()
@@ -1553,6 +1668,38 @@ def run_child(tmp_path: Path, timeout: float = 60) -> subprocess.CompletedProces
         timeout=timeout,
         check=False,
     )
+
+
+def test_real_stdin_eof_declines_without_traceback(tmp_path: Path) -> None:
+    """The real builtin input sees EOF on stdin and the entry point exits 4 without live changes."""
+    special_home(tmp_path)
+    before = tree(tmp_path)
+    script = SPECIAL_CHILD.replace(
+        "sys.exit(install.main(sys.argv[2:]))",
+        "sys.stdin.isatty = lambda: True\nsys.exit(install.main(sys.argv[2:]))",
+    )
+    home = tmp_path / "home"
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(FIXTURE), SHA],
+        env={
+            "HOME": str(home),
+            "PATH": os.environ["PATH"],
+            "PYTHONPATH": str(INTEGRATION),
+            "PI_CODING_AGENT_DIR": str(home / ".pi" / "agent"),
+            "XDG_DATA_HOME": str(tmp_path / "data"),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == ExitCode.CONSENT, result.stderr
+    assert "NOT APPLIED:" in result.stderr
+    assert "nothing changed" in result.stderr
+    assert "EOFError" not in result.stderr
+    assert "Traceback" not in result.stderr
+    assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == before
 
 
 def test_journal_is_private_before_any_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

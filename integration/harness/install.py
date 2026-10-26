@@ -26,7 +26,6 @@ References:
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import logging
 import os
@@ -47,6 +46,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError
 from urllib.request import urlopen
+
+# Native Windows has no fcntl: let platform/lock admission refuse it without an import traceback.
+try:
+    import fcntl
+except ModuleNotFoundError:
+    fcntl = None
 
 from harness.files import NonRegularFileError, entry_kind
 from harness.files import read_regular as read_regular_file
@@ -371,7 +376,7 @@ def required_node(tarball: Path) -> tuple[int, int, int]:
         tuple[int, int, int]: minimum major, minor, patch.
 
     Raises:
-        VerificationError: the manifest is missing or declares an unsupported range form.
+        VerificationError: the manifest has malformed consumed fields or an unsupported Node range.
     """
     try:
         with tarfile.open(tarball) as archive:
@@ -379,10 +384,27 @@ def required_node(tarball: Path) -> tuple[int, int, int]:
             manifest = json.loads(member.read()) if member is not None else {}
     except (OSError, KeyError, tarfile.TarError, ValueError) as error:
         raise VerificationError(f"Could not read the core manifest from '{tarball.name}': {error}") from error
-    engine = manifest.get("engines", {}).get("node", "")
-    match = NODE_ENGINE.fullmatch(engine)
+    label = f"Core `package.json` from '{tarball.name}'"
+    if not isinstance(manifest, dict):
+        raise VerificationError(f"{label} must be an object")
+    if manifest.get("name") != "@earendil-works/pi-coding-agent":
+        raise VerificationError(f"{label} must name '@earendil-works/pi-coding-agent' in `name`")
+    version = manifest.get("version")
+    if not isinstance(version, str) or SEMVER.fullmatch(version) is None:
+        raise VerificationError(f"{label} must declare a numeric major.minor.patch string in `version`")
+    binaries = manifest.get("bin")
+    if not isinstance(binaries, dict):
+        raise VerificationError(f"{label} must declare a `bin` object mapping `pi` to its CLI path")
+    binary = binaries.get("pi")
+    if not isinstance(binary, str) or not binary.strip():
+        raise VerificationError(f"{label} must declare a nonempty CLI path string in `bin.pi`")
+    engines = manifest.get("engines")
+    if not isinstance(engines, dict):
+        raise VerificationError(f"{label} must declare an `engines` object with a `node` range")
+    engine = engines.get("node")
+    match = NODE_ENGINE.fullmatch(engine) if isinstance(engine, str) else None
     if match is None:
-        raise VerificationError(f"Core declares an unsupported `engines.node` range: '{engine}'")
+        raise VerificationError(f"{label} must declare a supported `engines.node` range, e.g. '>=22.19.0'")
     major, minor, patch = (int(part) for part in match.group(1).split("."))
     return major, minor, patch
 
@@ -921,10 +943,11 @@ def consent(plan: Plan, assume_yes: bool, ask: Callable[[str], str] | None) -> N
         return
     if ask is None:
         raise ConsentError("The plan overwrites existing state; rerun with `--yes` to agree, nothing changed")
-    if ask("Apply these changes? Existing state is backed up first. [y/N] ").strip().lower() not in {
-        "y",
-        "yes",
-    }:
+    try:
+        answer = ask("Apply these changes? Existing state is backed up first. [y/N] ")
+    except EOFError as error:
+        raise ConsentError("Declined (end of input), nothing changed") from error
+    if answer.strip().lower() not in {"y", "yes"}:
         raise ConsentError("Declined, nothing changed")
 
 
@@ -1581,6 +1604,11 @@ def locked(layout: Layout) -> Iterator[None]:
         InstallError: another installer holds the lock.
         UnsupportedError: the lock is not an owned regular file, or is writable by others.
     """
+    if fcntl is None:
+        raise UnsupportedError(
+            f"platform '{platform.system()}/{platform.machine()}' is not supported: "
+            "Unix file locking is unavailable, nothing changed"
+        )
     layout.root.mkdir(parents=True, exist_ok=True)
     path = layout.root / "lock"
     kind = entry_kind(path)
