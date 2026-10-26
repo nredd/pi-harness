@@ -130,8 +130,8 @@ async function run(command, commandArgs) {
 	});
 }
 
-const GROUP_TERM_GRACE_MS = 800;
-const GROUP_KILL_WAIT_MS = 500;
+export const GROUP_TERM_GRACE_MS = 800;
+export const GROUP_KILL_WAIT_MS = 500;
 
 function processGroupAlive(pgid) {
 	try {
@@ -170,10 +170,12 @@ export async function runCancellable(command, commandArgs) {
 	await new Promise((resolve, reject) => {
 		const child = spawn(command, commandArgs, { stdio: "inherit", detached: true });
 		let reaping;
-		const reap = () => (reaping ??= reapProcessGroup(child.pid));
+		let reaped = false;
+		const reap = () => (reaping ??= reapProcessGroup(child.pid).finally(() => { reaped = true; }));
 		const signals = ["SIGTERM", "SIGINT", "SIGHUP"];
 		// Last resort if we are exiting some other way: never leave the group running.
-		const onExit = () => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ } };
+		// Once reaped the group is empty and its id may be reused, so it must never be signalled again.
+		const onExit = () => { if (reaped) return; try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ } };
 		const onTerminate = (signal) => {
 			// Repeated signals while reaping must not fall through to the default action.
 			void reap().finally(() => process.exit(128 + (os.constants.signals[signal] ?? 15)));
@@ -187,7 +189,7 @@ export async function runCancellable(command, commandArgs) {
 		child.on("error", (error) => {
 			cleanup();
 			reject(error.code === "ENOENT"
-				? new Error(`'${command}' was not found on PATH. Install the Rust toolchain (https://rustup.rs) and a C linker (e.g. build-essential), or install a package that ships prebuilt/linux/<arch>/linux-bridge.`)
+				? new Error(`'${command}' was not found on PATH. Install the Rust toolchain (https://rustup.rs) and a C linker (e.g. build-essential).`)
 				: error);
 		});
 		child.on("close", (code, signal) => {

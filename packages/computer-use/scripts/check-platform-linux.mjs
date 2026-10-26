@@ -83,14 +83,15 @@ setTimeout(() => fs.chmodSync(process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH, 0o7
 	const lines = async (file) => (await fs.readFile(file, "utf8").catch(() => "")).split("\n").filter(Boolean);
 	let caseIndex = 0;
 	/** A fake helper; `startFile` records each start, `protocol`/`architecture` model a stale build. */
-	const helperScript = ({ protocol = 4, architecture = 1, startFile }) => `#!/usr/bin/env node
+	const helperScript = ({ protocol = 4, architecture = 1, startFile, diagnosticsDelayMs = 0 }) => `#!/usr/bin/env node
 const fs = require("node:fs");
 const readline = require("node:readline");
-fs.appendFileSync(${JSON.stringify(startFile)}, "start\\n");
+fs.appendFileSync(${JSON.stringify(startFile)}, process.pid + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   const result = request.cmd === "diagnostics" ? { protocolVersion: ${protocol}, architectureVersion: ${architecture}, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
-  process.stdout.write(JSON.stringify({ protocolVersion: ${protocol}, id: request.id, ok: true, result }) + "\\n");
+  const reply = () => process.stdout.write(JSON.stringify({ protocolVersion: ${protocol}, id: request.id, ok: true, result }) + "\\n");
+  if (request.cmd === "diagnostics" && ${diagnosticsDelayMs} > 0) setTimeout(reply, ${diagnosticsDelayMs}); else reply();
 });
 `;
 	/** Fresh case dir: helper path, counters and a setup script that installs `goodHelper` (or fails). */
@@ -161,6 +162,53 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		await assert.rejects(client.command("echo", {}), /installed at .* failed validation: Linux helper protocol mismatch: expected 4, got 3\./);
 		assert.equal((await lines(c.setupCount)).length, 1, "no recursive or repeated setup within one attempt");
 		client.dispose();
+	}
+	const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+	const settled = async (pid, timeoutMs = 2000) => {
+		for (const deadline = Date.now() + timeoutMs; alive(pid) && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 20));
+		return !alive(pid);
+	};
+
+	{ // Replacing the helper kills the old child (no leak, no interleaved stdout) before the new one starts.
+		const c = await makeCase();
+		await fs.copyFile(c.good, c.helper); await fs.chmod(c.helper, 0o755);
+		const client = c.client();
+		await client.command("echo", {});
+		const [oldPid] = (await lines(c.starts)).map(Number);
+		await fs.rm(c.helper);
+		assert.equal((await client.command("echo", { again: 1 })).again, 1);
+		assert.equal((await lines(c.setupCount)).length, 1, "missing helper runs setup");
+		assert.equal((await lines(c.starts)).length, 2, "old child plus its replacement");
+		assert.equal(await settled(oldPid), true, `replaced helper ${oldPid} leaked`);
+		client.dispose();
+	}
+
+	{ // A stale helper's rejection says nothing about restarting Pi: setup is about to replace it.
+		const c = await makeCase({ installs: false });
+		await fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: c.starts })); await fs.chmod(c.helper, 0o755);
+		await assert.rejects(c.client().command("echo", {}), (error) => {
+			assert.doesNotMatch(error.message, /Restart Pi/);
+			assert.match(error.message, /was rejected: Linux helper protocol mismatch: expected 4, got 3\./);
+			return true;
+		});
+	}
+
+	{ // dispose() mid-probe aborts the install: helper not classified as broken, no setup, no second start.
+		const c = await makeCase();
+		await fs.writeFile(c.helper, helperScript({ startFile: c.starts, diagnosticsDelayMs: 5000 })); await fs.chmod(c.helper, 0o755);
+		const client = c.client();
+		const command = client.command("echo", {});
+		const outcome = command.then(() => "resolved", (error) => error.message);
+		for (const deadline = Date.now() + 5000; (await lines(c.starts)).length === 0 && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 20));
+		assert.equal((await lines(c.starts)).length, 1, "probe started the helper");
+		const [pid] = (await lines(c.starts)).map(Number);
+		client.dispose();
+		assert.match(await outcome, /closed because the Pi session ended/);
+		await new Promise((r) => setTimeout(r, 300));
+		assert.equal((await lines(c.setupCount)).length, 0, "dispose must not trigger setup");
+		assert.equal((await lines(c.starts)).length, 1, "dispose must not start a second helper");
+		assert.equal(client.child, undefined, "no child assigned after dispose");
+		assert.equal(await settled(pid), true, "probe child killed by dispose");
 	}
 	delete process.env.PI_TEST_LINUX_INSTALL_COUNT;
 	delete process.env.PI_TEST_LINUX_START_COUNT;

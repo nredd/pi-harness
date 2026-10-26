@@ -101,6 +101,11 @@ if (process.platform !== "win32") {
 	const setupUrl = pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href;
 	const wrapper = path.join(groupDir, "wrapper.mjs");
 	await fs.writeFile(wrapper, `import { runCancellable } from ${JSON.stringify(setupUrl)};\nawait runCancellable("sh", [process.argv[2]]);\nconsole.log("wrapper-ok");\n`);
+	const { GROUP_TERM_GRACE_MS, GROUP_KILL_WAIT_MS } = await import(setupUrl);
+	// The reap budget must fit the caller's 2s SIGKILL backstop (`SETUP_KILL_GRACE_MS` in helper.ts), by construction.
+	const reapBudgetMs = GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
+	assert.ok(reapBudgetMs < 2000, `reap budget ${reapBudgetMs}ms no longer fits the 2s outer backstop`);
+	const CI_HEADROOM_MS = 1500; // process spawn and scheduler jitter on loaded runners
 	const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; } };
 	const settled = async (pid, timeoutMs) => {
 		for (const deadline = Date.now() + timeoutMs; alive(pid) && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 20));
@@ -129,8 +134,9 @@ if (process.platform !== "win32") {
 			if (terminate) { assert.ok(alive(descendant), `${name}: descendant must be running before SIGTERM`); child.kill("SIGTERM"); }
 			const result = await closed;
 			const elapsed = Date.now() - started;
-			// Wrapper cleanup must finish inside the caller's 2s SIGKILL backstop, and exit codes stay as before.
-			assert.ok(elapsed < 2000, `${name}: wrapper took ${elapsed}ms, past the 2s outer backstop`);
+			// The TERM-ignoring descendant forces escalation: not before the TERM grace, and bounded by the reap budget.
+			assert.ok(elapsed >= GROUP_TERM_GRACE_MS - 250, `${name}: wrapper returned after ${elapsed}ms, before the ${GROUP_TERM_GRACE_MS}ms TERM grace (no SIGKILL escalation?)`);
+			assert.ok(elapsed < reapBudgetMs + CI_HEADROOM_MS, `${name}: wrapper took ${elapsed}ms, past the ${reapBudgetMs}ms reap budget`);
 			if (terminate) assert.equal(result.code, 143, `${name}: ${JSON.stringify(result)} ${output}`);
 			else assert.equal(result.code, 0, `${name}: ${output}`);
 			assert.equal(await settled(descendant, 300), true, `${name}: TERM-ignoring descendant ${descendant} survived the wrapper (orphaned compiler)`);
