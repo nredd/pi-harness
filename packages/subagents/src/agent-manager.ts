@@ -30,7 +30,7 @@ import { getAgentConfig } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { ModelCallEvent } from "./model-call.js";
-import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel } from "./model-resolver.js";
+import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback } from "./model-resolver.js";
 import {
   assertWithinBudgetDepth,
   BUDGET_QUEUE_FULL_ERROR,
@@ -309,6 +309,12 @@ interface SpawnOptions {
    */
   reclaim?: { handle: string; alias?: string };
   model?: Model<any>;
+  /**
+   * Set by a caller that resolved a configured model itself and fell back to the
+   * parent (passing the parent as `model`). Without it the spawn path cannot tell
+   * that from an explicit pick. Stored on the record, where every surface reads it.
+   */
+  modelFallback?: ModelFallback;
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
@@ -684,6 +690,7 @@ export class AgentManager {
       // `options` has stopped being the interesting object.
       blocking: options.blocking,
       invocation: options.invocation,
+      modelFallback: options.modelFallback,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,
@@ -1081,6 +1088,9 @@ export class AgentManager {
         depth: record.depth ?? 1,
         maxSubagentDepth: record.maxSubagentDepth,
       },
+      // The runner's own fallback (no model passed, definition `model:` unresolved).
+      // A caller-reported fallback is already on the record and wins.
+      onModelFallback: (fallback) => { record.modelFallback ??= fallback; },
       onSessionCreated: (session) => {
         record.session = session;
         // Capture now, while the session object exists: after eviction this

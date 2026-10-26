@@ -88,17 +88,30 @@ export function describeModel(
 }
 
 /**
- * The disclosure for a CONFIG model (`agentModels` or an agent's `model:`) that
- * did not resolve: the spawn still runs on the parent model, but the caller is
- * told which input failed and what actually ran. Same `Note:` prefix as the
- * unknown-agent-type fallback note.
+ * A CONFIG model (`agentModels`, an agent's `model:`, a stored job's model) that
+ * did not resolve, so the spawn ran on the parent model instead. Recorded once on
+ * the `AgentRecord` by the shared spawn path; every surface reads it from there.
  */
-export function unresolvedConfigModelNote(
-  modelInput: string,
-  parent: { provider: string; id: string } | undefined,
-): string {
-  const used = parent ? `parent model ${parent.provider}/${parent.id}` : "the session default model";
-  return `Note: configured model "${modelInput}" did not resolve; running on ${used}.`;
+export interface ModelFallback {
+  /** The configured input that failed to resolve. */
+  input: string;
+  /** `provider/id` of the parent model actually used; absent when the parent has none. */
+  used?: string;
+}
+
+/** The fallback outcome for `input` when the spawn ran on `parent`. */
+export function modelFallbackTo(input: string, parent: { provider: string; id: string } | undefined): ModelFallback {
+  return parent ? { input, used: `${parent.provider}/${parent.id}` } : { input };
+}
+
+/**
+ * The disclosure line for a fallback: same `Note:` prefix as the unknown-agent-type
+ * note. Empty string when there was none, so callers can concatenate it blindly.
+ */
+export function modelFallbackNote(fallback: ModelFallback | undefined): string {
+  if (!fallback) return "";
+  const used = fallback.used ? `parent model ${fallback.used}` : "the session default model";
+  return `Note: configured model "${fallback.input}" did not resolve; running on ${used}.`;
 }
 
 /** API id pi gives virtual catalog entries such as `router/default`; they never reach a provider. */

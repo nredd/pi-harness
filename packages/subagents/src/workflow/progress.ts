@@ -93,6 +93,8 @@ export interface WorkflowAgentEntry {
    * it.
    */
   requestedThinking?: string;
+  /** `Note:` line set when the child ran on the parent model because its configured one did not resolve. */
+  modelNote?: string;
   fallbackModel?: string;
   isolation?: "worktree";
   error?: string;
