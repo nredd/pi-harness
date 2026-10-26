@@ -40,6 +40,18 @@ The installer never reads, copies or writes credentials or personal state. After
 
 `auth.json`, `models.json`, sessions, memory and every other file in the agent directory are never touched. Machine-specific configuration (dotfiles, enterprise overlays) stays out of the snapshot by design.
 
+## Threat model
+
+The installer defends against accidental layouts (symlinked or foreign backup stores), partial installs
+and interrupted runs, and fails loudly on refused layouts or recovery failures. It does NOT defend
+against a concurrent same-user process renaming or replacing directories under the install roots
+mid-run; that user can already edit the installer's own files. Only backup-store operations are
+descriptor-anchored (the store and per-run directory). Known unanchored paths are live-target parents
+for `rollback()`, `agent_dir` between `Journal.record()` and `Journal.save()`, `bin_dir`, `root/core`,
+the journal/state parent, and each `write_atomic()` parent. A crash between `record()` and `save()`
+can leave a journal naming a missing backup: recovery reports it loudly, retains the journal and
+requires manual cleanup, not automatic recovery. Track ancestor anchoring [here](https://github.com/nredd/pi-harness/issues/157).
+
 ## Verification, before any change
 
 1. Platform and prerequisites, all reported at once.
