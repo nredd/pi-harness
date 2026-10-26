@@ -239,12 +239,19 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		assert.match(await waiter, /closed because the Pi session ended|aborted/);
 	}
 
-	{ // Session shutdown replaces the shared client so the next session gets a live one.
-		const { linuxHelper: before, resetLinuxHelper } = await import("../src/platform/linux/helper.ts");
-		resetLinuxHelper();
-		const { linuxHelper: after } = await import("../src/platform/linux/helper.ts");
-		assert.notEqual(after, before);
-		await assert.rejects(before.ensureInstalled(), /closed because the Pi session ended/);
+	{ // Session shutdown, through the real backend: the old client is disposed and the next session's first command works.
+		const helperModule = await import("../src/platform/linux/helper.ts");
+		const before = helperModule.linuxHelper;
+		assert.equal((await linux.listApps())[0]?.appName, "google-chrome-stable", "first session command");
+		assert.ok(before.child, "the session's helper is live before shutdown");
+		await linux.shutdown?.();
+		const after = helperModule.linuxHelper;
+		assert.notEqual(after, before, "shutdown must install a replacement client");
+		assert.equal(before.child, undefined, "old client's helper killed by shutdown");
+		await assert.rejects(before.command("listRoots", {}), /closed because the Pi session ended/, "old client is disposed");
+		assert.equal((await linux.listApps())[0]?.appName, "google-chrome-stable", "next session's first backend command works via the replacement");
+		assert.ok(after.child, "the replacement client started its own helper");
+		await linux.shutdown?.();
 	}
 	delete process.env.PI_TEST_LINUX_INSTALL_COUNT;
 	delete process.env.PI_TEST_LINUX_START_COUNT;
