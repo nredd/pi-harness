@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Score snapshots expired by up to `STALE_GRACE_MS` (15 min) as measured, flagged `stale`, instead of fallback; fixes balanced routing favouring `chain[0]` when a new child's first route races the background refresh. No network read added before routing
+- Record each scored routing decision (candidates, scores, limiting window, data age, chosen model) as a `router:decision` session entry and list the last five in `/router status`
+
 ## 0.4.1
 
 - Document conditional normalized-quota fairness guarantees and deterministic counterexamples without changing routing policy

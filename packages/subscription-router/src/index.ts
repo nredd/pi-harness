@@ -27,7 +27,7 @@ import {
 import { ExhaustionTracker } from "./exhaustion.js";
 import { refKey } from "./model-ref.js";
 import { SettleRecovery } from "./recovery.js";
-import { type RouteEnv, Router } from "./router.js";
+import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.js";
 import { formatScore } from "./selection.js";
 import { COLLECTED_PROVIDERS, UsageService } from "./usage.js";
 
@@ -35,6 +35,10 @@ const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
 const RPC_ADMIT = "router:rpc:admit";
 const RPC_USAGE = "router:rpc:usage";
 const PROMPT_SECTION = "subscription_usage";
+/** Custom session entry type carrying one `RouteDecision`. */
+const DECISION_ENTRY = "router:decision";
+/** Decisions kept in memory for `/router status`; the session entries are the full record. */
+const RECENT_DECISIONS = 5;
 
 /** The usage cache surface consumed by the extension, including routing decisions. */
 export type RouterUsage = Pick<UsageService, "get" | "peek" | "decisionFor" | "format" | "formatForPrompt">;
@@ -117,7 +121,16 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		const { usage, tracker } = options
 			? { usage: options.usage, tracker: options.tracker ?? new ExhaustionTracker(now) }
 			: shared();
-		const router = new Router(usage, tracker, now);
+		const recent: RouteDecision[] = [];
+		const record = (decision: RouteDecision): void => {
+			recent.push(decision);
+			if (recent.length > RECENT_DECISIONS) recent.shift();
+			// Logging must never fail a route.
+			try {
+				pi.appendEntry(DECISION_ENTRY, decision);
+			} catch {}
+		};
+		const router = new Router(usage, tracker, now, record);
 		const recovery = new SettleRecovery(router);
 		const config = options?.config ?? (await loadConfig(getAgentDir()));
 		const profiles = config.ok ? config.profiles : [];
@@ -232,6 +245,9 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 							lines.push(`  ${refKey(candidate.entry)}: ${formatScore(candidate.score)}`);
 					}
 					for (const block of picked.blocked) lines.push(`  ${refKey(block.entry)}: ${block.reason}`);
+				}
+				if (recent.length > 0) {
+					lines.push("last decisions (newest last):", ...recent.map(formatDecision));
 				}
 				ctx.ui.notify(lines.join("\n"), "info");
 			},

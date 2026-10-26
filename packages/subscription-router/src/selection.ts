@@ -6,18 +6,32 @@ import { modelMatchesFamily, type UsageSnapshot } from "./usage.js";
 /** A score is diagnostic only: it never blocks quota or refreshes usage. */
 export type QuotaScore =
 	| { kind: "unlimited" }
-	| { kind: "measured"; score: number; window: string; roundoff?: number }
+	| { kind: "measured"; score: number; window: string; roundoff?: number; stale?: number }
 	| { kind: "fallback"; reason: string };
 
 type MeasuredScore = Extract<QuotaScore, { kind: "measured" }>;
 
-/** Rank applicable fresh windows by the tightest remaining quota per time left. */
+/**
+ * How long past `retrievedAt` a snapshot that has outlived its cache TTL still
+ * counts as measured data (15 min, three TTLs). Usage only drifts slowly, and
+ * routing never reads the network, so a just-expired read is a far better
+ * signal than "unknown". Without this a new child whose first route races the
+ * background refresh always saw its peers as fallback and picked chain[0].
+ * Reduced trust means: marked `stale` in the score and decision log, and never
+ * unlimited. It is not discounted numerically, which would re-bias the ranking.
+ */
+export const STALE_GRACE_MS = 15 * 60_000;
+
+/** Rank applicable windows by the tightest remaining quota per time left; fresh, or stale within `STALE_GRACE_MS`. */
 export function scoreQuota(model: ModelRef, snapshot: UsageSnapshot | undefined, now: number): QuotaScore {
 	if (!snapshot) return { kind: "fallback", reason: "usage missing" };
-	if (snapshot.status !== "available" || snapshot.expiresAt <= now) {
-		return { kind: "fallback", reason: `usage ${snapshot.status === "available" ? "stale" : snapshot.status}` };
+	if (snapshot.status !== "available" && snapshot.status !== "stale") {
+		return { kind: "fallback", reason: `usage ${snapshot.status}` };
 	}
-	if (snapshot.credits?.unlimited) return { kind: "unlimited" };
+	const age = Math.max(0, now - snapshot.retrievedAt);
+	const expired = snapshot.status === "stale" || snapshot.expiresAt <= now;
+	if (expired && age > STALE_GRACE_MS) return { kind: "fallback", reason: "usage stale" };
+	if (!expired && snapshot.credits?.unlimited) return { kind: "unlimited" };
 	let limiting: MeasuredScore | undefined;
 	for (const window of snapshot.windows) {
 		if (window.scope === "model" && !window.families?.some((family) => modelMatchesFamily(model.id, family))) continue;
@@ -37,7 +51,8 @@ export function scoreQuota(model: ModelRef, snapshot: UsageSnapshot | undefined,
 		if (!limiting || score < limiting.score)
 			limiting = { kind: "measured", score, window: window.name, roundoff: (Number.EPSILON * 4) / timeLeft };
 	}
-	return limiting ?? { kind: "fallback", reason: "no applicable active windows" };
+	if (!limiting) return { kind: "fallback", reason: "no applicable active windows" };
+	return expired ? { ...limiting, stale: age } : limiting;
 }
 
 /** Strict ordering: unlimited, measured, fallback; equal values retain chain order. */
@@ -89,5 +104,6 @@ export function selectCandidate(
 export function formatScore(score: QuotaScore): string {
 	if (score.kind === "fallback") return `fallback: ${score.reason}`;
 	if (score.kind === "unlimited") return "unlimited";
-	return `score ${score.score.toFixed(3)}, limiting ${score.window}`;
+	const stale = score.stale === undefined ? "" : `, stale ${Math.floor(score.stale / 60_000)}m`;
+	return `score ${score.score.toFixed(3)}, limiting ${score.window}${stale}`;
 }

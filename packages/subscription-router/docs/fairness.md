@@ -1,14 +1,16 @@
 # Quota fairness contract
 
-This specifies the existing policy, not a new scheduler. No defaults, configuration,
-provider calls or routing behavior change. Fairness means balancing **normalized quota
+This specifies the existing policy, not a new scheduler. No defaults, configuration or
+provider calls change; the stale-data grace window and decision log below are the only
+routing-visible additions. Fairness means balancing **normalized quota
 headroom per window, adjusted for reset pace**, not equal requests, tokens, dollars,
 latency or local session usage. Provider percentages are account-wide observations:
 other Pi sessions, other clients and outside use contribute to them.
 
 ## Actual policy
 
-[`selection.ts`](../src/selection.ts) scores only fresh available snapshots. For each
+[`selection.ts`](../src/selection.ts) scores fresh available snapshots, and recently
+expired ones at reduced trust (see "Stale grace" below). For each
 applicable active finite window `w`:
 
 ```text
@@ -20,9 +22,36 @@ s_model = min_w s_w
 
 Negative/nonfinite utilization and passed finite resets are ignored. Missing or invalid
 timing gives `f_w = 1`. Model-scoped windows count only for matching families. A fresh
-unlimited snapshot ranks above every measured score; absent, expired, error, unavailable
-or inapplicable data is fallback, below every measured score. Chain order breaks ties.
+unlimited snapshot ranks above every measured score; absent, error, unavailable,
+inapplicable or long-expired data is fallback, below every measured score. Chain order breaks ties.
 A positive credit balance alone is not unlimited.
+
+### Stale grace
+
+A snapshot older than the 5 minute cache TTL is `stale`. Background refresh
+(`warm()`) is never awaited and routing never reads the network, so a fresh child's
+first route can run on expired data. Treating that as fallback ranked every
+just-expired provider below any fresh measured one, i.e. it always favoured whichever
+chain entry happened to have fresh data (usually `chain[0]`).
+
+Now a stale or TTL-expired snapshot whose `retrievedAt` is at most `STALE_GRACE_MS`
+(15 minutes, `selection.ts`) old scores as measured, normally, with `stale: <age>`
+attached to the score. Reduced trust is structural, not numeric: it is flagged in
+`/router status` and the decision log, it is never unlimited (unlimited requires fresh
+data), and failed reads (`error`/`unavailable`) are still fallback. No discount is
+applied because any factor would re-introduce a fixed bias for or against a provider.
+Past the grace window the snapshot is fallback again. Exhaustion blocking is unchanged
+(`UsageService.decisionFor`). Note the G1-G4 proofs assume fresh telemetry; stale
+scores are older observations of the same account-wide percentages.
+
+### Decision log
+
+Each scored pick (not sticky continuations or same-model retries) appends a
+`router:decision` custom session entry (`RouteDecision` in `router.ts`): time, profile,
+strategy, reason, chosen `provider/id`, every candidate's score (kind, score, limiting
+window, `stale` age) with snapshot age, and ineligible entries with reasons. `/router
+status` prints the last five of this process. The entries are the durable record for
+proving why a pick happened.
 
 [`Router.pick`](../src/router.ts) first filters unresolved models, missing credentials,
 tracker blocks and cached exhausted applicable windows. Scores never deny admission.
@@ -50,7 +79,8 @@ These statements deliberately distinguish selection-time guarantees from account
 models. The deterministic simulator calls the real `Router.route`, `Router.pick`,
 `ExhaustionTracker` and `UsageService.decisionFor`; quota observations, clock and
 physical resolution are fixtures. `CachedUsage.peek` is also substituted: it returns
-mutable snapshots without production `peek`'s expiry-to-stale conversion. These tests
+mutable snapshots without production `peek`'s expiry-to-stale conversion (the scorer
+itself handles both forms). These tests
 therefore exercise real dispatch/eligibility and scoring, not the production cache
 lifecycle; usage tests cover that lifecycle separately. The reset test refreshes only
 snapshot expiry to isolate passed-window scoring. No second routing algorithm is used.

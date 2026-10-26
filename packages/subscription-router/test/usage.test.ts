@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { STALE_GRACE_MS, scoreQuota } from "../src/selection.js";
 import { modelMatchesFamily, UsageService, type UsageTransport } from "../src/usage.js";
 
 const T0 = 1_700_000_000_000;
@@ -70,6 +71,17 @@ describe("UsageService", () => {
 		const snapshot = await service.get(ctx, "anthropic");
 		expect(snapshot.windows).toEqual([expect.objectContaining({ name: "five_hour", usedPercent: 100 })]);
 		expect(service.decisionFor(SONNET).block).toBe(true);
+	});
+
+	it("peek keeps retrievedAt so a recently expired read still scores as measured", async () => {
+		const { service, clock } = harness([{ body: { seven_day: { utilization: 10, resets_at: FUTURE_RESET } } }]);
+		await service.get(ctx, "anthropic");
+		clock.now = T0 + 6 * MINUTE;
+		const stale = service.peek("anthropic");
+		expect(stale).toMatchObject({ status: "stale", retrievedAt: T0 });
+		expect(scoreQuota(SONNET, stale, clock.now)).toMatchObject({ kind: "measured", stale: 6 * MINUTE });
+		clock.now = T0 + STALE_GRACE_MS + MINUTE;
+		expect(scoreQuota(SONNET, service.peek("anthropic"), clock.now).kind).toBe("fallback");
 	});
 
 	it("keeps blocking on stale data while a known reset is still ahead", async () => {

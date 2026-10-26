@@ -36,6 +36,7 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 		registerTool: vi.fn(),
 		registerCommand: vi.fn(),
 		registerVirtualModel: vi.fn(),
+		appendEntry: vi.fn(),
 	} as unknown as ExtensionAPI;
 	await subscriptionRouter(pi);
 	if (startSession) {
@@ -54,14 +55,53 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 		if (!registration) throw new Error("router command not registered");
 		await registration[1].handler(action, ctx);
 	};
-	return { rpc, fetch, usage, status, advance: (ms: number) => (now += ms), fail: () => (fail = true) };
+	return { pi, rpc, fetch, usage, status, advance: (ms: number) => (now += ms), fail: () => (fail = true) };
 }
 
 afterEach(() => {
+	vi.useRealTimers();
 	delete host[SHARED_KEY];
 });
 
 describe("router usage RPC", () => {
+	it("persists each routing decision as a session entry and lists the last ones in status", async () => {
+		vi.useFakeTimers({ now: 1_700_000_000_000 });
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			strategy: "balanced",
+			chain: [
+				{ provider: "anthropic", id: "sonnet" },
+				{ provider: "openai-codex", id: "terra" },
+			],
+		};
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		await h.status(ctx);
+		expect(notify.mock.calls[0]?.[0]).not.toContain("last decisions");
+		await h.usage.get(ctx, "anthropic");
+		await h.usage.get(ctx, "openai-codex");
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const route = await registration?.route({ reason: "user", thinkingLevel: "off" } as never, ctx);
+		const chosen = `${route?.model.provider}/${route?.model.id}`;
+		expect(h.pi.appendEntry).toHaveBeenCalledWith(
+			"router:decision",
+			expect.objectContaining({ profile: "default", chosen, reason: "user" }),
+		);
+		await h.status(ctx);
+		const text = notify.mock.calls[1]?.[0];
+		expect(text).toContain("last decisions");
+		expect(text).toContain(`router/default user -> ${chosen}`);
+		expect(text).toContain("anthropic/sonnet: score");
+		expect(text).toContain("data 0m old");
+		vi.useRealTimers();
+	});
+
 	it("forecasts status from cached-only shared selection and shows scores/fallbacks", async () => {
 		vi.useFakeTimers({ now: 1_700_000_000_000 });
 		try {

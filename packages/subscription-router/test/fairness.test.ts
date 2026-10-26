@@ -1,5 +1,6 @@
 /** Conditional fairness properties and constructive exclusions, against actual Router dispatch. */
 import { describe, expect, it } from "vitest";
+import { STALE_GRACE_MS } from "../src/selection.js";
 import { FairnessSimulation } from "./fairness-simulator.js";
 
 describe("normalized quota fairness (not request equality)", () => {
@@ -124,6 +125,7 @@ describe("limits of fairness", () => {
 		for (let i = 0; i < 32; i++) await sim.step({ fresh: false, incumbent: false });
 		expect(sim.debits).toEqual([32, 0]);
 		first.status = "stale";
+		first.retrievedAt -= STALE_GRACE_MS + 1;
 		expect(await sim.step({ fresh: false })).toBe(1);
 		sim.usage.snapshots.delete("quota-1");
 		expect(await sim.step({ fresh: false })).toBe(1); // all-fallback incumbent
