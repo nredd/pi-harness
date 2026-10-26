@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A background agent no longer dies with "This extension ctx is stale" after the parent reloads or replaces its session ([#145](https://github.com/nredd/pi-harness/issues/145)).** Two causes. The manager's usage and compaction observers close over the spawning activation's `pi`, and pi records a throw from a session listener as the child's turn failure, so the first message after a reload ended a detached child with an empty error turn; observers are now isolated from the run. A virtual model (`router/*`) also routes through the parent's invalidated runner during a reload; a step lost that way is re-prompted up to three times with backoff. A run that still cannot recover now fails with an "interrupted by a session reload" error and its last tool calls and output as the result, instead of "No output".
+
 ## [0.22.0-nredd.7] - 2026-10-23
 
 ### Added

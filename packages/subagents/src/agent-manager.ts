@@ -490,6 +490,21 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
   try { session?.dispose?.(); } catch { /* ignore */ }
 }
 
+/**
+ * Wrap an observer the child's own agent loop calls (usage, compaction) so a
+ * throw cannot reach that loop. pi records a throw from a session listener as
+ * the turn's failure, so an observer closed over a replaced session's `pi`
+ * ("This extension ctx is stale ...") used to end a detached child with an
+ * empty error turn and "No output" (#145). The observation is dropped; the run
+ * is not.
+ */
+function guardObserver<A extends unknown[]>(observer: ((...args: A) => void) | undefined): ((...args: A) => void) | undefined {
+  if (!observer) return undefined;
+  return (...args: A) => {
+    try { observer(...args); } catch { /* observers never fail the run */ }
+  };
+}
+
 export class AgentManager {
   private agents = new Map<string, AgentRecord>();
   private cleanupInterval: TimerHandle;
@@ -564,8 +579,8 @@ export class AgentManager {
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
-    this.onCompact = onCompact;
-    this.onUsage = onUsage;
+    this.onCompact = guardObserver(onCompact);
+    this.onUsage = guardObserver(onUsage);
     this.onSteered = onSteered;
     this.maxConcurrent = maxConcurrent;
     // Sweep finished records past their retention window (see cleanup()).

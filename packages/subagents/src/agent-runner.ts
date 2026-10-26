@@ -801,6 +801,96 @@ function finalTurnError(session: AgentSession, startIndex = 0): string | undefin
   return undefined;
 }
 
+/**
+ * pi invalidates an extension runner on reload and on session replacement
+ * (/new, /fork, /resume). A child shares its parent's model runtime, and a
+ * virtual model (`router/*`) routes through a closure over the PARENT's runner,
+ * so a child step that routes while that runner is invalidated dies with this
+ * message and zero usage (#145). Matched on the stable prefix.
+ */
+const STALE_CTX_RE = /extension ctx is stale after session replacement or reload/i;
+
+/** Waits before each re-prompt of a step lost to a stale ctx: a reload re-registers within seconds. */
+const STALE_CTX_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000, 9_000];
+
+/** Sent when the session's last step died on a stale ctx; the transcript already holds the work so far. */
+const STALE_CTX_RETRY_PROMPT = "Your previous step was interrupted by a session reload before it produced output. Continue the task from where you left off.";
+
+/** Longest tool output echoed into a partial result. */
+const PARTIAL_TOOL_OUTPUT_CHARS = 1_500;
+
+/**
+ * Resolve after `ms`, or as soon as `signal` aborts. Never rejects.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/**
+ * Re-prompt a session whose final step died on a stale extension ctx, backing
+ * off between attempts so a reload in progress can re-register its routes.
+ * Returns once the final step no longer fails that way, retries are spent, or
+ * `signal` aborts. A permanently dead runtime (the parent session was replaced)
+ * exhausts the retries and is reported by `staleCtxFailure`.
+ */
+export async function retryStaleCtx(
+  session: AgentSession,
+  startIndex: number,
+  signal: AbortSignal | undefined,
+  delays: readonly number[] = STALE_CTX_RETRY_DELAYS_MS,
+): Promise<void> {
+  for (const delay of delays) {
+    if (signal?.aborted || !STALE_CTX_RE.test(finalTurnError(session, startIndex) ?? "")) return;
+    await sleep(delay, signal);
+    if (signal?.aborted) return;
+    await session.prompt(STALE_CTX_RETRY_PROMPT);
+  }
+}
+
+/**
+ * What a run that died on a stale ctx had done: the last tool calls with the
+ * last tool output, so the parent can see side effects (a pushed branch, an
+ * opened PR) instead of "No output". Empty when the run did nothing.
+ */
+function partialProgress(session: AgentSession, startIndex: number): string {
+  const calls: string[] = [];
+  let lastOutput = "";
+  for (let i = session.messages.length - 1; i >= startIndex && calls.length < 5; i--) {
+    const msg = session.messages[i];
+    if (msg.role === "toolResult" && !lastOutput) lastOutput = extractText(msg.content).trim();
+    if (msg.role === "assistant") {
+      for (const part of [...msg.content].reverse()) {
+        if (part.type === "toolCall" && calls.length < 5) calls.unshift(part.name);
+      }
+    }
+  }
+  if (calls.length === 0) return "";
+  const clipped = lastOutput.length > PARTIAL_TOOL_OUTPUT_CHARS ? `${lastOutput.slice(0, PARTIAL_TOOL_OUTPUT_CHARS)}...` : lastOutput;
+  return `Last tool calls: ${calls.join(", ")}.${clipped ? `\nLast tool output:\n${clipped}` : ""}`;
+}
+
+/**
+ * The failure and partial result for a run whose final step is still a stale
+ * ctx after retries; undefined for any other outcome.
+ */
+export function staleCtxOutcome(session: AgentSession, startIndex: number): { failure: string; partial: string } | undefined {
+  const error = finalTurnError(session, startIndex);
+  if (error === undefined || !STALE_CTX_RE.test(error)) return undefined;
+  return {
+    failure: "interrupted by a session reload or replacement; the agent's model runtime went stale and retries did not recover it",
+    partial: partialProgress(session, startIndex),
+  };
+}
+
 /** The per-run callbacks a spawn and a resume share, plus the resolved turn limit. */
 type RunObserverOptions = Pick<RunOptions, "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction"> & {
   /** Already resolved: undefined = unlimited. */
@@ -1417,6 +1507,7 @@ export async function runAgent(
     // pi's `session.abort()` is a no-op until a run is active — so a child whose
     // parent is already gone is not prompted at all.
     if (options.signal?.aborted !== true) await session.prompt(effectivePrompt);
+    await retryStaleCtx(session, startLen, options.signal);
 
     // A cap fired. The wrap-up steer is only a request: a model deep in a tool
     // loop keeps calling tools through the grace turns and is then aborted
@@ -1446,7 +1537,8 @@ export async function runAgent(
     cleanupAbort();
   }
 
-  const responseText = collector.getText().trim() || getLastAssistantText(session, startLen);
+  const stale = staleCtxOutcome(session, startLen);
+  const responseText = collector.getText().trim() || getLastAssistantText(session, startLen) || stale?.partial || "";
   // A child asked for structured output that never gave any has failed, however
   // articulate its prose was. Reported through `failure` so it travels the same
   // path as a provider error rather than arriving as a successful empty answer.
@@ -1460,7 +1552,7 @@ export async function runAgent(
     session,
     aborted: run.aborted,
     steered: run.steered,
-    failure: finalTurnError(session, startLen) ?? structuredFailure,
+    failure: stale?.failure ?? finalTurnError(session, startLen) ?? structuredFailure,
     ...(structuredCapture?.json !== undefined ? { structuredJson: structuredCapture.json } : {}),
     ...(structuredRetried ? { structuredRetried } : {}),
   };
@@ -1491,6 +1583,7 @@ export async function resumeAgent(
   try {
     // Already aborted: not prompted, as in `runAgent`.
     if (options.signal?.aborted !== true) await session.prompt(prompt);
+    await retryStaleCtx(session, startLen, options.signal);
     if (run.steered && options.signal?.aborted !== true && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       if (await forceFinalReport(session, startLen, options.signal)) run.aborted = false;
@@ -1501,9 +1594,10 @@ export async function resumeAgent(
     cleanupAbort();
   }
 
+  const stale = staleCtxOutcome(session, startLen);
   return {
-    text: collector.getText().trim() || getLastAssistantText(session, startLen),
-    failure: finalTurnError(session, startLen),
+    text: collector.getText().trim() || getLastAssistantText(session, startLen) || stale?.partial || "",
+    failure: stale?.failure ?? finalTurnError(session, startLen),
     aborted: run.aborted,
     steered: run.steered,
   };
