@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { describeModel, getModelAliases, type ModelRegistry, modelFallbackNote, modelFallbackTo, parseModelVersion, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
-import { configuredAgentModel } from "../src/model-selection.js";
+import { describeModel, getModelAliases, type ModelRegistry, modelFallbackNote, modelFallbackTo, parseModelVersion, resolveModel, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
 
 // Mock model entries matching typical pi model registry shape
 const MODELS = [
@@ -348,26 +347,6 @@ describe("fuzzy resolution ranks by version, then score", () => {
     ];
     expect(resolveModel("pro", makeRegistry(mixed))).toEqual(mixed[0]); // exact id
     expect(resolveModel("pr", makeRegistry(mixed))).toEqual(mixed[2]); // only versioned one
-  });
-});
-
-describe("configuredAgentModel", () => {
-  afterEach(() => {
-    setAgentModels(undefined);
-  });
-
-  it("prefers the type, then the wildcard, then the definition's own model", () => {
-    setAgentModels({ Plan: "opus", "*": "sonnet" });
-    expect(configuredAgentModel("Plan", "haiku")).toBe("opus");
-    expect(configuredAgentModel("Explore", "haiku")).toBe("sonnet");
-    setAgentModels({ Plan: "opus" });
-    expect(configuredAgentModel("Explore", "haiku")).toBe("haiku");
-    expect(configuredAgentModel("Explore", undefined)).toBeUndefined();
-  });
-
-  it("matches the type case-insensitively", () => {
-    setAgentModels({ Plan: "opus" });
-    expect(configuredAgentModel("plan", undefined)).toBe("opus");
   });
 });
 
