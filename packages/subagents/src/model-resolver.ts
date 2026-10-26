@@ -97,8 +97,8 @@ export interface ModelFallback {
   input: string;
   /** `provider/id` of the model actually used; absent when the session default (a parent with no model) ran. */
   used?: string;
-  /** Whose model `used` is: the parent's (default) or the agent definition's, which took over from an unresolved stored model. */
-  via?: "parent" | "definition";
+  /** Whose model `used` is: the parent's (default) or the agent's own configured model (`agentModels` / definition `model:`), which took over from an unresolved stored model. */
+  via?: "parent" | "agent";
 }
 
 /** The fallback outcome for `input` when the spawn ran on `parent`. */
@@ -112,9 +112,29 @@ export function modelFallbackTo(input: string, parent: { provider: string; id: s
  */
 export function modelFallbackNote(fallback: ModelFallback | undefined): string {
   if (!fallback) return "";
-  const whose = fallback.via === "definition" ? "agent definition model" : "parent model";
+  const whose = fallback.via === "agent" ? "the agent's own model" : "parent model";
   const used = fallback.used ? `${whose} ${fallback.used}` : "the session default model";
   return `Note: configured model "${fallback.input}" did not resolve; running on ${used}.`;
+}
+
+/**
+ * The model a spawn that named none runs on: `agentModels[type]`, then
+ * `agentModels["*"]`, then the definition's `model:` (see `configuredAgentModel`),
+ * resolved with the same `resolveModel` the `Agent` tool uses, else the parent.
+ * `fallback` is set when a configured input did not resolve. The one selection
+ * step for every spawn path that has no tool-call model (runner, scheduler).
+ */
+export function selectConfiguredModel(
+  type: string,
+  definitionModel: string | undefined,
+  parent: { provider: string; id: string } | undefined,
+  registry: ModelRegistry,
+): { model: any; fallback?: ModelFallback } {
+  const input = configuredAgentModel(type, definitionModel);
+  if (input === undefined) return { model: parent };
+  const resolved = resolveModel(input, registry);
+  if (typeof resolved === "string") return { model: parent, fallback: modelFallbackTo(input, parent) };
+  return { model: resolved };
 }
 
 /** The short form of {@link modelFallbackNote} for one-line surfaces (widget, fleet, row). */

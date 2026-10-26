@@ -10,7 +10,7 @@
  * notice and `get_subagent_result`, nested Agent, resume (both directions),
  * cross-extension RPC and a direct @mention. Scheduler fire and the workflow host
  * are in config-model-fallback-spawn.test.ts. All run the real `resolveModel` and
- * the real `resolveDefaultModelOutcome`; only the session itself is stubbed.
+ * the real `selectConfiguredModel`; only the session itself is stubbed.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -232,8 +232,8 @@ describe("config model that does not resolve", () => {
     });
   });
 
-  it("cross-extension RPC: the real event-bus spawn handler's agent reports the fallback on the completion event, record and get_subagent_result", async () => {
-    writeAgent("scout", "claude-haiku-4-5");
+  /** Boot with a real in-process event bus, so RPC goes through the extension's own handler. */
+  async function bootWithBus(models: unknown[] = [PARENT]) {
     const handlers = new Map<string, Array<(data: unknown) => void>>();
     const bus = {
       on: (event: string, handler: (data: unknown) => void) => {
@@ -246,18 +246,27 @@ describe("config model that does not resolve", () => {
     ({ tools, pi, lifecycle } = booted);
     pi.events = bus;
     subagentsExtension(pi);
-    const sessionCtx = ctx([PARENT]);
+    const sessionCtx = ctx(models);
     await startSession(lifecycle, true, { model: sessionCtx.model, modelRegistry: sessionCtx.modelRegistry });
+    return bus;
+  }
 
+  /** Spawn over `subagents:rpc:spawn` and resolve with the reply id and the completion event. */
+  async function rpcSpawn(bus: { on: (e: string, h: (d: any) => void) => unknown; emit: (e: string, d: unknown) => void }, options: Record<string, unknown> = {}) {
     const completed = new Promise<any>((resolve) => bus.on("subagents:completed", resolve));
     const reply = new Promise<any>((resolve) => bus.on("subagents:rpc:spawn:reply:r1", resolve));
-    bus.emit("subagents:rpc:spawn", {
-      requestId: "r1", type: "scout", prompt: "go",
-      // A forged disclosure must not survive the RPC boundary.
-      options: { description: "rpc", modelFallback: { input: "forged", used: "nowhere/none" } },
-    });
+    bus.emit("subagents:rpc:spawn", { requestId: "r1", type: "scout", prompt: "go", options: { description: "rpc", ...options } });
     const id = (await reply).data.id;
-    const event = await completed;
+    return { id, event: await completed };
+  }
+
+  const recordOf = (id: string) => (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id);
+
+  it("cross-extension RPC: the real event-bus spawn handler's agent reports the fallback on the completion event, record and get_subagent_result", async () => {
+    writeAgent("scout", "claude-haiku-4-5");
+    const bus = await bootWithBus();
+
+    const { id, event } = await rpcSpawn(bus, { modelFallback: { input: "forged", used: "nowhere/none" } });
 
     expect(event.id).toBe(id);
     expect(event.modelNote).toBe(NOTE);
@@ -265,6 +274,49 @@ describe("config model that does not resolve", () => {
     const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: id }, undefined, undefined, ctx([PARENT]));
     expect(textOf(fetched)).toContain(NOTE);
     expect(textOf(fetched)).not.toContain("forged");
+  });
+
+  it("cross-extension RPC: a caller-supplied modelFallback is stripped, so it cannot forge provenance", async () => {
+    writeAgent("scout", "anthropic/claude-sonnet-5-5");
+    const bus = await bootWithBus();
+
+    const { id, event } = await rpcSpawn(bus, { modelFallback: { input: "forged", used: "nowhere/none" } });
+
+    expect(recordOf(id).modelFallback).toBeUndefined();
+    expect(event.modelFallback).toBeUndefined();
+    expect(event.modelNote).toBeUndefined();
+  });
+
+  it("cross-extension RPC: an unavailable agentModels override is honored and disclosed, even over a resolving definition model", async () => {
+    writeAgent("scout", "anthropic/claude-sonnet-5-5");
+    const bus = await bootWithBus();
+    setAgentModels({ scout: "claude-haiku-4-5" });
+
+    const { id, event } = await rpcSpawn(bus);
+
+    expect(event.modelNote).toBe(NOTE);
+    expect(recordOf(id).modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
+  });
+
+  it("cross-extension RPC: an available agentModels override is the model that runs", async () => {
+    writeAgent("scout");
+    const bus = await bootWithBus([PARENT, HAIKU]);
+    setAgentModels({ scout: "anthropic/claude-haiku-5-5" });
+
+    const { id, event } = await rpcSpawn(bus);
+
+    expect(event.modelNote).toBeUndefined();
+    expect(recordOf(id).invocation.modelId).toBe("anthropic/claude-haiku-5-5");
+  });
+
+  it("persists the fallback on the subagents:record entry history readers use", async () => {
+    writeAgent("scout", "claude-haiku-4-5");
+    const bus = await bootWithBus();
+
+    const { id } = await rpcSpawn(bus);
+
+    const entry = pi.appendEntry.mock.calls.find((c: any[]) => c[0] === "subagents:record" && c[1].id === id);
+    expect(entry?.[1].modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
   });
 
   it("@mention: an agent started by mention reports the definition model's fallback", async () => {
@@ -280,6 +332,21 @@ describe("config model that does not resolve", () => {
     await flush();
 
     expect(handled).toEqual({ action: "handled" });
+    const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: "scout" }, undefined, undefined, ctx([PARENT]));
+    expect(textOf(fetched)).toContain(NOTE);
+  });
+
+  it("@mention: an unavailable agentModels override is honored and disclosed over the definition model", async () => {
+    writeAgent("scout", "anthropic/claude-sonnet-5-5");
+    mkdirSync(join(cwd, "agent-dir"), { recursive: true });
+    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ agentMentions: "direct" }));
+    await boot();
+    setAgentModels({ scout: "claude-haiku-4-5" });
+    vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }) as any);
+
+    await lifecycle.get("input")({ type: "input", text: "@scout look around", source: "interactive" }, { ...ctx([PARENT]), mode: "tui" });
+    await flush();
+
     const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: "scout" }, undefined, undefined, ctx([PARENT]));
     expect(textOf(fetched)).toContain(NOTE);
   });
