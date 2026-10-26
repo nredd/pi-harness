@@ -64,7 +64,7 @@ Stock Pi compatibility is `make check-package-contracts`' job, not the unit gate
 Development (Node with npm workspaces, `uv`, Git, macOS or Linux; the benchmark is macOS-only):
 
 ```sh
-make install               # npm ci --ignore-scripts; uv sync --locked (integration, benchmark)
+make install               # verify root core overrides (stdlib python3), then npm ci --ignore-scripts; uv sync --locked
 make check                 # owned-code gates, see below
 make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, see docs/package-contracts.md
 make check-todo-package-contract # explicit: packed todo tool through stock Pi 1.3.0
