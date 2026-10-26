@@ -280,7 +280,11 @@ export interface AgentRecord {
    * as is, never recomputes it from the resuming call's config.
    */
   modelFallback?: ModelFallback;
-  /** Original selection outcome, retained across resumes and physical relabelling. */
+  /**
+   * This record's selection, retained across live resumes and physical relabelling.
+   * An evicted-session reopen selects anew; modelFallback separately retains the
+   * original conversation's disclosure even when the new selection resolves.
+   */
   modelSelection?: ModelSelection;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
