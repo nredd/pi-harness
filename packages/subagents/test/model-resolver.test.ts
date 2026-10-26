@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { configuredAgentModel, describeModel, getModelAliases, type ModelRegistry, modelFallbackNote, modelFallbackTo, parseModelVersion, resolveModel, selectConfiguredModel, setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
+import { describeModel, getModelAliases, type ModelRegistry, modelFallbackNote, modelFallbackTo, parseModelVersion, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
+import { configuredAgentModel } from "../src/model-selection.js";
 
 // Mock model entries matching typical pi model registry shape
 const MODELS = [
@@ -387,38 +388,5 @@ describe("modelFallbackNote", () => {
 
   it("is empty when there was no fallback", () => {
     expect(modelFallbackNote(undefined)).toBe("");
-  });
-});
-
-describe("selectConfiguredModel", () => {
-  const parent = { provider: "anthropic", id: "parent-model" };
-  afterEach(() => setAgentModels(undefined));
-
-  it("returns the parent, with no fallback, when nothing is configured", () => {
-    expect(selectConfiguredModel("Plan", undefined, parent, makeRegistry())).toEqual({ model: parent });
-    expect(selectConfiguredModel("Plan", undefined, undefined, makeRegistry())).toEqual({ model: undefined });
-  });
-
-  it("applies agentModels[type] > agentModels['*'] > the definition model", () => {
-    setAgentModels({ Plan: "opus", "*": "sonnet" });
-    expect(selectConfiguredModel("Plan", "haiku", parent, makeRegistry()).model.id).toBe("claude-opus-4-6");
-    expect(selectConfiguredModel("Other", "haiku", parent, makeRegistry()).model.id).toBe("claude-sonnet-4-6");
-    setAgentModels(undefined);
-    expect(selectConfiguredModel("Plan", "haiku", parent, makeRegistry()).model.id).toBe("claude-haiku-4-5-20251001");
-  });
-
-  it("falls back to the parent and names the failed input when it does not resolve", () => {
-    setAgentModels({ Plan: "ghost-model" });
-    expect(selectConfiguredModel("Plan", "haiku", parent, makeRegistry())).toEqual({
-      model: parent,
-      fallback: { input: "ghost-model", used: "anthropic/parent-model" },
-    });
-  });
-
-  it("treats a model outside the available set as unresolved", () => {
-    const registry = makeRegistry(MODELS, [MODELS[3]]);
-    const outcome = selectConfiguredModel("Plan", "anthropic/claude-haiku-4-5-20251001", parent, registry);
-    expect(outcome.model).toBe(parent);
-    expect(outcome.fallback?.input).toBe("anthropic/claude-haiku-4-5-20251001");
   });
 });

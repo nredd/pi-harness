@@ -36,8 +36,8 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../agent-manager.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
-import { configuredAgentModel, type ModelFallback, modelFallbackNote, modelFallbackTo, resolveModel } from "../model-resolver.js";
-import { checkModelScope } from "../model-scope.js";
+import { modelFallbackNote } from "../model-resolver.js";
+import { selectModel } from "../model-selection.js";
 import type { AgentRecord, ThinkingLevel } from "../types.js";
 import { getLifetimeTotal } from "../usage.js";
 import type { WorkflowGateResult, WorkflowHost, WorkflowSpawnResult } from "./runtime.js";
@@ -205,47 +205,16 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       const dispatch = resolveSpawnType(request.agentType);
       if (!dispatch.ok) return { ok: false, error: dispatch.message };
 
-      // Same precedence as the Agent tool: the caller's model wins, then the
-      // `agentModels` setting, the agent definition's is next, and the parent's
-      // is the floor. A model the script
-      // named and we cannot resolve is an error; one the definition named falls
-      // back to the parent, recorded on the child so the row says so.
-      let model = ctx.model;
-      let modelFallback: ModelFallback | undefined;
       const config = getAgentConfig(dispatch.type);
-      const modelInput = request.model ?? configuredAgentModel(dispatch.type, config?.model);
-      if (modelInput !== undefined) {
-        const resolved = resolveModel(modelInput, ctx.modelRegistry);
-        if (typeof resolved === "string") {
-          if (request.model !== undefined) return { ok: false, error: resolved };
-          modelFallback = modelFallbackTo(modelInput, ctx.model);
-        } else {
-          model = resolved;
-        }
-      }
-
-      // Same scopeModels policy as the Agent tool and the nested delegation
-      // tools: a script's `agent({ model })` is a runtime LLM choice, and the
-      // script is written by the model, so it must not reach a model the user's
-      // enabledModels list excludes. `callerSupplied` keys off `request.model`
-      // and NOT `modelInput` — the latter has already absorbed the agent file's
-      // own `model:`, which is user-authored config and so earns the
-      // warn-and-proceed branch rather than a refusal.
-      const scopeVerdict = checkModelScope({
-        model,
-        cwd: ctx.cwd,
-        modelRegistry: ctx.modelRegistry,
-        callerSupplied: request.model !== undefined,
-        agentLabel: config?.displayName ?? dispatch.type,
-        modelInput,
+      const selection = selectModel({
+        agentType: dispatch.type, definitionModel: config?.model, paramModel: request.model,
+        parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: config?.displayName,
       });
-      // This agent's failure, not the run's — the same shape a bad agent type
-      // takes above. The script sees `null` and its siblings carry on, which is
-      // the difference between one refused model and a discarded fan-out.
-      if (scopeVerdict.kind === "error") return { ok: false, error: scopeVerdict.message };
-      if (scopeVerdict.kind === "warn" && !warnedScopeMessages.has(scopeVerdict.message)) {
-        warnedScopeMessages.add(scopeVerdict.message);
-        ctx.ui.notify(scopeVerdict.message, "warning");
+      if (typeof selection === "string") return { ok: false, error: selection };
+      const model = selection.model;
+      if (selection.scopeWarning && !warnedScopeMessages.has(selection.scopeWarning)) {
+        warnedScopeMessages.add(selection.scopeWarning);
+        ctx.ui.notify(selection.scopeWarning, "warning");
       }
 
       /**
@@ -309,6 +278,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
           request.prompt,
           {
             description: request.label,
+            modelSelection: selection,
             // Same as the Agent tool: `isolated` comes off the agent definition.
             // Left out, a hermetic agent's script-spawned children loaded every
             // host extension and picked up its MCP and web tools.
@@ -321,7 +291,6 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
             // never queued behind it.
             ...(deps.workflowId !== undefined ? { workflowId: deps.workflowId } : {}),
             ...(model !== undefined ? { model } : {}),
-            ...(modelFallback !== undefined ? { modelFallback } : {}),
             // Validated worker-side against the same list pi accepts, so the
             // cast asserts what the boundary has already checked. Left unset,
             // the agent definition's `thinking` (then the parent's) still wins —

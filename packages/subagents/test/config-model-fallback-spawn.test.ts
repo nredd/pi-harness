@@ -26,7 +26,7 @@ vi.mock("../src/worktree.js", () => ({
 import { AgentManager } from "../src/agent-manager.js";
 import { runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
-import { modelFallbackNote, setAgentModels } from "../src/model-resolver.js";
+import { setAgentModels } from "../src/model-resolver.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
 import type { AgentConfig } from "../src/types.js";
@@ -90,16 +90,18 @@ describe("scheduler at fire time", () => {
       name: "job", description: "job", schedule: new Date(Date.now() + 50).toISOString(),
       subagent_type: "scout", prompt: "go", ...(model ? { model } : {}),
     });
-    await vi.waitFor(() => expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    await vi.waitFor(() => expect(scheduler.list()[0]?.lastStatus).toMatch(/success|error/), { timeout: 2000 });
     return manager.listAgents()[0]!;
   }
 
-  it("a job whose stored model no longer resolves says so, naming the parent it ran on", async () => {
+  it("refuses a job whose explicit stored model no longer resolves", async () => {
     registerAgents(new Map([agent("scout")]));
 
     const record = await fire("claude-haiku-4-5");
 
-    expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5", via: "parent" });
+    expect(record).toBeUndefined();
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(scheduler.list()[0].lastStatus).toBe("error");
   });
 
   it("a job on an agent whose definition `model:` does not resolve says so, from the runner", async () => {
@@ -110,20 +112,14 @@ describe("scheduler at fire time", () => {
     expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
   });
 
-  it("a stored model that does not resolve is still disclosed when the definition's own model took over", async () => {
-    // Selection is unchanged (the definition's model runs), but the failed stored
-    // input is named, along with what actually ran.
+  it("does not replace an unresolved explicit job model with the definition's model", async () => {
     registerAgents(new Map([agent("scout", "anthropic/claude-sonnet-5-5")]));
 
     const record = await fire("claude-haiku-4-5");
 
-    expect(record.modelFallback).toEqual({
-      input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5", via: "agent",
-    });
-    expect(modelFallbackNote(record.modelFallback)).toBe(
-      'Note: configured model "claude-haiku-4-5" did not resolve; running on the agent\'s own model anthropic/claude-sonnet-5-5.',
-    );
-    expect(vi.mocked(runAgent).mock.calls[0]?.[3].model).toBeUndefined();
+    expect(record).toBeUndefined();
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(scheduler.list()[0].lastStatus).toBe("error");
   });
 });
 
