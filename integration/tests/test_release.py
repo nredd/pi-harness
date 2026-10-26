@@ -12,10 +12,12 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -663,12 +665,40 @@ def write_root(root: Path, tag: str = NEW_TAG, contents: bytes = NEW_BYTES) -> d
     return urls
 
 
-def rewrite(path: Path, edit: Any) -> None:
+Edit = Callable[[dict[str, Any]], object]
+
+
+def merge_at(*path: str, values: dict[str, Any]) -> Edit:
+    """Build a fixture edit that merges `values` into the JSON object at `path`.
+
+    Parameters:
+        *path (str): keys leading from the document root to the object to extend.
+        values (dict[str, Any]): entries to add or replace.
+
+    Returns:
+        Edit: callable mutating a parsed document in place.
+    """
+
+    def edit(document: dict[str, Any]) -> None:
+        """Merge entries into the targeted fixture object.
+
+        Parameters:
+            document (dict[str, Any]): parsed fixture to mutate.
+        """
+        target = document
+        for key in path:
+            target = target[key]
+        target |= values
+
+    return edit
+
+
+def rewrite(path: Path, edit: Edit) -> None:
     """Apply an in-place edit to a JSON fixture.
 
     Parameters:
         path (Path): JSON file.
-        edit (Any): callable mutating the parsed document.
+        edit (Edit): callable mutating the parsed document.
     """
     document = json.loads(path.read_text())
     edit(document)
@@ -726,8 +756,10 @@ def test_root_override_gate_rejects_resolved_url_mismatch_before_any_download(
     monkeypatch.setattr(release, "urlopen", forbidden)
     rewrite(
         root / "package-lock.json",
-        lambda doc: doc["packages"]["node_modules/@earendil-works/pi-ai"].update(
-            resolved="https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.3.0.tgz"
+        merge_at(
+            "packages",
+            "node_modules/@earendil-works/pi-ai",
+            values={"resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.3.0.tgz"},
         ),
     )
     with pytest.raises(ValueError, match=r"`resolved` for '@earendil-works/pi-ai'"):
@@ -743,11 +775,11 @@ def test_root_override_gate_rejects_missing_or_weak_lock_metadata(
     root, _ = new_release
     lock = root / "package-lock.json"
     key = "node_modules/@earendil-works/pi-tui"
-    edits = {
+    edits: dict[str, Edit] = {
         "missing_entry": lambda doc: doc["packages"].pop(key),
         "no_packages": lambda doc: doc.pop("packages"),
         "no_integrity": lambda doc: doc["packages"][key].pop("integrity"),
-        "weak_integrity": lambda doc: doc["packages"][key].update(integrity="sha1-AAAA"),
+        "weak_integrity": merge_at("packages", key, values={"integrity": "sha1-AAAA"}),
     }
     rewrite(lock, edits[breakage])
     with pytest.raises(ValueError, match=r"packages|integrity"):
@@ -761,7 +793,7 @@ def test_root_override_gate_rejects_sha512_mismatch_with_matching_sha256(
     root, _ = new_release
     rewrite(
         root / "package-lock.json",
-        lambda doc: doc["packages"]["node_modules/@earendil-works/pi-ai"].update(integrity=sri(b"other")),
+        merge_at("packages", "node_modules/@earendil-works/pi-ai", values={"integrity": sri(b"other")}),
     )
     with pytest.raises(ValueError, match=r"integrity` mismatch for '@earendil-works/pi-ai'"):
         verify_root_overrides(root)
@@ -831,22 +863,26 @@ def test_root_override_gate_rejects_unexpected_override_shapes(
     """No extra, blanket, foreign or mismatched override and no nested lock copy is tolerated."""
     root, _ = new_release
     url = release.release_package_urls(NEW_TAG)["pi-tui"]
-    edits = {
-        "extra": lambda doc: doc["overrides"].update({"@earendil-works/pi-mcp": url}),
+    edits: dict[str, Edit] = {
+        "extra": merge_at("overrides", values={"@earendil-works/pi-mcp": url}),
         "missing": lambda doc: doc["overrides"].pop("@earendil-works/pi-tui"),
-        "blanket": lambda doc: doc["overrides"].update({"@earendil-works/pi-tui": {".": url}}),
-        "foreign_url": lambda doc: doc["overrides"].update(
-            {"@earendil-works/pi-tui": "https://example.com/pi-tui.tgz"}
+        "blanket": merge_at("overrides", values={"@earendil-works/pi-tui": {".": url}}),
+        "foreign_url": merge_at(
+            "overrides", values={"@earendil-works/pi-tui": "https://example.com/pi-tui.tgz"}
         ),
-        "wrong_asset": lambda doc: doc["overrides"].update(
-            {"@earendil-works/pi-tui": release.release_package_urls(NEW_TAG)["pi-ai"]}
+        "wrong_asset": merge_at(
+            "overrides",
+            values={"@earendil-works/pi-tui": release.release_package_urls(NEW_TAG)["pi-ai"]},
         ),
     }
     if breakage == "nested":
         rewrite(
             root / "package-lock.json",
-            lambda doc: doc["packages"].update(
-                {"node_modules/x/node_modules/@earendil-works/pi-tui": {"resolved": "https://e/x.tgz"}}
+            merge_at(
+                "packages",
+                values={
+                    "node_modules/x/node_modules/@earendil-works/pi-tui": {"resolved": "https://e/x.tgz"}
+                },
             ),
         )
         match = "Nested lock entries"
@@ -866,7 +902,7 @@ def test_root_override_gate_runs_before_install_and_blocks_it(tmp_path: Path) ->
     write_root(root, "v1.3.0-nredd.6")
     rewrite(
         root / "package-lock.json",
-        lambda doc: doc["packages"]["node_modules/@earendil-works/pi-ai"].update(resolved="https://e/x.tgz"),
+        merge_at("packages", "node_modules/@earendil-works/pi-ai", values={"resolved": "https://e/x.tgz"}),
     )
     commands, marker = tmp_path / "commands", tmp_path / "ran"
     commands.mkdir()
@@ -880,6 +916,33 @@ def test_root_override_gate_runs_before_install_and_blocks_it(tmp_path: Path) ->
     assert completed.returncode != 0
     assert "Root core override verification failed" in completed.stderr
     assert not marker.exists()
+
+
+def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Path) -> None:
+    """Only the preflight sees `GH_TOKEN`; `npm ci` and `uv sync` run without it."""
+    root = tmp_path / "root"
+    root.mkdir()
+    shutil.copy(Path(__file__).resolve().parents[2] / "Makefile", root / "Makefile")
+    (root / "integration").symlink_to(Path(__file__).resolve().parents[1])
+    (root / "benchmarks" / "comparison").mkdir(parents=True)
+    commands, log = tmp_path / "commands", tmp_path / "seen"
+    commands.mkdir()
+    for tool in ("python3", "npm", "uv"):
+        (commands / tool).write_text(
+            f'#!/bin/sh\necho "{tool}=${{GH_TOKEN:-unset}}" >> {shlex.quote(str(log))}\n'
+        )
+        (commands / tool).chmod(0o755)
+    env = os.environ | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}", "GH_TOKEN": "fixture-token"}
+    completed = subprocess.run(
+        ["make", "install"], cwd=root, env=env, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert log.read_text().splitlines() == [
+        "python3=fixture-token",
+        "npm=unset",
+        "uv=unset",
+        "uv=unset",
+    ]
 
 
 def test_cli_verify_flag_reports_failure_and_rejects_prefix(
