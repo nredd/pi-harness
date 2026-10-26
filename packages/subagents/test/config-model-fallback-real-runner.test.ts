@@ -1,11 +1,11 @@
 /**
  * config-model-fallback-real-runner.test.ts -- the REAL `runAgent` (real pi
- * session construction, faux provider, real `selectConfiguredModel`, real
+ * session construction, faux provider, real `selectModel`, real
  * manager) for spawns that name no model: cross-extension RPC, a direct
  * @mention, and a scheduled job without a stored model. An UNAVAILABLE
  * `agentModels` override must be honored and disclosed on each, even over a
  * definition `model:` that resolves. Nothing here replaces model selection, so
- * reverting `runAgent` to definition-only selection fails every test.
+ * bypassing the shared selector's configured precedence fails these tests.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -152,7 +152,7 @@ describe("real runAgent honors and discloses an unavailable agentModels override
       rmSync(tmp, { recursive: true, force: true });
     });
 
-    async function fire(model?: string) {
+    async function fire(model?: string, refused = false) {
       registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
       const pi = { events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) }, exec: async () => ({ code: 1, stdout: "", stderr: "" }) } as any;
       scheduler.start(pi, ctxFor(faux.getModel()), mgr, new ScheduleStore(join(tmp, "s.json")));
@@ -160,6 +160,10 @@ describe("real runAgent honors and discloses an unavailable agentModels override
         name: "job", description: "job", schedule: new Date(Date.now() + 50).toISOString(),
         subagent_type: "scout", prompt: "go", ...(model ? { model } : {}),
       });
+      if (refused) {
+        await vi.waitFor(() => expect(scheduler.list()[0].lastStatus).toBe("error"), { timeout: 3000 });
+        return undefined;
+      }
       await vi.waitFor(() => expect(mgr.listAgents()).toHaveLength(1), { timeout: 3000 });
       const record = mgr.listAgents()[0]!;
       await vi.waitFor(() => expect(record.modelFallback).toBeDefined(), { timeout: 5000 });
@@ -172,17 +176,18 @@ describe("real runAgent honors and discloses an unavailable agentModels override
 
       const record = await fire();
 
-      expect(modelFallbackNote(record.modelFallback)).toBe(NOTE());
+      expect(modelFallbackNote(record!.modelFallback)).toBe(NOTE());
     });
 
-    it("discloses BOTH failures when the stored model and the override are unavailable", async () => {
+    it("refuses the explicit stored input rather than trying a failing override after it", async () => {
       writeScout(parentRef());
       setAgentModels({ scout: "claude-haiku-4-5" });
 
-      const record = await fire("claude-opus-4-6");
+      const record = await fire("claude-opus-4-6", true);
 
-      expect(modelFallbackNote(record.modelFallback)).toBe(note('models "claude-opus-4-6", "claude-haiku-4-5" did'));
-      expect(record.modelFallback?.also).toEqual(["claude-haiku-4-5"]);
+      expect(record).toBeUndefined();
+      expect(mgr.listAgents()).toEqual([]);
+      expect(scheduler.list()[0].lastStatus).toBe("error");
     });
   });
 });
