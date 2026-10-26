@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_MONITORS, validateStart } from "../../src/monitor/validate.ts";
+import { MAX_MONITORS, MAX_TIMEOUT_S, validateStart } from "../../src/monitor/validate.ts";
 
 const base = { argv: ["tail", "-f", "x"], name: "logs" };
 const none = new Set<string>();
@@ -22,7 +22,7 @@ describe("validateStart", () => {
 		[{ ...base, match: "(" }, /valid regex/],
 		[{ ...base, match: "a".repeat(501) }, /at most 500/],
 		[{ ...base, timeout_s: 0 }, /timeout_s/],
-		[{ ...base, timeout_s: 90_000 }, /timeout_s/],
+		[{ ...base, timeout_s: MAX_TIMEOUT_S + 1 }, /timeout_s/],
 		[{ ...base, timeout_s: Number.NaN }, /timeout_s/],
 	])("rejects %j", (input, error) => {
 		const r = validateStart(input, none, 0);
@@ -34,6 +34,11 @@ describe("validateStart", () => {
 		expect(validateStart(base, new Set(["logs"]), 1)).toMatchObject({ ok: false });
 		expect(validateStart(base, none, MAX_MONITORS)).toMatchObject({ ok: false });
 		expect(validateStart(base, none, MAX_MONITORS - 1).ok).toBe(true);
+	});
+
+	it("accepts timeout_s up to the 7 day cap", () => {
+		expect(MAX_TIMEOUT_S).toBe(604_800);
+		expect(validateStart({ ...base, timeout_s: MAX_TIMEOUT_S }, none, 0).ok).toBe(true);
 	});
 
 	it("compiles match and honours wake and timeout_s", () => {
