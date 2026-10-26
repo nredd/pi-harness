@@ -118,7 +118,7 @@ function resolvedInfo(record: AgentRecord | undefined) {
   };
 }
 
-function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
+function toSpawnResult(record: AgentRecord, opts: { resumed?: boolean } = {}): WorkflowSpawnResult {
   const tokens = getLifetimeTotal(record.lifetimeUsage);
   // Reported separately from `tokens`, which is the lifetime total. The script's
   // `budget` counts *output* tokens, as Claude Code's does — billing the input
@@ -148,7 +148,11 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
       // worktree child it has had the branch note appended, so it would not
       // parse. A child asked for a schema that produced none never reaches
       // here — `runAgent` reports that through `failure`.
-      text: record.structuredJson ?? `${lead}${record.result ?? ""}`,
+      // A RESUMED child answers in prose (resume forbids `schema`), but its record
+      // still holds the original run's `structuredJson`; returning that would hand
+      // the script a stale payload with no note, and the worker only injects or
+      // logs for schema calls. So a resume reads `result` and leads with the note.
+      text: !opts.resumed && record.structuredJson !== undefined ? record.structuredJson : `${lead}${record.result ?? ""}`,
       ...(record.structuredRetried ? { structuredRetried: true } : {}),
     };
   }
@@ -391,7 +395,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       onResolved?.({ recordId: id });
       const info = resolvedInfo(record);
       if (info !== undefined) onResolved?.(info);
-      return toSpawnResult(record);
+      return toSpawnResult(record, { resumed: true });
     },
 
     /**

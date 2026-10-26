@@ -24,7 +24,7 @@ vi.mock("../src/worktree.js", () => ({
 }));
 
 import { AgentManager } from "../src/agent-manager.js";
-import { runAgent } from "../src/agent-runner.js";
+import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import { modelFallbackNote, setAgentModels } from "../src/model-resolver.js";
 import { SubagentScheduler } from "../src/schedule.js";
@@ -215,6 +215,25 @@ describe("workflow host", () => {
 
       expect(result.text).toBe("done");
       expect(result.modelNote).toBeUndefined();
+    });
+  });
+
+  describe("resuming a schema-origin child", () => {
+    it("returns the resumed prose with the note, never the stale structured JSON", async () => {
+      registerAgents(new Map([agent("scout", "claude-haiku-4-5")]));
+      vi.mocked(runAgent).mockImplementation((async (c: any, t: string, p: string, o: any) => {
+        const out = await runnerResolution()(c, t, p, o);
+        return { ...out, structuredJson: '{"a":1}' };
+      }) as any);
+      vi.mocked(resumeAgent).mockResolvedValue({ text: "follow-up answer", aborted: false, steered: false } as any);
+      const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: new AgentManager() });
+      await host.spawnAgent(request({ schema: { compiled: true } }));
+
+      const resumed = await host.resumeAgent!("wf-0", "more");
+
+      expect(resumed.ok).toBe(true);
+      expect(resumed.text).toBe(`${NOTE}\n\nfollow-up answer`);
+      expect(resumed.modelNote).toBe(NOTE);
     });
   });
 });
