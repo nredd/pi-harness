@@ -195,6 +195,7 @@ export class AgentResultView implements Component {
     const record = this.details.agentId ? this.live.getRecord(this.details.agentId) : undefined;
     const tags = tagsLine(this.details, this.theme);
     if (tags) lines.push(truncateToWidth(tags, width));
+    if (this.details.modelNote) lines.push(...wrapTextWithAnsi(this.theme.fg("warning", this.details.modelNote), width));
     const transcript = record?.outputFile ?? this.details.outputFile;
     if (transcript) lines.push(truncateToWidth(transcriptLink(transcript, this.theme), width));
 

@@ -17,7 +17,7 @@ import {
 } from "./agent-types.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
-import { resolveModel } from "./model-resolver.js";
+import { resolveModel, unresolvedConfigModelNote } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import {
   createOutputFilePath,
@@ -278,10 +278,13 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         defaultRunInBackground: false,
       });
       let model = ctx.model;
+      let modelNote = "";
       if (invocation.modelInput) {
         const resolvedModel = resolveModel(invocation.modelInput, ctx.modelRegistry);
         if (typeof resolvedModel === "string") {
           if (invocation.modelFromParams) return textResult(resolvedModel, true);
+          // Config-specified: still falls back to the parent, but says so.
+          modelNote = `${unresolvedConfigModelNote(invocation.modelInput, ctx.model)}\n\n`;
         } else {
           model = resolvedModel;
         }
@@ -390,7 +393,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
           { ...options, signal },
           attachTranscript,
         );
-        return textResult(formatRecord(record, "inline"), record.status === "error");
+        return textResult(`${modelNote}${formatRecord(record, "inline")}`, record.status === "error");
       } catch (err) {
         return textResult(err instanceof Error ? err.message : String(err), true);
       }

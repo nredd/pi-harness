@@ -43,7 +43,7 @@ import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
-import { describeModel, describeVirtualModel, isVirtualModel, type ModelRegistry, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
+import { describeModel, describeVirtualModel, isVirtualModel, type ModelRegistry, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider, unresolvedConfigModelNote } from "./model-resolver.js";
 import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
@@ -212,7 +212,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
 
 /** Build AgentDetails from a base + record-specific fields. */
 function buildDetails(
-  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "tags">,
+  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "modelNote" | "tags">,
   record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; outputFile?: string; lifetimeUsage: LifetimeUsage },
   activity?: AgentActivity,
   overrides?: Partial<AgentDetails>,
@@ -2040,7 +2040,7 @@ Terse command-style prompts produce shallow, generic work.
       // foreground path. Resume deliberately doesn't: it replays the stored
       // session and ignores `subagent_type` entirely, so a note about type
       // substitution would be describing something that didn't happen.
-      const fallbackNote = dispatch.ok && dispatch.fellBackFrom !== undefined
+      let fallbackNote = dispatch.ok && dispatch.fellBackFrom !== undefined
         ? `Note: Unknown agent type "${dispatch.fellBackFrom}" — using ${resolveType(subagentType) ? subagentType : "the fallback agent config"}.\n\n`
         : "";
 
@@ -2057,11 +2057,14 @@ Terse command-style prompts produce shallow, generic work.
 
       // Resolve an explicit tool-call model first; agent config supplies only a default.
       let model = ctx.model;
+      let modelNote: string | undefined;
       if (resolvedConfig.modelInput) {
         const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
         if (typeof resolved === "string") {
           if (resolvedConfig.modelFromParams) return textResult(resolved);
-          // config-specified: silent fallback to parent
+          // Config-specified: still falls back to the parent, but says so.
+          modelNote = unresolvedConfigModelNote(resolvedConfig.modelInput, ctx.model);
+          fallbackNote += `${modelNote}\n\n`;
         } else {
           model = resolved;
         }
@@ -2131,6 +2134,7 @@ Terse command-style prompts produce shallow, generic work.
         description: params.description,
         subagentType,
         modelName,
+        modelNote,
         tags: agentTags.length > 0 ? agentTags : undefined,
       };
 
@@ -2158,6 +2162,8 @@ Terse command-style prompts produce shallow, generic work.
           description: rec.description,
           subagentType: type,
           modelName: recModelName,
+          // A property of this spawn's config resolution, not of the record.
+          modelNote,
           tags: recTags.length > 0 ? recTags : undefined,
         };
       };
