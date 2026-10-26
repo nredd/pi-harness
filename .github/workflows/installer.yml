@@ -99,7 +99,7 @@ jobs:
           GH_CONFIG_DIR: ${{ runner.temp }}/installer-gh
         run: |
           if [ -n "$GH_TOKEN" ]; then
-            printf '%s' "$GH_TOKEN" | env -u GH_TOKEN gh auth login --hostname github.com --with-token
+            printf '%s' "$GH_TOKEN" | env -u GH_TOKEN gh auth login --hostname github.com --with-token --insecure-storage
           fi
       - name: Run the documented one-shot command in throwaway HOMEs
         env:

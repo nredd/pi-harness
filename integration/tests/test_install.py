@@ -1716,7 +1716,8 @@ def test_installer_workflow_token_is_confined_to_gh_login() -> None:
     login = steps["Authenticate gh attestation fallback"]
     assert login["run"] == (
         'if [ -n "$GH_TOKEN" ]; then\n'
-        "  printf '%s' \"$GH_TOKEN\" | env -u GH_TOKEN gh auth login --hostname github.com --with-token\n"
+        "  printf '%s' \"$GH_TOKEN\" | env -u GH_TOKEN gh auth login "
+        "--hostname github.com --with-token --insecure-storage\n"
         "fi\n"
     )
     assert login["env"]["GH_CONFIG_DIR"] == "${{ runner.temp }}/installer-gh"
