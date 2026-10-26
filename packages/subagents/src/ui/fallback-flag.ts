@@ -1,0 +1,52 @@
+/**
+ * fallback-flag.ts -- the ONE compact indicator for "this agent ran on another
+ * model than configured", shared by every renderer that shows model info.
+ *
+ * Rows are `label + stats` clamped from the right, so anything appended after
+ * unbounded text (a description, an error, a canonical model id) is the first
+ * thing a narrow terminal cuts. The flag is therefore always rendered FIRST and
+ * the rest is truncated around it. Renderers must use these helpers rather than
+ * building their own marker; `test/fallback-flag-renderers.test.ts` walks every
+ * renderer and fails the ones that do not.
+ */
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+
+/** Minimal theme surface, so this module has no dependency on the widgets that use it. */
+interface FlagTheme {
+  fg(color: string, text: string): string;
+}
+
+/** Anything that can carry the fallback: a record, details or notice details. */
+export interface FallbackCarrier {
+  modelFallback?: unknown;
+  modelNote?: string;
+}
+
+/** Whether `carrier` ran on a substituted model. */
+export const hasFallback = (carrier: FallbackCarrier | undefined): boolean =>
+  carrier?.modelFallback !== undefined || carrier?.modelNote !== undefined;
+
+/** Plain flag text: `[fallback]`, or `[fallback x3]` for a count of members. */
+export const fallbackFlagText = (count = 1): string => (count > 1 ? `[fallback x${count}]` : "[fallback]");
+
+/** The themed flag for `carrier`, or "" when it did not fall back. */
+export function fallbackFlag(theme: FlagTheme, carrier: FallbackCarrier | undefined, count = 1): string {
+  return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count)) : "";
+}
+
+/**
+ * `prefix + flag + rest`, never wider than `width`. The prefix and the flag are
+ * reserved first; `rest` (a string, or a function of the width left for it)
+ * is truncated to what remains, so the flag cannot be cut by unbounded text.
+ */
+export function withLeadingFlag(
+  prefix: string,
+  flag: string,
+  rest: string | ((inner: number) => string),
+  width: number,
+): string {
+  const lead = flag ? `${prefix}${flag} ` : prefix;
+  const inner = Math.max(0, width - visibleWidth(lead));
+  const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
+  return truncateToWidth(lead + body, width);
+}

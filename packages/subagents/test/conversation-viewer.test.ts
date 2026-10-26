@@ -146,7 +146,7 @@ describe("ConversationViewer invocation line", () => {
       undefined, { fg: (_c: string, t: string) => t, bold: (t: string) => t } as any, vi.fn(),
     );
     const row = viewer.render(200).find(l => l.includes("↳")) ?? "";
-    expect(row).toContain('anthropic/claude-sonnet-4-6 · fallback: "ghost" -> anthropic/claude-sonnet-4-6 · thinking: high');
+    expect(row).toContain("[fallback] anthropic/claude-sonnet-4-6 · thinking: high");
   });
 
   it("renders no row at all for a record with no invocation", () => {

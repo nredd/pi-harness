@@ -11,9 +11,10 @@ import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
 import { getConfig } from "../agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import { describeModelCall, type ModelCallState } from "../model-call.js";
-import { type ModelFallback, modelFallbackLabel } from "../model-resolver.js";
+import type { ModelFallback } from "../model-resolver.js";
 import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
+import { fallbackFlag } from "./fallback-flag.js";
 
 // ---- Constants ----
 
@@ -424,7 +425,6 @@ export class AgentWidget {
     if (activity) parts.push(formatTurns(activity.turnCount, activity.maxTurns));
     if (a.toolUses > 0) parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
     // Not gated by `showModel`: a substituted model is never a cosmetic detail.
-    if (a.modelFallback) parts.push(modelFallbackLabel(a.modelFallback));
     // From the record, not the activity tracker: that entry is deleted the
     // moment an agent finishes, and "what did it cost" is a question asked
     // about finished agents.
@@ -432,8 +432,9 @@ export class AgentWidget {
     if (costText) parts.push(costText);
     parts.push(duration);
 
-    const modeTag = (modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "") + (a.modelFallback ? ` ${theme.fg("warning", "[fallback]")}` : "");
-    return `${icon} ${renderAgentName(a.type, theme, { fallbackColor: "dim" })}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
+    const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
+    const flag = fallbackFlag(theme, a) ? `${fallbackFlag(theme, a)} ` : "";
+    return `${icon} ${flag}${renderAgentName(a.type, theme, { fallbackColor: "dim" })}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
   }
 
   /**
@@ -472,7 +473,8 @@ export class AgentWidget {
     const runningLines: string[][] = []; // each entry is [header, activity]
     for (const a of running) {
       const modeLabel = getPromptModeLabel(a.type);
-      const modeTag = (modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "") + (a.modelFallback ? ` ${theme.fg("warning", "[fallback]")}` : "");
+      const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
+    const flag = fallbackFlag(theme, a) ? `${fallbackFlag(theme, a)} ` : "";
       const elapsed = formatMs(this.clock.now() - a.startedAt);
 
       const bg = this.agentActivity.get(a.id);
@@ -496,8 +498,7 @@ export class AgentWidget {
         const thinkingTag = tags.find(tag => tag.startsWith("thinking: "));
         if (thinkingTag) parts.push(thinkingTag);
       }
-      if (a.modelFallback) parts.push(modelFallbackLabel(a.modelFallback));
-      if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
+        if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
       if (toolUses > 0) parts.push(`${toolUses} tool use${toolUses === 1 ? "" : "s"}`);
       if (tokenText) parts.push(tokenText);
       if (costText) parts.push(costText);
@@ -507,7 +508,7 @@ export class AgentWidget {
       const activity = bg ? describeActivity(bg.activeTools, bg.responseText, bg.modelCall, this.clock.now()) : "thinking…";
 
       runningLines.push([
-        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
+        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${flag}${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
         truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
       ]);
     }

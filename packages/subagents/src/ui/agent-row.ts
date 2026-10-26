@@ -14,7 +14,6 @@ import { pathToFileURL } from "node:url";
 import { type Component, hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import { formatClock } from "../model-call.js";
-import { modelFallbackLabel } from "../model-resolver.js";
 import type { AgentRecord } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import {
@@ -27,6 +26,7 @@ import {
   SPINNER,
   type Theme,
 } from "./agent-widget.js";
+import { fallbackFlag } from "./fallback-flag.js";
 
 /** Lines of the result shown when expanded; the rest is one `get_subagent_result` away. */
 const EXPANDED_RESULT_LINES = 50;
@@ -104,12 +104,12 @@ export function agentRowSummary(
   const cost = live.showCost() ? formatCost(record ? getLifetimeCost(record.lifetimeUsage) : (details.cost ?? 0)) : "";
 
   const parts = [text, formatClock(elapsed)];
-  const fallback = record?.modelFallback ?? details.modelFallback;
-  if (fallback) parts.push(modelFallbackLabel(fallback));
   if (tokenText) parts.push(tokenText);
   if (cost) parts.push(cost);
   if (!finished && details.backgroundHint && elapsed >= 2000) parts.push("(ctrl+b to run in background)");
-  return `${icon} ${parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(` ${theme.fg("dim", "·")} `)}`;
+  // Leading, ahead of the status text, which may carry a 300-char error.
+  const flag = fallbackFlag(theme, record?.modelFallback ? record : details);
+  return `${icon} ${flag ? `${flag} ` : ""}${parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(` ${theme.fg("dim", "·")} `)}`;
 }
 
 /**
@@ -119,7 +119,9 @@ export function agentRowSummary(
  */
 function tagsLine(details: AgentDetails, theme: Theme): string | undefined {
   const parts = [...(details.modelName ? [details.modelName] : []), ...(details.tags ?? [])];
-  return parts.length > 0 ? theme.fg("dim", `↳ ${parts.join(" · ")}`) : undefined;
+  const flag = fallbackFlag(theme, details);
+  if (parts.length === 0 && !flag) return undefined;
+  return `${theme.fg("dim", "↳")} ${flag ? `${flag} ` : ""}${theme.fg("dim", parts.join(" · "))}`;
 }
 
 /** The transcript as an OSC 8 hyperlink, so a click opens it. */
