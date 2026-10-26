@@ -126,8 +126,8 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		const record = (decision: RouteDecision): void => {
 			recent.push(decision);
 			if (recent.length > RECENT_DECISIONS) recent.shift();
-			// Session entries are never pruned, so persist only a profile's first decision and each
-			// change of chosen model (the moments a reader needs explained), not every route.
+			// Session entries are never pruned. Persisting only a profile's first decision per session
+			// and each change of chosen model slows growth; it is not a bound (flapping appends).
 			if (persisted.get(decision.profile) === decision.chosen) return;
 			persisted.set(decision.profile, decision.chosen);
 			// Logging must never fail a route.
@@ -158,6 +158,8 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 
 		pi.on("session_start", (_event, ctx) => {
 			currentCtx = ctx;
+			// A new or resumed session has no durable decision yet; its first pick must persist.
+			persisted.clear();
 			if (!config.ok) ctx.ui.notify(`subscription-router: ignoring config. ${config.error}`, "error");
 			warm(ctx, usage, sessionProviders(ctx, profiles));
 		});

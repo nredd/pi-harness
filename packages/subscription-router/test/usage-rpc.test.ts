@@ -55,7 +55,7 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 		if (!registration) throw new Error("router command not registered");
 		await registration[1].handler(action, ctx);
 	};
-	return { pi, rpc, fetch, usage, status, advance: (ms: number) => (now += ms), fail: () => (fail = true) };
+	return { pi, handlers, rpc, fetch, usage, status, advance: (ms: number) => (now += ms), fail: () => (fail = true) };
 }
 
 afterEach(() => {
@@ -200,6 +200,21 @@ describe("router usage RPC", () => {
 			"openai-codex/terra",
 			"anthropic/sonnet",
 		]);
+	});
+
+	it("a new session persists its first decision even when it picks the previous session's model", async () => {
+		const { h, ctx, tick, route } = await routed();
+		tick(MINUTE);
+		expect(await route()).toBe("openai-codex/terra");
+		expect(await route()).toBe("openai-codex/terra");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		// Session switch (new/resume): same extension instance, same chosen model.
+		h.handlers.get("session_start")?.({}, ctx as unknown as ExtensionContext);
+		tick(MINUTE);
+		expect(await route()).toBe("openai-codex/terra");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(2);
+		expect(await route()).toBe("openai-codex/terra");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(2);
 	});
 
 	it("a throwing appendEntry neither fails the route nor drops the in-memory decision", async () => {
