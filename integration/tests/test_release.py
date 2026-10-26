@@ -126,6 +126,22 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
     assert isinstance(caught.value.__cause__, subprocess.CalledProcessError)
 
 
+def test_gitlink_tag_scrubs_github_tokens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real git child receives no GitHub token variables, but keeps unrelated environment."""
+    binary = tmp_path / "git"
+    binary.write_text(
+        "#!/bin/sh\n"
+        + "\n".join(f'test -z "${{{name}+set}}" || exit 97' for name in sorted(GITHUB_TOKEN_VARIABLES))
+        + '\ntest "$KEEP_ME" = kept || exit 98\nprintf "v1.3.0-nredd.7\\n"\n'
+    )
+    binary.chmod(0o700)
+    monkeypatch.setattr(release, "GIT_BIN", str(binary))
+    monkeypatch.setenv("KEEP_ME", "kept")
+    for name in GITHUB_TOKEN_VARIABLES:
+        monkeypatch.setenv(name, "sentinel-not-a-real-token")
+    assert gitlink_tag(tmp_path) == "v1.3.0-nredd.7"
+
+
 def test_verify_asset_fails_closed(tmp_path: Path) -> None:
     """Accept matching bytes only, refusing mismatches and unrecorded assets.
 

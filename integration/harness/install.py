@@ -554,8 +554,8 @@ def is_real_directory_or_absent(path: Path) -> bool:
 def require_backup_store(layout: Layout) -> None:
     """Refuse a backup store the journal reader would refuse, before anything is written to it.
 
-    `Journal.backups.mkdir` follows a link, but `validate_journal` rejects one: a switch that
-    failed midway could then not be rolled back, and its journal would trap every later run.
+    This is the early planning check. The switch also anchors writes to open, no-follow directory
+    descriptors, since a path-only check cannot protect the later rename.
 
     Parameters:
         layout (Layout): installer paths.
@@ -942,6 +942,60 @@ class Journal:
         self.path = layout.journal
         self.backups = backups
         self.steps: list[dict[str, Any]] = []
+        self.backup_fd: int | None = None
+        self.directory_identities: dict[Path, tuple[int, int]] = {}
+
+    @contextmanager
+    def open_backups(self, *, create: bool = True) -> Iterator[None]:
+        """Anchor backup operations to real directories, never a later ancestor lookup.
+
+        Parameters:
+            create (bool): create a new run directory; `False` when restoring an existing one.
+
+        Yields:
+            None: directory descriptors remain open for the operation.
+        """
+        if create:
+            self.layout.backups.mkdir(parents=True, exist_ok=True)
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+        store_fd = os.open(self.layout.backups, flags)
+        try:
+            info = os.fstat(store_fd)
+            self.directory_identities[self.layout.backups] = (info.st_dev, info.st_ino)
+            if create:
+                os.mkdir(self.backups.name, mode=0o700, dir_fd=store_fd)
+            self.backup_fd = os.open(self.backups.name, flags, dir_fd=store_fd)
+            try:
+                info = os.fstat(self.backup_fd)
+                self.directory_identities[self.backups] = (info.st_dev, info.st_ino)
+                self.check_store()
+                yield
+                self.check_store()
+            finally:
+                os.close(self.backup_fd)
+                self.backup_fd = None
+        finally:
+            os.close(store_fd)
+
+    def check_store(self) -> None:
+        """Fail closed if the backup store path no longer names the opened directory."""
+        for path, identity in self.directory_identities.items():
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != identity:
+                raise OSError(f"Backup store directory '{path}' changed during the switch")
+
+    def save(self, live: Path, backup: Path) -> None:
+        """Move an original into the anchored run directory, ignoring replaced ancestor paths.
+
+        Parameters:
+            live (Path): original target.
+            backup (Path): validated destination within this run's backup directory.
+        """
+        if self.backup_fd is None:
+            raise OSError("Backup directory is not open")
+        self.check_store()
+        os.replace(live, backup.name, dst_dir_fd=self.backup_fd)
+        self.check_store()
 
     def record(self, target: Path, name: str) -> Path | None:
         """Durably record a step before it runs.
@@ -958,6 +1012,7 @@ class Journal:
                 refuse; it is not recorded, so the journal stays restorable and the switch
                 rolls back the steps before it.
         """
+        self.check_store()
         require_restorable_kind(self.layout, target, "the steps before it are rolled back")
         existed = target.exists() or target.is_symlink()
         backup = self.backups / name if existed else None
@@ -968,6 +1023,7 @@ class Journal:
 
     def commit(self) -> None:
         """Mark the switch complete; nothing will be rolled back."""
+        self.check_store()
         self.path.unlink()
 
 
@@ -1140,20 +1196,23 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
     return steps
 
 
-def load_journal(layout: Layout) -> list[Step]:
+def load_journal(layout: Layout) -> tuple[Path, list[Step]]:
     """Read and validate the journal of an interrupted switch.
 
     Parameters:
         layout (Layout): installer paths.
 
     Returns:
-        list[Step]: validated steps in the order they were recorded.
+        tuple[Path, list[Step]]: backup directory and validated steps in recorded order.
 
     Raises:
         RollbackError: the journal is not trusted; nothing was changed.
     """
     try:
-        return validate_journal(layout, read_journal(layout.journal))
+        document = read_journal(layout.journal)
+        steps = validate_journal(layout, document)
+        assert isinstance(document, dict)
+        return Path(document["backups"]), steps
     except ValueError as error:
         raise RollbackError(
             f"Journal '{layout.journal}' is not trusted: {error}; nothing was restored. It only names the "
@@ -1181,23 +1240,35 @@ def rollback(layout: Layout) -> list[str]:
     """
     if not layout.journal.exists(follow_symlinks=False):
         return []
-    steps = load_journal(layout)
+    backups, steps = load_journal(layout)
+    journal = Journal(layout, backups)
     restored = []
     try:
-        for step in reversed(steps):
-            if step.backup is None:
-                remove(step.target)
-            elif step.backup.exists(follow_symlinks=False):
-                remove(step.target)
-                step.backup.replace(step.target)
-            # A recorded backup that does not exist yet means the step never started: the
-            # original target is still in place.
-            restored.append(str(step.target))
+        with journal.open_backups(create=False):
+            # A missing backup is ambiguous (not started, already restored, or lost). Never call
+            # that success: a switched target may still be live. Validate all before deleting any.
+            for step in steps:
+                if step.backup is not None:
+                    try:
+                        os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
+                    except FileNotFoundError as error:
+                        raise OSError(
+                            f"Expected backup '{step.backup}' is missing; restore by hand"
+                        ) from error
+            for step in reversed(steps):
+                journal.check_store()
+                if step.backup is None:
+                    remove(step.target)
+                else:
+                    remove(step.target)
+                    os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
+                journal.check_store()
+                restored.append(str(step.target))
     except OSError as error:
         raise RollbackError(
             f"Could not restore an interrupted install: {error}; journal kept at '{layout.journal}'"
         ) from error
-    layout.journal.unlink()
+    journal.commit()
     return restored
 
 
@@ -1312,13 +1383,35 @@ def switch(
         journal (Journal): durable step record.
         staged_core (Path | None): verified private core prefix, when the core changed.
     """
+    with journal.open_backups():
+        switch_anchored(layout, verified, plan, staged_agent, journal, staged_core=staged_core)
+
+
+def switch_anchored(
+    layout: Layout,
+    verified: Verified,
+    plan: Plan,
+    staged_agent: Path | None,
+    journal: Journal,
+    *,
+    staged_core: Path | None,
+) -> None:
+    """Switch targets while `journal` holds the backup directory descriptors open.
+
+    Parameters:
+        layout (Layout): installer paths.
+        verified (Verified): verified input.
+        plan (Plan): desired changes.
+        staged_agent (Path | None): staged packages.
+        journal (Journal): journal with an open backup directory.
+        staged_core (Path | None): staged core prefix.
+    """
     layout.agent_dir.mkdir(parents=True, exist_ok=True)
-    journal.backups.mkdir(parents=True, exist_ok=True)
     if staged_core is not None:
         prefix = layout.core(verified.stack.core.tag)
         backup = journal.record(prefix, f"core-{verified.stack.core.tag}")
         if backup is not None:
-            prefix.replace(backup)
+            journal.save(prefix, backup)
         prefix.parent.mkdir(parents=True, exist_ok=True)
         staged_core.replace(prefix)
     if staged_agent is not None:
@@ -1330,7 +1423,7 @@ def switch(
                 continue
             backup = journal.record(live, tree)
             if backup is not None:
-                live.replace(backup)
+                journal.save(live, backup)
             if staged.exists():
                 staged.replace(live)
     for name, desired in ((SETTINGS_FILE, plan.settings), (SUBAGENTS_FILE, plan.subagents)):
@@ -1340,7 +1433,7 @@ def switch(
         layout.bin_dir.mkdir(parents=True, exist_ok=True)
         backup = journal.record(layout.link, LINK_BACKUP)
         if backup is not None:
-            layout.link.replace(backup)
+            journal.save(layout.link, backup)
         layout.link.symlink_to(plan.link)
     state = {
         "source_sha": verified.snapshot.source_sha,
@@ -1363,11 +1456,10 @@ def replace_file(journal: Journal, live: Path, name: str, text: str) -> None:
         text (str): new contents.
     """
     backup = journal.record(live, name)
+    mode = live.stat().st_mode & 0o777 if backup is not None else None
     if backup is not None:
-        temporary = backup.with_name(f".{name}.tmp")
-        shutil.copy2(live, temporary)
-        temporary.replace(backup)
-    write_atomic(live, text)
+        journal.save(live, backup)
+    write_atomic(live, text, mode=mode)
 
 
 def apply(layout: Layout, verified: Verified, plan: Plan) -> tuple[Path, str]:
@@ -1557,7 +1649,7 @@ def report_pending(layout: Layout, restoring: bool) -> None:
         "before planning anything"
     )
     try:
-        steps = load_journal(layout)
+        _, steps = load_journal(layout)
     except RollbackError as error:
         if restoring:
             raise

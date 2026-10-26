@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import selectors
+import shlex
 import shutil
 import signal
 import subprocess
@@ -29,6 +30,7 @@ from typing import Any
 
 import pytest
 
+from harness import release
 from harness.install import EXCLUDE_NEWER, INSTALLER_PYTHON, download
 from harness.promotion import (
     SNAPSHOT_ASSET,
@@ -120,30 +122,72 @@ def command(spec: str, stack_sha: str, *args: str) -> list[str]:
     ]  # fmt: skip
 
 
-def environment(home: Path, uv_cache: Path, path: str | None = None, gh_token: bool = True) -> dict[str, str]:
+def gh_config_shim(directory: Path, cfg: Path, gh: Path) -> Path:
+    """Create a gh-only login-config wrapper; no credential enters a child environment.
+
+    Parameters:
+        directory (Path): private shim directory.
+        cfg (Path): CI's temporary gh login directory, not the caller's personal config.
+        gh (Path): real gh executable.
+
+    Returns:
+        Path: shim directory to prepend to PATH.
+    """
+    directory.mkdir(mode=0o700)
+    shim = directory / "gh"
+    shim.write_text(
+        f'#!/bin/sh\nexport GH_CONFIG_DIR={shlex.quote(str(cfg))}\nexec {shlex.quote(str(gh))} "$@"\n'
+    )
+    shim.chmod(0o700)
+    return directory
+
+
+def configure_gh_login(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Expose CI's temporary login only through gh, never through uvx or package builds.
+
+    Parameters:
+        tmp_path (Path): private scratch directory.
+        monkeypatch (pytest.MonkeyPatch): restore PATH and the eager gh lookup after this test.
+    """
+    cfg = os.environ.get("INSTALLER_GH_CONFIG_DIR")
+    if not cfg:
+        return
+    gh = shutil.which("gh")
+    assert gh is not None, "`gh` is required for installer acceptance"
+    shim = gh_config_shim(tmp_path / "gh-shim", Path(cfg), Path(gh))
+    monkeypatch.setenv("PATH", f"{shim}{os.pathsep}{os.environ['PATH']}")
+    # Parent-process verification imported release before this fixture changed PATH. uvx imports
+    # after launch and discovers the wrapper normally; point the eager parent lookup at it too.
+    monkeypatch.setattr(release, "GH_BIN", str(shim / "gh"))
+
+
+@pytest.fixture(autouse=True)
+def isolated_gh_login(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Select the gh-only CI login for each real acceptance scenario."""
+    configure_gh_login(tmp_path, monkeypatch)
+
+
+def environment(home: Path, uv_cache: Path, path: str | None = None) -> dict[str, str]:
     """Build a clean environment: only PATH, the throwaway HOME and uv's cache.
 
-    A runner's read-only `GH_TOKEN` (main push/dispatch or owner-reviewed same-repo PR, never a fork PR)
-    is passed to the installer for its rate-limit fallback: hosted runners share the anonymous limit.
-    `uvx` and the installer process carry it; the installer hands it to `gh` alone.
+    No token or login-config environment is forwarded, including to uvx and its build children.
+    In CI, PATH contains a gh-only wrapper for the separately provisioned temporary login.
 
     Parameters:
         home (Path): throwaway HOME.
         uv_cache (Path): shared uv cache.
         path (str | None): PATH override.
-        gh_token (bool): pass a runner `GH_TOKEN` through; `False` for every non-installer launch.
 
     Returns:
         dict[str, str]: complete child environment, no user config.
     """
-    token = os.environ.get("GH_TOKEN") if gh_token else None
     return {
         "PATH": path or os.environ["PATH"],
         "HOME": str(home),
         "TERM": "dumb",
         "UV_CACHE_DIR": str(uv_cache),
         "UV_PYTHON_INSTALL_DIR": str(uv_cache / "python"),
-    } | ({"GH_TOKEN": token} if token else {})
+    }
 
 
 def run(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -295,7 +339,7 @@ def test_fresh_install_matches_the_promotion_and_reruns_cleanly(
         }
     pi = home / ".local" / "bin" / "pi"
     assert pi.readlink() == home / ".local" / "share" / "pi-stack" / "core" / stack.core.tag / "bin" / "pi"
-    env = environment(home, uv_cache, gh_token=False) | {"PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1"}
+    env = environment(home, uv_cache) | {"PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1"}
     version = run([str(pi), "--version"], env)
     assert version.returncode == 0
     assert version.stdout.strip() == stack.core.tag.removeprefix("v").split("-")[0]

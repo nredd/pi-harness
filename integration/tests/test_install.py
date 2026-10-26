@@ -55,6 +55,7 @@ from harness.promotion import (
 )
 from harness.release import GITHUB_TOKEN_VARIABLES, release_asset_url
 from harness.stack import package_declarations, source_string
+from scenarios.installer import test_installer as acceptance
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -437,6 +438,117 @@ def test_interrupted_switch_is_restored(tmp_path: Path, monkeypatch: pytest.Monk
     rollback(layout)
     assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
     assert not layout.journal.exists()
+
+
+def test_missing_expected_backup_keeps_journal_and_live_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lost backup is not proof that its journaled replacement never started."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    interrupt(harness, monkeypatch)
+    layout = harness.layout
+    document = json.loads(layout.journal.read_text())
+    backup = Path(next(step["backup"] for step in document["steps"] if step["backup"]))
+    install.remove(backup)
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match=r"Expected backup.*missing"):
+        rollback(layout)
+    assert tree(harness.home) == before
+    assert layout.journal.exists()
+
+
+@pytest.mark.parametrize("moment", ["after-check", "during-rename"])
+def test_backup_store_swap_cannot_redirect_backups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moment: str
+) -> None:
+    """Swap AFTER apply's final check; writes stay anchored and lost backups cannot commit recovery."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    layout = harness.layout
+    outside, held = tmp_path / "outside", tmp_path / "held-backups"
+    outside.mkdir()
+    attacked = False
+    original_switch, original_replace = install.switch, os.replace
+
+    def swap_store() -> None:
+        """Replace the checked store with an attacker-controlled symlink."""
+        nonlocal attacked
+        attacked = True
+        layout.backups.mkdir(parents=True, exist_ok=True)
+        layout.backups.rename(held)
+        layout.backups.symlink_to(outside)
+
+    def before_switch(*args: Any, **kwargs: Any) -> None:
+        """Swap after the last kind check but before switch opens its directory."""
+        swap_store()
+        original_switch(*args, **kwargs)
+
+    def during_replace(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Swap at the actual rename, then hide it with an empty real store before rollback."""
+        if Path(src) != layout.agent_dir / "npm":
+            original_replace(src, dst, **kwargs)
+            return
+        swap_store()
+        # The attacker prepares the same per-run directory so the old path-based rename succeeds.
+        for directory in held.iterdir():
+            (outside / directory.name).mkdir()
+        try:
+            original_replace(src, dst, **kwargs)
+        finally:
+            layout.backups.unlink()
+            layout.backups.mkdir()
+
+    if moment == "after-check":
+        monkeypatch.setattr(install, "switch", before_switch)
+        with pytest.raises(InstallError):
+            harness.run(yes=True)
+        assert not layout.journal.exists()
+    else:
+        monkeypatch.setattr(os, "replace", during_replace)
+        monkeypatch.setattr(install, "checked_version", lambda *args: (_ for _ in ()).throw(OSError("fail")))
+        with pytest.raises(RollbackError):
+            harness.run(yes=True)
+        assert layout.journal.exists()
+        assert list(held.glob("*/npm/node_modules/mine/package.json"))
+    assert attacked
+    assert tree(outside) == {}
+
+
+def test_rollback_store_swap_restores_from_open_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ancestor swapped at the recovery rename cannot substitute an attacker's backup."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    interrupt(harness, monkeypatch)
+    layout = harness.layout
+    outside, held = tmp_path / "outside", tmp_path / "held"
+    outside.mkdir()
+    document = json.loads(layout.journal.read_text())
+    fake = outside / Path(document["backups"]).name / "npm"
+    fake.mkdir(parents=True)
+    (fake / "attacker").write_text("not the original")
+    original = os.replace
+    attacked = False
+
+    def swap(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Replace the ancestor after validation but at the restore syscall boundary."""
+        nonlocal attacked
+        if Path(dst) == layout.agent_dir / "npm":
+            attacked = True
+            layout.backups.rename(held)
+            layout.backups.symlink_to(outside)
+        original(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, "replace", swap)
+    with pytest.raises(RollbackError):
+        rollback(layout)
+    assert attacked
+    assert (layout.agent_dir / "npm" / "node_modules" / "mine" / "package.json").is_file()
+    assert not (layout.agent_dir / "npm" / "attacker").exists()
+    assert (fake / "attacker").read_text() == "not the original"
+    assert layout.journal.exists()
 
 
 def test_rerun_after_interruption_recovers_then_installs(
@@ -1574,7 +1686,7 @@ def test_installer_workflow_token_policy(event: str, ref: str, head_repo: str, e
     ]
     assert tokens == [
         (
-            "Run the documented one-shot command in throwaway HOMEs",
+            "Authenticate gh attestation fallback",
             "GH_TOKEN",
             "${{ ((github.event_name == 'pull_request' && "
             "github.event.pull_request.head.repo.full_name == github.repository) || "
@@ -1595,6 +1707,88 @@ def test_installer_workflow_token_policy(event: str, ref: str, head_repo: str, e
     }.items():
         expression = expression.replace(name, repr(value))
     assert eval(expression.replace("&&", "and").replace("||", "or"), {"__builtins__": {}}) == expected
+
+
+def test_installer_workflow_token_is_confined_to_gh_login() -> None:
+    """The make/uv/pytest/build step has no token; only gh login consumes it, with cleanup always."""
+    workflow = yaml.safe_load(INSTALLER_WORKFLOW.read_text())
+    steps = {step.get("name"): step for step in workflow["jobs"]["installer"]["steps"]}
+    login = steps["Authenticate gh attestation fallback"]
+    assert login["run"] == (
+        'if [ -n "$GH_TOKEN" ]; then\n'
+        "  printf '%s' \"$GH_TOKEN\" | env -u GH_TOKEN gh auth login --hostname github.com --with-token\n"
+        "fi\n"
+    )
+    assert login["env"]["GH_CONFIG_DIR"] == "${{ runner.temp }}/installer-gh"
+    run_env = steps["Run the documented one-shot command in throwaway HOMEs"]["env"]
+    assert set(run_env) == {"INSTALLER_GH_CONFIG_DIR", "INSTALLER_SPEC", "STACK_SHA"}
+    cleanup = steps["Remove temporary gh login"]
+    assert cleanup["if"] == "always()"
+    assert cleanup["env"] == {"GH_CONFIG_DIR": login["env"]["GH_CONFIG_DIR"]}
+    assert cleanup["run"] == 'rm -rf -- "$GH_CONFIG_DIR"'
+
+
+def test_acceptance_token_never_reaches_uvx_or_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real uvx-shaped launcher/build child sees no sentinel; only gh can read the login file."""
+    cfg, tools, home = tmp_path / "login", tmp_path / "tools", tmp_path / "home"
+    for directory in (cfg, tools, home):
+        directory.mkdir()
+    (cfg / "token").write_text(SENTINEL)
+    gh = tools / "real-gh"
+    gh.write_text(
+        f"#!{sys.executable}\nimport os,pathlib\n"
+        f"assert not set(os.environ).intersection({sorted(GITHUB_TOKEN_VARIABLES)!r})\n"
+        "print((pathlib.Path(os.environ['GH_CONFIG_DIR']) / 'token').read_text())\n"
+    )
+    gh.chmod(0o700)
+    shim = acceptance.gh_config_shim(tmp_path / "shim", cfg, gh)
+    for token in GITHUB_TOKEN_VARIABLES:
+        monkeypatch.setenv(token, SENTINEL)
+    monkeypatch.setenv("GH_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("INSTALLER_GH_CONFIG_DIR", str(cfg))
+    env = acceptance.environment(home, tmp_path / "cache", f"{shim}:{tools}:/usr/bin:/bin")
+    script = (
+        "import os,subprocess,sys\n"
+        f"assert {SENTINEL!r} not in repr(dict(os.environ)), 'token reached non-gh child'\n"
+        "assert 'GH_CONFIG_DIR' not in os.environ\n"
+        f"assert not set(os.environ).intersection({sorted(GITHUB_TOKEN_VARIABLES)!r})\n"
+        "subprocess.run([sys.executable,'-c',sys.argv[1]],check=True)\n"
+        "subprocess.run(['gh'],check=True)\n"
+    )
+    build = f"import os; assert {SENTINEL!r} not in repr(dict(os.environ))"
+    result = subprocess.run(
+        [sys.executable, "-c", script, build], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == SENTINEL
+
+
+def test_acceptance_login_wraps_eager_parent_gh_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct parent verification and freshly launched installers both use the gh-only config shim."""
+    cfg, tools = tmp_path / "login", tmp_path / "tools"
+    cfg.mkdir()
+    tools.mkdir()
+    (cfg / "token").write_text(SENTINEL)
+    gh = tools / "gh"
+    gh.write_text(
+        f"#!{sys.executable}\nimport os,pathlib\n"
+        f"assert not set(os.environ).intersection({sorted(GITHUB_TOKEN_VARIABLES)!r})\n"
+        f"assert (pathlib.Path(os.environ['GH_CONFIG_DIR']) / 'token').read_text() == {SENTINEL!r}\n"
+    )
+    gh.chmod(0o700)
+    for name in GITHUB_TOKEN_VARIABLES | {"GH_CONFIG_DIR"}:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("INSTALLER_GH_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("PATH", str(tools))
+    monkeypatch.setattr(acceptance.release, "GH_BIN", str(gh))
+    acceptance.configure_gh_login(tmp_path, monkeypatch)
+    assert Path(acceptance.release.GH_BIN) == tmp_path / "gh-shim" / "gh"
+    acceptance.verify_attestation(tmp_path / "snapshot", "repo", "workflow", "ref")
+    assert "GH_CONFIG_DIR" not in os.environ
 
 
 def test_installer_workflow_token_permissions_are_read_only() -> None:

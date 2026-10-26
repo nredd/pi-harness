@@ -131,6 +131,7 @@ def gitlink_tag(directory: Path) -> str:
     try:
         return subprocess.check_output(
             [GIT_BIN, "-C", str(directory), "describe", "--tags", "--exact-match"],
+            env=without_github_tokens(os.environ),
             text=True,
             stderr=subprocess.STDOUT,
         ).strip()
