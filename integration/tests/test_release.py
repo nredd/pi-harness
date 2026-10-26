@@ -7,11 +7,17 @@ References:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
+import os
+import shlex
+import shutil
 import subprocess
+import sys
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -28,6 +34,7 @@ from harness.release import (
     release_checksums,
     verify_asset,
     verify_provenance,
+    verify_root_overrides,
 )
 
 # sha256 (frozen in `LEGACY_CHECKSUMS`) -> npm SRI sha512 of the same downloaded legacy tarball.
@@ -620,3 +627,348 @@ def test_root_overrides_stay_tied_to_verified_legacy_releases() -> None:
         entry = lock[f"node_modules/{name}"]
         assert entry["resolved"] == url
         assert entry["integrity"] == LOCK_INTEGRITY[sha256]
+
+
+NEW_TAG = "v1.3.0-nredd.8"
+NEW_BYTES = b"new core release bytes"
+
+
+def sri(contents: bytes) -> str:
+    """Return the npm SRI sha512 of bytes.
+
+    Parameters:
+        contents (bytes): tarball bytes.
+
+    Returns:
+        str: `sha512-<base64>`.
+    """
+    return "sha512-" + base64.b64encode(hashlib.sha512(contents).digest()).decode("ascii")
+
+
+def write_root(root: Path, tag: str = NEW_TAG, contents: bytes = NEW_BYTES) -> dict[str, str]:
+    """Write a root `package.json` and lockfile pinning all four core overrides.
+
+    Parameters:
+        root (Path): repository root fixture.
+        tag (str): core tag every override names.
+        contents (bytes): bytes whose sha512 the lock records.
+
+    Returns:
+        dict[str, str]: override name -> URL.
+    """
+    urls = {f"@earendil-works/{package}": url for package, url in release.release_package_urls(tag).items()}
+    (root / "package.json").write_text(json.dumps({"overrides": urls}))
+    packages = {
+        f"node_modules/{name}": {"resolved": url, "integrity": sri(contents)} for name, url in urls.items()
+    }
+    (root / "package-lock.json").write_text(json.dumps({"packages": packages}))
+    return urls
+
+
+Edit = Callable[[dict[str, Any]], object]
+
+
+def merge_at(*path: str, values: dict[str, Any]) -> Edit:
+    """Build a fixture edit that merges `values` into the JSON object at `path`.
+
+    Parameters:
+        *path (str): keys leading from the document root to the object to extend.
+        values (dict[str, Any]): entries to add or replace.
+
+    Returns:
+        Edit: callable mutating a parsed document in place.
+    """
+
+    def edit(document: dict[str, Any]) -> None:
+        """Merge entries into the targeted fixture object.
+
+        Parameters:
+            document (dict[str, Any]): parsed fixture to mutate.
+        """
+        target = document
+        for key in path:
+            target = target[key]
+        target |= values
+
+    return edit
+
+
+def rewrite(path: Path, edit: Edit) -> None:
+    """Apply an in-place edit to a JSON fixture.
+
+    Parameters:
+        path (Path): JSON file.
+        edit (Edit): callable mutating the parsed document.
+    """
+    document = json.loads(path.read_text())
+    edit(document)
+    path.write_text(json.dumps(document))
+
+
+@pytest.fixture
+def new_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, list[list[str]]]:
+    """Serve a non-legacy release offline, recording each `gh` invocation.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace checksums, download and `gh`.
+        tmp_path (Path): root fixture parent.
+
+    Returns:
+        tuple[Path, list[list[str]]]: fixture root and recorded `gh` commands.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    write_root(root)
+    gh_bin = tmp_path / "gh"
+    gh_bin.touch()
+    gh_calls: list[list[str]] = []
+    monkeypatch.setattr(release, "GH_BIN", str(gh_bin))
+    monkeypatch.setattr(release, "release_checksums", lambda tag: checksums_for(tag, NEW_BYTES))
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(NEW_BYTES))
+    monkeypatch.setattr(subprocess, "check_output", lambda argv, **_k: gh_calls.append(argv) or "ok")
+    return root, gh_calls
+
+
+def test_root_override_gate_passes_all_four_with_exact_provenance(
+    new_release: tuple[Path, list[list[str]]],
+) -> None:
+    """Verify every override's checksum, lock sha512 and provenance at the exact tag."""
+    root, gh_calls = new_release
+    verify_root_overrides(root)
+    assert len(gh_calls) == len(RELEASE_PACKAGES)
+    for call in gh_calls:
+        assert call[1:3] == ["attestation", "verify"]
+        assert call[call.index("--signer-workflow") + 1] == ATTESTATION_WORKFLOW
+        assert call[call.index("--source-ref") + 1] == f"refs/tags/{NEW_TAG}"
+        assert "--deny-self-hosted-runners" in call
+
+
+def test_root_override_gate_rejects_resolved_url_mismatch_before_any_download(
+    monkeypatch: pytest.MonkeyPatch, new_release: tuple[Path, list[list[str]]]
+) -> None:
+    """A lock that resolves elsewhere than the override fails without touching the network."""
+    root, gh_calls = new_release
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> None:
+        """Fail if the gate downloads anything.
+
+        Parameters:
+            *_args (Any): ignored positional arguments.
+            **_kwargs (Any): ignored keyword arguments.
+
+        Raises:
+            AssertionError: always.
+        """
+        raise AssertionError("downloaded before the lockfile agreed")
+
+    monkeypatch.setattr(release, "urlopen", forbidden)
+    rewrite(
+        root / "package-lock.json",
+        merge_at(
+            "packages",
+            "node_modules/@earendil-works/pi-ai",
+            values={"resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.3.0.tgz"},
+        ),
+    )
+    with pytest.raises(ValueError, match=r"`resolved` for '@earendil-works/pi-ai'"):
+        verify_root_overrides(root)
+    assert gh_calls == []
+
+
+@pytest.mark.parametrize("breakage", ["missing_entry", "no_packages", "no_integrity", "weak_integrity"])
+def test_root_override_gate_rejects_missing_or_weak_lock_metadata(
+    new_release: tuple[Path, list[list[str]]], breakage: str
+) -> None:
+    """Missing `packages` metadata or a non-sha512 integrity can never pass."""
+    root, _ = new_release
+    lock = root / "package-lock.json"
+    key = "node_modules/@earendil-works/pi-tui"
+    edits: dict[str, Edit] = {
+        "missing_entry": lambda doc: doc["packages"].pop(key),
+        "no_packages": lambda doc: doc.pop("packages"),
+        "no_integrity": lambda doc: doc["packages"][key].pop("integrity"),
+        "weak_integrity": merge_at("packages", key, values={"integrity": "sha1-AAAA"}),
+    }
+    rewrite(lock, edits[breakage])
+    with pytest.raises(ValueError, match=r"packages|integrity"):
+        verify_root_overrides(root)
+
+
+def test_root_override_gate_rejects_sha512_mismatch_with_matching_sha256(
+    new_release: tuple[Path, list[list[str]]],
+) -> None:
+    """Bytes recorded by `SHA256SUMS` must also equal the lockfile's sha512."""
+    root, _ = new_release
+    rewrite(
+        root / "package-lock.json",
+        merge_at("packages", "node_modules/@earendil-works/pi-ai", values={"integrity": sri(b"other")}),
+    )
+    with pytest.raises(ValueError, match=r"integrity` mismatch for '@earendil-works/pi-ai'"):
+        verify_root_overrides(root)
+
+
+def test_root_override_gate_rejects_altered_tarball_bytes(
+    monkeypatch: pytest.MonkeyPatch, new_release: tuple[Path, list[list[str]]]
+) -> None:
+    """Served bytes that differ from the recorded sha256 fail before provenance."""
+    root, gh_calls = new_release
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(NEW_BYTES + b"tampered"))
+    with pytest.raises(ValueError, match="Release checksum mismatch"):
+        verify_root_overrides(root)
+    assert gh_calls == []
+
+
+def test_root_override_gate_rejects_altered_legacy_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Frozen legacy sha256 values still bind the bytes; nothing is skipped for legacy tags."""
+    write_root(tmp_path, "v1.3.0-nredd.6")
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(b"altered"))
+    monkeypatch.setattr(release, "verify_provenance", lambda *_a: pytest.fail("legacy has no provenance"))
+    with pytest.raises(ValueError, match="Release checksum mismatch"):
+        verify_root_overrides(tmp_path)
+
+
+@pytest.mark.parametrize("missing_gh", [True, False])
+def test_root_override_gate_fails_on_provenance_failure_or_missing_gh(
+    monkeypatch: pytest.MonkeyPatch,
+    new_release: tuple[Path, list[list[str]]],
+    tmp_path: Path,
+    missing_gh: bool,
+) -> None:
+    """A non-legacy tag without verifiable provenance, or without `gh`, is a hard failure."""
+    root, _ = new_release
+    if missing_gh:
+        monkeypatch.setattr(release, "GH_BIN", str(tmp_path / "absent-gh"))
+        with pytest.raises(FileNotFoundError, match="requires `gh`"):
+            verify_root_overrides(root)
+        return
+
+    def refuse(argv: list[str], **_kwargs: Any) -> str:
+        """Simulate `gh attestation verify` rejecting the artifact.
+
+        Parameters:
+            argv (list[str]): GitHub CLI command.
+            **_kwargs (Any): ignored subprocess options.
+
+        Raises:
+            subprocess.CalledProcessError: always.
+        """
+        raise subprocess.CalledProcessError(1, argv, output="no matching attestation")
+
+    monkeypatch.setattr(subprocess, "check_output", refuse)
+    with pytest.raises(RuntimeError, match=r"provenance verification failed.*no matching attestation"):
+        verify_root_overrides(root)
+
+
+def test_root_override_gate_requires_every_core_asset_in_sha256sums(
+    monkeypatch: pytest.MonkeyPatch, new_release: tuple[Path, list[list[str]]]
+) -> None:
+    """A new tag whose `SHA256SUMS` omits one of the four assets is rejected."""
+    root, _ = new_release
+    partial = dict(list(checksums_for(NEW_TAG, NEW_BYTES).items())[:-1])
+    monkeypatch.setattr(release, "release_checksums", lambda _tag: partial)
+    with pytest.raises(ValueError, match="does not publish checksums"):
+        verify_root_overrides(root)
+
+
+@pytest.mark.parametrize("breakage", ["extra", "missing", "blanket", "foreign_url", "wrong_asset", "nested"])
+def test_root_override_gate_rejects_unexpected_override_shapes(
+    new_release: tuple[Path, list[list[str]]], breakage: str
+) -> None:
+    """No extra, blanket, foreign or mismatched override and no nested lock copy is tolerated."""
+    root, _ = new_release
+    url = release.release_package_urls(NEW_TAG)["pi-tui"]
+    edits: dict[str, Edit] = {
+        "extra": merge_at("overrides", values={"@earendil-works/pi-mcp": url}),
+        "missing": lambda doc: doc["overrides"].pop("@earendil-works/pi-tui"),
+        "blanket": merge_at("overrides", values={"@earendil-works/pi-tui": {".": url}}),
+        "foreign_url": merge_at(
+            "overrides", values={"@earendil-works/pi-tui": "https://example.com/pi-tui.tgz"}
+        ),
+        "wrong_asset": merge_at(
+            "overrides",
+            values={"@earendil-works/pi-tui": release.release_package_urls(NEW_TAG)["pi-ai"]},
+        ),
+    }
+    if breakage == "nested":
+        rewrite(
+            root / "package-lock.json",
+            merge_at(
+                "packages",
+                values={
+                    "node_modules/x/node_modules/@earendil-works/pi-tui": {"resolved": "https://e/x.tgz"}
+                },
+            ),
+        )
+        match = "Nested lock entries"
+    else:
+        rewrite(root / "package.json", edits[breakage])
+        match = "overrides|Override"
+    with pytest.raises(ValueError, match=match):
+        verify_root_overrides(root)
+
+
+def test_root_override_gate_runs_before_install_and_blocks_it(tmp_path: Path) -> None:
+    """`make install` verifies first: a bad lock stops it before `npm` or `uv` ever run."""
+    root = tmp_path / "root"
+    root.mkdir()
+    shutil.copy(Path(__file__).resolve().parents[2] / "Makefile", root / "Makefile")
+    (root / "integration").symlink_to(Path(__file__).resolve().parents[1])
+    write_root(root, "v1.3.0-nredd.6")
+    rewrite(
+        root / "package-lock.json",
+        merge_at("packages", "node_modules/@earendil-works/pi-ai", values={"resolved": "https://e/x.tgz"}),
+    )
+    commands, marker = tmp_path / "commands", tmp_path / "ran"
+    commands.mkdir()
+    for tool in ("npm", "uv"):
+        (commands / tool).write_text(f"#!/bin/sh\necho {shlex.quote(tool)} >> {shlex.quote(str(marker))}\n")
+        (commands / tool).chmod(0o755)
+    env = os.environ | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"}
+    completed = subprocess.run(
+        ["make", "install"], cwd=root, env=env, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode != 0
+    assert "Root core override verification failed" in completed.stderr
+    assert not marker.exists()
+
+
+def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Path) -> None:
+    """Only the preflight sees `GH_TOKEN`; `npm ci` and `uv sync` run without it."""
+    root = tmp_path / "root"
+    root.mkdir()
+    shutil.copy(Path(__file__).resolve().parents[2] / "Makefile", root / "Makefile")
+    (root / "integration").symlink_to(Path(__file__).resolve().parents[1])
+    (root / "benchmarks" / "comparison").mkdir(parents=True)
+    commands, log = tmp_path / "commands", tmp_path / "seen"
+    commands.mkdir()
+    for tool in ("python3", "npm", "uv"):
+        (commands / tool).write_text(
+            f'#!/bin/sh\necho "{tool}=${{GH_TOKEN:-unset}}" >> {shlex.quote(str(log))}\n'
+        )
+        (commands / tool).chmod(0o755)
+    env = os.environ | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}", "GH_TOKEN": "fixture-token"}
+    completed = subprocess.run(
+        ["make", "install"], cwd=root, env=env, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert log.read_text().splitlines() == [
+        "python3=fixture-token",
+        "npm=unset",
+        "uv=unset",
+        "uv=unset",
+    ]
+
+
+def test_cli_verify_flag_reports_failure_and_rejects_prefix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The CLI exits with the failure text and refuses the fetch-only `--prefix`."""
+    monkeypatch.setattr(sys, "argv", ["release", "--verify-root-overrides", "--root", str(tmp_path)])
+    with pytest.raises(SystemExit, match="Root core override verification failed"):
+        release.main()
+    monkeypatch.setattr(sys, "argv", ["release", "--verify-root-overrides", "--prefix", str(tmp_path)])
+    with pytest.raises(SystemExit) as caught:
+        release.main()
+    assert caught.value.code == 2

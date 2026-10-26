@@ -107,8 +107,11 @@ jobs:
       - name: Initialize the core fork at its Gitlink
         if: steps.plan.outputs.run == 'true'
         run: git submodule update --init forks/pi
+      # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
       - name: Install
         if: steps.plan.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: make install
       - name: Owned gates (biome, tsc, vitest, bun test, scripts, integration units)
         if: steps.plan.outputs.run == 'true'
@@ -178,8 +181,11 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         with:
           version: "0.13.1"
+      # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
       - name: Install
         if: steps.plan.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: make install
       - name: Packed plugins alone on exact stock Pi, plus packed preset audit
         if: steps.plan.outputs.run == 'true'
@@ -269,6 +275,11 @@ jobs:
       - name: Install tmux (macOS)
         if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'
         run: brew install tmux
+      - name: Verify root core overrides before install
+        if: steps.plan.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
       - name: Install workspace and harness dependencies
         id: workspace
         if: steps.plan.outputs.run == 'true'
@@ -278,6 +289,8 @@ jobs:
       - name: Fetch exact Gitlinked core release, formula-equivalent install
         if: steps.plan.outputs.run == 'true'
         working-directory: integration
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git -C ../forks/pi fetch --tags origin
           uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$RUNNER_TEMP/pi-release"
