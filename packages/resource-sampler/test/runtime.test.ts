@@ -216,7 +216,16 @@ describe(`actual sampler on ${runtime}`, () => {
 			const states = [];
 			for (let i = 0; i < 3; i++) {
 				if (i > 0) await delay(250);
-				states.push((await sampler.sample()).cpu);
+				const snapshot = await sampler.sample();
+				states.push(snapshot.cpu);
+				if (
+					process.platform === "darwin" &&
+					(process.versions.bun || Number(process.versions.node.split(".")[0]) >= 26)
+				) {
+					const own = snapshot.processes.find((p) => p.pid === process.pid);
+					expect(own?.cpu.state).toBe(i === 0 ? "warming" : "available");
+					expect(own?.footprint?.state).toBe("available");
+				}
 			}
 			expect(states[0]?.state).toBe("warming");
 			for (const cpu of states.slice(1)) {

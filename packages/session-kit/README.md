@@ -15,7 +15,8 @@ session branch. Closing pi stops its work.
 
 `/mon` opens a read-only, full-pane view of local CPU, memory, load and processes, sampled
 every ~2s by the shared `@nredd/pi-resource-sampler` library only while it is open. Details and
-limits (macOS process CPU is unavailable, executable names keep 16 bytes, RSS excludes compressed pages,
+limits (macOS native CPU/footprint require the upcoming sampler pin, executable names keep 16 bytes,
+RSS excludes compressed pages, `f` toggles a labelled footprint column,
 and memory labels state their measurement basis) are in
 [docs/mon-dashboard.md](docs/mon-dashboard.md). It is not a second `/monitor` process runner.
 

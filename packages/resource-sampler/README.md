@@ -4,6 +4,9 @@ Pi-independent, dependency-free ESM library for passive host resource dashboards
 `@nredd/pi-resource-sampler` is not a Pi extension. No tools, timers, hooks, output or policy are
 registered. Runs on Node >=22.14 and Bun.
 
+Unreleased source (planned `0.2.0`): native Darwin interval CPU/footprint and host used/swap metrics.
+Published `0.1.1` still lacks them; release and consumer-pin steps remain owner-gated.
+
 Upgrade from `0.1.0`, which is unsafe: on Darwin it reported `ps -c -o comm`, the basename of argv[0],
 so a launcher-chosen argv[0] or Node `process.title` (e.g. `npm exec <package> mcp`) leaked into
 `processes[].name`. On Bun, host `cpu` read lazily populated `os.cpus()` objects, so the second sample
@@ -29,7 +32,7 @@ Semantics:
 - `cpu`: aggregate host CPU counter delta, 0..100. Core count/model changes, individual counter
   rollback, initial samples, invalid intervals and counters that have not advanced are `warming`,
   never fabricated zero. Uses Node's native `os.cpus()` counters, not load average.
-- `processes[].cpu`: Linux user+system counter delta divided by monotonic elapsed milliseconds.
+- `processes[].cpu`: cumulative user+system counter delta divided by monotonic elapsed milliseconds.
   100 means one logical core, multi-threaded processes can exceed 100. Linux `CLK_TCK` is read
   once with fixed `/usr/bin/getconf CLK_TCK`; no assumed tick rate or RSS page size.
 - Linux identity includes the exact `/proc/PID/stat` start tick string. Read stat/exe/status/stat and
@@ -37,11 +40,24 @@ Semantics:
   invalidate their old baselines. New/reused PIDs and counter resets warm rather than showing zero.
 - `cpu` copies every `os.cpus()` counter when sampled. Bun returns lazy placeholders that read native
   counters on first property access; an unread stored baseline would describe a later instant.
-- Darwin uses only `/bin/ps -A -o pid=,ppid=,lstart=,time=,rss=,ucomm=` with `LC_ALL=C`.
-  Actual macOS observation: `time` prints hundredths (e.g. `185:32.40`), but `lstart` prints only
-  seconds (`Sat Oct 3 01:49:05 2026`). That cannot rule out PID reuse within one second, so Darwin
-  process interval CPU is explicitly `unavailable`. No decaying `%cpu` is relabelled as an interval.
-  RSS/name/parent PID remain useful. No native helper until this limitation justifies one separately.
+- Darwin enumerates metadata with fixed `/bin/ps -A -o pid=,ppid=,lstart=,time=,rss=,ucomm=`
+  and `LC_ALL=C`. Builtin FFI (Node >=26.1, Bun, verified on pinned 1.3.14) then reads fixed symbols
+  `proc_pidinfo`, `proc_pid_rusage` and `mach_timebase_info` from `/usr/lib/libproc.dylib`, without
+  root, a compiler, addon or new binary/package dependency. Import/construction does not load FFI.
+  Node emits its builtin experimental-FFI warning on first use; Bun does not. Node 22-25 keeps
+  metadata/RSS but explicitly unavailable CPU/footprint. ABI access is restricted to Darwin arm64/x64.
+- Native Darwin identity includes PID, kernel process-start absolute ticks, microsecond start time,
+  PPID and exact `p_comm` bytes. Rusage reads bracket metadata; changed start/exit state or counter
+  rollback rejects the native read. Same-second PID reuse cannot authenticate an old baseline even
+  with identical parent/name and nondecreasing CPU. Each observation has its own monotonic timestamp.
+  Identity/parent/name changes, negative deltas, nonpositive/nonfinite intervals and native intervals
+  over 60s warm instead of fabricating CPU. Native CPU counters are Mach ticks converted using the
+  kernel timebase (125/3 ns per tick on this Apple Silicon Mac), NOT assumed nanoseconds.
+- `processes[].footprint` is an optional Darwin metric from `ri_phys_footprint`, including compressed
+  memory. Native `rssBytes` comes from `ri_resident_size`. Inaccessible/exited/reused PIDs or exhausted
+  native budgets retain the enumerated metadata/RSS row with unavailable CPU/footprint; unsupported
+  runtimes do the same. No failed footprint is encoded as zero. `ps` fallback identity has only
+  whole-second precision, so it NEVER supplies interval CPU. No decaying `%cpu` is relabelled.
 - `wallTimeMs` labels the start; `monotonicTimeMs` controls intervals. Per-process reads have their own
   monotonic timestamps internally; the scan is not atomic. `durationMs` includes collection.
 - `memory.freeBytes` means free, NOT available or pressure. Darwin adds optional v1 `memory.usage`
@@ -61,7 +77,7 @@ Semantics:
 - `processes[].name` is an executable basename from kernel metadata. It excludes argv, environment,
   process title and Linux comm, but it is still untrusted metadata that the process or its launcher can
   choose (see the last item). `""` means unavailable, not a process called nothing:
-  - Darwin: `ucomm`, which `ps` prints from kinfo `p_comm`. XNU writes it only at exec, from the
+  - Darwin: native `proc_bsdinfo.pbi_comm`, or `ps ucomm` from kinfo `p_comm`. XNU writes it at exec, from the
     looked-up executable file name, truncated to 16 bytes (`Google Chrome He`). `ps -c -o comm` is
     argv[0] and is NOT used.
   - Linux: basename of `readlink /proc/PID/exe` (` (deleted)` marker removed), read between the two
@@ -79,7 +95,11 @@ Bounds:
 
 - Default scan budget 250ms, 2048 PIDs, 2MiB captured bytes; options allow at most 5s, 16384 PIDs,
   16MiB. Linux proc files read sequentially (concurrency one), at most 8KiB each. Directory iteration
-  stops at the budget; Darwin output stops at the PID/output budget and reaps the fixed helper.
+  stops at the budget; Darwin output stops at the PID/output budget and reaps the fixed helper. Native reads charge
+  8 bytes for the timebase and 328 bytes per admitted PID (two 96-byte rusage buffers and one 136-byte
+  metadata buffer), including failed calls, to that SAME byte budget. Only `pbi_comm` and numeric
+  fields are inspected; `pbi_name`, arguments and environment are never decoded or exported. Native
+  syscalls are synchronous/non-preemptible like `os.cpus()`; admission is checked between reads.
 - `/proc/PID/exe` is a `readlink`, which Node and Bun cannot cap: each call copies up to PATH_MAX
   (4096) bytes into a fixed runtime buffer before the length is known. That fixed per-call syscall
   copy can exceed the remaining budget; the logical budget cannot. A target longer than the remainder
@@ -99,9 +119,10 @@ Bounds:
   immediate SIGKILL on abort/deadline/cap, and resolve only on close. No persistent children or workers.
 - Unsupported platforms keep native host metrics but report process coverage unavailable.
 
-macOS measurement/definition comparison and unresolved CPU/native-ABI limitations:
+macOS measurement/definition comparison, native ABI evidence and future publication checklist:
 [here](../../docs/mon-accuracy.md). Process `rssBytes` still excludes compressed pages; it is not
-Activity Monitor's physical footprint. Names remain executable names, so Pi commonly appears as `node`.
+Activity Monitor's physical footprint; use the separate `footprint` metric for that comparison.
+Names remain executable names, so Pi commonly appears as `node`.
 
 Local overhead observation (2026-10-22, Darwin arm64, Node 26.12.0, 10 logical CPUs, 16GiB RAM,
 load about 6, not a quiet-runner benchmark): ten scans of 557 processes took 17.5-24.9ms each,

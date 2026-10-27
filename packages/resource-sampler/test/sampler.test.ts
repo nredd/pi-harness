@@ -172,6 +172,17 @@ describe("Darwin host memory", () => {
 		])
 			expect(darwinSwap(broken)).toBeNull();
 	});
+	it("parses the same-second AM-style kernel capture and measured fixed ps fallback rows", async () => {
+		const text = await readFile(new URL("./fixtures/darwin-kernel-window.txt", import.meta.url), "utf8");
+		expect(darwinMemory(text, 16 * 1024 ** 3)?.usedBytes).toBe(12061147136);
+		const ps = await readFile(new URL("./fixtures/darwin-ps.txt", import.meta.url), "utf8");
+		const rows = ps
+			.trim()
+			.split("\n")
+			.map((line) => darwinProcess(line, 1));
+		expect(rows.map((row) => row?.name)).toEqual(["node", "node", "node"]);
+		expect(rows.map((row) => row?.strongIdentity)).toEqual([undefined, undefined, undefined]);
+	});
 	it("does not spawn native readers after byte or deadline admission fails; absence is never zero", async () => {
 		for (const budget of [
 			new Budget(performance.now() - 1, 4096, 1, new AbortController().signal),
@@ -273,7 +284,11 @@ describe("real local sampler", () => {
 			}
 			expect(second.processes.some((entry) => entry.pid === process.pid)).toBe(true);
 			const own = second.processes.find((entry) => entry.pid === process.pid);
-			expect(own?.cpu.state).toBe(process.platform === "linux" ? "available" : "unavailable");
+			const native =
+				process.platform === "darwin" &&
+				(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) >= 26);
+			expect(own?.cpu.state).toBe(process.platform === "linux" || native ? "available" : "unavailable");
+			if (native) expect(own?.footprint?.state).toBe("available");
 			expect(second.coverage.bytesRead).toBeLessThanOrEqual(2_097_152);
 			if (process.platform === "darwin") {
 				expect(second.memory.usage?.state).toBe("available");

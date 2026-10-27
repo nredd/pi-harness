@@ -208,6 +208,30 @@ describe("sampler snapshot mapping", () => {
 		expect(legacy.memoryBasis).toBe("total-free");
 	});
 
+	it("maps native interval CPU and footprint independently, preserving failed PID metrics as unknown", () => {
+		const base = raw({ platform: "darwin" });
+		const processes = base.processes.slice(0, 3).map((p, i) => ({
+			...p,
+			cpu: { state: "available" as const, value: 99.7 },
+			footprint:
+				i === 0
+					? { state: "available" as const, value: 12345678 }
+					: { state: "unavailable" as const, reason: "no access" },
+		}));
+		const mapped = toMonSnapshot({ ...base, processes });
+		expect(mapped.processCpu).toBeUndefined();
+		expect(mapped.processes[0]?.cpuPercent).toBe(99.7);
+		expect(mapped.processes.map((p) => p.footprintBytes)).toEqual([12345678, null, null]);
+		for (const value of [
+			{ usedBytes: -1, totalBytes: 4 },
+			{ usedBytes: 5, totalBytes: 4 },
+		]) {
+			const result = toMonSnapshot({ ...base, memory: { ...base.memory, swap: { state: "available", value } } });
+			expect(result.swapUsedBytes).toBeNull();
+			expect(result.swapTotalBytes).toBeNull();
+		}
+	});
+
 	it("treats missing memory or non-finite values as unknown", () => {
 		const zero = toMonSnapshot(raw({ memory: { totalBytes: 0, freeBytes: 0 }, durationMs: Number.NaN }));
 		expect(zero.memoryTotalBytes).toBeNull();

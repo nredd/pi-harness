@@ -9,6 +9,8 @@ export interface MonProcess {
 	nameState?: "unknown" | "truncated";
 	cpuPercent: number | null;
 	rssBytes: number | null;
+	/** Native macOS physical footprint, including compression; undefined/null is not zero. */
+	footprintBytes?: number | null;
 }
 
 /** No process arguments, environment, working directories or host identifiers enter the view. */

@@ -64,11 +64,19 @@ export function createResourceSampler(options: SamplerOptions = {}): ResourceSam
 			name: counter.name,
 			identity: counter.identity,
 			rssBytes: counter.rssBytes,
+			...(host === "darwin"
+				? {
+						footprint:
+							counter.footprintBytes === undefined
+								? { state: "unavailable" as const, reason: "native footprint inaccessible or builtin FFI unavailable" }
+								: { state: "available" as const, value: counter.footprintBytes },
+					}
+				: {}),
 			cpu:
-				host === "darwin"
+				host === "darwin" && !counter.strongIdentity
 					? {
 							state: "unavailable" as const,
-							reason: "ps start identity precision is one second; PID reuse cannot be excluded",
+							reason: "native counters inaccessible or builtin FFI unavailable; ps identity has only whole seconds",
 						}
 					: processCpu(previousProcesses.get(counter.pid), counter),
 		}));

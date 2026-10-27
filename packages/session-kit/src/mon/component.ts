@@ -45,6 +45,7 @@ const HELP = [
 	" c CPU  m RSS    descending",
 	" p PID           ascending",
 	" s               cycle sort",
+	" f               toggle RSS / FOOT",
 	" ?               back to dashboard",
 	" q/Esc           close",
 	"",
@@ -74,12 +75,19 @@ const HELP = [
 	" RSS excludes compressed pages.",
 	" Activity Monitor's Memory column:",
 	" footprint, not RSS, with compression.",
+	" f shows FOOT bytes; MEM% stays RSS.",
+	" Failed/unsupported footprint is --.",
 	" (unknown): no access, e.g. another",
 	" user's process on Linux.",
 	" macOS keeps 16 bytes of a name;",
 	" a trailing … marks a possible cut.",
-	" macOS: ps start time is whole seconds,",
-	" so process CPU stays -- (sort: RSS).",
+	" macOS CPU: native cumulative time;",
+	" Start ticks + usec reject PID reuse.",
+	" No native access/builtin FFI: --.",
+	" Node <26.1 lacks builtin FFI; Bun uses",
+	" bun:ffi. ps start is whole seconds.",
+	" Older sampler releases also lack CPU.",
+	" Same PID/parent/name/time is NOT proof.",
 	" ps %cpu is decaying, NOT interval CPU.",
 	" Lists can be partial; notices say why.",
 	" Selection follows identity, not row.",
@@ -105,6 +113,7 @@ export class MonView implements Component {
 	private sort: MonSort = "cpu";
 	private sortChosen = false;
 	private help = false;
+	private footprint = false;
 	private scroll = 0;
 	private pageSize = 1;
 	private cache: { width: number; height: number; lines: string[] } | undefined;
@@ -172,6 +181,8 @@ export class MonView implements Component {
 			else if (data === "G" || matchesKey(data, Key.end)) this.helpScroll = this.helpLength;
 			else return;
 			this.helpScroll = Math.max(0, Math.min(this.helpScroll, this.helpLength - this.helpPageSize));
+		} else if (data === "f") {
+			this.footprint = !this.footprint;
 		} else if (data === "c" || data === "m" || data === "p" || data === "s") {
 			this.sortChosen = true;
 			this.sort =
@@ -261,7 +272,7 @@ export class MonView implements Component {
 				` ${this.cpuSummary()}`,
 				...timeHistoryRows(this.history, chartWidth, 2).map((row) => ` ${t.fg("accent", row)}`),
 				` ${t.fg("dim", this.historyLabel())}`,
-				"",
+				"", // Match the memory panel's added free/swap row.
 			],
 			leftWidth,
 		);
@@ -455,7 +466,14 @@ export class MonView implements Component {
 		lines.push(
 			t.fg(
 				"muted",
-				row(" ", "PID", "CPU%".padStart(cpuWidth), "RSS".padStart(rssWidth), "MEM%".padStart(memWidth), "NAME"),
+				row(
+					" ",
+					"PID",
+					"CPU%".padStart(cpuWidth),
+					(this.footprint ? "FOOT" : "RSS").padStart(rssWidth),
+					"MEM%".padStart(memWidth),
+					"NAME",
+				),
 			),
 		);
 		const index = Math.max(
@@ -477,7 +495,7 @@ export class MonView implements Component {
 				selected ? t.fg("accent", "▸") : " ",
 				String(p.pid),
 				this.value(percent(p.cpuPercent).replace("%", ""), cpuWidth),
-				this.value(bytes(p.rssBytes), rssWidth),
+				this.value(bytes(this.footprint ? (p.footprintBytes ?? null) : p.rssBytes), rssWidth),
 				this.value(share(p.rssBytes, total), memWidth),
 				this.nameCell(p),
 			);

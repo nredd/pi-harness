@@ -11,6 +11,9 @@ export interface ProcessCounter {
 	rssBytes: number;
 	cpuMs: number;
 	at: number;
+	/** Darwin native start identity and cumulative counters were read successfully. */
+	strongIdentity?: true;
+	footprintBytes?: number;
 }
 
 /**
@@ -51,13 +54,18 @@ export function hostCpu(previous: CpuInfo[] | undefined, current: CpuInfo[]): Me
 
 /** CPU milliseconds divided by monotonic wall milliseconds, not a lifetime/decaying ps average. */
 export function processCpu(previous: ProcessCounter | undefined, current: ProcessCounter): Metric<number> {
-	if (!previous || previous.identity !== current.identity)
+	if (
+		!previous ||
+		previous.identity !== current.identity ||
+		(current.strongIdentity && (previous.parentPid !== current.parentPid || previous.name !== current.name))
+	)
 		return { state: "warming", reason: "initial sample or PID reused" };
 	const elapsed = current.at - previous.at;
 	const cpu = current.cpuMs - previous.cpuMs;
 	if (
 		!Number.isFinite(elapsed) ||
 		elapsed <= 0 ||
+		(current.strongIdentity && elapsed > 60_000) ||
 		!Number.isFinite(cpu) ||
 		previous.cpuMs < 0 ||
 		current.cpuMs < 0 ||

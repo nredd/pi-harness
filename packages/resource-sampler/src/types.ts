@@ -14,6 +14,8 @@ export interface ProcessSample {
 	name: string;
 	identity: string;
 	rssBytes: number;
+	/** Darwin physical footprint (includes compressed memory); failure is never zero. */
+	footprint?: Metric<number>;
 	/** Interval utilization: 100 is one logical core, values may exceed 100. */
 	cpu: Metric<number>;
 }

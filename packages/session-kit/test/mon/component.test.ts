@@ -65,6 +65,8 @@ describe("mon responsive dashboard", () => {
 			"footprint, not RSS",
 			"pi runs as node",
 			"NOT interval CPU",
+			"usec reject PID reuse",
+			"No native access/builtin FFI",
 			"app + wired + compressed",
 			"not percent",
 			"elapsed time",
@@ -94,6 +96,27 @@ describe("mon responsive dashboard", () => {
 		expect(v.render(40).join("\n")).toContain("T-F");
 		expect(v.render(120).join("\n")).not.toContain("non-free");
 	});
+
+	it.each([40, 60, 80, 120])(
+		"toggles a labelled footprint column at %i columns without replacing failed PIDs by zero",
+		(width) => {
+			const { v } = view(24);
+			v.update({
+				...snapshot(),
+				processes: snapshot()
+					.processes.slice(0, 2)
+					.map((p, i) => ({ ...p, footprintBytes: i === 0 ? 800 * 1024 ** 2 : null })),
+			});
+			v.handleInput("f");
+			const lines = v.render(width);
+			expect(lines.find((line) => line.includes("NAME"))).toContain("FOOT");
+			expect(lines.find((line) => line.includes("1000"))).toContain("800M");
+			expect(lines.find((line) => line.includes("1001"))).toContain("--");
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			v.handleInput("f");
+			expect(v.render(width).find((line) => line.includes("NAME"))).toContain("RSS");
+		},
+	);
 
 	it("fills completion-paced history contiguously, right-aligned, with only real gaps dotted", () => {
 		// Real cadence is 2000ms plus scan time; drift must not invent gaps.

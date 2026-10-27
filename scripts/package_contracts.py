@@ -170,7 +170,7 @@ RESOURCE_SAMPLER_FILES = (
     "package.json",
     *(
         f"dist/{module}.{suffix}"
-        for module in ("index", "types", "counters", "collect")
+        for module in ("index", "types", "counters", "collect", "darwin")
         for suffix in ("js", "d.ts")
     ),
 )
@@ -272,7 +272,16 @@ await supervise(hostile, async () => {
             assert.equal(usedBytes + availableBytes, second.memory.totalBytes);
             assert.equal(second.memory.swap?.state, 'available', 'native swap missing');
             assert.ok(second.memory.swap.value.usedBytes <= second.memory.swap.value.totalBytes);
-            assert.ok(second.processes.every(p => p.cpu.state === 'unavailable'));
+            const own = second.processes.find(p => p.pid === process.pid);
+            const [major, minor] = process.versions.node.split('.').map(Number);
+            if (major > 26 || (major === 26 && minor >= 1)) {
+                assert.equal(own?.cpu.state, 'available', 'native interval CPU missing');
+                assert.ok(own.cpu.value >= 0);
+                assert.equal(own.footprint?.state, 'available', 'native footprint missing');
+                assert.ok(own.footprint.value > 0);
+            } else {
+                assert.equal(own?.cpu.state, 'unavailable');
+            }
         } else if (process.platform === 'linux') {
             assert.equal(second.memory.usage, undefined);
             assert.equal(second.memory.swap, undefined);

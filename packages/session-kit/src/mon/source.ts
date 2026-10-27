@@ -28,8 +28,9 @@ const REASONS: Readonly<Record<string, string>> = {
 };
 const utf8 = new TextEncoder();
 
-/** Additive v1 memory fields; keep the adapter compatible with the currently published 0.1.1. */
-type MemorySnapshot = ResourceSnapshot & {
+/** Additive v1 fields for registry 0.1.1 compatibility; remove this shim at the owner-gated 0.2.0 pin. */
+type MemorySnapshot = Omit<ResourceSnapshot, "memory" | "processes"> & {
+	processes: (ResourceSnapshot["processes"][number] & { footprint?: Metric<number> })[];
 	memory: ResourceSnapshot["memory"] & {
 		usage?: Metric<{ usedBytes: number; availableBytes: number; basis: "app+wired+compressed" }>;
 		swap?: Metric<{ usedBytes: number; totalBytes: number }>;
@@ -90,7 +91,12 @@ export function toMonSnapshot(snapshot: MemorySnapshot, baseline = true): MonSna
 	const swap = snapshot.memory.swap;
 	const measuredUsed = usage?.state === "available" ? finite(usage.value.usedBytes) : null;
 	const nativeUsed =
-		measuredUsed !== null && measuredUsed >= 0 && total !== null && measuredUsed <= total ? measuredUsed : null;
+		measuredUsed !== null && measuredUsed >= 0 && total !== null && total > 0 && measuredUsed <= total
+			? measuredUsed
+			: null;
+	const swapUsed = swap?.state === "available" ? finite(swap.value.usedBytes) : null;
+	const swapTotal = swap?.state === "available" ? finite(swap.value.totalBytes) : null;
+	const validSwap = swapUsed !== null && swapTotal !== null && swapUsed >= 0 && swapTotal >= swapUsed;
 	const text = notice(snapshot, baseline);
 	const note = hint(snapshot);
 	return {
@@ -104,8 +110,8 @@ export function toMonSnapshot(snapshot: MemorySnapshot, baseline = true): MonSna
 		memoryTotalBytes: total !== null && total > 0 ? total : null,
 		memoryBasis: usage ? "app+wired+compressed" : "total-free",
 		memoryFreeBytes: free !== null && free >= 0 ? free : null,
-		swapUsedBytes: swap?.state === "available" ? finite(swap.value.usedBytes) : null,
-		swapTotalBytes: swap?.state === "available" ? finite(swap.value.totalBytes) : null,
+		swapUsedBytes: validSwap ? swapUsed : null,
+		swapTotalBytes: validSwap ? swapTotal : null,
 		load: snapshot.loadAverage,
 		processes: snapshot.processes.map((p) => {
 			const state = nameState(snapshot, p.name);
@@ -116,6 +122,7 @@ export function toMonSnapshot(snapshot: MemorySnapshot, baseline = true): MonSna
 				...(state ? { nameState: state } : {}),
 				cpuPercent: p.cpu.state === "available" ? finite(p.cpu.value) : null,
 				rssBytes: finite(p.rssBytes),
+				footprintBytes: p.footprint?.state === "available" && p.footprint.value >= 0 ? finite(p.footprint.value) : null,
 			};
 		}),
 		capturedAt: snapshot.wallTimeMs,

@@ -11,6 +11,7 @@ import {
 	type ProcessCounter,
 	psi,
 } from "./counters.js";
+import { darwinNativeProcesses } from "./darwin.js";
 import type { ResourceSnapshot } from "./types.js";
 
 /** Linux PATH_MAX: Node (libuv `pathconf`) and Bun (`PathBuffer`) readlink buffer size on Linux. */
@@ -212,7 +213,7 @@ export async function darwinProcesses(budget: Budget): Promise<ProcessCounter[]>
 			budget.reasons.add("malformed-process-row");
 		}
 	}
-	return result;
+	return darwinNativeProcesses(result, budget);
 }
 
 /** Fixed metadata-only helpers share the process scan's deadline, byte cap and awaited reaping. */
