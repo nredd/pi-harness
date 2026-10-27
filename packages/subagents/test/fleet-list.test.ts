@@ -313,13 +313,13 @@ describe("FleetList navigation", () => {
     // Selection marker keeps accent color; row content uses primary text color.
     expect(selected).toContain("<accent>●</accent>");
     expect(selected).toContain("<text>one</text>");
-    expect(selected).toMatch(/<text>\d+s · ↓ [\d.]+k? tokens<\/text>/);
+    expect(selected).toMatch(/<text>.*· \d+s · ↓ [\d.]+k? tokens<\/text>/);
     // Agent display name rendered with the text token too (this type has no badge).
     expect(selected).toContain(`<text>${getDisplayName("general-purpose")}</text>`);
     // Inactive rows keep the muted/dim treatment.
     const unselected = h.render().find(l => l.includes("two"))!;
     expect(unselected).toContain("<dim>○</dim>");
-    expect(unselected).toMatch(/<dim>\d+s · ↓ [\d.]+k? tokens<\/dim>/);
+    expect(unselected).toMatch(/<dim>.*· \d+s · ↓ [\d.]+k? tokens<\/dim>/);
     expect(unselected).not.toContain("<text>");
   });
 
@@ -888,13 +888,13 @@ describe("FleetList model and activity", () => {
   it("names the model and thinking level under showModel", () => {
     const out = row(withModel(), true);
     expect(out).toContain("opus 4.6");
-    expect(out).toContain("thinking: high");
+    expect(out).toContain("think:high");
   });
 
   it("renders the row exactly as before when showModel is off", () => {
     const out = row(withModel(), false);
     expect(out).not.toContain("opus 4.6");
-    expect(out).not.toContain("thinking: high");
+    expect(out).not.toContain("think:high");
   });
 
   it("flags a model fallback first on the row, even with showModel off", () => {
@@ -961,7 +961,7 @@ describe("FleetList model and activity", () => {
       expect(emoji).toContain("...");
       expect(cjk).not.toContain("deliberately long description");
       expect(emoji).not.toContain("different long description");
-      expect(cellStart(cjk, "thinking: low")).toBe(cellStart(emoji, "thinking: ultrathink"));
+      expect(cellStart(cjk, "think:low")).toBe(cellStart(emoji, "think:ultrathink"));
       expect(cellStart(cjk, "tokens")).toBe(cellStart(emoji, "tokens"));
       expect(cellStart(cjk, "~$0.0042") + visibleWidth("~$0.0042"))
         .toBe(cellStart(emoji, "~$12.34") + visibleWidth("~$12.34"));
@@ -978,7 +978,7 @@ describe("FleetList model and activity", () => {
     expect(cellStart(a, "↓ 13.1k tokens") + visibleWidth("↓ 13.1k tokens"))
       .toBe(cellStart(b, "↓ 987.7k tokens") + visibleWidth("↓ 987.7k tokens"));
     expect(cellStart(a, "銀河 4.6")).toBe(cellStart(b, "🧠 opus"));
-    expect(cellStart(a, "thinking: low")).toBe(cellStart(b, "thinking: ultrathink"));
+    expect(cellStart(a, "think:low")).toBe(cellStart(b, "think:ultrathink"));
   });
 
   it("copes with a record that has no invocation yet", () => {
@@ -1014,6 +1014,295 @@ describe("FleetList model and activity", () => {
     }]]);
     const out = row(withModel({ status: "completed", completedAt: now - 100 }), false, activity);
     expect(out).not.toContain("writing");
+  });
+});
+
+describe("FleetList layout at real terminal sizes (#144)", () => {
+  const plainTheme = { fg: (_c: string, text: string) => text, bold: (text: string) => text };
+  const NOW = 1_000_000;
+
+  /** One agent per state, plus aliased and activity-less rows; start order = array order. */
+  function mixed(): AgentRecord[] {
+    const usage = (input: number) => ({ input, output: 0, cacheWrite: 0 });
+    const base = { startedAt: NOW - 60_000, lifetimeUsage: usage(13_100) };
+    return [
+      makeRecord({ ...base, id: "p", type: "Plan", description: "Plan the migration", invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" } }),
+      makeRecord({ ...base, id: "c1", alias: "pr-1412", description: "Spec review of the harness change", startedAt: NOW - 50_000, lifetimeUsage: usage(250_000) }),
+      makeRecord({ ...base, id: "c2", alias: "pr-1413", description: "Spec review of the harness change", startedAt: NOW - 40_000 }),
+      makeRecord({ ...base, id: "q", status: "queued", description: "Waiting for a slot", startedAt: NOW - 30_000 }),
+      makeRecord({ ...base, id: "d", status: "completed", completedAt: NOW - 1_000, description: "Finished fix", startedAt: NOW - 20_000 }),
+      makeRecord({ ...base, id: "f", status: "error", completedAt: NOW - 1_000, description: "Broken build", startedAt: NOW - 15_000 }),
+      makeRecord({ ...base, id: "s", status: "stopped", completedAt: NOW - 1_000, description: "Stopped by user", startedAt: NOW - 10_000 }),
+    ];
+  }
+
+  /** Real ANSI colour, so width maths and truncation run over escapes (the plain theme hides them). */
+  const styledTheme = {
+    fg: (color: string, text: string) => `\u001b[${color === "accent" ? 36 : color === "error" ? 31 : color === "success" ? 32 : 90}m${text}\u001b[39m`,
+    bold: (text: string) => `\u001b[1m${text}\u001b[22m`,
+  };
+
+  function renderAt(
+    agents: AgentRecord[],
+    columns: number,
+    rows: number,
+    selected = 0,
+    showModel = true,
+    extra: { styled?: boolean; showCost?: boolean; activity?: Map<string, AgentActivity> } = {},
+  ): string[] {
+    const activity = extra.activity ?? new Map<string, AgentActivity>([["c1", {
+      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
+      modelCall: { startedAt: NOW - 4_000, lastEventAt: NOW - 100, kind: "thinking", writtenChars: 0 },
+    }]]);
+    const clock = { now: () => NOW, setInterval: () => ({ cancel() {}, unref() {} }), setTimeout: () => ({ cancel() {}, unref() {} }) };
+    const fleet = new FleetList(fakeManager(agents), activity, () => extra.showCost ?? false, undefined, undefined, undefined, undefined, () => showModel, () => [], clock as never);
+    let factory: WidgetFactory | undefined;
+    let input: ((data: string) => unknown) | undefined;
+    const ui: FleetUICtx = {
+      setWidget: (_k, c) => { factory = c; },
+      onTerminalInput: h => { input = h; return () => {}; },
+      getEditorText: () => "",
+      notify: () => {},
+      custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+    };
+    fleet.setUICtx(ui);
+    fleet.update();
+    for (let i = 0; i <= selected; i++) input?.(DOWN);
+    const lines = factory!({ requestRender: () => {}, terminal: { columns, rows } }, extra.styled ? styledTheme : plainTheme).render(columns);
+    return extra.styled ? lines : lines.map(plain);
+  }
+
+  it.each([[80, 24], [120, 40]])("keeps leading fallback flags, aliases and aligned state/stats at %ix%i", (columns, rows) => {
+    const agents = mixed().slice(1, 3);
+    agents[0].modelFallback = { input: "ghost", used: "anthropic/x" };
+    for (const agent of agents) agent.invocation = { modelName: "opus 4.6", modelId: "a/o", thinking: "high" };
+    for (const showModel of [false, true]) {
+      const lines = renderAt(agents, columns, rows, 1, showModel, { styled: true }).map(plain);
+      const flagged = lines.find(l => l.includes("[fallback]"))!;
+      expect(flagged).toContain("pr-1412:");
+      expect(flagged.indexOf("[fallback]")).toBeLessThan(flagged.indexOf("pr-1412:"));
+      const agentRows = lines.filter(l => l.includes("▶ running"));
+      expect(agentRows).toHaveLength(2);
+      expect(new Set(agentRows.map(l => visibleWidth(l.split("▶ running")[0]))).size).toBe(1);
+      expect(new Set(agentRows.map(l => visibleWidth(l.split("tokens")[0]))).size).toBe(1);
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+    }
+  });
+
+  it("reserves a hidden row's fallback flag before fitting columns", () => {
+    const agents = mixed();
+    for (const agent of agents) agent.invocation = { modelName: "opus 4.6", modelId: "a/o", thinking: "high" };
+    agents[5].modelFallback = { input: "ghost", used: "anthropic/x" };
+    const top = renderAt(agents, 75, 24);
+    const bottom = renderAt(agents, 75, 24, 7);
+    expect(top.join("\n")).not.toContain("[fallback]");
+    expect(top.join("\n")).not.toContain("opus 4.6");
+    expect(bottom.join("\n")).toContain("[fallback]");
+    const stateAt = (lines: string[]) => lines.find(l => l.includes("tokens"))!.indexOf(" · ");
+    expect(stateAt(top)).toBe(stateAt(bottom));
+  });
+
+  it.each([false, true].flatMap(fallback => [false, true].map(showModel => ({ fallback, showModel }))))("preserves paid stats at 40 columns (fallback=$fallback, showModel=$showModel)", ({ fallback, showModel }) => {
+    const record = makeRecord({
+      startedAt: NOW - 60_000, alias: "audit", description: "Review a deliberately long description",
+      modelFallback: fallback ? { input: "ghost", used: "anthropic/x" } : undefined,
+      invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+      lifetimeUsage: { input: 13_100, output: 0, cacheWrite: 0, cost: 0.0042 },
+    });
+    const lines = renderAt([record], 40, 24, 1, showModel, { styled: true, showCost: true }).map(plain);
+    const line = lines[3];
+    if (fallback) expect(line).toMatch(/^\s*(?:[●○]\s*)?(?:\[fb\]|!)(?:\s|$)/);
+    else expect(line).not.toMatch(/\[fallback\]|\[fb\]|!/);
+    expect(line).toContain("60s");
+    expect(line).toContain("↓ 13.1k tokens");
+    expect(line).toContain("~$0.0042");
+    for (const row of lines) expect(visibleWidth(row)).toBeLessThanOrEqual(40);
+  });
+
+  it.each([false, true].flatMap(fallback => Array.from({ length: 91 }, (_, i) => ({ fallback, columns: i + 30 }))))("preserves physically fitting spend at $columns columns (fallback=$fallback)", ({ fallback, columns }) => {
+    for (const [input, cost, tokenText, costText] of [
+      [13_100, 0.0042, "↓ 13.1k tokens", "~$0.0042"],
+      [987_654, 12.34, "↓ 987.7k tokens", "~$12.34"],
+    ] as const) {
+      const record = makeRecord({
+        startedAt: NOW - 60_000, alias: "audit", description: "A long description to truncate before spend",
+        modelFallback: fallback ? { input: "ghost", used: "anthropic/x" } : undefined,
+        invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+        lifetimeUsage: { input, output: 0, cacheWrite: 0, cost },
+      });
+      const lines = renderAt([record], columns, 24, 1, true, { styled: true, showCost: true }).map(plain);
+      const line = lines[3];
+      if (fallback) expect(line).toMatch(/^\s*(?:[●○]\s*)?(?:\[fallback\]|\[fb\]|!)(?:\s|$)/);
+      else expect(line).not.toMatch(/\[fallback\]|\[fb\]|!/);
+      // Independent lower bound from literal expected stats, with a marker only if needed.
+      const marker = fallback ? "! " : "";
+      if (visibleWidth(`${marker}${tokenText} ${costText}`) <= columns) {
+        expect(line).toContain(tokenText);
+        expect(line).toContain(costText);
+      }
+      if (visibleWidth(`${marker}60s ${tokenText} ${costText}`) <= columns) expect(line).toContain("60s");
+      for (const row of lines) expect(visibleWidth(row)).toBeLessThanOrEqual(columns);
+    }
+  });
+
+  it("gives every state a glyph and a word, at 120x40", () => {
+    const lines = renderAt(mixed().slice(0, 1).concat(mixed().slice(3, 7)), 120, 40);
+    const text = lines.join("\n");
+    expect(text).toContain("▶ running");
+    expect(text).toContain("◦ queued");
+    expect(text).toContain("✓ done");
+    expect(text).toContain("✗ failed");
+    expect(text).toContain("■ stopped");
+  });
+
+  it("aligns every column across rows with and without activity, at 120x40", () => {
+    const lines = renderAt(mixed().slice(0, 3), 120, 40);
+    const rows = lines.filter(l => /▶ running/.test(l));
+    expect(rows).toHaveLength(3);
+    // The activity-less Plan row pads the activity slot, so elapsed and tokens still line up.
+    expect(new Set(rows.map(l => visibleWidth(l.split("tokens", 1)[0]))).size).toBe(1);
+    expect(new Set(rows.map(l => l.search(/\d\ds · +↓/))).size).toBe(1);
+    expect(new Set(rows.map(l => visibleWidth(l.trimEnd()))).size).toBe(1);
+    expect(rows[0]).toContain("think:high");
+    expect(rows[1]).toContain("thinking · 4s");
+  });
+
+  it("keeps the name handle ahead of a truncated description, at 80x24", () => {
+    const lines = renderAt(mixed().slice(0, 3), 80, 24);
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+    const critics = lines.filter(l => /pr-141\d/.test(l));
+    expect(critics.map(l => l.match(/pr-141\d/)?.[0])).toEqual(["pr-1412", "pr-1413"]);
+  });
+
+  it("drops optional columns, never the tokens, at 80x24", () => {
+    const lines = renderAt(mixed().slice(0, 3), 80, 24);
+    const agentRows = lines.filter(l => /▶ running/.test(l));
+    for (const line of agentRows) {
+      expect(line).toMatch(/↓ [\d.]+k? tokens\s*$/);
+      expect(line).not.toContain("think:");
+      expect(line).not.toContain("thinking ·");
+    }
+  });
+
+  it("sizes columns from hidden rows too, so scrolling never shifts them", () => {
+    // Seven agents: three show at a time. The widest cells (long model, 999.9k tokens) sit in a row
+    // that is hidden at the top of the list and visible only once scrolled to the end.
+    const agents = mixed();
+    agents[5] = makeRecord({
+      id: "wide", startedAt: NOW - 15_000, description: "Widest cells",
+      invocation: { modelName: "a-very-long-model-name 9.9", modelId: "x/y", thinking: "ultrathink" },
+      lifetimeUsage: { input: 999_900, output: 0, cacheWrite: 0 },
+    });
+    const stateAt = (lines: string[]) => lines.find(l => l.includes("▶ running"))!.indexOf("▶ running");
+    const top = renderAt(agents, 160, 40, 0);
+    const bottom = renderAt(agents, 160, 40, 7);
+    expect(top.join("\n")).not.toContain("a-very-long-model-name");
+    expect(bottom.join("\n")).toContain("a-very-long-model-name");
+    // With window-only sizing the top view's tail is narrower, so its state column starts further right.
+    expect(stateAt(top)).toBe(stateAt(bottom));
+  });
+
+  it("drops activity, then thinking, then model as the terminal narrows, never elapsed, tokens or cost", () => {
+    const record = makeRecord({
+      id: "r", startedAt: NOW - 41_000, description: "Review the change",
+      invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+      lifetimeUsage: { input: 8_200, output: 0, cacheWrite: 0, cost: 0.0042 },
+    });
+    const activity = new Map<string, AgentActivity>([["r", {
+      activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
+      modelCall: { startedAt: NOW - 4_000, lastEventAt: NOW - 100, kind: "thinking", writtenChars: 0 },
+    }]]);
+    const cells = { activity: "thinking · 4s", thinking: "think:high", model: "opus 4.6" };
+    const survivors = (columns: number) => {
+      const line = renderAt([record, makeRecord({ id: "x", description: "other", startedAt: NOW - 5_000 })], columns, 24, 0, true, { showCost: true, activity })
+        .find(l => l.includes("Review") || l.includes("▶ running"))!;
+      expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+      // The tail the terminal must always keep.
+      expect(line).toContain("41s");
+      expect(line).toContain("↓ 8.2k tokens");
+      expect(line).toContain("~$0.0042");
+      expect(line).toContain("▶ running");
+      return Object.fromEntries(Object.entries(cells).map(([k, v]) => [k, line.includes(v)]));
+    };
+    // Widest each optional column still shows, scanning down from a roomy terminal; once gone it never returns.
+    const lastWith = { activity: 0, thinking: 0, model: 0 };
+    const gone = new Set<string>();
+    for (let columns = 160; columns >= 50; columns--) {
+      const seen = survivors(columns);
+      for (const k of Object.keys(lastWith) as (keyof typeof lastWith)[]) {
+        if (seen[k]) {
+          expect(gone.has(k)).toBe(false);
+          lastWith[k] = columns;
+        } else gone.add(k);
+      }
+    }
+    expect(lastWith.activity).toBeGreaterThan(lastWith.thinking);
+    expect(lastWith.thinking).toBeGreaterThan(lastWith.model);
+    expect(lastWith.model).toBeGreaterThan(0);
+    // Pin the boundaries: at the width the cell survives, one column narrower drops it.
+    expect(survivors(lastWith.activity).activity).toBe(true);
+    expect(survivors(lastWith.activity - 1).activity).toBe(false);
+    expect(survivors(lastWith.thinking).thinking).toBe(true);
+    expect(survivors(lastWith.thinking - 1).thinking).toBe(false);
+    expect(survivors(lastWith.model).model).toBe(true);
+    expect(survivors(lastWith.model - 1).model).toBe(false);
+    // Order between boundaries: activity goes first, then thinking, model last.
+    expect(survivors(lastWith.thinking)).toEqual({ activity: false, thinking: true, model: true });
+    expect(survivors(lastWith.model)).toEqual({ activity: false, thinking: false, model: true });
+  });
+
+  it.each([[80, 24], [120, 40]])("keeps CJK and emoji rows aligned and in bounds under ANSI styling at %ix%i", (columns, rows) => {
+    const agents = [
+      makeRecord({
+        id: "a1", description: "調査 🦊 with a deliberately long description for the narrow terminal", startedAt: NOW - 118_000,
+        invocation: { modelName: "銀河 4.6", modelId: "acme/galaxy", thinking: "low" },
+        lifetimeUsage: { input: 13_100, output: 0, cacheWrite: 0, cost: 0.0042 },
+      }),
+      makeRecord({
+        id: "a2", alias: "🧠-audit", description: "emoji model and a different long description", startedAt: NOW - 59_000,
+        invocation: { modelName: "🧠 opus", modelId: "acme/opus", thinking: "ultrathink" },
+        lifetimeUsage: { input: 987_654, output: 0, cacheWrite: 0, cost: 12.34 },
+      }),
+    ];
+    const raw = renderAt(agents, columns, rows, 1, true, { styled: true, showCost: true });
+    expect(raw.some(l => l.includes("\u001b["))).toBe(true);
+    for (const line of raw) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+      // No colour is left open at the end of a row, so truncation cannot bleed into the next line.
+      const escapes = line.match(/\u001b\[[0-9;]*m/g) ?? [];
+      if (escapes.length > 0) expect(escapes.at(-1)).toMatch(/\[(?:39|22|0)m$/);
+    }
+    // A nested state colour must hand back to the row's colour: tokens stay dim, not default.
+    for (const line of raw.filter(l => l.includes("▶ running"))) {
+      const before = line.slice(0, line.indexOf("tokens"));
+      const lastFg = before.match(/\u001b\[(?:3[0-9]|90)m/g)?.at(-1);
+      expect(lastFg).toBeDefined();
+      expect(lastFg).not.toBe("\u001b[39m");
+    }
+    const [cjk, emoji] = ["調査", "🧠-audit"].map(d => raw.map(line => line.replace(/\u001b\[[0-9;]*m/g, "")).find(l => l.includes(d))!);
+    expect(cjk).toBeDefined();
+    expect(emoji).toBeDefined();
+    // Both rows end on the same cell and start the state column on the same cell, whatever the glyph widths.
+    expect(visibleWidth(cjk.trimEnd())).toBe(visibleWidth(emoji.trimEnd()));
+    expect(visibleWidth(cjk.split("▶ running")[0])).toBe(visibleWidth(emoji.split("▶ running")[0]));
+    // The description truncates with an ellipsis; the cost cell never does.
+    expect(cjk).toContain("~$0.0042");
+    expect(emoji).toContain("~$12.34");
+    if (columns === 80) expect(cjk).toContain("...");
+  });
+
+  it.each([[80, 24], [120, 40]])("summarizes hidden agents by state at %ix%i", (columns, rows) => {
+    // 7 agents: 5 visible rows - 2 indicators = 3 shown, 4 hidden below.
+    const lines = renderAt(mixed(), columns, rows);
+    const more = lines.find(l => /↓ \d+ more/.test(l));
+    expect(more?.trim()).toBe("↓ 4 more: 1 queued, 1 failed, 1 stopped, 1 done");
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+  });
+
+  it("summarizes rows scrolled above the window too", () => {
+    const lines = renderAt(mixed(), 120, 40, 7);
+    const above = lines.find(l => /↑ \d+ more/.test(l));
+    expect(above?.trim()).toMatch(/^↑ \d+ more: .*running/);
   });
 });
 

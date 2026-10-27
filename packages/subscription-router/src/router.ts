@@ -13,7 +13,7 @@ import type { ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-ag
 import { type ChainEntry, type Exhaustion, type Profile, ROUTER_PROVIDER } from "./config.js";
 import type { ExhaustionTracker } from "./exhaustion.js";
 import { type ModelRef, parseRef, refKey, sameModel } from "./model-ref.js";
-import { type QuotaScore, scoreQuota, selectCandidate } from "./selection.js";
+import { formatScore, type QuotaScore, scoreQuota, selectCandidate } from "./selection.js";
 import type { UsageDecision, UsageSnapshot } from "./usage.js";
 
 /**
@@ -78,12 +78,40 @@ export interface Candidate {
 	entry: ChainEntry;
 	model: Model<Api>;
 	score: QuotaScore;
+	/** Age of the cached snapshot the score came from; absent when there was none. */
+	ageMs?: number;
+}
+
+/** Why one routing pick happened: what each candidate scored on what data. JSON-safe. */
+export interface RouteDecision {
+	at: number;
+	profile: string;
+	strategy: "ordered" | "balanced";
+	reason: ModelRouteRequest["reason"];
+	/** `provider/id` of the chosen entry. */
+	chosen: string;
+	candidates: { model: string; quota: QuotaScore; ageMs?: number }[];
+	/** Entries skipped as ineligible, with the reason. */
+	blocked: { model: string; reason: string }[];
 }
 
 /** Outcome of `Router.pick`, shared by route, recovery, admission and status. */
 export type PickResult =
 	| { ok: true; entry: ChainEntry; model: Model<Api>; candidates: Candidate[]; blocked: Ineligible[] }
 	| { ok: false; blocked: Ineligible[]; resetAt?: number };
+
+/** Multi-line, human-readable form of a decision for `/router status`. */
+export function formatDecision(decision: RouteDecision): string {
+	const lines = [
+		`${isoSeconds(decision.at)} router/${decision.profile} ${decision.reason} -> ${decision.chosen} (${decision.strategy})`,
+	];
+	for (const c of decision.candidates) {
+		const age = c.ageMs === undefined ? "no data" : `data ${Math.floor(c.ageMs / 60_000)}m old`;
+		lines.push(`    ${c.model}: ${formatScore(c.quota)}, ${age}`);
+	}
+	for (const b of decision.blocked) lines.push(`    ${b.model}: ${b.reason}`);
+	return lines.join("\n");
+}
 
 /** Reply to a pi-subagents admission request (`router:rpc:admit`). */
 export interface Admission {
@@ -126,6 +154,8 @@ export class Router {
 		private readonly usage: UsageDecider,
 		private readonly tracker: ExhaustionTracker,
 		private readonly now: () => number = Date.now,
+		/** Called once per scored pick (not sticky continuations or same-model retries). */
+		private readonly onDecision?: (decision: RouteDecision) => void,
 	) {}
 
 	/** Why `model` is blocked, or undefined when it is eligible. */
@@ -178,7 +208,13 @@ export class Router {
 			}
 			const block = this.blockedBy(model);
 			if (!block) {
-				candidates.push({ entry, model, score: scoreQuota(model, this.usage.peek?.(model.provider), now) });
+				const snapshot = this.usage.peek?.(model.provider);
+				candidates.push({
+					entry,
+					model,
+					score: scoreQuota(model, snapshot, now),
+					...(snapshot ? { ageMs: Math.max(0, now - snapshot.retrievedAt) } : {}),
+				});
 			} else blocked.push({ entry, ...block, quota: true });
 		}
 		const index = selectCandidate(
@@ -240,6 +276,19 @@ export class Router {
 			reason === "user" && profile.strategy === "balanced" ? previous?.model : undefined,
 		);
 		if (!picked.ok) throw new ChainExhaustedError(profile.id, picked.blocked, picked.resetAt);
+		this.onDecision?.({
+			at: this.now(),
+			profile: profile.id,
+			strategy: profile.strategy ?? "ordered",
+			reason,
+			chosen: refKey(picked.entry),
+			candidates: picked.candidates.map((c) => ({
+				model: refKey(c.entry),
+				quota: c.score,
+				...(c.ageMs === undefined ? {} : { ageMs: c.ageMs }),
+			})),
+			blocked: picked.blocked.map((b) => ({ model: refKey(b.entry), reason: b.reason })),
+		});
 		return this.toRoute(picked.entry, picked.model, request.thinkingLevel);
 	}
 

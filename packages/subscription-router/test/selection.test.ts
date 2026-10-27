@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatScore, type QuotaScore, scoreQuota, selectCandidate } from "../src/selection.js";
+import { formatScore, type QuotaScore, STALE_GRACE_MS, scoreQuota, selectCandidate } from "../src/selection.js";
 import { parseAnthropic, parseCodex, type UsageSnapshot, type UsageWindow } from "../src/usage.js";
 
 const NOW = 1_700_000_000_000;
@@ -64,14 +64,15 @@ describe("scoreQuota", () => {
 		expect(scoreQuota(model, snapshot([window(25, { name: "weekly" })]), NOW)).toMatchObject({ score: 1.5 });
 	});
 	it("ranks only fresh data, handles empty/unlimited/invalid data and formats diagnostics", () => {
+		const old = NOW - STALE_GRACE_MS - 1;
 		for (const status of ["stale", "error", "unavailable"] as const) {
-			expect(scoreQuota(model, snapshot([window()], { status }), NOW)).toEqual({
+			expect(scoreQuota(model, snapshot([window()], { status, retrievedAt: old }), NOW)).toEqual({
 				kind: "fallback",
 				reason: `usage ${status}`,
 			});
 		}
 		expect(scoreQuota(model, undefined, NOW)).toEqual(fallback);
-		expect(scoreQuota(model, snapshot([window()], { expiresAt: NOW }), NOW)).toEqual({
+		expect(scoreQuota(model, snapshot([window()], { expiresAt: NOW, retrievedAt: old }), NOW)).toEqual({
 			kind: "fallback",
 			reason: "usage stale",
 		});
@@ -83,6 +84,43 @@ describe("scoreQuota", () => {
 		expect(formatScore(measured(0.5))).toBe("score 0.500, limiting test");
 		expect(formatScore(fallback)).toBe("fallback: usage missing");
 		expect(formatScore({ kind: "unlimited" })).toBe("unlimited");
+	});
+});
+
+describe("recently expired snapshots", () => {
+	const aged = (ageMs: number, overrides: Partial<UsageSnapshot> = {}) =>
+		snapshot([window(10)], { status: "stale", retrievedAt: NOW - ageMs, expiresAt: NOW, ...overrides });
+
+	it("score as measured with a stale marker inside the grace window", () => {
+		expect(scoreQuota(model, aged(6 * 60_000), NOW)).toMatchObject({
+			kind: "measured",
+			score: expect.closeTo(1.8),
+			stale: 6 * 60_000,
+		});
+		expect(scoreQuota(model, aged(STALE_GRACE_MS), NOW)).toMatchObject({ kind: "measured" });
+		// An available snapshot past its TTL is the same case, before `peek` relabels it.
+		expect(
+			scoreQuota(model, snapshot([window(10)], { retrievedAt: NOW - 6 * 60_000, expiresAt: NOW }), NOW),
+		).toMatchObject({ kind: "measured", stale: 6 * 60_000 });
+		expect(formatScore(scoreQuota(model, aged(6 * 60_000), NOW))).toContain("stale 6m");
+	});
+	it("stay fallback past the grace window, on failed reads and without windows", () => {
+		expect(scoreQuota(model, aged(STALE_GRACE_MS + 1), NOW).kind).toBe("fallback");
+		for (const status of ["error", "unavailable"] as const)
+			expect(scoreQuota(model, aged(1000, { status }), NOW).kind).toBe("fallback");
+		expect(scoreQuota(model, aged(1000, { windows: [] }), NOW).kind).toBe("fallback");
+	});
+	it("never count as unlimited", () => {
+		const data = aged(1000, { windows: [], credits: { available: true, unlimited: true } });
+		expect(scoreQuota(model, data, NOW).kind).toBe("fallback");
+	});
+	it("lets a higher-scored stale provider beat a lower-scored fresh one, and vice versa", () => {
+		// Regression: stale A (10% used) used to rank below fresh B (60% used) as fallback.
+		const staleA = scoreQuota(model, aged(6 * 60_000), NOW);
+		const freshB = scoreQuota(model, snapshot([window(60)]), NOW);
+		expect(selectCandidate([staleA, freshB], "balanced")).toBe(0);
+		const staleBusy = scoreQuota(model, aged(6 * 60_000, { windows: [window(90)] }), NOW);
+		expect(selectCandidate([staleBusy, freshB], "balanced")).toBe(1);
 	});
 });
 
