@@ -3590,6 +3590,11 @@ class MutationAudit:
         for name in ("write_text", "write_bytes", "mkdir", "unlink", "rmdir"):
             self.watch(patch, Path, name, (0,))
         self.watch(patch, install, "write_atomic", (0,))
+        self.watch_open(patch, builtins, "open")
+        self.watch_open(patch, io, "open")
+        self.watch(patch, os, "link", (1,))
+        for name in ("truncate", "ftruncate", "chmod", "fchmod", "utime"):
+            self.watch(patch, os, name, (0,))
         self.watch(patch, shutil, "rmtree", (0,))
         for name in ("move", "copy", "copy2", "copyfile", "copytree"):
             self.watch(patch, shutil, name, (1,))
@@ -3598,14 +3603,14 @@ class MutationAudit:
         """Resolve a mutation operand without following its final symlink.
 
         Parameters:
-            value (Any): path-like operand, never an integer file descriptor.
+            value (Any): path-like operand or a tracked file descriptor.
             descriptor (int | None): optional anchored parent.
 
         Returns:
             Path | None: absolute lexical path, or an unresolvable descriptor operand.
         """
         if isinstance(value, int):
-            return None
+            return self.descriptors.get(value)
         path = Path(value)
         if not path.is_absolute() and descriptor is not None:
             parent = self.descriptors.get(descriptor)
@@ -3627,6 +3632,29 @@ class MutationAudit:
             elif not existed and path.exists(follow_symlinks=False):
                 self.created.add(path)
 
+    def watch_open(self, patch: pytest.MonkeyPatch, owner: Any, name: str) -> None:
+        """Observe writable builtin/io opens, which bypass Python's os.open wrapper.
+
+        Parameters:
+            patch (pytest.MonkeyPatch): observer lifetime.
+            owner (Any): builtins or io module.
+            name (str): open primitive.
+        """
+        original = getattr(owner, name)
+
+        def opened(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+            """Record writable-open destinations and track their file descriptors."""
+            path = self.path(file)
+            existed = path is not None and path.exists(follow_symlinks=False)
+            handle = original(file, mode, *args, **kwargs)
+            if path is not None:
+                self.descriptors[handle.fileno()] = path
+                if any(flag in mode for flag in "wax+"):
+                    self.observe([(path, existed)])
+            return handle
+
+        patch.setattr(owner, name, opened)
+
     def watch(self, patch: pytest.MonkeyPatch, owner: Any, name: str, positions: tuple[int, ...]) -> None:
         """Observe successful mutation operands, not declared write intent.
 
@@ -3637,7 +3665,11 @@ class MutationAudit:
             positions (tuple[int, ...]): mutated argument positions (rename source AND destination).
         """
         original = getattr(owner, name)
-        parameters = tuple(inspect.signature(original).parameters)
+        try:
+            parameters = tuple(inspect.signature(original).parameters)
+        except (ValueError, TypeError):
+            # CPython's chmod/utime expose unrepresentable native defaults; both take `path` first.
+            parameters = ("path",)
 
         def mutation(*args: Any, **kwargs: Any) -> Any:
             """Capture real pre-mutation existence, including descriptor-relative rename paths."""
@@ -4148,7 +4180,22 @@ def test_cross_device_restore_is_refused_before_mutation(
 
 
 @pytest.mark.parametrize(
-    "mutation", ["atomic", "text", "bytes", "replace", "rename", "copy", "move", "symlink", "unlink"]
+    "mutation",
+    [
+        "atomic",
+        "text",
+        "bytes",
+        "replace",
+        "rename",
+        "copy",
+        "move",
+        "symlink",
+        "unlink",
+        "open",
+        "io-open",
+        "truncate",
+        "chmod",
+    ],
 )
 def test_mutation_audit_detects_deliberately_unjournaled_overwrite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
@@ -4179,6 +4226,17 @@ def test_mutation_audit_detects_deliberately_unjournaled_overwrite(
         elif mutation == "symlink":
             target.unlink(missing_ok=True)
             target.symlink_to(source)
+        elif mutation in {"open", "io-open"}:
+            writer = builtins.open if mutation == "open" else io.open
+            with writer(target, "w") as handle:
+                handle.write("unclassified")
+        elif mutation in {"truncate", "chmod"}:
+            if not target.exists():
+                target.write_text("initial fixture")
+            if mutation == "truncate":
+                os.truncate(target, 1)
+            else:
+                target.chmod((target.stat().st_mode & 0o777) ^ 0o100)
         else:
             target.unlink(missing_ok=True)
 
@@ -4227,7 +4285,7 @@ def test_actual_unsearchable_backup_parent_is_normalized(
     assert tree(harness.home) == before
 
 
-@pytest.mark.parametrize("value", ["relative", "~/share", "../outside", "./data"])
+@pytest.mark.parametrize("value", ["relative", "~/share", "../outside", "./data", ""])
 def test_relative_xdg_data_home_uses_prescribed_fallback(tmp_path: Path, value: str) -> None:
     """XDG relative values are invalid and ignored, never resolved against the working directory."""
     home = tmp_path / "home"
