@@ -15,12 +15,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
-from urllib.request import urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness.release import (
     LEGACY_RELEASE_TAGS,
+    fetch_bytes,
     release_asset_url,
     release_checksums,
     verify_provenance,
@@ -36,7 +36,6 @@ SHA_PATTERN = re.compile(rf"[0-9a-f]{{{GIT_SHA_LENGTH}}}")
 OPERATIONS = ("verify-only", "promote")
 GIT_BIN = "/usr/bin/git"
 STACK_CHECK_TIMEOUT = 900
-ASSET_TIMEOUT = 120
 STRICT = ConfigDict(extra="forbid", strict=True, frozen=True)
 # The consumer contract: who must have signed a `stack/<sha>` snapshot, and from which ref.
 SNAPSHOT_REPO = "nredd/pi-harness"
@@ -557,8 +556,7 @@ def _fetch_asset(url: str, destination: Path) -> None:
         EvidenceError: the download failed.
     """
     try:
-        with urlopen(url, timeout=ASSET_TIMEOUT) as response:
-            destination.write_bytes(response.read())
+        destination.write_bytes(fetch_bytes(url))
     except OSError as error:
         raise EvidenceError(f"Could not download '{url}': {error}") from error
 

@@ -721,19 +721,18 @@ def test_default_core_boundaries_translate_failures(tmp_path: Path, monkeypatch:
         verify_core_assets(stack, tmp_path / "a", fake_fetch)
     assert isinstance(attest_error.value.__cause__, RuntimeError)
 
-    def offline(url: str, timeout: int) -> None:
+    def offline(url: str) -> None:
         """Simulate an unreachable release host.
 
         Parameters:
             url (str): requested URL.
-            timeout (int): requested timeout.
 
         Raises:
             OSError: always.
         """
         raise OSError("offline")
 
-    monkeypatch.setattr(promotion, "urlopen", offline)
+    monkeypatch.setattr(promotion, "fetch_bytes", offline)
     with pytest.raises(EvidenceError, match="Could not download") as fetch_error:
         verify_core_assets(stack, tmp_path / "b")
     assert isinstance(fetch_error.value.__cause__, OSError)
@@ -758,7 +757,7 @@ def test_legacy_core_tags_skip_attestation(tmp_path: Path, monkeypatch: pytest.M
         """
         pytest.fail("legacy tags must not download or attest")
 
-    monkeypatch.setattr(promotion, "urlopen", forbidden)
+    monkeypatch.setattr(promotion, "fetch_bytes", forbidden)
     monkeypatch.setattr(promotion, "verify_provenance", forbidden)
     stack = Stack.model_validate_json(stack_path.read_bytes())
     verify_core_assets(stack, tmp_path / "core")

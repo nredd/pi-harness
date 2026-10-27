@@ -116,6 +116,7 @@ STATE_FILE = "installed.json"
 JOURNAL_FILE = "transaction.json"
 # Only the owner may write or read the journal: it names every path a restore deletes.
 JOURNAL_MODE = 0o600
+MAX_JOURNAL_BYTES = 1024 * 1024
 LINK_BACKUP = "bin-pi"
 CORE_MARKER = "pi-stack-core.json"
 SETTINGS_FILE = "settings.json"
@@ -1132,6 +1133,23 @@ class Step:
     backup: Path | None
     pending: bool = False
     original: tuple[int, int, int] | None = None
+    restored: bool = False
+
+    def record(self) -> dict[str, Any]:
+        """Serialize validated progress for the next atomic journal rewrite.
+
+        Returns:
+            dict[str, Any]: journal step, including the restored entry's identity when present.
+        """
+        result: dict[str, Any] = {
+            "target": str(self.target),
+            "backup": str(self.backup) if self.backup else None,
+        }
+        if self.original is not None:
+            result |= {"pending": self.pending, "original": list(self.original)}
+        if self.restored:
+            result["restored"] = True
+        return result
 
 
 def journaled_paths(layout: Layout) -> dict[Path, tuple[str, frozenset[str]]]:
@@ -1188,7 +1206,8 @@ def read_journal(path: Path) -> object:
         object: decoded JSON.
 
     Raises:
-        ValueError: the journal is a link, not private, foreign-owned or not JSON.
+        ValueError: the journal is a link, not private, foreign-owned, oversized, unreadable
+            or cannot be parsed within the interpreter's recursion/memory limits.
     """
     try:
         # Non-blocking: a FIFO in its place must fail the regular-file check, not wait for a writer.
@@ -1204,8 +1223,13 @@ def read_journal(path: Path) -> object:
         if info.st_mode & 0o077:
             raise ValueError(f"its mode is '{oct(info.st_mode & 0o777)}', not private")
         try:
-            return json.loads(handle.read())
-        except (OSError, ValueError) as error:
+            if info.st_size > MAX_JOURNAL_BYTES:
+                raise ValueError(f"journal exceeds {MAX_JOURNAL_BYTES} bytes")
+            text = handle.read(MAX_JOURNAL_BYTES + 1)
+            if len(text.encode("utf-8")) > MAX_JOURNAL_BYTES:
+                raise ValueError(f"journal exceeds {MAX_JOURNAL_BYTES} bytes")
+            return json.loads(text)
+        except (OSError, ValueError, RecursionError, MemoryError) as error:
             raise ValueError(f"it is not readable JSON: {error}") from error
 
 
@@ -1243,6 +1267,8 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         if not isinstance(raw, dict) or set(raw) not in (
             {"target", "backup"},
             {"target", "backup", "pending", "original"},
+            {"target", "backup", "restored"},
+            {"target", "backup", "pending", "original", "restored"},
         ):
             raise ValueError(f"step {raw!r} is not a valid journal step object")
         if not isinstance(raw["target"], str) or str(Path(raw["target"])) != raw["target"]:
@@ -1253,6 +1279,11 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
             raise ValueError(f"step target '{target}' is recorded twice")
         backup = backups / name
         pending, original = False, None
+        restored = raw.get("restored", False)
+        if type(restored) is not bool:
+            raise ValueError(f"step for '{target}' has invalid restored metadata")
+        if restored and raw["backup"] is not None and "original" not in raw:
+            raise ValueError(f"restored step for '{target}' has no original identity")
         if "pending" in raw:
             identity = raw["original"]
             if not isinstance(raw["pending"], bool) or not isinstance(identity, list) or len(identity) != 3:
@@ -1263,14 +1294,14 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
                 raise ValueError(f"step for '{target}' has original metadata without a backup")
             pending, original = raw["pending"], (identity[0], identity[1], identity[2])
         if raw["backup"] is None:
-            steps.append(Step(target, None))
+            steps.append(Step(target, None, restored=restored))
             continue
         if raw["backup"] != str(backup):
             raise ValueError(f"backup '{raw['backup']}' for '{target}' is not '{backup}'")
         kind = entry_kind(backup)
         if kind is not None and kind not in kinds:
             raise ValueError(f"backup '{backup}' is a {kind}, expected {' or '.join(sorted(kinds))}")
-        steps.append(Step(target, backup, pending, original))
+        steps.append(Step(target, backup, pending, original, restored))
     return steps
 
 
@@ -1292,7 +1323,7 @@ def load_journal(layout: Layout) -> tuple[Path, list[Step]]:
             raise ValueError("journal is not a JSON object")
         steps = validate_journal(layout, document)
         return Path(document["backups"]), steps
-    except ValueError as error:
+    except (ValueError, RecursionError, MemoryError) as error:
         raise RollbackError(
             f"Journal '{layout.journal}' is not trusted: {error}; nothing was restored. It only names the "
             "paths of the run that wrote it: if that run used another `--bin-dir` or "
@@ -1321,13 +1352,24 @@ def rollback(layout: Layout) -> list[str]:
         return []
     backups, steps = load_journal(layout)
     journal = Journal(layout, backups)
+    journal.steps = [step.record() for step in steps]
     restored = []
     not_started: set[Path] = set()
     try:
+        # An empty step list durably marks a completed rollback, even if unlink failed.
+        if not steps:
+            journal.path.unlink()
+            return []
         with journal.open_backups(create=False):
             # A missing backup is safe ONLY for a pending rename whose original entry is still
             # at the live path. Saved/legacy steps or a changed live identity must fail loudly.
             for step in steps:
+                if step.restored:
+                    info = step.target.lstat() if step.target.exists(follow_symlinks=False) else None
+                    identity = (info.st_dev, info.st_ino, info.st_ctime_ns) if info else None
+                    if identity != step.original:
+                        raise OSError(f"Restored target '{step.target}' changed; restore by hand")
+                    continue
                 if step.backup is not None:
                     try:
                         os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
@@ -1346,20 +1388,28 @@ def rollback(layout: Layout) -> list[str]:
                         raise OSError(
                             f"Expected backup '{step.backup}' is missing; restore by hand"
                         ) from error
-            for step in reversed(steps):
+            for index in reversed(range(len(steps))):
+                step = steps[index]
                 journal.check_store()
-                if step.target in not_started:
+                if step.restored:
                     continue
-                remove(step.target)
-                if step.backup is not None:
-                    os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
-                journal.check_store()
-                restored.append(str(step.target))
+                if step.target not in not_started:
+                    remove(step.target)
+                    if step.backup is not None:
+                        os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
+                    journal.check_store()
+                    restored.append(str(step.target))
+                info = step.target.lstat() if step.backup is not None else None
+                identity = (info.st_dev, info.st_ino, info.st_ctime_ns) if info else None
+                journal.steps[index] = Step(step.target, step.backup, False, identity, True).record()
+                journal.persist()
+            journal.steps = []
+            journal.persist()
+        journal.path.unlink()
     except OSError as error:
         raise RollbackError(
             f"Could not restore an interrupted install: {error}; journal kept at '{layout.journal}'"
         ) from error
-    journal.commit()
     return restored
 
 
@@ -1737,8 +1787,7 @@ def report_pending(layout: Layout, restoring: bool) -> None:
         restoring (bool): this run restores now; `False` for `--plan`, which only reports.
 
     Raises:
-        RollbackError: restoring and the journal is not trusted, so the run fails closed before
-            asking for consent.
+        RollbackError: the journal is not trusted, so reporting and recovery both fail closed.
     """
     when = (
         "This run restores them (with consent)"
@@ -1749,14 +1798,10 @@ def report_pending(layout: Layout, restoring: bool) -> None:
         f"PENDING: a previous install was interrupted; '{layout.journal}' lists its steps. {when} "
         "before planning anything"
     )
-    try:
-        _, steps = load_journal(layout)
-    except RollbackError as error:
-        if restoring:
-            raise
-        LOGGER.warning(str(error))
-        return
+    _, steps = load_journal(layout)
     for step in reversed(steps):
+        if step.restored:
+            continue
         source = f"from '{step.backup}'" if step.backup else "by removing it (it was new)"
         LOGGER.info(f"RESTORE '{step.target}' {source}")
 

@@ -17,16 +17,21 @@ import shutil
 import subprocess
 import sys
 import tarfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from email.message import Message
+from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from threading import Thread
 from types import MappingProxyType
 from typing import Any
 from urllib.error import HTTPError
+from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 import pytest
 
-from harness import release
+from harness import install, promotion, release
 from harness.release import (
     ATTESTATION_WORKFLOW,
     GITHUB_TOKEN_VARIABLES,
@@ -43,6 +48,13 @@ from harness.release import (
     verify_public_attestation,
     verify_root_overrides,
 )
+
+
+class HTTPBody(io.BytesIO):
+    """Minimal HTTP response with real header lookup for offline downloader units."""
+
+    headers = Message()
+
 
 # sha256 (frozen in `LEGACY_CHECKSUMS`) -> npm SRI sha512 of the same downloaded legacy tarball.
 # Re-derive both from one download: `gh release download <tag> --repo nredd/pi -p <asset>`, then
@@ -265,10 +277,10 @@ def test_release_checksums_require_release_file_except_named_legacy(
     monkeypatch.setattr(
         release,
         "urlopen",
-        lambda url, **kwargs: io.BytesIO(f"{'a' * 64}  earendil-works-pi-coding-agent-1.3.0.tgz\n".encode()),
+        lambda url, **kwargs: HTTPBody(f"{'a' * 64}  earendil-works-pi-coding-agent-1.3.0.tgz\n".encode()),
     )
     assert release_checksums(tag) == {base + "earendil-works-pi-coding-agent-1.3.0.tgz": "a" * 64}
-    monkeypatch.setattr(release, "urlopen", lambda url, **kwargs: io.BytesIO(b"not a checksum\n"))
+    monkeypatch.setattr(release, "urlopen", lambda url, **kwargs: HTTPBody(b"not a checksum\n"))
     with pytest.raises(ValueError, match="Invalid"):
         release_checksums(tag)
 
@@ -341,7 +353,7 @@ def test_fetch_aborts_when_provenance_cannot_verify(
     npm_calls: list[list[str]] = []
     monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
     monkeypatch.setattr(release, "release_checksums", lambda *_: checksums)
-    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(contents))
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(contents))
     if missing_gh:
         monkeypatch.setattr(release, "GH_BIN", str(tmp_path / "missing-gh"))
         error = FileNotFoundError
@@ -384,7 +396,7 @@ def test_legacy_fetch_enforces_checksum_without_provenance(
         tmp_path (Path): isolated release prefix.
     """
     provenance: list[tuple[Path, str]] = []
-    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"wrong bytes"))
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(b"wrong bytes"))
     monkeypatch.setattr(release, "verify_provenance", lambda path, tag: provenance.append((path, tag)))
     with pytest.raises(ValueError, match="checksum mismatch"):
         fetch_release("v1.3.0-nredd.7", tmp_path / "prefix")
@@ -437,7 +449,7 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
         """
         urls.append(url)
         assert kwargs["timeout"] == 120
-        return io.BytesIO(tarball)
+        return HTTPBody(tarball)
 
     prefix = tmp_path / "prefix"
     destination = (
@@ -542,7 +554,7 @@ def test_subprocess_timeouts_become_chained_runtime_errors(
     tag = "v1.3.0-nredd.8"
     contents = b"core"
     monkeypatch.setattr(release, "release_checksums", lambda *_: checksums_for(tag, contents))
-    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(contents))
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(contents))
     with pytest.raises(RuntimeError, match=r"partial .* output") as caught:
         fetch_release(tag, tmp_path / "prefix")
     assert isinstance(caught.value.__cause__, subprocess.TimeoutExpired)
@@ -602,7 +614,7 @@ def test_legacy_fetch_verifies_exactly_the_recorded_assets(
             io.BytesIO: the asset's bytes.
         """
         seen.append(url)
-        return io.BytesIO(payloads[url])
+        return HTTPBody(payloads[url])
 
     def install(*_args: Any, **_kwargs: Any) -> None:
         """Stop after verification; installation is covered elsewhere.
@@ -655,7 +667,7 @@ def test_legacy_fetch_rejects_a_wrong_asset(
         Returns:
             io.BytesIO: the asset's bytes, or wrong bytes for the last asset.
         """
-        return io.BytesIO(b"wrong" if url == recorded[-1] else payloads[url])
+        return HTTPBody(b"wrong" if url == recorded[-1] else payloads[url])
 
     def install(*_args: Any, **_kwargs: Any) -> None:
         """Fail the test if installation is reached.
@@ -738,7 +750,7 @@ def serve_attestations(monkeypatch: pytest.MonkeyPatch, outcome: bytes | int) ->
         assert not request.has_header("Authorization")
         if isinstance(outcome, int):
             raise HTTPError(request.full_url, outcome, "refused", Message(), None)
-        return io.BytesIO(outcome)
+        return HTTPBody(outcome)
 
     monkeypatch.setattr(release, "urlopen", fake_urlopen)
     return requests
@@ -819,7 +831,7 @@ def test_fetch_release_binds_bytes_to_explicit_checksums(
     """Explicit digests (the installer's snapshot) win over a re-read `SHA256SUMS`, before npm runs."""
     tag = "v1.3.0-nredd.8"
     served = b"republished bytes"
-    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(served))
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(served))
     monkeypatch.setattr(release, "release_checksums", lambda *_: checksums_for(tag, served))
     monkeypatch.setattr(release, "verify_provenance", lambda path, release_tag: None)
     npm_bin = tmp_path / "npm"
@@ -937,7 +949,7 @@ def new_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, 
     gh_calls: list[list[str]] = []
     monkeypatch.setattr(release, "GH_BIN", str(gh_bin))
     monkeypatch.setattr(release, "release_checksums", lambda tag: checksums_for(tag, NEW_BYTES))
-    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(NEW_BYTES))
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: HTTPBody(NEW_BYTES))
     monkeypatch.setattr(subprocess, "check_output", lambda argv, **_k: gh_calls.append(argv) or "ok")
     return root, gh_calls
 
@@ -1025,7 +1037,7 @@ def test_root_override_gate_rejects_altered_tarball_bytes(
 ) -> None:
     """Served bytes that differ from the recorded sha256 fail before provenance."""
     root, gh_calls = new_release
-    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(NEW_BYTES + b"tampered"))
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: HTTPBody(NEW_BYTES + b"tampered"))
     with pytest.raises(ValueError, match="Release checksum mismatch"):
         verify_root_overrides(root)
     assert gh_calls == []
@@ -1036,7 +1048,7 @@ def test_root_override_gate_rejects_altered_legacy_bytes(
 ) -> None:
     """Frozen legacy sha256 values still bind the bytes; nothing is skipped for legacy tags."""
     write_root(tmp_path, "v1.3.0-nredd.6")
-    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(b"altered"))
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: HTTPBody(b"altered"))
     monkeypatch.setattr(release, "verify_provenance", lambda *_a: pytest.fail("legacy has no provenance"))
     with pytest.raises(ValueError, match="Release checksum mismatch"):
         verify_root_overrides(tmp_path)
@@ -1185,3 +1197,184 @@ def test_cli_verify_flag_reports_failure_and_rejects_prefix(
     with pytest.raises(SystemExit) as caught:
         release.main()
     assert caught.value.code == 2
+
+
+class LocalHTTPTransport(HTTPSHandler):
+    """Replace only TLS transport, keeping real HTTP parsing and redirect policy in tests."""
+
+    def https_open(self, req: Request) -> Any:
+        """Connect to the loopback HTTP server for a logical HTTPS request.
+
+        Parameters:
+            req (Request): logical HTTPS URL with the fixture's host and port.
+
+        Returns:
+            Any: real urllib HTTP response, not an injected stream or exception.
+        """
+        return self.do_open(HTTPConnection, req)
+
+
+HTTPReply = Callable[[str], tuple[dict[str, str], bytes]]
+
+
+@contextmanager
+def http_responses(reply: HTTPReply) -> Iterator[tuple[str, Callable[..., Any], list[str]]]:
+    """Serve controlled wire responses with the production HTTPS redirect handler.
+
+    Parameters:
+        reply (HTTPReply): response headers and wire body selected by path.
+
+    Yields:
+        tuple[str, Callable[..., Any], list[str]]: logical base URL, opener and requested paths.
+    """
+    requests: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        """Serve exact malformed headers/bodies and silence request logs."""
+
+        def do_GET(self) -> None:
+            """Write one controlled response and close it, as urllib requests."""
+            requests.append(self.path)
+            headers, body = reply(self.path)
+            self.send_response(302 if "Location" in headers else 200)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+        def log_message(self, format: str, *args: Any) -> None:
+            """Suppress the fixture's HTTP access log."""
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    opener = build_opener(ProxyHandler({}), LocalHTTPTransport(), release.HTTPSRedirectHandler())
+    try:
+        yield f"https://127.0.0.1:{server.server_port}", opener.open, requests
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        assert not thread.is_alive()
+
+
+def test_nonlegacy_core_truncation_is_exit_three(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The real non-legacy checksum/asset verification path normalizes a broken chunked transfer."""
+    snapshot = promotion.load_promoted_snapshot(
+        (Path(__file__).parent / "fixtures" / "stack-snapshot-24889f7.json").read_bytes(),
+        "24889f7896be7157bf9077a41465a3b29620879f",
+    )
+    core = snapshot.stack.core.model_copy(update={"tag": NEW_TAG})
+    snapshot = snapshot.model_copy(update={"stack": snapshot.stack.model_copy(update={"core": core})})
+    sums = "".join(f"{digest}  {name}\n" for name, digest in core.integrity.items()).encode()
+
+    def reply(path: str) -> tuple[dict[str, str], bytes]:
+        """Serve valid checksums, then a genuinely truncated chunked asset."""
+        if path.endswith("SHA256SUMS"):
+            return {"Content-Length": str(len(sums))}, sums
+        return {"Transfer-Encoding": "chunked"}, b"10\r\npartial"
+
+    with http_responses(reply) as (base, opener, requests):
+        monkeypatch.setattr(release, "RELEASE_URL_PREFIX", base + "/")
+        monkeypatch.setattr(release, "urlopen", opener)
+        # Keep the old downloader local too when this test is run with finding 1 reverted.
+        monkeypatch.setattr(promotion, "urlopen", opener, raising=False)
+        monkeypatch.setattr(install, "preflight", lambda *args: {"node": "node"})
+        monkeypatch.setattr(install, "verify_snapshot", lambda *args: snapshot)
+        monkeypatch.setattr(
+            install, "verify_provenance_anonymously", lambda *args: pytest.fail("attested partial bytes")
+        )
+        monkeypatch.setattr(install.Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(install, "is_wsl", lambda: False)
+        for key in ("XDG_DATA_HOME", "PI_CODING_AGENT_DIR"):
+            monkeypatch.delenv(key, raising=False)
+        assert install.main([snapshot.source_sha, "--plan"]) == install.ExitCode.VERIFICATION
+        assert len(requests) == 2
+        assert requests[0].endswith("SHA256SUMS")
+        assert requests[1].endswith(".tgz")
+    assert "VERIFICATION FAILED" in caplog.text
+    assert "IncompleteRead" in caplog.text
+    assert "Traceback" not in caplog.text
+    assert not (tmp_path / ".local").exists()
+
+
+@pytest.mark.parametrize(
+    ("length", "body"),
+    [
+        ("bad", b"abcdef"),
+        ("-1", b"abcdef"),
+        ("1", b"abcdef"),
+        ("100", b"abcdef"),
+        ("33", b"x" * 33),
+        (None, b"x" * 33),
+    ],
+    ids=["bad", "negative", "short", "truncated", "oversized-header", "oversized-body"],
+)
+def test_wire_content_length_failure_is_exit_three(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    length: str | None,
+    body: bytes,
+) -> None:
+    """Real HTTP parsing must not ignore bad/negative lengths, hide excess bytes or allocate unboundedly."""
+    headers = {"Content-Length": length} if length is not None else {}
+    destination = tmp_path / "asset"
+    monkeypatch.setattr(release, "MAX_FETCH_BYTES", 32)
+    with http_responses(lambda path: (headers, body)) as (base, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+
+        def run(*args: Any) -> install.ExitCode:
+            """Run the real download and CLI error boundary without other verification setup."""
+            install.download(base + "/asset", destination)
+            return install.ExitCode.OK
+
+        monkeypatch.setattr(install, "run", run)
+        assert install.main(["a" * 40]) == install.ExitCode.VERIFICATION
+        assert requests == ["/asset"]
+    assert "VERIFICATION FAILED" in caplog.text
+    assert any(reason in caplog.text for reason in ("Content-Length", "exceeds", "IncompleteRead"))
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("redirect", [False, True], ids=["plain-http", "redirect-downgrade"])
+def test_insecure_download_is_exit_three(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, redirect: bool
+) -> None:
+    """Reject a plain URL and a real cross-origin HTTPS-to-HTTP redirect before opening its target."""
+    target = ""
+
+    def reply(path: str) -> tuple[dict[str, str], bytes]:
+        """Make the insecure target reachable so an unsafe follow would actually succeed."""
+        if path == "/redirect":
+            return {"Location": target}, b""
+        return {"Content-Length": "2"}, b"ok"
+
+    with http_responses(reply) as (base, opener, requests):
+        target = base.replace("https://127.0.0.1", "http://localhost") + "/forbidden"
+        monkeypatch.setattr(release, "urlopen", opener)
+        url = base + "/redirect" if redirect else base.replace("https:", "http:") + "/plain"
+
+        def run(*args: Any) -> install.ExitCode:
+            """Exercise download's normal exit-3 mapping."""
+            install.download(url, tmp_path / "asset")
+            return install.ExitCode.OK
+
+        monkeypatch.setattr(install, "run", run)
+        assert install.main(["a" * 40]) == install.ExitCode.VERIFICATION
+        assert requests == (["/redirect"] if redirect else [])
+    assert "requires HTTPS" in caplog.text
+    assert not (tmp_path / "asset").exists()
+
+
+@pytest.mark.parametrize("length", [None, "6"], ids=["eof-framed", "length-framed"])
+def test_valid_wire_body_is_complete(monkeypatch: pytest.MonkeyPatch, length: str | None) -> None:
+    """Guard the actual successful HTTP parser path with and without a length header."""
+    headers = {"Content-Length": length} if length is not None else {}
+    with http_responses(lambda path: (headers, b"abcdef")) as (base, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+        assert release.fetch_bytes(base + "/asset") == b"abcdef"
+        assert requests == ["/asset"]

@@ -23,6 +23,7 @@ import ssl
 import subprocess
 import sys
 import tarfile
+from email.message import Message
 from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from pathlib import Path
 from textwrap import dedent
@@ -992,6 +993,8 @@ def test_http_read_failures_are_clean_verification_failures(
     class BrokenResponse(io.BytesIO):
         """A response that fails while consuming its body, not while opening the connection."""
 
+        headers = Message()
+
         def read(self, size: int | None = -1) -> bytes:
             """Simulate an interrupted or malformed transfer after headers were accepted."""
             raise error
@@ -1615,8 +1618,8 @@ def test_untrusted_journal_changes_nothing(
     with pytest.raises(RollbackError, match="not trusted"):
         harness.run(yes=True)
     caplog.set_level("INFO")
-    assert install.run(Options(SHA, False, True, None), harness.env, None) == ExitCode.OK
-    assert "not trusted" in caplog.text
+    with pytest.raises(RollbackError, match="not trusted"):
+        install.run(Options(SHA, False, True, None), harness.env, None)
     assert "RESTORE" not in caplog.text
     assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == before
     assert harness.layout.journal.exists(follow_symlinks=False)
@@ -3035,3 +3038,155 @@ def test_failed_post_check_with_a_kept_core_names_its_removal(
         harness.run(yes=True)
     assert f"Core '{harness.layout.core(harness.snapshot.stack.core.tag)}' was kept" in str(raised.value)
     assert "remove it and rerun" in str(raised.value)
+
+
+def pending_file_restore(harness: Harness) -> dict[Path, bytes]:
+    """Journal settings followed by installed.json, matching the switch's restore order.
+
+    Parameters:
+        harness (Harness): isolated installer home.
+
+    Returns:
+        dict[Path, bytes]: original live bytes expected after recovery.
+    """
+    layout = harness.layout
+    originals = {
+        layout.agent_dir / install.SETTINGS_FILE: b'{"original":"settings"}',
+        layout.state: b'{"original":"installed"}',
+    }
+    for path, contents in originals.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    journal = Journal(layout, layout.backups / "retry")
+    with journal.open_backups():
+        for path in originals:
+            install.replace_file(journal, path, path.name, '{"replacement":true}')
+    return originals
+
+
+def test_partial_rollback_resumes_completed_restores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restore installed.json, fail settings.json's rename, then retry without requiring consumed backups."""
+    harness = Harness(tmp_path, monkeypatch)
+    originals = pending_file_restore(harness)
+    layout = harness.layout
+    original_replace = os.replace
+    attempts: list[Path] = []
+
+    def fail_second(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Fail only the second backup-to-live rename, not atomic journal rewrites."""
+        if kwargs.get("src_dir_fd") is not None:
+            attempts.append(Path(dst))
+            if Path(dst).name == install.SETTINGS_FILE:
+                raise OSError(errno.EIO, "second restore refused")
+        original_replace(src, dst, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", fail_second)
+        with pytest.raises(RollbackError, match="second restore refused"):
+            rollback(layout)
+    assert attempts == [layout.state, layout.agent_dir / install.SETTINGS_FILE]
+    assert layout.state.read_bytes() == originals[layout.state]
+    assert not (layout.backups / "retry" / install.STATE_FILE).exists()
+    assert rollback(layout) == [str(layout.agent_dir / install.SETTINGS_FILE)]
+    assert {path: path.read_bytes() for path in originals} == originals
+    assert not layout.journal.exists()
+
+
+def test_recorded_restore_rejects_changed_live_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Recorded progress cannot excuse a consumed backup when its restored live entry changed."""
+    harness = Harness(tmp_path, monkeypatch)
+    originals = pending_file_restore(harness)
+    layout = harness.layout
+    original_replace = os.replace
+
+    def fail_second(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Leave recovery interrupted after installed.json was restored."""
+        if kwargs.get("src_dir_fd") is not None and Path(dst).name == install.SETTINGS_FILE:
+            raise OSError("second restore refused")
+        original_replace(src, dst, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", fail_second)
+        with pytest.raises(RollbackError):
+            rollback(layout)
+    layout.state.unlink()
+    layout.state.write_bytes(originals[layout.state])
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match=r"Restored target.*changed"):
+        rollback(layout)
+    assert tree(harness.home) == before
+
+
+def test_rollback_unlink_failure_leaves_completed_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once originals are restored, failed journal cleanup must be retryable without any backups."""
+    harness = Harness(tmp_path, monkeypatch)
+    originals = pending_file_restore(harness)
+    layout = harness.layout
+    original_unlink = Path.unlink
+
+    def fail_cleanup(path: Path, *args: Any, **kwargs: Any) -> None:
+        """Refuse transaction cleanup after all restore renames have succeeded."""
+        if path == layout.journal:
+            raise OSError(errno.EACCES, "journal cleanup refused")
+        original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", fail_cleanup)
+        with pytest.raises(RollbackError, match="journal cleanup refused"):
+            rollback(layout)
+    assert {path: path.read_bytes() for path in originals} == originals
+    completed = json.loads(layout.journal.read_text())
+    shutil.rmtree(layout.backups)
+    install.recover(layout, True, None)
+    assert completed["steps"] == []
+    assert not layout.journal.exists()
+    assert {path: path.read_bytes() for path in originals} == originals
+
+
+@pytest.mark.parametrize("flags", [["--plan"], ["--yes"]], ids=["plan", "recovery"])
+@pytest.mark.parametrize("payload", ["nested", "oversized"])
+def test_bounded_journal_failures_exit_cleanly(tmp_path: Path, flags: list[str], payload: str) -> None:
+    """Actual CLI children reject deeply nested and oversized journals on both entry paths."""
+    _, root = special_home(tmp_path)
+    text = "[" * 10000 + "0" + "]" * 10000 if payload == "nested" else " " * (1024 * 1024 + 1)
+    journal = root / install.JOURNAL_FILE
+    journal.write_text(text)
+    journal.chmod(0o600)
+    before = tree(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-c", SPECIAL_CHILD, str(FIXTURE), SHA, *flags],
+        env={
+            "HOME": str(tmp_path / "home"),
+            "PATH": os.defpath,
+            "PYTHONPATH": str(INTEGRATION),
+            "XDG_DATA_HOME": str(tmp_path / "data"),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == ExitCode.FAILED, result.stderr
+    assert "is not trusted" in result.stderr
+    assert "nothing was restored" in result.stderr
+    if payload == "oversized":
+        assert "exceeds 1048576 bytes" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == before
+
+
+def test_journal_memory_failure_is_untrusted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bounded parse can still exhaust memory; normalize it instead of leaking an interpreter error."""
+    harness = Harness(tmp_path, monkeypatch)
+    pending_file_restore(harness)
+
+    def exhausted(*args: Any, **kwargs: Any) -> object:
+        """Model allocation failure inside the bounded JSON parser."""
+        raise MemoryError("bounded parse allocation failed")
+
+    monkeypatch.setattr(install.json, "loads", exhausted)
+    with pytest.raises(RollbackError, match=r"not trusted.*bounded parse allocation failed"):
+        rollback(harness.layout)

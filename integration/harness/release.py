@@ -28,11 +28,13 @@ import subprocess
 import tarfile
 import tempfile
 from collections.abc import Callable, Mapping
-from http.client import HTTPException
+from http.client import HTTPException, HTTPMessage
 from pathlib import Path
 from types import MappingProxyType
+from typing import IO, override
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
 
@@ -99,6 +101,40 @@ GITHUB_TOKEN_VARIABLES = frozenset(
     {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 )
 ProvenanceCheck = Callable[[Path, str], None]
+# Bound public assets, including responses without Content-Length, before allocating their bodies.
+MAX_FETCH_BYTES = 256 * 1024 * 1024
+CONTENT_LENGTH = re.compile(r"[0-9]+")
+
+
+class HTTPSRedirectHandler(HTTPRedirectHandler):
+    """Refuse every redirect that leaves HTTPS, including cross-origin downgrades."""
+
+    @override
+    def redirect_request(
+        self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
+    ) -> Request | None:
+        """Validate the next URL before urllib can open it.
+
+        Parameters:
+            req (Request): original request.
+            fp (IO[bytes]): redirect response stream.
+            code (int): HTTP status.
+            msg (str): response reason.
+            headers (HTTPMessage): response headers.
+            newurl (str): resolved redirect destination.
+
+        Returns:
+            Request | None: urllib's redirected request.
+
+        Raises:
+            ValueError: the next hop is not HTTPS.
+        """
+        if urlsplit(newurl).scheme != "https":
+            raise ValueError(f"Redirect requires HTTPS, refused '{newurl}'")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+urlopen = build_opener(HTTPSRedirectHandler()).open
 
 
 class FetchError(OSError):
@@ -126,12 +162,31 @@ def fetch_bytes(request: str | Request) -> bytes:
 
     Raises:
         FetchError: HTTPException (including IncompleteRead/RemoteDisconnected), OSError
-            (including TimeoutError/SSLError), or a malformed response-length ValueError.
+            (including TimeoutError/SSLError), non-HTTPS URL/redirect, invalid Content-Length,
+            length mismatch or response exceeding `MAX_FETCH_BYTES`.
     """
     url = request.full_url if isinstance(request, Request) else request
     try:
+        if urlsplit(url).scheme != "https":
+            raise ValueError(f"Download requires HTTPS, refused '{url}'")
         with urlopen(request, timeout=120) as response:
-            return response.read()
+            lengths = response.headers.get_all("Content-Length", [])
+            length = None
+            if lengths:
+                if len(lengths) != 1 or CONTENT_LENGTH.fullmatch(lengths[0].strip()) is None:
+                    raise ValueError(f"Invalid Content-Length: '{lengths}'")
+                length = int(lengths[0])
+                if length > MAX_FETCH_BYTES:
+                    raise ValueError(f"Content-Length exceeds {MAX_FETCH_BYTES} bytes")
+                # urllib requests Connection: close. Read to EOF, not its parsed length, so
+                # both undersized and oversized declarations are checked against actual bytes.
+                response.length = None
+            body = response.read(MAX_FETCH_BYTES + 1)
+            if len(body) > MAX_FETCH_BYTES:
+                raise ValueError(f"Response exceeds {MAX_FETCH_BYTES} bytes")
+            if length is not None and len(body) != length:
+                raise ValueError(f"Content-Length mismatch: expected {length} bytes, received {len(body)}")
+            return body
     except (HTTPException, OSError, ValueError) as error:
         raise FetchError(url, error) from error
 
