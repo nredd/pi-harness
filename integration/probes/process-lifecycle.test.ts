@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { run } from "../../packages/dev-tools/src/core/process.ts";
 import { spawnMonitor } from "../../packages/session-kit/src/monitor/process.ts";
@@ -93,9 +93,12 @@ const runners: Runner[] = [
 			 * @throws No errors.
 			 */
 			let markReady: () => void = () => {};
-			const ready = new Promise<void>((resolve) => {
-				markReady = resolve;
-			});
+			const ready = new Promise<void>(
+				/** @returns Stores the readiness resolver. @throws No errors. */
+				(resolve) => {
+					markReady = resolve;
+				},
+			);
 			const monitor = await spawnMonitor([process.execPath, "-e", script], {
 				cwd,
 				/**
@@ -119,6 +122,7 @@ const runners: Runner[] = [
 				},
 			});
 			const watchdog = setTimeout(
+				/** @returns Requests bounded monitor termination. @throws On a termination request failure. */
 				() => monitor.terminate(),
 				terminateOnReady ? READINESS_WATCHDOG_MS : COMPLETION_WATCHDOG_MS,
 			);
@@ -126,9 +130,12 @@ const runners: Runner[] = [
 				if (terminateOnReady) {
 					await Promise.race([
 						ready,
-						monitor.exited.then(() => {
-							throw new Error("Fixture exited before publishing TERM-handler readiness");
-						}),
+						monitor.exited.then(
+							/** @returns Never returns. @throws When exit precedes readiness. */
+							() => {
+								throw new Error("Fixture exited before publishing TERM-handler readiness");
+							},
+						),
 					]);
 					monitor.terminate();
 				}
@@ -158,21 +165,7 @@ function alive(pid: number): boolean {
 }
 
 /**
- * Kill only the fixture's known process group.
- * @param leader Owned group leader PID.
- * @returns Completion of the signal attempt.
- * @throws On signal errors other than ESRCH.
- */
-function killGroup(leader: number): void {
-	try {
-		process.kill(-leader, "SIGKILL");
-	} catch (error) {
-		if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
-	}
-}
-
-/**
- * Validate identities before cleanup can signal a failed fixture.
+ * Validate fixture identities before probe-only post-completion assertions.
  * @param stdout JSON identity record from the fixture.
  * @returns Validated leader and descendant PIDs.
  * @throws If JSON or process identities are malformed.
@@ -189,11 +182,18 @@ function identity(stdout: string): { leader: number; child: number } {
 
 for (const runner of runners) {
 	for (const inheritPipes of [false, true]) {
-		test(`${runner.name}: normal leader exit cleans descendants (${inheritPipes ? "inherited" : "closed"} pipes)`, {
-			timeout: TEST_TIMEOUT_MS,
-		}, async (context) => {
+		/**
+		 * Verify descendant cleanup after acknowledged normal exit.
+		 * @param context Test-owned scratch cleanup.
+		 * @returns Completes the descendant lifecycle assertions.
+		 * @throws On fixture or assertion failure.
+		 */
+		const verifyDescendantCleanup = async (context: TestContext) => {
 			const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-			context.after(() => rm(cwd, { recursive: true, force: true }));
+			context.after(
+				/** @returns Removes the disposable directory. @throws On removal failure. */
+				() => rm(cwd, { recursive: true, force: true }),
+			);
 			const script = `
 const { spawn } = require('node:child_process');
 const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, ${FIXTURE_LIFETIME_MS}); process.send("descendant-ready");'], { stdio: ${inheritPipes ? '["ignore", "inherit", "inherit", "ipc"]' : '["ignore", "ignore", "ignore", "ipc"]'} });
@@ -209,8 +209,8 @@ child.once("message", message => {
 `;
 			const result = await runner.execute(script, cwd);
 			const owned = identity(result.stdout);
-			// Registered only after the fixture proved its own group; a failing assertion still reaps it.
-			context.after(() => killGroup(owned.leader));
+			// The runner completed: numeric IDs no longer prove ownership. Probe only,
+			// including on assertion failure; never signal a potentially recycled group.
 			assert.equal(result.exitCode, 0, result.stderr);
 			assert.equal(
 				result.stderr,
@@ -220,14 +220,29 @@ child.once("message", message => {
 			const deadline = Date.now() + DESCENDANT_EXIT_TIMEOUT_MS;
 			while (alive(owned.child) && Date.now() < deadline) await delay(PROCESS_POLL_INTERVAL_MS);
 			assert.equal(alive(owned.child), false, "descendant outlived its completed command");
-		});
+			assert.equal(alive(-owned.leader), false, "completed runner left an observable group");
+		};
+		test(
+			`${runner.name}: normal leader exit cleans descendants (${inheritPipes ? "inherited" : "closed"} pipes)`,
+			{
+				timeout: TEST_TIMEOUT_MS,
+			},
+			verifyDescendantCleanup,
+		);
 	}
 
-	test(`${runner.name}: keeps nonzero status and separate streams`, {
-		timeout: TEST_TIMEOUT_MS,
-	}, async (context) => {
+	/**
+	 * Verify the runner preserves nonzero status and separate streams.
+	 * @param context Test-owned scratch cleanup.
+	 * @returns Completes the output assertions.
+	 * @throws On runner or assertion failure.
+	 */
+	const verifySeparateStreams = async (context: TestContext) => {
 		const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-		context.after(() => rm(cwd, { recursive: true, force: true }));
+		context.after(
+			/** @returns Removes the disposable directory. @throws On removal failure. */
+			() => rm(cwd, { recursive: true, force: true }),
+		);
 		const result = await runner.execute(
 			'process.stdout.write("out\\n"); process.stderr.write("err\\n"); process.exitCode = 7;',
 			cwd,
@@ -238,13 +253,27 @@ child.once("message", message => {
 			exitCode: 7,
 			signal: null,
 		});
-	});
+	};
+	test(
+		`${runner.name}: keeps nonzero status and separate streams`,
+		{
+			timeout: TEST_TIMEOUT_MS,
+		},
+		verifySeparateStreams,
+	);
 
-	test(`${runner.name}: escalates termination when the leader ignores SIGTERM`, {
-		timeout: TEST_TIMEOUT_MS,
-	}, async (context) => {
+	/**
+	 * Verify ignored TERM escalates to KILL after readiness.
+	 * @param context Test-owned scratch cleanup.
+	 * @returns Completes the escalation assertions.
+	 * @throws On runner or assertion failure.
+	 */
+	const verifyEscalation = async (context: TestContext) => {
 		const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-		context.after(() => rm(cwd, { recursive: true, force: true }));
+		context.after(
+			/** @returns Removes the disposable directory. @throws On removal failure. */
+			() => rm(cwd, { recursive: true, force: true }),
+		);
 		const result = await runner.execute(
 			`process.on("SIGTERM", () => {}); process.stderr.write("ready\\n"); setTimeout(() => {}, ${FIXTURE_LIFETIME_MS});`,
 			cwd,
@@ -253,5 +282,12 @@ child.once("message", message => {
 		assert.equal(result.stderr, "ready\n", "Fixture must publish readiness after installing its TERM handler");
 		assert.equal(result.exitCode, null);
 		assert.equal(result.signal, "SIGKILL");
-	});
+	};
+	test(
+		`${runner.name}: escalates termination when the leader ignores SIGTERM`,
+		{
+			timeout: TEST_TIMEOUT_MS,
+		},
+		verifyEscalation,
+	);
 }

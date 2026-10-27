@@ -39,15 +39,24 @@ if (!process.argv.includes("--inside-session")) {
 			stdio: "inherit",
 		},
 	);
-	const closed = new Promise((resolve) => child.once("close", resolve));
-	const exited = new Promise((resolve, reject) => {
-		child.once("error", reject);
-		child.once("exit", (code, signal) =>
-			signal
-				? reject(new Error(`Live Linux E2E session exited on ${signal}.`))
-				: resolve(code ?? 1),
-		);
-	});
+	const closed = new Promise(
+		/** @returns Subscribes to session stream closure. @throws No intentional errors. */
+		(resolve) => child.once("close", resolve),
+	);
+	const exited = new Promise(
+		/** @returns Registers the session exit outcome. @throws Spawn and signal failures reject the promise. */
+		(resolve, reject) => {
+			child.once("error", reject);
+			child.once(
+				"exit",
+				/** @returns Settles the session outcome. @throws No errors; signal exits reject the promise. */
+				(code, signal) =>
+					signal
+						? reject(new Error(`Live Linux E2E session exited on ${signal}.`))
+						: resolve(code ?? 1),
+			);
+		},
+	);
 	let sessionFailure;
 	try {
 		process.exitCode = await within(
@@ -62,6 +71,11 @@ if (!process.argv.includes("--inside-session")) {
 		await finishCheckCleanup(
 			"live Linux E2E session",
 			[
+				/**
+				 * A completed leader permits probes only; a running leader retains cleanup ownership.
+				 * @returns {Promise<void>} Bounded observation or owned-group cancellation.
+				 * @throws {Error} On quiescence or cancellation failure.
+				 */
 				() =>
 					stopCheckChild(child, closed, "live Linux E2E D-Bus session", true),
 			],

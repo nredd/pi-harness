@@ -183,11 +183,14 @@ if (process.platform === "darwin") {
 const { withDesktopLock } = await import("../src/desktop.ts");
 const order = [];
 await Promise.all([
-	withDesktopLock(async () => {
-		order.push("a1");
-		await Promise.resolve();
-		order.push("a2");
-	}),
+	withDesktopLock(
+		/** @returns {Promise<void>} Records a cooperative lock-held transaction. @throws {never} No intentional failures. */
+		async () => {
+			order.push("a1");
+			await Promise.resolve();
+			order.push("a2");
+		},
+	),
 	withDesktopLock(async () => {
 		order.push("b1");
 		order.push("b2");
@@ -198,10 +201,13 @@ assert.deepEqual(order, ["a1", "a2", "b1", "b2"]);
 // An aborted, still-queued call never runs.
 const controller = new AbortController();
 const ran = [];
-const slow = withDesktopLock(async () => {
-	await Promise.resolve();
-	ran.push("slow");
-});
+const slow = withDesktopLock(
+	/** @returns {Promise<void>} Yields once while retaining desktop ownership. @throws {never} No intentional failures. */
+	async () => {
+		await Promise.resolve();
+		ran.push("slow");
+	},
+);
 const queued = withDesktopLock(async () => {
 	ran.push("queued");
 }, controller.signal);

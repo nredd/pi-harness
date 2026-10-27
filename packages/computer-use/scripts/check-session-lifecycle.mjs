@@ -123,17 +123,21 @@ try {
 	assert(websocket, "test server did not retain the CDP socket");
 
 	// Subscribe before shutdown can close the socket; the timer is only a failure backstop.
-	const websocketClosed = new Promise((resolve, reject) => {
-		const timer = setTimeout(
-			() =>
-				reject(new Error("CDP socket remained open after session shutdown")),
-			CDP_CLOSE_TIMEOUT_MS,
-		);
-		websocket.once("close", () => {
-			clearTimeout(timer);
-			resolve();
-		});
-	});
+	const websocketClosed = new Promise(
+		/** @returns {void} Observes socket closure before shutdown begins. @throws {never} Expiry rejects this promise. */
+		(resolve, reject) => {
+			const timer = setTimeout(
+				/** @returns {void} Rejects missing socket closure. @throws {never} No synchronous errors. */
+				() =>
+					reject(new Error("CDP socket remained open after session shutdown")),
+				CDP_CLOSE_TIMEOUT_MS,
+			);
+			websocket.once("close", () => {
+				clearTimeout(timer);
+				resolve();
+			});
+		},
+	);
 	await Promise.all([shutdownComputerUseSession(), websocketClosed]);
 
 	const response = await fetch(`http://127.0.0.1:${port}/json/list`);

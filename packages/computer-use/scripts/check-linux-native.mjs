@@ -81,19 +81,40 @@ function startSetup(packageDir, env, extraArgs = [], observer) {
 		{ env, stdio: ["ignore", "pipe", "pipe"] },
 	);
 	const capture = { output: "" };
-	child.stdout.on("data", (chunk) => {
-		capture.output += chunk;
-	});
-	child.stderr.on("data", (chunk) => {
-		capture.output += chunk;
-	});
-	const closed = new Promise((resolve) => child.once("close", () => resolve()));
-	const done = new Promise((resolve, reject) => {
-		child.once("error", reject);
-		child.once("close", (code, signal) =>
-			resolve({ code, signal, output: capture.output }),
-		);
-	});
+	child.stdout.on(
+		"data",
+		/** @returns {void} Captures setup stdout. @throws {never} No errors for stream buffers. */
+		(chunk) => {
+			capture.output += chunk;
+		},
+	);
+	child.stderr.on(
+		"data",
+		/** @returns {void} Captures setup stderr. @throws {never} No errors for stream buffers. */
+		(chunk) => {
+			capture.output += chunk;
+		},
+	);
+	const closed = new Promise(
+		/** @returns {import('node:child_process').ChildProcess} Subscribes to setup closure. @throws {never} No errors. */
+		(resolve) =>
+			child.once(
+				"close",
+				/** @returns {void} Acknowledges setup closure. @throws {never} No errors. */
+				() => resolve(),
+			),
+	);
+	const done = new Promise(
+		/** @returns {void} Observes setup spawn and exit. @throws {never} Spawn errors reject this promise. */
+		(resolve, reject) => {
+			child.once("error", reject);
+			child.once(
+				"close",
+				/** @returns {void} Resolves setup status with capture. @throws {never} No errors. */
+				(code, signal) => resolve({ code, signal, output: capture.output }),
+			);
+		},
+	);
 	return { child, done, closed, capture };
 }
 
@@ -151,9 +172,17 @@ async function waitForReadyPid(file) {
 		const deadline = Date.now() + READINESS_TIMEOUT_MS;
 		Date.now() < deadline;
 	) {
-		const pid = Number(await fs.readFile(file, "utf8").catch(() => ""));
+		const pid = Number(
+			await fs.readFile(file, "utf8").catch(
+				/** @returns {string} Missing markers are unready. @throws {never} No errors. */
+				() => "",
+			),
+		);
 		if (Number.isInteger(pid) && pid > 0) return pid;
-		await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+		await new Promise(
+			/** @returns {NodeJS.Timeout} Schedules a bounded readiness probe. @throws {never} No errors. */
+			(resolve) => setTimeout(resolve, POLL_INTERVAL_MS),
+		);
 	}
 	throw new Error(
 		`Timed out waiting for compiler/setup fixture signal readiness: ${file}`,
@@ -337,20 +366,26 @@ wait`,
 				waitForReadyPid(leaderFile),
 				Promise.race([
 					waitForReadyPid(setupReady),
-					done.then((result) => {
-						throw new Error(
-							`Packed setup closed before wrapper readiness: ${result.output}`,
-						);
-					}),
+					done.then(
+						/** @returns {never} Never returns. @throws {Error} If setup exits before readiness. */
+						(result) => {
+							throw new Error(
+								`Packed setup closed before wrapper readiness: ${result.output}`,
+							);
+						},
+					),
 				]),
-			]).catch((error) => {
-				throw new Error(
-					`Packed setup readiness: ${error.message}\n${capture.output}`,
-					{
-						cause: error,
-					},
-				);
-			});
+			]).catch(
+				/** @returns {never} Never returns. @throws {Error} Enriches every readiness failure with capture. */
+				(error) => {
+					throw new Error(
+						`Packed setup readiness: ${error.message}\n${capture.output}`,
+						{
+							cause: error,
+						},
+					);
+				},
+			);
 			assert.equal(
 				wrapperPid,
 				setupChild.pid,
@@ -371,7 +406,10 @@ wait`,
 			) {
 				try {
 					process.kill(compilerPid, 0);
-					await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+					await new Promise(
+						/** @returns {NodeJS.Timeout} Schedules a bounded compiler-exit probe. @throws {never} No errors. */
+						(resolve) => setTimeout(resolve, POLL_INTERVAL_MS),
+					);
 				} catch (error) {
 					assert.equal(error.code, "ESRCH");
 					alive = false;
@@ -387,7 +425,12 @@ wait`,
 			setupChild.kill("SIGKILL");
 			// Successful cancellation releases PID ownership; cleanup only a failed fixture.
 			for (const file of compilerReaped ? [] : [leaderFile, pidFile]) {
-				const pid = Number(await fs.readFile(file, "utf8").catch(() => ""));
+				const pid = Number(
+					await fs.readFile(file, "utf8").catch(
+						/** @returns {string} Missing failed-fixture markers have no owned PID. @throws {never} No errors. */
+						() => "",
+					),
+				);
 				if (pid > 0) {
 					try {
 						if (file === leaderFile) process.kill(-pid, "SIGKILL");
@@ -501,11 +544,13 @@ wait`,
 	await finishCheckCleanup(
 		"native check cleanup",
 		[
+			/** @returns {Promise<object>} Restores scratch permissions. @throws {Error} On command failure or deadline. */
 			() =>
 				runCheckCommand("chmod", ["-R", "u+w", work], {
 					label: "restore native scratch permissions",
 					timeoutMs: PERMISSION_CHANGE_TIMEOUT_MS,
 				}),
+			/** @returns {Promise<void>} Removes scratch state independently. @throws {Error} On removal failure. */
 			() => fs.rm(work, { recursive: true, force: true }),
 		],
 		nativeFailure,

@@ -172,29 +172,32 @@ try {
 		fixtureEntry = path.join(linkedTempDir, "scripts", "setup-helper.mjs");
 	}
 	const result = await within(
-		new Promise((resolve, reject) => {
-			const child = spawn(
-				process.execPath,
-				[fixtureEntry, "--platform", "linux"],
-				{
-					env: {
-						...process.env,
-						PI_COMPUTER_USE_LINUX_HELPER_PATH: helperDest,
+		new Promise(
+			/** @returns {void} Spawns and captures initial setup. @throws {Error} Invalid spawn arguments reject this promise. */
+			(resolve, reject) => {
+				const child = spawn(
+					process.execPath,
+					[fixtureEntry, "--platform", "linux"],
+					{
+						env: {
+							...process.env,
+							PI_COMPUTER_USE_LINUX_HELPER_PATH: helperDest,
+						},
+						stdio: ["ignore", "pipe", "pipe"],
 					},
-					stdio: ["ignore", "pipe", "pipe"],
-				},
-			);
-			setupChild = child;
-			let output = "";
-			child.stdout.on("data", (chunk) => {
-				output += chunk;
-			});
-			child.stderr.on("data", (chunk) => {
-				output += chunk;
-			});
-			child.once("error", reject);
-			child.once("close", (code) => resolve({ code, output }));
-		}),
+				);
+				setupChild = child;
+				let output = "";
+				child.stdout.on("data", (chunk) => {
+					output += chunk;
+				});
+				child.stderr.on("data", (chunk) => {
+					output += chunk;
+				});
+				child.once("error", reject);
+				child.once("close", (code) => resolve({ code, output }));
+			},
+		),
 		"initial Linux setup CLI to close without a prebuilt",
 		SETUP_COMPLETION_TIMEOUT_MS,
 	);
@@ -258,7 +261,10 @@ if (process.platform !== "win32") {
 			const deadline = Date.now() + PROCESS_SETTLE_TIMEOUT_MS;
 			alive(pid) && Date.now() < deadline;
 		)
-			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+			await new Promise(
+				/** @returns {NodeJS.Timeout} Schedules a bounded fixture-exit probe. @throws {never} No errors. */
+				(resolve) => setTimeout(resolve, POLL_INTERVAL_MS),
+			);
 		return !alive(pid);
 	};
 	/**
@@ -274,7 +280,10 @@ if (process.platform !== "win32") {
 		) {
 			const pid = Number(await fs.readFile(file, "utf8").catch(() => ""));
 			if (Number.isInteger(pid) && pid > 0) return pid;
-			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+			await new Promise(
+				/** @returns {NodeJS.Timeout} Schedules a bounded readiness probe. @throws {never} No errors. */
+				(resolve) => setTimeout(resolve, POLL_INTERVAL_MS),
+			);
 		}
 		throw new Error(`Timed out waiting for fixture signal readiness: ${file}`);
 	};
@@ -334,9 +343,15 @@ await running;
 	 * @throws {Error} If signals, successful delivery or grace timing violate the contract.
 	 */
 	const assertEscalated = (name, trace, leader) => {
-		const signals = trace.filter((event) => event.signal !== 0);
+		const signals = trace.filter(
+			/** @returns {boolean} Excludes group probes. @throws {never} No errors for trace records. */
+			(event) => event.signal !== 0,
+		);
 		assert.deepEqual(
-			signals.map((event) => [event.pid, event.signal]),
+			signals.map(
+				/** @returns {Array<number|string>} Projects delivered signals. @throws {never} No errors for trace records. */
+				(event) => [event.pid, event.signal],
+			),
 			[
 				[-leader, "SIGTERM"],
 				[-leader, "SIGKILL"],
@@ -407,10 +422,13 @@ await running;
 			child.stderr.on("data", (chunk) => {
 				output += chunk;
 			});
-			const closed = new Promise((resolve, reject) => {
-				child.once("error", reject);
-				child.once("close", (code, signal) => resolve({ code, signal }));
-			});
+			const closed = new Promise(
+				/** @returns {void} Subscribes before wrapper cancellation. @throws {never} Spawn errors reject this promise. */
+				(resolve, reject) => {
+					child.once("error", reject);
+					child.once("close", (code, signal) => resolve({ code, signal }));
+				},
+			);
 			let leader;
 			let descendant;
 			try {
@@ -466,14 +484,21 @@ await running;
 			else {
 				assert.deepEqual(
 					trace
-						.filter((event) => event.signal !== 0)
-						.map((event) => [event.pid, event.signal]),
+						.filter(
+							/** @returns {boolean} Excludes group probes. @throws {never} No errors for trace records. */
+							(event) => event.signal !== 0,
+						)
+						.map(
+							/** @returns {Array<number|string>} Projects the no-KILL signal oracle. @throws {never} No errors for trace records. */
+							(event) => [event.pid, event.signal],
+						),
 					[[-leader, "SIGTERM"]],
 					`${name}: empty/reaped group must never receive KILL`,
 				);
 				// A deliberately TERM-responsive descendant MUST fail the same escalation oracle.
 				if (behavior === "responsive")
 					assert.throws(
+						/** @returns {void} Applies the escalation oracle. @throws {Error} The responsive negative control must fail escalation. */
 						() => assertEscalated(name, trace, leader),
 						/expected TERM then KILL escalation/,
 					);

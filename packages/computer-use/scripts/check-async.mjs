@@ -11,7 +11,7 @@ export const PARENT_READINESS_TIMEOUT_MS = 15_000;
 export const COMMAND_TERM_WAIT_MS = 5000;
 /** Hard cap for subprocess close after KILL. */
 export const COMMAND_KILL_WAIT_MS = 5000;
-/** Cadence for probing owned detached groups during bounded cleanup. */
+/** 20ms avoids busy-spinning yet samples group exit promptly within the five-second caps. */
 const COMMAND_GROUP_POLL_MS = 20;
 /** Default per-stream output limit for disposable check commands. */
 const COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -25,9 +25,12 @@ export const SIGNAL_READINESS_POLL_MS = 20;
  */
 export function deferred() {
 	let resolve;
-	const promise = new Promise((done) => {
-		resolve = done;
-	});
+	const promise = new Promise(
+		/** @returns {void} Stores the deferred resolver. @throws {never} No errors. */
+		(done) => {
+			resolve = done;
+		},
+	);
 	return { promise, resolve };
 }
 
@@ -49,12 +52,16 @@ export async function within(
 	try {
 		return await Promise.race([
 			promise,
-			new Promise((_, reject) => {
-				timer = setTimeout(
-					() => reject(new Error(`Timed out waiting for ${label}`)),
-					timeoutMs,
-				);
-			}),
+			new Promise(
+				/** @returns {void} Arms the contextual watchdog. @throws {never} Expiry rejects the promise. */
+				(_, reject) => {
+					timer = setTimeout(
+						/** @returns {void} Rejects the expired operation. @throws {never} No synchronous error. */
+						() => reject(new Error(`Timed out waiting for ${label}`)),
+						timeoutMs,
+					);
+				},
+			),
 		]);
 	} finally {
 		clearTimeout(timer);
@@ -116,7 +123,10 @@ async function waitForCheckGroup(pgid, label, timeoutMs) {
 			throw new Error(
 				`Timed out waiting for ${label}: process group ${pgid} remains`,
 			);
-		await new Promise((resolve) => setTimeout(resolve, COMMAND_GROUP_POLL_MS));
+		await new Promise(
+			/** @returns {NodeJS.Timeout} Schedules the next bounded group probe. @throws {never} No errors. */
+			(resolve) => setTimeout(resolve, COMMAND_GROUP_POLL_MS),
+		);
 	}
 }
 
@@ -125,11 +135,36 @@ async function waitForCheckGroup(pgid, label, timeoutMs) {
  * @param {import('node:child_process').ChildProcess} child Subprocess owned by this check.
  * @param {PromiseLike<unknown>} closed Promise subscribed before termination can begin.
  * @param {string} label Operation name included in cleanup failures.
- * @param {boolean} [group=false] Signal the detached POSIX group rather than only its leader.
+ * @param {boolean} [group=false] Signal the owned detached POSIX group, or only probe it if its leader already exited.
  * @returns {Promise<void>} Resolves once streams close and, if requested, the group is empty.
+ * @throws {Error} If a completed leader's streams/group remain observable past their probe-only caps.
  * @throws {AggregateError} If both bounded termination attempts fail.
  */
 export async function stopCheckChild(child, closed, label, group = false) {
+	// A completed leader no longer proves PGID ownership. Never signal its numeric ID:
+	// even a successful probe could refer to a recycled group. Observe only, and fail
+	// contextually if it does not disappear within the cap.
+	if (group && (child.exitCode != null || child.signalCode != null)) {
+		try {
+			await within(
+				closed,
+				`${label} completed leader streams`,
+				COMMAND_KILL_WAIT_MS,
+			);
+			if (child.pid !== undefined)
+				await waitForCheckGroup(
+					child.pid,
+					`${label} completed group`,
+					COMMAND_KILL_WAIT_MS,
+				);
+		} finally {
+			// Inherited pipes must not outlive the cap even when signalling is unsafe.
+			child.stdout?.destroy();
+			child.stderr?.destroy();
+			child.unref();
+		}
+		return;
+	}
 	const failures = [];
 	for (const [signal, waitMs] of [
 		["SIGTERM", COMMAND_TERM_WAIT_MS],
@@ -180,54 +215,68 @@ export async function runCheckCommand(
 	let child;
 	let didClose = false;
 	let markClosed;
-	const closed = new Promise((resolve) => {
-		markClosed = resolve;
-	});
+	const closed = new Promise(
+		/** @returns {void} Stores stream-closure acknowledgment. @throws {never} No errors. */
+		(resolve) => {
+			markClosed = resolve;
+		},
+	);
 	const group = process.platform !== "win32";
 	let stdout = "";
 	let stderr = "";
 	const sizes = { stdout: 0, stderr: 0 };
-	const result = new Promise((resolve, reject) => {
-		child = spawn(command, args, {
-			cwd,
-			env,
-			detached: group,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		/**
-		 * Capture bounded UTF-8 output without allowing a runaway command to exhaust memory.
-		 * @param {"stdout"|"stderr"} stream Captured stream.
-		 * @param {string} chunk Decoded stream data.
-		 * @returns {void} Completion of capture or rejection.
-		 * @throws {never} Over-limit output rejects the operation instead of throwing in an event callback.
-		 */
-		const capture = (stream, chunk) => {
-			const bytes = Buffer.byteLength(chunk);
-			const available = Math.max(0, maxBuffer - sizes[stream]);
-			const kept =
-				bytes <= available
-					? chunk
-					: Buffer.from(chunk).subarray(0, available).toString("utf8");
-			if (stream === "stdout") stdout += kept;
-			else stderr += kept;
-			sizes[stream] += bytes;
-			if (sizes[stream] > maxBuffer)
-				reject(new Error(`${stream} exceeded ${maxBuffer} bytes`));
-		};
-		child.stdout
-			?.setEncoding("utf8")
-			.on("data", (chunk) => capture("stdout", chunk));
-		child.stderr
-			?.setEncoding("utf8")
-			.on("data", (chunk) => capture("stderr", chunk));
-		child.once("error", reject);
-		child.once("close", (code, signal) => {
-			didClose = true;
-			markClosed();
-			if (code === 0) resolve({ stdout, stderr });
-			else reject(new Error(`exited with ${code ?? signal}`));
-		});
-	});
+	const result = new Promise(
+		/** @returns {void} Spawns and observes the owned command. @throws {Error} Invalid spawn arguments reject this promise. */
+		(resolve, reject) => {
+			child = spawn(command, args, {
+				cwd,
+				env,
+				detached: group,
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			/**
+			 * Capture bounded UTF-8 output without allowing a runaway command to exhaust memory.
+			 * @param {"stdout"|"stderr"} stream Captured stream.
+			 * @param {string} chunk Decoded stream data.
+			 * @returns {void} Completion of capture or rejection.
+			 * @throws {never} Over-limit output rejects the operation instead of throwing in an event callback.
+			 */
+			const capture = (stream, chunk) => {
+				const bytes = Buffer.byteLength(chunk);
+				const available = Math.max(0, maxBuffer - sizes[stream]);
+				const kept =
+					bytes <= available
+						? chunk
+						: Buffer.from(chunk).subarray(0, available).toString("utf8");
+				if (stream === "stdout") stdout += kept;
+				else stderr += kept;
+				sizes[stream] += bytes;
+				if (sizes[stream] > maxBuffer)
+					reject(new Error(`${stream} exceeded ${maxBuffer} bytes`));
+			};
+			child.stdout?.setEncoding("utf8").on(
+				"data",
+				/** @returns {void} Captures bounded stdout. @throws {never} Overflow rejects the command. */
+				(chunk) => capture("stdout", chunk),
+			);
+			child.stderr?.setEncoding("utf8").on(
+				"data",
+				/** @returns {void} Captures bounded stderr. @throws {never} Overflow rejects the command. */
+				(chunk) => capture("stderr", chunk),
+			);
+			child.once("error", reject);
+			child.once(
+				"close",
+				/** @returns {void} Settles capture and acknowledges stream closure. @throws {never} Nonzero status rejects the command. */
+				(code, signal) => {
+					didClose = true;
+					markClosed();
+					if (code === 0) resolve({ stdout, stderr });
+					else reject(new Error(`exited with ${code ?? signal}`));
+				},
+			);
+		},
+	);
 	try {
 		return await within(result, `${label} (${command}) to complete`, timeoutMs);
 	} catch (error) {

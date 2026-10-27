@@ -313,11 +313,15 @@ currentPlatformBackend.act = async (request) => {
 let release;
 const lockEntered = deferred();
 const held = withDesktopLock(
+	/** @returns {Promise<void>} Holds desktop ownership until explicit release. @throws {never} No intentional failures. */
 	() =>
-		new Promise((resolve) => {
-			release = resolve;
-			lockEntered.resolve();
-		}),
+		new Promise(
+			/** @returns {void} Publishes lock acquisition and retains its release gate. @throws {never} No errors. */
+			(resolve) => {
+				release = resolve;
+				lockEntered.resolve();
+			},
+		),
 );
 await within(lockEntered.promise, "desktop lock holder to enter");
 const lockObs = await call(executeObserve, { root: "@r1", mode: "semantic" });
@@ -355,8 +359,9 @@ await within(fallbackRequested.promise, "act to request foreground fallback");
 // Negative observation after fallback was requested: neither completion nor physical delivery
 // may occur while another transaction owns the lock. Assert markers/counters, not elapsed time.
 const FOREGROUND_BLOCKED_WINDOW_MS = 200;
-await new Promise((resolve) =>
-	setTimeout(resolve, FOREGROUND_BLOCKED_WINDOW_MS),
+await new Promise(
+	/** @returns {NodeJS.Timeout} Bounds observation of forbidden foreground work. @throws {never} No errors. */
+	(resolve) => setTimeout(resolve, FOREGROUND_BLOCKED_WINDOW_MS),
 );
 assert.equal(
 	foregroundDone,

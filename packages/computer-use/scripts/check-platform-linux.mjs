@@ -426,7 +426,10 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 			const deadline = Date.now() + timeoutMs;
 			alive(pid) && Date.now() < deadline;
 		)
-			await new Promise((r) => setTimeout(r, HELPER_POLL_INTERVAL_MS));
+			await new Promise(
+				/** @returns {NodeJS.Timeout} Schedules a bounded helper-exit probe. @throws {never} No errors. */
+				(r) => setTimeout(r, HELPER_POLL_INTERVAL_MS),
+			);
 		return !alive(pid);
 	};
 
@@ -498,7 +501,10 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 			const deadline = Date.now() + PROBE_READINESS_TIMEOUT_MS;
 			(await lines(probeReady)).length === 0 && Date.now() < deadline;
 		)
-			await new Promise((r) => setTimeout(r, HELPER_POLL_INTERVAL_MS));
+			await new Promise(
+				/** @returns {NodeJS.Timeout} Schedules another bounded diagnostics-readiness probe. @throws {never} No errors. */
+				(r) => setTimeout(r, HELPER_POLL_INTERVAL_MS),
+			);
 		assert.equal(
 			(await lines(probeReady)).length,
 			1,
@@ -511,8 +517,9 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		// Negative observation only: outcome has settled. Watch the setup/start counters for
 		// forbidden asynchronous restarts, not for readiness or elapsed-time correctness.
 		const DISPOSE_NO_RESTART_WINDOW_MS = 300;
-		await new Promise((resolve) =>
-			setTimeout(resolve, DISPOSE_NO_RESTART_WINDOW_MS),
+		await new Promise(
+			/** @returns {NodeJS.Timeout} Bounds the forbidden-restart observation window. @throws {never} No errors. */
+			(resolve) => setTimeout(resolve, DISPOSE_NO_RESTART_WINDOW_MS),
 		);
 		assert.equal(
 			(await lines(c.setupCount)).length,
@@ -578,7 +585,10 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 			const deadline = Date.now() + INSTALL_READINESS_TIMEOUT_MS;
 			!client.installPromise && Date.now() < deadline;
 		)
-			await new Promise((r) => setTimeout(r, INSTALL_POLL_INTERVAL_MS));
+			await new Promise(
+				/** @returns {NodeJS.Timeout} Schedules a bounded install-readiness probe. @throws {never} No errors. */
+				(r) => setTimeout(r, INSTALL_POLL_INTERVAL_MS),
+			);
 		assert.ok(client.installPromise, "install in flight");
 		client.dispose();
 		assert.equal(

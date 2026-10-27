@@ -42,22 +42,27 @@ let createCount = 0;
 
 try {
 	const results = await Promise.all(
-		Array.from({ length: 12 }, () =>
-			ensureIdentityOnce(
-				async () => identity,
-				async () => {
-					createCount++;
-					// All callers already performed their initial identity lookup; the real directory
-					// lock must serialize creation. No synthetic creation latency is needed.
-					identity = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
-					return identity;
-				},
-				(callback) =>
-					withDirectoryLock(lockPath, callback, {
-						waitMs: SIGNING_LOCK_WAIT_MS,
-						retryMs: SIGNING_LOCK_RETRY_MS,
-					}),
-			),
+		Array.from(
+			{ length: 12 },
+			/** @returns {Promise<string>} Requests one shared signing identity. @throws {Error} On lock or identity creation failure. */
+			() =>
+				ensureIdentityOnce(
+					async () => identity,
+					/** @returns {Promise<string>} Creates the fixture identity once. @throws {never} No intentional failures. */
+					async () => {
+						createCount++;
+						// All callers already performed their initial identity lookup; the real directory
+						// lock must serialize creation. No synthetic creation latency is needed.
+						identity = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
+						return identity;
+					},
+					/** @returns {Promise<unknown>} Serializes identity creation with the real lock. @throws {Error} On lock or callback failure. */
+					(callback) =>
+						withDirectoryLock(lockPath, callback, {
+							waitMs: SIGNING_LOCK_WAIT_MS,
+							retryMs: SIGNING_LOCK_RETRY_MS,
+						}),
+				),
 		),
 	);
 
