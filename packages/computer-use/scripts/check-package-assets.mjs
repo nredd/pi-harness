@@ -11,7 +11,8 @@ const execFileAsync = promisify(execFile);
 // ships its locked Rust crate source (no target/ or tests/) for the opt-in cargo build.
 const linuxCrate = ["Cargo.toml", "Cargo.lock", ...["atspi", "error", "lib", "main", "protocol", "state", "wayland", "x11"].map((name) => `src/${name}.rs`)];
 const expected = [
-	"package/docs/linux.md",
+	"package/docs/content/docs/how-to-guides/linux.mdx",
+	"package/native/macos/activity_glow.swift",
 	...linuxCrate.map((file) => `package/native/linux/bridge-rs/${file}`),
 	"package/native/macos/agent_cursor.swift",
 	"package/native/macos/agent_cursor_motion.swift",

@@ -40,7 +40,7 @@ await call(executeFind, { app: "App" });
 const observed = await call(executeObserve, { root: "@r1", mode: "semantic" });
 const stateId = text(observed).match(/stateId ([0-9a-f-]{36})/)[1];
 observeCalls.length = 0;
-const result = await call(executeAct, { stateId, actions: [{ action: "press", ref: text(observed).match(/(@e\d+) AXButton/)[1] }] });
+const result = await call(executeAct, { stateId, actions: [{ action: "press", ref: text(observed).match(/(@e\d+) button/)[1] }] });
 assert.notEqual(result.details?.status, "post_action_observation_failed", text(result));
 assert.match(text(result), /Executed 1 checked UI action/);
 const successor = observeCalls.at(-1);
@@ -62,7 +62,7 @@ currentPlatformBackend.actBatch = async () => ({
 });
 const second = await call(executeObserve, { root: "@r1", mode: "semantic" });
 const second_state = text(second).match(/stateId ([0-9a-f-]{36})/)[1];
-const acted = await call(executeAct, { stateId: second_state, actions: [{ action: "press", ref: text(second).match(/(@e\d+) AXButton/)[1] }] });
+const acted = await call(executeAct, { stateId: second_state, actions: [{ action: "press", ref: text(second).match(/(@e\d+) button/)[1] }] });
 const deltaRef = text(acted).match(/New root: dialog "Confirm"[^\n]*\((@r\d+)\)/)?.[1];
 assert.ok(deltaRef, `delta line missing an @r ref:\n${text(acted)}`);
 const refreshed = await call(executeFind, { app: "App" });
@@ -83,7 +83,7 @@ let release;
 const held = withDesktopLock(() => new Promise((resolve) => { release = resolve; }));
 const lockObs = await call(executeObserve, { root: "@r1", mode: "semantic" });
 const lockState = () => text(lockObs).match(/stateId ([0-9a-f-]{36})/)[1];
-const goRef = text(lockObs).match(/(@e\d+) AXButton/)[1];
+const goRef = text(lockObs).match(/(@e\d+) button/)[1];
 const background = await Promise.race([
 	call(executeAct, { stateId: lockState(), actions: [{ action: "press", ref: goRef }] }).then(() => "done"),
 	new Promise((resolve) => setTimeout(() => resolve("blocked"), 2_000)),
@@ -94,7 +94,7 @@ needForeground = true;
 policies.length = 0;
 const again = await call(executeObserve, { root: "@r1", mode: "semantic" });
 let foregroundDone = false;
-const foreground = call(executeAct, { stateId: text(again).match(/stateId ([0-9a-f-]{36})/)[1], actions: [{ action: "press", ref: text(again).match(/(@e\d+) AXButton/)[1] }] }).then(() => { foregroundDone = true; });
+const foreground = call(executeAct, { stateId: text(again).match(/stateId ([0-9a-f-]{36})/)[1], actions: [{ action: "press", ref: text(again).match(/(@e\d+) button/)[1] }] }).then(() => { foregroundDone = true; });
 await new Promise((resolve) => setTimeout(resolve, 200));
 assert.equal(foregroundDone, false, "a foreground act must wait for the desktop lock");
 assert.ok(!policies.includes("foreground"), "foreground delivery must not start while the lock is held");
@@ -115,7 +115,7 @@ currentPlatformBackend.act = async (request) => {
 	return { outcome: "worked", performed: { delivery: "hid" } };
 };
 const two = await call(executeObserve, { root: "@r1", mode: "semantic" });
-const goTwice = text(two).match(/(@e\d+) AXButton/)[1];
+const goTwice = text(two).match(/(@e\d+) button/)[1];
 await call(executeAct, { stateId: text(two).match(/stateId ([0-9a-f-]{36})/)[1], actions: [{ action: "press", ref: goTwice }, { action: "press", ref: goTwice }] });
 await queuedDesk;
 assert.deepEqual(order, ["fg", "fg", "desk"], "desktop_input must not interleave inside a physical act_ui transaction");

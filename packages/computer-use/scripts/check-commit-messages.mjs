@@ -1,7 +1,11 @@
 #!/usr/bin/env node
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
-const pattern = /^(?:(feat|chore|refactor|fix|perf|docs|ci)\([^)\s:]+\)|ci):\s?\S.+$/;
+// This imported workspace follows the harness house style, not upstream's conventional commits.
+const validSubject = (subject) => subject.length <= 72 && /^(?:[a-z][a-z0-9-]*: )?[A-Z][^\n]*[^.\s]$/.test(subject);
+for (const subject of ["Resync computer-use with upstream", "rtl: Preserve the root target"]) assert.ok(validSubject(subject));
+for (const subject of ["fix(browser): stabilize targeting", "lowercase subject", "Trailing period.", "A".repeat(73)]) assert.ok(!validSubject(subject));
 const ignoredPrefixes = ["Merge ", "Revert "];
 
 function git(args) {
@@ -26,13 +30,13 @@ try {
 	process.exit(1);
 }
 
-const invalid = subjects.filter((subject) => !ignoredPrefixes.some((prefix) => subject.startsWith(prefix)) && !pattern.test(subject));
+const invalid = subjects.filter((subject) => !ignoredPrefixes.some((prefix) => subject.startsWith(prefix)) && !validSubject(subject));
 
 if (invalid.length > 0) {
 	console.error("Invalid commit message(s):");
 	for (const subject of invalid) console.error(`- ${subject}`);
-	console.error("\nExpected format: feat|chore|refactor|fix|perf|docs|ci(<scope>): <summary> (or ci: <summary>)");
-	console.error("Example: fix(browser): stabilize window targeting");
+	console.error("\nExpected a capitalized imperative subject, at most 72 characters, no trailing period or conventional-commit prefix.");
+	console.error("Example: Preserve root targeting");
 	process.exit(1);
 }
 

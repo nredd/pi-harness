@@ -1,9 +1,22 @@
 #!/usr/bin/env node
 // Whole-desktop tools: input validation and helper wire mapping (no real input is posted).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+// Static native wiring checks supplement mocked calls below. They do not prove live GUI behavior.
+const swift = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
+assert.match(swift, /case "captureDisplay":\s+return try captureDisplay\(request\)/, "native display capture dispatch must remain");
+assert.match(swift, /case "desktopInput":\s+return try desktopInput\(request\)/, "native desktop input dispatch must remain");
+assert.match(swift, /let cursor = CGEvent\(source: nil\)\?\.location/, "cursor readback must use top-left global coordinates");
+assert.match(swift, /for step in interpolatedDragPoints\(/, "native drags must interpolate");
+assert.match(swift, /let tiers:[^\n]+bundleIdentifier[^\n]+localizedName[^\n]+executableURL/, "activation must rank bundle id before name before executable");
+assert.match(swift, /code: "ambiguous_app"/, "ambiguous activation must fail closed");
+assert.match(swift, /executableURL = URL\(fileURLWithPath: "\/usr\/bin\/open"\)/, "activation must use killable open subprocess");
+assert.match(swift, /NSPasteboard\.general\.string\(forType: \.string\)/, "native clipboard read must remain");
+assert.match(swift, /NSPasteboard\.general\.setString\(text, forType: \.string\)/, "native clipboard write must remain");
 
 const { macosHelper } = await import("../src/platform/macos/helper.ts");
-const { executeDesktopInput, validateDesktopInput } = await import("../src/desktop.ts");
+const { executeDesktopInput, executeDesktopScreenshot, validateDesktopInput } = await import("../src/desktop.ts");
 
 for (const bad of [
 	{ action: "click", x: Number.NaN, y: 1 },
@@ -33,6 +46,16 @@ assert.throws(() => validateDesktopInput({ action: "scroll", x: 1, y: 1, scrollY
 
 if (process.platform === "darwin") {
 	const sent = [];
+	macosHelper.command = async (name, args) => {
+		assert.equal(name, "captureDisplay");
+		assert.deepEqual(args, { display: 1, maxDimension: 1200 });
+		return { display: 1, displays: [{ index: 1, isMain: false, frame: { x: 341, y: -1080, w: 1920, h: 1080 } }], frame: { x: 341, y: -1080, w: 1920, h: 1080 }, image: { jpegBase64: "fixture", width: 1200, height: 675 } };
+	};
+	const screenshot = await executeDesktopScreenshot("s", { display: 1, maxDimension: 1200 });
+	assert.match(screenshot.content[0].text, /global frame 341,-1080 1920x1080/);
+	assert.match(screenshot.content[0].text, /image pixel \/ 0\.625/);
+	assert.deepEqual(screenshot.content[1], { type: "image", data: "fixture", mimeType: "image/jpeg" });
+	assert.equal(screenshot.details.scale, 0.625);
 	macosHelper.command = async (name, args) => {
 		sent.push({ name, args });
 		return { performed: args.action, mouse: { x: 0, y: 0 } };

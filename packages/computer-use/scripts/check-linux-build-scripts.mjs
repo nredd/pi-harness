@@ -41,13 +41,13 @@ for (const entry of await fs.readdir(crateDir, { recursive: true, withFileTypes:
 	if (entry.isFile() && !/^(target|tests)\//.test(relative) && relative !== ".gitignore") crateFiles.push(`native/linux/bridge-rs/${relative}`);
 }
 assert.deepEqual(pkg.files.filter((file) => file.startsWith("native/linux/")).sort(), crateFiles.sort(), "package.json `files` must list exactly the crate sources (no target/ or tests/)");
-assert.ok(pkg.files.includes("docs/linux.md"));
+assert.ok(pkg.files.includes("docs/content/docs"));
 
 // Rust and TypeScript must agree on the wire protocol and shared architecture contract.
 const [protocolRs, architectureTs, linuxDoc] = await Promise.all([
 	fs.readFile(path.join(crateDir, "src", "protocol.rs"), "utf8"),
 	fs.readFile(path.join(rootDir, "src", "platform", "architecture.ts"), "utf8"),
-	fs.readFile(path.join(rootDir, "docs", "linux.md"), "utf8"),
+	fs.readFile(path.join(rootDir, "docs", "content", "docs", "how-to-guides", "linux.mdx"), "utf8"),
 ]);
 assert.equal(protocolRs.match(/PROTOCOL_VERSION: u32 = (\d+)/)?.[1], helperSource.match(/LINUX_HELPER_PROTOCOL_VERSION = (\d+)/)?.[1], "Rust and TS protocol versions drifted");
 assert.equal(nativeSource.match(/"architectureVersion": (\d+)/)?.[1], architectureTs.match(/PLATFORM_ARCHITECTURE_VERSION = (\d+)/)?.[1], "architecture versions drifted");
@@ -55,7 +55,7 @@ const rustInvariants = [...(nativeSource.match(/"invariants": \[([^\]]*)\]/)?.[1
 const tsInvariants = [...(architectureTs.match(/REQUIRED_PLATFORM_INVARIANTS = \[([^\]]*)\]/)?.[1] ?? "").matchAll(/"([a-z-]+)"/g)].map((match) => match[1]);
 assert.ok(tsInvariants.length > 0);
 assert.deepEqual(rustInvariants, tsInvariants, "Rust and TS architecture invariants drifted");
-assert.match(linuxDoc, /PI_COMPUTER_USE_ALLOW_BUILD=1/, "docs/linux.md must document the opt-in source build");
+assert.match(linuxDoc, /PI_COMPUTER_USE_ALLOW_BUILD=1/, "Linux guide must document the opt-in source build");
 assert.match(linuxDoc, /cargo/);
 assert.equal(pkg.scripts["build:linux"], "node scripts/build-native.mjs --platform linux");
 
