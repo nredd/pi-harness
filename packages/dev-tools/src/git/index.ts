@@ -4,11 +4,14 @@
  * Reads (and `git_worktree_list`) are annotated read-only so Plan mode admits them. Mutations are not.
  */
 
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type TSchema, Type } from "typebox";
 import { abnormalExit, bound, seconds, toolResult } from "../core/index.ts";
 import { buildCommitMessage, validateSubject } from "./commit-message.ts";
 import { findGuardViolation } from "./guard.ts";
+import { resolvePushRemote } from "./push-remote.ts";
 import { assertExplicitPaths, assertRef, git, gitFailure, gitState } from "./run.ts";
 import { formatStatus, parsePorcelainV2 } from "./status.ts";
 import { registerWorktreeTools } from "./worktree.ts";
@@ -304,8 +307,21 @@ export function registerGitTools(pi: ExtensionAPI): void {
 				return fail("validate", (e as Error).message);
 			}
 
-			const add = await git(["add", "--", ...params.paths], { cwd, signal, timeoutMs });
-			const addFailure = gitFailure(add, "git add");
+			// A path whose deletion is already staged is unknown to the index and the worktree, so `git add`
+			// rejects it; `commit -- <path>` still resolves it against HEAD. Everything else goes through
+			// `add -A`, which also stages worktree deletions.
+			const toAdd: string[] = [];
+			for (const path of params.paths) {
+				if (!existsSync(resolve(cwd, path))) {
+					const inIndex = await git(["ls-files", "--", path], { cwd, signal, timeoutMs });
+					const inHead = await git(["ls-tree", "--name-only", "HEAD", "--", path], { cwd, signal, timeoutMs });
+					if (inIndex.exitCode === 0 && !inIndex.stdout.trim() && inHead.exitCode === 0 && inHead.stdout.trim())
+						continue;
+				}
+				toAdd.push(path);
+			}
+			const add = toAdd.length ? await git(["add", "-A", "--", ...toAdd], { cwd, signal, timeoutMs }) : undefined;
+			const addFailure = add && gitFailure(add, "git add");
 			if (addFailure) return fail("add", addFailure);
 
 			// `commit -- <paths>` commits exactly the named paths; anything else already in the index stays there.
@@ -346,14 +362,14 @@ export function registerGitTools(pi: ExtensionAPI): void {
 					structured: { stage: "done", sha, signed, pushed: false, hookModifiedFiles: false },
 				});
 			}
-			// Push only the current branch: to its upstream's remote when it has one, else set origin up.
-			const upstream = await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
-				cwd,
-				signal,
-				timeoutMs,
-			});
-			const remote = upstream.exitCode === 0 ? upstream.stdout.trim().split("/")[0] : undefined;
-			const pushArgs = remote ? ["push", "-q", remote, "HEAD"] : ["push", "-q", "-u", "origin", "HEAD"];
+			// Push only the current branch, to the remote git itself would pick for it:
+			// branch.<n>.pushRemote, then remote.pushDefault, then branch.<n>.remote, then the sole remote.
+			// Several remotes and no setting is ambiguous: fail closed rather than guess `origin`.
+			const target = await resolvePushRemote((args) => git(args, { cwd, signal, timeoutMs }));
+			if ("error" in target) return fail("push", `committed ${short} but ${target.error}`, { sha, signed });
+			const pushArgs = target.setUpstream
+				? ["push", "-q", "-u", target.remote, "HEAD"]
+				: ["push", "-q", target.remote, "HEAD"];
 			const push = await git(pushArgs, { cwd, signal, timeoutMs });
 			const pushFailure = gitFailure(push, "git push");
 			if (pushFailure) {
@@ -364,7 +380,7 @@ export function registerGitTools(pi: ExtensionAPI): void {
 				});
 			}
 			return toolResult({
-				text: `committed ${short}${signed ? " (signed)" : ""} and pushed in ${seconds(add.durationMs + commit.durationMs + push.durationMs)}`,
+				text: `committed ${short}${signed ? " (signed)" : ""} and pushed in ${seconds((add?.durationMs ?? 0) + commit.durationMs + push.durationMs)}`,
 				structured: { stage: "done", sha, signed, pushed: true, hookModifiedFiles: false },
 			});
 		},
