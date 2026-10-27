@@ -24,11 +24,22 @@ export interface FallbackCarrier {
   modelTier?: TierDisclosure;
 }
 
-/** Whether `carrier` ran on a substituted model. */
-export const hasFallback = (carrier: FallbackCarrier | undefined): boolean =>
-  carrier?.modelFallback !== undefined || carrier?.modelNote !== undefined || carrier?.modelTier !== undefined;
+/** Whether this tier's answer differs from the member/profile admitted for it. */
+function switchedWithinTier(tier: TierDisclosure): boolean {
+  return (tier.kind === "routed" || tier.kind === "static")
+    && tier.answered !== undefined
+    && tier.answered !== (tier.kind === "routed" ? tier.admitted : tier.member);
+}
 
-/** Plain tier/outcome flag, or `[fallback]`; group counts retain the same identity. */
+/** Whether `carrier` needs an actionable fallback warning, not merely tier identity. */
+export const hasFallback = (carrier: FallbackCarrier | undefined): boolean => {
+  if (carrier?.modelFallback !== undefined) return true;
+  const tier = carrier?.modelTier;
+  if (!tier) return carrier?.modelNote !== undefined;
+  return tier.kind === "unmapped" || tier.kind === "unavailable" || switchedWithinTier(tier);
+};
+
+/** Plain tier identity/outcome flag, or `[fallback]`; group counts retain the same identity. */
 export function fallbackFlagText(count = 1, carrier?: FallbackCarrier): string {
   const tier = carrier?.modelTier;
   const suffix = count > 1 ? ` x${count}` : "";
@@ -36,8 +47,9 @@ export function fallbackFlagText(count = 1, carrier?: FallbackCarrier): string {
     : `[fallback${suffix}]`;
 }
 
-/** The themed flag for `carrier`, or "" when it did not fall back. */
+/** The themed tier identity or actionable fallback flag for `carrier`. */
 export function fallbackFlag(theme: FlagTheme, carrier: FallbackCarrier | undefined, count = 1): string {
+  if (carrier?.modelTier) return theme.fg(hasFallback(carrier) ? "warning" : "dim", fallbackFlagText(count, carrier));
   return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count, carrier)) : "";
 }
 

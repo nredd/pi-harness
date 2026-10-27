@@ -25,6 +25,7 @@ import {
 import type { WorkflowAgentEntry } from "../src/workflow/progress.js";
 
 const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s } as any;
+const coloredTheme = { fg: (color: string, text: string) => `${color}:${text}`, bold: (text: string) => text } as any;
 const FALLBACK = { input: "ghost", used: "anthropic/x" };
 const NOTE = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
 const NOW = 10_000_000;
@@ -113,6 +114,18 @@ it("workflow cards use the actual tier flag ahead of long labels, not a healthy 
       expect(visibleWidth(row)).toBeLessThanOrEqual(width);
     }
   }
+});
+
+it("renders healthy tier identity neutrally and switched tiers as actionable fallbacks", () => {
+  const healthy = TIER_FLAGS[0]!.modelTier;
+  const switched: TierDisclosure = { ...healthy, admitted: "fixture/fast", answered: "fixture/safer" };
+  const card = layoutWorkflowCard({ width: 120, now: NOW, task, progress: [agentEntry({ modelTier: healthy })] });
+  expect(card.flat().find(segment => segment.text.includes("[@cheap]"))).toMatchObject({ color: "dim" });
+  const dialog = layoutWorkflowDialog(dialogInput(120, [agentEntry({ modelTier: healthy })]));
+  expect(dialog.flat().find(segment => segment.text.includes("[@cheap]"))).toMatchObject({ color: "dim" });
+  expect(strip(renderNotification(notice({ modelTier: healthy }), false, coloredTheme, false).render(120)[0]!)).toContain("dim:[@cheap]");
+  expect(strip(renderNotification(notice({ modelTier: switched }), false, coloredTheme, false).render(120)[0]!)).toContain("warning:[@cheap]");
+  expect(groupSummary([notice({ modelTier: healthy }), notice({ modelTier: switched })], coloredTheme)).toContain("warning:[@cheap]");
 });
 
 it("individual and grouped notices distinguish tiers, outcome and real fallback counts", () => {

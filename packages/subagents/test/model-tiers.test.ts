@@ -15,7 +15,7 @@ import { appendModelTierEntry } from "../src/output-file.js";
 import { loadSettings } from "../src/settings.js";
 import { AgentResultView } from "../src/ui/agent-row.js";
 import type { AgentDetails } from "../src/ui/agent-widget.js";
-import { fallbackFlag } from "../src/ui/fallback-flag.js";
+import { fallbackFlag, fallbackFlagText } from "../src/ui/fallback-flag.js";
 import { appendJournal, readJournal, type WorkflowJournalEntry } from "../src/workflow/journal.js";
 import { runWorkflow } from "../src/workflow/runtime.js";
 
@@ -71,6 +71,25 @@ describe("exact model tiers", () => {
       expect(selectModel({ ...request, definitionModel })).toContain("Model not found");
     }
   });
+  it("reports a newer Haiku sibling as unavailable instead of silently upgrading Explore", () => {
+    registry.registerProvider("anthropic", {
+      api: "anthropic-messages", baseUrl: "http://localhost:1", apiKey: "fixture-not-a-secret",
+      models: ["claude-haiku-5-5"].map(id => ({ id, name: id, reasoning: false, input: ["text"], contextWindow: 1000, maxTokens: 100, cost: costs })),
+    });
+    const request = { agentType: "Explore", definitionModel: DEFAULT_AGENTS.get("Explore")?.model,
+      parentModel: registry.find("tier-test", "parent"), registry, cwd: dir };
+    setModelTiers({}, { onUnavailable: "inherit" });
+    const inherited = selectModel(request);
+    expect(inherited).toMatchObject({ outcome: "fallback", model: { id: "parent" }, tier: {
+      kind: "unavailable", tier: "claude-haiku-4-5", tried: ["anthropic/claude-haiku-4-5"],
+    } });
+    if (typeof inherited === "string") throw new Error(inherited);
+    expect(modelSelectionNote({ modelTier: inherited.tier, modelFallback: inherited.fallback })).toContain("@claude-haiku-4-5 is unavailable");
+    expect(fallbackFlagText(1, { modelTier: inherited.tier })).toBe("[@claude-haiku-4-5 unavailable]");
+    setModelTiers({}, { onUnavailable: "error" });
+    expect(selectModel(request)).toBe("Model tier @claude-haiku-4-5 is unavailable.");
+  });
+
   it("selects the first credentialed static member and lists skips without a router", async () => {
     setModelTiers({ cheap: ["no-tier-credentials/a", ref("b")] }, {});
     const outcome = await resolveTier("cheap", { registry, admit: open });

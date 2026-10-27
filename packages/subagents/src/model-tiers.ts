@@ -9,7 +9,7 @@ export type TierBinding =
   | { kind: "static"; tier: string; members: string[] };
 
 /** Why an earlier static member could not be selected. */
-export interface TierSkip {
+interface TierSkip {
   ref: string;
   why: "no-credentials" | "quota";
 }

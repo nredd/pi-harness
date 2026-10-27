@@ -380,23 +380,41 @@ it("keeps an explicit quota-parked alias request and re-resolves it at fire time
   expect(options?.modelSelection).toMatchObject({ requested: "portable", source: "param" });
 });
 
-it("reopens an evicted mention with current selection and retained original fallback provenance", async () => {
-  setAgentModels({ scout: "missing-model" });
+it("reopens an unavailable-tier run on a literal model with only current fallback disclosure", async () => {
+  setModelTiers({ cheap: ["missing/model"] }, { onUnavailable: "inherit" });
+  setAgentModels({ scout: "@cheap" });
   const { record } = await invoke("Agent");
   const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
   expect(record?.sessionFile).toBeDefined();
-  expect(record?.modelFallback).toEqual({ input: "missing-model", used: ref("parent") });
+  expect(record?.modelFallback).toEqual({ input: "@cheap", used: ref("parent") });
+  expect(record?.modelTier).toMatchObject({ kind: "unavailable", tier: "cheap" });
   clock.advance(11 * 60_000);
   expect(root.getRecord(record!.id)).toBeUndefined();
-  setAgentModels({ scout: "router/default" });
+  setAgentModels({ scout: ref("explicit") });
   await boot.lifecycle.get("input")?.({ type: "input", text: "@scout again", source: "interactive" } as never, context);
   await flush();
   const options = vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3];
+  const reopened = root.getRecord(options!.agentId!);
   expect(options?.resumeSessionFile).toBe(record?.sessionFile);
-  expect(options?.model).toMatchObject({ provider: "router", id: "default" });
-  expect(options?.modelSelection).toMatchObject({ requested: "router/default", source: "agentModels:type" });
-  expect(options?.modelSelection?.fallback).toBeUndefined();
-  expect(root.getRecord(options!.agentId!)?.modelFallback).toEqual(record?.modelFallback);
+  expect(options?.model).toMatchObject({ id: "explicit" });
+  expect(reopened?.modelSelection).toMatchObject({ requested: ref("explicit"), source: "agentModels:type" });
+  expect(reopened?.modelFallback).toBeUndefined();
+  expect(reopened?.previousModelFallback).toEqual(record?.modelFallback);
+  expect(reopened?.previousModelTier).toEqual(record?.modelTier);
+});
+
+it("does not retain unavailable-tier fallback provenance when a reopen request fails", async () => {
+  setModelTiers({ cheap: ["missing/model"] }, { onUnavailable: "inherit" });
+  setAgentModels({ scout: "@cheap" });
+  const { record } = await invoke("Agent");
+  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
+  clock.advance(11 * 60_000);
+  setModelTiers({ cheap: ["missing/model"] }, { onUnavailable: "error" });
+  await boot.lifecycle.get("input")?.({ type: "input", text: "@scout again", source: "interactive" } as never, context);
+  await flush();
+  expect(vi.mocked(runner.runAgent)).toHaveBeenCalledTimes(1);
+  expect(root.getRecord(record!.id)).toBeUndefined();
+  expect(context.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Model tier @cheap is unavailable."), "warning");
 });
 
 it("keeps the prior tier separate from an evicted mention's new literal selection", async () => {

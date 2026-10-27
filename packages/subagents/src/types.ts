@@ -284,14 +284,16 @@ export interface AgentRecord {
   modelFallback?: ModelFallback;
   /**
    * This record's selection, retained across live resumes and physical relabelling.
-   * An evicted-session reopen selects anew; modelFallback separately retains the
-   * original conversation's disclosure even when the new selection resolves.
+   * An evicted-session reopen selects anew; current fallback disclosure always
+   * comes from that selection.
    */
   modelSelection?: ModelSelection;
   /** Actual run's tier provenance, preserved through eviction and replay. */
   modelTier?: TierDisclosure;
   /** Prior evicted run's outcome, never the continuation's selection or disclosure. */
   previousModelTier?: TierDisclosure;
+  /** Prior evicted run's fallback, retained separately from the continuation's current disclosure. */
+  previousModelFallback?: ModelFallback;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
   /**

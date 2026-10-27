@@ -356,7 +356,7 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
     const rail = lastGroup ? "  " : `${glyphs.vertical} `;
     group.agents.forEach((entry, agentIndex) => {
       const lastAgent = agentIndex === group.agents.length - 1;
-      const flag = hasFallback(entry) ? fallbackFlagText(1, entry) : "";
+      const flag = entry.modelTier || hasFallback(entry) ? fallbackFlagText(1, entry) : "";
       const segments: WorkflowCardLine = [
         { text: "  " },
         { text: rail, color: "dim" },
@@ -364,7 +364,7 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
         rowGlyph(entry, glyphs),
         { text: " " },
         // Leading, ahead of the label: the row is clamped from the right.
-        ...(flag ? [{ text: `${flag} `, color: "warning" as const }] : []),
+        ...(flag ? [{ text: `${flag} `, color: hasFallback(entry) ? "warning" as const : "dim" as const }] : []),
       ];
 
       // Prepended rather than folded into `agentStatSegments`, which is the

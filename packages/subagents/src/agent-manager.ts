@@ -327,8 +327,9 @@ interface SpawnOptions {
   modelSelection?: ModelSelection;
   /** Historical outcome only, never used to label the continuation. */
   previousModelTier?: TierDisclosure;
-  /** Original provenance retained when reopening an evicted conversation. Internal only. */
-  modelFallback?: ModelFallback;
+  /** Historical fallback only, never used to label the continuation. */
+  previousModelFallback?: ModelFallback;
+
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
@@ -739,10 +740,11 @@ export class AgentManager {
       // `options` has stopped being the interesting object.
       blocking: options.blocking,
       invocation: options.invocation,
-      modelFallback: options.modelFallback ?? selection.fallback,
+      modelFallback: selection.fallback,
       modelSelection: selection,
       modelTier: selection.tier ? tierDisclosure(selection.tier) : undefined,
       previousModelTier: options.previousModelTier,
+      previousModelFallback: options.previousModelFallback,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,
@@ -1018,7 +1020,7 @@ export class AgentManager {
       if (options.modelSelection?.tierBinding && !options.modelSelection.tierAdmitted) {
         const block = await admitModelSelection(options.modelSelection, ctx.modelRegistry, pi.events);
         record.modelTier = options.modelSelection.tier ? tierDisclosure(options.modelSelection.tier) : undefined;
-        record.modelFallback = options.modelFallback ?? options.modelSelection.fallback;
+        record.modelFallback = options.modelSelection.fallback;
         if (block) throw new Error(`${modelSelectionNote(record)} ${describeBlock(block)} The agent was not started.`);
         if (record.abortController?.signal.aborted || options.signal?.aborted) throw new Error("Agent aborted during model admission.");
       }

@@ -56,8 +56,8 @@ export function groupSummary(all: NotificationDetails[], theme: Theme): string {
   // In the heading, ahead of the member list that truncation eats from the end,
   // so a fallback member listed last is still counted.
   const groups = new Map<string, { carrier: NotificationDetails; count: number }>();
-  for (const carrier of all.filter(d => hasFallback(d))) {
-    const key = fallbackFlagText(1, carrier);
+  for (const carrier of all.filter(d => d.modelTier !== undefined || hasFallback(d))) {
+    const key = `${hasFallback(carrier)}:${fallbackFlagText(1, carrier)}`;
     const group = groups.get(key);
     if (group) group.count++;
     else groups.set(key, { carrier, count: 1 });

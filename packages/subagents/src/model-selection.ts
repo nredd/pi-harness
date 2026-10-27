@@ -84,11 +84,17 @@ export function selectModel(request: {
         selection = { ...input, model, outcome: "resolved", tierBinding: binding, tierParent: request.parentModel };
       }
     } else {
+      const compatibilityPin = input.source === "definition" && request.agentType === "Explore"
+        ? LEGACY_MODEL_PINS.get(requested) : undefined;
       const resolved = request.paramModel != null && typeof request.paramModel === "object"
         ? request.paramModel : input.source === "param" ? resolveModel(requested, request.registry)
-        : exactTierModel(LEGACY_MODEL_PINS.get(requested) ?? requested, request.registry) ?? `Model not found: "${requested}".`;
+        : exactTierModel(compatibilityPin ?? requested, request.registry) ?? `Model not found: "${requested}".`;
       if (typeof resolved !== "string") selection = { ...input, model: resolved, outcome: "resolved" };
-      else {
+      else if (compatibilityPin) {
+        const tier: TierOutcome = { kind: "unavailable", tier: requested, tried: [compatibilityPin] };
+        if (getModelResolution().onUnavailable === "error") return `Model tier @${requested} is unavailable.`;
+        selection = { ...selection, tier, outcome: "fallback", fallback: modelFallbackTo(input.requested, request.parentModel) };
+      } else {
         if (input.source === "param" || getModelResolution().onUnavailable === "error") return resolved;
         selection = { ...selection, outcome: "fallback", fallback: modelFallbackTo(input.requested, request.parentModel) };
       }

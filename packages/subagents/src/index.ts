@@ -842,6 +842,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     delete safeOptions.modelSelection;
     delete safeOptions.modelTier;
     delete safeOptions.previousModelTier;
+    delete safeOptions.previousModelFallback;
     return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
   };
 
@@ -1144,8 +1145,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           description: entry.description,
           reclaim: { handle: entry.handle, alias: entry.alias },
           resumeSessionFile: entry.sessionFile,
-          // The original failure, not whatever the CURRENT config would say.
-          ...(entry.modelFallback ? { modelFallback: entry.modelFallback } : {}),
+          // Historical disclosures never replace the continuation's current selection.
+          ...(entry.modelFallback ? { previousModelFallback: entry.modelFallback } : {}),
           ...(entry.modelTier ? { previousModelTier: entry.modelTier } : {}),
           isBackground: true,
         });
