@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import http from "node:http";
-import { cdpTabForWindow } from "../src/cdp.ts";
 import { shutdownComputerUseSession } from "../src/bridge.ts";
+import { cdpTabForWindow } from "../src/cdp.ts";
 
 function websocketFrame(value, opcode = 1) {
 	const payload = Buffer.from(value);
@@ -30,7 +30,9 @@ function serveWebsocket(socket) {
 			offset += maskLength;
 			const payload = Buffer.from(buffer.subarray(offset, offset + length));
 			buffer = buffer.subarray(offset + length);
-			if (mask) for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
+			if (mask)
+				for (let index = 0; index < payload.length; index += 1)
+					payload[index] ^= mask[index % 4];
 
 			if (opcode === 8) {
 				socket.end(websocketFrame(payload, 8));
@@ -38,7 +40,9 @@ function serveWebsocket(socket) {
 			}
 			if (opcode !== 1) continue;
 			const request = JSON.parse(payload.toString("utf8"));
-			socket.write(websocketFrame(JSON.stringify({ id: request.id, result: {} })));
+			socket.write(
+				websocketFrame(JSON.stringify({ id: request.id, result: {} })),
+			);
 		}
 	});
 }
@@ -49,13 +53,17 @@ let port;
 const server = http.createServer((request, response) => {
 	if (request.url === "/json/list") {
 		response.setHeader("content-type", "application/json");
-		response.end(JSON.stringify([{
-			id: "test-tab",
-			type: "page",
-			title: "Test Tab",
-			url: "about:blank",
-			webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/test-tab`,
-		}]));
+		response.end(
+			JSON.stringify([
+				{
+					id: "test-tab",
+					type: "page",
+					title: "Test Tab",
+					url: "about:blank",
+					webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/test-tab`,
+				},
+			]),
+		);
 		return;
 	}
 	response.statusCode = 404;
@@ -69,16 +77,20 @@ server.on("connection", (socket) => {
 server.on("upgrade", (request, socket) => {
 	upgradedSocket = socket;
 	const accept = createHash("sha1")
-		.update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+		.update(
+			`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`,
+		)
 		.digest("base64");
-	socket.write([
-		"HTTP/1.1 101 Switching Protocols",
-		"Upgrade: websocket",
-		"Connection: Upgrade",
-		`Sec-WebSocket-Accept: ${accept}`,
-		"",
-		"",
-	].join("\r\n"));
+	socket.write(
+		[
+			"HTTP/1.1 101 Switching Protocols",
+			"Upgrade: websocket",
+			"Connection: Upgrade",
+			`Sec-WebSocket-Accept: ${accept}`,
+			"",
+			"",
+		].join("\r\n"),
+	);
 	serveWebsocket(socket);
 });
 
@@ -95,19 +107,35 @@ try {
 	const websocket = upgradedSocket;
 	assert(websocket, "test server did not retain the CDP socket");
 
-	await shutdownComputerUseSession();
-	await new Promise((resolve, reject) => {
-		const timer = setTimeout(() => reject(new Error("CDP socket remained open after session shutdown")), 1_500);
+	// Subscribe before shutdown can close the socket; the timer is only a failure backstop.
+	const websocketClosed = new Promise((resolve, reject) => {
+		const timer = setTimeout(
+			() =>
+				reject(new Error("CDP socket remained open after session shutdown")),
+			1_500,
+		);
 		websocket.once("close", () => {
 			clearTimeout(timer);
 			resolve();
 		});
 	});
+	await shutdownComputerUseSession();
+	await websocketClosed;
 
 	const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-	assert.equal(response.status, 200, "session shutdown stopped the external browser endpoint");
-	assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, String(port), "session shutdown changed the external CDP configuration");
-	console.log("PASS session shutdown closes CDP while leaving an external browser running");
+	assert.equal(
+		response.status,
+		200,
+		"session shutdown stopped the external browser endpoint",
+	);
+	assert.equal(
+		process.env.PI_COMPUTER_USE_CDP_PORT,
+		String(port),
+		"session shutdown changed the external CDP configuration",
+	);
+	console.log(
+		"PASS session shutdown closes CDP while leaving an external browser running",
+	);
 } finally {
 	delete process.env.PI_COMPUTER_USE_CDP_PORT;
 	for (const socket of sockets) socket.destroy();

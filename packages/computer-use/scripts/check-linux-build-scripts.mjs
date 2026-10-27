@@ -258,11 +258,19 @@ setInterval(() => {
 		`import fs from "node:fs";
 import { runCancellable } from ${JSON.stringify(setupUrl)};
 const [fixture, base, behavior] = process.argv.slice(2);
+const trace = [];
 const kill = (pid, signal) => {
-  fs.appendFileSync(base + ".trace", JSON.stringify({ pid, signal, at: performance.now() }) + "\\n");
-  return process.kill(pid, signal);
+  let result;
+  try { result = process.kill(pid, signal); }
+  catch (error) { trace.push({ pid, signal, error: error.code }); throw error; }
+  const at = performance.now(); // Successful syscall first, with no trace I/O before delivery.
+  trace.push({ pid, signal, at });
+  return result;
 };
-await runCancellable(process.execPath, [fixture, "leader", base, behavior], { kill });
+const running = runCancellable(process.execPath, [fixture, "leader", base, behavior], { kill });
+// Register AFTER runCancellable's exit hook so a late exit-hook signal is captured too.
+process.on("exit", () => fs.writeFileSync(base + ".trace", JSON.stringify(trace)));
+await running;
 `,
 	);
 	const assertEscalated = (name, trace, leader) => {
@@ -275,6 +283,8 @@ await runCancellable(process.execPath, [fixture, "leader", base, behavior], { ki
 			],
 			`${name}: expected TERM then KILL escalation`,
 		);
+		for (const event of signals)
+			assert.equal(event.error, undefined, `${name}: signal syscall failed`);
 		// Date.now() in the reaper has millisecond precision; allow only its rounding, not scheduler guesses.
 		assert.ok(
 			signals[1].at - signals[0].at >= GROUP_TERM_GRACE_MS - 1,
@@ -296,7 +306,8 @@ await runCancellable(process.execPath, [fixture, "leader", base, behavior], { ki
 				return true;
 			},
 		);
-		// EPERM is a pure injected syscall case: no process/trap exists to handshake with.
+		// Preserve today's EPERM policy without claiming it proves PGID reuse (follow-up #167).
+		// This pure injected syscall case has no process/trap to handshake with.
 		const calls = [];
 		await reapProcessGroup(424242, (pid, signal) => {
 			calls.push([pid, signal]);
@@ -305,7 +316,7 @@ await runCancellable(process.execPath, [fixture, "leader", base, behavior], { ki
 		assert.deepEqual(
 			calls,
 			[[-424242, 0]],
-			"a foreign (EPERM) group must only be probed",
+			"the current EPERM policy must only probe without signalling",
 		);
 
 		for (const [name, behavior] of [
@@ -373,10 +384,7 @@ await runCancellable(process.execPath, [fixture, "leader", base, behavior], { ki
 			} finally {
 				clearTimeout(timer);
 			}
-			const trace = (await fs.readFile(`${base}.trace`, "utf8"))
-				.trim()
-				.split("\n")
-				.map((line) => JSON.parse(line));
+			const trace = JSON.parse(await fs.readFile(`${base}.trace`, "utf8"));
 			if (behavior === "waits" || behavior === "exits-first")
 				assertEscalated(name, trace, leader);
 			else {

@@ -17,19 +17,25 @@ interface Outcome {
 
 interface Runner {
 	name: string;
-	execute(script: string, cwd: string): Promise<Outcome>;
+	execute(script: string, cwd: string, terminateOnReady?: boolean): Promise<Outcome>;
 }
 
 /** Adapt only return/capture shapes; spawning and cleanup remain the production implementations. */
 const runners: Runner[] = [
 	{
 		name: "dev-tools",
-		async execute(script, cwd) {
+		async execute(script, cwd, terminateOnReady = false) {
+			const controller = new AbortController();
 			const result = await run({
 				cmd: process.execPath,
 				args: ["-e", script],
 				cwd,
-				timeoutMs: 1_000,
+				// Startup has a failure backstop, but TERM is triggered by the post-handler marker.
+				timeoutMs: terminateOnReady ? 10_000 : 1_000,
+				signal: controller.signal,
+				onStderrLine: (line) => {
+					if (terminateOnReady && line === "ready") controller.abort();
+				},
 			});
 			return {
 				stdout: result.stdout,
@@ -41,9 +47,13 @@ const runners: Runner[] = [
 	},
 	{
 		name: "session-kit",
-		async execute(script, cwd) {
+		async execute(script, cwd, terminateOnReady = false) {
 			let stdout = "";
 			let stderr = "";
+			let markReady: () => void = () => {};
+			const ready = new Promise<void>((resolve) => {
+				markReady = resolve;
+			});
 			const monitor = await spawnMonitor([process.execPath, "-e", script], {
 				cwd,
 				onStdout: (chunk) => {
@@ -51,10 +61,20 @@ const runners: Runner[] = [
 				},
 				onStderr: (chunk) => {
 					stderr += chunk.toString();
+					if (stderr.split("\n").includes("ready")) markReady();
 				},
 			});
-			const watchdog = setTimeout(() => monitor.terminate(), 1_000);
+			const watchdog = setTimeout(() => monitor.terminate(), terminateOnReady ? 10_000 : 1_000);
 			try {
+				if (terminateOnReady) {
+					await Promise.race([
+						ready,
+						monitor.exited.then(() => {
+							throw new Error("Fixture exited before publishing TERM-handler readiness");
+						}),
+					]);
+					monitor.terminate();
+				}
 				const result = await monitor.exited;
 				return { stdout, stderr, ...result };
 			} finally {
@@ -144,8 +164,9 @@ console.log(JSON.stringify({leader: process.pid, child: child.pid}));
 		const result = await runner.execute(
 			'process.on("SIGTERM", () => {}); process.stderr.write("ready\\n"); setTimeout(() => {}, 10000);',
 			cwd,
+			true,
 		);
-		assert.equal(result.stderr, "ready\n");
+		assert.equal(result.stderr, "ready\n", "Fixture must publish readiness after installing its TERM handler");
 		assert.equal(result.exitCode, null);
 		assert.equal(result.signal, "SIGKILL");
 	});

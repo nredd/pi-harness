@@ -28,7 +28,15 @@ The upstream [AT-SPI development guide](https://gnome.pages.gitlab.gnome.org/at-
 
 `npm run test:linux-scripts` runs real POSIX process groups on macOS and Linux. Each fixture process publishes readiness only after installing its TERM handler; the exit-first leader waits for an explicit release after both markers arrive. The checks record injected group signals and require TERM followed by KILL after the grace period, plus dead descendants and an empty group. A TERM-responsive negative control must fail that same escalation assertion. The reaped-group guard requires TERM without a later exit-hook KILL; the injected EPERM case has no real process to synchronize.
 
-Readiness and wrapper completion have bounded waits with explicit failures, rather than startup sleeps or elapsed-wrapper-time lower bounds. `npm run test:linux-native` also waits for the fake compiler and leader to publish signal readiness before cancelling the packed-source setup. Its cargo/build checks require Linux and report NOT RUN elsewhere.
+Readiness and wrapper completion have bounded waits with explicit failures, rather than startup sleeps or elapsed-wrapper-time lower bounds. Signal timestamps are recorded immediately after successful syscalls in memory; the trace is flushed once on wrapper exit, after its cleanup exit hook. Failed signal attempts are retained separately so the reaped-group guard still detects forbidden exit-hook attempts. `npm run test:linux-native` also waits for the fake compiler and leader to publish signal readiness before cancelling the packed-source setup. Its cargo/build checks require Linux and report NOT RUN elsewhere.
+
+The synchronization audit covers `scripts/*.mjs` and `integration/probes/`:
+- Keep the named `DISPOSE_NO_RESTART_WINDOW_MS` and `FOREGROUND_BLOCKED_WINDOW_MS` negative-observation windows: they watch start/setup counters and completion/delivery markers after observable probe/fallback readiness, not elapsed time as a proxy for readiness.
+- Use cooperative microtask yields for mock concurrent workloads and await their completion; do not inject fixed signing/installation latency. Register the CDP close listener before triggering shutdown. Live Linux checks poll accessible roots instead of sleeping before discovery or Terminal launch.
+- Trigger integration lifecycle TERM escalation from the fixture's post-handler `ready` line, not a startup timer. Remaining timers bound observable file/process/socket polls, fixture lifetime, requests or teardown. The slow diagnostics reply is deliberate fault injection, not a readiness guarantee.
+- Keep the latency probe's injected stall and Python overhead probe's metric-sampling windows: they define the measured workload rather than synchronize startup or infer completion.
+
+Production cancellation policy is unchanged here. Permission-denied group probes and unsuccessful final quiescence have confirmed fault-injection follow-ups [here](https://github.com/nredd/pi-harness/issues/167) and [here](https://github.com/nredd/pi-harness/issues/168); this fixture fix does not establish that EPERM means PGID reuse or that a positive post-KILL probe is harmless.
 
 ## Capability matrix
 

@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ensureIdentityOnce, parseCodeSigningIdentities, withDirectoryLock } from "./setup-helper.mjs";
+import {
+	ensureIdentityOnce,
+	parseCodeSigningIdentities,
+	withDirectoryLock,
+} from "./setup-helper.mjs";
 
 const sample = `
 Policy: Code Signing
@@ -20,30 +24,47 @@ assert.deepEqual(parseCodeSigningIdentities(sample), [
 	"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
 ]);
 
-const setupCopy = await fs.readFile(new URL("./setup-helper.mjs", import.meta.url), "utf8");
+const setupCopy = await fs.readFile(
+	new URL("./setup-helper.mjs", import.meta.url),
+	"utf8",
+);
 assert.doesNotMatch(setupCopy, /tccutil[\s\S]{0,80}reset|resetTcc/i);
 
-const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-signing-test-"));
+const tempDir = await fs.mkdtemp(
+	path.join(os.tmpdir(), "pi-computer-use-signing-test-"),
+);
 const lockPath = path.join(tempDir, "identity.lock");
 let identity;
 let createCount = 0;
 
 try {
-	const results = await Promise.all(Array.from({ length: 12 }, () => ensureIdentityOnce(
-		async () => identity,
-		async () => {
-			createCount++;
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			identity = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
-			return identity;
-		},
-		(callback) => withDirectoryLock(lockPath, callback, { waitMs: 2_000, retryMs: 5 }),
-	)));
+	const results = await Promise.all(
+		Array.from({ length: 12 }, () =>
+			ensureIdentityOnce(
+				async () => identity,
+				async () => {
+					createCount++;
+					// All callers already performed their initial identity lookup; the real directory
+					// lock must serialize creation. No synthetic creation latency is needed.
+					identity = "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
+					return identity;
+				},
+				(callback) =>
+					withDirectoryLock(lockPath, callback, { waitMs: 2_000, retryMs: 5 }),
+			),
+		),
+	);
 
-	assert.equal(createCount, 1, "concurrent callers must create only one identity");
+	assert.equal(
+		createCount,
+		1,
+		"concurrent callers must create only one identity",
+	);
 	assert.deepEqual(new Set(results), new Set([identity]));
 } finally {
 	await fs.rm(tempDir, { force: true, recursive: true });
 }
 
-console.log("[check-local-signing] stable identity, non-destructive install, and concurrent creation passed");
+console.log(
+	"[check-local-signing] stable identity, non-destructive install, and concurrent creation passed",
+);
