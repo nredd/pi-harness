@@ -3,8 +3,8 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { type AgentManager, markConsumed } from "../src/agent-manager.js";
 import type { AgentRecord } from "../src/types.js";
-import { FLEET_DISCLOSURE_SETTLE_MS, FLEET_STATE_ENTRY, FleetList, type FleetUICtx, type FleetWorkflow, renderFleetSummary } from "../src/ui/fleet-list.js";
-import { FLEET_STATE_VERSION, type FleetJournalEntry, MAX_COMPACT_ALERT_COUNT, MAX_FLEET_ALERT_DETAILS } from "../src/ui/fleet-state.js";
+import { FLEET_DISCLOSURE_SETTLE_MS, FleetList, type FleetUICtx, type FleetWorkflow, renderFleetSummary } from "../src/ui/fleet-list.js";
+import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION, type FleetJournalEntry, MAX_COMPACT_ALERT_COUNT, MAX_FLEET_ALERT_DETAILS } from "../src/ui/fleet-state.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 
 const theme = {
@@ -337,6 +337,22 @@ describe("collapsed fleet", () => {
     h.fleet.acknowledgeFailure(agents[0].id);
     h.fleet.acknowledgeFailure(run.id);
     expect(stripTerminalSequences(h.render()[0])).not.toContain("failed");
+    h.fleet.dispose();
+  });
+
+  it("does not rescan the journal on ticks for acknowledged workflows with rebuilt display projections", () => {
+    const h = setup();
+    const branch: FleetJournalEntry[] = [];
+    const read = vi.fn(() => branch);
+    h.fleet.restoreSession(read, data => branch.push({ type: "custom", customType: FLEET_STATE_ENTRY, data }));
+    const owner = {};
+    h.fleet.setWorkflowSource(() => [{ ...workflow("failed"), observationKey: owner }], () => {});
+    h.fleet.update();
+    h.fleet.acknowledgeFailure("wf_abc123");
+    read.mockClear();
+    for (let i = 0; i < 100; i++) h.fleet.update();
+    expect(read).not.toHaveBeenCalled();
+    expect(h.render()).toEqual([]);
     h.fleet.dispose();
   });
 

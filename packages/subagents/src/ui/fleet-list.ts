@@ -25,8 +25,6 @@ import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroun
 import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.js";
 import { FleetJournal, type FleetJournalEntry, type FleetSnapshot, fleetAlert, MAX_COMPACT_ALERT_COUNT } from "./fleet-state.js";
 
-export { FLEET_STATE_ENTRY } from "./fleet-state.js";
-
 /** Matches the todo/monitor disclosure shortcut family; arrows keep their navigation roles. */
 export const FLEET_COLLAPSE_KEY = "ctrl+shift+a";
 /** Quiet-period debounce bounds journal writes per toggle burst; shutdown flushes immediately. */
@@ -82,6 +80,8 @@ export interface FleetWorkflow {
   /** Set once the run settles, which is what freezes its clock. */
   completedAt?: number;
   tokens: number;
+  /** Stable, weakly observed owner when the source rebuilds its display projection each tick. */
+  observationKey?: object;
 }
 
 type MainEntry = { kind: "main" };
@@ -244,6 +244,7 @@ export class FleetList {
   private disclosureTimer: TimerHandle | undefined;
   /** Weak observation prevents repeated journal lookups, without retaining manager records. */
   private readonly observed = new WeakMap<AgentRecord, boolean>();
+  private readonly observedWorkflows = new WeakMap<object, number>();
   /** Quota parking has no AgentRecord; the scheduler supplies its enabled-job count. */
   private parkedSource: () => number = () => 0;
   /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
@@ -544,6 +545,10 @@ export class FleetList {
     const runs = new Map((this.workflowSource?.() ?? []).map(run => [run.id, run]));
     for (const run of runs.values()) {
       if (run.status === "failed" || run.status === "killed") {
+        const key = run.observationKey ?? run;
+        const timestamp = run.completedAt ?? run.startedAt;
+        if (this.observedWorkflows.get(key) === timestamp) continue;
+        this.observedWorkflows.set(key, timestamp);
         this.ingestFailure({ id: run.id, type: "workflow", description: run.name, status: run.status, startedAt: run.startedAt, completedAt: run.completedAt });
       }
     }

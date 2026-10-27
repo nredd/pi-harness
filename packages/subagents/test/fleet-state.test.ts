@@ -29,7 +29,6 @@ describe("fleet journal", () => {
     resumed.report(1); // duplicated detached notice after a resume is NOT a new alert
     resumed.report(2, "aborted");
     expect(resumed.state.count).toBe(1);
-    expect(resumed.state.isAcknowledged("a1")).toBe(true);
     expect(resumed.branch).toHaveLength(3);
   });
 
@@ -88,7 +87,10 @@ describe("fleet journal", () => {
     resumed.state.restore(() => [], () => {});
     expect(resumed.state.count).toBe(0);
     expect(resumed.state.collapsed).toBe(true);
-    expect(resumed.state.isAcknowledged("a1")).toBe(false);
+    const alert = fleetAlert(failure(1));
+    if (!alert) throw new Error("Invalid fixture");
+    resumed.state.report(alert);
+    expect(resumed.state.count).toBe(1);
   });
 
   it("stores bounded plain metadata, never the record's result/session/usage", () => {

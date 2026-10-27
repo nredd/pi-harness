@@ -5,6 +5,10 @@ export const FLEET_STATE_ENTRY = "subagents:fleet-state";
 export const FLEET_STATE_VERSION = 1;
 export const MAX_FLEET_ALERT_DETAILS = 128;
 export const MAX_COMPACT_ALERT_COUNT = 99;
+export const MAX_ALERT_ID_LENGTH = 160;
+export const MAX_ALERT_TYPE_LENGTH = 80;
+export const MAX_ALERT_DESCRIPTION_LENGTH = 240;
+const ALERT_FIELD_COUNT = 5;
 
 export type FailureKind = "error" | "aborted" | "failed" | "killed";
 /** No AgentRecord, result, session, promise or usage references may cross this boundary. */
@@ -44,10 +48,10 @@ function snapshot(data: unknown): FleetSnapshot | undefined {
 function validAlert(value: unknown): value is FleetAlert {
   if (!value || typeof value !== "object") return false;
   const alert = value as FleetAlert;
-  return typeof alert.id === "string" && alert.id.length > 0 && alert.id.length <= 160
-    && typeof alert.type === "string" && alert.type.length <= 80
-    && typeof alert.description === "string" && alert.description.length <= 240
-    && Object.keys(alert).length === 5
+  return typeof alert.id === "string" && alert.id.length > 0 && alert.id.length <= MAX_ALERT_ID_LENGTH
+    && typeof alert.type === "string" && alert.type.length <= MAX_ALERT_TYPE_LENGTH
+    && typeof alert.description === "string" && alert.description.length <= MAX_ALERT_DESCRIPTION_LENGTH
+    && Object.keys(alert).length === ALERT_FIELD_COUNT
     && KINDS.includes(alert.state) && Number.isFinite(alert.timestamp);
 }
 
@@ -55,12 +59,12 @@ function validAlert(value: unknown): value is FleetAlert {
 export function fleetAlert(value: unknown): FleetAlert | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as { id?: unknown; type?: unknown; description?: unknown; status?: unknown; completedAt?: unknown; startedAt?: unknown };
-  if (typeof record.id !== "string" || !record.id || record.id.length > 160 || typeof record.type !== "string"
+  if (typeof record.id !== "string" || !record.id || record.id.length > MAX_ALERT_ID_LENGTH || typeof record.type !== "string"
     || typeof record.description !== "string" || !KINDS.includes(record.status as FailureKind)) return undefined;
   const timestamp = record.completedAt ?? record.startedAt;
   if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return undefined;
   const clean = (text: string, limit: number) => stripTerminalSequences(text).replace(/[\x00-\x1f\x7f]/g, " ").slice(0, limit);
-  return { id: record.id, type: clean(record.type, 80), description: clean(record.description, 240), state: record.status as FailureKind, timestamp };
+  return { id: record.id, type: clean(record.type, MAX_ALERT_TYPE_LENGTH), description: clean(record.description, MAX_ALERT_DESCRIPTION_LENGTH), state: record.status as FailureKind, timestamp };
 }
 
 /**
@@ -123,8 +127,6 @@ export class FleetJournal {
     if (!this.details.delete(id)) this.overflow[previous.alert.state]--;
     this.write({ alert: previous.alert, acknowledged: true });
   }
-
-  isAcknowledged(id: string): boolean { return !this.details.has(id) && this.previous(id)?.acknowledged === true; }
 
   /** Debounced by the controller; a net-no-change burst writes nothing. */
   flushDisclosure(): void {

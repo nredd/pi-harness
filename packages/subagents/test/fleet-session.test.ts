@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
-import { FLEET_COLLAPSE_KEY, FLEET_DISCLOSURE_SETTLE_MS, FLEET_STATE_ENTRY } from "../src/ui/fleet-list.js";
+import { FLEET_COLLAPSE_KEY, FLEET_DISCLOSURE_SETTLE_MS } from "../src/ui/fleet-list.js";
+import { FLEET_STATE_ENTRY } from "../src/ui/fleet-state.js";
 import { answer, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 const TOGGLE = "\x1b[97;6u"; // Kitty ctrl+shift+a press, distinct from ctrl+a
@@ -244,6 +245,25 @@ it("journals terminal failure before its public lifecycle event and result consu
   await h.session.prompt("read");
   expect(states().at(-1)).toMatchObject({ data: { transition: { alert: { id }, acknowledged: true } } });
   expect(h.session.messages.some(message => JSON.stringify(message).includes(FLEET_STATE_ENTRY))).toBe(false);
+});
+
+it("never journals an inline-consumed failure, even before polling or after disk resume", async () => {
+  fixture = new ScenarioSession();
+  fixture.physical("fauxchild", "child", [answer("", { stopReason: "error", errorMessage: "INLINE FAILURE" })]);
+  let atTerminalEvent: unknown[] = [];
+  const h = await fixture.start({ factories: [pi => { pi.events.on("subagents:failed", () => {
+    atTerminalEvent = h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
+  }); }], harness: { sessionManager: SessionManager.create(fixture.cwd, join(fixture.root, "sessions")) } });
+  h.setResponses([calls(spawn("inline failure", { model: "fauxchild/child", run_in_background: false })), answer("READ INLINE")]);
+  await h.session.prompt("go");
+  expect(atTerminalEvent).toEqual([]); // settleRun consumes foreground results BEFORE its terminal callback
+  expect(h.session.messages.some(message => message.role === "toolResult" && message.toolName === "Agent" && JSON.stringify(message).includes("INLINE FAILURE"))).toBe(true);
+  const path = h.sessionManager.getSessionFile();
+  if (!path) throw new Error("Missing persisted session");
+  await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+  h.cleanup(); // no manager/record survives into the fresh host
+  const resumed = await fixture.start({ harness: { sessionManager: SessionManager.open(path) } });
+  expect(resumed.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY)).toEqual([]);
 });
 
 it("fleet paints model and live thinking activity", async () => {
