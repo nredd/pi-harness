@@ -170,6 +170,8 @@ def fetch_failure_reason(error: Exception) -> str:
     Returns:
         str: readable reason without URL wrapping or response-body contents.
     """
+    # Specific subclasses precede their parents: HTTPError -> URLError, and protocol/TLS
+    # failures -> HTTPException/OSError. Preserve that order when adding a transport category.
     if isinstance(error, HTTPError):
         try:
             default = HTTPStatus(error.code).phrase
@@ -645,7 +647,8 @@ def download_verified_asset(
         ValueError: no recorded checksum or the bytes disagree.
         RuntimeError: a non-legacy asset lacks the required provenance.
         FileNotFoundError: a non-legacy asset needs `gh`, which is unavailable.
-        OSError: the download (including `URLError`) or the write to `destination` failed.
+        FetchError: the public download failed with a normalized URL/reason diagnostic.
+        OSError: writing the downloaded bytes to `destination` failed.
     """
     destination.write_bytes(fetch_bytes(url))
     verify_asset(destination, url, checksums)

@@ -1226,9 +1226,11 @@ def test_http_read_failures_are_clean_verification_failures(
         ("404", "HTTP 404 Not Found"),
         ("403", "HTTP 403 Forbidden"),
         ("500", "HTTP 500 Internal Server Error"),
+        ("429", "HTTP 429 Too Many Requests"),
         ("dns", "DNS lookup failed"),
         ("timeout", "Request timed out"),
         ("truncated", "Incomplete response: received 3 bytes, expected 7 more"),
+        ("truncated-unknown", "Incomplete response: received 3 bytes"),
     ],
 )
 def test_snapshot_fetch_cli_has_one_stable_diagnostic(
@@ -1257,9 +1259,11 @@ def test_snapshot_fetch_cli_has_one_stable_diagnostic(
         "404": HTTPError("https://error.invalid/", 404, "Not Found", Message(), None),
         "403": HTTPError("https://error.invalid/", 403, "Forbidden", Message(), None),
         "500": HTTPError("https://error.invalid/", 500, "Internal Server Error", Message(), None),
+        "429": HTTPError("https://error.invalid/", 429, "Too Many Requests", Message(), None),
         "dns": URLError(socket.gaierror(-2, "platform-specific DNS detail")),
         "timeout": TimeoutError("platform-specific timeout detail"),
         "truncated": IncompleteRead(b"abc", 7),
+        "truncated-unknown": IncompleteRead(b"abc"),
     }
 
     def failed(request: Any, **kwargs: Any) -> Any:

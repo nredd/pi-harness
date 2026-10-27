@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import io
 import json
@@ -1333,6 +1334,53 @@ def test_shared_fetch_diagnostics_are_stable(
     assert not destination.exists()
 
 
+@pytest.mark.parametrize("caller", ["snapshot", "promotion"])
+def test_local_write_diagnostics_stay_separate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caller: str,
+) -> None:
+    """A successful fetch followed by denied output must remain a local-I/O domain failure.
+
+    Parameters:
+        tmp_path (Path): output destination.
+        monkeypatch (pytest.MonkeyPatch): successful network and failed write boundaries.
+        caller (str): snapshot or promotion consumer.
+
+    Returns:
+        None: output failure retains its own operation and original non-FetchError cause.
+    """
+    url = "https://downloads.example.invalid/core.tgz"
+    failure = PermissionError(errno.EACCES, "output denied")
+
+    def denied(path: Path, data: bytes) -> int:
+        """Refuse the local output write after the response body has been read.
+
+        Parameters:
+            path (Path): output destination.
+            data (bytes): successfully downloaded bytes.
+
+        Returns:
+            int: never returned.
+
+        Raises:
+            PermissionError: fixture output permission was denied.
+            AssertionError: fetched bytes differ from the fixture body.
+        """
+        assert data == b"downloaded"
+        raise failure
+
+    monkeypatch.setattr(release, "urlopen", lambda *args, **kwargs: HTTPBody(b"downloaded"))
+    monkeypatch.setattr(Path, "write_bytes", denied)
+    error_type = install.VerificationError if caller == "snapshot" else promotion.EvidenceError
+    download = install.download if caller == "snapshot" else promotion._fetch_asset
+    with pytest.raises(error_type) as caught:
+        download(url, tmp_path / "output")
+    assert str(caught.value) == f"Could not download '{url}': [Errno {errno.EACCES}] output denied"
+    assert caught.value.__cause__ is failure
+    assert not isinstance(caught.value.__cause__, release.FetchError)
+
+
 class LocalHTTPTransport(HTTPSHandler):
     """Replace only TLS transport, keeping real HTTP parsing and redirect policy in tests."""
 
@@ -1495,21 +1543,23 @@ def test_nonlegacy_core_truncation_is_exit_three(
         assert len(requests) == 2
         assert requests[0].endswith("SHA256SUMS")
         assert requests[1].endswith(".tgz")
-    assert "VERIFICATION FAILED" in caplog.text
-    assert "Incomplete response" in caplog.text
-    assert "Traceback" not in caplog.text
+    url = f"{base}/{NEW_TAG}/earendil-works-pi-coding-agent-1.3.0.tgz"
+    assert caplog.messages == [
+        f"VERIFICATION FAILED, nothing changed: Core release '{NEW_TAG}' rejected: "
+        f"Could not fetch '{url}': Incomplete response: received 0 bytes"
+    ]
     assert not (tmp_path / ".local").exists()
 
 
 @pytest.mark.parametrize(
-    ("length", "body"),
+    ("length", "body", "reason"),
     [
-        ("bad", b"abcdef"),
-        ("-1", b"abcdef"),
-        ("1", b"abcdef"),
-        ("100", b"abcdef"),
-        ("33", b"x" * 33),
-        (None, b"x" * 33),
+        ("bad", b"abcdef", "Invalid Content-Length: '['bad']'"),
+        ("-1", b"abcdef", "Invalid Content-Length: '['-1']'"),
+        ("1", b"abcdef", "Content-Length mismatch: expected 1 bytes, received 6"),
+        ("10", b"abcdef", "Content-Length mismatch: expected 10 bytes, received 6"),
+        ("33", b"x" * 33, "Content-Length exceeds 32 bytes"),
+        (None, b"x" * 33, "Response exceeds 32 bytes"),
     ],
     ids=["bad", "negative", "short", "truncated", "oversized-header", "oversized-body"],
 )
@@ -1517,10 +1567,24 @@ def test_wire_content_length_failure_is_exit_three(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    *,
     length: str | None,
     body: bytes,
+    reason: str,
 ) -> None:
-    """Real HTTP parsing must not ignore bad/negative lengths, hide excess bytes or allocate unboundedly."""
+    """Real HTTP framing failures must retain exact bounded-read diagnostics.
+
+    Parameters:
+        tmp_path (Path): output fixture.
+        monkeypatch (pytest.MonkeyPatch): real wire transport and CLI download seam.
+        caplog (pytest.LogCaptureFixture): actual CLI diagnostic.
+        length (str | None): wire length header.
+        body (bytes): response body.
+        reason (str): literal expected framing/size reason.
+
+    Returns:
+        None: exact diagnostics and non-mutation hold for malformed, mismatched and oversized bodies.
+    """
     headers = {"Content-Length": length} if length is not None else {}
     destination = tmp_path / "asset"
     monkeypatch.setattr(release, "MAX_FETCH_BYTES", 32)
@@ -1545,8 +1609,9 @@ def test_wire_content_length_failure_is_exit_three(
         monkeypatch.setattr(install, "run", run)
         assert install.main(["a" * 40]) == install.ExitCode.VERIFICATION
         assert requests == ["/asset"]
-    assert "VERIFICATION FAILED" in caplog.text
-    assert any(reason in caplog.text for reason in ("Content-Length", "exceeds", "Incomplete response"))
+    assert caplog.messages == [
+        f"VERIFICATION FAILED, nothing changed: Could not fetch '{base}/asset': {reason}"
+    ]
     assert not destination.exists()
 
 
@@ -1593,7 +1658,9 @@ def test_insecure_download_is_exit_three(
         monkeypatch.setattr(install, "run", run)
         assert install.main(["a" * 40]) == install.ExitCode.VERIFICATION
         assert requests == (["/redirect"] if redirect else [])
-    assert "requires HTTPS" in caplog.text
+    reason = f"Redirect requires HTTPS, refused '{target}'" if redirect else "Download requires HTTPS"
+    assert caplog.messages == [f"VERIFICATION FAILED, nothing changed: Could not fetch '{url}': {reason}"]
+    assert caplog.messages[0].count(url) == 1
     assert not (tmp_path / "asset").exists()
 
 
