@@ -215,3 +215,28 @@ export async function runCheckCommand(
 		throw failure;
 	}
 }
+
+/**
+ * Attempt every cleanup action without hiding an already propagating check failure.
+ * @param {string} label Cleanup context.
+ * @param {Array<() => Promise<unknown>>} actions Ordered, independently attempted cleanup operations.
+ * @param {unknown} [primaryError] Earlier check failure, retained if cleanup also fails.
+ * @returns {Promise<void>} Completion when every cleanup action succeeds.
+ * @throws {AggregateError} On cleanup failure, retaining the primary error and every cleanup error.
+ */
+export async function finishCheckCleanup(label, actions, primaryError) {
+	const failures = [];
+	for (const action of actions) {
+		try {
+			await action();
+		} catch (error) {
+			failures.push(error);
+		}
+	}
+	if (failures.length) {
+		throw new AggregateError(
+			primaryError === undefined ? failures : [primaryError, ...failures],
+			`${label}: cleanup failed`,
+		);
+	}
+}

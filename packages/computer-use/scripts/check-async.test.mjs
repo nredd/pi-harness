@@ -10,6 +10,7 @@ import {
 	COMMAND_TERM_WAIT_MS,
 	DEFAULT_CHECK_TIMEOUT_MS,
 	deferred,
+	finishCheckCleanup,
 	runCheckCommand,
 	SIGNAL_READINESS_POLL_MS,
 	SIGNAL_READINESS_TIMEOUT_MS,
@@ -319,4 +320,45 @@ test("failed and missing close attempts keep cleanup bounded", {
 	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 	assert.equal(destroyed, 2);
 	assert.equal(unreferenced, true);
+});
+
+test("cleanup attempts every action and retains primary plus cleanup errors", async () => {
+	const primary = new Error("primary check failure");
+	const permissions = new Error("permission restore failed");
+	const removal = new Error("scratch removal failed");
+	const calls = [];
+	await assert.rejects(
+		finishCheckCleanup(
+			"cleanup control",
+			[
+				async () => {
+					calls.push("permissions");
+					throw permissions;
+				},
+				async () => {
+					calls.push("removal");
+					throw removal;
+				},
+			],
+			primary,
+		),
+		(error) => {
+			assert(error instanceof AggregateError);
+			assert.deepEqual(error.errors, [primary, permissions, removal]);
+			return true;
+		},
+	);
+	assert.deepEqual(calls, ["permissions", "removal"]);
+	await finishCheckCleanup("successful cleanup", [async () => {}], primary);
+	await assert.rejects(
+		finishCheckCleanup("cleanup-only failure", [
+			async () => {
+				throw removal;
+			},
+		]),
+		(error) => {
+			assert.deepEqual(error.errors, [removal]);
+			return true;
+		},
+	);
 });

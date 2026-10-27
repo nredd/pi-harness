@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	finishCheckCleanup,
 	SIGNAL_READINESS_POLL_MS as POLL_INTERVAL_MS,
 	PARENT_READINESS_TIMEOUT_MS as READINESS_TIMEOUT_MS,
 	runCheckCommand,
@@ -101,6 +102,7 @@ function startSetup(packageDir, env, extraArgs = [], observer) {
  * @param {number} [timeoutMs=SETUP_COMPLETION_TIMEOUT_MS] Completion budget, in milliseconds.
  * @returns {Promise<object>} Captured setup exit status and output.
  * @throws {Error} If setup cannot spawn or close before its deadline.
+ * @throws {AggregateError} If setup and its bounded cancellation cleanup both fail.
  */
 async function runSetup(
 	packageDir,
@@ -162,6 +164,7 @@ async function writeFakeCargo(dir, body) {
 	});
 }
 
+let nativeFailure;
 try {
 	// 1. Crate unit/integration tests, built outside the source tree.
 	await runCheckCommand(
@@ -478,10 +481,20 @@ wait`,
 		);
 	}
 	console.log("Linux native checks passed");
+} catch (error) {
+	nativeFailure = error;
+	throw error;
 } finally {
-	await runCheckCommand("chmod", ["-R", "u+w", work], {
-		label: "restore native scratch permissions",
-		timeoutMs: PERMISSION_CHANGE_TIMEOUT_MS,
-	});
-	await fs.rm(work, { recursive: true, force: true });
+	await finishCheckCleanup(
+		"native check cleanup",
+		[
+			() =>
+				runCheckCommand("chmod", ["-R", "u+w", work], {
+					label: "restore native scratch permissions",
+					timeoutMs: PERMISSION_CHANGE_TIMEOUT_MS,
+				}),
+			() => fs.rm(work, { recursive: true, force: true }),
+		],
+		nativeFailure,
+	);
 }

@@ -11,7 +11,7 @@ const CDP_CLOSE_TIMEOUT_MS = 1500;
  * @param {string|Buffer} value Frame payload.
  * @param {number} [opcode=1] WebSocket opcode.
  * @returns {Buffer} Complete frame bytes.
- * @throws {Error} If the fixture payload exceeds the small-frame limit.
+ * @throws {import('node:assert').AssertionError} If the payload exceeds the small-frame limit.
  */
 function websocketFrame(value, opcode = 1) {
 	const payload = Buffer.from(value);
