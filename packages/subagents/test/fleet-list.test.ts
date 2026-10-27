@@ -647,6 +647,48 @@ describe("FleetList rendering", () => {
 });
 
 describe("FleetList overlay lifecycle", () => {
+  it("acknowledges an old failed record only after its viewer closes successfully", async () => {
+    const failed = makeRecord({ status: "error", completedAt: Date.now() - 60_000, error: "BROKEN" });
+    const h = harness([failed], { collapsed: true });
+    expect(h.render().join("\n")).toContain("[1 failed]");
+    h.press(DOWN);
+    h.press(DOWN);
+    h.press(ENTER);
+    expect(h.overlayOpened()).toBe(true);
+    expect(failed.resultConsumed).not.toBe(true);
+    await h.closeOverlay();
+    expect(failed.resultConsumed).toBe(true);
+    h.press(ESC);
+    expect(h.render()).toEqual([]);
+    h.fleet.dispose();
+  });
+
+  it("does not acknowledge a failed record when opening its viewer rejects", async () => {
+    const failed = makeRecord({ status: "error", completedAt: Date.now() - 60_000 });
+    const h = harness([failed], { collapsed: true });
+    h.ui.custom = () => Promise.reject(new Error("viewer unavailable"));
+    h.press(DOWN);
+    h.press(DOWN);
+    h.press(ENTER);
+    await Promise.resolve();
+    expect(failed.resultConsumed).not.toBe(true);
+    h.press(ESC);
+    expect(h.render().join("\n")).toContain("[1 failed]");
+    h.fleet.dispose();
+  });
+
+  it("retains an old failed workflow until its inspector is actually viewed", async () => {
+    const h = harness([], { collapsed: true });
+    h.setWorkflows([makeWorkflow({ status: "failed", completedAt: Date.now() - 60_000 })]);
+    expect(h.render().join("\n")).toContain("[1 failed]");
+    h.press(DOWN);
+    h.press(DOWN);
+    h.press(ENTER);
+    await h.closeWorkflowDialog();
+    h.press(ESC);
+    expect(h.render()).toEqual([]);
+    h.fleet.dispose();
+  });
   it.each<{ mode: TuiMode; expected: OverlayOptions }>([
     { mode: "regular", expected: { anchor: "center", width: "90%", maxHeight: "70%" } },
     { mode: "fullscreen", expected: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } },

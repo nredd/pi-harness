@@ -1,9 +1,9 @@
 /** Fleet disclosure policy, counts and width safety, independent of agent execution. */
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentManager } from "../src/agent-manager.js";
+import { type AgentManager, markConsumed } from "../src/agent-manager.js";
 import type { AgentRecord } from "../src/types.js";
-import { FleetList, type FleetUICtx, type FleetWorkflow, renderFleetSummary } from "../src/ui/fleet-list.js";
+import { FLEET_STATE_ENTRY, FleetList, type FleetUICtx, type FleetWorkflow, renderFleetSummary } from "../src/ui/fleet-list.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 
 const theme = {
@@ -126,6 +126,75 @@ describe("collapsed fleet", () => {
       else expect(text).toMatch(/^\[1 failed, 2 parked, 1 paused, 1 fallback\]/);
       expect(line).not.toContain("\ufffd");
     }
+  });
+
+  it.each(["error", "aborted"] as const)("retains outstanding %s alerts beyond linger and manager eviction until existing result acknowledgement", status => {
+    const failed = { ...record(1, status), completedAt: NOW - 60_000 };
+    const agents = [failed, record(2)];
+    const h = setup(agents);
+    expect(stripTerminalSequences(h.render()[0])).toMatch(/^\[1 failed\]/);
+    agents.shift(); // simulate manager TTL eviction: UI must not forget an outstanding failure
+    h.clock.advance(10_000);
+    expect(stripTerminalSequences(h.render()[0])).toMatch(/^\[1 failed\]/);
+    markConsumed(failed, h.clock.now()); // same acknowledgement used by get_result / RPC / inline delivery
+    h.clock.advance(200);
+    expect(stripTerminalSequences(h.render()[0])).not.toContain("failed");
+    expect(stripTerminalSequences(h.render()[0])).toContain("1 running");
+    h.fleet.dispose();
+  });
+
+  it("keeps a failed-only widget registered until inspecting its failure acknowledges it", () => {
+    const failed = { ...record(1, "error"), completedAt: NOW - 60_000, error: "STARTUP FAILED" };
+    const h = setup([failed]);
+    h.clock.advance(5_000);
+    expect(stripTerminalSequences(h.render()[0])).toMatch(/^\[1 failed\]/);
+    h.fleet.handleKey("\x1b[B"); // enter the list
+    h.fleet.handleKey("\x1b[B"); // failed row, even without a session
+    h.fleet.handleKey("\r");
+    expect(h.ui.notify).toHaveBeenCalledWith("STARTUP FAILED", "error");
+    expect(failed.resultConsumed).toBe(true);
+    h.clock.advance(200);
+    expect(h.render()).toEqual([]);
+    h.fleet.dispose();
+  });
+
+  it.each([99, 100, 1000])("bounds all four multidigit alert counts (%i) at every width 20..80", count => {
+    const agents = Array.from({ length: count }, (_, i) => ({ ...record(i, "error"), modelFallback: { input: "missing", used: "test/child" } }));
+    const workflows = Array.from({ length: count }, () => workflow("paused"));
+    const full = `[${count} failed, ${count} parked, ${count} paused, ${count} fallback]`;
+    const compactCount = count > 99 ? "99+" : String(count);
+    for (let width = 20; width <= 80; width++) {
+      const line = renderFleetSummary(agents, workflows, count, false, width, theme);
+      const text = stripTerminalSequences(line);
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      expect(text).not.toMatch(/\[fb\]|^!/);
+      if (width >= full.length) expect(text).toContain(full);
+      else expect(text.replaceAll(" ", "")).toContain(`[E${compactCount}P${compactCount}B${compactCount}F${compactCount}]`);
+    }
+    // At genuinely tiny widths, failure outranks every other alert and never reads as fallback.
+    expect(stripTerminalSequences(renderFleetSummary(agents, workflows, count, false, 6, theme)).trimEnd()).toBe(`[E${compactCount}]`);
+    expect(stripTerminalSequences(renderFleetSummary(agents, workflows, count, false, 1, theme))).toBe("!");
+  });
+
+  it("restores only valid branch disclosure snapshots and journals explicit toggles, not arrow navigation", () => {
+    const h = setup([openable(1)]);
+    const persist = vi.fn();
+    h.fleet.restoreSession([
+      { type: "custom", customType: FLEET_STATE_ENTRY, data: { version: 1, collapsed: false } },
+      { type: "custom", customType: FLEET_STATE_ENTRY, data: { version: 2, collapsed: true } },
+      { type: "custom", customType: FLEET_STATE_ENTRY, data: { version: 1, collapsed: "true" } },
+      { type: "custom", customType: "other", data: { version: 1, collapsed: true } },
+    ], persist);
+    expect(h.render()).toHaveLength(5);
+    expect(persist).not.toHaveBeenCalled();
+    h.fleet.toggleCollapse();
+    expect(persist).toHaveBeenCalledExactlyOnceWith(true);
+    h.fleet.handleKey("\x1b[B");
+    h.fleet.handleKey("\x1b");
+    expect(persist).toHaveBeenCalledTimes(1);
+    h.fleet.restoreSession([], persist); // a fresh session does not inherit the old choice
+    expect(h.render()).toHaveLength(1);
+    h.fleet.dispose();
   });
 
   it("retains explicit disclosure through ticks, roster growth, invalidation and UI rebind", () => {

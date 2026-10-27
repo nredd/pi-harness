@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
-import { FLEET_COLLAPSE_KEY } from "../src/ui/fleet-list.js";
+import { FLEET_COLLAPSE_KEY, FLEET_STATE_ENTRY } from "../src/ui/fleet-list.js";
 import { answer, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 const TOGGLE = "\x1b[97;6u"; // Kitty ctrl+shift+a press, distinct from ctrl+a
@@ -48,16 +48,45 @@ it("running fleet re-registers after core reload", async () => {
   expect(h.session.extensionRunner).not.toBe(oldRunner);
   expect(host.viewport().join("\n")).toContain("Reloaded ");
   expect(record.status).toBe("running");
-  expect(host.viewport().join("\n")).toContain("agents: 1 running");
-  host.input(TOGGLE);
-  await host.settle();
-  expect(row()).toContain("probe child");
+  expect(row()).toContain("probe child"); // explicit expansion is replayed from the session branch
   // Raw fleet navigation still owns the keys after the real widget reset/rebind.
   host.input("\x1b[B");
   await host.settle();
   expect(host.viewport().join("\n")).toContain("enter view");
   stream.release();
   await record.promise;
+});
+
+it.each([false, true])("restores explicit collapsed=%s from disk when a fresh host resumes the same session", async collapsed => {
+  const { h, host, stream } = await start("before resume");
+  if (collapsed) { host.input(TOGGLE); await host.settle(); }
+  const path = h.sessionManager.getSessionFile();
+  if (!path) throw new Error("Missing persisted session");
+  const snapshots = h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
+  expect(snapshots.at(-1)).toMatchObject({ data: { version: 1, collapsed } });
+  const completed = fixture.completion();
+  stream.release();
+  await completed;
+  await host.dispose(); // destroys the activation, not just the widget instance
+
+  const resumed = await fixture.start({ terminal: true, harness: { sessionManager: SessionManager.open(path) } });
+  const resumedStream = fixture.holdStream(fixture.providers[0]);
+  resumed.setResponses([calls(spawn("after resume", { model: "fauxchild/child" })), answer("RESUMED")]);
+  await resumed.session.prompt("continue");
+  await resumedStream.entered;
+  const terminal = fixture.host;
+  if (!terminal) throw new Error("Missing resumed host");
+  fixture.clock.advance(200);
+  await terminal.settle();
+  const row = terminal.viewport().find(line => /^\s+[●○] Agent\s+after resume/.test(line));
+  if (collapsed) {
+    expect(row).toBeUndefined();
+    expect(terminal.viewport().join("\n")).toContain("agents: 1 running");
+  } else expect(row).toContain("after resume");
+  // Replay did not append a second state entry or leak state into model messages.
+  expect(resumed.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY)).toHaveLength(snapshots.length);
+  expect(resumed.session.messages.some(message => JSON.stringify(message).includes(FLEET_STATE_ENTRY))).toBe(false);
+  resumedStream.release();
 });
 
 it("disclosure key round-trips through the real editor without colliding with registered shortcuts", async () => {
@@ -99,6 +128,37 @@ it("quota parking refreshes the one-line fleet without creating a child session"
   expect(host.viewport().filter(line => line.trimStart().startsWith("[1 parked] agents:"))).toHaveLength(1);
   expect(host.viewport().join("\n")).not.toMatch(/^\s+[●○] main/m);
   expect(fixture.providers[0].state.callCount).toBe(0);
+});
+
+it("keeps a failed child flagged after linger and clears it only when its result is consumed", async () => {
+  fixture = new ScenarioSession();
+  fixture.physical("fauxchild", "child", [answer("", { stopReason: "error", errorMessage: "CHILD FAILURE" })]);
+  let failed!: () => void;
+  const failure = new Promise<void>(resolve => { failed = resolve; });
+  const h = await fixture.start({ terminal: true, factories: [pi => {
+    pi.events.on("subagents:failed", () => failed());
+  }] });
+  h.setResponses([calls(spawn("broken child", { model: "fauxchild/child" })), answer("SPAWNED")]);
+  await h.session.prompt("go");
+  await failure;
+  const result = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
+  const id = result?.content.find(part => part.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  if (!id) throw new Error("Missing failed child id");
+  const host = fixture.host;
+  if (!host) throw new Error("No terminal host");
+  h.setResponses([answer("NOTICED")]); // delivery of a notice alone is not acknowledgement
+  fixture.clock.advance(5_000);
+  await host.settle();
+  await h.session.waitForIdle();
+  await host.settle();
+  expect(host.viewport().filter(line => line.trimStart().startsWith("[1 failed] agents:"))).toHaveLength(1);
+  expect(fixture.record(id).resultConsumed).not.toBe(true);
+  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id } }), answer("ACKNOWLEDGED")]);
+  await h.session.prompt("read the failure");
+  fixture.clock.advance(200);
+  await host.settle();
+  expect(fixture.record(id).resultConsumed).toBe(true);
+  expect(host.viewport().some(line => line.trimStart().startsWith("[1 failed] agents:"))).toBe(false);
 });
 
 it("fleet paints model and live thinking activity", async () => {

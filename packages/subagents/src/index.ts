@@ -75,7 +75,7 @@ import {
   type UICtx,
 } from "./ui/agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./ui/conversation-viewer.js";
-import { FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.js";
+import { FLEET_STATE_ENTRY, FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.js";
 import { renderNotification } from "./ui/notification-view.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
@@ -908,6 +908,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // bound session_start, so a filtered-out activation never advertises (#142).
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    restoreFleetDisclosure(ctx);
     // Pi resolves project trust before the first session starts, so this is the
     // earliest honest answer. The activation-time load defaulted to untrusted,
     // so a trusted project's `packages[]` only becomes visible now.
@@ -1444,6 +1445,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // Agents the previous instance of this session left running (/reload, /new, ...).
     () => listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.()), clock);
   fleet.setParkedSource(() => scheduler.list().filter(job => job.enabled && job.quotaParked && job.lastStatus !== "running").length);
+  /** Replay UI-only state from the active branch, like workflow/goal custom snapshots. */
+  function restoreFleetDisclosure(ctx: ExtensionContext): void {
+    fleet.restoreSession(ctx.sessionManager?.getBranch?.() ?? [], collapsed => {
+      pi.appendEntry(FLEET_STATE_ENTRY, { version: 1, collapsed });
+    });
+  }
+  pi.on("session_tree", (_event, ctx) => {
+    restoreFleetDisclosure(ctx);
+    fleet.update();
+  });
   /** What the Agent tool row reads at render time, so its summary stays live. */
   const agentRowLive: AgentRowLive = {
     getRecord: (id) => manager.getRecord(id),

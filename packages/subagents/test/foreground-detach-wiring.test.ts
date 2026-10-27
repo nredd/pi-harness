@@ -39,6 +39,7 @@ vi.mock("../src/ui/fleet-list.js", () => ({
     setUICtx = vi.fn();
     setWorkflowSource = vi.fn();
     setParkedSource = vi.fn();
+    restoreSession = vi.fn();
     /** The real one peeks at the TUI's focused component; tests flip this. */
     editorHasFocus = vi.fn(() => true);
     setEnabled = vi.fn();

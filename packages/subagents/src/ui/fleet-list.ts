@@ -14,7 +14,7 @@
 
 import { isKeyRelease, Key, matchesKey, type ScrollViewScrollbar, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentName } from "../agent-color.js";
-import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
+import { type AgentManager, isTopLevelAgent, markConsumed } from "../agent-manager.js";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import type { RunningDetached } from "../detached-results.js";
 import { describeModelCall } from "../model-call.js";
@@ -26,6 +26,13 @@ import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.js";
 
 /** Matches the todo/monitor disclosure shortcut family; arrows keep their navigation roles. */
 export const FLEET_COLLAPSE_KEY = "ctrl+shift+a";
+/** Plain session custom entry, replayed from the active branch like workflow snapshots. */
+export const FLEET_STATE_ENTRY = "subagents:fleet-state";
+
+/** Existing result-consumption semantics also acknowledge a failed fleet row. */
+function isOutstandingFailure(record: AgentRecord): boolean {
+  return (record.status === "error" || record.status === "aborted") && !record.resultConsumed;
+}
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -190,12 +197,28 @@ export function renderFleetSummary(
     : workflowBucket(row.workflow.status) === "failed").length;
   const paused = workflows.filter(run => run.status === "paused").length;
   const fallback = agents.filter(hasFallback).length;
-  // Put actionable counts FIRST, not after a list that a narrow terminal clips.
-  // Compact words retain the counts at 20 columns, even with all four alerts.
-  const alerts = [failed ? `${failed} failed` : "", parked ? `${parked} parked` : "", paused ? `${paused} paused` : "", fallback ? `${fallback} fallback` : ""].filter(Boolean);
-  const fullFlag = alerts.length ? `[${alerts.join(", ")}]` : "";
-  const compactFlag = [failed ? `E${failed}` : "", parked ? `P${parked}` : "", paused ? `B${paused}` : "", fallback ? `F${fallback}` : ""].filter(Boolean).join(" ");
-  const flag = theme.fg(failed ? "error" : "warning", visibleWidth(fullFlag) > width ? `[${compactFlag}]` : fullFlag);
+  // Actionable counts lead. Cap ONLY compact counts, then remove spaces before
+  // dropping any alert: all four fit at 20 columns even for arbitrarily large fleets.
+  const alerts = [
+    { count: failed, label: "failed", key: "E" },
+    { count: parked, label: "parked", key: "P" },
+    { count: paused, label: "paused", key: "B" },
+    { count: fallback, label: "fallback", key: "F" },
+  ].filter(alert => alert.count > 0);
+  let flagText = alerts.length ? `[${alerts.map(a => `${a.count} ${a.label}`).join(", ")}]` : "";
+  if (visibleWidth(flagText) > width) {
+    const compact = alerts.map(a => `${a.key}${a.count > 99 ? "99+" : a.count}`);
+    flagText = `[${compact.join(" ")}]`;
+    if (visibleWidth(flagText) > width) flagText = `[${compact.join("")}]`;
+    // Below the supported 20-column floor, shed lowest-priority alerts first.
+    // Failure is first and never becomes the shared helper's misleading [fb].
+    while (visibleWidth(flagText) > width && compact.length > 1) {
+      compact.pop();
+      flagText = `[${compact.join("")}]`;
+    }
+    if (visibleWidth(flagText) > width) flagText = width > 0 ? "!" : "";
+  }
+  const flag = theme.fg(failed ? "error" : "warning", flagText);
   const cost = showCost ? formatCost(agents.reduce((sum, agent) => sum + getLifetimeCost(agent.lifetimeUsage), 0)) : "";
   const summary = summarizeHidden(rows) || "0 running";
   const text = `agents: ${summary}${parked ? `, ${parked} parked` : ""}${cost ? ` · ${cost}` : ""} · ${FLEET_COLLAPSE_KEY} to expand`;
@@ -214,6 +237,11 @@ export class FleetList {
   private enabled = true;
   /** Explicit session choice. Navigation temporarily reveals rows without changing it. */
   private collapsed = true;
+  private persistDisclosure: ((collapsed: boolean) => void) | undefined;
+  /** Keep outstanding failure records reachable even after manager TTL eviction. */
+  private readonly outstandingFailures = new Map<string, AgentRecord>();
+  /** Workflow inspection acknowledges the failed container, not its child records. */
+  private readonly acknowledgedWorkflows = new Set<string>();
   /** Quota parking has no AgentRecord; the scheduler supplies its enabled-job count. */
   private parkedSource: () => number = () => 0;
   /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
@@ -282,9 +310,26 @@ export class FleetList {
   toggleCollapse(): void {
     if (!this.enabled || !this.ui || this.viewerClose || this.viewingWorkflowId || !this.editorHasFocus()) return;
     this.collapsed = this.active ? true : !this.collapsed;
+    this.persistDisclosure?.(this.collapsed);
     this.active = false;
     this.selectedIndex = 0;
     this.update();
+  }
+
+  /** Restore the last valid active-branch disclosure entry without writing another entry. */
+  restoreSession(
+    entries: readonly { type: string; customType?: string; data?: unknown }[],
+    persist: (collapsed: boolean) => void,
+  ): void {
+    this.collapsed = true;
+    for (const entry of entries) {
+      if (entry.type !== "custom" || entry.customType !== FLEET_STATE_ENTRY || !entry.data || typeof entry.data !== "object") continue;
+      const data = entry.data as { version?: unknown; collapsed?: unknown };
+      if (data.version === 1 && typeof data.collapsed === "boolean") this.collapsed = data.collapsed;
+    }
+    this.persistDisclosure = persist;
+    this.active = false;
+    this.selectedIndex = 0;
   }
 
   /** Inject scheduler display data, without coupling the fleet to scheduling behavior. */
@@ -419,12 +464,22 @@ export class FleetList {
     const own = this.manager.listAgents();
     const ownIds = new Set(own.map(a => a.id));
     const orphans = this.detachedSource().map(d => d.record).filter(r => !ownIds.has(r.id));
-    return [...own, ...orphans]
-      .filter(a => isTopLevelAgent(a) && (includePending || a.session) && (
-        a.status === "running" || a.status === "queued"
-        || a.id === this.viewingAgentId
-        || (a.completedAt != null && now - a.completedAt < FINISHED_LINGER_MS)
-      ))
+    const records = new Map([...this.outstandingFailures.values(), ...own, ...orphans].map(a => [a.id, a]));
+    for (const a of records.values()) {
+      if (isTopLevelAgent(a) && isOutstandingFailure(a)) this.outstandingFailures.set(a.id, a);
+      else this.outstandingFailures.delete(a.id);
+    }
+    return [...records.values()]
+      .filter(a => {
+        if (!isTopLevelAgent(a)) return false;
+        if (isOutstandingFailure(a)) return true;
+        // Consumed failures may linger as expanded history, never as outstanding alerts.
+        if (includePending && (a.status === "error" || a.status === "aborted")) return false;
+        return (includePending || a.session) && (
+          a.status === "running" || a.status === "queued" || a.id === this.viewingAgentId
+          || (a.completedAt != null && now - a.completedAt < FINISHED_LINGER_MS)
+        );
+      })
       .sort((a, b) => a.startedAt - b.startedAt);
   }
 
@@ -457,11 +512,11 @@ export class FleetList {
     if (!this.workflowSource) return [];
     const now = this.clock.now();
     return [...this.workflowSource()]
-      .filter(run =>
-        run.status === "running"
-        || run.status === "paused"
-        || (run.completedAt != null && now - run.completedAt < FINISHED_LINGER_MS)
-      )
+      .filter(run => {
+        if (run.status === "failed" || run.status === "killed") return !this.acknowledgedWorkflows.has(run.id);
+        return run.status === "running" || run.status === "paused"
+          || (run.completedAt != null && now - run.completedAt < FINISHED_LINGER_MS);
+      })
       .sort((a, b) => a.startedAt - b.startedAt);
   }
 
@@ -582,7 +637,7 @@ export class FleetList {
       // still has to put the cursor back on the run when it comes down.
       this.viewingWorkflowId = entry.workflow.id;
       void Promise.resolve(this.openWorkflow?.(entry.workflow.id)).then(
-        () => this.clearViewer(),
+        () => this.clearViewer(true),
         () => this.clearViewer(),
       );
       return;
@@ -590,6 +645,12 @@ export class FleetList {
     const record = entry.record;
     if (!this.ui) return;
     if (!record.session) {
+      if (isOutstandingFailure(record)) {
+        this.ui.notify(record.error ?? `Agent ${record.status}.`, "error");
+        markConsumed(record, this.clock.now());
+        this.update();
+        return;
+      }
       this.ui.notify(`Agent is ${record.status} — no session available.`, "info");
       return;
     }
@@ -627,11 +688,11 @@ export class FleetList {
         overlay: true,
         overlayOptions: () => overlayOptions,
       },
-    ).then(() => this.clearViewer(), () => this.clearViewer());
+    ).then(() => this.clearViewer(true), () => this.clearViewer());
   }
 
   /** Reset overlay state and return to the list (on close, auto-close, or error). */
-  private clearViewer(): void {
+  private clearViewer(acknowledge = false): void {
     // Keep the cursor on the agent we were viewing — re-resolve by id so it
     // still feels natural if the list reordered (an earlier agent finished)
     // while the overlay was open. If that agent is gone, leave the index for
@@ -644,6 +705,14 @@ export class FleetList {
         : false,
       );
       if (idx >= 0) this.selectedIndex = idx;
+    }
+    if (acknowledge && this.viewingAgentId) {
+      const record = this.agentRecords(true).find(a => a.id === this.viewingAgentId);
+      if (record && isOutstandingFailure(record)) markConsumed(record, this.clock.now());
+    }
+    if (acknowledge && this.viewingWorkflowId) {
+      const run = this.workflowSource?.().find(run => run.id === this.viewingWorkflowId);
+      if (run?.status === "failed" || run?.status === "killed") this.acknowledgedWorkflows.add(run.id);
     }
     this.viewerClose = undefined;
     this.viewingAgentId = undefined;
