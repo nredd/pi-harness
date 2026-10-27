@@ -173,6 +173,14 @@ const cases = [
 		failure: /compiler cleanup must escalate to group SIGKILL/,
 	},
 	{
+		name: "host-independent documentation inventory (harness sync)",
+		file: "scripts/docs-generators/generate-tool-reference.mjs",
+		before: "const tools = [...COMPUTER_USE_TOOLS, ...DESKTOP_TOOLS];",
+		after: "const tools = [...COMPUTER_USE_TOOLS];",
+		check: "check-docs-platform.mjs",
+		failure: /tool reference must be identical on linux/,
+	},
+	{
 		name: "cursor source packaging (harness 6207189)",
 		file: "package.json",
 		before: '"native/macos/agent_cursor_motion.swift",',

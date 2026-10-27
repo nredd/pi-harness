@@ -168,7 +168,7 @@ const evaluateBrowserTool = defineTool({
 	execute: executeEvaluateBrowser,
 });
 
-const COMPUTER_USE_TOOLS = [findTool, observeTool, searchUiTool, expandUiTool, inspectUiTool, actTool, readTextTool, waitForTool, launchBrowserTool, navigateBrowserTool, evaluateBrowserTool];
+export const COMPUTER_USE_TOOLS = [findTool, observeTool, searchUiTool, expandUiTool, inspectUiTool, actTool, readTextTool, waitForTool, launchBrowserTool, navigateBrowserTool, evaluateBrowserTool];
 const COMPUTER_USE_TOOL_NAMES = new Set(COMPUTER_USE_TOOLS.map((tool) => tool.name));
 
 function formatConfigStatus(): string {
@@ -217,11 +217,14 @@ const desktopInputTool = defineTool({
 	execute: executeDesktopInput,
 });
 
+/** Complete desktop definitions for host-independent docs; runtime registration remains darwin-only. */
+export const DESKTOP_TOOLS = [desktopScreenshotTool, desktopInputTool];
+
 export default function computerUseExtension(pi: ExtensionAPI): void {
 	let activityGlowActive = false;
 
 	for (const tool of COMPUTER_USE_TOOLS) pi.registerTool(tool);
-	if (process.platform === "darwin") for (const tool of [desktopScreenshotTool, desktopInputTool]) pi.registerTool(tool);
+	if (process.platform === "darwin") for (const tool of DESKTOP_TOOLS) pi.registerTool(tool);
 
 	pi.registerCommand("computer-use", {
 		description: "Show pi-computer-use configuration",

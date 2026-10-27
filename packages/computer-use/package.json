@@ -65,7 +65,7 @@
 	"scripts": {
 		"postinstall": "node scripts/setup-helper.mjs --postinstall",
 		"docs:generate": "tsx scripts/docs-generators/generate-tool-reference.mjs && node scripts/docs-generators/generate-source-references.mjs",
-		"docs:check": "tsx scripts/docs-generators/generate-tool-reference.mjs --check && node scripts/docs-generators/generate-source-references.mjs --check && node scripts/check-docs.mjs",
+		"docs:check": "tsx scripts/docs-generators/generate-tool-reference.mjs --check && node scripts/docs-generators/generate-source-references.mjs --check && node scripts/check-docs.mjs && node scripts/check-docs-platform.mjs",
 		"docs:dev": "npm --prefix docs run dev",
 		"docs:build": "npm --prefix docs run build",
 		"docs:site:check": "npm --prefix docs run typecheck && npm --prefix docs run build",

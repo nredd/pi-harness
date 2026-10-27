@@ -28,6 +28,7 @@ none is a claim of acceptance. Remove a row only after its check passes without 
 | App activation | `400f784`, `3fd2fe3` | Rank bundle/name/executable, reject ambiguity, launch with killable open and verify frontmost; upstreamed in <PR> | `test:desktop` native wiring and mocked output/errors |
 | Clipboard | `400f784`, `3fd2fe3` | Retain plain-text clipboard actions and fence untrusted reads; upstreamed in <PR> | `test:desktop` native wiring, validation, fencing and truncation |
 | Harness Linux | `c59eb11` | Probe existing helper; opt-in locked build into writable cache and reap compiler groups; upstreamed in <PR> | `test:linux`, `test:linux-scripts`, `test:linux-native` on Linux |
+| Host-independent docs | harness sync | Generate from all declared tool definitions, not the host's 13/11 registered subset; harness-only | `docs:check` runs `check-docs-platform.mjs` under both platform fixtures |
 | Harness package | `988eb2f`, `a4fc068`, `6207189`, subsequent contract hardening | Preserve @nredd metadata, source-only Linux, macOS payloads/cursor sources, platform-aware contracts, non-macOS NOT RUN and house-style commits; harness-only | `test:package-assets`, `test:linux-scripts`, `test:commits`, package-contract tests and stock contract |
 
 `2c3dd8b` root targeting is absorbed by upstream PR #95 (`2aebb01`): no duplicate implementation
@@ -48,7 +49,10 @@ The note is historical evidence, not validation of this sync.
   Keep ref eviction and drag helpers inside that block and use range-checked window ids.
 - Keep canonical delta mapping and precise stale/replacement outcomes, plus upstream compact-view
   tests. Update unpaired tests to exercise the new compact default rather than requiring AX labels.
-- Adopt upstream's docs site layout and generators. Pack only docs content, not site dependencies or
+- Adopt upstream's docs site layout and generators. Generate the tool reference from exported
+  definition inventories, not runtime platform registration: initial Linux CI exposed the 11-vs-13
+  host-dependent output. A subprocess fixture reproduced that exact failure on the Mac before the
+  fix, then passed for both `linux` and `darwin`; the docs gate now always runs it. Pack only docs content, not site dependencies or
   build output. Preserve Linux source-build documentation in its moved page.
 - Preserve the local build/signing path. Add `activity_glow.swift` to both source lists and the exact
   packed contract. Rebuild both loose payloads; do not import upstream's stale July binaries.
@@ -140,7 +144,7 @@ Recorded on the implementation Mac (2026-10-27):
 - `npm run check`: passed, including Swift typecheck and compiled native PURE checks. Live tests print
   NOT RUN. `test:commits` is adapted to the harness's capitalized imperative subjects rather than
   applying upstream's incompatible conventional-commit policy to monorepo commits.
-- `npm run test:sync-reverts`: 20 expected failures demonstrated, one behavior disabled at a time.
+- `npm run test:sync-reverts`: 21 expected failures demonstrated, one behavior disabled at a time.
 - `npm run test:windows-scripts`: 23 assertions, 0 failures, using isolated helper/build paths.
   Native Windows Rust compilation and an actual Windows desktop remain NOT RUN.
 - `make check-computer-use-package-contract`: passed against exact stock Pi 1.3.0; all 13 macOS tools,
@@ -156,7 +160,7 @@ Recorded on the implementation Mac (2026-10-27):
   external target directory: 33 passed, 1 ignored (requires a live session AT-SPI bus) on macOS.
   Docker is installed but has no running daemon/context endpoint. Linux-native packed-source build,
   diagnostics and actual Linux host acceptance remain CI responsibilities, NOT local passes.
-- `test:upstream-sync` compared the clean pinned upstream source and accepted exactly 41 declared
+- `test:upstream-sync` compared the clean pinned upstream source and accepted exactly 43 declared
   differing files. An omitted ledger entry failed first, confirming undeclared drift is rejected.
 - Rebuilt x64 and arm64 payloads serially. Both retain ad-hoc signatures and identifier
   `com.injaneity.pi-computer-use`; the installed local signer/path were inspected read-only and not
