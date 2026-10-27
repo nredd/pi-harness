@@ -46,6 +46,7 @@ import {
   type WorkflowRunStatus,
 } from "../workflow/progress.js";
 import type { Theme } from "./agent-widget.js";
+import { fallbackFlagText, hasFallback } from "./fallback-flag.js";
 
 /**
  * Header re-render cadence. Claude Code ticks the workflow clock once a second,
@@ -361,6 +362,8 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
         { text: `${lastAgent ? glyphs.lastBranch : glyphs.branch} `, color: "dim" },
         rowGlyph(entry, glyphs),
         { text: " " },
+        // Leading, ahead of the label: the row is clamped from the right.
+        ...(hasFallback(entry) ? [{ text: `${fallbackFlagText()} `, color: "warning" as const }] : []),
       ];
 
       // Prepended rather than folded into `agentStatSegments`, which is the
@@ -370,7 +373,7 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
       const statParts = entry.cached
         ? [REPLAYED_ANNOTATION, ...agentStatSegments(entry)]
         : agentStatSegments(entry);
-      const pad = Math.max(0, labelColumn - visibleWidth(entry.label));
+      const pad = Math.max(0, labelColumn - visibleWidth(entry.label) - (hasFallback(entry) ? visibleWidth(fallbackFlagText()) + 1 : 0));
       segments.push({ text: statParts.length > 0 ? entry.label + " ".repeat(pad) : entry.label });
       for (const part of statParts) {
         segments.push({ text: " · ", color: "dim" }, { text: part, color: "dim" });
