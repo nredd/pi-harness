@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runAgent } from "../../src/agent-runner.js";
@@ -37,10 +38,25 @@ async function main(): Promise<void> {
   write(settingsPath, JSON.stringify({ packages: [scope === "global" ? { source: "~/package" } : "~/package"], extensions: ["~/extension.ts"] }));
 
   const probes: string[] = [];
-  for (const method of ["accessSync", "chmodSync", "existsSync", "globSync", "lstatSync", "mkdirSync", "openSync", "opendirSync", "readdirSync", "readFileSync", "readlinkSync", "realpathSync", "rmSync", "statSync", "writeFileSync"] as const) {
-    const original = fs[method];
-    fs[method] = new Proxy(original, { apply(target, receiver, args) { probes.push(resolve(String(args[0]))); return Reflect.apply(target, receiver, args); } });
+  function recordPath(value: unknown): void {
+    const path = value instanceof URL ? fileURLToPath(value) : Buffer.isBuffer(value) ? value.toString() : typeof value === "string" ? value : undefined;
+    if (path !== undefined) probes.push(resolve(path));
   }
+  function traceFilesystemApi(api: object): void {
+    for (const [name, original] of Object.entries(api)) {
+      if (typeof original !== "function") continue;
+      // Pi's current loader/package manager use synchronous APIs, but trace the
+      // whole default export and its promises object so a future ambient read
+      // cannot hide behind an unlisted node:fs method.
+      Object.defineProperty(api, name, {
+        configurable: true,
+        writable: true,
+        value: new Proxy(original, { apply(target, receiver, args) { recordPath(args[0]); return Reflect.apply(target, receiver, args); } }),
+      });
+    }
+  }
+  traceFilesystemApi(fs);
+  traceFilesystemApi(fs.promises);
   if (process.versions.bun) {
     // Bun does not synchronize patched built-in named exports. Replace only
     // their export table; every filesystem call still delegates to real I/O.
