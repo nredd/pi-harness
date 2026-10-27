@@ -5,6 +5,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+	SIGNAL_READINESS_POLL_MS as POLL_INTERVAL_MS,
+	SIGNAL_READINESS_TIMEOUT_MS as READINESS_TIMEOUT_MS,
+	within,
+	writeSignalReadinessObserver,
+} from "./check-async.mjs";
+
+const SETUP_COMPLETION_TIMEOUT_MS = 30_000;
+const PROCESS_SETTLE_TIMEOUT_MS = 5000;
+const WRAPPER_BACKSTOP_HEADROOM_MS = 5000;
+const FIXTURE_LIFETIME_MS = 15_000;
+const OUTER_SETUP_BACKSTOP_MS = 2000;
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptsDir, "..");
@@ -134,6 +146,7 @@ const tempDir = await fs.mkdtemp(
 	path.join(os.tmpdir(), "pi-computer-use-linux-scripts-"),
 );
 const helperDest = path.join(tempDir, "linux-bridge");
+let setupChild;
 try {
 	const fixtureScriptsDir = path.join(tempDir, "scripts");
 	const fixtureHelperPathDir = path.join(tempDir, "src", "platform", "macos");
@@ -157,24 +170,33 @@ try {
 		await fs.symlink(tempDir, linkedTempDir);
 		fixtureEntry = path.join(linkedTempDir, "scripts", "setup-helper.mjs");
 	}
-	const result = await new Promise((resolve) => {
-		const child = spawn(
-			process.execPath,
-			[fixtureEntry, "--platform", "linux"],
-			{
-				env: { ...process.env, PI_COMPUTER_USE_LINUX_HELPER_PATH: helperDest },
-				stdio: ["ignore", "pipe", "pipe"],
-			},
-		);
-		let output = "";
-		child.stdout.on("data", (chunk) => {
-			output += chunk;
-		});
-		child.stderr.on("data", (chunk) => {
-			output += chunk;
-		});
-		child.on("close", (code) => resolve({ code, output }));
-	});
+	const result = await within(
+		new Promise((resolve, reject) => {
+			const child = spawn(
+				process.execPath,
+				[fixtureEntry, "--platform", "linux"],
+				{
+					env: {
+						...process.env,
+						PI_COMPUTER_USE_LINUX_HELPER_PATH: helperDest,
+					},
+					stdio: ["ignore", "pipe", "pipe"],
+				},
+			);
+			setupChild = child;
+			let output = "";
+			child.stdout.on("data", (chunk) => {
+				output += chunk;
+			});
+			child.stderr.on("data", (chunk) => {
+				output += chunk;
+			});
+			child.once("error", reject);
+			child.once("close", (code) => resolve({ code, output }));
+		}),
+		"initial Linux setup CLI to close without a prebuilt",
+		SETUP_COMPLETION_TIMEOUT_MS,
+	);
 	assert.equal(result.code, 1);
 	assert.match(result.output, /No Linux prebuilt helper found for (x64|arm64)/);
 	assert.equal(
@@ -185,6 +207,7 @@ try {
 		false,
 	);
 } finally {
+	setupChild?.kill("SIGKILL");
 	await fs.rm(`${tempDir}-link`, { force: true });
 	await fs.rm(tempDir, { recursive: true, force: true });
 }
@@ -205,10 +228,10 @@ if (process.platform !== "win32") {
 	} = await import(setupUrl);
 	const reapBudgetMs = GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
 	assert.ok(
-		reapBudgetMs < 2000,
+		reapBudgetMs < OUTER_SETUP_BACKSTOP_MS,
 		`reap budget ${reapBudgetMs}ms no longer fits the 2s outer backstop`,
 	);
-	const backstopMs = reapBudgetMs + 5000;
+	const backstopMs = reapBudgetMs + WRAPPER_BACKSTOP_HEADROOM_MS;
 	const alive = (pid) => {
 		try {
 			process.kill(pid, 0);
@@ -219,17 +242,20 @@ if (process.platform !== "win32") {
 	};
 	const settled = async (pid) => {
 		for (
-			const deadline = Date.now() + 5000;
+			const deadline = Date.now() + PROCESS_SETTLE_TIMEOUT_MS;
 			alive(pid) && Date.now() < deadline;
 		)
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 		return !alive(pid);
 	};
 	const waitForReady = async (file) => {
-		for (const deadline = Date.now() + 10_000; Date.now() < deadline; ) {
+		for (
+			const deadline = Date.now() + READINESS_TIMEOUT_MS;
+			Date.now() < deadline;
+		) {
 			const pid = Number(await fs.readFile(file, "utf8").catch(() => ""));
 			if (Number.isInteger(pid) && pid > 0) return pid;
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 		}
 		throw new Error(`Timed out waiting for fixture signal readiness: ${file}`);
 	};
@@ -246,11 +272,11 @@ const [role, base, behavior] = process.argv.slice(2);
 process.on("SIGTERM", role === "desc" && behavior !== "responsive" ? () => {} : () => process.exit(0));
 if (role === "leader" && behavior !== "reaped") spawn(process.execPath, [fileURLToPath(import.meta.url), "desc", base, behavior], { stdio: "ignore" });
 fs.writeFileSync(base + "." + role, String(process.pid));
-const deadline = Date.now() + 15000;
+const deadline = Date.now() + ${FIXTURE_LIFETIME_MS};
 setInterval(() => {
   if (role === "leader" && behavior === "exits-first" && fs.existsSync(base + ".release")) process.exit(0);
   if (Date.now() > deadline) process.exit(99);
-}, 20);
+}, ${POLL_INTERVAL_MS});
 `,
 	);
 	await fs.writeFile(
@@ -295,16 +321,20 @@ await running;
 	const pids = new Set();
 	const groups = new Set();
 	try {
-		await assert.rejects(
-			runCancellable("pi-cu-definitely-missing-tool", []),
-			(error) => {
-				assert.match(
-					error.message,
-					/'pi-cu-definitely-missing-tool' was not found on PATH\. Install the Rust toolchain/,
-				);
-				assert.doesNotMatch(error.message, /prebuilt\/linux/);
-				return true;
-			},
+		await within(
+			assert.rejects(
+				runCancellable("pi-cu-definitely-missing-tool", []),
+				(error) => {
+					assert.match(
+						error.message,
+						/'pi-cu-definitely-missing-tool' was not found on PATH\. Install the Rust toolchain/,
+					);
+					assert.doesNotMatch(error.message, /prebuilt\/linux/);
+					return true;
+				},
+			),
+			"missing build tool to reject with its install hint",
+			SETUP_COMPLETION_TIMEOUT_MS,
 		);
 		// Preserve today's EPERM policy without claiming it proves PGID reuse (follow-up #167).
 		// This pure injected syscall case has no process/trap to handshake with.
@@ -326,9 +356,12 @@ await running;
 			["negative-control", "responsive"],
 		]) {
 			const base = path.join(groupDir, name);
+			const observer = `${base}.observer.mjs`;
+			const wrapperReady = `${base}.wrapper`;
+			await writeSignalReadinessObserver(observer, wrapperReady);
 			const child = spawn(
 				process.execPath,
-				[wrapper, fixture, base, behavior],
+				["--import", observer, wrapper, fixture, base, behavior],
 				{ stdio: ["ignore", "pipe", "pipe"] },
 			);
 			children.push(child);
@@ -349,25 +382,15 @@ await running;
 			const descendant =
 				behavior === "reaped" ? undefined : await waitForReady(`${base}.desc`);
 			if (descendant) pids.add(descendant);
+			assert.equal(
+				await waitForReady(wrapperReady),
+				child.pid,
+				`${name}: wrapper handlers must be live before cancellation`,
+			);
 			assert.ok(alive(leader), `${name}: ready leader must be alive`);
 			if (descendant)
 				assert.ok(alive(descendant), `${name}: ready descendant must be alive`);
-			let timer;
-			try {
-				const bounded = Promise.race([
-					closed,
-					new Promise((_, reject) => {
-						timer = setTimeout(
-							() =>
-								reject(
-									new Error(
-										`${name}: wrapper exceeded ${backstopMs}ms reap backstop`,
-									),
-								),
-							backstopMs,
-						);
-					}),
-				]);
+			const completion = (async () => {
 				if (behavior === "exits-first")
 					await fs.writeFile(`${base}.release`, "go");
 				else
@@ -375,15 +398,18 @@ await running;
 						child.kill("SIGTERM"),
 						`${name}: wrapper must receive TERM`,
 					);
-				const result = await bounded;
-				assert.equal(
-					result.code,
-					behavior === "exits-first" ? 0 : 143,
-					`${name}: ${JSON.stringify(result)} ${output}`,
-				);
-			} finally {
-				clearTimeout(timer);
-			}
+				return await closed;
+			})();
+			const result = await within(
+				completion,
+				`${name}: wrapper to close inside its ${backstopMs}ms reap backstop`,
+				backstopMs,
+			);
+			assert.equal(
+				result.code,
+				behavior === "exits-first" ? 0 : 143,
+				`${name}: ${JSON.stringify(result)} ${output}`,
+			);
 			const trace = JSON.parse(await fs.readFile(`${base}.trace`, "utf8"));
 			if (behavior === "waits" || behavior === "exits-first")
 				assertEscalated(name, trace, leader);

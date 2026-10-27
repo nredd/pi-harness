@@ -8,6 +8,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { run } from "../../packages/dev-tools/src/core/process.ts";
 import { spawnMonitor } from "../../packages/session-kit/src/monitor/process.ts";
 
+const READINESS_WATCHDOG_MS = 10_000;
+const COMPLETION_WATCHDOG_MS = 10_000;
+const FIXTURE_LIFETIME_MS = 60_000;
+const TEST_TIMEOUT_MS = 30_000;
+const DESCENDANT_EXIT_TIMEOUT_MS = 1_000;
+const PROCESS_POLL_INTERVAL_MS = 10;
+
 interface Outcome {
 	stdout: string;
 	stderr: string;
@@ -31,7 +38,7 @@ const runners: Runner[] = [
 				args: ["-e", script],
 				cwd,
 				// Startup has a failure backstop, but TERM is triggered by the post-handler marker.
-				timeoutMs: terminateOnReady ? 10_000 : 1_000,
+				timeoutMs: terminateOnReady ? READINESS_WATCHDOG_MS : COMPLETION_WATCHDOG_MS,
 				signal: controller.signal,
 				onStderrLine: (line) => {
 					if (terminateOnReady && line === "ready") controller.abort();
@@ -64,7 +71,10 @@ const runners: Runner[] = [
 					if (stderr.split("\n").includes("ready")) markReady();
 				},
 			});
-			const watchdog = setTimeout(() => monitor.terminate(), terminateOnReady ? 10_000 : 1_000);
+			const watchdog = setTimeout(
+				() => monitor.terminate(),
+				terminateOnReady ? READINESS_WATCHDOG_MS : COMPLETION_WATCHDOG_MS,
+			);
 			try {
 				if (terminateOnReady) {
 					await Promise.race([
@@ -118,29 +128,41 @@ function identity(stdout: string): { leader: number; child: number } {
 for (const runner of runners) {
 	for (const inheritPipes of [false, true]) {
 		test(`${runner.name}: normal leader exit cleans descendants (${inheritPipes ? "inherited" : "closed"} pipes)`, {
-			timeout: 15_000,
+			timeout: TEST_TIMEOUT_MS,
 		}, async (context) => {
 			const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
 			context.after(() => rm(cwd, { recursive: true, force: true }));
 			const script = `
 const { spawn } = require('node:child_process');
-const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { stdio: ${inheritPipes ? '["ignore", "inherit", "inherit"]' : '"ignore"'} });
-child.unref();
+const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, ${FIXTURE_LIFETIME_MS}); process.send("descendant-ready");'], { stdio: ${inheritPipes ? '["ignore", "inherit", "inherit", "ipc"]' : '["ignore", "ignore", "ignore", "ipc"]'} });
 console.log(JSON.stringify({leader: process.pid, child: child.pid}));
+const watchdog = setTimeout(() => { console.error("Descendant did not acknowledge readiness"); process.exit(99); }, ${READINESS_WATCHDOG_MS});
+child.once("message", message => {
+  if (message !== "descendant-ready") throw new Error("Unexpected descendant readiness acknowledgment");
+  clearTimeout(watchdog);
+  console.error(message);
+  child.disconnect();
+  child.unref(); // Only now may the leader exit naturally, after output drains.
+});
 `;
 			const result = await runner.execute(script, cwd);
 			const owned = identity(result.stdout);
 			// Registered only after the fixture proved its own group; a failing assertion still reaps it.
 			context.after(() => killGroup(owned.leader));
-			assert.equal(result.exitCode, 0);
-			const deadline = Date.now() + 1_000;
-			while (alive(owned.child) && Date.now() < deadline) await delay(10);
+			assert.equal(result.exitCode, 0, result.stderr);
+			assert.equal(
+				result.stderr,
+				"descendant-ready\n",
+				"leader must receive the descendant acknowledgment before exit",
+			);
+			const deadline = Date.now() + DESCENDANT_EXIT_TIMEOUT_MS;
+			while (alive(owned.child) && Date.now() < deadline) await delay(PROCESS_POLL_INTERVAL_MS);
 			assert.equal(alive(owned.child), false, "descendant outlived its completed command");
 		});
 	}
 
 	test(`${runner.name}: keeps nonzero status and separate streams`, {
-		timeout: 15_000,
+		timeout: TEST_TIMEOUT_MS,
 	}, async (context) => {
 		const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
 		context.after(() => rm(cwd, { recursive: true, force: true }));
@@ -157,12 +179,12 @@ console.log(JSON.stringify({leader: process.pid, child: child.pid}));
 	});
 
 	test(`${runner.name}: escalates termination when the leader ignores SIGTERM`, {
-		timeout: 15_000,
+		timeout: TEST_TIMEOUT_MS,
 	}, async (context) => {
 		const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
 		context.after(() => rm(cwd, { recursive: true, force: true }));
 		const result = await runner.execute(
-			'process.on("SIGTERM", () => {}); process.stderr.write("ready\\n"); setTimeout(() => {}, 10000);',
+			`process.on("SIGTERM", () => {}); process.stderr.write("ready\\n"); setTimeout(() => {}, ${FIXTURE_LIFETIME_MS});`,
 			cwd,
 			true,
 		);

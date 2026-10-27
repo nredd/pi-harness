@@ -10,6 +10,18 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import {
+	SIGNAL_READINESS_POLL_MS as POLL_INTERVAL_MS,
+	SIGNAL_READINESS_TIMEOUT_MS as READINESS_TIMEOUT_MS,
+	within,
+	writeSignalReadinessObserver,
+} from "./check-async.mjs";
+
+const SETUP_COMPLETION_TIMEOUT_MS = 30_000;
+const SOURCE_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
+const CANCELLATION_BACKSTOP_MS = 10_000;
+const COMPILER_EXIT_TIMEOUT_MS = 5000;
+const FAKE_COMPILER_LIFETIME_SECONDS = 300;
 
 const execFileAsync = promisify(execFile);
 
@@ -37,11 +49,20 @@ const work = await fs.mkdtemp(
 const archName = { x64: "x86_64", arm64: "aarch64" }[process.arch];
 assert.ok(archName, `unsupported host architecture ${process.arch}`);
 
-/** Start setup-helper.mjs from `packageDir` like Pi does (`--platform linux`); `done` resolves with the outcome. */
-function startSetup(packageDir, env, extraArgs = []) {
+/**
+ * Start the real setup CLI with optional test-only signal-registration observation.
+ * @param {string} packageDir Packed package containing the production setup script.
+ * @param {NodeJS.ProcessEnv} env Child environment, including fixture paths.
+ * @param {string[]} [extraArgs=[]] Additional production CLI arguments.
+ * @param {string} [observer] Test-only Node preload; never modifies production handlers.
+ * @returns {{child: import('node:child_process').ChildProcess, done: Promise<object>}} Child and close outcome.
+ * @throws {Error} Spawn errors reject `done`.
+ */
+function startSetup(packageDir, env, extraArgs = [], observer) {
 	const child = spawn(
 		process.execPath,
 		[
+			...(observer ? ["--import", observer] : []),
 			path.join(packageDir, "scripts", "setup-helper.mjs"),
 			"--platform",
 			"linux",
@@ -56,14 +77,72 @@ function startSetup(packageDir, env, extraArgs = []) {
 	child.stderr.on("data", (chunk) => {
 		output += chunk;
 	});
-	const done = new Promise((resolve) =>
-		child.on("close", (code, signal) => resolve({ code, signal, output })),
-	);
+	const done = new Promise((resolve, reject) => {
+		child.once("error", reject);
+		child.once("close", (code, signal) => resolve({ code, signal, output }));
+	});
 	return { child, done };
 }
 
-const runSetup = (packageDir, env, extraArgs) =>
-	startSetup(packageDir, env, extraArgs).done;
+/**
+ * Await setup completion with a contextual deadline and bounded cancellation on failure.
+ * @param {string} packageDir Packed package containing the production CLI.
+ * @param {NodeJS.ProcessEnv} env Child environment.
+ * @param {string[]} [extraArgs=[]] Additional CLI arguments.
+ * @param {number} [timeoutMs=SETUP_COMPLETION_TIMEOUT_MS] Completion budget, in milliseconds.
+ * @returns {Promise<object>} Captured setup exit status and output.
+ * @throws {Error} If setup cannot spawn or close before its deadline.
+ */
+async function runSetup(
+	packageDir,
+	env,
+	extraArgs = [],
+	timeoutMs = SETUP_COMPLETION_TIMEOUT_MS,
+) {
+	const { child, done } = startSetup(packageDir, env, extraArgs);
+	try {
+		return await within(
+			done,
+			`Linux setup ${extraArgs.join(" ")} in ${packageDir} to close`,
+			timeoutMs,
+		);
+	} catch (error) {
+		child.kill("SIGTERM"); // Let the real wrapper reap its compiler group before the hard backstop.
+		try {
+			await within(
+				done,
+				"timed-out Linux setup to finish cancellation",
+				CANCELLATION_BACKSTOP_MS,
+			);
+		} catch {
+			child.kill("SIGKILL");
+			child.stdout.destroy();
+			child.stderr.destroy();
+			child.unref();
+		}
+		throw error;
+	}
+}
+
+/**
+ * Observe a process-owned PID marker published only after fixture signal readiness.
+ * @param {string} file Marker written by the compiler, leader or setup observer.
+ * @returns {Promise<number>} Valid positive PID contained in the marker.
+ * @throws {Error} If no valid PID becomes observable before the readiness deadline.
+ */
+async function waitForReadyPid(file) {
+	for (
+		const deadline = Date.now() + READINESS_TIMEOUT_MS;
+		Date.now() < deadline;
+	) {
+		const pid = Number(await fs.readFile(file, "utf8").catch(() => ""));
+		if (Number.isInteger(pid) && pid > 0) return pid;
+		await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+	}
+	throw new Error(
+		`Timed out waiting for compiler/setup fixture signal readiness: ${file}`,
+	);
+}
 
 async function writeFakeCargo(dir, body) {
 	await fs.mkdir(dir, { recursive: true });
@@ -191,7 +270,7 @@ mkdir -p "$target/release" && printf '#!/bin/sh\\n' > "$target/release/linux-bri
 		await writeFakeCargo(
 			fakeBin,
 			`trap 'exit 0' TERM
-sh -c 'trap "" TERM; echo $$ > "${pidFile}"; exec sleep 300' &
+sh -c 'trap "" TERM; echo $$ > "${pidFile}"; exec sleep ${FAKE_COMPILER_LIFETIME_SECONDS}' &
 echo $$ > "${leaderFile}"
 wait`,
 		);
@@ -205,48 +284,43 @@ wait`,
 			),
 			PATH: `${fakeBin}:/usr/bin:/bin`,
 		};
-		const { child: setupChild, done } = startSetup(packageDir, env, [
-			"--allow-build",
-		]);
-		const waitForReadyPid = async (file) => {
-			for (const deadline = Date.now() + 10_000; Date.now() < deadline; ) {
-				const pid = Number(await fs.readFile(file, "utf8").catch(() => ""));
-				if (Number.isInteger(pid) && pid > 0) return pid;
-				await new Promise((resolve) => setTimeout(resolve, 20));
-			}
-			throw new Error(
-				`Timed out waiting for compiler fixture signal readiness: ${file}`,
-			);
-		};
-		let timer;
+		const setupReady = path.join(work, "setup-ready.pid");
+		const observer = path.join(work, "setup-observer.mjs");
+		await writeSignalReadinessObserver(observer, setupReady);
+		const { child: setupChild, done } = startSetup(
+			packageDir,
+			env,
+			["--allow-build"],
+			observer,
+		);
 		let compilerReaped = false;
 		try {
-			const [compilerPid] = await Promise.all([
+			const [compilerPid, , wrapperPid] = await Promise.all([
 				waitForReadyPid(pidFile),
 				waitForReadyPid(leaderFile),
+				waitForReadyPid(setupReady),
 			]);
+			assert.equal(
+				wrapperPid,
+				setupChild.pid,
+				"packed setup handlers must be live before TERM",
+			);
 			process.kill(compilerPid, 0); // compiler child alive after its TERM disposition is ready
 			setupChild.kill("SIGTERM");
-			const finished = await Promise.race([
+			const finished = await within(
 				done,
-				new Promise((_, reject) => {
-					timer = setTimeout(
-						() =>
-							reject(
-								new Error(
-									"Packed setup exceeded the 10s compiler cancellation backstop",
-								),
-							),
-						10_000,
-					);
-				}),
-			]);
+				"packed setup to close after compiler cancellation",
+				CANCELLATION_BACKSTOP_MS,
+			);
 			assert.equal(finished.code, 143, finished.output);
 			let alive = true;
-			for (let i = 0; i < 100 && alive; i += 1) {
+			for (
+				const deadline = Date.now() + COMPILER_EXIT_TIMEOUT_MS;
+				alive && Date.now() < deadline;
+			) {
 				try {
 					process.kill(compilerPid, 0);
-					await new Promise((r) => setTimeout(r, 50));
+					await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 				} catch (error) {
 					assert.equal(error.code, "ESRCH");
 					alive = false;
@@ -259,7 +333,6 @@ wait`,
 			);
 			compilerReaped = true;
 		} finally {
-			clearTimeout(timer);
 			setupChild.kill("SIGKILL");
 			// Successful cancellation releases PID ownership; cleanup only a failed fixture.
 			for (const file of compilerReaped ? [] : [leaderFile, pidFile]) {
@@ -292,6 +365,7 @@ wait`,
 			PI_COMPUTER_USE_LINUX_HELPER_PATH: helper,
 		},
 		["--allow-build"],
+		SOURCE_BUILD_TIMEOUT_MS,
 	);
 	assert.equal(real.code, 0, real.output);
 	assert.ok(
