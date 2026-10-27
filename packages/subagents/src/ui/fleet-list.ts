@@ -12,7 +12,7 @@
  * can `consume` keys — gated on `getEditorText() === ""` so normal typing is untouched.
  */
 
-import { isKeyRelease, Key, matchesKey, type ScrollViewScrollbar, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { isKeyRelease, isKeyRepeat, Key, matchesKey, type ScrollViewScrollbar, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent, markConsumed } from "../agent-manager.js";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
@@ -23,11 +23,14 @@ import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, buildInvocationTags, fgPreservingNestedStyles, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
 import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.js";
+import { FleetJournal, type FleetJournalEntry, type FleetSnapshot, fleetAlert, MAX_COMPACT_ALERT_COUNT } from "./fleet-state.js";
+
+export { FLEET_STATE_ENTRY } from "./fleet-state.js";
 
 /** Matches the todo/monitor disclosure shortcut family; arrows keep their navigation roles. */
 export const FLEET_COLLAPSE_KEY = "ctrl+shift+a";
-/** Plain session custom entry, replayed from the active branch like workflow snapshots. */
-export const FLEET_STATE_ENTRY = "subagents:fleet-state";
+/** Quiet-period debounce bounds journal writes per toggle burst; shutdown flushes immediately. */
+export const FLEET_DISCLOSURE_SETTLE_MS = 300;
 
 /** Existing result-consumption semantics also acknowledge a failed fleet row. */
 function isOutstandingFailure(record: AgentRecord): boolean {
@@ -187,6 +190,7 @@ export function renderFleetSummary(
   showCost: boolean,
   width: number,
   theme: Theme,
+  overflowFailures = 0,
 ): string {
   const rows: (AgentEntry | WorkflowEntry)[] = [
     ...agents.map(record => ({ kind: "agent" as const, record })),
@@ -194,7 +198,7 @@ export function renderFleetSummary(
   ];
   const failed = rows.filter(row => row.kind === "agent"
     ? agentState(row.record.status).bucket === "failed"
-    : workflowBucket(row.workflow.status) === "failed").length;
+    : workflowBucket(row.workflow.status) === "failed").length + overflowFailures;
   const paused = workflows.filter(run => run.status === "paused").length;
   const fallback = agents.filter(hasFallback).length;
   // Actionable counts lead. Cap ONLY compact counts, then remove spaces before
@@ -207,7 +211,7 @@ export function renderFleetSummary(
   ].filter(alert => alert.count > 0);
   let flagText = alerts.length ? `[${alerts.map(a => `${a.count} ${a.label}`).join(", ")}]` : "";
   if (visibleWidth(flagText) > width) {
-    const compact = alerts.map(a => `${a.key}${a.count > 99 ? "99+" : a.count}`);
+    const compact = alerts.map(a => `${a.key}${a.count > MAX_COMPACT_ALERT_COUNT ? `${MAX_COMPACT_ALERT_COUNT}+` : a.count}`);
     flagText = `[${compact.join(" ")}]`;
     if (visibleWidth(flagText) > width) flagText = `[${compact.join("")}]`;
     // Below the supported 20-column floor, shed lowest-priority alerts first.
@@ -220,7 +224,7 @@ export function renderFleetSummary(
   }
   const flag = theme.fg(failed ? "error" : "warning", flagText);
   const cost = showCost ? formatCost(agents.reduce((sum, agent) => sum + getLifetimeCost(agent.lifetimeUsage), 0)) : "";
-  const summary = summarizeHidden(rows) || "0 running";
+  const summary = [summarizeHidden(rows), overflowFailures ? `${overflowFailures} more failed` : ""].filter(Boolean).join(", ") || "0 running";
   const text = `agents: ${summary}${parked ? `, ${parked} parked` : ""}${cost ? ` · ${cost}` : ""} · ${FLEET_COLLAPSE_KEY} to expand`;
   return withLeadingFlag("", alerts.length ? flag : "", theme.fg("dim", text), width);
 }
@@ -236,12 +240,10 @@ export class FleetList {
 
   private enabled = true;
   /** Explicit session choice. Navigation temporarily reveals rows without changing it. */
-  private collapsed = true;
-  private persistDisclosure: ((collapsed: boolean) => void) | undefined;
-  /** Keep outstanding failure records reachable even after manager TTL eviction. */
-  private readonly outstandingFailures = new Map<string, AgentRecord>();
-  /** Workflow inspection acknowledges the failed container, not its child records. */
-  private readonly acknowledgedWorkflows = new Set<string>();
+  private readonly journal = new FleetJournal();
+  private disclosureTimer: TimerHandle | undefined;
+  /** Weak observation prevents repeated journal lookups, without retaining manager records. */
+  private readonly observed = new WeakMap<AgentRecord, boolean>();
   /** Quota parking has no AgentRecord; the scheduler supplies its enabled-job count. */
   private parkedSource: () => number = () => 0;
   /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
@@ -309,8 +311,9 @@ export class FleetList {
   /** UI-only disclosure; never claims a dialog's key or touches running work. */
   toggleCollapse(): void {
     if (!this.enabled || !this.ui || this.viewerClose || this.viewingWorkflowId || !this.editorHasFocus()) return;
-    this.collapsed = this.active ? true : !this.collapsed;
-    this.persistDisclosure?.(this.collapsed);
+    this.journal.collapsed = this.active ? true : !this.journal.collapsed;
+    this.disclosureTimer?.cancel();
+    this.disclosureTimer = this.clock.setTimeout(() => this.flushState(), FLEET_DISCLOSURE_SETTLE_MS);
     this.active = false;
     this.selectedIndex = 0;
     this.update();
@@ -318,18 +321,32 @@ export class FleetList {
 
   /** Restore the last valid active-branch disclosure entry without writing another entry. */
   restoreSession(
-    entries: readonly { type: string; customType?: string; data?: unknown }[],
-    persist: (collapsed: boolean) => void,
+    entries: readonly FleetJournalEntry[] | (() => readonly FleetJournalEntry[]),
+    persist: (state: FleetSnapshot) => void,
   ): void {
-    this.collapsed = true;
-    for (const entry of entries) {
-      if (entry.type !== "custom" || entry.customType !== FLEET_STATE_ENTRY || !entry.data || typeof entry.data !== "object") continue;
-      const data = entry.data as { version?: unknown; collapsed?: unknown };
-      if (data.version === 1 && typeof data.collapsed === "boolean") this.collapsed = data.collapsed;
-    }
-    this.persistDisclosure = persist;
+    this.disclosureTimer?.cancel();
+    this.disclosureTimer = undefined;
+    this.journal.restore(typeof entries === "function" ? entries : () => entries, persist);
     this.active = false;
     this.selectedIndex = 0;
+  }
+
+  /** Flush while the activation's appendEntry/context is still valid. */
+  flushState(): void {
+    this.disclosureTimer?.cancel();
+    this.disclosureTimer = undefined;
+    this.journal.flushDisclosure();
+  }
+
+  /** Terminal callback and detached-notice ingress, never dependent on a render tick. */
+  ingestFailure(value: unknown): void {
+    const alert = fleetAlert(value);
+    if (alert) this.journal.report(alert);
+  }
+
+  /** Shared semantic edge for result consumption, RPC and successful human inspection. */
+  acknowledgeFailure(id: string): void {
+    this.journal.acknowledge(id);
   }
 
   /** Inject scheduler display data, without coupling the fleet to scheduling behavior. */
@@ -371,6 +388,7 @@ export class FleetList {
   }
 
   dispose(): void {
+    this.flushState();
     if (this.timer) { this.timer.cancel(); this.timer = undefined; }
     this.inputUnsub?.();
     this.inputUnsub = undefined;
@@ -393,7 +411,7 @@ export class FleetList {
     if (!this.ui) return;
     // Summary existence includes pending starts and quota parking: neither has
     // an openable row yet. Navigation still uses the openable roster only.
-    const hasRows = this.enabled && (this.agentRecords(true).length > 0 || this.workflows().length > 0 || this.parkedSource() > 0);
+    const hasRows = this.enabled && (this.agentRecords(true).length > 0 || this.workflows().length > 0 || this.journal.count > 0 || this.parkedSource() > 0);
 
     if (!hasRows) {
       if (this.widgetRegistered) {
@@ -464,15 +482,28 @@ export class FleetList {
     const own = this.manager.listAgents();
     const ownIds = new Set(own.map(a => a.id));
     const orphans = this.detachedSource().map(d => d.record).filter(r => !ownIds.has(r.id));
-    const records = new Map([...this.outstandingFailures.values(), ...own, ...orphans].map(a => [a.id, a]));
+    const records = new Map([...own, ...orphans].map(a => [a.id, a]));
     for (const a of records.values()) {
-      if (isTopLevelAgent(a) && isOutstandingFailure(a)) this.outstandingFailures.set(a.id, a);
-      else this.outstandingFailures.delete(a.id);
+      if (!isTopLevelAgent(a) || (a.status !== "error" && a.status !== "aborted")) continue;
+      const consumed = !!a.resultConsumed;
+      if (this.observed.get(a) === consumed) continue;
+      this.observed.set(a, consumed);
+      if (consumed) this.acknowledgeFailure(a.id);
+      else this.ingestFailure(a);
+    }
+    for (const alert of this.journal.alerts) {
+      if (alert.state !== "error" && alert.state !== "aborted") continue;
+      const live = records.get(alert.id);
+      if (!live || !isOutstandingFailure(live)) records.set(`fleet-alert:${alert.id}`, {
+        id: alert.id, type: alert.type, description: alert.description, status: alert.state,
+        startedAt: alert.timestamp, completedAt: alert.timestamp, toolUses: 0, compactionCount: 0,
+        lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
+      });
     }
     return [...records.values()]
       .filter(a => {
         if (!isTopLevelAgent(a)) return false;
-        if (isOutstandingFailure(a)) return true;
+        if (isOutstandingFailure(a)) return this.journal.alerts.some(alert => alert.id === a.id);
         // Consumed failures may linger as expanded history, never as outstanding alerts.
         if (includePending && (a.status === "error" || a.status === "aborted")) return false;
         return (includePending || a.session) && (
@@ -509,11 +540,24 @@ export class FleetList {
 
   /** Live runs, plus recently settled ones — the same linger the agents get. */
   private workflows(): FleetWorkflow[] {
-    if (!this.workflowSource) return [];
     const now = this.clock.now();
-    return [...this.workflowSource()]
+    const runs = new Map((this.workflowSource?.() ?? []).map(run => [run.id, run]));
+    for (const run of runs.values()) {
+      if (run.status === "failed" || run.status === "killed") {
+        this.ingestFailure({ id: run.id, type: "workflow", description: run.name, status: run.status, startedAt: run.startedAt, completedAt: run.completedAt });
+      }
+    }
+    for (const alert of this.journal.alerts) {
+      if (alert.state !== "failed" && alert.state !== "killed") continue;
+      const live = runs.get(alert.id);
+      if (!live || (live.status !== "failed" && live.status !== "killed")) runs.set(`fleet-alert:${alert.id}`, {
+        id: alert.id, name: alert.description, status: alert.state, startedAt: alert.timestamp,
+        completedAt: alert.timestamp, doneCount: 0, totalCount: 0, tokens: 0,
+      });
+    }
+    return [...runs.values()]
       .filter(run => {
-        if (run.status === "failed" || run.status === "killed") return !this.acknowledgedWorkflows.has(run.id);
+        if (run.status === "failed" || run.status === "killed") return this.journal.alerts.some(alert => alert.id === run.id);
         return run.status === "running" || run.status === "paused"
           || (run.completedAt != null && now - run.completedAt < FINISHED_LINGER_MS);
       })
@@ -562,6 +606,8 @@ export class FleetList {
     }
 
     if (matchesKey(data, FLEET_COLLAPSE_KEY)) {
+      // Kitty event type 2 is auto-repeat; arrows deliberately still repeat.
+      if (isKeyRepeat(data)) return { consume: true };
       this.toggleCollapse();
       return { consume: true };
     }
@@ -632,6 +678,12 @@ export class FleetList {
       return;
     }
     if (entry.kind === "workflow") {
+      if (!this.workflowSource?.().some(run => run.id === entry.workflow.id) || !this.openWorkflow) {
+        this.ui?.notify(`workflow: ${entry.workflow.name} (${entry.workflow.status}).`, "error");
+        this.acknowledgeFailure(entry.workflow.id);
+        this.update();
+        return;
+      }
       // The extension owns this overlay and closes it, so there is no
       // `viewerClose` to hold — but the list still has to know one is up, and
       // still has to put the cursor back on the run when it comes down.
@@ -646,8 +698,9 @@ export class FleetList {
     if (!this.ui) return;
     if (!record.session) {
       if (isOutstandingFailure(record)) {
-        this.ui.notify(record.error ?? `Agent ${record.status}.`, "error");
+        this.ui.notify(record.error ?? `${record.type}: ${record.description} (${record.status}).`, "error");
         markConsumed(record, this.clock.now());
+        this.acknowledgeFailure(record.id);
         this.update();
         return;
       }
@@ -708,11 +761,14 @@ export class FleetList {
     }
     if (acknowledge && this.viewingAgentId) {
       const record = this.agentRecords(true).find(a => a.id === this.viewingAgentId);
-      if (record && isOutstandingFailure(record)) markConsumed(record, this.clock.now());
+      if (record && isOutstandingFailure(record)) {
+        markConsumed(record, this.clock.now());
+        this.acknowledgeFailure(record.id);
+      }
     }
     if (acknowledge && this.viewingWorkflowId) {
-      const run = this.workflowSource?.().find(run => run.id === this.viewingWorkflowId);
-      if (run?.status === "failed" || run?.status === "killed") this.acknowledgedWorkflows.add(run.id);
+      const run = this.workflows().find(run => run.id === this.viewingWorkflowId);
+      if (run?.status === "failed" || run?.status === "killed") this.acknowledgeFailure(run.id);
     }
     this.viewerClose = undefined;
     this.viewingAgentId = undefined;
@@ -724,8 +780,8 @@ export class FleetList {
 
   private renderBar(width: number, theme: Theme): string[] {
     const rows = this.roster().slice(1) as (WorkflowEntry | AgentEntry)[];
-    if ((this.collapsed && !this.active) || rows.length === 0) {
-      return [renderFleetSummary(this.agentRecords(true), this.workflows(), this.parkedSource(), this.showCost(), width, theme)];
+    if ((this.journal.collapsed && !this.active) || rows.length === 0) {
+      return [renderFleetSummary(this.agentRecords(true), this.workflows(), this.parkedSource(), this.showCost(), width, theme, this.journal.overflowCount)];
     }
     // Clamp locally so a render between a roster shrink and the next update()
     // (e.g. on terminal resize) never loses the selection marker.
@@ -735,7 +791,10 @@ export class FleetList {
       ? "↑↓ select · enter view · esc back"
       : `esc to interrupt · ← for agents · ↓ to manage · ${FLEET_COLLAPSE_KEY} to collapse`;
     const lines: string[] = [];
-    lines.push(truncateToWidth("  " + theme.fg("dim", hint), width));
+    // Overflow details are deliberately bounded, but their exact failure count stays visible.
+    lines.push(this.journal.overflowCount
+      ? renderFleetSummary(this.agentRecords(true), this.workflows(), this.parkedSource(), this.showCost(), width, theme, this.journal.overflowCount)
+      : truncateToWidth("  " + theme.fg("dim", hint), width));
     lines.push("");
     lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
 

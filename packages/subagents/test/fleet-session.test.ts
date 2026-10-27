@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
-import { FLEET_COLLAPSE_KEY, FLEET_STATE_ENTRY } from "../src/ui/fleet-list.js";
+import { FLEET_COLLAPSE_KEY, FLEET_DISCLOSURE_SETTLE_MS, FLEET_STATE_ENTRY } from "../src/ui/fleet-list.js";
 import { answer, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 const TOGGLE = "\x1b[97;6u"; // Kitty ctrl+shift+a press, distinct from ctrl+a
@@ -33,6 +33,7 @@ async function start(description: string) {
   await host.settle();
   expect(host.viewport().join("\n")).toMatch(/^\s+[●○] main\s*$/m);
   expect(row()).toContain(description);
+  fixture.clock.advance(FLEET_DISCLOSURE_SETTLE_MS);
   return { h, host, stream, row };
 }
 
@@ -59,7 +60,7 @@ it("running fleet re-registers after core reload", async () => {
 
 it.each([false, true])("restores explicit collapsed=%s from disk when a fresh host resumes the same session", async collapsed => {
   const { h, host, stream } = await start("before resume");
-  if (collapsed) { host.input(TOGGLE); await host.settle(); }
+  if (collapsed) { host.input(TOGGLE); await host.settle(); fixture.clock.advance(FLEET_DISCLOSURE_SETTLE_MS); }
   const path = h.sessionManager.getSessionFile();
   if (!path) throw new Error("Missing persisted session");
   const snapshots = h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
@@ -161,6 +162,90 @@ it("keeps a failed child flagged after linger and clears it only when its result
   expect(host.viewport().some(line => line.trimStart().startsWith("[1 failed] agents:"))).toBe(false);
 });
 
+it("reloads unread failures, then honors their acknowledgement on fresh-host disk resume", async () => {
+  const { h, host, stream } = await start("durable failure");
+  const tool = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
+  const id = tool?.content.find(part => part.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  if (!id) throw new Error("Missing child id");
+  const record = fixture.record(id);
+  fixture.providers[0].setResponses([answer("", { stopReason: "error", errorMessage: "DURABLE FAILURE" })]);
+  stream.release();
+  await record.promise;
+  host.input(TOGGLE); // collapsed summary after completion
+  fixture.clock.advance(FLEET_DISCLOSURE_SETTLE_MS);
+  await host.settle();
+  const path = h.sessionManager.getSessionFile();
+  if (!path) throw new Error("Missing persisted session");
+  host.input("/reload"); host.input("\r");
+  await host.settle();
+  expect(host.viewport().some(line => line.trimStart().startsWith("[1 failed] agents:"))).toBe(true);
+  await host.dispose();
+  const resumed = await fixture.start({ terminal: true, harness: { sessionManager: SessionManager.open(path) } });
+  const fresh = fixture.host;
+  if (!fresh) throw new Error("Missing fresh host");
+  await fresh.settle();
+  expect(fresh.viewport().some(line => line.trimStart().startsWith("[1 failed] agents:"))).toBe(true);
+  // Minimal restored rows have no live session; inspecting their toast acknowledges the identity.
+  fresh.input("\x1b[B"); fresh.input("\x1b[B"); fresh.input("\r");
+  await fresh.settle();
+  const states = resumed.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
+  expect(states.at(-1)).toMatchObject({ data: { transition: { alert: { id }, acknowledged: true } } });
+  await fresh.dispose();
+  await fixture.start({ terminal: true, harness: { sessionManager: SessionManager.open(path) } });
+  const acknowledged = fixture.host;
+  if (!acknowledged) throw new Error("Missing acknowledged host");
+  fixture.clock.advance(5000);
+  await acknowledged.settle();
+  expect(acknowledged.viewport().some(line => line.trimStart().startsWith("[1 failed] agents:"))).toBe(false);
+});
+
+it("ingests a running detached failure between ticks after reload unregisters its record", async () => {
+  const { h, host, stream } = await start("detached failure");
+  const tool = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
+  const id = tool?.content.find(part => part.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  if (!id) throw new Error("Missing child id");
+  const record = fixture.record(id);
+  host.input(TOGGLE);
+  fixture.clock.advance(FLEET_DISCLOSURE_SETTLE_MS);
+  host.input("/reload"); host.input("\r");
+  await host.settle();
+  expect(record.status).toBe("running");
+  fixture.providers[0].setResponses([answer("", { stopReason: "error", errorMessage: "BETWEEN TICKS" })]);
+  stream.release();
+  await record.promise; // NO clock tick: terminal unregister -> spool -> active sink must ingest directly
+  await host.settle();
+  expect(record.status).toBe("error");
+  expect(host.viewport().some(line => line.trimStart().startsWith("[1 failed] agents:"))).toBe(true);
+  const states = h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
+  expect(states.at(-1)).toMatchObject({ data: { transition: { alert: { id, state: "error" }, acknowledged: false } } });
+});
+
+it("journals terminal failure before its public lifecycle event and result consumption in a headless session", async () => {
+  fixture = new ScenarioSession();
+  fixture.physical("fauxchild", "child", [answer("", { stopReason: "error", errorMessage: "HEADLESS FAILURE" })]);
+  let signalFailure!: () => void;
+  const failure = new Promise<void>(resolve => { signalFailure = resolve; });
+  let atTerminalEvent: unknown;
+  const h = await fixture.start({ factories: [pi => { pi.events.on("subagents:failed", () => {
+    atTerminalEvent = h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY).at(-1);
+    signalFailure();
+  }); }],
+    harness: { sessionManager: SessionManager.create(fixture.cwd, join(fixture.root, "sessions")) } });
+  h.setResponses([calls(spawn("headless failure", { model: "fauxchild/child" })), answer("SPAWNED")]);
+  await h.session.prompt("go");
+  await failure;
+  const tool = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
+  const id = tool?.content.find(part => part.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  if (!id) throw new Error("Missing headless child id");
+  const states = () => h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
+  expect(atTerminalEvent).toMatchObject({ data: { transition: { alert: { id, state: "error" }, acknowledged: false } } });
+  expect(states().at(-1)).toMatchObject({ data: { transition: { alert: { id, state: "error" }, acknowledged: false } } });
+  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id } }), answer("READ")]);
+  await h.session.prompt("read");
+  expect(states().at(-1)).toMatchObject({ data: { transition: { alert: { id }, acknowledged: true } } });
+  expect(h.session.messages.some(message => JSON.stringify(message).includes(FLEET_STATE_ENTRY))).toBe(false);
+});
+
 it("fleet paints model and live thinking activity", async () => {
   const { host, row } = await start("probe child");
   expect(row()).toMatch(/\bchild\b/);
@@ -171,7 +256,7 @@ it("fleet paints model and live thinking activity", async () => {
 
 it("silent stream repaints at the stall threshold without input", async () => {
   const { host, row } = await start("silent child");
-  fixture.clock.advance(119_600);
+  fixture.clock.advance(119_600 - FLEET_DISCLOSURE_SETTLE_MS);
   await host.settle();
   expect(row()).toContain("thinking · 1m59s");
   expect(row()).not.toContain("stalled?");

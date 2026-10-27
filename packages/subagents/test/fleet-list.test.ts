@@ -12,6 +12,7 @@ import {
   formatFleetElapsed,
   formatFleetTokens,
 } from "../src/ui/fleet-list.js";
+import { FLEET_STATE_ENTRY, type FleetJournalEntry } from "../src/ui/fleet-state.js";
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
 const DOWN = "\x1b[B";
@@ -160,6 +161,8 @@ function harness(
 
   const manager = fakeManager(agents);
   const fleet = new FleetList(manager, new Map(), undefined, opts.viewerMarkdown, opts.onViewerMarkdown, undefined, opts.backgroundAction);
+  const journal: FleetJournalEntry[] = [];
+  fleet.restoreSession(() => journal, data => journal.push({ type: "custom", customType: FLEET_STATE_ENTRY, data }));
   fleet.setUICtx(ui);
   if (!opts.collapsed) fleet.toggleCollapse(); // existing row tests exercise the expanded rendering
   let workflows: FleetWorkflow[] = [];

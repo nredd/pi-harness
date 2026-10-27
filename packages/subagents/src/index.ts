@@ -75,7 +75,8 @@ import {
   type UICtx,
 } from "./ui/agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./ui/conversation-viewer.js";
-import { FLEET_STATE_ENTRY, FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.js";
+import { FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.js";
+import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "./ui/fleet-state.js";
 import { renderNotification } from "./ui/notification-view.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
@@ -624,7 +625,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   function deliverDetachedResult(result: DetachedResult) {
     try {
-      if (result.record) pi.appendEntry("subagents:record", result.record);
+      if (result.record) {
+        pi.appendEntry("subagents:record", result.record);
+        fleet.ingestFailure(result.record);
+        fleet.update();
+      }
       const details = result.details as NotificationDetails;
       outbox.add({
         ids: [details.id, ...(details.others?.map(other => other.id) ?? [])],
@@ -651,6 +656,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       return;
     }
 
+    if (!record.resultConsumed) fleet.ingestFailure(record);
     // Emit lifecycle event based on terminal status
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
     const eventData = buildEventData(record);
@@ -970,6 +976,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
             if (!record || record.parentAgentId) return false;
             if (record.status === "running" || record.status === "queued") return false;
             markConsumed(record, clock.now());
+            fleet.acknowledgeFailure(record.id);
             outbox.cancel(record.id);
             return true;
           },
@@ -1256,6 +1263,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // to this session (see detached-results.ts). Only agents that cannot outlive the
   // session are aborted.
   pi.on("session_shutdown", async (event: { reason?: string }) => {
+    fleet.flushState(); // appendEntry must run before this activation loses its context
     const sessionFile = currentCtx?.sessionManager?.getSessionFile?.();
     unwatchDetached?.();
     unwatchDetached = undefined;
@@ -1447,8 +1455,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   fleet.setParkedSource(() => scheduler.list().filter(job => job.enabled && job.quotaParked && job.lastStatus !== "running").length);
   /** Replay UI-only state from the active branch, like workflow/goal custom snapshots. */
   function restoreFleetDisclosure(ctx: ExtensionContext): void {
-    fleet.restoreSession(ctx.sessionManager?.getBranch?.() ?? [], collapsed => {
-      pi.appendEntry(FLEET_STATE_ENTRY, { version: 1, collapsed });
+    fleet.restoreSession(() => ctx.sessionManager?.getBranch?.() ?? [], state => {
+      pi.appendEntry(FLEET_STATE_ENTRY, { ...state, version: FLEET_STATE_VERSION });
     });
   }
   pi.on("session_tree", (_event, ctx) => {
@@ -3226,6 +3234,7 @@ Terse command-style prompts produce shallow, generic work.
       // Mark result as consumed — suppresses the completion notification
       if (record.status !== "running" && record.status !== "queued") {
         markConsumed(record, clock.now());
+        fleet.acknowledgeFailure(record.id);
         outbox.cancel(record.id);
       }
 
