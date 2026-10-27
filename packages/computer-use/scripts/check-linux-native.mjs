@@ -219,6 +219,7 @@ wait`,
 			);
 		};
 		let timer;
+		let compilerReaped = false;
 		try {
 			const [compilerPid] = await Promise.all([
 				waitForReadyPid(pidFile),
@@ -256,14 +257,16 @@ wait`,
 				false,
 				"SIGTERM to setup must reap the compiler process group",
 			);
+			compilerReaped = true;
 		} finally {
 			clearTimeout(timer);
 			setupChild.kill("SIGKILL");
-			for (const file of [leaderFile, pidFile]) {
+			// Successful cancellation releases PID ownership; cleanup only a failed fixture.
+			for (const file of compilerReaped ? [] : [leaderFile, pidFile]) {
 				const pid = Number(await fs.readFile(file, "utf8").catch(() => ""));
 				if (pid > 0) {
 					try {
-						process.kill(-pid, "SIGKILL");
+						if (file === leaderFile) process.kill(-pid, "SIGKILL");
 					} catch {
 						/* already gone */
 					}

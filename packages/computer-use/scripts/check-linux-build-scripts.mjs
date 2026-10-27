@@ -282,7 +282,8 @@ await runCancellable(process.execPath, [fixture, "leader", base, behavior], { ki
 		);
 	};
 	const children = [];
-	const pids = [];
+	const pids = new Set();
+	const groups = new Set();
 	try {
 		await assert.rejects(
 			runCancellable("pi-cu-definitely-missing-tool", []),
@@ -332,10 +333,11 @@ await runCancellable(process.execPath, [fixture, "leader", base, behavior], { ki
 				child.once("close", (code, signal) => resolve({ code, signal }));
 			});
 			const leader = await waitForReady(`${base}.leader`);
-			pids.push(leader);
+			pids.add(leader);
+			groups.add(leader);
 			const descendant =
 				behavior === "reaped" ? undefined : await waitForReady(`${base}.desc`);
-			if (descendant) pids.push(descendant);
+			if (descendant) pids.add(descendant);
 			assert.ok(alive(leader), `${name}: ready leader must be alive`);
 			if (descendant)
 				assert.ok(alive(descendant), `${name}: ready descendant must be alive`);
@@ -392,22 +394,26 @@ await runCancellable(process.execPath, [fixture, "leader", base, behavior], { ki
 						/expected TERM then KILL escalation/,
 					);
 			}
-			if (descendant)
+			if (descendant) {
 				assert.equal(
 					await settled(descendant),
 					true,
 					`${name}: descendant ${descendant} survived the wrapper`,
 				);
+				pids.delete(descendant);
+			}
 			assert.equal(
 				await settled(leader),
 				true,
 				`${name}: leader ${leader} survived`,
 			);
+			pids.delete(leader);
 			assert.equal(
 				alive(-leader),
 				false,
 				`${name}: process group ${leader} still has members`,
 			);
+			groups.delete(leader);
 		}
 	} finally {
 		for (const child of children) {
@@ -417,12 +423,15 @@ await runCancellable(process.execPath, [fixture, "leader", base, behavior], { ki
 				/* already gone */
 			}
 		}
-		for (const pid of pids) {
+		// Forget verified-empty groups and dead PIDs before cleanup: their IDs may be reused.
+		for (const pgid of groups) {
 			try {
-				process.kill(-pid, "SIGKILL");
+				process.kill(-pgid, "SIGKILL");
 			} catch {
 				/* already gone */
 			}
+		}
+		for (const pid of pids) {
 			try {
 				process.kill(pid, "SIGKILL");
 			} catch {
