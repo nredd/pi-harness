@@ -17,7 +17,6 @@ import {
   DefaultResourceLoader,
   defineTool,
   type ExtensionAPI,
-  getAgentDir,
   type InlineExtension,
   SessionManager,
   SettingsManager,
@@ -28,7 +27,7 @@ import { runInChildSessionContext } from "./child-context.js";
 import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
-import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
+import { buildMemoryBlock, buildReadOnlyMemoryBlock, resolveAgentDir } from "./memory.js";
 import type { ModelCallEvent } from "./model-call.js";
 import type { ModelFallback } from "./model-resolver.js";
 import { type ModelSelection, selectModel } from "./model-selection.js";
@@ -1073,7 +1072,7 @@ export async function runAgent(
   // Still pass noSkills: true since we don't need the skill loader to load them again.
   const noSkills = skills === false || Array.isArray(skills);
 
-  const agentDir = getAgentDir();
+  const agentDir = resolveAgentDir(options.homeDir);
 
   // Extension loading:
   // - true  → all default-discovered extensions

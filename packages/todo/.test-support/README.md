@@ -9,8 +9,9 @@ only those helpers used by this package. `rpiv-workflow` is a dev-only dependenc
 for their type imports; no workflow code is loaded by the helpers.
 
 `.vitest.config.ts` aliases the unpublished `@juicesharp/rpiv-test-utils` to this
-barrel. `setup.ts` preserves upstream's isolated HOME, dynamic state/i18n reset,
-and config cleanup, without importing unrelated monorepo extensions. No upstream
+barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config
+cleanup while isolating config through `XDG_CONFIG_HOME`; it leaves `HOME`
+untouched so Bun cannot read the real home through a cached `os.homedir()`.  No upstream
 test assertions or tests are removed. Keep support/config files in dot paths so
 upstream's unchanged ship-manifest walker does not mistake them for production.
 
