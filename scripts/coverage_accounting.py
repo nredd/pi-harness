@@ -51,6 +51,34 @@ class Exclusion(StrictModel):
         return self
 
 
+class VerificationHelper(StrictModel):
+    path: str = Field(min_length=1, description="Exact repository-relative verification-only file path.")
+    reason: str = Field(
+        min_length=1, description="Why this file is verification infrastructure, not shipped code."
+    )
+
+    @model_validator(mode="after")
+    def exact_reasoned_path(self) -> VerificationHelper:
+        """Require a concrete, reasoned verification-only classification.
+
+        Parameters:
+            None.
+        Returns:
+            VerificationHelper: Validated exact-file classification.
+        Raises:
+            ValueError: The reason is blank or the path is absolute, escaping or a wildcard.
+        """
+        if not self.reason.strip():
+            raise ValueError("A `verification_helpers` entry requires a reason")
+        if (
+            Path(self.path).is_absolute()
+            or ".." in Path(self.path).parts
+            or any(c in self.path for c in "*?[")
+        ):
+            raise ValueError(f"Verification helper requires an exact repository-relative path: '{self.path}'")
+        return self
+
+
 class Signal(StrictModel):
     report: str = Field(description="Package-relative LCOV report path.")
     files: list[str] | None = Field(
@@ -145,6 +173,10 @@ class Policy(StrictModel):
         description="Enable the final primary target instead of transitional budgets."
     )
     packages: dict[str, Package] = Field(description="Named owned source packages and their coverage policy.")
+    verification_helpers: list[VerificationHelper] = Field(
+        default_factory=list,
+        description="Per-file reasoned verification harness classifications, never production.",
+    )
     reclassifications: list[Reclassification] = Field(
         default_factory=list,
         description="Explicit reviewed source-membership changes relative to the PR base.",
@@ -503,7 +535,7 @@ def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision:
 
 
 def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
-    """Find owned TypeScript/Python files absent from measured, pending or justified scope.
+    """Find owned executable TS, Python and JavaScript absent from reviewed scope.
 
     Parameters:
         root (Path): Absolute repository root.
@@ -512,15 +544,28 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
     Returns:
         set[str]: Unaccounted executable source paths; an empty set passes the audit.
     Raises:
-        ValueError: A source declaration cannot be expanded.
+        ValueError: Ownership expansion fails or helper paths are absent, duplicated or production-owned.
     """
     covered = {file for files_in_scope in inventory_scopes(root, policy).values() for file in files_in_scope}
+    helpers = {helper.path for helper in policy.verification_helpers}
+    if len(helpers) != len(policy.verification_helpers):
+        raise ValueError("Duplicate `verification_helpers` paths")
+    if helpers - files:
+        raise ValueError(
+            f"Verification helpers do not exist in the working tree: '{sorted(helpers - files)}'"
+        )
+    if helpers & covered:
+        raise ValueError(f"Verification helpers overlap production inventory: '{sorted(helpers & covered)}'")
     unknown: set[str] = set()
     for file in files:
         path = Path(file)
-        if path.suffix not in {".ts", ".py"} or is_test_path(path) or path.parts[0] == "forks":
+        if (
+            path.suffix not in {".ts", ".py", ".mjs", ".cjs", ".js"}
+            or is_test_path(path)
+            or path.parts[0] == "forks"
+        ):
             continue
-        if file in covered:
+        if file in covered or file in helpers:
             continue
         excluded = any(
             path.is_relative_to(package.root)
@@ -585,7 +630,11 @@ def scoped_records(root: Path, policy: Policy, package: Package, signal: Signal)
     for path, counters in raw.items():
         resolved = (Path(path) if Path(path).is_absolute() else root / package.root / path).resolve()
         repository_path = resolved.relative_to(root.resolve())
-        if "node_modules" in repository_path.parts or is_test_path(repository_path):
+        if (
+            "node_modules" in repository_path.parts
+            or is_test_path(repository_path)
+            or repository_path.as_posix() in {helper.path for helper in policy.verification_helpers}
+        ):
             continue
         excluded = any(
             resolved.is_relative_to((root / other.root).resolve())

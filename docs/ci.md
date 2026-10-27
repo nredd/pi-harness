@@ -25,8 +25,10 @@ on either outcome. Bun counters are separately ratcheted, never merged into prim
 `computer-use` is not measured, tracked; `dev-tools` awaits a clean cargo baseline after #155.
 Neither is silently called 100%. Python tooling/harness code, remaining boundary probes/providers,
 benchmark source and producer configurations are also explicitly inventoried as measurement-pending.
-The repository-wide TS/Python audit and the base-tree/current-tree inventory ratchet prevent silent
-source omission; reasoned reclassifications are required for membership losses. The policy's eventual
+The repository-wide TS/Python/JavaScript audit and the base-tree/current-tree inventory ratchet
+prevent silent source omission; reasoned reclassifications are required for membership losses.
+Verification-only scripts have exact per-file `verification_helpers` reasons; shipped runtime
+scripts remain owned production source, never blanket helper exclusions. The policy's eventual
 global-zero flip refuses pending packages.
 No job or required-check name changes. Definition, exclusions, receipts and ratcheting:
 [here](coverage.md).

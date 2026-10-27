@@ -3,6 +3,35 @@
   "target": { "lines": 0, "functions": 0 },
   "enforce_target": false,
   "reclassifications": [],
+  "verification_helpers": [
+    { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
+    { "path": "integration/probes/anthropic-block-types.mjs", "reason": "Offline assertion probe for synthetic Anthropic block classification; no production entrypoint or real credentials." },
+    { "path": "integration/providers/auth_guard.mjs", "reason": "Auth-scenario fixture verifies mock transport readiness and refused egress before synthetic credentials can dispatch; never shipped." },
+    { "path": "integration/providers/redirect_anthropic.mjs", "reason": "Test-only Node preload redirects synthetic auth requests to loopback and records forbidden credential access; never installed." },
+    { "path": "integration/providers/fast_timers.mjs", "reason": "Scenario-only preload substitutes selected timer delays for verification; never installed in the product." },
+    { "path": "packages/computer-use/scripts/check-act-outcomes.mjs", "reason": "Assertion harness for act outcome contracts; excluded from the published package files." },
+    { "path": "packages/computer-use/scripts/check-bounded-output.mjs", "reason": "Regression harness for output bounds and truncation; excluded from the published package files." },
+    { "path": "packages/computer-use/scripts/check-commit-messages.mjs", "reason": "Repository commit-message policy checker, not runtime code or a published package file." },
+    { "path": "packages/computer-use/scripts/check-desktop-tools.mjs", "reason": "Fixture-based desktop tool wire/gating checks, not a published runtime tool entrypoint." },
+    { "path": "packages/computer-use/scripts/check-invariants.mjs", "reason": "Computer-use invariant assertion harness, including explicitly gated live cases; not shipped." },
+    { "path": "packages/computer-use/scripts/check-linux-build-scripts.mjs", "reason": "Regression checks for Linux install/build process lifetime and script behavior from #150; not shipped." },
+    { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in Linux desktop acceptance harness; verification only and absent from published files." },
+    { "path": "packages/computer-use/scripts/check-linux-native.mjs", "reason": "Headless Linux crate, packed-source build and protocol-diagnostics acceptance harness from #150; not shipped." },
+    { "path": "packages/computer-use/scripts/check-local-signing.mjs", "reason": "Assertions for local helper-signing behavior; not the shipped signing/setup implementation." },
+    { "path": "packages/computer-use/scripts/check-macos-helper-live.mjs", "reason": "Opt-in macOS live helper acceptance fixture, not published runtime source." },
+    { "path": "packages/computer-use/scripts/check-macos-helper-path.mjs", "reason": "Regression assertions for helper path selection; the actual shipped helper-path module remains owned production source." },
+    { "path": "packages/computer-use/scripts/check-macos-native-pure.mjs", "reason": "Pure native macOS helper regression harness; not a shipped runtime module." },
+    { "path": "packages/computer-use/scripts/check-macos-observe-target.mjs", "reason": "Fixture assertions for macOS observation target selection; not published runtime source." },
+    { "path": "packages/computer-use/scripts/check-package-assets.mjs", "reason": "Packed-asset and package-manifest verification harness, including Linux source checks from #150; not shipped." },
+    { "path": "packages/computer-use/scripts/check-platform-linux.mjs", "reason": "Linux backend lifecycle and platform contract regression harness from #150; not shipped." },
+    { "path": "packages/computer-use/scripts/check-platform-windows.mjs", "reason": "Windows platform/backend contract verification harness; not shipped." },
+    { "path": "packages/computer-use/scripts/check-runtime-concurrency.mjs", "reason": "Runtime concurrency and isolation assertion harness; not part of the published implementation." },
+    { "path": "packages/computer-use/scripts/check-session-lifecycle.mjs", "reason": "Session lifecycle regression fixture; not part of the published implementation." },
+    { "path": "packages/computer-use/scripts/check-tool-schemas.mjs", "reason": "Tool schema assertion harness; actual shipped schemas remain in the owned source tree." },
+    { "path": "packages/computer-use/scripts/check-unpaired-act.mjs", "reason": "Unpaired-action regression harness; not published runtime source." },
+    { "path": "packages/computer-use/scripts/check-windows-build-scripts.mjs", "reason": "Windows native build-script verification harness; not a shipped runtime script." },
+    { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a synthetic gateway; verification infrastructure excluded from npm published files." }
+  ],
   "packages": {
     "dev-tools": {
       "root": "packages/dev-tools",
@@ -87,7 +116,10 @@
     "session-kit": {
       "root": "packages/session-kit",
       "owned": ["src/**/*.ts"],
-      "exclusions": [{ "path": "src/monitor/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
+      "exclusions": [
+        { "path": "src/monitor/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." },
+        { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
+      ],
       "status": "measured",
       "note": "Clean runs report 110 or 111 uncovered lines: the kill callback at src/diff/git.ts:87 is timing-dependent. Initial Phase 0 baseline uses the clean 111-line measurement; both receipts are retained.",
       "signals": {
@@ -200,10 +232,26 @@
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "extensions/**/*.ts", "native/macos/bridge.swift", "native/macos/agent_cursor.swift", "native/macos/agent_cursor_motion.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "native/macos/bridge.swift", "native/macos/agent_cursor.swift", "native/macos/agent_cursor_motion.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs"],
       "exclusions": [],
       "status": "pending",
-      "note": "Not measured, tracked: custom platform/native check scripts have no standard coverage runner. Global target fails closed until instrumentation is designed.",
+      "note": "Not measured, tracked: computer-use has no standard coverage runner. Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript are owned production source, never verification helpers. Global target fails closed until instrumentation is designed.",
+      "signals": {}
+    },
+    "runtime-build-tooling": {
+      "root": "packages/plan-mode",
+      "owned": ["scripts/*.mjs"],
+      "exclusions": [],
+      "status": "pending",
+      "note": "Runtime builder scripts produce the shipped plan-mode runtime. Existing output contract tests are not source-complete LCOV accounting; build-tooling instrumentation and clean receipts are follow-up work.",
+      "signals": {}
+    },
+    "workflow-examples": {
+      "root": "packages/subagents",
+      "owned": ["examples/**/*.js"],
+      "exclusions": [],
+      "status": "pending",
+      "note": "Runnable workflow example programs and their library helper are executable source, not verification harnesses. Establish source-complete example coverage and clean LCOV receipts in follow-up work.",
       "signals": {}
     },
     "python-scripts": {

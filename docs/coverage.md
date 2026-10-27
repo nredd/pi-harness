@@ -56,6 +56,22 @@ Every exclusion has a path (a glob is permitted for generated hashed artifacts),
 CLI or "hard to test" exemptions. Runtime enums/constants are executable source.
 Review exclusions as carefully as code; the script cannot prove a human's justification.
 
+Verification-only harnesses outside conventional test directories are classified under
+`verification_helpers`, with an exact repository-relative `path` and a separate `reason` for
+each file. Blanket globs, missing files, duplicate entries and overlap with owned production
+source fail. Classification also applies to imported LCOV records. A verification label does
+not waive the base-tree ratchet: moving previously owned production into this classification
+still requires a reasoned `reclassifications` entry.
+
+Shipped runtime code is NEVER a verification helper. In particular, computer-use's published
+`setup-helper.mjs`, `build-native.mjs` and `src/platform/macos/helper-path.mjs` remain owned,
+measurement-pending production source because computer-use has no standard coverage runner.
+Its non-shipped `check-*.mjs` assertion scripts and `pi-cubench-agent.mjs` benchmark harness have
+individual verification reasons, as does `scripts/router_contract.mjs`. Runtime builder scripts
+and runnable workflow examples are explicitly pending source, not verification exemptions.
+The generated stats CLI bundle has a reasoned generated-artifact exclusion; its original
+`src/stats/cli.ts` remains owned and measured.
+
 `computer-use` is explicitly **not measured, tracked**. Its custom platform/native scripts
 continue running, but no invented instrumentation or 100% claim is made. Its TS entries and
 native sources stay in inventory. A separate runner/instrumentation change is required before
@@ -68,10 +84,30 @@ Existing Python gates are not coverage accounting: pytest-cov for `scripts/` and
 `integration/harness/` is follow-up work. `benchmarks/comparison` already has pytest-cov at 90%
 combined coverage and retains it; independent LCOV line/function accounting is still pending.
 The declaration-only `integration/harness/__init__.py` has an explicit reasoned exclusion.
-A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TS/Python
-source. Each executable file must be included in a measured/pending inventory or have an explicit
+A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
+Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
-are not. All pending inventories are expanded and validated, and block the final target flip.
+are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
+explicit owned/pending declaration or reasoned verification classification. Existing producer
+configurations remain pending in the policy. All pending inventories are expanded and validated,
+and block the final target flip.
+
+## Add a source file
+
+- Check that the new file matches its package's `owned` inventory; otherwise add it explicitly.
+  Do not mark shipped runtime code as verification just because it lives under `scripts/`.
+- For a measured package, update the primary producer's explicit includes so never-imported source
+  still counts. For #161's `packages/subagents/src/model-selection.ts`, `src/**/*.ts` already owns
+  the file, but the explicit list in `packages/subagents/vitest.config.ts` must include it too.
+- Update an independent compatibility `files` list only when that declared suite actually reports
+  the new file. Do not fabricate a report or merge compatibility counters with primary counters.
+- Run `make check-scripts` to check source classification and producer inventory consistency;
+  run the affected package's existing primary/declared compatibility invocations, then
+  `make check-coverage BASE=origin/main`. Missing expected source fails closed. Keep fresh clean
+  receipts and never raise uncovered budgets to accommodate new untested behavior.
+- For a genuine non-shipped verification harness, add one exact `verification_helpers` entry with
+  its own reason. For source removal, rename or role changes, follow the reclassification ledger
+  below, including affected compatibility scopes.
 
 ## Run and ratchet
 

@@ -25,6 +25,7 @@ from coverage_accounting import (
     Policy,
     Reclassification,
     Signal,
+    VerificationHelper,
     account,
     audit_inventory,
     check_inventory_ratchet,
@@ -144,7 +145,7 @@ def test_serialized_policy_fields_have_descriptions() -> None:
     Raises:
         AssertionError: A policy field lacks its documented contract.
     """
-    for model in [Counts, Exclusion, Signal, Package, Policy, Reclassification]:
+    for model in [Counts, Exclusion, Signal, Package, Policy, Reclassification, VerificationHelper]:
         for name, field in model.model_fields.items():
             assert field.description, f"{model.__name__}.{name}"
             assert field.description.strip(), f"{model.__name__}.{name}"
