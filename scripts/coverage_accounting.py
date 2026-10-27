@@ -26,32 +26,50 @@ class StrictModel(BaseModel):
 
 
 class Counts(StrictModel):
-    lines: int = Field(ge=0)
-    functions: int = Field(ge=0)
+    lines: int = Field(ge=0, description="Maximum number of uncovered executable lines.")
+    functions: int = Field(ge=0, description="Maximum number of uncovered functions.")
 
 
 class Exclusion(StrictModel):
-    path: str = Field(min_length=1)
-    kind: Literal["generated", "type-only"]
-    reason: str = Field(min_length=1)
+    path: str = Field(min_length=1, description="Package-relative excluded path or generated-file glob.")
+    kind: Literal["generated", "type-only", "test-helper"] = Field(description="Reviewed exclusion category.")
+    reason: str = Field(min_length=1, description="Why this path is not executable production source.")
 
     @model_validator(mode="after")
     def meaningful_reason(self) -> Exclusion:
-        """Reject whitespace-only explanations."""
+        """Reject whitespace-only explanations.
+
+        Parameters:
+            None.
+        Returns:
+            Exclusion: Validated exclusion declaration.
+        Raises:
+            ValueError: The reason is blank.
+        """
         if not self.reason.strip():
             raise ValueError("An exclusion requires a reason")
         return self
 
 
 class Signal(StrictModel):
-    report: str
-    files: list[str] | None = None
-    max_uncovered: Counts
-    reporters: list[str]
+    report: str = Field(description="Package-relative LCOV report path.")
+    files: list[str] | None = Field(
+        default=None, description="Expected source paths; null means full inventory."
+    )
+    max_uncovered: Counts = Field(description="Independent integer uncovered-counter budget.")
+    reporters: list[str] = Field(description="Required producer output formats, including text and LCOV.")
 
     @model_validator(mode="after")
     def text_and_lcov(self) -> Signal:
-        """Require visible threshold enforcement as well as machine accounting."""
+        """Require visible threshold enforcement as well as machine accounting.
+
+        Parameters:
+            None.
+        Returns:
+            Signal: Validated independent reporting contract.
+        Raises:
+            ValueError: Required reporters are absent or file declarations are empty/duplicated.
+        """
         if not {"text", "lcov"}.issubset(self.reporters):
             raise ValueError("Coverage signals require both text and lcov reporters")
         if self.files is not None and (not self.files or len(set(self.files)) != len(self.files)):
@@ -60,17 +78,29 @@ class Signal(StrictModel):
 
 
 class Package(StrictModel):
-    root: str
-    owned: list[str] = Field(min_length=1)
-    exclusions: list[Exclusion]
-    test_helpers: list[str] = Field(default_factory=list)
-    status: Literal["measured", "pending"]
-    note: str
-    signals: dict[str, Signal]
+    root: str = Field(description="Repository-relative package source root.")
+    owned: list[str] = Field(
+        min_length=1, description="Explicit source paths or package-relative source globs."
+    )
+    exclusions: list[Exclusion] = Field(description="Reviewed source exclusions with mandatory reasons.")
+    test_helpers: list[str] = Field(
+        default_factory=list, description="Legacy explicitly named test helper paths."
+    )
+    status: Literal["measured", "pending"] = Field(description="Whether clean-run coverage is accounted for.")
+    note: str = Field(description="Measurement limitations and concrete pending follow-up.")
+    signals: dict[str, Signal] = Field(description="Independent primary and compatibility coverage signals.")
 
     @model_validator(mode="after")
     def measurement_status(self) -> Package:
-        """Pending packages must be explicitly explained, never silently green."""
+        """Require explicit measurement status rather than inventing coverage.
+
+        Parameters:
+            None.
+        Returns:
+            Package: Validated package status and signal declarations.
+        Raises:
+            ValueError: Pending status lacks a note or measured status lacks a primary signal.
+        """
         if self.status == "pending" and (not self.note.strip() or self.signals):
             raise ValueError("Pending package requires a note and no invented measurements")
         if self.status == "measured" and "primary" not in self.signals:
@@ -78,15 +108,59 @@ class Package(StrictModel):
         return self
 
 
+class Reclassification(StrictModel):
+    package: str = Field(min_length=1, description="Package whose previous source membership changes.")
+    signal: str = Field(default="owned", description="Owned inventory or an independent signal name.")
+    path: str = Field(min_length=1, description="Exact repository-relative path in the base inventory.")
+    replacement: str | None = Field(
+        default=None, description="Current repository-relative replacement, if moved."
+    )
+    reason: str = Field(
+        min_length=1, description="Reviewed justification for removal, exclusion or reclassification."
+    )
+
+    @model_validator(mode="after")
+    def explicit_paths(self) -> Reclassification:
+        """Validate a reasoned, exact source-membership change.
+
+        Parameters:
+            None.
+        Returns:
+            Reclassification: Validated change declaration.
+        Raises:
+            ValueError: A reason is blank or a path is not repository-relative.
+        """
+        if not self.reason.strip():
+            raise ValueError("A `reclassification` requires a reason")
+        for value in [self.path, *([self.replacement] if self.replacement is not None else [])]:
+            if Path(value).is_absolute() or ".." in Path(value).parts:
+                raise ValueError(f"Reclassification path must be repository-relative: '{value}'")
+        return self
+
+
 class Policy(StrictModel):
-    version: Literal[1]
-    target: Counts
-    enforce_target: bool
-    packages: dict[str, Package]
+    version: Literal[1] = Field(description="Coverage policy schema version.")
+    target: Counts = Field(description="Final zero-uncovered primary coverage target.")
+    enforce_target: bool = Field(
+        description="Enable the final primary target instead of transitional budgets."
+    )
+    packages: dict[str, Package] = Field(description="Named owned source packages and their coverage policy.")
+    reclassifications: list[Reclassification] = Field(
+        default_factory=list,
+        description="Explicit reviewed source-membership changes relative to the PR base.",
+    )
 
     @model_validator(mode="after")
     def zero_target(self) -> Policy:
-        """Keep the final target explicit during transitional ratcheting."""
+        """Keep the final target explicit during transitional ratcheting.
+
+        Parameters:
+            None.
+        Returns:
+            Policy: Validated zero-uncovered final target.
+        Raises:
+            ValueError: Either final target counter is nonzero.
+        """
         if self.target.lines or self.target.functions:
             raise ValueError("The target must be zero uncovered lines and functions")
         return self
@@ -115,7 +189,15 @@ class LcovRecord:
     summaries: dict[str, int] = field(default_factory=dict)
 
     def add(self, row: str) -> None:
-        """Validate a supported LCOV row before adding its counter."""
+        """Validate a supported LCOV row before adding its counter.
+
+        Parameters:
+            row (str): One LCOV counter or summary row.
+        Returns:
+            None: The validated counter is accumulated.
+        Raises:
+            ValueError: The row is malformed, unsupported or duplicated.
+        """
         key, separator, value = row.partition(":")
         if not separator:
             raise ValueError(f"Malformed LCOV row: '{row}'")
@@ -139,7 +221,16 @@ class LcovRecord:
             raise ValueError(f"Unsupported LCOV row: '{row}'")
 
     def add_function(self, key: str, value: str) -> None:
-        """Validate named function definitions and hit counts."""
+        """Validate named function definitions and hit counts.
+
+        Parameters:
+            key (str): FN definition or FNDA counter identifier.
+            value (str): Numeric location/count followed by the function identity.
+        Returns:
+            None: The validated function record is accumulated.
+        Raises:
+            ValueError: A function record is malformed or duplicated.
+        """
         number, comma, name = value.partition(",")
         if not comma or not number.isdecimal() or not name:
             raise ValueError(f"Malformed function counter: '{value}'")
@@ -149,7 +240,15 @@ class LcovRecord:
         counters[name] = int(number)
 
     def add_branch(self, value: str) -> None:
-        """Validate a branch identity and its optional hit count."""
+        """Validate a branch identity and its optional hit count.
+
+        Parameters:
+            value (str): LCOV branch location, identity and optional hit count.
+        Returns:
+            None: The validated branch counter is accumulated.
+        Raises:
+            ValueError: The branch record is malformed or duplicated.
+        """
         parts = value.split(",")
         if len(parts) != 4 or not all(p.isdecimal() for p in parts[:3]):
             raise ValueError(f"Malformed branch counter: '{value}'")
@@ -159,7 +258,15 @@ class LcovRecord:
         self.branches[identity] = 0 if parts[3] == "-" else int(parts[3])
 
     def finish(self) -> FileCoverage:
-        """Check producer summaries against actual executable counters."""
+        """Check producer summaries against actual executable counters.
+
+        Parameters:
+            None.
+        Returns:
+            FileCoverage: Validated executable line, function and branch counters.
+        Raises:
+            ValueError: Required counters are missing or summary totals are inconsistent.
+        """
         if set(self.definitions) != set(self.functions):
             raise ValueError("Missing function counters")
         totals = {
@@ -226,21 +333,42 @@ def parse_lcov(text: str) -> dict[str, FileCoverage]:
 
 
 def is_test_path(path: Path) -> bool:
-    """Tests and their dedicated helper directories are outside production scope by definition."""
-    return any(
-        part in {"test", "tests", ".test-support", "fixtures"} for part in path.parts
-    ) or path.name.endswith(".test.ts")
+    """Identify conventional tests and dedicated fixture directories.
+
+    Parameters:
+        path (Path): Repository- or package-relative source path.
+    Returns:
+        bool: Whether the path belongs to the defined test-file scope.
+    Raises:
+        None.
+    """
+    return (
+        any(part in {"test", "tests", ".test-support", "fixtures"} for part in path.parts)
+        or path.name.endswith(".test.ts")
+        or (path.suffix == ".py" and path.name.startswith("test_"))
+    )
 
 
-def inventory(root: Path, package: Package) -> set[str]:
-    """Expand explicit production globs and justified exclusions relative to a package."""
+def expand_inventory(package: Package, files: set[str]) -> set[str]:
+    """Expand production membership against a supplied repository file universe.
+
+    Parameters:
+        package (Package): Source patterns and reviewed exclusions.
+        files (set[str]): Repository-relative paths from one specific tree.
+    Returns:
+        set[str]: Package-relative executable source membership.
+    Raises:
+        ValueError: A pattern is empty, a helper overlaps source, or a declaration exclusion is invalid.
+    """
+    available = {
+        Path(file).relative_to(package.root).as_posix()
+        for file in files
+        if Path(file).is_relative_to(package.root)
+    }
     owned: set[str] = set()
-    directory = root / package.root
     for pattern in package.owned:
         matches = {
-            p.relative_to(directory).as_posix()
-            for p in directory.glob(pattern)
-            if p.is_file() and not is_test_path(p.relative_to(directory))
+            file for file in available if Path(file).full_match(pattern) and not is_test_path(Path(file))
         }
         if not matches:
             raise ValueError(f"Owned pattern matches no files: '{package.root}/{pattern}'")
@@ -254,8 +382,167 @@ def inventory(root: Path, package: Package) -> set[str]:
     return owned
 
 
+def inventory(root: Path, package: Package) -> set[str]:
+    """Expand the current working-tree production inventory.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        package (Package): Source ownership declaration.
+    Returns:
+        set[str]: Package-relative executable source membership.
+    Raises:
+        ValueError: Source ownership or exclusions are invalid.
+    """
+    files = {
+        file.relative_to(root).as_posix()
+        for pattern in package.owned
+        for file in (root / package.root).glob(pattern)
+        if file.is_file()
+    }
+    return expand_inventory(package, files)
+
+
+def git_read(root: Path, args: list[str]) -> str:
+    """Read Git metadata while preserving failed-command diagnostics.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        args (list[str]): Git subcommand and arguments, without a shell.
+    Returns:
+        str: Combined standard output and standard error.
+    Raises:
+        subprocess.CalledProcessError: Git fails; output contains its diagnostics.
+        OSError: The absolute Git executable cannot be invoked.
+    """
+    return subprocess.check_output([str(GIT), "-C", str(root), *args], text=True, stderr=subprocess.STDOUT)
+
+
+def repository_files(root: Path, revision: str | None = None) -> set[str]:
+    """Enumerate an immutable Git tree or current nonignored working files.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        revision (str | None): Base commit; null selects tracked and untracked working files.
+    Returns:
+        set[str]: Existing repository-relative paths, preserving spaces and newlines.
+    Raises:
+        subprocess.CalledProcessError: The revision or repository cannot be read.
+    """
+    args = (
+        ["ls-tree", "-rz", "--name-only", revision]
+        if revision is not None
+        else ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]
+    )
+    files = set(git_read(root, args).split("\0")) - {""}
+    return files if revision is not None else {file for file in files if (root / file).is_file()}
+
+
+def inventory_scopes(
+    root: Path, policy: Policy, files: set[str] | None = None
+) -> dict[tuple[str, str], set[str]]:
+    """Identify physical source membership for every owned and compatibility scope.
+
+    Parameters:
+        root (Path): Absolute repository root for current-tree expansion.
+        policy (Policy): Policy belonging to the same tree as files.
+        files (set[str] | None): Base-tree paths, or null for the working tree.
+    Returns:
+        dict[tuple[str, str], set[str]]: Repository-relative membership by package and scope.
+    Raises:
+        ValueError: Ownership expansion or an explicit signal subset is invalid.
+    """
+    scopes: dict[tuple[str, str], set[str]] = {}
+    for name, package in policy.packages.items():
+        owned = inventory(root, package) if files is None else expand_inventory(package, files)
+        scopes[name, "owned"] = {(Path(package.root) / file).as_posix() for file in owned}
+        for signal_name, signal in package.signals.items():
+            if signal_name == "primary":
+                continue
+            expected = set(signal.files) if signal.files is not None else owned
+            if not expected.issubset(owned):
+                raise ValueError(f"Signal is outside owned inventory: '{name}/{signal_name}'")
+            scopes[name, signal_name] = {(Path(package.root) / file).as_posix() for file in expected}
+    return scopes
+
+
+def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision: str) -> None:
+    """Reject lost base-tree source membership without a new reasoned declaration.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        current (Policy): Current working-tree policy.
+        base (Policy): Policy read from the PR base commit.
+        revision (str): Immutable Git base tree used to expand the base policy.
+    Returns:
+        None: All membership losses have explicit reviewed declarations.
+    Raises:
+        ValueError: A loss is undeclared, a declaration is stale or a replacement is invalid.
+        subprocess.CalledProcessError: The base Git tree cannot be read.
+    """
+    before = inventory_scopes(root, base, repository_files(root, revision))
+    after = inventory_scopes(root, current)
+    losses = {
+        (name, signal, path)
+        for (name, signal), files in before.items()
+        for path in files - after.get((name, signal), set())
+    }
+    historical = {entry.model_dump_json() for entry in base.reclassifications}
+    declarations: dict[tuple[str, str, str], Reclassification] = {}
+    for entry in current.reclassifications:
+        if entry.model_dump_json() in historical:
+            continue
+        key = (entry.package, entry.signal, entry.path)
+        if key in declarations or key not in losses:
+            raise ValueError(f"Duplicate or stale `reclassification`: '{key}'")
+        if entry.replacement is not None and entry.replacement not in after.get(key[:2], set()):
+            raise ValueError(f"Replacement is outside current inventory: '{entry.replacement}'")
+        declarations[key] = entry
+    missing = losses - declarations.keys()
+    if missing:
+        raise ValueError(f"Inventory ratchet requires `reclassifications`: '{sorted(missing)}'")
+
+
+def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
+    """Find owned TypeScript/Python files absent from measured, pending or justified scope.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        policy (Policy): Current measured and pending source declarations.
+        files (set[str]): Repository-wide nonignored working paths, including new files.
+    Returns:
+        set[str]: Unaccounted executable source paths; an empty set passes the audit.
+    Raises:
+        ValueError: A source declaration cannot be expanded.
+    """
+    covered = {file for files_in_scope in inventory_scopes(root, policy).values() for file in files_in_scope}
+    unknown: set[str] = set()
+    for file in files:
+        path = Path(file)
+        if path.suffix not in {".ts", ".py"} or is_test_path(path) or path.parts[0] == "forks":
+            continue
+        if file in covered:
+            continue
+        excluded = any(
+            path.is_relative_to(package.root)
+            and any(path.relative_to(package.root).full_match(item.path) for item in package.exclusions)
+            for package in policy.packages.values()
+        )
+        if not excluded:
+            unknown.add(file)
+    return unknown
+
+
 def check_ratchet(current: Policy, base: Policy) -> None:
-    """Reject removed signals/packages or an increased uncovered budget versus PR base."""
+    """Reject removed signals/packages or increased uncovered budgets.
+
+    Parameters:
+        current (Policy): Current working-tree policy.
+        base (Policy): Policy read from the PR base commit.
+    Returns:
+        None: Every integer budget preserves the base ratchet.
+    Raises:
+        ValueError: A package/signal disappears, a budget increases or the final target is disabled.
+    """
     if base.enforce_target and not current.enforce_target:
         raise ValueError("Cannot disable global target")
     for name, previous in base.packages.items():
@@ -274,7 +561,19 @@ def check_ratchet(current: Policy, base: Policy) -> None:
 
 
 def scoped_records(root: Path, policy: Policy, package: Package, signal: Signal) -> dict[str, FileCoverage]:
-    """Validate raw LCOV paths, removing only defined tests and inventoried sibling source."""
+    """Validate report membership without merging counters across packages.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        policy (Policy): Complete owned source policy.
+        package (Package): Package whose signal is being accounted for.
+        signal (Signal): Independent expected-file and report declaration.
+    Returns:
+        dict[str, FileCoverage]: Package-relative counters for expected executable source.
+    Raises:
+        OSError: The report cannot be read.
+        ValueError: LCOV, membership, expected files or total owned executable lines are invalid.
+    """
     expected = set(signal.files) if signal.files is not None else inventory(root, package)
     raw = parse_lcov((root / package.root / signal.report).read_text())
     records: dict[str, FileCoverage] = {}
@@ -319,16 +618,25 @@ def scoped_records(root: Path, policy: Policy, package: Package, signal: Signal)
 
 
 def account(root: Path, policy: Policy) -> tuple[list[dict[str, object]], list[str]]:
-    """Report independent package/file integer counters; retain every failure for artifacts."""
+    """Account for independent package/file counters and retain signal failures.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        policy (Policy): Validated coverage inventory and budgets.
+    Returns:
+        tuple[list[dict[str, object]], list[str]]: Per-file metrics and explicit accounting failures.
+    Raises:
+        ValueError: A package inventory cannot be expanded.
+    """
     results: list[dict[str, object]] = []
     errors: list[str] = []
     for name, package in policy.packages.items():
+        owned = inventory(root, package)
         if package.status == "pending":
             LOGGER.warning(f"NOT MEASURED, TRACKED: '{name}': {package.note}")
             if policy.enforce_target:
                 errors.append(f"Unmeasured package: '{name}'")
             continue
-        owned = inventory(root, package)
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
             try:
@@ -360,7 +668,16 @@ def account(root: Path, policy: Policy) -> tuple[list[dict[str, object]], list[s
 
 
 def main() -> int:
-    """Load the policy and trusted Git base, then write a summary even on accounting failure."""
+    """Read CLI inputs, enforce both Git ratchets and write an accounting summary.
+
+    Parameters:
+        None: Arguments are read through argparse.
+    Returns:
+        int: Zero for successful accounting, one for validated input or accounting failures.
+    Raises:
+        OSError: The summary output cannot be written.
+        SystemExit: Argparse rejects the command line.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--base", required=True)
@@ -385,18 +702,21 @@ def main() -> int:
         missing_roots = workspace_roots - {package.root for package in policy.packages.values()}
         if missing_roots:
             raise ValueError(f"Workspaces missing from policy: '{sorted(missing_roots)}'")
+        unknown = audit_inventory(root, policy, repository_files(root))
+        if unknown:
+            raise ValueError(f"Executable source missing from policy: '{sorted(unknown)}'")
         # A new policy has no base counterpart. Only that exact missing path is bootstrap;
         # invalid revisions, failed git commands and malformed base policies still fail closed.
-        tree = subprocess.check_output(
-            [str(GIT), "-C", str(root), "ls-tree", args.base, "--", "coverage/policy.json"], text=True
-        )
+        tree = git_read(root, ["ls-tree", args.base, "--", "coverage/policy.json"])
         if tree.strip():
-            previous = subprocess.check_output(
-                [str(GIT), "-C", str(root), "show", f"{args.base}:coverage/policy.json"], text=True
-            )
-            check_ratchet(policy, Policy.model_validate_json(previous))
+            previous = git_read(root, ["show", f"{args.base}:coverage/policy.json"])
+            base = Policy.model_validate_json(previous)
+            check_ratchet(policy, base)
+            check_inventory_ratchet(root, policy, base, args.base)
         results, errors = account(root, policy)
-    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+    except subprocess.CalledProcessError as error:
+        errors.append(f"Git metadata read failed: '{error.output}'")
+    except (OSError, ValueError, KeyError, TypeError) as error:
         errors.append(str(error))
     totals: dict[str, dict[str, int]] = {}
     for result in results:

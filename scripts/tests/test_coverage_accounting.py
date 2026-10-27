@@ -1,4 +1,8 @@
-"""Exercise fail-closed accounting with LCOV and disposable Git base policies."""
+"""Exercise fail-closed accounting with LCOV and disposable Git base policies.
+
+References:
+    ../../docs/coverage.md
+"""
 
 from __future__ import annotations
 
@@ -19,7 +23,15 @@ SCRIPT = Path(__file__).resolve().parents[1] / "coverage_accounting.py"
 
 
 def policy() -> Policy:
-    """Return a fully measured miniature package policy."""
+    """Return a measured miniature policy.
+
+    Parameters:
+        None.
+    Returns:
+        Policy: Validated fixture ownership and budgets.
+    Raises:
+        ValidationError: The fixture policy is invalid.
+    """
     return Policy.model_validate(
         {
             "version": 1,
@@ -47,7 +59,16 @@ def policy() -> Policy:
 
 
 def setup_report(tmp_path: Path, fixture: str = "passing.info") -> Path:
-    """Create real source paths and an LCOV fixture in a disposable repository tree."""
+    """Create disposable source paths and a real LCOV fixture.
+
+    Parameters:
+        tmp_path (Path): Disposable source root.
+        fixture (str): Stored LCOV fixture filename.
+    Returns:
+        Path: Created LCOV report path.
+    Raises:
+        OSError: Fixture files cannot be created or read.
+    """
     (tmp_path / "package.json").write_text(json.dumps({"workspaces": ["packages/*"]}))
     directory = tmp_path / "packages/example"
     (directory / "src").mkdir(parents=True)
@@ -60,7 +81,15 @@ def setup_report(tmp_path: Path, fixture: str = "passing.info") -> Path:
 
 
 def test_passing_lines_and_functions_branches_report_only(tmp_path: Path) -> None:
-    """An uncovered branch alone must not fail the line/function gate."""
+    """Keep branches reported without gating primary coverage.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: Integer line/function counters pass despite an uncovered branch.
+    Raises:
+        AssertionError: Branch-only misses fail accounting.
+    """
     setup_report(tmp_path)
     results, errors = account(tmp_path, policy())
     assert not errors
@@ -69,7 +98,15 @@ def test_passing_lines_and_functions_branches_report_only(tmp_path: Path) -> Non
 
 
 def test_uncovered_counts_fail(tmp_path: Path) -> None:
-    """Compare integer uncovered counts, not rounded percentages."""
+    """Reject independently counted uncovered execution.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: Both uncovered counters are reported exactly.
+    Raises:
+        AssertionError: Uncovered execution is accepted.
+    """
     setup_report(tmp_path, "uncovered.info")
     results, errors = account(tmp_path, policy())
     assert results[0]["uncovered_functions"] == 1
@@ -78,7 +115,16 @@ def test_uncovered_counts_fail(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("mode", ["missing-report", "empty", "missing-file", "unknown-file"])
 def test_fail_closed(tmp_path: Path, mode: str) -> None:
-    """Missing input, absent source and unexpected source never count as covered."""
+    """Fail closed on unavailable or inconsistent report membership.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+        mode (str): Report or expected-file failure to introduce.
+    Returns:
+        None: The accounting failure is retained explicitly.
+    Raises:
+        AssertionError: Missing or unexpected source becomes successful coverage.
+    """
     report = setup_report(tmp_path)
     if mode == "missing-report":
         report.unlink()
@@ -113,14 +159,30 @@ def test_fail_closed(tmp_path: Path, mode: str) -> None:
     ],
 )
 def test_malformed_lcov_rejected(text: str) -> None:
-    """Reject malformed, inconsistent, zero-line and duplicate counters."""
+    """Reject malformed or internally inconsistent LCOV.
+
+    Parameters:
+        text (str): Invalid LCOV document.
+    Returns:
+        None: Parsing raises a semantic validation failure.
+    Raises:
+        AssertionError: Invalid counters are accepted.
+    """
     with pytest.raises(ValueError, match=r"LCOV|counter|line|branch|function"):
         parse_lcov(text)
 
 
 @pytest.mark.parametrize("metric", ["lines", "functions"])
 def test_ratchet_cannot_increase_uncovered_budget(metric: str) -> None:
-    """Each independent metric must ratchet against the Git base."""
+    """Keep each integer budget independently monotonic.
+
+    Parameters:
+        metric (str): Budget counter to increase.
+    Returns:
+        None: Raising the budget fails while tightening it succeeds.
+    Raises:
+        AssertionError: The base budget can be weakened.
+    """
     current, base = policy(), policy()
     setattr(current.packages["example"].signals["primary"].max_uncovered, metric, 1)
     with pytest.raises(ValueError, match="Ratchet violation"):
@@ -129,7 +191,15 @@ def test_ratchet_cannot_increase_uncovered_budget(metric: str) -> None:
 
 
 def test_ratchet_cannot_remove_a_signal_or_package() -> None:
-    """Removing accounting is not a legitimate way to satisfy the ratchet."""
+    """Reject removal of measured packages and signals.
+
+    Parameters:
+        None.
+    Returns:
+        None: Removing either accounting boundary fails.
+    Raises:
+        AssertionError: A measured package or signal can disappear.
+    """
     current = policy()
     current.packages.clear()
     with pytest.raises(ValueError, match="Removed package"):
@@ -142,7 +212,15 @@ def test_ratchet_cannot_remove_a_signal_or_package() -> None:
 
 @pytest.mark.parametrize("reason", ["", "   "])
 def test_exclusion_requires_a_reason(reason: str) -> None:
-    """Every exclusion must carry a substantive reviewed explanation."""
+    """Require substantive exclusion explanations.
+
+    Parameters:
+        reason (str): Empty or whitespace-only justification.
+    Returns:
+        None: Policy validation rejects the exclusion.
+    Raises:
+        AssertionError: An unreasoned exclusion passes.
+    """
     data = policy().model_dump()
     data["packages"]["example"]["exclusions"] = [
         {"path": "src/types.ts", "kind": "type-only", "reason": reason},
@@ -152,7 +230,15 @@ def test_exclusion_requires_a_reason(reason: str) -> None:
 
 
 def test_excluded_declaration_is_not_executable_scope(tmp_path: Path) -> None:
-    """Explicitly justified type declarations need no executable report record."""
+    """Keep genuine declarations outside executable measurement.
+
+    Parameters:
+        tmp_path (Path): Disposable source and report root.
+    Returns:
+        None: A reasoned declaration exclusion leaves executable accounting intact.
+    Raises:
+        AssertionError: A declaration is measured as production execution.
+    """
     setup_report(tmp_path)
     (tmp_path / "packages/example/src/types.ts").write_text("export type Value = string;\n")
     data = policy().model_dump()
@@ -165,14 +251,30 @@ def test_excluded_declaration_is_not_executable_scope(tmp_path: Path) -> None:
 
 
 def test_new_owned_file_requires_measurement(tmp_path: Path) -> None:
-    """An owned glob cannot silently omit never-imported source."""
+    """Detect never-imported source newly matched by ownership.
+
+    Parameters:
+        tmp_path (Path): Disposable source and report root.
+    Returns:
+        None: An incomplete primary measurement fails.
+    Raises:
+        AssertionError: Newly owned source silently disappears from the denominator.
+    """
     setup_report(tmp_path)
     (tmp_path / "packages/example/src/new.ts").write_text("export const value = 0;\n")
     assert "Primary signal must measure every owned" in account(tmp_path, policy())[1][0]
 
 
 def test_lcov_only_threshold_bypass_is_rejected() -> None:
-    """Runner-independent policy rejects lcov-only threshold declarations."""
+    """Require both machine and visible threshold reporting.
+
+    Parameters:
+        None.
+    Returns:
+        None: LCOV-only reporting fails policy validation.
+    Raises:
+        AssertionError: The reporter requirement is weakened.
+    """
     data = policy().model_dump()
     data["packages"]["example"]["signals"]["primary"]["reporters"] = ["lcov"]
     with pytest.raises(ValidationError, match="both text and lcov"):
@@ -180,7 +282,15 @@ def test_lcov_only_threshold_bypass_is_rejected() -> None:
 
 
 def test_global_flip_requires_no_uncovered_or_pending(tmp_path: Path) -> None:
-    """The final policy-only flip must reject transitional budgets and missing coverage."""
+    """Reject gaps and pending packages when the final target is enabled.
+
+    Parameters:
+        tmp_path (Path): Disposable source and report root.
+    Returns:
+        None: The policy-only flip enforces the primary target.
+    Raises:
+        AssertionError: Transitional gaps can satisfy the final target.
+    """
     setup_report(tmp_path, "uncovered.info")
     cfg = policy()
     cfg.packages["example"].signals["primary"].max_uncovered.lines = 1
@@ -194,7 +304,15 @@ def test_global_flip_requires_no_uncovered_or_pending(tmp_path: Path) -> None:
 
 
 def test_cli_uses_real_git_base_and_always_writes_summary(tmp_path: Path) -> None:
-    """A policy increase fails using the committed base, not a supplied replacement file."""
+    """Read ratchet budgets from an actual committed Git policy.
+
+    Parameters:
+        tmp_path (Path): Disposable Git repository.
+    Returns:
+        None: The CLI rejects a budget increase and writes its summary.
+    Raises:
+        AssertionError: The Git base is bypassed or failure artifacts disappear.
+    """
     setup_report(tmp_path)
     (tmp_path / "coverage").mkdir()
     path = tmp_path / "coverage/policy.json"
@@ -215,7 +333,9 @@ def test_cli_uses_real_git_base_and_always_writes_summary(tmp_path: Path) -> Non
             "Base policy",
         ],
     ]:
-        subprocess.check_output(["/usr/bin/git", "-C", str(tmp_path), *argv], text=True)
+        subprocess.check_output(
+            ["/usr/bin/git", "-C", str(tmp_path), *argv], text=True, stderr=subprocess.STDOUT
+        )
     cfg.packages["example"].signals["primary"].max_uncovered.lines = 1
     path.write_text(cfg.model_dump_json())
     summary = tmp_path / "summary.json"
@@ -229,7 +349,15 @@ def test_cli_uses_real_git_base_and_always_writes_summary(tmp_path: Path) -> Non
 
 
 def test_aggregate_function_lcov_is_validated() -> None:
-    """Accept summary-only LCOV without losing its uncovered-function denominator."""
+    """Validate aggregate-only function LCOV without losing its denominator.
+
+    Parameters:
+        None.
+    Returns:
+        None: Valid aggregate counters pass and inconsistent totals fail.
+    Raises:
+        AssertionError: Aggregate function misses are dropped.
+    """
     text = (FIXTURES / "bun-aggregate.info").read_text()
     counters = parse_lcov(text)["source.ts"]
     assert counters.functions == 2
@@ -239,7 +367,15 @@ def test_aggregate_function_lcov_is_validated() -> None:
 
 
 def test_global_primary_target_does_not_replace_independent_runtime_ratchet(tmp_path: Path) -> None:
-    """A final primary-100% flip must not silently redefine a separate runtime signal."""
+    """Keep a runtime ratchet independent of the final primary target.
+
+    Parameters:
+        tmp_path (Path): Disposable report and source root.
+    Returns:
+        None: The runtime signal retains its own budget.
+    Raises:
+        AssertionError: Independent runtime counters are merged or retargeted.
+    """
     report = setup_report(tmp_path)
     runtime = report.with_name("runtime.info")
     shutil.copyfile(FIXTURES / "uncovered.info", runtime)
@@ -256,14 +392,30 @@ def test_global_primary_target_does_not_replace_independent_runtime_ratchet(tmp_
 
 
 def test_unknown_sibling_is_not_silently_discarded(tmp_path: Path) -> None:
-    """A cross-package import needs its own reviewed inventory."""
+    """Require reviewed ownership for imported sibling source.
+
+    Parameters:
+        tmp_path (Path): Disposable report and source root.
+    Returns:
+        None: Unknown sibling production source fails.
+    Raises:
+        AssertionError: Uninventoried imported source is discarded silently.
+    """
     report = setup_report(tmp_path)
     report.write_text(report.read_text().replace("src/index.ts", "../unknown/src/index.ts"))
     assert "Report file not in policy" in account(tmp_path, policy())[1][0]
 
 
 def test_generated_artifact_exclusions_need_not_be_owned_source(tmp_path: Path) -> None:
-    """Explicit justified generated globs cover imported hashed build artifacts only."""
+    """Allow reviewed generated-output duplicates outside production scope.
+
+    Parameters:
+        tmp_path (Path): Disposable report and source root.
+    Returns:
+        None: Generated output is not added to production counters.
+    Raises:
+        AssertionError: A justified generated duplicate corrupts accounting.
+    """
     report = setup_report(tmp_path)
     generated = report.read_text().replace("src/index.ts", "dist/chunks/generated.ts")
     report.write_text(report.read_text() + generated)
@@ -275,7 +427,15 @@ def test_generated_artifact_exclusions_need_not_be_owned_source(tmp_path: Path) 
 
 
 def test_test_helper_cannot_overlap_owned_inventory(tmp_path: Path) -> None:
-    """A helper declaration must not become a back-door production exclusion."""
+    """Reject overlap between explicit helper and production declarations.
+
+    Parameters:
+        tmp_path (Path): Disposable report and source root.
+    Returns:
+        None: Inventory validation rejects the overlap.
+    Raises:
+        AssertionError: A helper declaration bypasses owned production scope.
+    """
     setup_report(tmp_path)
     cfg = policy()
     cfg.packages["example"].test_helpers = ["src/index.ts"]

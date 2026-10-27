@@ -23,7 +23,11 @@ with the PR base's `coverage/policy.json`, and fails closed on missing/invalid i
 are reported only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
 on either outcome. Bun counters are separately ratcheted, never merged into primary coverage.
 `computer-use` is not measured, tracked; `dev-tools` awaits a clean cargo baseline after #155.
-Neither is silently called 100%. The policy's eventual global-zero flip refuses pending packages.
+Neither is silently called 100%. Python tooling/harness code, remaining boundary probes/providers,
+benchmark source and producer configurations are also explicitly inventoried as measurement-pending.
+The repository-wide TS/Python audit and the base-tree/current-tree inventory ratchet prevent silent
+source omission; reasoned reclassifications are required for membership losses. The policy's eventual
+global-zero flip refuses pending packages.
 No job or required-check name changes. Definition, exclusions, receipts and ratcheting:
 [here](coverage.md).
 

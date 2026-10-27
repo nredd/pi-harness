@@ -2,6 +2,7 @@
   "version": 1,
   "target": { "lines": 0, "functions": 0 },
   "enforce_target": false,
+  "reclassifications": [],
   "packages": {
     "dev-tools": {
       "root": "packages/dev-tools",
@@ -205,6 +206,57 @@
       "note": "Not measured, tracked: custom platform/native check scripts have no standard coverage runner. Global target fails closed until instrumentation is designed.",
       "signals": {}
     },
+    "python-scripts": {
+      "root": "scripts",
+      "owned": ["*.py"],
+      "exclusions": [],
+      "status": "pending",
+      "note": "Existing Python gates are not coverage accounting. Follow up with pytest-cov for scripts/ and validated LCOV line/function accounting; no failed or uninstrumented run is a baseline.",
+      "signals": {}
+    },
+    "python-harness": {
+      "root": "integration",
+      "owned": ["harness/*.py"],
+      "exclusions": [
+        { "path": "harness/__init__.py", "kind": "type-only", "reason": "Declaration-only package marker containing only a module docstring; no executable implementation." },
+        { "path": "conftest.py", "kind": "test-helper", "reason": "Pytest fixture configuration for integration scenarios, not production implementation." }
+      ],
+      "status": "pending",
+      "note": "Existing Python gates are not coverage accounting. Follow up with pytest-cov for integration/harness and validated LCOV line/function accounting.",
+      "signals": {}
+    },
+    "python-benchmarks": {
+      "root": "benchmarks/comparison",
+      "owned": ["src/pi_harness_benchmark/*.py"],
+      "exclusions": [],
+      "status": "pending",
+      "note": "benchmarks/comparison already has pytest-cov at 90 percent combined line/branch coverage. Retain that gate; LCOV line/function accounting and a clean ratchet baseline are a follow-up.",
+      "signals": {}
+    },
+    "probe-boundaries": {
+      "root": "integration/probes",
+      "owned": ["latency.ts", "render.ts", "session-kit-child-scope.ts", "transcript-types.ts"],
+      "exclusions": [],
+      "status": "pending",
+      "note": "Executable boundary probes are inventoried but their scenario/Node gates are not complete coverage accounting. Follow up with source-complete instrumentation and clean LCOV receipts.",
+      "signals": {}
+    },
+    "providers": {
+      "root": "integration/providers",
+      "owned": ["*.ts"],
+      "exclusions": [{ "path": "extension_inventory.ts", "kind": "test-helper", "reason": "Test-only extension registry observer injected by integration fixtures; no production provider behavior." }],
+      "status": "pending",
+      "note": "faux.ts and usage_fixture.ts execute provider behavior in stack scenarios. Existing scenario gates are not coverage accounting; establish instrumented source-complete receipts in a follow-up.",
+      "signals": {}
+    },
+    "coverage-configurations": {
+      "root": ".",
+      "owned": ["packages/*/vitest.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts"],
+      "exclusions": [],
+      "status": "pending",
+      "note": "Executable test-producer configuration is explicitly inventoried. Existing format/type/producer contract checks are not coverage accounting; loader instrumentation is a follow-up.",
+      "signals": {}
+    },
     "import-audit": {
       "root": "scripts",
       "owned": ["import_audit.ts"],
@@ -236,8 +288,10 @@
     "inprocess": {
       "root": "integration/inprocess",
       "owned": ["support.ts", "goal-support.ts", "native-timers.ts"],
-      "exclusions": [],
-      "test_helpers": ["agents-support.ts", "todo-support.ts", "../providers/extension_inventory.ts"],
+      "exclusions": [
+        { "path": "agents-support.ts", "kind": "test-helper", "reason": "In-process test assertions and fixture factories, not production behavior." },
+        { "path": "todo-support.ts", "kind": "test-helper", "reason": "In-process todo test host fixture and assertion helpers, not production behavior." }
+      ],
       "status": "measured",
       "note": "Verification infrastructure, measured in addition to owned production packages.",
       "signals": {

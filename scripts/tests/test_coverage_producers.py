@@ -1,4 +1,9 @@
-"""Pin producer contracts separately from runner-agnostic LCOV accounting."""
+"""Pin producer contracts separately from runner-agnostic LCOV accounting.
+
+References:
+    https://github.com/oven-sh/bun/blob/bun-v1.3.14/docs/test/code-coverage.mdx
+    ../../docs/coverage.md
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,15 @@ INCLUDE = re.compile(r"include:\s*(\[[^\]]*\])", re.DOTALL)
 
 
 def test_primary_configs_match_policy_inventory() -> None:
-    """Prevent the instrumentation include list and reviewed denominator drifting apart."""
+    """Bind primary instrumentation includes to reviewed ownership.
+
+    Parameters:
+        None.
+    Returns:
+        None: Every measured primary configuration includes all owned executable files.
+    Raises:
+        AssertionError: Producer includes or failure-reporting requirements drift.
+    """
     policy = json.loads((ROOT / "coverage/policy.json").read_text())
     for package in policy["packages"].values():
         primary = package["signals"].get("primary")
@@ -42,7 +55,15 @@ def test_primary_configs_match_policy_inventory() -> None:
 
 
 def test_declared_bun_coverage_commands_have_both_reporters() -> None:
-    """An lcov-only Bun invocation must never satisfy the generic reporter declaration."""
+    """Bind declared Bun commands to visible and machine reporting.
+
+    Parameters:
+        None.
+    Returns:
+        None: Every declared compatibility suite uses both required reporters.
+    Raises:
+        AssertionError: A producer removes a reporter or the independent output directory.
+    """
     manifests = [*ROOT.glob("packages/*/package.json"), ROOT / "integration/inprocess/package.json"]
     for manifest in manifests:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
@@ -53,13 +74,29 @@ def test_declared_bun_coverage_commands_have_both_reporters() -> None:
 
 
 def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:
-    """LCOV's bundled HTML must not be linted as source on the next native gate."""
+    """Keep generated report HTML outside whole-workspace source linting.
+
+    Parameters:
+        None.
+    Returns:
+        None: Whole-workspace linters ignore generated coverage output.
+    Raises:
+        AssertionError: A repeated native gate starts linting generated reports.
+    """
     for directory in [ROOT / "packages/plan-mode", ROOT / "integration/inprocess"]:
         assert "coverage/" in (directory / ".gitignore").read_text().splitlines()
 
 
 def test_node_coverage_wraps_the_existing_test_invocations() -> None:
-    """Node gates instrument their existing pass, including never-imported owned code."""
+    """Instrument existing Node invocations without a second test pass.
+
+    Parameters:
+        None.
+    Returns:
+        None: Both Node producers include all owned source and both reporting formats.
+    Raises:
+        AssertionError: Existing Node instrumentation requirements regress.
+    """
     makefile = (ROOT / "Makefile").read_text()
     commands = [line for line in makefile.splitlines() if "/.bin/c8 " in line]
     assert len(commands) == 2
@@ -72,7 +109,15 @@ def test_node_coverage_wraps_the_existing_test_invocations() -> None:
 
 
 def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
-    """Coverage must not become a second test job or disappear after a failed suite."""
+    """Keep accounting and artifacts after tests, including failure paths.
+
+    Parameters:
+        None.
+    Returns:
+        None: Existing owned CI jobs account for and preserve their reports.
+    Raises:
+        AssertionError: CI drops failure accounting, base history or artifacts.
+    """
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     owned = workflow.split("  owned:", 1)[1].split("  contracts:", 1)[0]
     accounting = owned.split("- name: Coverage accounting", 1)[1].split("- name:", 1)[0]
@@ -88,10 +133,18 @@ def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
 
 
 def test_pinned_bun_lcov_only_threshold_bypass(tmp_path: Path) -> None:
-    """Reproduce 1.3.14's exit-0 bypass; demonstrate why the text reporter is mandatory."""
+    """Reproduce the pinned LCOV-only threshold bypass with the real runtime.
+
+    Parameters:
+        tmp_path (Path): Disposable coverage probe project.
+    Returns:
+        None: LCOV-only exits zero while adding text enforces the function threshold.
+    Raises:
+        AssertionError: The pinned runtime, LCOV output or threshold behavior differs.
+    """
     executable = shutil.which("bun")
     assert executable, "The repository's pinned Bun is required, not a skipped verification"
-    version = subprocess.check_output([executable, "--version"], text=True).strip()
+    version = subprocess.check_output([executable, "--version"], text=True, stderr=subprocess.STDOUT).strip()
     assert version == (ROOT / ".bun-version").read_text().strip()
     (tmp_path / "bunfig.toml").write_text(
         "[test]\ncoverageThreshold = { functions = 1.0 }\ncoverageSkipTestFiles = true\n"

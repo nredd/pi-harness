@@ -42,17 +42,18 @@ and absent expected source all fail closed.
 
 ## Inventory and exclusions
 
-Each package lists owned source files or source globs. A signal without a `files` subset expects the entire expanded inventory after justified
-exclusions. Primary instrumentation includes must cover that inventory, including never-imported
+Each package lists owned source files or source globs. A signal without a `files` subset expects
+the entire expanded inventory after justified exclusions. Primary instrumentation includes must cover that inventory, including never-imported
 modules. New source matched by a glob fails until instrumentation includes are updated.
 Tests and dedicated test-helper directories are outside production scope by definition, not
-coverage exclusions. Non-directory helper paths are explicitly named in `test_helpers`; they
-cannot overlap that package's owned inventory. Do not place production code in those directories.
+coverage exclusions. Non-directory test fixture/assertion helpers use explicit `test-helper`
+exclusions with reasons. The legacy `test_helpers` field remains readable for old base policies,
+but the current policy uses reasoned exclusions. Do not place production code in test directories.
 
-Only generated artifacts and genuine type-only declarations may be excluded. Every exclusion
-has a path (a glob is permitted for generated hashed artifacts), a `generated` or `type-only`
-kind and a substantive reason. No UI, platform,
-error-path, CLI or "hard to test" exemptions. Runtime enums/constants are executable source.
+Production exclusions are limited to generated artifacts and genuine type-only declarations.
+Every exclusion has a path (a glob is permitted for generated hashed artifacts), a `generated`,
+`type-only` or genuine `test-helper` kind and a substantive reason. No UI, platform, error-path,
+CLI or "hard to test" exemptions. Runtime enums/constants are executable source.
 Review exclusions as carefully as code; the script cannot prove a human's justification.
 
 `computer-use` is explicitly **not measured, tracked**. Its custom platform/native scripts
@@ -60,6 +61,17 @@ continue running, but no invented instrumentation or 100% claim is made. Its TS 
 native sources stay in inventory. A separate runner/instrumentation change is required before
 the global flip. `dev-tools` is pending a clean cargo-suite baseline after #155; failed-run
 reports are diagnostic artifacts only and never establish budgets.
+
+Python `scripts/*.py` and `integration/harness/*.py`, boundary probes, executable providers and
+producer configurations are named **measurement-pending** inventories, not silently omitted.
+Existing Python gates are not coverage accounting: pytest-cov for `scripts/` and
+`integration/harness/` is follow-up work. `benchmarks/comparison` already has pytest-cov at 90%
+combined coverage and retains it; independent LCOV line/function accounting is still pending.
+The declaration-only `integration/harness/__init__.py` has an explicit reasoned exclusion.
+A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TS/Python
+source. Each executable file must be included in a measured/pending inventory or have an explicit
+reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
+are not. All pending inventories are expanded and validated, and block the final target flip.
 
 ## Run and ratchet
 
@@ -74,6 +86,34 @@ This consumes reports without executing tests, writes `coverage/summary.json`, a
 each independent budget with `git show <base>:coverage/policy.json`. Raising either uncovered
 budget, removing a measured package/signal or disabling an enabled global target fails. Only
 the initial addition of a policy has no base counterpart; invalid Git bases still fail.
+
+The second ratchet compares **expanded source membership**, not just budgets. The base policy
+comes from `git show` and its globs expand against that base commit's `git ls-tree` paths, never
+the current checkout. Current globs expand against the working tree. Shrinking `owned`, changing
+a root, introducing an exclusion, moving source into fixture scope or shrinking a compatibility
+`files` subset cannot hide an old file. Deletions and renames also count as membership losses.
+
+A legitimate change needs a new entry in the policy's `reclassifications` ledger for each lost
+repository-relative base path and scope, with a substantive reviewed reason:
+
+```json
+{
+  "package": "example",
+  "signal": "owned",
+  "path": "packages/example/src/old.ts",
+  "replacement": "packages/example/src/new.ts",
+  "reason": "Rename the implementation while retaining measurement on its replacement."
+}
+```
+
+Use `signal: "owned"` for production membership; compatibility subsets require their own named
+signal entry when they lose membership too. For a deletion or genuine role change, omit
+`replacement` (or use null). A replacement must exist in the current inventory for that scope.
+Entries name exact files, not waiver globs. Old historical entries cannot authorize a new loss;
+duplicate, unrelated or invalid new entries fail. Reclassification never permits budget increases
+or an unsupported exclusion category. Review it as an explicit source-accounting change, not as a
+way to exempt uncovered production behavior.
+
 Reduce budgets only to clean-run measured values; do not regenerate them from a failed run.
 Keep measurement receipts with the policy update. A new package needs an owned inventory,
 justified declaration exclusions, complete primary includes, text+LCOV producer wiring,
