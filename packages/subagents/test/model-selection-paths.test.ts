@@ -34,6 +34,8 @@ let manager: AgentManager;
 let scheduler: SubagentScheduler;
 let clock: FakeClock;
 let blockedUntil: number | undefined;
+let admissionModels: string[];
+let refuseStaleParent: boolean;
 
 function bus() {
   const handlers = new Map<string, Set<(data: unknown) => void>>();
@@ -65,12 +67,16 @@ beforeEach(async () => {
   context = makeCtx({ cwd: sandbox.dir, model: parent, modelRegistry: registry, isProjectTrusted: () => true });
   clock = new FakeClock();
   blockedUntil = undefined;
+  admissionModels = [];
+  refuseStaleParent = false;
   boot = makePi();
   boot.pi.events = bus();
   // Answer admission synchronously, without any real router or network calls.
-  boot.pi.events.on("router:rpc:admit", ({ requestId }: { requestId: string }) => {
+  boot.pi.events.on("router:rpc:admit", ({ requestId, model }: { requestId: string; model: string }) => {
+    admissionModels.push(model);
     boot.pi.events.emit(`router:rpc:admit:reply:${requestId}`, { success: true,
-      data: blockedUntil === undefined ? { ok: true } : { ok: false, resetAt: blockedUntil },
+      data: blockedUntil !== undefined ? { ok: false, resetAt: blockedUntil }
+        : refuseStaleParent && model === ref("parent") ? { ok: false, wait: false } : { ok: true },
     });
   });
   createSubagentsExtension({ clock })(boot.pi);
@@ -157,6 +163,29 @@ describe.each(paths)("%s model selection parity", path => {
     expect(record?.modelSelection).toMatchObject({ source: "parent", outcome: "inherited", model: parent });
   });
 
+  it.each(["", "  "])("skips a blank definition %j without recording a request", async blank => {
+    writeFileSync(join(sandbox.dir, ".pi", "agents", "scout.md"), `---\ndescription: scout\ntools: read\nmodel: ${JSON.stringify(blank)}\n---\nScout.`);
+    registerAgents(loadCustomAgents(sandbox.dir, false, { projectTrusted: true }));
+    const { invocation, record } = await invoke(path);
+    expect(invocation?.[3].model).toBe(parent);
+    expect(record?.modelSelection).toMatchObject({ source: "parent", outcome: "inherited" });
+    expect(record?.modelSelection?.requested).toBeUndefined();
+  });
+
+  it.each(["", "  "])("skips blank configured overrides %j down to the definition", async blank => {
+    setAgentModels({ scout: blank, "*": blank });
+    const { invocation, record } = await invoke(path);
+    expect(invocation?.[3].model).toMatchObject({ id: "definition" });
+    expect(record?.modelSelection).toMatchObject({ requested: ref("definition"), source: "definition", outcome: "resolved" });
+  });
+
+  if (path !== "mention") it.each(["", "  "])("skips a blank explicit model %j down to configured routing", async blank => {
+    setAgentModels({ scout: ref("typed") });
+    const { invocation, record } = await invoke(path, blank);
+    expect(invocation?.[3].model).toMatchObject({ id: "typed" });
+    expect(record?.modelSelection).toMatchObject({ requested: ref("typed"), source: "agentModels:type", outcome: "resolved" });
+  });
+
   it("stores the unavailable request and parent fallback once", async () => {
     setAgentModels({ scout: "missing-model", "*": ref("wildcard") });
     const { invocation, record } = await invoke(path);
@@ -228,11 +257,14 @@ it("reselects quota-parked defaults at fire time instead of freezing the admitte
   const [job] = new ScheduleStore(resolveStorePath(sandbox.dir, "s1")).list();
   expect(job.quotaParked).toBe(true);
   expect(job.model).toBeUndefined();
+  expect(admissionModels).toEqual(["router/default"]);
   expect(runner.runAgent).not.toHaveBeenCalled();
+  refuseStaleParent = true;
   setAgentModels({ scout: ref("typed") });
   blockedUntil = undefined;
   clock.advance(120_000);
   await flush();
+  expect(admissionModels).toEqual(["router/default", ref("typed")]);
   expect(vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3].model).toMatchObject({ id: "typed" });
 });
 
@@ -245,12 +277,16 @@ it("keeps an explicit quota-parked alias request and re-resolves it at fire time
   const [job] = new ScheduleStore(resolveStorePath(sandbox.dir, "s1")).list();
   expect(job.quotaParked).toBe(true);
   expect(job.model).toBe("portable");
+  expect(admissionModels).toEqual(["router/default"]);
+  expect(runner.runAgent).not.toHaveBeenCalled();
+  refuseStaleParent = true;
   setModelAliases({ portable: [ref("explicit")] });
   setAgentModels({ scout: ref("typed") });
   blockedUntil = undefined;
   clock.advance(120_000);
   await flush();
   const options = vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3];
+  expect(admissionModels).toEqual(["router/default", ref("explicit")]);
   expect(options?.model).toMatchObject({ id: "explicit" });
   expect(options?.modelSelection).toMatchObject({ requested: "portable", source: "param" });
 });
