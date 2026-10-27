@@ -3662,7 +3662,12 @@ def test_malformed_restoring_hash_is_refused_without_changes(
         del identity["sha256"]
     else:
         identity["sha256"] = bad_hash
-    edit_journal(harness, lambda document: document["steps"][0].update(restoring=identity))
+
+    def corrupt(document: dict[str, Any]) -> None:
+        """Replace the intent with this case's malformed hash fixture."""
+        document["steps"][0] |= {"restoring": identity}
+
+    edit_journal(harness, corrupt)
     before = tree(harness.home)
     with pytest.raises(RollbackError, match="not trusted"):
         rollback(harness.layout)
@@ -3676,9 +3681,12 @@ def test_legacy_mtime_only_restore_intent_requires_manual_recovery(
     harness = Harness(tmp_path, monkeypatch)
     journal, target = saved_recovery_entry(harness, "file")
     info = (journal.backups / target.name).stat()
-    edit_journal(
-        harness, lambda document: document["steps"][0].update(restoring=[info.st_mtime_ns, info.st_size])
-    )
+
+    def weaken(document: dict[str, Any]) -> None:
+        """Model an older intent that has no content hash or inode corroboration."""
+        document["steps"][0] |= {"restoring": [info.st_mtime_ns, info.st_size]}
+
+    edit_journal(harness, weaken)
     before = tree(harness.home)
     with pytest.raises(RollbackError, match="not trusted"):
         rollback(harness.layout)
