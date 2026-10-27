@@ -41,7 +41,7 @@ from types import MappingProxyType
 from typing import IO, override
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 from urllib.request import (
     HTTPRedirectHandler,
     HTTPSHandler,
@@ -133,8 +133,10 @@ CA_FILE_ENVIRONMENT_KEYS = frozenset(
 )
 CA_ENVIRONMENT_KEYS = CA_FILE_ENVIRONMENT_KEYS | {"SSL_CERT_DIR"}
 CONNECTIVITY_ENVIRONMENT_KEYS = PROXY_ENVIRONMENT_KEYS | CA_ENVIRONMENT_KEYS
-PROXY_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)[^\s/\"'<>?#]*@")
-MIN_PROXY_PASSWORD_TOKEN_LENGTH = 8
+URL_SCHEME_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
+URL_AUTHORITY_DELIMITERS = frozenset("/\"'<>?#")
+PASSWORD_MASK_CHARACTERS = "*#~!^|?+="
+MAX_PROXY_REDACTION_VALUE_CHARACTERS = 8192
 # Runtime/location/locale only. Tool configuration and code-injection variables are not inherited.
 CHILD_ENVIRONMENT_KEYS = frozenset(
     {
@@ -463,25 +465,28 @@ def pinned_child_path(node: str) -> Iterator[None]:
 
 
 def redact_diagnostic(text: str) -> str:
-    """Remove final-`@` URL userinfo and known encoded/decoded credential tokens.
+    """Remove URL userinfo and every occurrence of configured encoded/decoded passwords.
 
-    Known proxy values come from `os.environ`. Scheme-less authorities and credential
-    tokens use non-word boundaries; password-only representations require 8+ characters.
-    Username-only strings, shorter standalone passwords and embedded-word substrings remain.
+    Known proxies come from `os.environ`. Password masking ignores length and word boundaries;
+    a one-character mask absent from all passwords prevents growth or reintroduced secrets.
+    Oversized proxy values or exhaustion of safe mask characters elide the diagnostic.
 
     Parameters:
         text (str): untrusted diagnostic before truncating its output tail.
 
     Returns:
-        str: public text with URL userinfo removed and matching known tokens masked.
+        str: sanitized text, or an empty string when bounded safe masking is unavailable.
 
     Raises:
         None: valid string diagnostics do not raise.
     """
     representations: dict[str, str] = {}
     tokens: set[str] = set()
+    passwords: set[str] = set()
     for key in sorted(PROXY_ENVIRONMENT_KEYS):
         value = os.environ.get(key, "")
+        if len(value) > MAX_PROXY_REDACTION_VALUE_CHARACTERS:
+            return ""
         scheme, separator, rest = value.partition("://")
         if not separator:
             rest = value
@@ -499,9 +504,13 @@ def redact_diagnostic(text: str) -> str:
         if password:
             for credentials in (userinfo, unquote(userinfo)):
                 tokens |= {credentials, credentials + "@"}
-            for secret in (password, unquote(password)):
-                if len(secret) >= MIN_PROXY_PASSWORD_TOKEN_LENGTH:
-                    tokens.add(secret)
+            decoded = unquote(password)
+            passwords |= {
+                password,
+                decoded,
+                quote(password, safe="", errors="surrogatepass"),
+                quote(decoded, safe="", errors="surrogatepass"),
+            }
     for original in sorted(representations, key=lambda value: (-len(value), value)):
         clean = representations[original]
         text = (
@@ -509,11 +518,71 @@ def redact_diagnostic(text: str) -> str:
             if "://" in original
             else replace_diagnostic_token(text, original, clean)
         )
-    # Greedy authority matching consumes through the FINAL '@', not a decoded password's '@'.
-    text = PROXY_USERINFO.sub(lambda match: match["scheme"] or "", text)
+    text = redact_url_userinfo(text)
     for token in sorted(tokens, key=lambda value: (-len(value), value)):
         text = replace_diagnostic_token(text, token)
+    if not passwords:
+        return text
+    alphabet = set("".join(passwords))
+    mask = next((character for character in PASSWORD_MASK_CHARACTERS if character not in alphabet), "")
+    if not mask:
+        return ""
+    # At most four forms for each of eight keys. Each literal pass is linear, cannot grow
+    # text, and cannot create any password across a replacement boundary.
+    for password in sorted(passwords, key=lambda value: (-len(value), value)):
+        if password:
+            text = text.replace(password, mask)
     return text
+
+
+def redact_url_userinfo(text: str) -> str:
+    """Scan URL authorities in linear work, removing userinfo through their final `@`.
+
+    Each delimiter search advances; scheme walks cannot cross a prior `://`, and an
+    authority scan stops at its first delimiter. A nested scheme's colon is revisited once.
+
+    Parameters:
+        text (str): untrusted diagnostic, potentially much larger than its displayed tail.
+
+    Returns:
+        str: original text except for credential-bearing URL authority prefixes.
+
+    Raises:
+        None: valid string diagnostics do not raise.
+    """
+    if not text:
+        return text
+    parts: list[str] = []
+    search = 0
+    copied = 0
+    while (delimiter := text.find("://", search)) >= 0:
+        start = delimiter
+        has_letter = False
+        while start > 0 and text[start - 1] in URL_SCHEME_CHARACTERS:
+            start -= 1
+            character = text[start]
+            has_letter |= "A" <= character <= "Z" or "a" <= character <= "z"
+        authority = delimiter + 3
+        if not has_letter:
+            search = authority
+            continue
+        end = authority
+        last_at = -1
+        while end < len(text):
+            character = text[end]
+            if character.isspace() or character in URL_AUTHORITY_DELIMITERS:
+                break
+            if character == "@":
+                last_at = end
+            end += 1
+        if last_at >= 0:
+            parts.append(text[copied:authority])
+            copied = last_at + 1
+        search = max(authority, end - 1)
+    if not parts:
+        return text
+    parts.append(text[copied:])
+    return "".join(parts)
 
 
 def replace_diagnostic_token(text: str, token: str, replacement: str = "[redacted]") -> str:
@@ -521,7 +590,7 @@ def replace_diagnostic_token(text: str, token: str, replacement: str = "[redacte
 
     Parameters:
         text (str): diagnostic after complete URL redaction.
-        token (str): known authority, userinfo or sufficiently long password, encoded or decoded.
+        token (str): known authority or userinfo pair, encoded or decoded.
         replacement (str): clean authority or the default `[redacted]` marker.
 
     Returns:

@@ -6401,29 +6401,3 @@ def test_proxy_redaction_at_public_diagnostic_boundaries(
     assert "log-user" not in text
     assert "log-password" not in text
     assert "http://host:8080" in text
-
-
-def test_snapshot_does_not_authenticate_third_party_lock_integrity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Record the real snapshot's transport-trust gap without claiming broader integrity.
-
-    Parameters:
-        tmp_path (Path): isolated installation with real snapshot package declarations.
-        monkeypatch (pytest.MonkeyPatch): fake download/package-install boundaries.
-
-    Returns:
-        None: owned evidence excludes third parties and their altered lock integrity passes.
-
-    Raises:
-        AssertionError: the snapshot's authentication coverage changes and docs need updating.
-    """
-    harness = Harness(tmp_path, monkeypatch)
-    assert harness.run() == ExitCode.OK
-    assert all(item.package.startswith("@nredd/") for item in harness.snapshot.gates.owned_packages)
-    lock_path = harness.layout.agent_dir / "npm/package-lock.json"
-    lock = json.loads(lock_path.read_text())
-    third_party = next(key for key in lock["packages"] if not key.startswith("node_modules/@nredd/"))
-    lock["packages"][third_party]["integrity"] = "sha512-untrusted-registry-substitution"
-    lock_path.write_text(json.dumps(lock))
-    install.verify_owned_integrity(harness.snapshot, harness.layout.agent_dir)

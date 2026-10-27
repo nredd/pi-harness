@@ -17,9 +17,10 @@ import sys
 import traceback
 from dataclasses import dataclass
 from functools import partial
+from operator import index
 from pathlib import Path
-from typing import TYPE_CHECKING, Never
-from urllib.parse import unquote
+from typing import TYPE_CHECKING, Never, override
+from urllib.parse import quote, unquote
 
 import pytest
 
@@ -29,6 +30,7 @@ from tests.test_install import SHA, Harness, shim_core_tarball
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import Self, SupportsIndex
 
 LOGGER = logging.getLogger(__name__)
 BOUNDARIES = (
@@ -419,27 +421,26 @@ def test_fallback_url_redaction_consumes_final_authority_at(url: str) -> None:
     assert release.redact_diagnostic(url) == scheme + "://" + authority.rsplit("@", 1)[-1]
 
 
-@pytest.mark.parametrize("secret", ["long-password", "long%40password", "pässword-long", "tiny"])
-def test_password_only_redaction_has_documented_token_threshold(
-    monkeypatch: pytest.MonkeyPatch, secret: str
-) -> None:
-    """Only complete known password tokens of at least eight characters are masked.
+@pytest.mark.parametrize(
+    "secret", ["long-password", "long%40password", "pässword-long", "tiny", "x", "e", "a", "*", "_"]
+)
+def test_password_only_redaction_masks_every_occurrence(monkeypatch: pytest.MonkeyPatch, secret: str) -> None:
+    """Every nonempty known password representation is masked, even inside unrelated words.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): scoped known proxy password.
-        secret (str): encoded/Unicode/short password to render without userinfo.
+        secret (str): encoded, Unicode, short or one-character configured password.
 
     Returns:
-        None: long encoded/decoded tokens are masked but word substrings/short tokens survive.
+        None: plain, labeled and word-embedded occurrences never survive redaction.
 
     Raises:
-        AssertionError: threshold or boundary behavior differs from the documented decision.
+        AssertionError: a length/boundary exclusion or a mask-character collision leaks a password.
     """
     monkeypatch.setenv("HTTPS_PROXY", f"http://user:{secret}@proxy.invalid")
-    for value in (secret, unquote(secret)):
-        expected = "[redacted]" if len(value) >= 8 else value
-        assert release.redact_diagnostic(f"password='{value}'.") == f"password='{expected}'."
-        assert release.redact_diagnostic(f"prefix{value}suffix") == f"prefix{value}suffix"
+    for value in {secret, unquote(secret), quote(secret, safe=""), quote(unquote(secret), safe="")}:
+        for message in (value, f"password='{value}'.", f"prefix{value}suffix"):
+            assert value not in release.redact_diagnostic(message)
 
 
 @pytest.mark.parametrize("module", ["test_installer_transport.py", "test_installer_diagnostics.py"])
@@ -563,3 +564,250 @@ def test_chain_inventory_rejects_new_raw_child_wrapper(module: str) -> None:
     )
     with pytest.raises(AssertionError):
         assert_raw_chain_inventory(source + mutation, module)
+
+
+class CountedText(str):
+    """Instrument logical string-search/read work without depending on wall-clock timing.
+
+    Parameters:
+        value (str): diagnostic input whose search/read spans should be counted.
+
+    Returns:
+        CountedText: string with mutable `work` recording touched characters/search spans.
+
+    Raises:
+        None: constructing from a valid string does not raise.
+    """
+
+    work: int
+
+    def __new__(cls: type[Self], value: str) -> Self:
+        """Initialize the immutable string and its logical operation counter.
+
+        Parameters:
+            value (str): diagnostic contents.
+
+        Returns:
+            Self: instrumented string with a zero counter.
+
+        Raises:
+            None: valid string construction does not raise.
+        """
+        result = super().__new__(cls, value)
+        result.work = 0
+        return result
+
+    @override
+    def __getitem__(self, key: SupportsIndex | slice, /) -> str:
+        """Count indexed reads and copied slices while preserving native string semantics.
+
+        Parameters:
+            key (SupportsIndex | slice): character index or slice.
+
+        Returns:
+            str: native indexed character or copied slice.
+
+        Raises:
+            IndexError: a character index lies outside the string.
+            TypeError: an index does not implement the indexing protocol.
+            AssertionError: logical work exceeds the scanner's deterministic linear budget.
+        """
+        self.work += len(range(*key.indices(len(self)))) if isinstance(key, slice) else 1
+        assert self.work <= 12 * len(self) + 64
+        return super().__getitem__(key)
+
+    @override
+    def find(self, sub: str, start: SupportsIndex | None = 0, end: SupportsIndex | None = None) -> int:
+        """Count the logical searched span up to the match, not an unsearched suffix.
+
+        Parameters:
+            sub (str): literal delimiter to locate.
+            start (SupportsIndex | None): first search position.
+            end (SupportsIndex | None): exclusive search limit.
+
+        Returns:
+            int: native match offset, or minus one.
+
+        Raises:
+            TypeError: the substring or indexing arguments have invalid types.
+            AssertionError: rescanning growing suffixes exhausts the linear work budget.
+        """
+        begin = 0 if start is None else index(start)
+        stop = len(self) if end is None else index(end)
+        result = super().find(sub, begin, stop)
+        lower, upper, _ = slice(begin, stop).indices(len(self))
+        self.work += max(0, (result + len(sub) if result >= 0 else upper) - lower)
+        assert self.work <= 12 * len(self) + 64
+        return result
+
+
+@pytest.mark.parametrize("atom", ["a", "a@", "http://"])
+def test_large_redaction_input_has_linear_character_work(atom: str) -> None:
+    """One/four-MiB adversarial diagnostics require linear search/read work, not regex retries.
+
+    Parameters:
+        atom (str): letters, repeated `a@` or repeated scheme delimiters.
+
+    Returns:
+        None: exact output and a deterministic linear operation bound hold at both sizes.
+
+    Raises:
+        AssertionError: the scanner is absent, revisits growing prefixes or changes plain text.
+    """
+    # Fail the old implementation before invoking its quadratic regex on a MiB of letters.
+    assert "redact_url_userinfo" in vars(release)
+    work: list[int] = []
+    for size in (1024 * 1024, 4 * 1024 * 1024):
+        value = (atom * (size // len(atom) + 1))[:size]
+        counted = CountedText(value)
+        assert release.redact_diagnostic(counted) == value
+        assert size <= counted.work <= 12 * size + 64
+        work.append(counted.work)
+    assert work[1] <= 4 * work[0] + 64
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("http://http://user:p@ss@host/path", "http://http://host/path"),
+        ("1http://user:pass@host", "1http://host"),
+        ("123://user:pass@host", "123://user:pass@host"),
+        (
+            "http://host/path@user?query@value#fragment@value",
+            "http://host/path@user?query@value#fragment@value",
+        ),
+        ("HTTP://user:pass@[::1]:8080?q=@not-userinfo", "HTTP://[::1]:8080?q=@not-userinfo"),
+        ("http://user:p@host\u2003http://user:q@other", "http://host\u2003http://other"),
+    ],
+)
+def test_linear_url_scanner_preserves_boundaries_and_nested_schemes(value: str, expected: str) -> None:
+    """Preserve URL delimiter semantics while visiting nested schemes only once more.
+
+    Parameters:
+        value (str): unknown URL text, with no configured proxy credentials.
+        expected (str): independently specified result after authority-only redaction.
+
+    Returns:
+        None: nested schemes, invalid prefixes, paths, queries and whitespace behave correctly.
+
+    Raises:
+        AssertionError: the linear scanner skips a credential or erases non-authority text.
+    """
+    assert release.redact_diagnostic(value) == expected
+
+
+@pytest.mark.parametrize("secret", ["tiny", "x", "e", "a", "*", "p@ss", "p/ss", "päss"])
+def test_successful_child_output_and_info_message_mask_all_password_occurrences(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, secret: str
+) -> None:
+    """A successful real child cannot return a short/embedded password for INFO logging.
+
+    Parameters:
+        tmp_path (Path): private executable and installer roots.
+        monkeypatch (pytest.MonkeyPatch): scoped known password and fixture home.
+        caplog (pytest.LogCaptureFixture): INFO message payload capture.
+        secret (str): literal password, including one-character and reserved/Unicode cases.
+
+    Returns:
+        None: returned version/output and logged message contain no password representations.
+
+    Raises:
+        AssertionError: post-check success or INFO logging exposes any configured password form.
+    """
+    encoded = quote(secret, safe="")
+    monkeypatch.setenv("HTTPS_PROXY", f"http://user:{encoded}@proxy.invalid")
+    harness = Harness(tmp_path, monkeypatch)
+    child = tmp_path / "child"
+    payload = f"password='{secret}' embedded=prefix{secret}suffix encoded={encoded}"
+    child.write_text(f"#!{sys.executable}\nprint({payload!r})\n")
+    child.chmod(0o700)
+    harness.layout.link.parent.mkdir(parents=True, exist_ok=True)
+    harness.layout.link.symlink_to(child)
+    returned = install.post_check(harness.layout)
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        LOGGER.info(returned)
+    assert caplog.messages == [returned]
+    for value in {secret, encoded, quote(encoded, safe="")}:
+        assert value not in returned
+        assert value not in caplog.messages[0]
+
+
+@pytest.mark.parametrize("renderer", ["traceback", "logging"])
+@pytest.mark.parametrize("secret", ["tiny", "p@ss", "p/ss", "päss"])
+def test_short_and_encoded_passwords_do_not_survive_exception_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, renderer: str, secret: str
+) -> None:
+    """Standard traceback/logging output and detached causes mask short embedded passwords.
+
+    Parameters:
+        tmp_path (Path): private child-boundary fixtures.
+        monkeypatch (pytest.MonkeyPatch): scoped encoded password and OSError injection.
+        renderer (str): standard traceback or `exc_info=True` logging.
+        secret (str): short or reserved/Unicode literal password.
+
+    Returns:
+        None: standard renderers and every detached cause have no credential representation.
+
+    Raises:
+        AssertionError: a plain/encoded/embedded password survives in a cause or public text.
+    """
+    encoded = quote(secret, safe="")
+    proxy = f"http://user:{encoded}@proxy.invalid"
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    payload = f"password='{secret}', embedded=prefix{secret}suffix, encoded={encoded}"
+    boundary = prepare_boundary("node", tmp_path, monkeypatch, OSError(payload), proxy)
+    text, error = rendered_failure(boundary, renderer)
+    assert error.__context__ is None
+    cause = error.__cause__
+    assert cause is not None
+    assert cause.__context__ is None
+    for value in {secret, encoded, quote(encoded, safe="")}:
+        assert value not in text
+        assert value not in str(error)
+        assert value not in str(cause)
+
+
+@pytest.mark.parametrize("kind", ["oversized", "mask-alphabet"])
+def test_pathological_proxy_passwords_elide_diagnostics_safely(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Bound pathological proxy input and avoid mask collisions without dropping any password.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped oversized/mask-colliding proxy credentials.
+        kind (str): oversized proxy value or a password containing every mask candidate.
+
+    Returns:
+        None: diagnostics are elided when safe bounded redaction cannot produce a marker.
+
+    Raises:
+        AssertionError: a pathological input bypasses the safety cap or leaks mask characters.
+    """
+    assert "MAX_PROXY_REDACTION_VALUE_CHARACTERS" in vars(release)
+    secret = (
+        "x" * (release.MAX_PROXY_REDACTION_VALUE_CHARACTERS + 1)
+        if kind == "oversized"
+        else release.PASSWORD_MASK_CHARACTERS
+    )
+    monkeypatch.setenv("HTTPS_PROXY", f"http://user:{quote(secret, safe='')}@proxy.invalid")
+    assert release.redact_diagnostic("diagnostic payload") == ""
+
+
+def test_one_character_password_mask_does_not_grow_large_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One-character passwords are still removed in one non-growing bounded literal pass.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped single-character credential.
+
+    Returns:
+        None: a MiB of matching characters is masked without growing the diagnostic.
+
+    Raises:
+        AssertionError: short passwords survive, output expands or the linear scanner is missing.
+    """
+    assert "redact_url_userinfo" in vars(release)
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:x@proxy.invalid")
+    original = "x" * (1024 * 1024)
+    redacted = release.redact_diagnostic(original)
+    assert "x" not in redacted
+    assert len(redacted) <= len(original)
