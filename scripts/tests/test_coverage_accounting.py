@@ -34,7 +34,7 @@ def policy() -> Policy:
     """
     return Policy.model_validate(
         {
-            "version": 1,
+            "version": 2,
             "target": {"lines": 0, "functions": 0},
             "enforce_target": False,
             "packages": {
@@ -48,7 +48,10 @@ def policy() -> Policy:
                         "primary": {
                             "report": "coverage/lcov.info",
                             "files": ["src/index.ts"],
-                            "max_uncovered": {"lines": 0, "functions": 0},
+                            "max_uncovered": {
+                                "darwin": {"lines": 0, "functions": 0},
+                                "linux": {"lines": 0, "functions": 0},
+                            },
                             "reporters": ["text", "lcov"],
                         }
                     },
@@ -184,7 +187,7 @@ def test_ratchet_cannot_increase_uncovered_budget(metric: str) -> None:
         AssertionError: The base budget can be weakened.
     """
     current, base = policy(), policy()
-    setattr(current.packages["example"].signals["primary"].max_uncovered, metric, 1)
+    setattr(current.packages["example"].signals["primary"].max_uncovered[sys.platform], metric, 1)
     with pytest.raises(ValueError, match="Ratchet violation"):
         check_ratchet(current, base)
     check_ratchet(base, current)
@@ -293,8 +296,8 @@ def test_global_flip_requires_no_uncovered_or_pending(tmp_path: Path) -> None:
     """
     setup_report(tmp_path, "uncovered.info")
     cfg = policy()
-    cfg.packages["example"].signals["primary"].max_uncovered.lines = 1
-    cfg.packages["example"].signals["primary"].max_uncovered.functions = 1
+    cfg.packages["example"].signals["primary"].max_uncovered[sys.platform].lines = 1
+    cfg.packages["example"].signals["primary"].max_uncovered[sys.platform].functions = 1
     assert not account(tmp_path, cfg)[1]
     cfg.enforce_target = True
     assert account(tmp_path, cfg)[1]
@@ -336,7 +339,7 @@ def test_cli_uses_real_git_base_and_always_writes_summary(tmp_path: Path) -> Non
         subprocess.check_output(
             ["/usr/bin/git", "-C", str(tmp_path), *argv], text=True, stderr=subprocess.STDOUT
         )
-    cfg.packages["example"].signals["primary"].max_uncovered.lines = 1
+    cfg.packages["example"].signals["primary"].max_uncovered[sys.platform].lines = 1
     path.write_text(cfg.model_dump_json())
     summary = tmp_path / "summary.json"
     result = subprocess.run(
@@ -382,8 +385,8 @@ def test_global_primary_target_does_not_replace_independent_runtime_ratchet(tmp_
     cfg = policy()
     runtime_signal = cfg.packages["example"].signals["primary"].model_copy(deep=True)
     runtime_signal.report = "coverage/runtime.info"
-    runtime_signal.max_uncovered.lines = 1
-    runtime_signal.max_uncovered.functions = 1
+    runtime_signal.max_uncovered[sys.platform].lines = 1
+    runtime_signal.max_uncovered[sys.platform].functions = 1
     cfg.packages["example"].signals["runtime"] = runtime_signal
     cfg.enforce_target = True
     results, errors = account(tmp_path, cfg)

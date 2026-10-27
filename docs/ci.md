@@ -18,8 +18,15 @@ Phase 0 coverage runs inside the existing primary and declared Bun test invocati
 second CI test pass. Each Vitest config explicitly includes owned source, uses text + LCOV and
 `reportOnFailure`; `subagents` retains Istanbul because V8 reload merging is incorrect. The
 existing Node helper gates use c8. An `always()` step after owned tests consumes those independent
-reports with `scripts/coverage_accounting.py`, compares integer uncovered-line/function budgets
-with the PR base's `coverage/policy.json`, and fails closed on missing/invalid input. Branches
+reports with `scripts/coverage_accounting.py`, selects `darwin` / `linux` integer uncovered-line/function
+floors using `sys.platform`, compares **every OS's** floors with the PR base's `coverage/policy.json`,
+and fails closed on missing/invalid input or a missing OS floor. Hosted artifacts, not a local Mac,
+establish per-runner floors. Windows/WSL owned-source coverage is not measured. The WSL2 scenarios
+are separate acceptance evidence, not coverage. To regenerate a review-only policy diff from an
+artifact, run `uv run --locked --project integration python scripts/coverage_accounting.py --measure
+--os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json` (use `darwin` and its
+artifact for macOS). The full download/replay and independent-two-run comparison procedure is
+[here](coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Branches
 are reported only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
 on either outcome. Bun counters are separately ratcheted, never merged into primary coverage.
 `computer-use` is not measured, tracked; `dev-tools` awaits a clean cargo baseline after #155.

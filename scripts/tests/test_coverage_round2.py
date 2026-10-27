@@ -208,7 +208,10 @@ def test_tree_ratchet_rejects_undeclared_membership_loss(tmp_path: Path, change:
             {
                 "report": "coverage/runtime.info",
                 "files": ["src/index.ts", "src/kept.ts"],
-                "max_uncovered": {"lines": 0, "functions": 0},
+                "max_uncovered": {
+                    "darwin": {"lines": 0, "functions": 0},
+                    "linux": {"lines": 0, "functions": 0},
+                },
                 "reporters": ["text", "lcov"],
             }
         )

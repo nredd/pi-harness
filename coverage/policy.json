@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "target": { "lines": 0, "functions": 0 },
   "enforce_target": false,
   "reclassifications": [],
@@ -46,11 +46,11 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [{ "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; assembled Bun hosts load these generated files." }],
       "status": "measured",
-      "note": "The clean native check measured 552 uncovered lines; a one-worker timing sample measured 551. Both measurements are retained, and no source paths or assertions were excluded.",
+      "note": "Per-OS floors measured from hosted run 40441614924. Local receipts remain advisory; no source paths or assertions were excluded.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 552, "functions": 138 },
+          "max_uncovered": { "darwin": { "lines": 555, "functions": 138 }, "linux": { "lines": 555, "functions": 138 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -68,7 +68,7 @@
             "src/settings.ts", "src/state.ts", "src/tool-availability.ts", "src/tool-policy.ts",
             "src/tool-selection.ts", "src/workflow-mutex.ts"
           ],
-          "max_uncovered": { "lines": 3479, "functions": 245 },
+          "max_uncovered": { "darwin": { "lines": 3479, "functions": 245 }, "linux": { "lines": 3479, "functions": 245 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -82,13 +82,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 21, "functions": 12 },
+          "max_uncovered": { "darwin": { "lines": 19, "functions": 12 }, "linux": { "lines": 19, "functions": 12 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
           "files": ["extensions/expanded-footer.ts", "lib/footer-cache.ts", "lib/footer-quota.ts"],
-          "max_uncovered": { "lines": 244, "functions": 15 },
+          "max_uncovered": { "darwin": { "lines": 244, "functions": 15 }, "linux": { "lines": 244, "functions": 15 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -102,13 +102,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 58, "functions": 2 },
+          "max_uncovered": { "darwin": { "lines": 58, "functions": 2 }, "linux": { "lines": 31, "functions": 2 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
           "files": ["src/collect.ts", "src/counters.ts", "src/index.ts"],
-          "max_uncovered": { "lines": 163, "functions": 14 },
+          "max_uncovered": { "darwin": { "lines": 163, "functions": 14 }, "linux": { "lines": 46, "functions": 8 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -121,11 +121,11 @@
         { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
       ],
       "status": "measured",
-      "note": "Clean runs report 110 or 111 uncovered lines: the kill callback at src/diff/git.ts:87 is timing-dependent. Initial Phase 0 baseline uses the clean 111-line measurement; both receipts are retained.",
+      "note": "Per-OS floors measured from hosted run 40441614924. Local 110/111-line receipts are advisory; the independent hosted comparison is recorded in coverage receipts.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 111, "functions": 31 },
+          "max_uncovered": { "darwin": { "lines": 110, "functions": 32 }, "linux": { "lines": 110, "functions": 31 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -145,7 +145,7 @@
             "src/stats/index.ts", "src/stats/load.ts", "src/stats/palette.ts", "src/stats/snapshot.ts",
             "src/stats/ticks.ts", "src/titles/aliases.ts", "src/titles/index.ts", "src/titles/logic.ts"
           ],
-          "max_uncovered": { "lines": 859, "functions": 116 },
+          "max_uncovered": { "darwin": { "lines": 859, "functions": 116 }, "linux": { "lines": 859, "functions": 114 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -159,7 +159,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 494, "functions": 65 },
+          "max_uncovered": { "darwin": { "lines": 500, "functions": 68 }, "linux": { "lines": 500, "functions": 68 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -185,7 +185,7 @@
             "src/workflow/task.ts", "src/workflow/tool-description.ts", "src/workflow/worker-source.ts",
             "src/worktree.ts", "src/xml.ts"
           ],
-          "max_uncovered": { "lines": 7728, "functions": 512 },
+          "max_uncovered": { "darwin": { "lines": 7728, "functions": 512 }, "linux": { "lines": 7728, "functions": 512 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -199,13 +199,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 20, "functions": 4 },
+          "max_uncovered": { "darwin": { "lines": 20, "functions": 4 }, "linux": { "lines": 20, "functions": 4 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
           "files": ["src/config.ts", "src/exhaustion.ts", "src/index.ts", "src/model-ref.ts", "src/recovery.ts", "src/router.ts", "src/selection.ts", "src/usage.ts"],
-          "max_uncovered": { "lines": 226, "functions": 31 },
+          "max_uncovered": { "darwin": { "lines": 226, "functions": 31 }, "linux": { "lines": 226, "functions": 31 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -219,13 +219,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 121, "functions": 20 },
+          "max_uncovered": { "darwin": { "lines": 120, "functions": 20 }, "linux": { "lines": 120, "functions": 20 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
           "files": ["config.ts", "state/i18n-bridge.ts", "state/invariants.ts", "state/plan.ts", "state/replay.ts", "state/selectors.ts", "state/state-reducer.ts", "state/state.ts", "state/store.ts", "state/task-graph.ts", "todo.ts", "tool/response-envelope.ts", "tool/sanitize.ts", "tool/types.ts", "view/format.ts"],
-          "max_uncovered": { "lines": 936, "functions": 71 },
+          "max_uncovered": { "darwin": { "lines": 936, "functions": 71 }, "linux": { "lines": 936, "functions": 71 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -314,7 +314,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 9, "functions": 0 },
+          "max_uncovered": { "darwin": { "lines": 9, "functions": 0 }, "linux": { "lines": 9, "functions": 0 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -328,7 +328,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 45, "functions": 1 },
+          "max_uncovered": { "darwin": { "lines": 45, "functions": 1 }, "linux": { "lines": 45, "functions": 1 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -345,13 +345,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 15, "functions": 4 },
+          "max_uncovered": { "darwin": { "lines": 15, "functions": 4 }, "linux": { "lines": 25, "functions": 8 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
           "files": ["support.ts", "goal-support.ts", "native-timers.ts"],
-          "max_uncovered": { "lines": 22, "functions": 4 },
+          "max_uncovered": { "darwin": { "lines": 22, "functions": 4 }, "linux": { "lines": 37, "functions": 5 } },
           "reporters": ["text", "lcov"]
         }
       }

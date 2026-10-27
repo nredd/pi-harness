@@ -6,15 +6,20 @@ proof that every behavior is asserted. Every subsequently closed gap needs a tes
 without the change. Phase 0 adds accounting only, not tests for existing production gaps.
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
-zero uncovered lines/functions. Transitional `max_uncovered` budgets are integer counts, not
-rounded percentages. `enforce_target: false` is intentional; the final PR flips that field to
+zero uncovered lines/functions. Schema version 2 keys each signal's transitional `max_uncovered`
+integer budgets by runner OS: `darwin` (`macos-14`) and `linux` (`ubuntu-24.04`), never rounded
+percentages or platform averages. Windows and WSL coverage are **not measured**; the WSL scenario
+job is not an owned-source coverage measurement. Unsupported OSes and missing selected-OS floors
+fail closed, including when the global target is enabled. `enforce_target: false` is intentional; the final PR flips that field to
 `true`, without changing the accounting implementation. That flip applies to primary signals;
 independent runtime signals keep their own ratchets. Pending packages then fail, too.
 
 ## Independent signals
 
 Clean local counts, report hashes and the measured +26-second (8.5%) serial runtime sample are
-recorded [here](../coverage/receipts/phase0-macos.md). This is not a hosted-CI timing claim.
+recorded [here](../coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,
+not hosted floors or a hosted-CI timing claim. Hosted artifact measurements and their independent
+run comparison are recorded [here](../coverage/receipts/hosted-platforms.md).
 
 The accounting script consumes LCOV, not runner APIs. Primary reports currently come from
 Vitest/V8, except `subagents` uses Istanbul: real Pi reloads produce demonstrably wrong V8
@@ -119,8 +124,11 @@ make check-coverage BASE=origin/main
 ```
 
 This consumes reports without executing tests, writes `coverage/summary.json`, and compares
-each independent budget with `git show <base>:coverage/policy.json`. Raising either uncovered
-budget, removing a measured package/signal or disabling an enabled global target fails. Only
+each independent per-OS budget with `git show <base>:coverage/policy.json`. The default OS is
+`sys.platform`; `--os darwin` or `--os linux` is explicit for artifact replay and tests. Raising
+either uncovered counter on **any** OS, removing any previously declared OS floor or measured
+package/signal, or disabling an enabled global target fails. The base ratchet checks both OSes,
+not just the host running accounting. A missing selected-OS floor never falls back to the other OS. Only
 the initial addition of a policy has no base counterpart; invalid Git bases still fail.
 
 The second ratchet compares **expanded source membership**, not just budgets. The base policy
@@ -150,11 +158,51 @@ duplicate, unrelated or invalid new entries fail. Reclassification never permits
 or an unsupported exclusion category. Review it as an explicit source-accounting change, not as a
 way to exempt uncovered production behavior.
 
-Reduce budgets only to clean-run measured values; do not regenerate them from a failed run.
-Keep measurement receipts with the policy update. A new package needs an owned inventory,
+Reduce budgets only to clean-producer measured values. Missing reports or failed test producers
+cannot establish floors. The initial hosted accounting failure exposed wrong local floors; its
+complete reports came from successful test producers, so they establish the initial per-OS policy
+before this PR introduces that policy to main. This is not permission to raise an existing main
+floor. Keep measurement receipts with the policy update. A new package needs an owned inventory,
 justified declaration exclusions, complete primary includes, text+LCOV producer wiring,
 independent runtime signal if declared, and clean-run receipts before its budgets are accepted.
 The command also rejects npm workspaces missing from policy.
+
+## Refresh floors from hosted artifacts
+
+Download each OS artifact from the same CI run, then print its measured counts and reviewable policy
+diff (no policy files are modified, and measurement mode is explicitly **not a gate**):
+
+```sh
+gh run download <run-id> -R nredd/pi-harness -n coverage-ubuntu-24.04 -D /tmp/cov-linux
+gh run download <run-id> -R nredd/pi-harness -n coverage-macos-14 -D /tmp/cov-darwin
+uv run --locked --project integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json
+uv run --locked --project integration python scripts/coverage_accounting.py --measure --os darwin --reports-root /tmp/cov-darwin --summary /tmp/measured-darwin.json
+```
+
+Use a checkout matching the artifact's production source and inventory. `--reports-root` reads the
+artifact's repository-relative report paths while ownership validation uses that checkout. JSON
+`measured_floors` contains each `package/signal -> OS -> {lines, functions}`; the logged unified diff
+proposes only that OS's measured counters. Review it and edit the policy manually; it is never
+written or auto-committed. `--measure` rejects `--base` so it cannot be confused with ratchet evidence.
+Replay the artifact as a gate by dropping `--measure` and adding `--base origin/main`; the summary's
+`measurement_only` is then false. Missing/inconsistent artifacts fail in either mode.
+
+Compare **two independent hosted runs on different commits**, per package/signal/OS. Do not retry
+until green or widen beyond observed counts. Investigate changed counters; fix nondeterminism or
+retain the maximum actually observed per counter with a documented cause and follow-up issue.
+Never average platforms or combine their maxima. Once the policy is on main, the base ratchet still
+forbids raising it; measurement mode is diagnostic, not a bypass.
+
+Linux in-process primary coverage in run `40441614924` is 25 uncovered lines / 8 functions versus
+Darwin's 15 / 4. The entire delta is `integration/inprocess/support.ts` (21 / 5 versus 11 / 1);
+`goal-support.ts` and `native-timers.ts` have identical counters. `isolateStackHome()` only spawns
+`/usr/bin/caffeinate` on Darwin. Linux never invokes `stopWake()` or `exitedWithin()` and its timeout,
+exit and Promise callbacks (lines 51-77), while macOS executes normal wake-helper teardown.
+The `support.test.ts` sleep-assertion test explicitly skips outside Darwin: primary logs show
+63 passed / 1 skipped on Linux versus 64 passed on macOS. Bun likewise skips that test and reports
+37 / 5 versus 22 / 4. This is an intentional platform branch, not missing tmux or a Pi binary:
+these real in-process sessions use the installed core harness and the remaining suites run on
+both OSes. No wake path, source file or test assertion is excluded to hide the difference.
 
 Existing `owned` CI jobs run accounting after tests even on failure, then upload independent
 LCOV and JSON summary artifacts even if accounting fails. No required job names or protection

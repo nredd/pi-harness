@@ -8,9 +8,11 @@ References:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import logging
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -84,7 +86,9 @@ class Signal(StrictModel):
     files: list[str] | None = Field(
         default=None, description="Expected source paths; null means full inventory."
     )
-    max_uncovered: Counts = Field(description="Independent integer uncovered-counter budget.")
+    max_uncovered: dict[str, Counts] = Field(
+        description="Independent integer uncovered-counter budgets keyed by measured runner OS."
+    )
     reporters: list[str] = Field(description="Required producer output formats, including text and LCOV.")
 
     @model_validator(mode="after")
@@ -98,6 +102,8 @@ class Signal(StrictModel):
         Raises:
             ValueError: Required reporters are absent or file declarations are empty/duplicated.
         """
+        if self.max_uncovered.keys() - {"darwin", "linux"}:
+            raise ValueError("Coverage floors support only measured darwin/linux OSes")
         if not {"text", "lcov"}.issubset(self.reporters):
             raise ValueError("Coverage signals require both text and lcov reporters")
         if self.files is not None and (not self.files or len(set(self.files)) != len(self.files)):
@@ -167,7 +173,7 @@ class Reclassification(StrictModel):
 
 
 class Policy(StrictModel):
-    version: Literal[1] = Field(description="Coverage policy schema version.")
+    version: Literal[2] = Field(description="Coverage policy schema version; per-OS budgets.")
     target: Counts = Field(description="Final zero-uncovered primary coverage target.")
     enforce_target: bool = Field(
         description="Enable the final primary target instead of transitional budgets."
@@ -598,14 +604,17 @@ def check_ratchet(current: Policy, base: Policy) -> None:
             if signal_name not in package.signals:
                 raise ValueError(f"Removed signal: '{name}/{signal_name}'")
             new = package.signals[signal_name]
-            if (
-                new.max_uncovered.lines > old.max_uncovered.lines
-                or new.max_uncovered.functions > old.max_uncovered.functions
-            ):
-                raise ValueError(f"Ratchet violation: '{name}/{signal_name}'")
+            for runner_os, floor in old.max_uncovered.items():
+                if runner_os not in new.max_uncovered:
+                    raise ValueError(f"Missing OS floor: '{name}/{signal_name}/{runner_os}'")
+                budget = new.max_uncovered[runner_os]
+                if budget.lines > floor.lines or budget.functions > floor.functions:
+                    raise ValueError(f"Ratchet violation: '{name}/{signal_name}/{runner_os}'")
 
 
-def scoped_records(root: Path, policy: Policy, package: Package, signal: Signal) -> dict[str, FileCoverage]:
+def scoped_records(
+    root: Path, policy: Policy, package: Package, signal: Signal, reports_root: Path | None = None
+) -> dict[str, FileCoverage]:
     """Validate report membership without merging counters across packages.
 
     Parameters:
@@ -613,6 +622,7 @@ def scoped_records(root: Path, policy: Policy, package: Package, signal: Signal)
         policy (Policy): Complete owned source policy.
         package (Package): Package whose signal is being accounted for.
         signal (Signal): Independent expected-file and report declaration.
+        reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
     Returns:
         dict[str, FileCoverage]: Package-relative counters for expected executable source.
     Raises:
@@ -620,7 +630,7 @@ def scoped_records(root: Path, policy: Policy, package: Package, signal: Signal)
         ValueError: LCOV, membership, expected files or total owned executable lines are invalid.
     """
     expected = set(signal.files) if signal.files is not None else inventory(root, package)
-    raw = parse_lcov((root / package.root / signal.report).read_text())
+    raw = parse_lcov(((reports_root or root) / package.root / signal.report).read_text())
     records: dict[str, FileCoverage] = {}
     known = {
         (root / other.root / file).resolve()
@@ -666,17 +676,28 @@ def scoped_records(root: Path, policy: Policy, package: Package, signal: Signal)
     return records
 
 
-def account(root: Path, policy: Policy) -> tuple[list[dict[str, object]], list[str]]:
+def account(
+    root: Path,
+    policy: Policy,
+    runner_os: str = sys.platform,
+    reports_root: Path | None = None,
+    measure: bool = False,
+) -> tuple[list[dict[str, object]], list[str]]:
     """Account for independent package/file counters and retain signal failures.
 
     Parameters:
         root (Path): Absolute repository root.
         policy (Policy): Validated coverage inventory and budgets.
+        runner_os (str): Measured runner platform; only darwin and linux are supported.
+        reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
+        measure (bool): Report validated measurements without enforcing budgets; not a gate.
     Returns:
         tuple[list[dict[str, object]], list[str]]: Per-file metrics and explicit accounting failures.
     Raises:
         ValueError: A package inventory cannot be expanded.
     """
+    if runner_os not in {"darwin", "linux"}:
+        raise ValueError(f"Coverage is not measured on OS: '{runner_os}'")
     results: list[dict[str, object]] = []
     errors: list[str] = []
     for name, package in policy.packages.items():
@@ -694,19 +715,27 @@ def account(root: Path, policy: Policy) -> tuple[list[dict[str, object]], list[s
                     raise ValueError("Signal files are outside owned inventory")
                 if signal_name == "primary" and expected != owned:
                     raise ValueError("Primary signal must measure every owned executable file")
-                records = scoped_records(root, policy, package, signal)
+                if not measure and runner_os not in signal.max_uncovered:
+                    raise ValueError(f"Missing OS floor: '{runner_os}'")
+                records = scoped_records(root, policy, package, signal, reports_root)
                 uncovered_lines = sum(c.uncovered_lines for c in records.values())
                 uncovered_functions = sum(c.uncovered_functions for c in records.values())
+                for path, counters in sorted(records.items()):
+                    item = {"package": name, "signal": signal_name, "os": runner_os, "file": path} | vars(
+                        counters
+                    )
+                    results.append(item)
+                    LOGGER.info(f"{label} {path}: {counters}")
+                LOGGER.info(
+                    f"{label}/{runner_os}: uncovered lines={uncovered_lines}, functions={uncovered_functions}"
+                )
+                if measure:
+                    continue
                 budget = (
                     policy.target
                     if policy.enforce_target and signal_name == "primary"
-                    else signal.max_uncovered
+                    else signal.max_uncovered[runner_os]
                 )
-                for path, counters in sorted(records.items()):
-                    item = {"package": name, "signal": signal_name, "file": path} | vars(counters)
-                    results.append(item)
-                    LOGGER.info(f"{label} {path}: {counters}")
-                LOGGER.info(f"{label}: uncovered lines={uncovered_lines}, functions={uncovered_functions}")
                 if uncovered_lines > budget.lines or uncovered_functions > budget.functions:
                     raise ValueError(
                         f"Budget exceeded: {uncovered_lines} lines, {uncovered_functions} functions"
@@ -714,6 +743,62 @@ def account(root: Path, policy: Policy) -> tuple[list[dict[str, object]], list[s
             except (OSError, ValueError) as error:
                 errors.append(f"{label}: {error}")
     return results, errors
+
+
+def log_measured_diff(policy: Policy, floors: dict[str, dict[str, dict[str, int]]], runner_os: str) -> None:
+    """Print a reviewable policy proposal without editing any checkout files.
+
+    Parameters:
+        policy (Policy): Original validated coverage policy.
+        floors (dict[str, dict[str, dict[str, int]]]): Validated measured counts by signal and OS.
+        runner_os (str): Explicit measured artifact platform.
+    Returns:
+        None: A unified policy diff is logged for manual review, never applied.
+    Raises:
+        ValueError: Measured counters cannot be validated as a floor.
+    """
+    proposed = policy.model_copy(deep=True)
+    for label, platforms in floors.items():
+        name, signal = label.split("/")
+        proposed.packages[name].signals[signal].max_uncovered[runner_os] = Counts.model_validate(
+            platforms[runner_os]
+        )
+    LOGGER.info("MEASUREMENT ONLY; review this diff, no policy files are changed")
+    LOGGER.info(
+        "".join(
+            difflib.unified_diff(
+                policy.model_dump_json(indent=2).splitlines(keepends=True),
+                proposed.model_dump_json(indent=2).splitlines(keepends=True),
+                fromfile="coverage/policy.json",
+                tofile=f"measured/{runner_os}/policy.json",
+            )
+        )
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    """Validate gate and measurement modes before reading any reports.
+
+    Parameters:
+        None: Arguments are read from the command line.
+    Returns:
+        argparse.Namespace: Validated CLI inputs.
+    Raises:
+        SystemExit: Missing base or mixed gate/measurement options are rejected.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument("--base", help="Git base required for gating; not used by --measure.")
+    parser.add_argument("--os", default=sys.platform, choices=["darwin", "linux"])
+    parser.add_argument("--reports-root", type=Path, help="Root of downloaded CI artifacts.")
+    parser.add_argument("--measure", action="store_true", help="Print measured policy diff; NOT a gate.")
+    parser.add_argument("--summary", type=Path, default=Path("coverage/summary.json"))
+    args = parser.parse_args()
+    if not args.measure and not args.base:
+        parser.error("--base is required unless --measure is selected")
+    if args.measure and args.base:
+        parser.error("--measure cannot enforce --base; use a separate gating invocation")
+    return args
 
 
 def main() -> int:
@@ -727,11 +812,7 @@ def main() -> int:
         OSError: The summary output cannot be written.
         SystemExit: Argparse rejects the command line.
     """
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
-    parser.add_argument("--base", required=True)
-    parser.add_argument("--summary", type=Path, default=Path("coverage/summary.json"))
-    args = parser.parse_args()
+    args = parse_args()
     root = args.root.resolve()
     errors: list[str] = []
     results: list[dict[str, object]] = []
@@ -756,13 +837,13 @@ def main() -> int:
             raise ValueError(f"Executable source missing from policy: '{sorted(unknown)}'")
         # A new policy has no base counterpart. Only that exact missing path is bootstrap;
         # invalid revisions, failed git commands and malformed base policies still fail closed.
-        tree = git_read(root, ["ls-tree", args.base, "--", "coverage/policy.json"])
+        tree = "" if args.measure else git_read(root, ["ls-tree", args.base, "--", "coverage/policy.json"])
         if tree.strip():
             previous = git_read(root, ["show", f"{args.base}:coverage/policy.json"])
             base = Policy.model_validate_json(previous)
             check_ratchet(policy, base)
             check_inventory_ratchet(root, policy, base, args.base)
-        results, errors = account(root, policy)
+        results, errors = account(root, policy, args.os, args.reports_root, args.measure)
     except subprocess.CalledProcessError as error:
         errors.append(f"Git metadata read failed: '{error.output}'")
     except (OSError, ValueError, KeyError, TypeError) as error:
@@ -775,10 +856,25 @@ def main() -> int:
             value = result[metric]
             if isinstance(value, int):
                 counters[metric] = counters.get(metric, 0) + value
+    floors = {
+        label: {args.os: {"lines": counts["uncovered_lines"], "functions": counts["uncovered_functions"]}}
+        for label, counts in totals.items()
+    }
+    if args.measure and not errors:
+        log_measured_diff(policy, floors, args.os)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     args.summary.write_text(
         json.dumps(
-            {"packages": totals, "files": results, "not_measured": pending, "errors": errors}, indent=2
+            {
+                "os": args.os,
+                "measurement_only": args.measure,
+                "measured_floors": floors,
+                "packages": totals,
+                "files": results,
+                "not_measured": pending,
+                "errors": errors,
+            },
+            indent=2,
         )
         + "\n"
     )
