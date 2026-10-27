@@ -613,8 +613,13 @@ def test_preflight_reports_every_problem() -> None:
 
 
 @pytest.mark.parametrize("pending_journal", [False, True])
-def test_windows_without_fcntl_refuses_cleanly(tmp_path: Path, pending_journal: bool) -> None:
-    """Native Windows can import the entry point and refuse before creating even a lock."""
+@pytest.mark.parametrize("flags", [[], ["--yes"], ["--plan"]], ids=["normal", "yes", "plan"])
+@pytest.mark.parametrize("missing_attrs", [False, True], ids=["unix-attrs-present", "unix-attrs-absent"])
+@pytest.mark.parametrize("missing_fcntl", [False, True], ids=["fcntl-present", "fcntl-absent"])
+def test_windows_without_fcntl_refuses_cleanly(
+    tmp_path: Path, pending_journal: bool, flags: list[str], missing_attrs: bool, missing_fcntl: bool
+) -> None:
+    """Regression: pending --plan bypassed admission; other combinations guard the platform boundary."""
     home = tmp_path / "home"
     home.mkdir()
     root = home / ".local" / "share" / "pi-stack"
@@ -623,15 +628,20 @@ def test_windows_without_fcntl_refuses_cleanly(tmp_path: Path, pending_journal: 
         (root / "transaction.json").write_text("{}")
     before = tree(home)
     script = dedent("""\
-        import platform, sys
-        sys.modules['fcntl'] = None
+        import os, platform, sys
+        if sys.argv.pop(1) == 'True':
+            sys.modules['fcntl'] = None
+        if sys.argv.pop(1) == 'True':
+            for name in ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK', 'O_NOCTTY', 'getuid', 'fchmod'):
+                if hasattr(os, name):
+                    delattr(os, name)
         platform.system = lambda: 'Windows'
         platform.machine = lambda: 'AMD64'
         from harness.install import main
         sys.exit(main(sys.argv[1:]))
     """)
     result = subprocess.run(
-        [sys.executable, "-c", script, SHA],
+        [sys.executable, "-c", script, str(missing_fcntl), str(missing_attrs), SHA, *flags],
         env={"HOME": str(home), "USERPROFILE": str(home), "PATH": os.defpath, "PYTHONPATH": str(INTEGRATION)},
         capture_output=True,
         text=True,
@@ -641,6 +651,58 @@ def test_windows_without_fcntl_refuses_cleanly(tmp_path: Path, pending_journal: 
     assert result.returncode == ExitCode.UNSUPPORTED, result.stderr
     assert "UNSUPPORTED:" in result.stderr
     assert "Windows/AMD64" in result.stderr
+    assert "nothing changed" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert tree(home) == before
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "os.O_NOFOLLOW",
+        "os.O_DIRECTORY",
+        "os.O_NONBLOCK",
+        "os.O_NOCTTY",
+        "os.getuid",
+        "os.fchmod",
+        "fcntl",
+        "fcntl.flock",
+        "fcntl.LOCK_EX",
+        "fcntl.LOCK_NB",
+    ],
+)
+def test_missing_unix_primitive_refuses_before_pending_plan(tmp_path: Path, missing: str) -> None:
+    """Regression: even an allowlisted platform cannot report a journal without required primitives."""
+    home = tmp_path / "home"
+    root = home / ".local" / "share" / "pi-stack"
+    root.mkdir(parents=True)
+    (root / "transaction.json").write_text("{}")
+    before = tree(home)
+    script = dedent("""\
+        import os, platform, sys
+        missing = sys.argv.pop(1)
+        if missing == 'fcntl':
+            sys.modules['fcntl'] = None
+        if missing.startswith('os.'):
+            delattr(os, missing.split('.')[1])
+        from harness import install
+        if missing.startswith('fcntl.'):
+            delattr(install.fcntl, missing.split('.')[1])
+        platform.system = lambda: 'Linux'
+        platform.machine = lambda: 'x86_64'
+        sys.exit(install.main(sys.argv[1:]))
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script, missing, SHA, "--plan"],
+        env={"HOME": str(home), "PATH": os.defpath, "PYTHONPATH": str(INTEGRATION)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == ExitCode.UNSUPPORTED, result.stderr
+    assert "UNSUPPORTED:" in result.stderr
+    assert missing in result.stderr
     assert "nothing changed" in result.stderr
     assert "Traceback" not in result.stderr
     assert tree(home) == before
@@ -730,9 +792,50 @@ def test_malformed_verified_core_manifest_is_verification_failure(
     monkeypatch.setattr(install, "run", verify_metadata)
     assert install.main([SHA]) == ExitCode.VERIFICATION
     assert "VERIFICATION FAILED, nothing changed" in caplog.text
-    assert "package.json" in caplog.text
+    offending = field
+    if field == "manifest":
+        offending = "name" if isinstance(value, dict) else "root"
+    elif isinstance(value, dict) and field in {"engines", "bin"}:
+        offending = "engines.node" if field == "engines" else "bin.pi"
+    assert f"`{offending}`" in caplog.text
     assert "Traceback" not in caplog.text
     assert tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("field", ["name", "version", "engines", "engines.node", "bin", "bin.pi"])
+def test_core_manifest_missing_field_guard(tmp_path: Path, field: str) -> None:
+    """Guard coverage, not a new regression: omitted required metadata was already refused."""
+    manifest = core_manifest()
+    target = manifest
+    key = field
+    if "." in field:
+        parent, key = field.split(".")
+        target = manifest[parent]
+    del target[key]
+    tarball = make_tarball(tmp_path / "core.tgz", manifest)
+    with pytest.raises(VerificationError) as raised:
+        required_node(tarball)
+    assert f"`{field}`" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("name", "wrong-package"),
+        ("version", "not-a-version"),
+        ("bin.pi", " \t "),
+    ],
+)
+def test_core_manifest_nonempty_bad_value_guard(tmp_path: Path, field: str, value: str) -> None:
+    """Guard coverage: wrong nonempty identity/version and blank CLI paths were already refused."""
+    manifest = core_manifest()
+    if field == "bin.pi":
+        manifest["bin"]["pi"] = value
+    else:
+        manifest[field] = value
+    with pytest.raises(VerificationError) as raised:
+        required_node(make_tarball(tmp_path / "core.tgz", manifest))
+    assert f"`{field}`" in str(raised.value)
 
 
 def test_old_node_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2444,10 +2547,86 @@ def test_malformed_manifest_identity_is_a_value_error(tmp_path: Path) -> None:
     agent = tmp_path / "agent"
     package = agent / "npm" / "node_modules" / "pi-memory"
     package.mkdir(parents=True)
-    for text in MALFORMED_MANIFESTS.values():
+    fields = {
+        "empty-object": "name",
+        "no-version": "version",
+        "no-name": "name",
+        "wrong-types": "name",
+        "not-an-object": "root",
+    }
+    for case, text in MALFORMED_MANIFESTS.items():
         (package / "package.json").write_text(text)
-        with pytest.raises(ValueError, match="pi-memory"):
+        with pytest.raises(ValueError, match="pi-memory") as raised:
             install.installed_identities(stack, [source] * len(stack.sources), agent)
+        assert f"`{fields[case]}`" in str(raised.value)
+
+
+@pytest.mark.parametrize("field", ["name", "version"])
+@pytest.mark.parametrize("value", [[], "", 1, None, {}, False, pytest.param(..., id="omitted")])
+def test_installed_manifest_independent_field_guard(tmp_path: Path, field: str, value: object) -> None:
+    """Guard coverage: validate one malformed identity field while the other remains valid."""
+    stack = real_snapshot().stack
+    source = "npm:pi-memory@0.4.2"
+    agent = tmp_path / "agent"
+    package = agent / "npm" / "node_modules" / "pi-memory"
+    package.mkdir(parents=True)
+    manifest: dict[str, Any] = {"name": "pi-memory", "version": "0.4.2"}
+    if value is ...:
+        del manifest[field]
+    else:
+        manifest[field] = value
+    (package / "package.json").write_text(json.dumps(manifest))
+    before = tree(tmp_path)
+    with pytest.raises(ValueError, match=rf"`{field}`") as raised:
+        install.installed_identities(stack, [source] * len(stack.sources), agent)
+    assert f"`{field}`" in str(raised.value)
+    assert tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("field", ["root", "packages"])
+@pytest.mark.parametrize("value", [[], "not-an-object", 1, None, False])
+def test_owned_lock_container_guard(tmp_path: Path, field: str, value: object) -> None:
+    """Guard coverage: malformed root/packages containers already failed; diagnostics name the field."""
+    agent = tmp_path / "agent"
+    lock = agent / "npm" / "package-lock.json"
+    lock.parent.mkdir(parents=True)
+    document = value if field == "root" else {"packages": value}
+    lock.write_text(json.dumps(document))
+    before = tree(tmp_path)
+    with pytest.raises(InstallError) as raised:
+        install.verify_owned_integrity(real_snapshot(), agent)
+    assert f"`{field}`" in str(raised.value)
+    assert tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("field", ["version", "integrity"])
+@pytest.mark.parametrize(
+    "value", [[], "", 1, None, {}, False, "wrong-nonempty-value", pytest.param(..., id="omitted")]
+)
+def test_owned_lock_object_field_guard(tmp_path: Path, field: str, value: object) -> None:
+    """Guard coverage: object entries with bad version/integrity were already promotion mismatches."""
+    snapshot = real_snapshot()
+    entries: dict[str, dict[str, Any]] = {
+        f"node_modules/{owned.package.rsplit('@', 1)[0]}": {
+            "version": owned.package.rsplit("@", 1)[1],
+            "integrity": owned.integrity,
+        }
+        for owned in snapshot.gates.owned_packages
+    }
+    first = next(iter(entries.values()))
+    if value is ...:
+        del first[field]
+    else:
+        first[field] = value
+    agent = tmp_path / "agent"
+    lock = agent / "npm" / "package-lock.json"
+    lock.parent.mkdir(parents=True)
+    lock.write_text(json.dumps({"packages": entries}))
+    before = tree(tmp_path)
+    with pytest.raises(InstallError) as raised:
+        install.verify_owned_integrity(snapshot, agent)
+    assert f"`{field}`" in str(raised.value)
+    assert tree(tmp_path) == before
 
 
 @pytest.mark.parametrize("case", sorted(MALFORMED_MANIFESTS))
@@ -2481,8 +2660,9 @@ def test_malformed_lock_entry_plans_repair_without_mutation(
     document["packages"]["node_modules/@nredd/pi-todo"] = MALFORMED_LOCK_ENTRIES[case]
     lock.write_text(json.dumps(document))
     before = tree(harness.home)
-    with pytest.raises(InstallError, match="pi-todo"):
+    with pytest.raises(InstallError, match="pi-todo") as raised:
         install.verify_owned_integrity(harness.snapshot, harness.layout.agent_dir)
+    assert "`packages`" in str(raised.value)
     assert not install.packages_ready(harness.layout, harness.verified)
     with pytest.raises(ConsentError):
         harness.run()

@@ -366,6 +366,29 @@ def preflight(
     return tools
 
 
+def require_unix_runtime() -> None:
+    """Admit the platform and required Unix primitives before any layout or journal access.
+
+    Recovery deliberately precedes external-tool preflight, but must never bypass this gate.
+
+    Raises:
+        UnsupportedError: the platform or a required Unix primitive is unavailable.
+    """
+    system, machine = platform.system(), platform.machine()
+    if (system, machine) not in SUPPORTED_PLATFORMS:
+        raise UnsupportedError(f"platform '{system}/{machine}' is not supported, nothing changed")
+    required = ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK", "O_NOCTTY", "getuid", "fchmod")
+    missing = [f"os.{name}" for name in required if not hasattr(os, name)]
+    if fcntl is None:
+        missing.append("fcntl")
+    else:
+        missing.extend(
+            f"fcntl.{name}" for name in ("flock", "LOCK_EX", "LOCK_NB") if not hasattr(fcntl, name)
+        )
+    if missing:
+        raise UnsupportedError(f"Required Unix primitives unavailable: {', '.join(missing)}; nothing changed")
+
+
 def required_node(tarball: Path) -> tuple[int, int, int]:
     """Read the minimum Node.js version from a verified core tarball's `engines`.
 
@@ -386,7 +409,7 @@ def required_node(tarball: Path) -> tuple[int, int, int]:
         raise VerificationError(f"Could not read the core manifest from '{tarball.name}': {error}") from error
     label = f"Core `package.json` from '{tarball.name}'"
     if not isinstance(manifest, dict):
-        raise VerificationError(f"{label} must be an object")
+        raise VerificationError(f"{label} `root` must be an object")
     if manifest.get("name") != "@earendil-works/pi-coding-agent":
         raise VerificationError(f"{label} must name '@earendil-works/pi-coding-agent' in `name`")
     version = manifest.get("version")
@@ -634,7 +657,7 @@ def read_json(path: Path) -> dict[str, Any]:
             f"Existing '{path}' is not readable JSON; fix or move it, nothing changed: {error}"
         ) from error
     if not isinstance(value, dict):
-        raise InstallError(f"Existing '{path}' is not a JSON object; fix or move it, nothing changed")
+        raise InstallError(f"Existing '{path}' `root` is not a JSON object; fix or move it, nothing changed")
     return value
 
 
@@ -875,7 +898,7 @@ def owned_lock_entries(agent_dir: Path) -> dict[str, Any]:
     lock = agent_dir / "npm" / "package-lock.json"
     packages = read_json(lock).get("packages")
     if not isinstance(packages, dict):
-        raise InstallError(f"No npm lockfile packages in '{lock}'")
+        raise InstallError(f"Npm lockfile `packages` in '{lock}' must be an object")
     return packages
 
 
@@ -894,12 +917,13 @@ def verify_owned_integrity(snapshot: StackSnapshot, agent_dir: Path) -> None:
         name, version = owned.package.rsplit("@", 1)
         entry = entries.get(f"node_modules/{name}")
         if not isinstance(entry, dict):
-            entry = {}
-        if entry.get("version") != version or entry.get("integrity") != owned.integrity:
-            raise InstallError(
-                f"Installed '{name}' is '{entry.get('version')}' with integrity '{entry.get('integrity')}', "
-                f"the promotion verified '{version}' with '{owned.integrity}'"
-            )
+            raise InstallError(f"Installed '{name}' lockfile `packages` entry must be an object")
+        for key, expected in (("version", version), ("integrity", owned.integrity)):
+            if entry.get(key) != expected:
+                raise InstallError(
+                    f"Installed '{name}' lockfile `{key}` is '{entry.get(key)}'; "
+                    f"the promotion verified '{expected}'"
+                )
 
 
 def report_plan(plan: Plan, verified: Verified) -> None:
@@ -1711,6 +1735,7 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
     Raises:
         InstallError: any refused or failed step, typed by outcome.
     """
+    require_unix_runtime()
     if SHA_PATTERN.fullmatch(opts.source_sha) is None:
         raise UnsupportedError(f"Stack SHA must be 40 lowercase hex characters, got '{opts.source_sha}'")
     layout = Layout.from_env(env, Path.home(), opts.bin_dir)
