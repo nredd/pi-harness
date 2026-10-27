@@ -62,6 +62,7 @@ import {
   type WorkflowEntry,
 } from "../workflow/progress.js";
 import { SPINNER, type Theme } from "./agent-widget.js";
+import { fallbackFlagText, hasFallback } from "./fallback-flag.js";
 import {
   ASCII_GLYPHS,
   clampLine,
@@ -643,6 +644,8 @@ function agentRow(options: {
     { text: " " },
     dialogRowGlyph(display, glyphs, options.spinnerFrame),
     { text: " " },
+    // Leading, ahead of the label, in both pane modes: the row clamps from the right.
+    ...(hasFallback(entry) ? [{ text: `${fallbackFlagText()} `, color: "warning" as const }] : []),
     { text: entry.label, color: selected ? "accent" : undefined },
   ];
   // The narrow pane holds the label and nothing else; there is no room for a
@@ -795,6 +798,13 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
     if (entry.durationMs) stats.push(formatDuration(entry.durationMs));
     if (stats.length > 0) {
       detailRows.push(clampLine([{ text: ` ${stats.join(" · ")}`, color: "dim" }], rightWidth));
+    }
+    // A substituted model is never cosmetic: name the failed input and what ran.
+    // Wrapped, not clamped: this is the one place the full note is readable.
+    if (entry.modelNote) {
+      for (const line of wrapTextWithAnsi(entry.modelNote, Math.max(1, rightWidth - 1))) {
+        detailRows.push(clampLine([{ text: ` ${line}`, color: "warning" }], rightWidth));
+      }
     }
 
     const prompt = previewLines(entry.promptPreview);

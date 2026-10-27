@@ -2,7 +2,7 @@
 
 export const MAX_MONITORS = 5;
 export const DEFAULT_TIMEOUT_S = 3600;
-export const MAX_TIMEOUT_S = 86_400;
+export const MAX_TIMEOUT_S = 604_800;
 export const MAX_NAME_LENGTH = 40;
 export const MAX_MATCH_LENGTH = 500;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

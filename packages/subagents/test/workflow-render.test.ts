@@ -243,6 +243,13 @@ describe("stat segments", () => {
     expect(agentStatSegments(agentEntry({ index: 0, toolCalls: 1 }))).toEqual(["1 tool call"]);
   });
 
+  it("keeps the note out of the stat tail; the card row leads with a [fallback] flag instead", () => {
+    const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+    expect(agentStatSegments(agentEntry({ index: 0, model: "sonnet", modelNote }))).toEqual(["sonnet"]);
+    const row = treeRows(card({ progress: [agentEntry({ index: 0, label: "agent-0", state: "done", modelNote })] })).slice(1)[0]!;
+    expect(row).toContain("[fallback] agent-0");
+  });
+
   it("merges the fallback model into the model segment", () => {
     expect(agentStatSegments(agentEntry({ index: 0, model: "haiku", fallbackModel: "sonnet" }))).toEqual([
       "haiku→sonnet",

@@ -4,9 +4,9 @@
   <img src="./assets/logo/logo3.png" width="50%" alt="pi-computer-use">
 </p>
 
-`pi-computer-use` lets AI agents use desktop apps on macOS. The package source also carries Windows and Linux backends that are not shipped as helpers.
+`pi-computer-use` lets AI agents use desktop apps on macOS. The package source also carries a Windows backend that is not shipped as a helper; Linux ships its Rust helper as locked source for an opt-in build.
 
-The macOS helper requires macOS 14 or newer. Only the macOS helper ships in the npm package: the Windows and Linux helpers are not packed, and `desktop_screenshot`/`desktop_input` are registered on macOS only.
+The macOS helper requires macOS 14 or newer. The npm package ships the macOS helper prebuilts and the Linux helper crate source (build with `PI_COMPUTER_USE_ALLOW_BUILD=1`, see [Linux support](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/docs/linux.md)); the Windows helper is not packed. `desktop_screenshot`/`desktop_input` are registered on macOS only.
 
 An agent can look at an app window, understand the buttons and text inside it, and perform actions like clicking, typing, scrolling, and waiting for something to change. This is useful when the agent needs to work with a normal desktop app instead of an API, a terminal command, or a file.
 
