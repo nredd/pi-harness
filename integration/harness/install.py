@@ -26,6 +26,7 @@ References:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -39,7 +40,7 @@ import tarfile
 import tempfile
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import IntEnum
 from pathlib import Path
@@ -80,6 +81,7 @@ from harness.release import (
 from harness.sandbox import deep_merge
 from harness.stack import (
     CORE_TAG,
+    SHA256_HEX,
     install_overrides,
     installed_identities,
     package_agents_policy,
@@ -117,6 +119,11 @@ JOURNAL_FILE = "transaction.json"
 # Only the owner may write or read the journal: it names every path a restore deletes.
 JOURNAL_MODE = 0o600
 MAX_JOURNAL_BYTES = 1024 * 1024
+# Bound recovery hashing, including tree names and link targets; never follow symlinks.
+MAX_RESTORE_BYTES = 8 * 1024**3
+MAX_RESTORE_ENTRIES = 100_000
+MAX_RESTORE_DEPTH = 128
+RESTORE_READ_SIZE = 1024 * 1024
 LINK_BACKUP = "bin-pi"
 CORE_MARKER = "pi-stack-core.json"
 SETTINGS_FILE = "settings.json"
@@ -810,18 +817,23 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
         (plan.overwrites if subagents_path.exists(follow_symlinks=False) else plan.creates).append(message)
     if not plan.empty:
         # Before consent: a kind the journal cannot restore must never be moved into a backup.
-        for target in replaced_targets(layout, plan):
+        for target in replaced_targets(layout, plan, prefix if plan.install_core else None):
             require_restorable_kind(layout, target)
+            if target.exists(follow_symlinks=False) and not any(
+                f"'{target}'" in message for message in plan.overwrites
+            ):
+                plan.overwrites.append(f"replace '{target}' (backed up)")
         require_backup_store(layout)
     return plan
 
 
-def replaced_targets(layout: Layout, plan: Plan) -> list[Path]:
+def replaced_targets(layout: Layout, plan: Plan, core: Path | None = None) -> list[Path]:
     """List every existing path a switch for this plan may replace.
 
     Parameters:
         layout (Layout): installer paths.
         plan (Plan): non-empty plan.
+        core (Path | None): core prefix when this plan replaces it.
 
     Returns:
         list[Path]: targets, the state record always included.
@@ -833,7 +845,7 @@ def replaced_targets(layout: Layout, plan: Plan) -> list[Path]:
         targets.append(layout.agent_dir / SUBAGENTS_FILE)
     if plan.link is not None:
         targets.append(layout.link)
-    return [*targets, layout.state]
+    return [*([core] if core is not None else []), *targets, layout.state]
 
 
 def require_restorable_kind(layout: Layout, target: Path, outcome: str = "nothing changed") -> None:
@@ -1126,6 +1138,128 @@ def remove(path: Path) -> None:
 
 
 @dataclass(frozen=True)
+class RestoreIdentity:
+    """Content identity plus rename-stable corroboration for one original entry."""
+
+    kind: str
+    device: int
+    inode: int
+    mtime_ns: int
+    size: int
+    sha256: str
+
+
+@dataclass
+class RestoreHasher:
+    """Stream a bounded, no-follow content digest of files, symlinks or directory trees."""
+
+    remaining_bytes: int = MAX_RESTORE_BYTES
+    remaining_entries: int = MAX_RESTORE_ENTRIES
+
+    def consume(self, count: int) -> None:
+        """Charge bytes before hashing them, refusing an oversized restore.
+
+        Parameters:
+            count (int): bytes read, including directory names and link targets.
+        """
+        self.remaining_bytes -= count
+        if self.remaining_bytes < 0:
+            raise OSError("Restore content exceeds the hashing byte limit; restore by hand")
+
+    def file_digest(self, descriptor: int) -> str:
+        """Hash a regular file through its already-open descriptor with bounded reads.
+
+        Parameters:
+            descriptor (int): no-follow regular-file descriptor.
+
+        Returns:
+            str: lowercase SHA-256 of the file bytes.
+        """
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, min(RESTORE_READ_SIZE, self.remaining_bytes + 1)):
+            self.consume(len(chunk))
+            digest.update(chunk)
+        return digest.hexdigest()
+
+    def tree_digest(self, descriptor: int, depth: int) -> str:
+        """Hash sorted child names, kinds and content digests with length-prefixed framing.
+
+        Parameters:
+            descriptor (int): no-follow directory descriptor.
+            depth (int): current depth, bounded before descending.
+
+        Returns:
+            str: recursive SHA-256; symlinks are entries, never traversed.
+        """
+        names = []
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                if self.remaining_entries <= 0:
+                    raise OSError("Restore tree exceeds the hashing entry limit; restore by hand")
+                # Reserve each child while scanning, bounding names held across recursive levels.
+                self.remaining_entries -= 1
+                self.consume(len(os.fsencode(entry.name)))
+                names.append(entry.name)
+        digest = hashlib.sha256()
+        for name in sorted(names, key=os.fsencode):
+            child = self.identity(name, dir_fd=descriptor, depth=depth + 1)
+            for value in (os.fsencode(name), child.kind.encode(), child.sha256.encode()):
+                digest.update(len(value).to_bytes(8, "big"))
+                digest.update(value)
+        return digest.hexdigest()
+
+    def identity(self, path: Path | str, *, dir_fd: int | None = None, depth: int = 0) -> RestoreIdentity:
+        """Hash one entry without following links and corroborate its opened identity.
+
+        Parameters:
+            path (Path | str): live path or backup basename relative to `dir_fd`.
+            dir_fd (int | None): anchored parent descriptor, or normal live lookup.
+            depth (int): recursive tree depth.
+
+        Returns:
+            RestoreIdentity: entry kind, device, inode and decisive content hash.
+
+        Raises:
+            OSError: refused kind, changed entry or a hashing bound was exceeded.
+        """
+        if depth > MAX_RESTORE_DEPTH or (depth == 0 and self.remaining_entries <= 0):
+            raise OSError("Restore tree exceeds the hashing depth/entry limit; restore by hand")
+        if depth == 0:
+            self.remaining_entries -= 1
+        info = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+        if stat.S_ISLNK(info.st_mode):
+            kind = "symlink"
+            target = os.fsencode(os.readlink(path, dir_fd=dir_fd))
+            self.consume(len(target))
+            digest = hashlib.sha256(target).hexdigest()
+        else:
+            if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+                raise OSError(f"Restore entry '{path}' is not a file, directory or symlink")
+            kind = "file" if stat.S_ISREG(info.st_mode) else "directory"
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY
+            descriptor = os.open(path, flags | (os.O_DIRECTORY if kind == "directory" else 0), dir_fd=dir_fd)
+            try:
+                if os.fstat(descriptor) != info:
+                    raise OSError(f"Restore entry '{path}' changed before hashing")
+                digest = (
+                    self.file_digest(descriptor) if kind == "file" else self.tree_digest(descriptor, depth)
+                )
+                after = os.fstat(descriptor)
+            finally:
+                os.close(descriptor)
+            # Reading may change atime, but never the identity or the content-change fields.
+            if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+            ):
+                raise OSError(f"Restore entry '{path}' changed while hashing")
+        return RestoreIdentity(kind, info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size, digest)
+
+
+@dataclass(frozen=True)
 class Step:
     """One validated journal step: a path the switch replaced and where its original is kept."""
 
@@ -1134,7 +1268,7 @@ class Step:
     pending: bool = False
     original: tuple[int, int, int] | None = None
     restored: bool = False
-    restoring: tuple[int, int] | None = None
+    restoring: RestoreIdentity | None = None
 
     def live_identity(self) -> tuple[int, int, int] | None:
         """Return the live entry's device/inode/ctime, or absence, without following links.
@@ -1160,7 +1294,7 @@ class Step:
         if self.restored:
             result["restored"] = True
         if self.restoring is not None:
-            result["restoring"] = list(self.restoring)
+            result["restoring"] = asdict(self.restoring)
         return result
 
 
@@ -1245,14 +1379,14 @@ def read_journal(path: Path) -> object:
             raise ValueError(f"it is not readable JSON: {error}") from error
 
 
-def restoring_identity(raw: dict[str, Any]) -> tuple[int, int] | None:
+def restoring_identity(raw: dict[str, Any]) -> RestoreIdentity | None:
     """Validate a write-ahead restore identity before it can excuse a consumed backup.
 
     Parameters:
         raw (dict[str, Any]): journal step with otherwise validated progress metadata.
 
     Returns:
-        tuple[int, int] | None: original mtime and size, or no restore intent.
+        RestoreIdentity | None: content and rename-stable identity, or no restore intent.
 
     Raises:
         ValueError: restore intent is malformed or conflicts with another step state.
@@ -1261,16 +1395,18 @@ def restoring_identity(raw: dict[str, Any]) -> tuple[int, int] | None:
         return None
     identity = raw["restoring"]
     if (
-        not isinstance(identity, list)
-        or len(identity) != 2
-        or any(type(value) is not int for value in identity)
-        or identity[1] < 0
+        not isinstance(identity, dict)
+        or set(identity) != {"kind", "device", "inode", "mtime_ns", "size", "sha256"}
+        or identity["kind"] not in ("file", "directory", "symlink")
+        or any(type(identity[key]) is not int or identity[key] < 0 for key in ("device", "inode", "size"))
+        or type(identity["mtime_ns"]) is not int
+        or not isinstance(identity["sha256"], str)
+        or SHA256_HEX.fullmatch(identity["sha256"]) is None
         or raw["backup"] is None
-        or raw.get("restored", False)
         or raw.get("pending", False)
     ):
-        raise ValueError(f"step for '{raw['target']}' has invalid restoring mtime/size metadata")
-    return identity[0], identity[1]
+        raise ValueError(f"step for '{raw['target']}' has invalid `restoring` content identity")
+    return RestoreIdentity(**identity)
 
 
 def validate_journal(layout: Layout, document: object) -> list[Step]:
@@ -1373,25 +1509,32 @@ def load_journal(layout: Layout) -> tuple[Path, list[Step]]:
         ) from error
 
 
-def restore_backup(journal: Journal, step: Step, index: int) -> None:
+def restore_backup(journal: Journal, step: Step, index: int) -> RestoreIdentity | None:
     """Persist restore intent before consuming a backup, or remove a newly created target.
 
     Parameters:
         journal (Journal): validated journal with its backup directory held open.
         step (Step): validated restore step.
         index (int): step position in the journal's original order.
+
+    Returns:
+        RestoreIdentity | None: retained content identity, or absence for a new target.
     """
+    identity = step.restoring
     if step.backup is not None:
-        info = os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
-        # Rename changes ctime, but preserves mtime and size for files, links and trees.
-        journal.steps[index] = Step(
-            step.target, step.backup, restoring=(info.st_mtime_ns, info.st_size)
-        ).record()
+        if identity is None:
+            identity = RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd)
+        journal.steps[index] = Step(step.target, step.backup, restoring=identity).record()
         journal.persist()
+        # Hardening only: another same-user swap after this check remains outside #157's scope.
+        # Verify before removing the live entry, so a mismatch preserves BOTH entries.
+        if RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd) != identity:
+            raise OSError(f"Backup '{step.backup}' content identity changed; restore by hand")
     remove(step.target)
     if step.backup is not None:
         os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
     journal.check_store()
+    return identity
 
 
 def rollback(layout: Layout) -> list[str]:
@@ -1423,22 +1566,26 @@ def rollback(layout: Layout) -> list[str]:
             journal.path.unlink()
             return []
         with journal.open_backups(create=False):
-            # A missing backup is safe ONLY for a pending rename whose original entry is still
-            # at the live path. Saved/legacy steps or a changed live identity must fail loudly.
+            # Missing backups require either a never-started pending identity or a content-bound
+            # restore intent matching the live original. Saved/legacy losses still fail loudly.
             for step in steps:
                 if step.restored:
-                    if step.live_identity() != step.original:
+                    if step.live_identity() != step.original or (
+                        step.restoring is not None and RestoreHasher().identity(step.target) != step.restoring
+                    ):
                         raise OSError(f"Restored target '{step.target}' changed; restore by hand")
                     continue
                 if step.backup is not None:
                     try:
                         os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
                     except FileNotFoundError as error:
-                        if step.restoring is not None:
-                            info = step.target.lstat() if step.target.exists(follow_symlinks=False) else None
-                            if info is not None and (info.st_mtime_ns, info.st_size) == step.restoring:
-                                not_started.add(step.target)
-                                continue
+                        if (
+                            step.restoring is not None
+                            and step.target.exists(follow_symlinks=False)
+                            and RestoreHasher().identity(step.target) == step.restoring
+                        ):
+                            not_started.add(step.target)
+                            continue
                         if (
                             step.pending
                             and step.original is not None
@@ -1454,11 +1601,12 @@ def rollback(layout: Layout) -> list[str]:
                 journal.check_store()
                 if step.restored:
                     continue
+                content = step.restoring
                 if step.target not in not_started:
-                    restore_backup(journal, step, index)
+                    content = restore_backup(journal, step, index)
                     restored.append(str(step.target))
                 identity = step.live_identity() if step.backup is not None else None
-                journal.steps[index] = Step(step.target, step.backup, False, identity, True).record()
+                journal.steps[index] = Step(step.target, step.backup, False, identity, True, content).record()
                 journal.persist()
             journal.steps = []
             journal.persist()

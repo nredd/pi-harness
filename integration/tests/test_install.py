@@ -3339,6 +3339,431 @@ def test_installer_restore_retry_documentation() -> None:
     assert "missing backup with a nonmatching live target fails loudly" in text
 
 
+def recovery_entry(path: Path, kind: str, contents: str) -> None:
+    """Write a file, one-child tree or symlink without following an existing entry.
+
+    Parameters:
+        path (Path): entry to create or replace.
+        kind (str): file, directory or symlink.
+        contents (str): file/child bytes or readlink target.
+    """
+    install.remove(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "directory":
+        path.mkdir()
+        (path / "child").write_text(contents)
+    elif kind == "symlink":
+        path.symlink_to(contents)
+    else:
+        path.write_text(contents)
+
+
+def saved_recovery_entry(harness: Harness, kind: str) -> tuple[Journal, Path]:
+    """Create one saved backup and its live replacement using the switch's real journal API.
+
+    Parameters:
+        harness (Harness): isolated installer home.
+        kind (str): original entry kind.
+
+    Returns:
+        tuple[Journal, Path]: saved journal and live target.
+    """
+    layout = harness.layout
+    target = {"file": layout.state, "directory": layout.agent_dir / "npm", "symlink": layout.link}[kind]
+    recovery_entry(target, kind, "ORIGINAL")
+    name, _ = install.journaled_path(layout, target)
+    journal = Journal(layout, layout.backups / "content")
+    with journal.open_backups():
+        backup = journal.record(target, name)
+        assert backup is not None
+        journal.save(target, backup)
+    recovery_entry(target, kind, "NEW FILE")
+    return journal, target
+
+
+def forge_recovery_entry(path: Path, kind: str, *, replace: bool = False, identical: bool = False) -> None:
+    """Change content while preserving size/mtime, optionally substituting the entry's inode.
+
+    Parameters:
+        path (Path): original entry.
+        kind (str): file, directory or symlink.
+        replace (bool): substitute a separate entry rather than change bytes in place.
+        identical (bool): retain content to isolate the device/inode corroboration check.
+    """
+    info = path.lstat()
+    value = "ORIGINAL" if identical else "FORGERY!"
+    if replace or kind == "symlink":
+        # Keep the old inode allocated so a filesystem cannot immediately recycle it.
+        held = path.with_name(path.name + "-held")
+        path.rename(held)
+        recovery_entry(path, kind, value)
+    else:
+        data = path / "child" if kind == "directory" else path
+        before = data.stat()
+        data.write_text(value)
+        os.utime(data, ns=(before.st_atime_ns, before.st_mtime_ns))
+    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
+
+
+@pytest.mark.parametrize("case", ["file", "file-copy", "identical-copy", "symlink", "directory"])
+def test_restore_intent_rejects_preserved_metadata_forgery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Same size and mtime never excuse changed bytes, changed link targets or a substituted inode."""
+    harness = Harness(tmp_path, monkeypatch)
+    kind = "file" if case in {"file-copy", "identical-copy"} else case
+    _, target = saved_recovery_entry(harness, kind)
+    original_replace = os.replace
+
+    def interrupt(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Consume the original backup, then interrupt before the completion journal rewrite."""
+        original_replace(src, dst, **kwargs)
+        if kwargs.get("src_dir_fd") is not None:
+            raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            rollback(harness.layout)
+    forge_recovery_entry(target, kind, replace=case.endswith("copy"), identical=case == "identical-copy")
+    before = tree(harness.home)
+    with pytest.raises(RollbackError):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
+    assert harness.layout.journal.exists()
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink", "directory"])
+@pytest.mark.parametrize("replace", [False, True], ids=["content-change", "inode-swap"])
+def test_backup_content_is_rechecked_after_restore_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, replace: bool
+) -> None:
+    """Tampering after the intent rewrite must preserve BOTH backup and live replacement on refusal."""
+    harness = Harness(tmp_path, monkeypatch)
+    journal, target = saved_recovery_entry(harness, kind)
+    name, _ = install.journaled_path(harness.layout, target)
+    backup = journal.backups / name
+    original_write = install.write_atomic
+    attacked = False
+
+    def tamper(path: Path, text: str, mode: int | None = None) -> None:
+        """Modify the backup immediately after write-ahead intent becomes durable."""
+        nonlocal attacked
+        original_write(path, text, mode)
+        if path == harness.layout.journal and not attacked:
+            attacked = True
+            forge_recovery_entry(backup, kind, replace=replace)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(install, "write_atomic", tamper)
+        with pytest.raises(RollbackError):
+            rollback(harness.layout)
+    assert attacked
+    if kind == "directory":
+        assert tree(target) == {"child": b"NEW FILE"}
+        assert tree(backup) == {"child": b"FORGERY!"}
+    elif kind == "symlink":
+        assert target.readlink() == Path("NEW FILE")
+        assert backup.readlink() == Path("FORGERY!")
+    else:
+        assert target.read_bytes() == b"NEW FILE"
+        assert backup.read_bytes() == b"FORGERY!"
+    before_retry = tree(harness.home)
+    with pytest.raises(RollbackError):
+        rollback(harness.layout)
+    assert tree(harness.home) == before_retry
+    assert backup.exists(follow_symlinks=False)
+    assert harness.layout.journal.exists()
+
+
+def test_every_existing_switch_write_is_classified_before_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Derive the write set from Journal.record calls, including the unconditional state record."""
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    layout = harness.layout
+    # Force a settings-only repair with no other old paths to hide missing state consent.
+    for name in (install.SETTINGS_FILE, install.SUBAGENTS_FILE):
+        (layout.agent_dir / name).unlink()
+    plan = plan_install(layout, harness.verified)
+    assert not plan.empty
+    inode = layout.state.stat().st_ino
+    with pytest.raises(ConsentError):
+        harness.run()
+    assert layout.state.stat().st_ino == inode
+    captured: list[Path] = []
+    original_record = Journal.record
+
+    def record(journal: Journal, target: Path, name: str) -> Path | None:
+        """Observe the actual switch write set before each original is moved."""
+        if target.exists(follow_symlinks=False):
+            captured.append(target)
+        return original_record(journal, target, name)
+
+    monkeypatch.setattr(Journal, "record", record)
+    assert harness.run(yes=True) == ExitCode.OK
+    assert captured
+    for target in captured:
+        assert any(f"'{target}'" in line for line in plan.overwrites), target
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_switch_write_set_classification_includes_core_and_shims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bool
+) -> None:
+    """Enumerate writes from the real switch, not a hand-maintained list of planner targets."""
+    harness = Harness(tmp_path, monkeypatch)
+    if existing:
+        assert harness.run() == ExitCode.OK
+        prefix = harness.layout.core(harness.snapshot.stack.core.tag)
+        (prefix / install.CORE_MARKER).unlink()
+        harness.layout.link.unlink()
+        harness.layout.link.write_text("old shim")
+        (harness.layout.agent_dir / "git").mkdir()
+        for name in (install.SETTINGS_FILE, install.SUBAGENTS_FILE):
+            (harness.layout.agent_dir / name).write_text("{}")
+        harness.layout.state.write_text("{}")
+    plan = plan_install(harness.layout, harness.verified)
+    recorded: list[tuple[Path, bool]] = []
+    original = Journal.record
+
+    def record(journal: Journal, path: Path, name: str) -> Path | None:
+        """Capture existence for every path the implementation actually journals for replacement."""
+        recorded.append((path, path.exists(follow_symlinks=False)))
+        return original(journal, path, name)
+
+    monkeypatch.setattr(Journal, "record", record)
+    assert harness.run(yes=True) == ExitCode.OK
+    assert recorded
+    for path, existed in recorded:
+        if existed:
+            assert any(f"'{path}'" in line for line in plan.overwrites), path
+
+
+def recovery_transitions() -> list[tuple[str, str, str, str]]:
+    """Expand the single documented transition table into the complete state cross-product.
+
+    Returns:
+        list[tuple[str, str, str, str]]: state, backup presence, live state and expected transition.
+    """
+    text = (INTEGRATION.parent / "docs/install.md").read_text()
+    table = text.split("<!-- recovery-transition-table -->")[1].split("<!-- /recovery-transition-table -->")[
+        0
+    ]
+    rows = [
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in table.splitlines()
+        if line.startswith("|")
+    ]
+    header, _, *body = rows
+    return [
+        (row[0], row[1], live, outcome)
+        for row in body
+        for live, outcome in zip(header[2:], row[2:], strict=True)
+    ]
+
+
+def test_recovery_transition_table_is_complete() -> None:
+    """The documented oracle must include the exact requested 6 x 2 x 6 cross-product once."""
+    transitions = recovery_transitions()
+    states = {"pending", "saved", "legacy", "restoring", "restored", "new-target-completed"}
+    presences = {"present", "missing"}
+    lives = {"original", "new", "other", "absent", "directory", "symlink"}
+    assert len(transitions) == 72
+    assert {(state, presence, live) for state, presence, live, _ in transitions} == {
+        (state, presence, live) for state in states for presence in presences for live in lives
+    }
+    assert {outcome for _, _, _, outcome in transitions} == {"restore", "skip", "refuse"}
+
+
+def matrix_content_identity(path: Path) -> dict[str, Any]:
+    """Build the known regular-file fixture's content identity independently of production hashing.
+
+    Parameters:
+        path (Path): original fixture containing ORIGINAL.
+
+    Returns:
+        dict[str, Any]: expected wire identity, including rename-stable corroboration.
+    """
+    info = path.lstat()
+    return {
+        "kind": "file",
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "mtime_ns": info.st_mtime_ns,
+        "size": info.st_size,
+        "sha256": hashlib.sha256(b"ORIGINAL").hexdigest(),
+    }
+
+
+@pytest.mark.parametrize(("state", "presence", "live", "outcome"), recovery_transitions())
+def test_recovery_state_cross_product(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, state: str, presence: str, live: str, outcome: str
+) -> None:
+    """Every documented state/backup/live transition recovers idempotently or refuses without mutation."""
+    harness = Harness(tmp_path, monkeypatch)
+    layout = harness.layout
+    target = layout.state
+    recovery_entry(target, "file", "ORIGINAL")
+    info = target.stat()
+    content = matrix_content_identity(target)
+    backups = layout.backups / "matrix"
+    backups.mkdir(parents=True)
+    backup = backups / target.name
+    if presence == "present":
+        shutil.copy2(target, backup)
+    raw: dict[str, Any] = {"target": str(target), "backup": str(backup)}
+    if state in {"pending", "saved", "restored"}:
+        raw |= {"pending": state == "pending", "original": [info.st_dev, info.st_ino, info.st_ctime_ns]}
+    if state == "restoring":
+        raw["restoring"] = matrix_content_identity(backup) if presence == "present" else content
+    if state == "restored":
+        raw |= {"restored": True, "restoring": content}
+    if state == "new-target-completed":
+        raw |= {"backup": None, "restored": True}
+    if live in {"new", "other"}:
+        target.write_text("NEW FILE" if live == "new" else "FORGERY!")
+        os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns))
+    elif live == "absent":
+        target.unlink()
+    elif live in {"directory", "symlink"}:
+        recovery_entry(target, live, "keep me")
+    install.write_atomic(
+        layout.journal, json.dumps({"backups": str(backups), "steps": [raw]}), mode=install.JOURNAL_MODE
+    )
+    before = tree(harness.home)
+    if outcome == "refuse":
+        with pytest.raises(RollbackError):
+            rollback(layout)
+        assert tree(harness.home) == before
+    else:
+        rollback(layout)
+        assert rollback(layout) == []
+        assert not layout.journal.exists()
+        if state == "new-target-completed":
+            assert not target.exists(follow_symlinks=False)
+        else:
+            assert target.read_bytes() == b"ORIGINAL"
+        assert backup.exists() == (presence == "present" and outcome == "skip")
+
+
+@pytest.mark.parametrize(
+    "bad_hash", [None, "", "f" * 63, "g" * 64, 3, [], True, pytest.param(..., id="missing")]
+)
+def test_malformed_restoring_hash_is_refused_without_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_hash: object
+) -> None:
+    """Missing, short and wrong-type hashes cannot authorize any restore operation."""
+    harness = Harness(tmp_path, monkeypatch)
+    journal, target = saved_recovery_entry(harness, "file")
+    identity = matrix_content_identity(journal.backups / target.name)
+    if bad_hash is ...:
+        del identity["sha256"]
+    else:
+        identity["sha256"] = bad_hash
+    edit_journal(harness, lambda document: document["steps"][0].update(restoring=identity))
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match="not trusted"):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
+
+
+def test_legacy_mtime_only_restore_intent_requires_manual_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An older mtime/size-only intent cannot silently substitute for a missing content hash."""
+    harness = Harness(tmp_path, monkeypatch)
+    journal, target = saved_recovery_entry(harness, "file")
+    info = (journal.backups / target.name).stat()
+    edit_journal(
+        harness, lambda document: document["steps"][0].update(restoring=[info.st_mtime_ns, info.st_size])
+    )
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match="not trusted"):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink"])
+def test_content_bound_restore_resumes_after_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """All allowed entry kinds retain matching content and inode identity through a restore rename."""
+    harness = Harness(tmp_path, monkeypatch)
+    _, target = saved_recovery_entry(harness, kind)
+    original = os.replace
+
+    def interrupt(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Interrupt after the backup is consumed, leaving only write-ahead intent."""
+        original(src, dst, **kwargs)
+        if kwargs.get("src_dir_fd") is not None:
+            raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            rollback(harness.layout)
+    rollback(harness.layout)
+    assert rollback(harness.layout) == []
+    if kind == "directory":
+        assert tree(target) == {"child": b"ORIGINAL"}
+    elif kind == "symlink":
+        assert target.readlink() == Path("ORIGINAL")
+    else:
+        assert target.read_bytes() == b"ORIGINAL"
+
+
+def test_restore_hashing_streams_and_bounds_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """File hashing uses bounded descriptor reads; trees refuse byte, entry and depth exhaustion."""
+    data = b"x" * (2 * install.RESTORE_READ_SIZE + 7)
+    path = tmp_path / "file"
+    path.write_bytes(data)
+    reads: list[int] = []
+    original_read = os.read
+
+    def read(descriptor: int, count: int) -> bytes:
+        """Record requested chunk sizes on the actual fd read path."""
+        reads.append(count)
+        return original_read(descriptor, count)
+
+    monkeypatch.setattr(os, "read", read)
+    assert install.RestoreHasher().identity(path).sha256 == hashlib.sha256(data).hexdigest()
+    assert len(reads) >= 4
+    assert max(reads) <= install.RESTORE_READ_SIZE
+    with pytest.raises(OSError, match="byte limit"):
+        install.RestoreHasher(remaining_bytes=1).identity(path)
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    (directory / "child").write_text("data")
+    with pytest.raises(OSError, match="entry limit"):
+        install.RestoreHasher(remaining_entries=1).identity(directory)
+    monkeypatch.setattr(install, "MAX_RESTORE_DEPTH", 0)
+    with pytest.raises(OSError, match="depth/entry limit"):
+        install.RestoreHasher().identity(directory)
+
+
+def test_restore_tree_digest_has_defined_framing_and_never_follows_links(tmp_path: Path) -> None:
+    """The recursive digest is reproducible from its documented framing, not linked target bytes."""
+    directory = tmp_path / "tree"
+    directory.mkdir()
+    (directory / "file").write_bytes(b"data")
+    outside = tmp_path / "outside"
+    outside.write_text("private target bytes")
+    (directory / "link").symlink_to("../outside")
+    fields = (
+        (b"file", b"file", hashlib.sha256(b"data").hexdigest().encode()),
+        (b"link", b"symlink", hashlib.sha256(b"../outside").hexdigest().encode()),
+    )
+    framed = b"".join(len(value).to_bytes(8, "big") + value for child in fields for value in child)
+    expected = hashlib.sha256(framed).hexdigest()
+    assert install.RestoreHasher(remaining_entries=3).identity(directory).sha256 == expected
+    outside.write_text("different private bytes")
+    assert install.RestoreHasher().identity(directory).sha256 == expected
+    with pytest.raises(OSError, match="entry limit"):
+        install.RestoreHasher(remaining_entries=2).identity(directory)
+
+
 def test_journal_memory_failure_is_untrusted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A bounded parse can still exhaust memory; normalize it instead of leaking an interpreter error."""
     harness = Harness(tmp_path, monkeypatch)
