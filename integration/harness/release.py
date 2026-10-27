@@ -106,6 +106,25 @@ RATE_LIMIT_STATUSES = frozenset({403, 429})
 GITHUB_TOKEN_VARIABLES = frozenset(
     {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 )
+# Exact, case-sensitive connectivity keys, never npm configuration or runtime injection.
+PROXY_ENVIRONMENT_KEYS = frozenset(
+    {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "all_proxy",
+    }
+)
+CA_FILE_ENVIRONMENT_KEYS = frozenset(
+    {"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
+)
+CA_ENVIRONMENT_KEYS = CA_FILE_ENVIRONMENT_KEYS | {"SSL_CERT_DIR"}
+CONNECTIVITY_ENVIRONMENT_KEYS = PROXY_ENVIRONMENT_KEYS | CA_ENVIRONMENT_KEYS
+PROXY_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)?[^\s/\"'<>:@]+(?::[^\s/\"'<>@]*)?@")
 # Runtime/location/locale only. Tool configuration and code-injection variables are not inherited.
 CHILD_ENVIRONMENT_KEYS = frozenset(
     {
@@ -202,7 +221,7 @@ def fetch_failure_reason(error: Exception) -> str:
         reason = f"I/O error: {error.strerror or error}"
     else:
         reason = str(error)
-    return " ".join(reason.split())
+    return redact_diagnostic(" ".join(reason.split()))
 
 
 class FetchError(OSError):
@@ -296,13 +315,35 @@ def pinned_child_path(node: str) -> Iterator[None]:
         CHILD_PATH.reset(token)
 
 
+def redact_diagnostic(text: str) -> str:
+    """Remove proxy URL userinfo from public diagnostics, including echoed child output.
+
+    Parameters:
+        text (str): untrusted diagnostic before truncating its output tail.
+
+    Returns:
+        str: diagnostic retaining the scheme and host, never username/password userinfo.
+    """
+    for key in PROXY_ENVIRONMENT_KEYS:
+        value = os.environ.get(key, "")
+        authority = value.split("://", 1)[-1].split("/", 1)[0]
+        if "@" in authority:
+            credentials = authority.rsplit("@", 1)[0] + "@"
+            text = text.replace(credentials, "")
+    return PROXY_USERINFO.sub(lambda match: match["scheme"] or "", text)
+
+
 def child_environment(
     env: Mapping[str, str],
     *,
     overrides: Mapping[str, str] | None = None,
     github_tokens: bool = False,
 ) -> dict[str, str]:
-    """Build every child environment from a minimal inherited allowlist and owned overrides.
+    """Build every child environment from runtime/connectivity allowlists and owned overrides.
+
+    Connectivity values containing NUL/CR/LF and CA paths that are not absolute existing
+    files/directories are dropped with value-free warnings. Proxy userinfo is preserved
+    for the child; use `redact_diagnostic` before displaying any child output.
 
     Parameters:
         env (Mapping[str, str]): untrusted parent environment, filtered by explicit key.
@@ -318,7 +359,25 @@ def child_environment(
     allowed = CHILD_ENVIRONMENT_KEYS | (
         GITHUB_TOKEN_VARIABLES | {"GH_CONFIG_DIR"} if github_tokens else set()
     )
-    result = {key: value for key, value in env.items() if key in allowed} | dict(overrides or {})
+    result = {key: value for key, value in env.items() if key in allowed}
+    for key in sorted(CONNECTIVITY_ENVIRONMENT_KEYS):
+        if key not in env:
+            continue
+        value = env[key]
+        if any(character in value for character in ("\x00", "\n", "\r")):
+            LOGGER.warning(f"Dropping `{key}`: NUL/newline is not allowed")
+            continue
+        if key in CA_ENVIRONMENT_KEYS:
+            path = Path(value)
+            try:
+                valid = path.is_absolute() and (path.is_dir() if key == "SSL_CERT_DIR" else path.is_file())
+            except OSError:
+                valid = False
+            if not valid:
+                LOGGER.warning(f"Dropping `{key}`: expected an absolute existing CA path")
+                continue
+        result[key] = value
+    result |= dict(overrides or {})
     path = CHILD_PATH.get()
     if path is None:
         path = os.pathsep.join(
@@ -360,7 +419,8 @@ def gitlink_tag(directory: Path) -> str:
             ).strip()
     except subprocess.CalledProcessError as error:
         raise RuntimeError(
-            f"Core Gitlink at '{directory}' is untagged; release it before gating pins: {error.output}"
+            f"Core Gitlink at '{directory}' is untagged; release it before gating pins: "
+            f"{redact_diagnostic(error.output)}"
         ) from error
 
 
@@ -448,7 +508,7 @@ def _error_tail(error: subprocess.CalledProcessError | subprocess.TimeoutExpired
     output = error.output or ""
     if isinstance(output, bytes):
         output = output.decode("utf-8", errors="replace")
-    return output[-6000:]
+    return redact_diagnostic(output)[-6000:]
 
 
 def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:

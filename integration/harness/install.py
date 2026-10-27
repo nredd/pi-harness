@@ -75,6 +75,7 @@ from harness.release import (
     fetch_bytes,
     fetch_release,
     pinned_child_path,
+    redact_diagnostic,
     release_asset_url,
     release_checksums,
     release_tarballs,
@@ -327,10 +328,10 @@ def node_version(node: str) -> tuple[int, int, int]:
             env=child_environment(os.environ),
         )
     except (OSError, subprocess.SubprocessError) as error:
-        raise UnsupportedError(f"Could not run '{node} --version': {error}") from error
+        raise UnsupportedError(redact_diagnostic(f"Could not run '{node} --version': {error}")) from error
     match = SEMVER.search(output)
     if match is None:
-        raise UnsupportedError(f"`node --version` printed no version: '{output.strip()}'")
+        raise UnsupportedError(redact_diagnostic(f"`node --version` printed no version: '{output.strip()}'"))
     major, minor, patch = (int(part) for part in match.groups())
     return major, minor, patch
 
@@ -2086,9 +2087,13 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
                 timeout=INSTALL_TIMEOUT,
             )
         except subprocess.CalledProcessError as error:
-            raise InstallError(f"`pi install` failed for '{source}': {error.output[-4000:]}") from error
+            raise InstallError(
+                f"`pi install` failed for '{source}': {redact_diagnostic(error.output)[-4000:]}"
+            ) from error
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise InstallError(f"`pi install` could not complete for '{source}': {error}") from error
+            raise InstallError(
+                redact_diagnostic(f"`pi install` could not complete for '{source}': {error}")
+            ) from error
     try:
         installed_identities(stack, verified.sources, agent)
     except (OSError, ValueError) as error:
@@ -2321,7 +2326,7 @@ def post_check(layout: Layout) -> str:
         InstallError: the installed executable does not run.
     """
     try:
-        return subprocess.check_output(
+        output = subprocess.check_output(
             [str(layout.link), "--version"],
             text=True,
             stderr=subprocess.STDOUT,
@@ -2334,9 +2339,10 @@ def post_check(layout: Layout) -> str:
                     "PI_OFFLINE": "1",
                 },
             ),
-        ).strip()
+        )
     except (OSError, subprocess.SubprocessError) as error:
-        raise InstallError(f"Installed '{layout.link}' does not run: {error}") from error
+        raise InstallError(redact_diagnostic(f"Installed '{layout.link}' does not run: {error}")) from error
+    return redact_diagnostic(output.strip())
 
 
 def checked_version(layout: Layout, kept_core: Path | None) -> str:
@@ -2614,16 +2620,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return run(opts, os.environ, ask)
     except UnsupportedError as error:
-        LOGGER.error(f"UNSUPPORTED: {error}")
+        LOGGER.error(redact_diagnostic(f"UNSUPPORTED: {error}"))
         return ExitCode.UNSUPPORTED
     except VerificationError as error:
-        LOGGER.error(f"VERIFICATION FAILED, nothing changed: {error}")
+        LOGGER.error(redact_diagnostic(f"VERIFICATION FAILED, nothing changed: {error}"))
         return ExitCode.VERIFICATION
     except ConsentError as error:
-        LOGGER.error(f"NOT APPLIED: {error}")
+        LOGGER.error(redact_diagnostic(f"NOT APPLIED: {error}"))
         return ExitCode.CONSENT
     except InstallError as error:
-        LOGGER.error(f"FAILED: {error}")
+        LOGGER.error(redact_diagnostic(f"FAILED: {error}"))
         return ExitCode.FAILED
     except KeyboardInterrupt:
         LOGGER.error("INTERRUPTED: staging is discarded; an interrupted switch is restored on the next run")

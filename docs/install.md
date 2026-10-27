@@ -72,7 +72,19 @@ Every URL and redirect must use HTTPS. Public downloads accept only URL strings 
 
 Every external process (`node`, `gh`, `npm`, `pi`, and release Git lookup) receives an explicit environment through one helper. Only these parent keys are inherited when present: `HOME`, `PATH`, `LANG`, `LC_ALL`, `TMPDIR`, `TERM`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `CI` and `GITHUB_ACTIONS`. `PATH` is made absolute and frozen as described below; staging replaces `HOME` with its private home. Release Git lookup uses an isolated home/config and disables system Git config and prompts.
 
-All other parent variables are dropped by default, including `NODE_OPTIONS`, `NODE_PATH`, `NODE_EXTRA_CA_CERTS`, every `npm_config_*`/`NPM_CONFIG_*` variable, and every `PI_*` variable. Inherited Node CA overrides are not needed by the verified release/install flow and are not forwarded, including on corporate networks; this installer does not promise support for a network that requires them. The installer supplies its own npm config/cache/registry settings and disabled-package lifecycle flags, and its own Pi offline/update/telemetry flags. `pi install` gets the private staged `PI_CODING_AGENT_DIR`; the installed `pi --version` gets the installer-resolved live agent directory, never the parent's raw value. Only `gh`'s authenticated attestation fallback additionally receives `GH_CONFIG_DIR` and the four GitHub token variables (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`). A local-bundle verification gets none of those keys. This is environment filtering, not a sandbox or credential-capability isolation: same-user package code can still access the filesystem and inherited PATH shims described above.
+Connectivity-only parent keys also reach EVERY child, including `npm`, `gh`, `node` and `pi`, to support enterprise proxies and CAs. Names are exact and case-sensitive:
+
+- `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`, `http_proxy`, `https_proxy`, `no_proxy`, `all_proxy`: proxy routing and bypass lists. Credentials in proxy URLs reach the child unchanged.
+- `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`: absolute existing CA files only.
+- `SSL_CERT_DIR`: an absolute existing CA directory only.
+
+Connectivity values containing NUL, LF or CR are dropped. Relative, missing or wrong-kind CA paths are dropped too. Each drop emits a one-line warning naming ONLY the variable and reason, never its value. Paths are not expanded (no `~` or `$VAR` expansion). The helper preserves valid values verbatim; these settings configure the child's transport, not package sources. The selected tools decide which transport variables they support. Trusting an enterprise CA is the operator's choice.
+
+Installer diagnostics redact proxy URL userinfo (`user:pass@host` -> `host`), including child output echoed in exceptions, environment dumps and version messages. Redaction runs before output-tail truncation, preserving the host and scheme. Raw child environments are never logged by the installer. This protects installer-generated diagnostics, not arbitrary files a child writes or secrets other than proxy userinfo.
+
+All other parent variables are dropped by default, including `NODE_OPTIONS` (can execute a preload with `--require`/`--import`), `NODE_PATH` (changes module resolution), every `npm_config_*`/`NPM_CONFIG_*` variable (including registry/auth/prefix settings), every `PI_*` variable, `BASH_ENV`, `ENV`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH` and every `GIT_*` variable. A mirrored npm registry is deliberately out of scope: a registry override can redirect packages or their configuration can execute code. Digest checks would catch changed core bytes and a changed owned `@nredd/` top-level lockfile integrity, but NOT arbitrary third-party or transitive substitutions: those have no independent snapshot digest. The owned integrity check also runs AFTER package installation, not before lifecycle execution. Provenance is not a blanket defense for registry overrides.
+
+The installer supplies its own npm config/cache/registry settings and disabled-package lifecycle flags, and its own Pi offline/update/telemetry flags. `pi install` gets the private staged `PI_CODING_AGENT_DIR`; the installed `pi --version` gets the installer-resolved live agent directory, never the parent's raw value. Only `gh`'s authenticated attestation fallback additionally receives `GH_CONFIG_DIR` and the four GitHub token variables (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`). A local-bundle verification gets none of those keys. This is environment filtering, not a sandbox or credential-capability isolation: same-user package code can still access the filesystem and inherited PATH shims described above.
 
 ## Prerequisites and platforms
 
@@ -144,7 +156,7 @@ To uninstall: remove `~/.local/bin/pi`, `~/.local/share/pi-stack`, `~/.pi/agent/
 
 ## Tracked follow-ups
 
-- UNVERIFIED: exception tails containing `gh`/npm output may log sensitive child diagnostics; audit/redaction remains a follow-up, not a claimed fix.
+- Proxy URL userinfo is redacted from installer diagnostics. Arbitrary other secrets in child output are NOT covered by that narrow redaction contract.
 - UNVERIFIED: parent-directory fsync and journal/backup durability across a power loss mid-switch remain a follow-up; file-content fsync is not proof of durable directory entries.
 
 ## Testing
