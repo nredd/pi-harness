@@ -14,6 +14,17 @@ The publish job alone requests a short-lived npm OIDC identity.
 
 On the `owned` job, `@nredd/pi-computer-use`'s macOS-only checks (`test:invariants` INV-8/INV-17, `test:macos-native`, `test:desktop`'s helper wire mapping and gating, `test:macos-live`) print `NOT RUN` lines on Linux and are not passes. Conversely, `test:linux-native` runs headless on the Ubuntu cell only (`NOT RUN` on macOS): the crate's `cargo test --locked`, a source build from the *packed* tarball into a user-cache target dir, the built x64 helper's real `diagnostics` (protocol 4, shared architecture invariants), the cargo-missing hint and compiler cleanup on `SIGTERM`. The aarch64 target (`rustup target add`) is `cargo check --locked` compile-only; ARM64 runtime, WSL, desktop/display and live UI are NOT RUN. This is coverage inside the existing `owned` job, not a new required check (`test:linux-native` prints `Linux native checks passed` on Ubuntu, `NOT RUN` on macOS.)
 
+The `owned` checkout fetches complete history (`fetch-depth: 0`) for computer-use's commit gate.
+`test:commits` reads `GITHUB_EVENT_PATH`: PRs validate `pull_request.base.sha..pull_request.head.sha`
+(not the synthetic merge SHA), pushes validate `before..after`. Local runs default to `HEAD~1..HEAD`;
+a CLI range overrides `COMMIT_RANGE`, which overrides event selection. Missing/malformed event SHAs,
+zero-SHA push boundaries and shallow histories fail closed; supply an explicit range when an event
+has no comparison base, and fetch full history before validation. Disposable Git fixtures cover
+range selection, invalid intermediate subjects and depth-one clone/fetch recovery.
+Before the upstream sync, computer-use's `check` only ran `npm test && npm run test:package-assets`:
+the existing commit script was not in CI's check chain. Adding it exposed both the nonexistent
+`GITHUB_BASE_SHA` assumption and the previously unchanged depth-one `owned` checkout.
+
 The resource sampler's package gate runs real host sampling and bounded helper cleanup in each
 `owned` OS cell. `check-package-contracts` also builds/audits/installs its exact ESM tarball and
 runs an isolated Node consumer in each `contracts` OS cell. This library has no Pi entrypoint;

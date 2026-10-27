@@ -186,6 +186,21 @@ in `test:commits` because its shallow checkout has no `HEAD~1` for the default `
 This is a diagnosed gate/history failure, not a Linux helper failure; it was not blindly retried.
 New-head CI and all owner live/TCC acceptance remain separate evidence.
 
+Commit-gate follow-up: run `40560439112` reproduced the same failure on both owned OS cells.
+Before the sync, `origin/main`'s package `check` ran only `npm test && npm run test:package-assets`;
+the sync first wired `test:commits` into it. The owned checkout was already depth one. The script
+incorrectly expected `GITHUB_BASE_SHA`, so PR CI fell back to the missing `HEAD~1`. It now reads the
+actual PR base/head or push before/after from `GITHUB_EVENT_PATH`, and owned CI fetches full history.
+Shallow histories fail closed even when both endpoints exist, preventing hidden intermediate commits
+from escaping validation. See `docs/ci.md` for local/explicit-range behavior and unsupported bases.
+The original script failed with the exact ambiguous-range error in a disposable `clone --depth 1`;
+fetching complete history with the new script passes valid PR/push ranges and rejects a hidden bad
+subject. Seven CLI/workflow tests cover those paths; the original script fails the PR/push selection
+controls. Fresh full `npm run check`, scoped Biome, `make check-scripts` (692 Python and 8 Node tests)
+and the explicit 116 CI-path/merge-check/WSL-workflow tests passed after this fix. No `node_modules`
+repair was needed after the workspace move. The new test is declared in `sync-patches.json`;
+previous 45-file upstream-comparison evidence above predates this added harness-only file.
+
 ## Owner-only live acceptance (NOT RUN)
 
 This checklist covers every tool with nonzero calls in spec section 2.2, not just the desktop pair.

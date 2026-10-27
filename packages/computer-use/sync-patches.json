@@ -18,6 +18,7 @@
 		"prebuilt/macos/x64/bridge",
 		"scripts/check-act-outcomes.mjs",
 		"scripts/check-commit-messages.mjs",
+		"scripts/check-commit-messages.test.mjs",
 		"scripts/check-desktop-tools.mjs",
 		"scripts/check-docs-platform.mjs",
 		"scripts/check-docs.mjs",

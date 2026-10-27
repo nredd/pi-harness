@@ -76,7 +76,7 @@
 		"test:lifecycle": "tsx scripts/check-session-lifecycle.mjs",
 		"test:runtime": "tsx scripts/check-runtime-concurrency.mjs",
 		"test:output": "tsx scripts/check-bounded-output.mjs",
-		"test:commits": "node scripts/check-commit-messages.mjs",
+		"test:commits": "node --test scripts/check-commit-messages.test.mjs && node scripts/check-commit-messages.mjs",
 		"test:platform": "tsx scripts/check-platform-windows.mjs",
 		"test:windows-scripts": "node scripts/check-windows-build-scripts.mjs",
 		"test:package-assets": "node scripts/check-package-assets.mjs",
