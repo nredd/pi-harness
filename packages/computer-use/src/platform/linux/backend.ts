@@ -20,7 +20,7 @@ import type {
 	PlatformWaitForRequest,
 	PlatformWaitForResponse,
 } from "../types.ts";
-import { LINUX_HELPER_PROTOCOL_VERSION, linuxHelper } from "./helper.ts";
+import { LINUX_HELPER_PROTOCOL_VERSION, linuxHelper, resetLinuxHelper } from "./helper.ts";
 
 function normalizedProcessName(appName: string): string {
 	return appName.toLowerCase().split("/").pop()!.replace(/\.desktop$/i, "");
@@ -124,7 +124,7 @@ async function ensureReady(_ctx: unknown, state: PlatformReadyState, signal?: Ab
 export const linuxBackend: ComputerUsePlatformBackend = {
 	name: "linux",
 	shutdown(): void {
-		linuxHelper.dispose();
+		resetLinuxHelper();
 	},
 	ensureReady,
 	async listApps(signal?: AbortSignal): Promise<PlatformApp[]> {
