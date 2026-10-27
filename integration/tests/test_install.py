@@ -1110,6 +1110,7 @@ def test_verify_snapshot_rejects_failed_attestation(tmp_path: Path, monkeypatch:
 
         Parameters:
             *args (object): ignored.
+            **kwargs (object): ignored verifier options.
 
         Raises:
             RuntimeError: always.
@@ -1844,6 +1845,7 @@ def test_kind_changed_mid_run_rolls_back_and_fails(tmp_path: Path, monkeypatch: 
             verified (Verified): verified input.
             plan (install.Plan): planned changes.
             staging (Path): staging directory.
+            **kwargs (Any): preflight-selected tool paths forwarded to staging.
 
         Returns:
             Path | None: the staged agent tree.
@@ -4420,7 +4422,11 @@ def test_partial_directory_aside_cleanup_retries(
     (target / "second").write_text("replacement child")
 
     def replacement(document: dict[str, Any]) -> None:
-        """Record both children as the switch's known replacement before starting recovery."""
+        """Record both children as the switch's known replacement before starting recovery.
+
+        Parameters:
+            document (dict[str, Any]): journal fixture to edit.
+        """
         document["steps"][0]["replacement"] = asdict(install.RestoreHasher().identity(target))
 
     edit_journal(harness, replacement)
@@ -4429,7 +4435,15 @@ def test_partial_directory_aside_cleanup_retries(
     aside: Path | None = None
 
     def partial(path: Path, *, dir_fd: int | None = None) -> None:
-        """Delete one of two children before the real cleanup syscall sequence finishes."""
+        """Delete one of two children before the real cleanup syscall sequence finishes.
+
+        Parameters:
+            path (Path): directory to remove.
+            dir_fd (int | None): optional anchored parent descriptor.
+
+        Raises:
+            OSError | KeyboardInterrupt: the parametrized cleanup interruption.
+        """
         nonlocal aside
         if ".pi-stack-restore-" in Path(path).name:
             aside = Path(path)
@@ -4496,7 +4510,13 @@ def test_mutation_audit_detects_unplanned_create(
     original = install.switch_anchored
 
     def unplanned(layout: Layout, *args: Any, **kwargs: Any) -> None:
-        """Inject a write outside every declared CREATE, without touching an existing entry."""
+        """Inject a write outside every declared CREATE, without touching an existing entry.
+
+        Parameters:
+            layout (Layout): live destination paths.
+            *args (Any): remaining switch arguments.
+            **kwargs (Any): switch options.
+        """
         original(layout, *args, **kwargs)
         target = layout.agent_dir / "unplanned"
         if mutation == "mkdir":
@@ -4565,7 +4585,16 @@ def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, as
     monkeypatch.setattr(install, "fetch_bytes", lambda request: FIXTURE.read_bytes())
 
     def bundle(repo: str, path: Path, destination: Path) -> Path:
-        """Provide a local attestation input while retaining the real gh subprocess boundary."""
+        """Provide a local attestation input while retaining the real gh subprocess boundary.
+
+        Parameters:
+            repo (str): ignored attesting repository.
+            path (Path): ignored artifact path.
+            destination (Path): bundle file to create.
+
+        Returns:
+            Path: local bundle destination.
+        """
         destination.write_text("{}\n")
         return destination
 
@@ -4584,7 +4613,17 @@ def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, as
     }
 
     def verified(snapshot: StackSnapshot, node: str, workdir: Path, **kwargs: Any) -> Verified:
-        """Keep real dispatcher executions; tarball identity is this offline fixture's digest."""
+        """Keep real dispatcher executions; tarball identity is this offline fixture's digest.
+
+        Parameters:
+            snapshot (StackSnapshot): verified promotion fixture.
+            node (str): preflight-selected Node.js dispatcher.
+            workdir (Path): verification scratch directory.
+            **kwargs (Any): preflight-selected GitHub CLI path.
+
+        Returns:
+            Verified: inputs bound to the fixture's tarball bytes.
+        """
         assert install.node_version(node) == (22, 19, 0)
         artifact = workdir / "core.tgz"
         artifact.write_bytes(tarball)
@@ -4596,14 +4635,32 @@ def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, as
     original_run, original_popen = subprocess.run, subprocess.Popen
 
     def checked_run(argv: Any, *args: Any, **kwargs: Any) -> Any:
-        """Observe check_output's run boundary before cwd can reinterpret an executable."""
+        """Observe check_output's run boundary before cwd can reinterpret an executable.
+
+        Parameters:
+            argv (Any): subprocess command list.
+            *args (Any): remaining subprocess arguments.
+            **kwargs (Any): subprocess options.
+
+        Returns:
+            Any: the real subprocess result.
+        """
         seen.append(str(argv[0]))
         if assert_absolute:
             assert Path(argv[0]).is_absolute(), argv
         return original_run(argv, *args, **kwargs)
 
     def checked_popen(argv: Any, *args: Any, **kwargs: Any) -> Any:
-        """Also catch direct Popen users, independently of subprocess.run."""
+        """Also catch direct Popen users, independently of subprocess.run.
+
+        Parameters:
+            argv (Any): subprocess command list.
+            *args (Any): remaining subprocess arguments.
+            **kwargs (Any): subprocess options.
+
+        Returns:
+            Any: the real child process handle.
+        """
         if assert_absolute:
             assert Path(argv[0]).is_absolute(), argv
         return original_popen(argv, *args, **kwargs)
