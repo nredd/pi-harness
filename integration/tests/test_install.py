@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import ast
 import builtins
+import errno
 import hashlib
 import io
 import json
 import os
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tarfile
+from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
@@ -28,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import yaml
 
-from harness import install
+from harness import install, release
 from harness.install import (
     ConsentError,
     ExitCode,
@@ -139,6 +142,8 @@ class Harness:
         self.fetched: list[Mapping[str, str] | None] = []
         self.env = {"PATH": str(self.home / ".local" / "bin")}
         monkeypatch.setattr(install.Path, "home", classmethod(lambda cls: self.home))
+        # Generic installer units model a native host, even when this test suite runs on WSL.
+        monkeypatch.setattr(install, "is_wsl", lambda: False)
         monkeypatch.setattr(install, "preflight", lambda system, machine: {"node": "node"})
         monkeypatch.setattr(install, "verify_snapshot", lambda sha, workdir: self.snapshot)
         monkeypatch.setattr(install, "verify_release", lambda snapshot, node, workdir: self.verified)
@@ -386,6 +391,40 @@ def test_plan_lists_overwrites_for_existing_setup(tmp_path: Path, monkeypatch: p
     assert str(harness.layout.link) in text
 
 
+@pytest.mark.parametrize("failure", ["file", "eacces", "enospc", "erofs"])
+def test_installer_root_creation_failure_is_clean_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure: str
+) -> None:
+    """File-as-root and environment failures are clean exit 2 refusals, never raw mkdir tracebacks."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    root = harness.layout.root
+    for name in ("XDG_DATA_HOME", "PI_CODING_AGENT_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    if failure == "file":
+        root.parent.mkdir(parents=True, exist_ok=True)
+        root.write_text("not an installer directory")
+    else:
+        number = {"eacces": errno.EACCES, "enospc": errno.ENOSPC, "erofs": errno.EROFS}[failure]
+        original = Path.mkdir
+
+        def refuse(path: Path, *args: Any, **kwargs: Any) -> None:
+            """Inject the actual filesystem error at installer-root creation only."""
+            if path == root:
+                raise OSError(number, os.strerror(number), str(path))
+            original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", refuse)
+    before = tree(harness.home)
+    assert install.main([SHA, "--yes"]) == ExitCode.UNSUPPORTED
+    assert "UNSUPPORTED:" in caplog.text
+    assert f"Cannot create installer root '{root}'" in caplog.text
+    assert "nothing changed" in caplog.text
+    assert "Traceback" not in caplog.text
+    assert tree(harness.home) == before
+    assert harness.calls() == []
+
+
 def test_staging_failure_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed `pi install` leaves the live tree identical and no staging behind."""
     harness = Harness(tmp_path, monkeypatch)
@@ -470,6 +509,93 @@ def test_interrupted_switch_is_restored(tmp_path: Path, monkeypatch: pytest.Monk
     rollback(layout)
     assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
     assert not layout.journal.exists()
+
+
+@pytest.mark.parametrize("failure", ["eacces", "interrupt"])
+def test_unstarted_backup_rename_rolls_back_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """A pending step whose original never moved needs no missing backup and leaves no repair journal."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    layout = harness.layout
+    before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
+    original = os.replace
+    attempts: list[Path] = []
+
+    def fail_rename(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Fail at the original-to-backup syscall, after record persisted but before any move."""
+        if Path(src) == layout.agent_dir / "npm":
+            attempts.append(Path(src))
+            if failure == "eacces":
+                raise PermissionError(errno.EACCES, "backup rename refused")
+            raise KeyboardInterrupt
+        original(src, dst, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", fail_rename)
+        with pytest.raises(InstallError, match="rolled back") as raised:
+            harness.run(yes=True)
+    assert not isinstance(raised.value, RollbackError)
+    assert len(attempts) == 1
+    assert not layout.journal.exists()
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+    assert harness.run(yes=True) == ExitCode.OK
+
+
+def test_missing_backup_after_pending_rename_still_fails_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserve the lost-backup guard when rename succeeded but the saved phase was not persisted."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    layout = harness.layout
+    original = os.replace
+
+    def lose_backup_after_move(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Simulate loss after the original moved, before save can mark the pending entry saved."""
+        original(src, dst, **kwargs)
+        if Path(src) == layout.agent_dir / "npm":
+            (backup,) = layout.backups.glob("*/npm")
+            install.remove(backup)
+            (layout.agent_dir / "npm").mkdir()
+            (layout.agent_dir / "npm" / "replacement").write_text("new live entry")
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(os, "replace", lose_backup_after_move)
+    with pytest.raises(RollbackError, match=r"Expected backup.*missing"):
+        harness.run(yes=True)
+    assert layout.journal.exists()
+    assert (layout.agent_dir / "npm" / "replacement").read_text() == "new live entry"
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("pending", "yes"),
+        ("original", None),
+        ("original", [1]),
+        ("original", [True, 2, 3]),
+        ("original", [-1, 2, 3]),
+        ("original", ["1", 2, 3]),
+    ],
+)
+def test_untrusted_pending_journal_metadata_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, value: object
+) -> None:
+    """Pending metadata must be strictly typed before it can excuse an absent original backup."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    interrupt(harness, monkeypatch)
+    path = harness.layout.journal
+    document = json.loads(path.read_text())
+    step = next(step for step in document["steps"] if step["backup"])
+    step[key] = value
+    path.write_text(json.dumps(document))
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match="not trusted"):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
 
 
 def test_missing_expected_backup_keeps_journal_and_live_targets(
@@ -690,6 +816,7 @@ def test_missing_unix_primitive_refuses_before_pending_plan(tmp_path: Path, miss
             delattr(install.fcntl, missing.split('.')[1])
         platform.system = lambda: 'Linux'
         platform.machine = lambda: 'x86_64'
+        install.is_wsl = lambda: False
         sys.exit(install.main(sys.argv[1:]))
     """)
     result = subprocess.run(
@@ -836,6 +963,71 @@ def test_core_manifest_nonempty_bad_value_guard(tmp_path: Path, field: str, valu
     with pytest.raises(VerificationError) as raised:
         required_node(make_tarball(tmp_path / "core.tgz", manifest))
     assert f"`{field}`" in str(raised.value)
+
+
+@pytest.mark.parametrize("caller", ["download", "checksums", "attestation"])
+@pytest.mark.parametrize(
+    "failure", ["truncated", "protocol", "disconnected", "io", "timeout", "tls", "length"]
+)
+def test_http_read_failures_are_clean_verification_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    caller: str,
+    failure: str,
+) -> None:
+    """Truncated-read regressions plus the HTTP/I/O/TLS/length family preserve clean CLI exit 3."""
+    errors = {
+        "truncated": IncompleteRead(b"partial", 100),
+        "protocol": HTTPException("bad HTTP response"),
+        "disconnected": RemoteDisconnected("peer disconnected"),
+        "io": OSError(errno.EIO, "read failed"),
+        "timeout": TimeoutError("read timed out"),
+        "tls": ssl.SSLError("TLS read failed"),
+        "length": ValueError("bad Content-Length"),
+    }
+    error = errors[failure]
+    requests: list[str] = []
+
+    class BrokenResponse(io.BytesIO):
+        """A response that fails while consuming its body, not while opening the connection."""
+
+        def read(self, size: int | None = -1) -> bytes:
+            """Simulate an interrupted or malformed transfer after headers were accepted."""
+            raise error
+
+    def open_response(request: Any, **kwargs: Any) -> BrokenResponse:
+        """Record the exact caller URL and inject a body read failure."""
+        requests.append(request.full_url if hasattr(request, "full_url") else str(request))
+        return BrokenResponse(b"partial")
+
+    monkeypatch.setattr(release, "urlopen", open_response)
+    snapshot = real_snapshot()
+    artifact = tmp_path / "snapshot.json"
+    artifact.write_bytes(FIXTURE.read_bytes())
+    if caller == "attestation":
+        monkeypatch.setattr(install, "download", lambda url, destination: artifact)
+
+    def verify(opts: Options, env: object, ask: object) -> ExitCode:
+        """Use the real verification caller and CLI error mapping, with only the HTTP opener replaced."""
+        if caller == "download":
+            install.download("https://downloads.example.invalid/core.tgz", tmp_path / "download")
+        elif caller == "checksums":
+            core = snapshot.stack.core.model_copy(update={"tag": "v1.3.0-nredd.8"})
+            stack = snapshot.stack.model_copy(update={"core": core})
+            install.verify_release(snapshot.model_copy(update={"stack": stack}), "node", tmp_path)
+        else:
+            install.verify_snapshot(SHA, tmp_path)
+        return ExitCode.OK
+
+    monkeypatch.setattr(install, "run", verify)
+    assert install.main([SHA]) == ExitCode.VERIFICATION
+    assert len(requests) == 1
+    assert requests[0] in caplog.text
+    assert str(error) in caplog.text
+    assert "VERIFICATION FAILED, nothing changed" in caplog.text
+    assert "Traceback" not in caplog.text
+    assert not (tmp_path / "download").exists()
 
 
 def test_old_node_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1649,6 +1841,7 @@ from harness.promotion import load_promoted_snapshot
 from harness.stack import source_string
 snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
 sources = [source_string(package) for package in snapshot.stack.sources]
+install.is_wsl = lambda: False
 install.preflight = lambda system, machine: {"node": "node"}
 install.verify_snapshot = lambda sha, workdir: snapshot
 install.verify_release = lambda snapshot, node, workdir: install.Verified(snapshot, sources, {})
@@ -2453,6 +2646,36 @@ def test_preflight_makes_a_relative_discovery_absolute(
     assert install.node_version(tools["node"]) == (22, 19, 0)
 
 
+@pytest.mark.parametrize("pending_journal", [False, True], ids=["no-journal-guard", "pending-regression"])
+@pytest.mark.parametrize("flags", [[], ["--plan"], ["--yes"]], ids=["normal", "plan", "yes"])
+def test_wsl_admission_precedes_pending_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    pending_journal: bool,
+    flags: list[str],
+) -> None:
+    """Refuse physical WSL before --plan reporting or --yes recovery can inspect or change a journal."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    if pending_journal:
+        interrupt(harness, monkeypatch)
+    journal = harness.layout.journal.read_bytes() if pending_journal else None
+    for name in ("XDG_DATA_HOME", "PI_CODING_AGENT_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(install, "preflight", REAL_PREFLIGHT)
+    monkeypatch.setattr(install, "is_wsl", lambda: True)
+    monkeypatch.setattr(install.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(install.platform, "machine", lambda: "x86_64")
+    before = tree(tmp_path)
+    assert install.main([SHA, *flags]) == ExitCode.UNSUPPORTED
+    assert "WSL" in caplog.text
+    assert "nothing changed" in caplog.text
+    assert tree(tmp_path) == before
+    if pending_journal:
+        assert harness.layout.journal.read_bytes() == journal
+
+
 def test_wsl_is_refused_by_preflight_before_anything_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2538,6 +2761,17 @@ MALFORMED_MANIFESTS = {
     "not-an-object": "[]",
 }
 MALFORMED_LOCK_ENTRIES = {"string": "x", "null": None, "list": [], "number": 3}
+LOCK_CONTAINER_VALUES = [[], "not-an-object", 1, None, False]
+LOCK_OBJECT_FIELD_VALUES = [
+    [],
+    "",
+    1,
+    None,
+    {},
+    False,
+    "wrong-nonempty-value",
+    pytest.param(..., id="omitted"),
+]
 
 
 def test_malformed_manifest_identity_is_a_value_error(tmp_path: Path) -> None:
@@ -2583,10 +2817,17 @@ def test_installed_manifest_independent_field_guard(tmp_path: Path, field: str, 
     assert tree(tmp_path) == before
 
 
-@pytest.mark.parametrize("field", ["root", "packages"])
-@pytest.mark.parametrize("value", [[], "not-an-object", 1, None, False])
-def test_owned_lock_container_guard(tmp_path: Path, field: str, value: object) -> None:
-    """Guard coverage: malformed root/packages containers already failed; diagnostics name the field."""
+def owned_lock_container_error(tmp_path: Path, field: str, value: object) -> str:
+    """Require unchanged refusal without mutations and return its diagnostic for a separate test.
+
+    Parameters:
+        tmp_path (Path): scratch directory.
+        field (str): malformed container.
+        value (object): bad JSON container value.
+
+    Returns:
+        str: rejection message, without asserting its newer field-specific wording.
+    """
     agent = tmp_path / "agent"
     lock = agent / "npm" / "package-lock.json"
     lock.parent.mkdir(parents=True)
@@ -2595,16 +2836,35 @@ def test_owned_lock_container_guard(tmp_path: Path, field: str, value: object) -
     before = tree(tmp_path)
     with pytest.raises(InstallError) as raised:
         install.verify_owned_integrity(real_snapshot(), agent)
-    assert f"`{field}`" in str(raised.value)
     assert tree(tmp_path) == before
+    return str(raised.value)
 
 
-@pytest.mark.parametrize("field", ["version", "integrity"])
-@pytest.mark.parametrize(
-    "value", [[], "", 1, None, {}, False, "wrong-nonempty-value", pytest.param(..., id="omitted")]
-)
-def test_owned_lock_object_field_guard(tmp_path: Path, field: str, value: object) -> None:
-    """Guard coverage: object entries with bad version/integrity were already promotion mismatches."""
+@pytest.mark.parametrize("field", ["root", "packages"])
+@pytest.mark.parametrize("value", LOCK_CONTAINER_VALUES)
+def test_owned_lock_container_refusal_guard(tmp_path: Path, field: str, value: object) -> None:
+    """Unchanged refusal guard: all ten cases pass on 8488a7a, independent of diagnostic wording."""
+    owned_lock_container_error(tmp_path, field, value)
+
+
+@pytest.mark.parametrize("field", ["root", "packages"])
+@pytest.mark.parametrize("value", LOCK_CONTAINER_VALUES)
+def test_owned_lock_container_diagnostic_regression(tmp_path: Path, field: str, value: object) -> None:
+    """Diagnostic regression: all ten field-label assertions fail on 8488a7a."""
+    assert f"`{field}`" in owned_lock_container_error(tmp_path, field, value)
+
+
+def owned_lock_object_field_error(tmp_path: Path, field: str, value: object) -> str:
+    """Require an object-entry mismatch without mutations, leaving wording to a separate test.
+
+    Parameters:
+        tmp_path (Path): scratch directory.
+        field (str): malformed entry field.
+        value (object): bad JSON value or omission sentinel.
+
+    Returns:
+        str: rejection message, without asserting its newer field-specific wording.
+    """
     snapshot = real_snapshot()
     entries: dict[str, dict[str, Any]] = {
         f"node_modules/{owned.package.rsplit('@', 1)[0]}": {
@@ -2625,8 +2885,22 @@ def test_owned_lock_object_field_guard(tmp_path: Path, field: str, value: object
     before = tree(tmp_path)
     with pytest.raises(InstallError) as raised:
         install.verify_owned_integrity(snapshot, agent)
-    assert f"`{field}`" in str(raised.value)
     assert tree(tmp_path) == before
+    return str(raised.value)
+
+
+@pytest.mark.parametrize("field", ["version", "integrity"])
+@pytest.mark.parametrize("value", LOCK_OBJECT_FIELD_VALUES)
+def test_owned_lock_object_field_refusal_guard(tmp_path: Path, field: str, value: object) -> None:
+    """Unchanged refusal guard: all sixteen cases pass on 8488a7a without wording assertions."""
+    owned_lock_object_field_error(tmp_path, field, value)
+
+
+@pytest.mark.parametrize("field", ["version", "integrity"])
+@pytest.mark.parametrize("value", LOCK_OBJECT_FIELD_VALUES)
+def test_owned_lock_object_field_diagnostic_regression(tmp_path: Path, field: str, value: object) -> None:
+    """Diagnostic regression: all sixteen field-label assertions fail on 8488a7a."""
+    assert f"`{field}`" in owned_lock_object_field_error(tmp_path, field, value)
 
 
 @pytest.mark.parametrize("case", sorted(MALFORMED_MANIFESTS))

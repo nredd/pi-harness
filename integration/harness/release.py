@@ -28,6 +28,7 @@ import subprocess
 import tarfile
 import tempfile
 from collections.abc import Callable, Mapping
+from http.client import HTTPException
 from pathlib import Path
 from types import MappingProxyType
 from urllib.error import HTTPError
@@ -98,6 +99,41 @@ GITHUB_TOKEN_VARIABLES = frozenset(
     {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 )
 ProvenanceCheck = Callable[[Path, str], None]
+
+
+class FetchError(OSError):
+    """A public HTTP read failed; preserve status for the anonymous rate-limit fallback."""
+
+    def __init__(self, url: str, error: Exception) -> None:
+        """Keep the URL and reason without exposing callers to protocol-specific exceptions.
+
+        Parameters:
+            url (str): public resource URL.
+            error (Exception): HTTP, I/O, TLS, timeout or response-length failure.
+        """
+        self.status = error.code if isinstance(error, HTTPError) else None
+        super().__init__(f"Could not fetch '{url}': {error}")
+
+
+def fetch_bytes(request: str | Request) -> bytes:
+    """Read a complete public response, normalizing HTTP and I/O failures in one place.
+
+    Parameters:
+        request (str | Request): public URL, optionally with explicit non-credential headers.
+
+    Returns:
+        bytes: complete response body, never a partially consumed response.
+
+    Raises:
+        FetchError: HTTPException (including IncompleteRead/RemoteDisconnected), OSError
+            (including TimeoutError/SSLError), or a malformed response-length ValueError.
+    """
+    url = request.full_url if isinstance(request, Request) else request
+    try:
+        with urlopen(request, timeout=120) as response:
+            return response.read()
+    except (HTTPException, OSError, ValueError) as error:
+        raise FetchError(url, error) from error
 
 
 class AttestationRateLimitedError(RuntimeError):
@@ -199,10 +235,9 @@ def release_checksums(tag: str) -> dict[str, str]:
     if tag in LEGACY_RELEASE_TAGS:
         return {release_asset_url(tag, name): digest for name, digest in LEGACY_CHECKSUMS[tag].items()}
     try:
-        with urlopen(release_asset_url(tag, "SHA256SUMS"), timeout=120) as response:
-            contents = response.read().decode("utf-8")
-    except OSError as error:
-        raise ValueError(f"Could not download release checksums for '{tag}'") from error
+        contents = fetch_bytes(release_asset_url(tag, "SHA256SUMS")).decode("utf-8")
+    except (FetchError, UnicodeError) as error:
+        raise ValueError(f"Could not download release checksums for '{tag}': {error}") from error
     checksums: dict[str, str] = {}
     for line in contents.splitlines():
         fields = line.split(maxsplit=1)
@@ -259,10 +294,9 @@ def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
     url = f"{ATTESTATIONS_API}/repos/{repo}/attestations/sha256:{digest}"
     request = Request(url, headers={"Accept": "application/vnd.github+json"})
     try:
-        with urlopen(request, timeout=120) as response:
-            document = json.loads(response.read())
-    except HTTPError as error:
-        if error.code in RATE_LIMIT_STATUSES:
+        document = json.loads(fetch_bytes(request))
+    except FetchError as error:
+        if error.status in RATE_LIMIT_STATUSES:
             raise AttestationRateLimitedError(
                 f"Anonymous attestations API refused '{url}': {error}"
             ) from error
@@ -425,8 +459,7 @@ def download_verified_asset(
         FileNotFoundError: a non-legacy asset needs `gh`, which is unavailable.
         OSError: the download (including `URLError`) or the write to `destination` failed.
     """
-    with urlopen(url, timeout=120) as response:
-        destination.write_bytes(response.read())
+    destination.write_bytes(fetch_bytes(url))
     verify_asset(destination, url, checksums)
     if tag not in LEGACY_RELEASE_TAGS:
         (provenance or verify_provenance)(destination, tag)

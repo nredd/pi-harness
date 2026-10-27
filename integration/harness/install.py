@@ -44,8 +44,6 @@ from datetime import UTC, datetime
 from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.error import HTTPError
-from urllib.request import urlopen
 
 # Native Windows has no fcntl: let platform/lock admission refuse it without an import traceback.
 try:
@@ -69,6 +67,7 @@ from harness.promotion import (
     verify_core_assets,
 )
 from harness.release import (
+    fetch_bytes,
     fetch_release,
     release_asset_url,
     release_checksums,
@@ -366,10 +365,13 @@ def preflight(
     return tools
 
 
-def require_unix_runtime() -> None:
+def require_unix_runtime(*, wsl: bool | None = None) -> None:
     """Admit the platform and required Unix primitives before any layout or journal access.
 
     Recovery deliberately precedes external-tool preflight, but must never bypass this gate.
+
+    Parameters:
+        wsl (bool | None): test injection; `None` physically detects WSL on Linux.
 
     Raises:
         UnsupportedError: the platform or a required Unix primitive is unavailable.
@@ -377,6 +379,11 @@ def require_unix_runtime() -> None:
     system, machine = platform.system(), platform.machine()
     if (system, machine) not in SUPPORTED_PLATFORMS:
         raise UnsupportedError(f"platform '{system}/{machine}' is not supported, nothing changed")
+    detected = wsl if wsl is not None else system == "Linux" and is_wsl()
+    if detected:
+        raise UnsupportedError(
+            "Windows Subsystem for Linux (WSL) is not supported; use native Linux or macOS, nothing changed"
+        )
     required = ("O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK", "O_NOCTTY", "getuid", "fchmod")
     missing = [f"os.{name}" for name in required if not hasattr(os, name)]
     if fcntl is None:
@@ -446,10 +453,7 @@ def download(url: str, destination: Path) -> Path:
         VerificationError: the URL does not exist or could not be read.
     """
     try:
-        with urlopen(url, timeout=120) as response:
-            destination.write_bytes(response.read())
-    except HTTPError as error:
-        raise VerificationError(f"Could not download '{url}': HTTP {error.code}") from error
+        destination.write_bytes(fetch_bytes(url))
     except OSError as error:
         raise VerificationError(f"Could not download '{url}': {error}") from error
     return destination
@@ -1040,9 +1044,18 @@ class Journal:
         """
         if self.backup_fd is None:
             raise OSError("Backup directory is not open")
+        if not self.steps or self.steps[-1]["target"] != str(live):
+            raise OSError(f"No pending journal entry for '{live}'")
         self.check_store()
         os.replace(live, backup.name, dst_dir_fd=self.backup_fd)
         self.check_store()
+        self.steps[-1]["pending"] = False
+        self.persist()
+
+    def persist(self) -> None:
+        """Persist the current two-phase journal before continuing the switch."""
+        document = {"backups": str(self.backups), "steps": self.steps}
+        write_atomic(self.path, json.dumps(document, indent=2), mode=JOURNAL_MODE)
 
     def record(self, target: Path, name: str) -> Path | None:
         """Durably record a step before it runs.
@@ -1063,9 +1076,12 @@ class Journal:
         require_restorable_kind(self.layout, target, "the steps before it are rolled back")
         existed = target.exists() or target.is_symlink()
         backup = self.backups / name if existed else None
-        self.steps.append({"target": str(target), "backup": str(backup) if backup else None})
-        document = {"backups": str(self.backups), "steps": self.steps}
-        write_atomic(self.path, json.dumps(document, indent=2), mode=JOURNAL_MODE)
+        step: dict[str, Any] = {"target": str(target), "backup": str(backup) if backup else None}
+        if backup is not None:
+            info = target.lstat()
+            step |= {"pending": True, "original": [info.st_dev, info.st_ino, info.st_ctime_ns]}
+        self.steps.append(step)
+        self.persist()
         return backup
 
     def commit(self) -> None:
@@ -1114,6 +1130,8 @@ class Step:
 
     target: Path
     backup: Path | None
+    pending: bool = False
+    original: tuple[int, int, int] | None = None
 
 
 def journaled_paths(layout: Layout) -> dict[Path, tuple[str, frozenset[str]]]:
@@ -1222,8 +1240,11 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         raise ValueError(f"'{backups}' is not owned by the current user")
     steps: list[Step] = []
     for raw in raw_steps:
-        if not isinstance(raw, dict) or set(raw) != {"target", "backup"}:
-            raise ValueError(f"step {raw!r} is not a `{{target, backup}}` object")
+        if not isinstance(raw, dict) or set(raw) not in (
+            {"target", "backup"},
+            {"target", "backup", "pending", "original"},
+        ):
+            raise ValueError(f"step {raw!r} is not a valid journal step object")
         if not isinstance(raw["target"], str) or str(Path(raw["target"])) != raw["target"]:
             raise ValueError(f"step target '{raw['target']}' is not a canonical path")
         target = Path(raw["target"])
@@ -1231,6 +1252,16 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         if any(step.target == target for step in steps):
             raise ValueError(f"step target '{target}' is recorded twice")
         backup = backups / name
+        pending, original = False, None
+        if "pending" in raw:
+            identity = raw["original"]
+            if not isinstance(raw["pending"], bool) or not isinstance(identity, list) or len(identity) != 3:
+                raise ValueError(f"step for '{target}' has invalid pending/original metadata")
+            if any(type(value) is not int or value < 0 for value in identity):
+                raise ValueError(f"step for '{target}' has invalid original device/inode/ctime")
+            if raw["backup"] is None:
+                raise ValueError(f"step for '{target}' has original metadata without a backup")
+            pending, original = raw["pending"], (identity[0], identity[1], identity[2])
         if raw["backup"] is None:
             steps.append(Step(target, None))
             continue
@@ -1239,7 +1270,7 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         kind = entry_kind(backup)
         if kind is not None and kind not in kinds:
             raise ValueError(f"backup '{backup}' is a {kind}, expected {' or '.join(sorted(kinds))}")
-        steps.append(Step(target, backup))
+        steps.append(Step(target, backup, pending, original))
     return steps
 
 
@@ -1291,20 +1322,34 @@ def rollback(layout: Layout) -> list[str]:
     backups, steps = load_journal(layout)
     journal = Journal(layout, backups)
     restored = []
+    not_started: set[Path] = set()
     try:
         with journal.open_backups(create=False):
-            # A missing backup is ambiguous (not started, already restored, or lost). Never call
-            # that success: a switched target may still be live. Validate all before deleting any.
+            # A missing backup is safe ONLY for a pending rename whose original entry is still
+            # at the live path. Saved/legacy steps or a changed live identity must fail loudly.
             for step in steps:
                 if step.backup is not None:
                     try:
                         os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
                     except FileNotFoundError as error:
+                        if step.pending and step.original is not None:
+                            try:
+                                info = step.target.lstat()
+                            except FileNotFoundError:
+                                info = None
+                            if (
+                                info is not None
+                                and (info.st_dev, info.st_ino, info.st_ctime_ns) == step.original
+                            ):
+                                not_started.add(step.target)
+                                continue
                         raise OSError(
                             f"Expected backup '{step.backup}' is missing; restore by hand"
                         ) from error
             for step in reversed(steps):
                 journal.check_store()
+                if step.target in not_started:
+                    continue
                 remove(step.target)
                 if step.backup is not None:
                     os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
@@ -1633,7 +1678,12 @@ def locked(layout: Layout) -> Iterator[None]:
             f"platform '{platform.system()}/{platform.machine()}' is not supported: "
             "Unix file locking is unavailable, nothing changed"
         )
-    layout.root.mkdir(parents=True, exist_ok=True)
+    try:
+        layout.root.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise UnsupportedError(
+            f"Cannot create installer root '{layout.root}'; nothing changed: {error}"
+        ) from error
     path = layout.root / "lock"
     kind = entry_kind(path)
     if kind not in {None, "file"}:
