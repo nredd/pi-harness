@@ -3,22 +3,25 @@
 Status: proposal for review. Nothing here is ported, pinned or wired yet. Measurements are from
 `origin/main` `f2255c1`, macOS arm64 only, on a loaded laptop (load average 5-23), Node `26.12.0`,
 Vitest `5.0.3`, pinned Bun `1.3.14` (official `bun-darwin-aarch64.zip`, SHA-256
-`d8b96221...2652620` checked against `SHASUMS256.txt`) and Bun `1.4.4` (newest stable, released
-2026-10-22, [here](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.4)). Linux was NOT
-measured. Timings are indicative only. Commands to reproduce are in the appendix.
+`d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620` checked against
+`SHASUMS256.txt`) and Bun `1.4.4` (newest stable, released 2026-10-22,
+[here](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.4)). Linux was NOT measured.
+Timings are indicative only. Commands and probe sources are in the appendix; the raw logs named
+`/tmp/...` below are scratch output, NOT in the repo, so rerun the commands rather than trust them.
 
 TL;DR:
 
-- ONE tool for owned TypeScript: **Vitest** (tests, coverage, benches), executed on **both
-  engines**: Node (`vitest run`) and Bun (`bun --bun vitest run`). Not `bun test`
+- ONE tool for owned TypeScript: Vitest (tests, coverage, benches), executed on BOTH engines:
+  Node (`vitest run`) and Bun (`bun --bun vitest run`). Not `bun test`. Production is Node today
+  and Bun is the target, so a Bun-only runner would test an engine nothing ships on yet
 - Measured: the full Vitest suites already run under Bun with zero rewrites. 4 of 9 workspaces
   are fully green on both Bun versions. The remaining 49 failures on Bun 1.4.4 (46 Bun-only) are
   genuine Bun-vs-Node behavior differences that the `bun test` subsets never exercised
-- Coverage: **Istanbul** everywhere. Its counters are engine-independent (identical denominators
+- Coverage: Istanbul everywhere. Its counters are engine-independent (identical denominators
   on Node, Bun 1.3.14 and 1.4.4), it counts never-imported files and it has branches. Bun's native
   coverage has no branches and no unimported-file include, on 1.3.14 *and* 1.4.4
 - Python stays (pytest, `uv`, `ruff`, `ty`). `dotfiles` stays on `node --test`, documented exception
-- Production engine today is **Node** everywhere. Bun standalone is CI-only. So both engines are
+- Production engine today is Node everywhere. Bun standalone is CI-only. So both engines are
   required, and Node stays primary until the standalone actually ships
 
 ## 1. Goals, non-goals, decision criteria
@@ -51,7 +54,9 @@ Decision criteria, ranked:
 Test counts: Vitest on Node, this checkout. API counts: `grep -rhoE '\bvi\.<api>\b'` over each
 directory, excluding `node_modules`/`dist` (script in appendix). "Raw `bun test`" is the full
 directory under `bun test` with no changes (coverage-baseline task, Bun 1.3.14). "Vitest on Bun"
-is `bun --bun vitest run` with the package's own config.
+is `bun --bun vitest run` with the package's own config. The raw column comes from the coverage
+baseline run on `d6dad4e`; section 3's reruns on `f2255c1` differ by 1 test in `session-kit` and
+`todo`.
 
 | Dir | Runner(s) today | Tests | `vi.mock` / `importActual`+`importOriginal` / `hoisted` | async timers / `useFakeTimers` / `waitFor` | `setConfig` / `stubEnv` / `resetModules` | Config features Bun's runner lacks | Raw `bun test` fail | Vitest on Bun fail 1.3.14 / 1.4.4 |
 | --- | --- | ---: | --- | --- | --- | --- | ---: | --- |
@@ -81,7 +86,7 @@ Vitest-on-Bun failures, classified (logs `/tmp/vr-*-bun.txt`, `/tmp/vr13-*.txt`)
 
 | Package | Failing files | Cause | Real defect class? |
 | --- | --- | --- | --- |
-| `subagents` | `custom-agents` (9), `skill-loader` (2) | Bun's `os.homedir()` ignores runtime `HOME` changes (repro below). Tests point `HOME` at a temp dir; source calls `homedir()` and reads the REAL `~/.agents` (`expected 8 to be 1`) | Yes, and a hermeticity hazard. `src/invocation-config.ts:84` already works around it |
+| `subagents` | `custom-agents` (9), `skill-loader` (2) | Bun's `os.homedir()` ignores runtime `HOME` changes (repro below). Tests point `HOME` at a temp dir; source calls `homedir()` and reads the REAL `~/.agents` (`expected 8 to be 1`) | Yes, and a hermeticity hazard. `src/invocation-config.ts:84-85` already prefers `process.env.HOME` over `homedir()` in `resolveCwdParam` |
 | `subagents` | `workflow-runtime` (1) | reported script line numbers differ under JSC | Yes, user-visible error locations |
 | `todo` | `config`, `todo-overlay.*`, `todo.guidance` (15) | same `homedir()` behavior via `.test-support/setup.ts` | Yes, same hazard |
 | `dev-tools` | `core/process-lines` (18), `core/process` (1) | `child.stdout = new PassThrough()` throws `Attempted to assign to readonly property` on Bun's `ChildProcess` | Test-double only, rewrite the fake |
@@ -194,8 +199,9 @@ Why is `benchmarks/comparison` Python:
 - Inference, NOT recorded: the benchmark's subject fixtures are Python projects, so a
   Python harness that shares `uv`/`ruff`/`ty` with them was the path of least resistance.
   Author preference is equally plausible
-- Either way, the migration plan preserves it as historical (`docs/migration-plan.md` section 1:
-  "Preserve the benchmark's experimental versions"; out of scope: "historical benchmark reruns").
+- Either way, the migration plan preserves it as historical (`docs/migration-plan.md:33` keeps its
+  experimental versions and invalid-run annotations; `:218` puts historical benchmark reruns out
+  of scope).
   A port changes the instrument that produced the retained results, for no engine coverage gain
 
 Python coverage: keep pytest-cov. Emit LCOV (`--cov-report=lcov`) for `scripts/` and
@@ -235,13 +241,14 @@ Recommended (Vitest + Istanbul, both engines):
   Denominators are identical, so the Node and Bun signals are directly comparable and the "JSC and
   V8 counters differ" problem disappears. Hit deltas are the engine-specific paths, which is the
   point of running both. This also answers the reload-accounting question: Istanbul reports the
-  same 92.54% lines on both engines, versus V8's documented wrong merge on Node
+  same 6221/6722 lines on both engines (Vitest prints 92.54%), versus V8's documented wrong merge
+  on Node
 - Policy plumbing (PR #162, schema 2): `primary` = Istanbul on Node, `bun` = Istanbul on Bun over
   the FULL suite with the SAME `files` inventory as `primary`. No more Bun subset lists
 - `enforcement` flip for a package's `bun` signal, `report-only` -> `enforced`, when ALL hold:
   full suite green under Bun on both owned OSes; Bun inventory == primary inventory; complete-source
   receipts recorded; an `enforcement_changes`-style reviewed entry. The accounting algorithm does
-  not change (`docs/coverage.md` already says only producer wiring changes)
+  not change (PR #162's `docs/coverage.md` already says only producer wiring changes)
 - Exclusions stay in `coverage/policy.json` only, with reasons; nothing in per-package Vitest
   configs beyond `include`
 - Branch coverage: report-only now (PR #162 already reports Istanbul branches). Gate branches only
@@ -250,10 +257,20 @@ Recommended (Vitest + Istanbul, both engines):
 - Python: pytest-cov LCOV into the same accounting (section 4)
 - `node --test` surfaces: disappear from the repo after units 5-6; c8 producers go with them
 
-Fallback if D1 picks native `bun test`: coverage would be lines+functions only forever (no Bun
-release offers branches), an import-all test file per package generated from the policy globs (M:
-importing `never.ts` makes it appear with `FNH:0`), `text`+`lcov` both mandatory, and a regression
-fixture per Bun bump because counters change between versions (M: `LF:1` -> `LF:2`).
+Fallback if D1 picks native `bun test` as the only runner:
+
+- Signals: `primary` becomes Bun-native LCOV; the Node signal disappears, and with it every
+  Node-engine defect (section 8). `bun` and `primary` collapse into one signal
+- Import-all: a generated `test/coverage-import-all.test.ts` per package that imports every file
+  matched by the policy `owned` globs minus exclusions (M: importing `never.ts` makes it appear
+  with `FNH:0`). A check in `make check-scripts` fails when the generated list and the expanded
+  policy inventory disagree
+- Enforcement: `text`+`lcov` both mandatory (1.3.14 lcov-only bypass); the accounting script, not
+  `coverageThreshold`, enforces integer budgets. The report-only -> enforced flip uses the same
+  conditions as above minus branches
+- Branches: none, permanently, on every released Bun (D4 reduces to "lines+functions only")
+- Counter drift: a regression fixture per Bun bump, because executable-line counts change between
+  versions (M: `LF:1` -> `LF:2`), so a bump can move budgets without a source change
 
 ## 7. dotfiles
 
@@ -292,7 +309,7 @@ stays required because published packages keep serving stock-Pi Node users.
 | --- | --- | --- |
 | `os.homedir()` ignores runtime `HOME` (1.3.14 and 1.4.4, M) | Bun test hermeticity: source reads the owner's REAL `~/.agents`, `~/.config` | before any full Bun suite runs: launch Bun suites with `HOME` set to a temp dir at spawn, and add a setup assertion that fails if `homedir() !== process.env.HOME`. Then inject home dirs in `subagents`/`todo` |
 | Bun `ChildProcess.stdout` is readonly (M) | `dev-tools` test doubles | build fakes from `EventEmitter` + streams, not by mutating `ChildProcess` |
-| `process.exit`/`exit` event bug on 1.3.14, passes on 1.4.4 (issue body; not reproduced here) | optional core Bun rows in `forks/pi/packages/codemode/test/worker-lifetime.test.ts` (skipped when `bun` is absent; core CI has no Bun) | gate with the Bun toolchain PR; do not add Bun to core CI on 1.3.14 |
+| `process.exit`/`exit` event bug on 1.3.14, passes on 1.4.4 (issue body; NOT reproduced here, an explicit unknown) | optional core Bun rows in `forks/pi/packages/codemode/test/worker-lifetime.test.ts` (skipped when `bun` is absent; core CI has no Bun) | owned by the Bun toolchain PR (phase 6): reproduce with that fixture on both versions first; do not add Bun to core CI on 1.3.14 |
 | `NODE_OPTIONS` preloads never load in standalone ([#14](https://github.com/nredd/pi-harness/issues/14)) | 7 auth D/E cases skip | unchanged by this spec; package suites never depend on preloads (Vitest `setupFiles` run inside the pool) |
 | Nondeterministic standalone build ([#72](https://github.com/nredd/pi-harness/issues/72)) | `stack` flake, release safety | unchanged; package suites under Bun do not bundle, so they cannot catch or cause it |
 | macOS standalone exit flakes ([#100](https://github.com/nredd/pi-harness/issues/100), [#108](https://github.com/nredd/pi-harness/issues/108)) | `stack (macos-14, personal)` | unchanged; existing one-rerun policy. Watch for the same family in Bun package suites (monitor/reaping tests) and file, never retry-until-green |
@@ -308,7 +325,9 @@ stays required because published packages keep serving stock-Pi Node users.
 Acceptance for EVERY phase: green in both `owned` cells (macOS + Linux); no weakened or deleted
 assertions; no timeout increases; every gap closed gets a test that fails without the change
 (named in the PR); `primary` coverage stays enforced with budgets never raised; `bun` signals
-move report-only -> enforced only per section 6; required check names unchanged.
+move report-only -> enforced only per section 6; required check names unchanged. Phase 1 also
+records hosted Linux and macOS results and runtimes for every Bun suite it enables before phase 2
+starts: nothing in this spec was measured on Linux.
 
 | Phase | Scope | Size | Parallel units |
 | --- | --- | --- | --- |
@@ -329,7 +348,8 @@ First 3 PRs:
    the real home), make `test:bun` = `bun --bun vitest run` for those four, delete their `bun test`
    subsets. Gap test: a fixture that mutates `HOME` and must fail the guard under Bun
 2. `Inject home directories into subagents and todo config loading`: replace runtime `HOME`
-   mutation with explicit seams (pattern exists at `packages/subagents/src/invocation-config.ts:84`);
+   mutation with explicit home-directory parameters (today only an env override exists, at
+   `packages/subagents/src/invocation-config.ts:84-85`);
    then enable their full Bun suites. Gap tests: the 26 currently Bun-failing tests, unchanged
    assertions, green on both engines
 3. `Switch coverage producers to Istanbul and declare full-suite Bun signals`: after PR #162 lands;
@@ -340,7 +360,7 @@ First 3 PRs:
 
 | # | Decision | Recommendation |
 | --- | --- | --- |
-| D1 | single tool: Vitest on two engines, or native `bun test` port | Vitest on Node + Bun. Native `bun test` is L effort and permanently loses branch coverage and unimported-file coverage |
+| D1 | single tool: Vitest on two engines, or native `bun test` port | Vitest on Node + Bun. Tests must run on the shipping engine (Node) and the target (Bun); native `bun test` drops Node, is L effort, and permanently loses branch and unimported-file coverage |
 | D2 | primary engine | Node until the standalone ships; then Bun primary, Node still required |
 | D3 | coverage provider | Istanbul everywhere (engine-independent, works on pinned 1.3.14) |
 | D4 | branch coverage | report-only now; gate at 100% only after lines/functions hit 100% |
@@ -374,9 +394,51 @@ Coverage counters (`@vitest/coverage-istanbul@5.0.3`, installed `--no-save` for 
   --coverage.provider=istanbul --coverage.include='src/**/*.ts' --coverage.reporter=text-summary
 ```
 
-Bun-native coverage probe: `src/half.ts` (one of two functions called), `src/full.ts`,
-`src/never.ts` (never imported), `bunfig.toml` `coverageThreshold = { lines = 1.0, functions = 1.0 }`,
-then `bun test --coverage --coverage-reporter=lcov` vs `--coverage-reporter=text --coverage-reporter=lcov`:
+`homedir()` probe (`home.mjs`), run with `node`, `bun` 1.4.4 and the pinned `bun`:
+
+```js
+import os from "node:os";
+const before = os.homedir();
+process.env.HOME = "/tmp/fakehome";
+console.log(JSON.stringify({ before, after: os.homedir() }));
+```
+
+Engine inside the pool: a throwaway test asserting
+`typeof Bun !== "undefined" ? "bun " + Bun.version : "node " + process.version` received
+`bun 1.4.4` / `bun 1.3.14` under `bun --bun vitest run` (plan-mode's `forks` pool included) and
+`node v26.12.0` under `vitest run`.
+
+Bun-native coverage probe, in an empty directory:
+
+```ts
+// src/half.ts: one of two functions called
+export function used(x: number): number {
+  if (x > 0) {
+    return 1;
+  }
+  return 2;
+}
+export function unused(): string {
+  return "never called";
+}
+// src/full.ts
+export const full = (n: number): number => n + 1;
+// src/never.ts: never imported
+export function neverImported(): number {
+  return 42;
+}
+// test/a.test.ts
+import { expect, test } from "bun:test";
+import { used } from "../src/half.ts";
+import { full } from "../src/full.ts";
+test("covers", () => { expect(used(1)).toBe(1); expect(full(1)).toBe(2); });
+```
+
+With `bunfig.toml` `[test]` `coverageThreshold = { lines = 1.0, functions = 1.0 }` and
+`coverageSkipTestFiles = true`, run `bun test --coverage --coverage-reporter=lcov` vs
+`--coverage-reporter=text --coverage-reporter=lcov`. Per-file enforcement: threshold `0.55`
+(aggregate 75%, `half.ts` 50%) exits 1 on both versions. Import-all: adding a test that imports
+`../src/never.ts` makes it appear (`FNF:1 FNH:0`), with `LF:1` on 1.3.14 and `LF:2` on 1.4.4:
 
 ```text
 bun 1.3.14 reporters=text,lcov rc=1  never.ts in lcov: 0  BRDA: 0
