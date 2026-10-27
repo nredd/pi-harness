@@ -4,7 +4,6 @@ description: Runs a repo's gate or a stated verification command and reports the
 tools: bash, read, grep, find, ext:pi-dev-tools/git_status, ext:pi-dev-tools/git_log, ext:pi-dev-tools/git_diff
 extensions: [pi-dev-tools]
 skills: false
-thinking: low
 max_turns: 30
 prompt_mode: replace
 ---
