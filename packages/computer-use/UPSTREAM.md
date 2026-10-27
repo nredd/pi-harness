@@ -42,7 +42,9 @@ The note is historical evidence, not validation of this sync.
 - Keep upstream's compact observation rendering, `detail: outline`, find validation, activity glow,
   headless synthesized-input rejection and Linux/Windows native fixes. Glow tracks the same 11
   upstream state-scoped tools, not the two carried desktop tools: do not expand its overlay into
-  whole-display capture as an incidental sync change.
+  whole-display capture as an incidental sync change. A whole-display `desktop_screenshot` can
+  nevertheless include a glow already activated by a state-scoped tool or another session; only
+  single-window `observe_ui` captures exclude that overlay.
 - Merge `desktop_control` alongside `activity_glow` in config and public registration. This avoids
   the six activity-glow TypeScript errors from the trial rebase.
 - Keep one Swift PURE block, not duplicate modal/capture definitions from upstream's #95 salvage.
@@ -52,8 +54,9 @@ The note is historical evidence, not validation of this sync.
 - Adopt upstream's docs site layout and generators. Generate the tool reference from exported
   definition inventories, not runtime platform registration: initial Linux CI exposed the 11-vs-13
   host-dependent output. A subprocess fixture reproduced that exact failure on the Mac before the
-  fix, then passed for both `linux` and `darwin`; the docs gate now always runs it. Pack only docs content, not site dependencies or
-  build output. Preserve Linux source-build documentation in its moved page.
+  fix, then passed for both `linux` and `darwin`; the docs gate now always runs it.
+- Pack only docs content, not site dependencies or build output. Preserve Linux source-build
+  documentation in its moved page.
 - Preserve the local build/signing path. Add `activity_glow.swift` to both source lists and the exact
   packed contract. Rebuild both loose payloads; do not import upstream's stale July binaries.
 
@@ -160,7 +163,7 @@ Recorded on the implementation Mac (2026-10-27):
   external target directory: 33 passed, 1 ignored (requires a live session AT-SPI bus) on macOS.
   Docker is installed but has no running daemon/context endpoint. Linux-native packed-source build,
   diagnostics and actual Linux host acceptance remain CI responsibilities, NOT local passes.
-- `test:upstream-sync` compared the clean pinned upstream source and accepted exactly 43 declared
+- `test:upstream-sync` compared the clean pinned upstream source and accepted exactly 45 declared
   differing files. An omitted ledger entry failed first, confirming undeclared drift is rejected.
 - Rebuilt x64 and arm64 payloads serially. Both retain ad-hoc signatures and identifier
   `com.injaneity.pi-computer-use`; the installed local signer/path were inspected read-only and not
@@ -170,15 +173,80 @@ Recorded on the implementation Mac (2026-10-27):
 - The upstream Next.js documentation site itself was not built; content generators and doc-link
   checks passed. Site dependencies remain in its separate, upstream-owned nested lockfile.
 
-Owner-only validation, with a free desktop and a scratch TextEdit document (agent tool-call syntax):
+Round-two review evidence (no live validation): the documentation guard rejected the old universal
+claim that the glow never appears in agent observations, before the source-owned prose was fixed.
+The configuration reference is regenerated from `src/config.ts`; `docs:check` now verifies all
+source references, including configuration, under both Linux and macOS subprocess platform fixtures.
+Actual Linux CI runs that same checked-in-output comparison; a local platform fixture is not an
+OS runtime acceptance claim.
 
-1. `desktop_screenshot({display: 0})`: verify cursor inclusion and displayed global mapping.
-2. `desktop_input({action: "moveMouse", x: 100, y: 100})`: verify the pointer and screenshot agree.
-3. `find_roots({app: "TextEdit"})`, then `observe_ui({root: "<returned @r>", mode: "semantic"})`:
-   verify that exact root, including a nonmodal secondary root, is retained.
-4. `desktop_input({action: "activateApp", app: "com.apple.TextEdit"})`: verify TextEdit is frontmost.
-5. After the owner installs the reviewed upgrade, `PI_COMPUTER_USE_LIVE=1 npm run test:macos-live`:
-   validates helper restart/ref epoch and fixtures; it DOES manipulate the shared desktop and clipboard.
+Hosted evidence at `96c2397`: run `40556877655`, Ubuntu `owned` job `122375808415`, passed Rust tests,
+packed-source x86_64 build/helper diagnostics and aarch64 compile-only checks. The job then failed
+in `test:commits` because its shallow checkout has no `HEAD~1` for the default `HEAD~1..HEAD` range.
+This is a diagnosed gate/history failure, not a Linux helper failure; it was not blindly retried.
+New-head CI and all owner live/TCC acceptance remain separate evidence.
 
-These five checks are NOT RUN by the implementation agent. Existing Fusion/Bambu targeting and
-physical input still need owner validation; do not treat old live notes as current acceptance.
+## Owner-only live acceptance (NOT RUN)
+
+This checklist covers every tool with nonzero calls in spec section 2.2, not just the desktop pair.
+Run it only after installing the reviewed upgrade, with a free desktop, other agents paused and
+empty/disposable Fusion 360 and Bambu Studio documents. Do not alter existing designs, mesh objects
+or settings; do not save, import, export, slice or print. Only open and dismiss menus. Do not type
+commands into Fusion's console. If a safe target is unavailable, record that case as blocked rather
+than substitute a mutating action. Fill placeholders from current results, never reuse historical
+pids, root refs, state ids or element refs.
+
+Before upgrade, record the helper's existing path and entries/toggle states in System Settings ->
+Privacy & Security -> Accessibility and Screen Recording (Screen & System Audio Recording on newer
+macOS). After upgrade, verify the same helper entries/path and grants remain unchanged, with no
+new or duplicate entry. Do not toggle grants, reset TCC or approve a new request to make this test
+pass. On the first `desktop_screenshot`, observation and input after upgrade, verify **no new TCC
+prompt** appears. A re-prompt or changed grant is a failed acceptance case: stop and report it.
+
+Required tool smoke (agent tool-call syntax; counts from the owner's recorded sessions):
+
+1. `desktop_screenshot({display: 0})` (708 calls): capture the display containing Fusion/Bambu;
+   verify the real cursor and global image-to-point mapping. Compare again after activation/input.
+   An already-active optional glow may be visible in this display capture, unlike a single-window
+   `observe_ui` capture; that is not evidence of an unexpected window exclusion.
+2. `desktop_input` (1,591 calls): use `{action: "activateApp", app: "<verified Fusion name or bundle id>"}`
+   and the corresponding verified Bambu identity. Confirm each is frontmost before sending any key.
+   Use `{action: "moveMouse", x: <safe global x>, y: <safe global y>}` over empty chrome, not a model or
+   control; verify placement with `desktop_screenshot`. After the menu-only action in step 7, send
+   `{action: "keypress", keys: ["escape"]}` only while the tested app/menu is frontmost, then confirm
+   dismissal and unchanged document state. Do not click/type into model-editing controls.
+3. `find_roots({text: "Fusion"})` and `find_roots({text: "Bambu"})` (46 calls): identify the actual
+   app identities, main-window refs and Fusion's BROWSER sidebar/secondary root. Do not hard-code
+   names from earlier sessions or treat an unrelated app's root as a match.
+4. `observe_ui({root: "<fresh @r>", mode: "semantic"})` (95 calls): repeat for both main windows
+   and Fusion's BROWSER secondary root when present. Confirm the exact requested root remains the
+   target and an explicitly nonmodal sidebar is not reported as modal. Also try `detail: "outline"`
+   and compare it with the compact default; retain each returned `stateId`. Record the secondary-root
+   case as NOT RUN if absent; do not fabricate an unpaired root. Unpaired/stale/replaced-root live
+   acceptance remains separate unless a safe example naturally exists.
+5. `search_ui({stateId: "<current state>", text: "<visible menu label>"})` (17 calls): search cached
+   Fusion and Bambu states for a visible top-level menu (e.g. File, only if actually exposed).
+   Confirm the matched ref/label belongs to that exact observed app/root, without another capture.
+6. `inspect_ui({stateId: "<same state>", ref: "<returned @e>"})` (8 calls): inspect each candidate's
+   identity, role and capabilities. Proceed only if it is a verified menu-opening control, not a
+   save/export/print command or model operation. Record a blocked case if neither app exposes one.
+7. `act_ui({stateId: "<fresh state>", actions: [{action: "press", ref: "<inspected menu @e>"}]})`
+   (88 calls): repeat the verified menu-only press in Fusion and Bambu. Confirm the expected menu
+   opens, the successor stays associated with the intended root (no sidebar/modal retargeting), and
+   no model/document setting changes. Dismiss with the guarded Escape in step 2; re-observe before
+   the next action. Do not use coordinates or a different command as an unverified fallback.
+8. `launch_browser({})` (2 calls): expect a separate Pi-managed temporary-profile browser at
+   `about:blank`, a browser-page root and observed state. Do not attach to a personal browser/profile,
+   log in, navigate to private pages or change settings. Close only that disposable test window.
+
+Helper-upgrade/restart check, owner only: with all other desktop work paused, run
+`PI_COMPUTER_USE_LIVE=1 npm run test:macos-live` from the source package after the reviewed upgrade.
+It restarts the shared helper and drives disposable fixture windows, activation and a restorable
+plain-text clipboard round trip. It must reject pre-restart refs rather than aliasing them; confirm
+fresh discovery works afterwards. Recheck both System Settings privacy entries and absence of new
+TCC prompts after the restart. Do not run it against active/valuable work or bypass its safeguards.
+
+All live checks above are **NOT RUN** by the implementation agent. Record tool/scenario outcomes,
+observed helper identity/path and TCC result without private document contents. Acceptance requires
+all eight tool smoke cases on the stated real-app/disposable-browser scenarios plus the upgrade/TCC
+checks; historical Fusion/Bambu notes and deterministic mocks do not satisfy it.

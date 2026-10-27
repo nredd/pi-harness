@@ -178,7 +178,7 @@ const cases = [
 		before: "const tools = [...COMPUTER_USE_TOOLS, ...DESKTOP_TOOLS];",
 		after: "const tools = [...COMPUTER_USE_TOOLS];",
 		check: "check-docs-platform.mjs",
-		failure: /tool reference must be identical on linux/,
+		failure: /generated references must be identical on linux/,
 	},
 	{
 		name: "cursor source packaging (harness 6207189)",

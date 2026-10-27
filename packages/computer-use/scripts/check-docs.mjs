@@ -78,6 +78,7 @@ const allDocs = [resolve(root, "README.md"), resolve(root, "CONTRIBUTING.md"), .
 	.map((file) => readFileSync(file, "utf8"))
 	.join("\n");
 const staleMacosClaims = [
+	[/never in the agent's own observations/i, "activity glow can appear in whole-display desktop_screenshot captures"],
 	[/ScreenCaptureKit probe\s*\(authoritative\)/i, "ScreenCaptureKit readiness query described as an authoritative permission API"],
 	[/already listed in (?:both )?(?:settings )?panes/i, "version-dependent System Settings listing guarantee"],
 	[/setup-helper\.mjs --force/, "nonexistent setup-helper --force option"],
