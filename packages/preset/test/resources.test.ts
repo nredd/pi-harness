@@ -87,6 +87,13 @@ test("agent extension selectors use short names, never the scoped form", () => {
 	}
 });
 
+test("no preset agent pins thinking, so callers and pi defaults decide", () => {
+	for (const agent of AGENTS) {
+		const { frontmatter } = frontmatterOf(`agents/${agent}.md`);
+		assert.ok(!("thinking" in frontmatter), `${agent}: pins thinking`);
+	}
+});
+
 test("every selector's extension is a declared external extension and the declaration matches usage", () => {
 	const declared = new Map(external().extensions.map((e) => [e.name, e]));
 	const used = new Map();

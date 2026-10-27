@@ -183,18 +183,18 @@ describe("lifecycle events", () => {
     }
   });
 
-  it("a runner-selected fallback is NOT on `started` (it precedes discovery) but IS on completed and usage", async () => {
+  it("shared spawn records RPC defaults before started, usage and completion", async () => {
     const { pi } = await boot();
     vi.mocked(runAgent).mockImplementation((async (c: any, t: string, p: string, o: any) => {
       const out = await runnerResolution()(c, t, p, o);
       o.onAssistantUsage?.({ input: 1, output: 1, cacheWrite: 0, cost: 0.001 });
       return out;
     }) as any);
-    // RPC/registry spawn: no tool-side resolution, so only the runner can find it.
+    // RPC/registry spawn: shared spawn selects even without tool-side preflight.
     const id = (globalThis as any)[Symbol.for("pi-subagents:manager")].spawn(pi, ctx(), "scout", "go", { description: "rpc" });
     await flush();
 
-    expect(eventsNamed(pi, "subagents:started").find((e: any) => e.id === id)?.modelFallback).toBeUndefined();
+    expect(eventsNamed(pi, "subagents:started").find((e: any) => e.id === id)?.modelFallback).toEqual(FALLBACK);
     expect(eventsNamed(pi, "subagents:usage").find((e: any) => e.id === id)?.modelFallback).toEqual(FALLBACK);
     expect(eventsNamed(pi, "subagents:completed").find((e: any) => e.id === id)?.modelFallback).toEqual(FALLBACK);
   });

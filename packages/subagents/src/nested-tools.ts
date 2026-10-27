@@ -17,8 +17,8 @@ import {
 } from "./agent-types.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
-import { type ModelFallback, modelFallbackNote, modelFallbackTo, resolveModel } from "./model-resolver.js";
-import { checkModelScope } from "./model-scope.js";
+import { modelFallbackNote } from "./model-resolver.js";
+import { type ModelSelection, selectModel } from "./model-selection.js";
 import {
   createOutputFilePath,
   getOutputTranscriptDefault,
@@ -77,8 +77,7 @@ export const NESTED_WORKFLOW_NO_AGENT_ERROR =
 interface NestedSpawnOptions {
   description: string;
   model?: Model<any>;
-  /** The configured model that did not resolve, when `model` is the parent standing in for it. */
-  modelFallback?: ModelFallback;
+  modelSelection?: ModelSelection;
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
@@ -282,35 +281,15 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       // Foreground regardless of `backgroundByDefault` — see the reasoning on
       // ResolveOptions. An explicit `true` here still opts in.
       const invocation = resolveAgentInvocationConfig(config, params, {
-        agentType: resolvedType,
         worktreeAllowed: isWorktreeIsolationEnabled(),
         defaultRunInBackground: false,
       });
-      let model = ctx.model;
-      let modelFallback: ModelFallback | undefined;
-      if (invocation.modelInput) {
-        const resolvedModel = resolveModel(invocation.modelInput, ctx.modelRegistry);
-        if (typeof resolvedModel === "string") {
-          if (invocation.modelFromParams) return textResult(resolvedModel, true);
-          // Config-specified: still falls back to the parent, but says so.
-          modelFallback = modelFallbackTo(invocation.modelInput, ctx.model);
-        } else {
-          model = resolvedModel;
-        }
-      }
-
-      // Same scopeModels policy as the top-level Agent tool — a nested spawn
-      // must not escape the allowlist. A "warn" verdict proceeds silently:
-      // child sessions have no UI surface to toast to.
-      const scopeVerdict = checkModelScope({
-        model,
-        cwd: context.configCwd,
-        modelRegistry: ctx.modelRegistry,
-        callerSupplied: invocation.modelFromParams,
-        agentLabel: config?.displayName ?? resolvedType,
-        modelInput: invocation.modelInput,
+      const selection = selectModel({
+        agentType: resolvedType, definitionModel: config?.model, paramModel: params.model,
+        parentModel: ctx.model, registry: ctx.modelRegistry, cwd: context.configCwd, agentLabel: config?.displayName,
       });
-      if (scopeVerdict.kind === "error") return textResult(scopeVerdict.message, true);
+      if (typeof selection === "string") return textResult(selection, true);
+      const model = selection.model;
 
       // The whole branch shares the root session's transcript directory; read it
       // off the owning parent rather than this child session's own id.
@@ -319,7 +298,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       const options: NestedSpawnOptions = {
         description: params.description,
         model,
-        modelFallback,
+        modelSelection: selection,
         maxTurns: invocation.maxTurns,
         isolated: invocation.isolated,
         inheritContext: invocation.inheritContext,

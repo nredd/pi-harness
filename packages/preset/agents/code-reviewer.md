@@ -4,7 +4,6 @@ description: Read-only reviewer for one review axis (Standards or Spec) of a dif
 tools: read, grep, find, ext:pi-dev-tools/git_diff, ext:pi-dev-tools/git_show, ext:pi-dev-tools/git_log, ext:pi-dev-tools/git_status
 extensions: [pi-dev-tools]
 skills: false
-thinking: medium
 max_turns: 40
 prompt_mode: replace
 ---
