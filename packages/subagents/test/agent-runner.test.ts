@@ -3287,3 +3287,6 @@ describe("agent-runner abort signal forwarding", () => {
     expect(session.abort).not.toHaveBeenCalled();
   });
 });
+
+// Model choice is covered through selectModel with Pi's real registry in
+// model-selection.test.ts and through each dispatch path in model-selection-paths.test.ts.

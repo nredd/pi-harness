@@ -31,6 +31,7 @@ import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { ModelCallEvent } from "./model-call.js";
 import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback, modelFallbackNote } from "./model-resolver.js";
+import { type ModelSelection, selectModel } from "./model-selection.js";
 import { appendModelFallbackEntry } from "./output-file.js";
 import {
   assertWithinBudgetDepth,
@@ -312,12 +313,10 @@ interface SpawnOptions {
    * `spawnTopLevel` strips it from anything a caller sends.
    */
   reclaim?: { handle: string; alias?: string };
-  model?: Model<any>;
-  /**
-   * Set by a caller that resolved a configured model itself and fell back to the
-   * parent (passing the parent as `model`). Without it the spawn path cannot tell
-   * that from an explicit pick. Stored on the record, where every surface reads it.
-   */
+  model?: Model<any> | string;
+  /** Internal preflight outcome, stored on the record without resolving again. */
+  modelSelection?: ModelSelection;
+  /** Original provenance retained when reopening an evicted conversation. Internal only. */
   modelFallback?: ModelFallback;
   maxTurns?: number;
   isolated?: boolean;
@@ -655,6 +654,18 @@ export class AgentManager {
     // call, not minutes later at drain. Throw (not warn): programmatic callers
     // can fix and retry; the RPC layer converts throws into error envelopes.
     assertValidSpawnCwd(options.cwd);
+    const selection = options.modelSelection ?? selectModel({
+      agentType: type,
+      definitionModel: getAgentConfig(type)?.model,
+      paramModel: options.model,
+      parentModel: ctx.model,
+      registry: ctx.modelRegistry,
+      cwd: options.configCwd ?? ctx.cwd,
+      agentLabel: getAgentConfig(type)?.displayName,
+    });
+    if (typeof selection === "string") throw new Error(selection);
+    if (selection.scopeWarning && !options.modelSelection) ctx.ui.notify(selection.scopeWarning, "warning");
+    options = { ...options, model: selection.model, modelSelection: selection };
 
     const id = randomUUID().slice(0, 17);
     const abortController = new AbortController();
@@ -694,7 +705,8 @@ export class AgentManager {
       // `options` has stopped being the interesting object.
       blocking: options.blocking,
       invocation: options.invocation,
-      modelFallback: options.modelFallback,
+      modelFallback: options.modelFallback ?? selection.fallback,
+      modelSelection: selection,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,
@@ -1047,7 +1059,8 @@ export class AgentManager {
     const promise = runAgent(ctx, type, prompt, {
       pi,
       agentId: id,
-      model: options.model,
+      model: options.modelSelection?.model,
+      modelSelection: options.modelSelection,
       maxTurns: options.maxTurns,
       isolated: options.isolated,
       inheritContext: options.inheritContext,
@@ -1092,9 +1105,6 @@ export class AgentManager {
         depth: record.depth ?? 1,
         maxSubagentDepth: record.maxSubagentDepth,
       },
-      // The runner's own fallback (no model passed, definition `model:` unresolved).
-      // A caller-reported fallback is already on the record and wins.
-      onModelFallback: (fallback) => { record.modelFallback ??= fallback; },
       onSessionCreated: (session) => {
         record.session = session;
         // Capture now, while the session object exists: after eviction this
