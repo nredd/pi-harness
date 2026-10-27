@@ -463,13 +463,20 @@ def pinned_child_path(node: str) -> Iterator[None]:
 
 
 def redact_diagnostic(text: str) -> str:
-    """Remove proxy URL userinfo from public diagnostics, including echoed child output.
+    """Remove final-`@` URL userinfo and known encoded/decoded credential tokens.
+
+    Known proxy values come from `os.environ`. Scheme-less authorities and credential
+    tokens use non-word boundaries; password-only representations require 8+ characters.
+    Username-only strings, shorter standalone passwords and embedded-word substrings remain.
 
     Parameters:
         text (str): untrusted diagnostic before truncating its output tail.
 
     Returns:
-        str: diagnostic retaining the scheme and host, never username/password userinfo.
+        str: public text with URL userinfo removed and matching known tokens masked.
+
+    Raises:
+        None: valid string diagnostics do not raise.
     """
     representations: dict[str, str] = {}
     tokens: set[str] = set()
