@@ -57,6 +57,14 @@ const record = (over: Partial<AgentRecord> = {}): AgentRecord =>
     lifetimeUsage: { input: 3_200, output: 0, cacheWrite: 0 }, compactionCount: 0, modelFallback: FALLBACK, session: { subscribe: () => () => {}, messages: [] } as any, ...over,
   }) as AgentRecord;
 
+/**
+ * Render the above-editor agent widget for one record and return its fallback-flag row.
+ *
+ * @param rec - The agent record to display.
+ * @param width - Terminal columns to render at.
+ * @param renderTheme - Theme used for styling; defaults to the plain test theme.
+ * @returns The row containing the `[fallback` marker, or the whole render when none is present.
+ */
 function widgetLine(rec: AgentRecord, width: number, renderTheme = theme): string {
   const widget = new AgentWidget(
     { listAgents: () => [rec] } as unknown as AgentManager,
@@ -70,6 +78,14 @@ function widgetLine(rec: AgentRecord, width: number, renderTheme = theme): strin
   return lines.find(l => l.includes("[fallback")) ?? lines.join("\n");
 }
 
+/**
+ * Render the below-editor fleet list for one record and return its flagged row.
+ *
+ * @param rec - The agent record to display.
+ * @param width - Terminal columns to render at.
+ * @param renderTheme - Theme used for styling; defaults to the plain test theme.
+ * @returns The first row carrying a fallback marker, or the whole render when none is present.
+ */
 function fleetLine(rec: AgentRecord, width: number, renderTheme = theme): string {
   const fleet = new FleetList({ listAgents: () => [rec], abort: () => true, steer: vi.fn(() => true) } as unknown as AgentManager,
     new Map(), undefined, undefined, undefined, undefined, undefined, () => true);
