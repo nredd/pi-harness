@@ -93,8 +93,8 @@ it("#179 characterizes Pi's ambient .agents/skills scan before loader-level noSk
 });
 
 it.each([
-  ["glob-cwd", [".agents/glob-cwd"]],
-  ["realpath-native", [".agents/native-realpath"]],
+  ["glob-cwd", [".agents/glob-cwd", ".agents/glob-pattern/*.missing"]],
+  ["realpath-native", [".agents/native-realpath-callback", ".agents/native-realpath-sync"]],
   ["streams", [".agents/read-stream", ".agents/write-stream"]],
 ])("records the %s ambient-home bypass probe", (bypass, expected) => {
   const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));

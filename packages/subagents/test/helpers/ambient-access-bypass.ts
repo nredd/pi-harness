@@ -14,11 +14,13 @@ export async function exerciseAmbientAccessBypass(ambient: string, bypass: Ambie
       return;
     }
     case "glob-cwd":
-      fs.globSync(["*.missing"], { cwd: join(ambient, ".agents", "glob-cwd") });
+      fs.globSync([join(ambient, ".agents", "glob-pattern", "*.missing"), "*.missing"], { cwd: join(ambient, ".agents", "glob-cwd") });
       return;
-    case "realpath-native":
-      (fs.realpathSync.native ?? fs.realpathSync)(join(ambient, ".agents", "native-realpath"));
+    case "realpath-native": {
+      (fs.realpathSync.native ?? fs.realpathSync)(join(ambient, ".agents", "native-realpath-sync"));
+      await new Promise<void>((resolve, reject) => fs.realpath.native(join(ambient, ".agents", "native-realpath-callback"), error => error ? reject(error) : resolve()));
       return;
+    }
     case "streams": {
       const reader = new fs.ReadStream(join(ambient, ".agents", "read-stream"));
       const writer = new fs.WriteStream(join(ambient, ".agents", "write-stream"));

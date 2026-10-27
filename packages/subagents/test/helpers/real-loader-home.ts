@@ -40,9 +40,11 @@ async function main(): Promise<void> {
   }
   const ambientSkillsDir = join(ambient, ".agents", "skills");
   write(join(ambientSkillsDir, "ambient-skill", "SKILL.md"), "---\nname: ambient-skill\ndescription: #179 fixture\n---\nambient\n");
-  write(join(ambient, ".agents", "native-realpath"), "native");
+  write(join(ambient, ".agents", "native-realpath-sync"), "native");
+  write(join(ambient, ".agents", "native-realpath-callback"), "native");
   write(join(ambient, ".agents", "read-stream"), "read");
   fs.mkdirSync(join(ambient, ".agents", "glob-cwd"), { recursive: true });
+  fs.mkdirSync(join(ambient, ".agents", "glob-pattern"), { recursive: true });
   fs.mkdirSync(cwd, { recursive: true });
   const settingsPath = scope === "global" ? join(agentDir, "settings.json") : join(cwd, ".pi", "settings.json");
   write(settingsPath, JSON.stringify({ packages: [scope === "global" ? { source: "~/package" } : "~/package"], extensions: ["~/extension.ts"] }));
