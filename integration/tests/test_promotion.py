@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -48,6 +48,9 @@ from harness.promotion import (
 from harness.publish_gate import PublishError, release_state, verify_tag_target
 from harness.release import LEGACY_CHECKSUMS
 from harness.stack import Stack
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CI_WORKFLOW = Path(__file__).parents[2] / ".github/workflows/ci.yml"
@@ -322,23 +325,40 @@ def test_stack_runs_accept_renamed_job_with_valid_artifact_evidence() -> None:
     assert not hasattr(promotion, "PERSONAL_STACK_JOB")
 
 
+def merge_evidence(*path: str | int, **values: Any) -> Callable[[dict[str, Any], dict[str, Any]], None]:
+    """Build a named merge edit for one run/artifact fixture object.
+
+    Parameters:
+        *path (str | int): keys/indices from the run/artifacts fixture roots.
+        **values (Any): fields to merge into that object.
+
+    Returns:
+        Callable[[dict[str, Any], dict[str, Any]], None]: documented dictionary-merge edit.
+    """
+
+    def merge(run: dict[str, Any], artifacts: dict[str, Any]) -> None:
+        """Apply malformed evidence using a statement merge, never an update expression."""
+        target: Any = {"run": run, "artifacts": artifacts}
+        for key in path:
+            target = target[key]
+        target |= values
+
+    return merge
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda run, artifacts: run.update(event="pull_request"),
-        lambda run, artifacts: run.update(headBranch="topic"),
-        lambda run, artifacts: run.update(conclusion="failure"),
-        lambda run, artifacts: run.update(headSha="b" * 40),
+        merge_evidence("run", event="pull_request"),
+        merge_evidence("run", headBranch="topic"),
+        merge_evidence("run", conclusion="failure"),
+        merge_evidence("run", headSha="b" * 40),
         lambda run, artifacts: artifacts.clear(),
         lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"].clear(),
-        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(expired=True),
-        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(
-            name="stack-macos-14-personal"
-        ),
-        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(
-            head_sha="b" * 40
-        ),
-        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(id=1),
+        merge_evidence("artifacts", str(FIXTURE_RUN), 0, "artifacts", 3, expired=True),
+        merge_evidence("artifacts", str(FIXTURE_RUN), 0, "artifacts", 3, name="stack-macos-14-personal"),
+        merge_evidence("artifacts", str(FIXTURE_RUN), 0, "artifacts", 3, "workflow_run", head_sha="b" * 40),
+        merge_evidence("artifacts", str(FIXTURE_RUN), 0, "artifacts", 3, "workflow_run", id=1),
     ],
 )
 def test_stack_runs_reject_absent_expired_or_mismatched_evidence(mutate: Any) -> None:

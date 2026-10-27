@@ -32,6 +32,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -40,7 +41,7 @@ import tarfile
 import tempfile
 import uuid
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import IntEnum
 from pathlib import Path
@@ -124,6 +125,7 @@ MAX_RESTORE_BYTES = 8 * 1024**3
 MAX_RESTORE_ENTRIES = 100_000
 MAX_RESTORE_DEPTH = 128
 RESTORE_READ_SIZE = 1024 * 1024
+RESTORE_ASIDE_ID = re.compile(r"[0-9a-f]{32}")
 LINK_BACKUP = "bin-pi"
 CORE_MARKER = "pi-stack-core.json"
 SETTINGS_FILE = "settings.json"
@@ -224,7 +226,9 @@ class Layout:
         # Real paths: npm records lockfile keys relative to symlinked parents (e.g. macOS `/tmp`),
         # which would hide the packages it installed from the integrity check.
         home = home.resolve()
-        data = Path(env["XDG_DATA_HOME"]) if env.get("XDG_DATA_HOME") else home / ".local" / "share"
+        data = Path(env.get("XDG_DATA_HOME", ""))
+        if not data.is_absolute():
+            data = home / ".local" / "share"
         agent = (
             expand_tilde(env["PI_CODING_AGENT_DIR"], home)
             if env.get("PI_CODING_AGENT_DIR")
@@ -1065,6 +1069,23 @@ class Journal:
         self.steps[-1]["pending"] = False
         self.persist()
 
+    def place(self, source: Path | None, target: Path) -> None:
+        """Record the replacement's identity before its rename, preserving its inode.
+
+        Parameters:
+            source (Path | None): prepared replacement, or intended absence.
+            target (Path): the last recorded switch target.
+        """
+        if not self.steps or self.steps[-1]["target"] != str(target):
+            raise OSError(f"No journal entry for replacement '{target}'")
+        self.check_store()
+        identity = RestoreHasher().identity(source) if source is not None else None
+        self.steps[-1]["replacement"] = asdict(identity) if identity is not None else None
+        self.persist()
+        if source is not None:
+            source.replace(target)
+        self.check_store()
+
     def persist(self) -> None:
         """Persist the current two-phase journal before continuing the switch."""
         document = {"backups": str(self.backups), "steps": self.steps}
@@ -1260,6 +1281,22 @@ class RestoreHasher:
 
 
 @dataclass(frozen=True)
+class RestoreAside:
+    """A journaled sibling holding the displaced live entry until restoration succeeds."""
+
+    path: Path
+    identity: RestoreIdentity
+
+    def record(self) -> dict[str, Any]:
+        """Serialize the sibling path and the content it must still hold.
+
+        Returns:
+            dict[str, Any]: validated aside metadata.
+        """
+        return {"path": str(self.path), "identity": asdict(self.identity)}
+
+
+@dataclass(frozen=True)
 class Step:
     """One validated journal step: a path the switch replaced and where its original is kept."""
 
@@ -1269,6 +1306,9 @@ class Step:
     original: tuple[int, int, int] | None = None
     restored: bool = False
     restoring: RestoreIdentity | None = None
+    replacement: RestoreIdentity | None = None
+    replacement_known: bool = False
+    aside: RestoreAside | None = None
 
     def live_identity(self) -> tuple[int, int, int] | None:
         """Return the live entry's device/inode/ctime, or absence, without following links.
@@ -1295,6 +1335,10 @@ class Step:
             result["restored"] = True
         if self.restoring is not None:
             result["restoring"] = asdict(self.restoring)
+        if self.replacement_known:
+            result["replacement"] = asdict(self.replacement) if self.replacement is not None else None
+        if self.aside is not None:
+            result["aside"] = self.aside.record()
         return result
 
 
@@ -1393,7 +1437,23 @@ def restoring_identity(raw: dict[str, Any]) -> RestoreIdentity | None:
     """
     if "restoring" not in raw:
         return None
-    identity = raw["restoring"]
+    if raw["backup"] is None or raw.get("pending", False):
+        raise ValueError(f"step for '{raw['target']}' has invalid `restoring` state")
+    return content_identity(raw["restoring"])
+
+
+def content_identity(identity: object) -> RestoreIdentity:
+    """Validate the shared original/replacement/aside content identity schema.
+
+    Parameters:
+        identity (object): serialized identity.
+
+    Returns:
+        RestoreIdentity: strictly validated content identity.
+
+    Raises:
+        ValueError: any identity field is missing, malformed or unexpected.
+    """
     if (
         not isinstance(identity, dict)
         or set(identity) != {"kind", "device", "inode", "mtime_ns", "size", "sha256"}
@@ -1402,11 +1462,67 @@ def restoring_identity(raw: dict[str, Any]) -> RestoreIdentity | None:
         or type(identity["mtime_ns"]) is not int
         or not isinstance(identity["sha256"], str)
         or SHA256_HEX.fullmatch(identity["sha256"]) is None
-        or raw["backup"] is None
-        or raw.get("pending", False)
     ):
-        raise ValueError(f"step for '{raw['target']}' has invalid `restoring` content identity")
+        raise ValueError("invalid journal content identity")
     return RestoreIdentity(**identity)
+
+
+def aside_metadata(value: object, target: Path) -> RestoreAside | None:
+    """Accept only a bounded-identity aside directly beside its recorded target.
+
+    Parameters:
+        value (object): serialized aside or absence.
+        target (Path): validated live target.
+
+    Returns:
+        RestoreAside | None: validated sibling and identity.
+
+    Raises:
+        ValueError: the aside names an unrelated path or has malformed content metadata.
+    """
+    if value is None:
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"path", "identity"}
+        or not isinstance(value["path"], str)
+    ):
+        raise ValueError(f"invalid restore aside for '{target}'")
+    path = Path(value["path"])
+    prefix = f".{target.name}.pi-stack-restore-"
+    if (
+        str(path) != value["path"]
+        or path.parent != target.parent
+        or not path.name.startswith(prefix)
+        or RESTORE_ASIDE_ID.fullmatch(path.name.removeprefix(prefix)) is None
+    ):
+        raise ValueError(f"restore aside '{path}' is not a private sibling of '{target}'")
+    return RestoreAside(path, content_identity(value["identity"]))
+
+
+def pending_identity(raw: dict[str, Any], target: Path) -> tuple[bool, tuple[int, int, int] | None]:
+    """Validate a pending/saved original identity without widening its historical contract.
+
+    Parameters:
+        raw (dict[str, Any]): journal step.
+        target (Path): validated target, for diagnostics.
+
+    Returns:
+        tuple[bool, tuple[int, int, int] | None]: pending flag and original identity.
+
+    Raises:
+        ValueError: pending/original metadata is malformed.
+    """
+    if "pending" not in raw:
+        return False, None
+    identity = raw["original"]
+    if not isinstance(raw["pending"], bool) or not isinstance(identity, list) or len(identity) != 3:
+        raise ValueError(f"step for '{target}' has invalid pending/original metadata")
+    if any(type(value) is not int or value < 0 for value in identity):
+        raise ValueError(f"step for '{target}' has invalid original device/inode/ctime")
+    if raw["backup"] is None:
+        raise ValueError(f"step for '{target}' has original metadata without a backup")
+    return raw["pending"], (identity[0], identity[1], identity[2])
 
 
 def validate_journal(layout: Layout, document: object) -> list[Step]:
@@ -1440,7 +1556,7 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         raise ValueError(f"'{backups}' is not owned by the current user")
     steps: list[Step] = []
     for raw in raw_steps:
-        if not isinstance(raw, dict) or set(raw) - {"restoring"} not in (
+        if not isinstance(raw, dict) or set(raw) - {"restoring", "replacement", "aside"} not in (
             {"target", "backup"},
             {"target", "backup", "pending", "original"},
             {"target", "backup", "restored"},
@@ -1454,31 +1570,29 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         if any(step.target == target for step in steps):
             raise ValueError(f"step target '{target}' is recorded twice")
         backup = backups / name
-        pending, original = False, None
+        pending, original = pending_identity(raw, target)
         restored = raw.get("restored", False)
         if type(restored) is not bool:
             raise ValueError(f"step for '{target}' has invalid restored metadata")
         if restored and raw["backup"] is not None and "original" not in raw:
             raise ValueError(f"restored step for '{target}' has no original identity")
-        if "pending" in raw:
-            identity = raw["original"]
-            if not isinstance(raw["pending"], bool) or not isinstance(identity, list) or len(identity) != 3:
-                raise ValueError(f"step for '{target}' has invalid pending/original metadata")
-            if any(type(value) is not int or value < 0 for value in identity):
-                raise ValueError(f"step for '{target}' has invalid original device/inode/ctime")
-            if raw["backup"] is None:
-                raise ValueError(f"step for '{target}' has original metadata without a backup")
-            pending, original = raw["pending"], (identity[0], identity[1], identity[2])
         restoring = restoring_identity(raw)
+        replacement = content_identity(raw["replacement"]) if raw.get("replacement") is not None else None
+        known = "replacement" in raw
+        aside = aside_metadata(raw.get("aside"), target)
+        if aside is not None and (restoring is None or raw["backup"] is None):
+            raise ValueError(f"step for '{target}' has an aside without restore intent")
         if raw["backup"] is None:
-            steps.append(Step(target, None, restored=restored))
+            steps.append(
+                Step(target, None, restored=restored, replacement=replacement, replacement_known=known)
+            )
             continue
         if raw["backup"] != str(backup):
             raise ValueError(f"backup '{raw['backup']}' for '{target}' is not '{backup}'")
         kind = entry_kind(backup)
         if kind is not None and kind not in kinds:
             raise ValueError(f"backup '{backup}' is a {kind}, expected {' or '.join(sorted(kinds))}")
-        steps.append(Step(target, backup, pending, original, restored, restoring))
+        steps.append(Step(target, backup, pending, original, restored, restoring, replacement, known, aside))
     return steps
 
 
@@ -1500,7 +1614,7 @@ def load_journal(layout: Layout) -> tuple[Path, list[Step]]:
             raise ValueError("journal is not a JSON object")
         steps = validate_journal(layout, document)
         return Path(document["backups"]), steps
-    except (ValueError, RecursionError, MemoryError) as error:
+    except (OSError, ValueError, RecursionError, MemoryError) as error:
         raise RollbackError(
             f"Journal '{layout.journal}' is not trusted: {error}; nothing was restored. It only names the "
             "paths of the run that wrote it: if that run used another `--bin-dir` or "
@@ -1509,30 +1623,162 @@ def load_journal(layout: Layout) -> tuple[Path, list[Step]]:
         ) from error
 
 
-def restore_backup(journal: Journal, step: Step, index: int) -> RestoreIdentity | None:
-    """Persist restore intent before consuming a backup, or remove a newly created target.
+def live_content(path: Path) -> RestoreIdentity | None:
+    """Read an existing entry's identity, preserving absence as a separate state.
 
     Parameters:
-        journal (Journal): validated journal with its backup directory held open.
-        step (Step): validated restore step.
-        index (int): step position in the journal's original order.
+        path (Path): entry, without following a final symlink.
 
     Returns:
-        RestoreIdentity | None: retained content identity, or absence for a new target.
+        RestoreIdentity | None: content identity or absence.
     """
-    identity = step.restoring
-    if step.backup is not None:
-        if identity is None:
-            identity = RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd)
-        journal.steps[index] = Step(step.target, step.backup, restoring=identity).record()
-        journal.persist()
-        # Hardening only: another same-user swap after this check remains outside #157's scope.
-        # Verify before removing the live entry, so a mismatch preserves BOTH entries.
-        if RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd) != identity:
-            raise OSError(f"Backup '{step.backup}' content identity changed; restore by hand")
-    remove(step.target)
-    if step.backup is not None:
+    return RestoreHasher().identity(path) if path.exists(follow_symlinks=False) else None
+
+
+def changed_live_error(target: Path) -> OSError:
+    """Explain how to preserve a post-crash edit before manually retrying recovery.
+
+    Parameters:
+        target (Path): live entry recovery refuses to replace.
+
+    Returns:
+        OSError: actionable refusal, not an executed command.
+    """
+    saved = target.with_name(target.name + ".user-saved")
+    command = shlex.join(["mv", "-i", "--", str(target), str(saved)])
+    return OSError(
+        f"Live target '{target}' does not match the original or recorded replacement; nothing changed. "
+        f"Preserve it yourself with `{command}`, then retry with `--yes`; journal and backup kept"
+    )
+
+
+def check_aside(step: Step) -> bool:
+    """Verify a displaced entry before recovery can rename or delete it.
+
+    Parameters:
+        step (Step): validated step.
+
+    Returns:
+        bool: whether its recorded aside exists.
+    """
+    if step.aside is None or not step.aside.path.exists(follow_symlinks=False):
+        return False
+    if live_content(step.aside.path) != step.aside.identity:
+        raise OSError(f"Restore aside '{step.aside.path}' changed; restore by hand")
+    return True
+
+
+def check_restore_step(journal: Journal, step: Step) -> bool:
+    """Preflight every live/backup transition before the rollback mutates anything.
+
+    Parameters:
+        journal (Journal): anchored backup directory.
+        step (Step): validated step.
+
+    Returns:
+        bool: the original is already live or its pending save never started.
+
+    Raises:
+        OSError: unknown live content, lost backups/asides, or a cross-device restore.
+    """
+    aside_exists = check_aside(step)
+    if step.restored:
+        if step.live_identity() != step.original or (
+            step.restoring is not None and live_content(step.target) != step.restoring
+        ):
+            raise OSError(f"Restored target '{step.target}' changed; {changed_live_error(step.target)}")
+        return True
+    try:
+        live = live_content(step.target)
+    except OSError as error:
+        raise changed_live_error(step.target) from error
+    if step.backup is None:
+        if live is not None and live != step.replacement:
+            raise changed_live_error(step.target)
+        return False
+    try:
+        info = os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
+    except FileNotFoundError as error:
+        if (step.restoring is not None and live == step.restoring) or (
+            step.pending and step.original is not None and step.live_identity() == step.original
+        ):
+            return True
+        raise OSError(f"Expected backup '{step.backup}' is missing; restore by hand") from error
+    if info.st_dev != step.target.parent.stat().st_dev or (live is not None and live.device != info.st_dev):
+        raise OSError(
+            f"Backup '{step.backup}' and target '{step.target}' are on different filesystems; nothing changed"
+        )
+    original = step.restoring or RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd)
+    if live == original:
+        return True
+    if live is None:
+        if step.aside is not None and not aside_exists:
+            raise OSError(f"Restore aside '{step.aside.path}' is missing; restore by hand")
+        return False
+    if live != step.replacement:
+        raise changed_live_error(step.target)
+    return False
+
+
+def finish_aside(step: Step) -> None:
+    """Remove a verified displaced entry only after its original is safely live.
+
+    Parameters:
+        step (Step): step with optional aside metadata.
+    """
+    if check_aside(step):
+        assert step.aside is not None
+        remove(step.aside.path)
+
+
+def rename_restore(journal: Journal, step: Step) -> None:
+    """Restore by reversible renames, putting the live entry back if the second rename fails.
+
+    Parameters:
+        journal (Journal): open backup directory.
+        step (Step): persisted restore/aside intent.
+    """
+    assert step.backup is not None
+    if step.aside is not None and not step.aside.path.exists(follow_symlinks=False):
+        step.target.replace(step.aside.path)
+    try:
         os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
+    except BaseException:
+        # If the rename completed before an interrupt, retain the original and its recorded aside.
+        if step.aside is not None and not step.target.exists(follow_symlinks=False):
+            step.aside.path.replace(step.target)
+        raise
+    finish_aside(step)
+
+
+def restore_backup(journal: Journal, step: Step, index: int) -> RestoreIdentity | None:
+    """Persist original/replacement/aside identities before reversible restore renames.
+
+    Parameters:
+        journal (Journal): open backup directory.
+        step (Step): preflighted step.
+        index (int): journal position.
+
+    Returns:
+        RestoreIdentity | None: restored content identity, or original absence.
+    """
+    if step.backup is None:
+        remove(step.target)
+        return None
+    identity = step.restoring or RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd)
+    aside = step.aside
+    if aside is None and (live := live_content(step.target)) is not None:
+        path = step.target.with_name(f".{step.target.name}.pi-stack-restore-{uuid.uuid4().hex}")
+        if path.exists(follow_symlinks=False):
+            raise OSError(f"Restore aside '{path}' already exists; nothing changed")
+        aside = RestoreAside(path, live)
+    intent = replace(step, pending=False, restoring=identity, aside=aside)
+    journal.steps[index] = intent.record()
+    journal.persist()
+    # Hardening only: concurrent same-user swaps after this check remain outside #157's scope.
+    if RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd) != identity:
+        raise OSError(f"Backup '{step.backup}' content identity changed; restore by hand")
+    rename_restore(journal, intent)
     journal.check_store()
     return identity
 
@@ -1566,47 +1812,27 @@ def rollback(layout: Layout) -> list[str]:
             journal.path.unlink()
             return []
         with journal.open_backups(create=False):
-            # Missing backups require either a never-started pending identity or a content-bound
-            # restore intent matching the live original. Saved/legacy losses still fail loudly.
+            # Check the ENTIRE transaction before any rename, deletion or journal rewrite.
             for step in steps:
-                if step.restored:
-                    if step.live_identity() != step.original or (
-                        step.restoring is not None and RestoreHasher().identity(step.target) != step.restoring
-                    ):
-                        raise OSError(f"Restored target '{step.target}' changed; restore by hand")
-                    continue
-                if step.backup is not None:
-                    try:
-                        os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
-                    except FileNotFoundError as error:
-                        if (
-                            step.restoring is not None
-                            and step.target.exists(follow_symlinks=False)
-                            and RestoreHasher().identity(step.target) == step.restoring
-                        ):
-                            not_started.add(step.target)
-                            continue
-                        if (
-                            step.pending
-                            and step.original is not None
-                            and step.live_identity() == step.original
-                        ):
-                            not_started.add(step.target)
-                            continue
-                        raise OSError(
-                            f"Expected backup '{step.backup}' is missing; restore by hand"
-                        ) from error
+                if check_restore_step(journal, step):
+                    not_started.add(step.target)
             for index in reversed(range(len(steps))):
                 step = steps[index]
                 journal.check_store()
-                if step.restored:
+                if step.restored and step.aside is None:
                     continue
                 content = step.restoring
                 if step.target not in not_started:
                     content = restore_backup(journal, step, index)
                     restored.append(str(step.target))
+                else:
+                    finish_aside(step)
+                    if step.backup is not None:
+                        content = live_content(step.target)
                 identity = step.live_identity() if step.backup is not None else None
-                journal.steps[index] = Step(step.target, step.backup, False, identity, True, content).record()
+                journal.steps[index] = replace(
+                    step, pending=False, original=identity, restored=True, restoring=content, aside=None
+                ).record()
                 journal.persist()
             journal.steps = []
             journal.persist()
@@ -1759,7 +1985,7 @@ def switch_anchored(
         if backup is not None:
             journal.save(prefix, backup)
         prefix.parent.mkdir(parents=True, exist_ok=True)
-        staged_core.replace(prefix)
+        journal.place(staged_core, prefix)
     if staged_agent is not None:
         # Every existing tree is replaced, as planned, even when the stack stages none of it: a
         # leftover `git` tree is backed up rather than kept beside packages it no longer declares.
@@ -1770,8 +1996,7 @@ def switch_anchored(
             backup = journal.record(live, tree)
             if backup is not None:
                 journal.save(live, backup)
-            if staged.exists():
-                staged.replace(live)
+            journal.place(staged if staged.exists() else None, live)
     for name, desired in ((SETTINGS_FILE, plan.settings), (SUBAGENTS_FILE, plan.subagents)):
         if desired is not None:
             replace_file(journal, layout.agent_dir / name, name, json.dumps(desired, indent=2) + "\n")
@@ -1780,7 +2005,12 @@ def switch_anchored(
         backup = journal.record(layout.link, LINK_BACKUP)
         if backup is not None:
             journal.save(layout.link, backup)
-        layout.link.symlink_to(plan.link)
+        temporary = layout.link.with_name(f".pi.{uuid.uuid4().hex}.replacement")
+        try:
+            temporary.symlink_to(plan.link)
+            journal.place(temporary, layout.link)
+        finally:
+            remove(temporary)
     state = {
         "source_sha": verified.snapshot.source_sha,
         "stack_sha256": verified.snapshot.stack_sha256,
@@ -1805,7 +2035,12 @@ def replace_file(journal: Journal, live: Path, name: str, text: str) -> None:
     mode = live.stat().st_mode & 0o777 if backup is not None else None
     if backup is not None:
         journal.save(live, backup)
-    write_atomic(live, text, mode=mode)
+    temporary = live.with_name(f".{live.name}.{uuid.uuid4().hex}.replacement")
+    try:
+        write_atomic(temporary, text, mode=mode)
+        journal.place(temporary, live)
+    finally:
+        remove(temporary)
 
 
 def apply(layout: Layout, verified: Verified, plan: Plan) -> tuple[Path, str]:

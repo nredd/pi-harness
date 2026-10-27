@@ -14,6 +14,7 @@ import ast
 import builtins
 import errno
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -724,7 +725,7 @@ def test_rerun_after_interruption_recovers_then_installs(
     journal.record(layout.agent_dir / "npm", "npm")
     layout.agent_dir.mkdir(parents=True)
     assert staged is not None
-    (staged / "npm").replace(layout.agent_dir / "npm")
+    journal.place(staged / "npm", layout.agent_dir / "npm")
     assert harness.run(yes=True) == ExitCode.OK
     assert not layout.journal.exists()
     assert json.loads(layout.state.read_text())["source_sha"] == SHA
@@ -1517,6 +1518,23 @@ def tamper_core(harness: Harness, outside: Path, case: str) -> None:
             raise ValueError(f"Unknown core tampering '{case}'")
 
 
+def set_journal_fields(**values: Any) -> Callable[[dict[str, Any]], None]:
+    """Build a named journal edit using the documented dictionary-merge form.
+
+    Parameters:
+        **values (Any): top-level fixture fields to replace.
+
+    Returns:
+        Callable[[dict[str, Any]], None]: named edit function.
+    """
+
+    def edit(document: dict[str, Any]) -> None:
+        """Merge this fixture's malformed fields into the journal."""
+        document |= values
+
+    return edit
+
+
 def tamper(harness: Harness, outside: Path, case: str) -> None:
     """Make the pending journal untrusted in one way.
 
@@ -1547,7 +1565,7 @@ def tamper(harness: Harness, outside: Path, case: str) -> None:
         case "traversal-backup":
             edit_journal(harness, set_backup("settings.json", f"{backups}/../c/settings.json"))
         case "traversal-backups-dir":
-            edit_journal(harness, lambda document: document.update(backups=f"{backups}/.."))
+            edit_journal(harness, set_journal_fields(backups=f"{backups}/.."))
         case "symlinked-backup":
             (backups / "settings.json").unlink()
             (backups / "settings.json").symlink_to(outside / "settings.json")
@@ -1569,7 +1587,7 @@ def tamper(harness: Harness, outside: Path, case: str) -> None:
         case "corrupt-journal":
             journal.write_text("{not json")
         case "steps-not-a-list":
-            edit_journal(harness, lambda document: document.update(steps={}))
+            edit_journal(harness, set_journal_fields(steps={}))
         case "step-missing-backup":
             edit_journal(harness, lambda document: document["steps"].append({"target": str(agent / "npm")}))
         case _:
@@ -2735,7 +2753,7 @@ def test_agent_dir_expands_tilde_like_pi_with_the_injected_home(
     assert agent("a~/x") == (tmp_path / "a~" / "x").resolve()
     assert agent("/abs/~/x") == Path("/abs/~/x")
     unexpanded = Layout.from_env({"XDG_DATA_HOME": "~/share"}, home, None)
-    assert unexpanded.root == (tmp_path / "~" / "share" / "pi-stack").resolve()
+    assert unexpanded.root == home / ".local" / "share" / "pi-stack"
     # Pi converts only `^file://` (case-sensitive) with `fileURLToPath`; other `file:` values are relative.
     assert agent("file:x") == (tmp_path / "file:x").resolve()
     assert agent("FILE:///x") == (tmp_path / "FILE:" / "x").resolve()
@@ -3377,7 +3395,14 @@ def saved_recovery_entry(harness: Harness, kind: str) -> tuple[Journal, Path]:
         backup = journal.record(target, name)
         assert backup is not None
         journal.save(target, backup)
-    recovery_entry(target, kind, "NEW FILE")
+        replacement = target.with_name(target.name + ".new-fixture")
+        recovery_entry(replacement, kind, "NEW FILE")
+        place = getattr(journal, "place", None)
+        if place is None:
+            # Exercise the old switch protocol too when production is reverted for regression proofs.
+            replacement.replace(target)
+        else:
+            place(replacement, target)
     return journal, target
 
 
@@ -3508,6 +3533,145 @@ def test_every_existing_switch_write_is_classified_before_consent(
         assert any(f"'{target}'" in line for line in plan.overwrites), target
 
 
+class MutationAudit:
+    """Observe real mutations, independently of which writes the installer journals."""
+
+    def __init__(self, harness: Harness, patch: pytest.MonkeyPatch, plan: install.Plan) -> None:
+        """Install observers before a full install, after the test's existing-state setup.
+
+        Parameters:
+            harness (Harness): isolated installer home.
+            patch (pytest.MonkeyPatch): observer lifetime.
+            plan (install.Plan): pre-consent classification.
+        """
+        self.layout, self.plan = harness.layout, plan
+        self.created: set[Path] = set()
+        self.events: list[Path] = []
+        self.journaled: set[Path] = set()
+        self.backups: set[Path] = set()
+        self.descriptors: dict[int, Path] = {}
+        original_open, original_close, original_record = os.open, os.close, Journal.record
+
+        def opened(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+            """Resolve relative descriptor destinations against the actual opened parent."""
+            resolved = self.path(path, kwargs.get("dir_fd"))
+            existed = resolved is not None and resolved.exists(follow_symlinks=False)
+            descriptor = original_open(path, flags, *args, **kwargs)
+            if resolved is not None:
+                self.descriptors[descriptor] = resolved
+                if flags & os.O_CREAT and not existed:
+                    self.created.add(resolved)
+                elif flags & os.O_ACCMODE in {os.O_WRONLY, os.O_RDWR}:
+                    self.observe([(resolved, existed)])
+            return descriptor
+
+        def closed(descriptor: int) -> None:
+            """Do not attribute a recycled descriptor to a previous directory."""
+            self.descriptors.pop(descriptor, None)
+            original_close(descriptor)
+
+        def recorded(journal: Journal, target: Path, name: str) -> Path | None:
+            """Collect claimed journal coverage separately from observed mutation destinations."""
+            backup = original_record(journal, target, name)
+            self.journaled.add(target)
+            if backup is not None:
+                self.backups.add(backup)
+            return backup
+
+        patch.setattr(os, "open", opened)
+        patch.setattr(os, "close", closed)
+        patch.setattr(Journal, "record", recorded)
+        self.watch(patch, os, "replace", (0, 1))
+        self.watch(patch, os, "rename", (0, 1))
+        self.watch(patch, os, "symlink", (1,))
+        self.watch(patch, os, "mkdir", (0,))
+        self.watch(patch, os, "unlink", (0,))
+        self.watch(patch, os, "rmdir", (0,))
+        for name in ("write_text", "write_bytes", "mkdir", "unlink", "rmdir"):
+            self.watch(patch, Path, name, (0,))
+        self.watch(patch, install, "write_atomic", (0,))
+        self.watch(patch, shutil, "rmtree", (0,))
+        for name in ("move", "copy", "copy2", "copyfile", "copytree"):
+            self.watch(patch, shutil, name, (1,))
+
+    def path(self, value: Any, descriptor: int | None = None) -> Path | None:
+        """Resolve a mutation operand without following its final symlink.
+
+        Parameters:
+            value (Any): path-like operand, never an integer file descriptor.
+            descriptor (int | None): optional anchored parent.
+
+        Returns:
+            Path | None: absolute lexical path, or an unresolvable descriptor operand.
+        """
+        if isinstance(value, int):
+            return None
+        path = Path(value)
+        if not path.is_absolute() and descriptor is not None:
+            parent = self.descriptors.get(descriptor)
+            return None if parent is None else parent / path
+        return path.absolute()
+
+    def observe(self, before: list[tuple[Path, bool]]) -> None:
+        """Record existing-path mutations and distinguish entries created during this run.
+
+        Parameters:
+            before (list[tuple[Path, bool]]): operands and their pre-call existence.
+        """
+        roots = (self.layout.root, self.layout.agent_dir, self.layout.bin_dir)
+        for path, existed in before:
+            if not any(path == root or path.is_relative_to(root) for root in roots):
+                continue
+            if existed and path not in self.created:
+                self.events.append(path)
+            elif not existed and path.exists(follow_symlinks=False):
+                self.created.add(path)
+
+    def watch(self, patch: pytest.MonkeyPatch, owner: Any, name: str, positions: tuple[int, ...]) -> None:
+        """Observe successful mutation operands, not declared write intent.
+
+        Parameters:
+            patch (pytest.MonkeyPatch): observer lifetime.
+            owner (Any): module or class.
+            name (str): mutation primitive.
+            positions (tuple[int, ...]): mutated argument positions (rename source AND destination).
+        """
+        original = getattr(owner, name)
+        parameters = tuple(inspect.signature(original).parameters)
+
+        def mutation(*args: Any, **kwargs: Any) -> Any:
+            """Capture real pre-mutation existence, including descriptor-relative rename paths."""
+            before = []
+            for position in positions:
+                key = "src_dir_fd" if position == 0 and name in {"replace", "rename"} else "dst_dir_fd"
+                descriptor = kwargs.get(key) if name in {"replace", "rename"} else kwargs.get("dir_fd")
+                operand = args[position] if len(args) > position else kwargs[parameters[position]]
+                path = self.path(operand, descriptor)
+                if path is not None:
+                    existed = path.exists(follow_symlinks=False)
+                    if name != "mkdir" or not existed:
+                        before.append((path, existed))
+            result = original(*args, **kwargs)
+            self.observe(before)
+            return result
+
+        patch.setattr(owner, name, mutation)
+
+    def assert_classified(self) -> None:
+        """Require every pre-existing mutation to be journaled/classified or explicit installer scratch."""
+        infrastructure = {self.layout.journal, self.layout.root / "lock"}
+        for path in self.events:
+            # Staging is disposable installer scratch, never live user state. Do not exempt root/core/state.
+            if (
+                path in infrastructure
+                or path.is_relative_to(self.layout.root / "staging")
+                or path in self.backups
+            ):
+                continue
+            assert path in self.journaled, f"Unjournaled existing mutation: '{path}'"
+            assert any(f"'{path}'" in message for message in self.plan.overwrites), path
+
+
 @pytest.mark.parametrize("existing", [False, True])
 def test_switch_write_set_classification_includes_core_and_shims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bool
@@ -3524,21 +3688,15 @@ def test_switch_write_set_classification_includes_core_and_shims(
         for name in (install.SETTINGS_FILE, install.SUBAGENTS_FILE):
             (harness.layout.agent_dir / name).write_text("{}")
         harness.layout.state.write_text("{}")
+        auth = harness.layout.agent_dir / "auth.json"
+        auth.unlink(missing_ok=True)
+        auth.write_text("personal state outside the installer write set")
     plan = plan_install(harness.layout, harness.verified)
-    recorded: list[tuple[Path, bool]] = []
-    original = Journal.record
-
-    def record(journal: Journal, path: Path, name: str) -> Path | None:
-        """Capture existence for every path the implementation actually journals for replacement."""
-        recorded.append((path, path.exists(follow_symlinks=False)))
-        return original(journal, path, name)
-
-    monkeypatch.setattr(Journal, "record", record)
-    assert harness.run(yes=True) == ExitCode.OK
-    assert recorded
-    for path, existed in recorded:
-        if existed:
-            assert any(f"'{path}'" in line for line in plan.overwrites), path
+    with monkeypatch.context() as patch:
+        audit = MutationAudit(harness, patch, plan)
+        assert harness.run(yes=True) == ExitCode.OK
+    assert audit.events
+    audit.assert_classified()
 
 
 def recovery_transitions() -> list[tuple[str, str, str, str]]:
@@ -3577,11 +3735,12 @@ def test_recovery_transition_table_is_complete() -> None:
     assert {outcome for _, _, _, outcome in transitions} == {"restore", "skip", "refuse"}
 
 
-def matrix_content_identity(path: Path) -> dict[str, Any]:
+def matrix_content_identity(path: Path, contents: bytes = b"ORIGINAL") -> dict[str, Any]:
     """Build the known regular-file fixture's content identity independently of production hashing.
 
     Parameters:
-        path (Path): original fixture containing ORIGINAL.
+        path (Path): known fixture entry.
+        contents (bytes): expected file contents.
 
     Returns:
         dict[str, Any]: expected wire identity, including rename-stable corroboration.
@@ -3593,26 +3752,36 @@ def matrix_content_identity(path: Path) -> dict[str, Any]:
         "inode": info.st_ino,
         "mtime_ns": info.st_mtime_ns,
         "size": info.st_size,
-        "sha256": hashlib.sha256(b"ORIGINAL").hexdigest(),
+        "sha256": hashlib.sha256(contents).hexdigest(),
     }
 
 
-@pytest.mark.parametrize(("state", "presence", "live", "outcome"), recovery_transitions())
-def test_recovery_state_cross_product(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, state: str, presence: str, live: str, outcome: str
-) -> None:
-    """Every documented state/backup/live transition recovers idempotently or refuses without mutation."""
-    harness = Harness(tmp_path, monkeypatch)
+def seed_recovery_matrix(harness: Harness, state: str, presence: str, live: str) -> Path:
+    """Seed a single documented transition without consulting its expected outcome.
+
+    Parameters:
+        harness (Harness): isolated installer.
+        state (str): journal progress state.
+        presence (str): backup presence.
+        live (str): live entry state.
+
+    Returns:
+        Path: the backup entry, whether present or absent.
+    """
+    tmp_path = harness.home.parent
     layout = harness.layout
     target = layout.state
     recovery_entry(target, "file", "ORIGINAL")
-    info = target.stat()
-    content = matrix_content_identity(target)
     backups = layout.backups / "matrix"
     backups.mkdir(parents=True)
     backup = backups / target.name
     if presence == "present":
-        shutil.copy2(target, backup)
+        if live == "original":
+            os.link(target, backup)
+        else:
+            shutil.copy2(target, backup)
+    info = target.stat()
+    content = matrix_content_identity(target)
     raw: dict[str, Any] = {"target": str(target), "backup": str(backup)}
     if state in {"pending", "saved", "restored"}:
         raw |= {"pending": state == "pending", "original": [info.st_dev, info.st_ino, info.st_ctime_ns]}
@@ -3622,8 +3791,14 @@ def test_recovery_state_cross_product(
         raw |= {"restored": True, "restoring": content}
     if state == "new-target-completed":
         raw |= {"backup": None, "restored": True}
-    if live in {"new", "other"}:
-        target.write_text("NEW FILE" if live == "new" else "FORGERY!")
+    if state in {"pending", "saved", "restoring"}:
+        replacement = tmp_path / "replacement"
+        replacement.write_bytes(b"NEW FILE")
+        raw["replacement"] = matrix_content_identity(replacement, b"NEW FILE")
+        if live == "new":
+            replacement.replace(target)
+    if live == "other" or (live == "new" and "replacement" not in raw):
+        target.write_text("FORGERY!" if live == "other" else "NEW FILE")
         os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns))
     elif live == "absent":
         target.unlink()
@@ -3632,6 +3807,17 @@ def test_recovery_state_cross_product(
     install.write_atomic(
         layout.journal, json.dumps({"backups": str(backups), "steps": [raw]}), mode=install.JOURNAL_MODE
     )
+    return backup
+
+
+@pytest.mark.parametrize(("state", "presence", "live", "outcome"), recovery_transitions())
+def test_recovery_state_cross_product(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, state: str, presence: str, live: str, outcome: str
+) -> None:
+    """Every documented state/backup/live transition recovers idempotently or refuses without mutation."""
+    harness = Harness(tmp_path, monkeypatch)
+    backup = seed_recovery_matrix(harness, state, presence, live)
+    layout, target = harness.layout, harness.layout.state
     before = tree(harness.home)
     if outcome == "refuse":
         with pytest.raises(RollbackError):
@@ -3770,6 +3956,299 @@ def test_restore_tree_digest_has_defined_framing_and_never_follows_links(tmp_pat
     assert install.RestoreHasher().identity(directory).sha256 == expected
     with pytest.raises(OSError, match="entry limit"):
         install.RestoreHasher(remaining_entries=2).identity(directory)
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink"])
+def test_post_crash_edits_refuse_without_mutating_any_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A post-crash edit is user state, not a concurrent swap or authorized installer replacement."""
+    harness = Harness(tmp_path, monkeypatch)
+    journal, target = saved_recovery_entry(harness, "file")
+    recovery_entry(target, kind, "USER EDIT")
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match="mv -i") as raised:
+        rollback(harness.layout)
+    assert str(target) in str(raised.value)
+    assert tree(harness.home) == before
+    assert (journal.backups / target.name).read_bytes() == b"ORIGINAL"
+
+
+def test_legacy_unknown_replacement_refuses_new_live_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An older journal cannot authorize deleting live content it never identified."""
+    harness = Harness(tmp_path, monkeypatch)
+    saved_recovery_entry(harness, "file")
+    edit_journal(harness, lambda document: document["steps"][0].pop("replacement", None))
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match="recorded replacement"):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
+
+
+def test_legacy_unknown_new_target_is_never_deleted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Original absence in an old journal does not authorize deleting an unidentified live file."""
+    harness = Harness(tmp_path, monkeypatch)
+    layout = harness.layout
+    journal = Journal(layout, layout.backups / "legacy-new")
+    with journal.open_backups():
+        journal.record(layout.state, layout.state.name)
+    layout.state.write_text("unidentified newer state")
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match="recorded replacement"):
+        rollback(layout)
+    assert tree(harness.home) == before
+
+
+def test_all_live_steps_are_checked_before_any_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later-discovered post-crash edit must not permit earlier restores or journal writes."""
+    harness = Harness(tmp_path, monkeypatch)
+    pending_file_restore(harness)
+    (harness.layout.agent_dir / install.SETTINGS_FILE).write_text("post-crash edit")
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match="mv -i"):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
+
+
+def test_replacement_identity_is_durable_before_switch_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """There is no rename-to-journal-update gap in identifying the installer's replacement."""
+    harness = Harness(tmp_path, monkeypatch)
+    layout = harness.layout
+    layout.root.mkdir(parents=True)
+    layout.state.write_bytes(b"ORIGINAL")
+    journal = Journal(layout, layout.backups / "replacement-intent")
+    original_replace = os.replace
+    observed = False
+
+    def inspect(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Inspect the actual durable journal immediately before installed.json lands."""
+        nonlocal observed
+        if Path(dst) == layout.state and kwargs.get("src_dir_fd") is None:
+            document = json.loads(layout.journal.read_text())
+            replacement = document["steps"][-1].get("replacement")
+            assert replacement is not None
+            info = Path(src).stat()
+            assert replacement["sha256"] == hashlib.sha256(b"NEW FILE").hexdigest()
+            assert (replacement["device"], replacement["inode"]) == (info.st_dev, info.st_ino)
+            observed = True
+            raise KeyboardInterrupt
+        original_replace(src, dst, **kwargs)
+
+    with journal.open_backups(), monkeypatch.context() as patch:
+        patch.setattr(os, "replace", inspect)
+        with pytest.raises(KeyboardInterrupt):
+            install.replace_file(journal, layout.state, layout.state.name, "NEW FILE")
+    assert observed
+    rollback(layout)
+    assert layout.state.read_bytes() == b"ORIGINAL"
+
+
+@pytest.mark.parametrize("failure", [errno.EXDEV, errno.EIO])
+def test_failed_backup_rename_preserves_live_and_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: int
+) -> None:
+    """The live entry is renamed back if the second restore rename fails, never deleted first."""
+    harness = Harness(tmp_path, monkeypatch)
+    journal, target = saved_recovery_entry(harness, "file")
+    before, inode = tree(harness.home), target.stat().st_ino
+    original = os.replace
+
+    def refuse(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Inject a real EXDEV/EIO result at the backup-to-live syscall only."""
+        if kwargs.get("src_dir_fd") is not None:
+            raise OSError(failure, os.strerror(failure))
+        original(src, dst, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", refuse)
+        with pytest.raises(RollbackError):
+            rollback(harness.layout)
+    assert target.read_bytes() == b"NEW FILE"
+    assert target.stat().st_ino == inode
+    assert (journal.backups / target.name).read_bytes() == b"ORIGINAL"
+    assert {
+        key: value for key, value in tree(harness.home).items() if not key.endswith(install.JOURNAL_FILE)
+    } == {key: value for key, value in before.items() if not key.endswith(install.JOURNAL_FILE)}
+    rollback(harness.layout)
+    assert target.read_bytes() == b"ORIGINAL"
+
+
+@pytest.mark.parametrize("moment", ["aside-moved", "backup-restored", "aside-deleted"])
+def test_interrupted_restore_aside_reconciles_without_losing_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moment: str
+) -> None:
+    """Every new aside window is journaled, including a rename that succeeded before interruption."""
+    harness = Harness(tmp_path, monkeypatch)
+    _, target = saved_recovery_entry(harness, "file")
+    original_replace, original_unlink = os.replace, Path.unlink
+
+    def rename(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Interrupt after one of the two restore renames, not journal rewrites."""
+        original_replace(src, dst, **kwargs)
+        if (moment == "aside-moved" and Path(src) == target) or (
+            moment == "backup-restored" and kwargs.get("src_dir_fd") is not None
+        ):
+            raise KeyboardInterrupt
+
+    def unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        """Interrupt after cleanup consumed the aside but before progress was recorded."""
+        original_unlink(path, *args, **kwargs)
+        if moment == "aside-deleted" and ".pi-stack-restore-" in path.name:
+            raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", rename)
+        patch.setattr(Path, "unlink", unlink)
+        with pytest.raises(KeyboardInterrupt):
+            rollback(harness.layout)
+    rollback(harness.layout)
+    assert target.read_bytes() == b"ORIGINAL"
+    assert rollback(harness.layout) == []
+    assert list(target.parent.glob("*.pi-stack-restore-*")) == []
+
+
+def test_cross_device_restore_is_refused_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A static layout-device mismatch is refused before even rewriting the journal."""
+    harness = Harness(tmp_path, monkeypatch)
+    journal, target = saved_recovery_entry(harness, "file")
+    backup = journal.backups / target.name
+    original_stat, original_identity = os.stat, install.RestoreHasher.identity
+    identity = install.RestoreHasher().identity(backup)
+
+    def stat_backup(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        """Model a backup on another mounted device without requiring mount privileges."""
+        info = original_stat(path, *args, **kwargs)
+        if kwargs.get("dir_fd") is not None and str(path) == backup.name:
+            values = list(info)
+            values[2] += 1
+            return os.stat_result(values)
+        return info
+
+    def hash_backup(hasher: Any, path: Any, **kwargs: Any) -> Any:
+        """Keep content hashing independent of the simulated layout-device probe."""
+        if kwargs.get("dir_fd") is not None and str(path) == backup.name:
+            return identity
+        return original_identity(hasher, path, **kwargs)
+
+    before = tree(harness.home)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "stat", stat_backup)
+        patch.setattr(install.RestoreHasher, "identity", hash_backup)
+        with pytest.raises(RollbackError, match="different filesystems"):
+            rollback(harness.layout)
+    assert tree(harness.home) == before
+
+
+@pytest.mark.parametrize(
+    "mutation", ["atomic", "text", "bytes", "replace", "rename", "copy", "move", "symlink", "unlink"]
+)
+def test_mutation_audit_detects_deliberately_unjournaled_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """The consent test itself must catch accidental writes that bypass Journal.record entirely."""
+    original = install.switch_anchored
+
+    def unclassified(layout: Layout, *args: Any, **kwargs: Any) -> None:
+        """Deliberately violate the write contract after the real switch has finished."""
+        original(layout, *args, **kwargs)
+        target = layout.agent_dir / "auth.json"
+        source = tmp_path / "rogue-source"
+        source.write_text("unclassified")
+        if mutation == "atomic":
+            install.write_atomic(path=target, text="unclassified")
+        elif mutation == "text":
+            target.write_text("unclassified")
+        elif mutation == "bytes":
+            target.write_bytes(b"unclassified")
+        elif mutation == "replace":
+            source.replace(target)
+        elif mutation == "rename":
+            source.rename(target)
+        elif mutation == "copy":
+            shutil.copy2(src=source, dst=target)
+        elif mutation == "move":
+            shutil.move(source, target)
+        elif mutation == "symlink":
+            target.unlink(missing_ok=True)
+            target.symlink_to(source)
+        else:
+            target.unlink(missing_ok=True)
+
+    monkeypatch.setattr(install, "switch_anchored", unclassified)
+    with pytest.raises(AssertionError, match=r"Unjournaled existing mutation: '.*auth\.json'"):
+        test_switch_write_set_classification_includes_core_and_shims(tmp_path, monkeypatch, existing=True)
+
+
+def test_backup_validation_permission_error_is_normalized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any validation I/O error becomes RollbackError before the restore mutates an entry."""
+    harness = Harness(tmp_path, monkeypatch)
+    journal, _ = saved_recovery_entry(harness, "file")
+    original = install.entry_kind
+
+    def denied(path: Path) -> str | None:
+        """Model an unsearchable backup parent at the validation boundary."""
+        if path == journal.backups:
+            raise PermissionError(errno.EACCES, "backup parent unsearchable")
+        return original(path)
+
+    before = tree(harness.home)
+    monkeypatch.setattr(install, "entry_kind", denied)
+    with pytest.raises(RollbackError, match="not trusted"):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
+
+
+def test_actual_unsearchable_backup_parent_is_normalized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise actual filesystem permissions, not merely an injected validation exception."""
+    if os.getuid() == 0:
+        pytest.skip("root bypasses chmod 000 directory search permissions")
+    harness = Harness(tmp_path, monkeypatch)
+    journal, _ = saved_recovery_entry(harness, "file")
+    before = tree(harness.home)
+    mode = journal.backups.stat().st_mode & 0o777
+    journal.backups.chmod(0)
+    try:
+        with pytest.raises(RollbackError, match="not trusted"):
+            rollback(harness.layout)
+    finally:
+        journal.backups.chmod(mode)
+    assert tree(harness.home) == before
+
+
+@pytest.mark.parametrize("value", ["relative", "~/share", "../outside", "./data"])
+def test_relative_xdg_data_home_uses_prescribed_fallback(tmp_path: Path, value: str) -> None:
+    """XDG relative values are invalid and ignored, never resolved against the working directory."""
+    home = tmp_path / "home"
+    layout = Layout.from_env({"XDG_DATA_HOME": value, "XDG_CONFIG_HOME": "relative-also"}, home, None)
+    assert layout.root == home.resolve() / ".local/share/pi-stack"
+
+
+@pytest.mark.parametrize("name", ["test_install.py", "test_promotion.py"])
+def test_installer_fixtures_do_not_use_update_expressions(name: str) -> None:
+    """Keep dictionary edits out of lambda/expression update calls across both PR fixture files."""
+    module = ast.parse(Path(__file__).with_name(name).read_text())
+    parents = {child: parent for parent in ast.walk(module) for child in ast.iter_child_nodes(parent)}
+    invalid = [
+        node.lineno
+        for node in ast.walk(module)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "update"
+        and not isinstance(parents[node], ast.Expr)
+    ]
+    assert invalid == []
 
 
 def test_journal_memory_failure_is_untrusted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
