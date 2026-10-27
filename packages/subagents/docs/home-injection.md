@@ -127,9 +127,9 @@ Tests:
   extension tilde, frontmatter `session_dir`, resource/settings and default-session
   forwarding. Each forwarding argument can be removed independently to make its
   regression fail.
-- `resource-loader-home.test.ts` is in `test:bun` through Bun-launched Vitest;
-  its child asserts the same Bun runtime so the cached-home regression cannot be
-  Node-only coverage.
+- `resource-loader-home.test.ts` is in `test:bun` through `bun --bun`-launched
+  Vitest. That gate asserts Bun matches the root pin, and its child asserts the
+  same runtime so the cached-home regression cannot be Node-only coverage.
 - `test/helpers/home-extension.ts` binds wiring tests to their disposable agent
   directory; `scenario-session.ts` passes its explicit root to the factory.
 - `custom-agents.test.ts` and `skill-loader.test.ts` bind every loader invocation to

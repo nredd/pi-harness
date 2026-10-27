@@ -9,9 +9,11 @@ import { normalizeResourceSettings } from "../src/resource-loader.js";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const helper = fileURLToPath(new URL("./helpers/real-loader-home.ts", import.meta.url));
+const pinnedBunVersion = readFileSync(fileURLToPath(new URL("../../../.bun-version", import.meta.url)), "utf8").trim();
 let bundleDir: string;
 
 beforeAll(async () => {
+  if (process.env.PI_EXPECT_BUN_RUNTIME === "1") expect(process.versions.bun).toBe(pinnedBunVersion);
   // Bundle only owned TypeScript, leaving the real Pi SDK/package manager
   // external. A colocated disposable module retains native npm resolution.
   bundleDir = mkdtempSync(join(packageRoot, ".real-loader-home-"));
