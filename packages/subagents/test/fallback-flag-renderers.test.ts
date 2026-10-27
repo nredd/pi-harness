@@ -13,6 +13,7 @@ import type { AgentRecord, NotificationDetails } from "../src/types.js";
 import { AgentResultView } from "../src/ui/agent-row.js";
 import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
+import { hasFallback } from "../src/ui/fallback-flag.js";
 import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.js";
 import { groupSummary, renderNotification } from "../src/ui/notification-view.js";
 import { layoutWorkflowCard, plainWorkflowCardLines, type WorkflowCardTask } from "../src/ui/workflow-card.js";
@@ -56,7 +57,7 @@ const record = (over: Partial<AgentRecord> = {}): AgentRecord =>
     lifetimeUsage: { input: 3_200, output: 0, cacheWrite: 0 }, compactionCount: 0, modelFallback: FALLBACK, session: { subscribe: () => () => {}, messages: [] } as any, ...over,
   }) as AgentRecord;
 
-function widgetLine(rec: AgentRecord, width: number): string {
+function widgetLine(rec: AgentRecord, width: number, renderTheme = theme): string {
   const widget = new AgentWidget(
     { listAgents: () => [rec] } as unknown as AgentManager,
     new Map<string, AgentActivity>([[rec.id, { activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1 }]]),
@@ -65,11 +66,11 @@ function widgetLine(rec: AgentRecord, width: number): string {
   let factory: any;
   widget.setUICtx({ setStatus: () => {}, setWidget: (_k: string, c: unknown) => { factory = c; } } as any);
   widget.update();
-  const lines: string[] = factory({ terminal: { columns: width }, requestRender: () => {} }, theme).render();
+  const lines: string[] = factory({ terminal: { columns: width }, requestRender: () => {} }, renderTheme).render();
   return lines.find(l => l.includes("[fallback")) ?? lines.join("\n");
 }
 
-function fleetLine(rec: AgentRecord, width: number): string {
+function fleetLine(rec: AgentRecord, width: number, renderTheme = theme): string {
   const fleet = new FleetList({ listAgents: () => [rec], abort: () => true, steer: vi.fn(() => true) } as unknown as AgentManager,
     new Map(), undefined, undefined, undefined, undefined, undefined, () => true);
   let factory: any;
@@ -78,7 +79,7 @@ function fleetLine(rec: AgentRecord, width: number): string {
     notify: () => {}, custom: (() => new Promise(() => {})) as FleetUICtx["custom"],
   } as FleetUICtx);
   fleet.update();
-  const lines: string[] = factory({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, theme).render(width);
+  const lines: string[] = factory({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, renderTheme).render(width);
   return lines.find(l => /\[fallback|\[fb\]|^\s*[●○]\s+!/.test(l)) ?? lines.join("\n");
 }
 
@@ -116,16 +117,37 @@ it("workflow cards use the actual tier flag ahead of long labels, not a healthy 
   }
 });
 
-it("renders healthy tier identity neutrally and switched tiers as actionable fallbacks", () => {
-  const healthy = TIER_FLAGS[0]!.modelTier;
-  const switched: TierDisclosure = { ...healthy, admitted: "fixture/fast", answered: "fixture/safer" };
-  const card = layoutWorkflowCard({ width: 120, now: NOW, task, progress: [agentEntry({ modelTier: healthy })] });
-  expect(card.flat().find(segment => segment.text.includes("[@cheap]"))).toMatchObject({ color: "dim" });
-  const dialog = layoutWorkflowDialog(dialogInput(120, [agentEntry({ modelTier: healthy })]));
-  expect(dialog.flat().find(segment => segment.text.includes("[@cheap]"))).toMatchObject({ color: "dim" });
-  expect(strip(renderNotification(notice({ modelTier: healthy }), false, coloredTheme, false).render(120)[0]!)).toContain("dim:[@cheap]");
-  expect(strip(renderNotification(notice({ modelTier: switched }), false, coloredTheme, false).render(120)[0]!)).toContain("warning:[@cheap]");
-  expect(groupSummary([notice({ modelTier: healthy }), notice({ modelTier: switched })], coloredTheme)).toContain("warning:[@cheap]");
+it("keeps a routed response without an admission label healthy across every renderer", () => {
+  const routedWithoutAdmission: TierDisclosure = { ...TIER_FLAGS[0]!.modelTier, answered: "fixture/fast" };
+  const switched: TierDisclosure = { ...routedWithoutAdmission, admitted: "fixture/fast", answered: "fixture/safer" };
+  expect(hasFallback({ modelTier: routedWithoutAdmission })).toBe(false);
+  expect(hasFallback({ modelTier: switched })).toBe(true);
+
+  const neutralCard = layoutWorkflowCard({ width: 120, now: NOW, task, progress: [agentEntry({ modelTier: routedWithoutAdmission })] });
+  const warningCard = layoutWorkflowCard({ width: 120, now: NOW, task, progress: [agentEntry({ modelTier: switched })] });
+  expect(neutralCard.flat().find(segment => segment.text.includes("[@cheap]"))).toMatchObject({ color: "dim" });
+  expect(warningCard.flat().find(segment => segment.text.includes("[@cheap]"))).toMatchObject({ color: "warning" });
+
+  const neutralDialog = layoutWorkflowDialog(dialogInput(120, [agentEntry({ modelTier: routedWithoutAdmission })]));
+  const warningDialog = layoutWorkflowDialog(dialogInput(120, [agentEntry({ modelTier: switched })]));
+  expect(neutralDialog.flat().find(segment => segment.text.includes("[@cheap]"))).toMatchObject({ color: "dim" });
+  expect(warningDialog.flat().find(segment => segment.text.includes("[@cheap]"))).toMatchObject({ color: "warning" });
+
+  const neutralNotice = strip(renderNotification(notice({ modelTier: routedWithoutAdmission }), false, coloredTheme, false).render(120)[0]!);
+  const warningNotice = strip(renderNotification(notice({ modelTier: switched }), false, coloredTheme, false).render(120)[0]!);
+  expect(neutralNotice).toContain("dim:[@cheap]");
+  expect(neutralNotice).not.toContain("warning:");
+  expect(warningNotice).toContain("warning:[@cheap]");
+  expect(groupSummary([notice({ modelTier: routedWithoutAdmission }), notice({ modelTier: switched })], coloredTheme)).toContain("warning:[@cheap]");
+
+  const details = { displayName: "x", description: "d", subagentType: "x", toolUses: 0, tokens: "", durationMs: 0, status: "completed", agentId: "a1", modelTier: routedWithoutAdmission } as any;
+  const row = new AgentResultView(details, "", false, { getRecord: () => undefined, getActivity: () => undefined, showCost: () => false }, coloredTheme).render(120).join("\n");
+  expect(strip(row)).toContain("dim:[@cheap]");
+  expect(strip(row)).not.toContain("warning:");
+
+  const tierRecord = record({ modelFallback: undefined, modelTier: routedWithoutAdmission });
+  expect(strip(widgetLine(tierRecord, 120, coloredTheme))).toContain("dim:[@cheap]");
+  expect(strip(fleetLine(tierRecord, 120, coloredTheme))).toContain("dim:[@cheap]");
 });
 
 it("individual and grouped notices distinguish tiers, outcome and real fallback counts", () => {

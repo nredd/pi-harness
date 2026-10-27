@@ -26,9 +26,9 @@ export interface FallbackCarrier {
 
 /** Whether this tier's answer differs from the member/profile admitted for it. */
 function switchedWithinTier(tier: TierDisclosure): boolean {
-  return (tier.kind === "routed" || tier.kind === "static")
-    && tier.answered !== undefined
-    && tier.answered !== (tier.kind === "routed" ? tier.admitted : tier.member);
+  if (tier.kind !== "routed" && tier.kind !== "static") return false;
+  const baseline = tier.kind === "routed" ? tier.admitted : tier.member;
+  return baseline !== undefined && tier.answered !== undefined && tier.answered !== baseline;
 }
 
 /** Whether `carrier` needs an actionable fallback warning, not merely tier identity. */
