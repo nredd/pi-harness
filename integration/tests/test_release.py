@@ -1269,6 +1269,9 @@ def test_shared_fetch_diagnostics_are_stable(
 
     Returns:
         None: exact text, URL cardinality, status and exception chaining match the contract.
+
+    Raises:
+        AssertionError: a consumer changes the normalized text, status or sanitized exception graph.
     """
     artifact = tmp_path / "snapshot.json"
     artifact.write_bytes(b"snapshot")

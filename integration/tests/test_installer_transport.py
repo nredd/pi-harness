@@ -399,6 +399,63 @@ def test_installer_refuses_unsupported_proxy_without_downgrade(scheme: str) -> N
     assert not request.has_header("Proxy-Authorization")
 
 
+def test_fetch_context_without_defaults_ignores_ambient_ca(
+    local_transport: LocalTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing explicit/compiled-in roots fail closed instead of loading ambient CA paths.
+
+    Parameters:
+        local_transport (LocalTransport): real CA paths used only as rejected ambient inputs.
+        monkeypatch (pytest.MonkeyPatch): missing compiled-in defaults and ambient trusted CA.
+
+    Returns:
+        None: the context verifies hostnames/certificates and its trust store is empty.
+
+    Raises:
+        AssertionError: ambient CA paths populate the supposedly explicit empty trust store.
+    """
+    defaults = ssl.get_default_verify_paths()._replace(
+        openssl_cafile=str(local_transport.certificate.parent / "missing-default.pem"),
+        openssl_capath=str(local_transport.certificate.parent / "missing-default-dir"),
+    )
+    monkeypatch.setattr(ssl, "get_default_verify_paths", lambda: defaults)
+    monkeypatch.setenv("SSL_CERT_FILE", str(local_transport.certificate))
+    monkeypatch.setenv("SSL_CERT_DIR", str(local_transport.ca_directory))
+    context = release.fetch_ssl_context({})
+    assert context.check_hostname
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.cert_store_stats()["x509"] == 0
+
+
+def test_rejected_ambient_ca_uses_explicit_compiled_default(
+    local_transport: LocalTransport, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A rejected relative CA does not block the explicit compiled-in default trust store.
+
+    Parameters:
+        local_transport (LocalTransport): CA treated as the compiled-in default for this test.
+        monkeypatch (pytest.MonkeyPatch): relative ambient CA and explicit default-path fixture.
+        caplog (pytest.LogCaptureFixture): value-free validation warning.
+
+    Returns:
+        None: the HTTPS/CONNECT request succeeds through the compiled-in default CA.
+
+    Raises:
+        AssertionError: a rejected ambient path displaces default trust or appears in a warning.
+    """
+    defaults = ssl.get_default_verify_paths()._replace(
+        openssl_cafile=str(local_transport.certificate),
+        openssl_capath=str(local_transport.certificate.parent / "missing-default-dir"),
+    )
+    monkeypatch.setattr(ssl, "get_default_verify_paths", lambda: defaults)
+    monkeypatch.setenv("SSL_CERT_FILE", "rejected-relative.pem")
+    monkeypatch.setenv("HTTPS_PROXY", local_transport.proxy)
+    assert release.fetch_bytes(local_transport.url) == b"trusted"
+    assert local_transport.connects
+    assert caplog.messages == ["Dropping `SSL_CERT_FILE`: expected an absolute existing CA path"]
+    assert "rejected-relative.pem" not in caplog.text
+
+
 @pytest.mark.parametrize("missing", ["proxy", "ca"])
 def test_https_transport_requires_explicit_proxy_and_trust(
     local_transport: LocalTransport, monkeypatch: pytest.MonkeyPatch, missing: str
@@ -584,12 +641,17 @@ def test_fetch_traceback_and_context_are_redacted(
     assert "public.invalid/artifact" in text
 
 
-@pytest.mark.parametrize("name", DOCUMENTED_TESTS)
-def test_added_test_docstrings_have_typed_sections(name: str) -> None:
-    """Gate the seven review-identified test docstrings, not only helper contracts.
+@pytest.mark.parametrize(
+    ("module", "name"),
+    [("test_install.py", name) for name in DOCUMENTED_TESTS]
+    + [("test_release.py", "test_shared_fetch_diagnostics_are_stable")],
+)
+def test_added_test_docstrings_have_typed_sections(module: str, name: str) -> None:
+    """Gate the review-identified and newly touched test docstrings, not only helpers.
 
     Parameters:
-        name (str): round-one regression test to inspect.
+        module (str): installer/release test module to inspect.
+        name (str): regression test whose typed contract must be documented.
 
     Returns:
         None: its docstring documents typed inputs, result and failure contract.
@@ -597,12 +659,12 @@ def test_added_test_docstrings_have_typed_sections(name: str) -> None:
     Raises:
         AssertionError: a required typed documentation section is missing.
     """
-    tree = ast.parse(Path(__file__).with_name("test_install.py").read_text())
+    tree = ast.parse(Path(__file__).with_name(module).read_text())
     node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
     doc = ast.get_docstring(node) or ""
     for section in ("Parameters:", "Returns:", "Raises:"):
         assert section in doc, name
-    for argument in node.args.args:
+    for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
         assert f"{argument.arg} (" in doc, name
 
 
