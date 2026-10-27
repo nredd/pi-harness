@@ -24,22 +24,31 @@ import os
 import platform
 import re
 import shutil
+import ssl
 import subprocess
 import tarfile
 import tempfile
+import traceback
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from http import HTTPStatus
-from http.client import HTTPException, HTTPMessage, IncompleteRead, RemoteDisconnected
+from http.client import HTTPException, HTTPMessage, HTTPResponse, IncompleteRead, RemoteDisconnected
 from pathlib import Path
 from socket import gaierror
 from ssl import SSLError
 from types import MappingProxyType
 from typing import IO, override
+from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import unquote, urlsplit
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
 
@@ -147,6 +156,11 @@ ProvenanceCheck = Callable[[Path, str], None]
 # Bound public assets, including responses without Content-Length, before allocating their bodies.
 MAX_FETCH_BYTES = 256 * 1024 * 1024
 CONTENT_LENGTH = re.compile(r"[0-9]+")
+# Typeshed omits this runtime helper on macOS, where proxy_bypass also reads system state.
+# Select urllib's environment-only implementation explicitly, with our validated mapping.
+PROXY_BYPASS_ENVIRONMENT: Callable[[str, dict[str, str]], bool] = vars(urllib_request)[
+    "proxy_bypass_environment"
+]
 
 
 class HTTPSRedirectHandler(HTTPRedirectHandler):
@@ -177,7 +191,110 @@ class HTTPSRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-urlopen = build_opener(HTTPSRedirectHandler()).open
+class ValidatedProxyHandler(ProxyHandler):
+    """Use only explicit proxy/bypass policy, never ambient or platform proxy settings."""
+
+    proxies: dict[str, str]
+
+    @override
+    def proxy_open(self, req: Request, proxy: str, type: str) -> None:
+        """Configure HTTPS CONNECT using the validated proxy and explicit bypass list.
+
+        Parameters:
+            req (Request): HTTPS request, including its destination port.
+            proxy (str): selected proxy URL or authority.
+            type (str): protocol selected by urllib's handler dispatch.
+
+        Returns:
+            None: urllib's HTTPS handler completes the request or direct bypass.
+
+        Raises:
+            ValueError: the proxy is not an HTTP CONNECT authority.
+        """
+        if not proxy or PROXY_BYPASS_ENVIRONMENT(req.host, self.proxies):
+            return
+        parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+        # urllib tunnels HTTPS origins but cannot layer TLS to an HTTPS proxy. Refuse
+        # that scheme rather than silently sending CONNECT credentials in plaintext.
+        if parsed.scheme != "http" or not parsed.hostname:
+            raise ValueError("Installer proxy requires an HTTP CONNECT authority")
+        if parsed.username is not None:
+            credentials = f"{unquote(parsed.username)}:{unquote(parsed.password or '')}"
+            encoded = base64.b64encode(credentials.encode()).decode("ascii")
+            req.add_unredirected_header("Proxy-Authorization", f"Basic {encoded}")
+        req.set_proxy(parsed.netloc.rsplit("@", 1)[-1], parsed.scheme)
+
+
+def urlopen(request: str | Request, *, timeout: int) -> HTTPResponse:
+    """Open HTTPS with the same validated connectivity policy as installer children.
+
+    Parameters:
+        request (str | Request): public HTTPS resource.
+        timeout (int): socket timeout in seconds.
+
+    Returns:
+        HTTPResponse: urllib response, including HTTP headers and bounded-read support.
+
+    Raises:
+        OSError | ValueError: transport configuration or HTTPS connection failed.
+    """
+    env = connectivity_environment(os.environ)
+    proxies = {
+        name: env.get(name + "_proxy", env.get(name.upper() + "_PROXY", ""))
+        for name in ("http", "https", "all", "no")
+    }
+    # urllib has no ALL_PROXY fallback by itself; make the documented fallback explicit.
+    if "https_proxy" not in env and "HTTPS_PROXY" not in env:
+        proxies["https"] = proxies["all"]
+    return build_opener(
+        ValidatedProxyHandler(proxies),
+        HTTPSHandler(context=fetch_ssl_context(env)),
+        HTTPSRedirectHandler(),
+    ).open(request, timeout=timeout)
+
+
+def fetch_ssl_context(env: Mapping[str, str]) -> ssl.SSLContext:
+    """Build TLS trust from validated CA paths and explicit compiled-in defaults.
+
+    Parameters:
+        env (Mapping[str, str]): validated connectivity values, never ambient OpenSSL overrides.
+
+    Returns:
+        ssl.SSLContext: hostname-verifying context with all configured additional CA bundles.
+
+    Raises:
+        OSError | ValueError: a configured CA bundle is unreadable or invalid.
+    """
+    defaults = ssl.get_default_verify_paths()
+    cafile = env.get("SSL_CERT_FILE")
+    capath = env.get("SSL_CERT_DIR")
+    if cafile is None and Path(str(defaults.openssl_cafile)).resolve().is_file():
+        cafile = defaults.openssl_cafile
+    if capath is None and Path(str(defaults.openssl_capath)).resolve().is_dir():
+        capath = defaults.openssl_capath
+    # Passing neither argument to create_default_context would silently reread ambient
+    # SSL_CERT_FILE/SSL_CERT_DIR, including values validation rejected. Fail closed instead.
+    context = (
+        ssl.create_default_context(cafile=cafile, capath=capath)
+        if cafile or capath
+        else ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    )
+    for key in ("NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        if key in env:
+            context.load_verify_locations(cafile=env[key])
+    return context
+
+
+def format_exception_redacted(error: BaseException) -> str:
+    """Format the complete cause/context chain through the one diagnostic sanitizer.
+
+    Parameters:
+        error (BaseException): untrusted transport exception and its traceback chain.
+
+    Returns:
+        str: formatted traceback without proxy URL userinfo.
+    """
+    return redact_diagnostic("".join(traceback.format_exception(error)))
 
 
 def fetch_failure_reason(error: Exception) -> str:
@@ -238,7 +355,7 @@ class FetchError(OSError):
             None: the public diagnostic names the requested URL once and retains the HTTP status.
         """
         self.status = error.code if isinstance(error, HTTPError) else None
-        super().__init__(f"Could not fetch '{url}': {fetch_failure_reason(error)}")
+        super().__init__(redact_diagnostic(f"Could not fetch '{url}': {fetch_failure_reason(error)}"))
 
 
 def fetch_bytes(request: str | Request) -> bytes:
@@ -282,7 +399,11 @@ def fetch_bytes(request: str | Request) -> bytes:
                 raise ValueError(f"Content-Length mismatch: expected {length} bytes, received {len(body)}")
             return body
     except (HTTPException, OSError, ValueError) as error:
-        raise FetchError(url, error) from error
+        failure = FetchError(url, error)
+        # Retain a useful sanitized cause, not urllib's original args/reason/context graph.
+        failure.__cause__ = RuntimeError(format_exception_redacted(error))
+    # Raising outside the handler prevents Python attaching the raw error as __context__.
+    raise failure from failure.__cause__
 
 
 class AttestationRateLimitedError(RuntimeError):
@@ -333,6 +454,44 @@ def redact_diagnostic(text: str) -> str:
     return PROXY_USERINFO.sub(lambda match: match["scheme"] or "", text)
 
 
+def connectivity_environment(env: Mapping[str, str]) -> dict[str, str]:
+    """Validate the shared child/fetch connectivity allowlist without exposing values.
+
+    Parameters:
+        env (Mapping[str, str]): untrusted parent transport settings.
+
+    Returns:
+        dict[str, str]: unchanged valid values, retaining both case variants for children.
+    """
+    result: dict[str, str] = {}
+    for key in sorted(CONNECTIVITY_ENVIRONMENT_KEYS):
+        if key not in env:
+            continue
+        value = env[key]
+        if any(character in value for character in ("\u0000", "\n", "\r")):
+            LOGGER.warning(f"Dropping `{key}`: NUL/newline is not allowed")
+            continue
+        if key in CA_ENVIRONMENT_KEYS:
+            try:
+                path = Path(str(value)).resolve()
+                valid = (
+                    Path(str(value)).is_absolute()
+                    and path.exists()
+                    and (path.is_dir() if key == "SSL_CERT_DIR" else path.is_file())
+                )
+            except (OSError, RuntimeError):
+                valid = False
+            if not valid:
+                LOGGER.warning(f"Dropping `{key}`: expected an absolute existing CA path")
+                continue
+        result[key] = value
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        lower = key.lower()
+        if key in result and lower in result and result[key] != result[lower]:
+            LOGGER.warning(f"Conflicting `{key}` and `{lower}`: installer fetch prefers `{lower}`")
+    return result
+
+
 def child_environment(
     env: Mapping[str, str],
     *,
@@ -360,23 +519,7 @@ def child_environment(
         GITHUB_TOKEN_VARIABLES | {"GH_CONFIG_DIR"} if github_tokens else set()
     )
     result = {key: value for key, value in env.items() if key in allowed}
-    for key in sorted(CONNECTIVITY_ENVIRONMENT_KEYS):
-        if key not in env:
-            continue
-        value = env[key]
-        if any(character in value for character in ("\x00", "\n", "\r")):
-            LOGGER.warning(f"Dropping `{key}`: NUL/newline is not allowed")
-            continue
-        if key in CA_ENVIRONMENT_KEYS:
-            path = Path(value)
-            try:
-                valid = path.is_absolute() and (path.is_dir() if key == "SSL_CERT_DIR" else path.is_file())
-            except OSError:
-                valid = False
-            if not valid:
-                LOGGER.warning(f"Dropping `{key}`: expected an absolute existing CA path")
-                continue
-        result[key] = value
+    result |= connectivity_environment(env)
     result |= dict(overrides or {})
     path = CHILD_PATH.get()
     if path is None:

@@ -6129,7 +6129,19 @@ def test_install_never_spawns_relative_executable(tmp_path: Path, monkeypatch: p
     ],
 )
 def test_connectivity_reaches_every_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str) -> None:
-    """Each exact connectivity key reaches real npm/gh/node/pi env-dumping shims unchanged."""
+    """Each exact connectivity key reaches real npm/gh/node/pi shims unchanged.
+
+    Parameters:
+        tmp_path (Path): isolated CA files, shims and install roots.
+        monkeypatch (pytest.MonkeyPatch): scoped synthetic environment and network seams.
+        key (str): exact allowlisted connectivity name.
+
+    Returns:
+        None: every child's environment preserves the synthetic value.
+
+    Raises:
+        AssertionError: any child drops or rewrites the value.
+    """
     ca = tmp_path / "enterprise-ca.pem"
     ca.write_text("synthetic CA fixture")
     value = (
@@ -6156,7 +6168,20 @@ def test_connectivity_reaches_every_child(tmp_path: Path, monkeypatch: pytest.Mo
 def test_invalid_ca_dropped_with_value_free_warning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, key: str, kind: str
 ) -> None:
-    """Relative, missing and wrong-kind CA paths never reach children or warning text."""
+    """Relative, missing and wrong-kind CA paths never reach children or warning text.
+
+    Parameters:
+        tmp_path (Path): isolated path fixture.
+        caplog (pytest.LogCaptureFixture): captured value-free warnings.
+        key (str): CA file/directory variable.
+        kind (str): relative, missing or wrong-kind path.
+
+    Returns:
+        None: invalid paths are dropped with the exact warning.
+
+    Raises:
+        AssertionError: an invalid path passes or its value is logged.
+    """
     path = tmp_path / "private-ca-path"
     if kind == "wrong-kind":
         if key == "SSL_CERT_DIR":
@@ -6174,7 +6199,19 @@ def test_invalid_ca_dropped_with_value_free_warning(
 def test_connectivity_rejects_control_characters(
     caplog: pytest.LogCaptureFixture, key: str, character: str
 ) -> None:
-    """Invalid environment values are dropped before spawn with a value-free warning."""
+    """Invalid environment values are dropped before spawn with a value-free warning.
+
+    Parameters:
+        caplog (pytest.LogCaptureFixture): captured warning text.
+        key (str): exact connectivity variable.
+        character (str): NUL, CR or LF injected into the value.
+
+    Returns:
+        None: no invalid value reaches a child.
+
+    Raises:
+        AssertionError: the value passes or its diagnostic exposes it.
+    """
     assert key not in release.child_environment({key: f"private{character}value"})
     assert caplog.messages == [f"Dropping `{key}`: NUL/newline is not allowed"]
 
@@ -6189,7 +6226,18 @@ def test_connectivity_rejects_control_characters(
     ],
 )
 def test_proxy_redaction_before_tail_truncation(monkeypatch: pytest.MonkeyPatch, proxy: str) -> None:
-    """Echoed environments and byte/string failure tails strip credentials before slicing."""
+    """Echoed environments and byte/string failure tails strip credentials before slicing.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped synthetic proxy setting.
+        proxy (str): credential-bearing URL or authority.
+
+    Returns:
+        None: independent expected strings match all sanitized tails.
+
+    Raises:
+        AssertionError: userinfo survives or truncation precedes redaction.
+    """
     monkeypatch.setenv("HTTPS_PROXY", proxy)
     expected = proxy.replace(proxy.rsplit("://", maxsplit=1)[-1].split("@", maxsplit=1)[0] + "@", "")
     message = json.dumps({"HTTPS_PROXY": proxy}) + " " + proxy
@@ -6208,7 +6256,19 @@ def test_proxy_redaction_before_tail_truncation(monkeypatch: pytest.MonkeyPatch,
 def test_child_diagnostics_redact_proxy_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
 ) -> None:
-    """Real child output is untrusted: errors and successful version text redact URL userinfo."""
+    """Real child errors and successful version text redact URL userinfo.
+
+    Parameters:
+        tmp_path (Path): isolated executable shims and staging.
+        monkeypatch (pytest.MonkeyPatch): scoped environment and download seams.
+        tool (str): installer subprocess boundary to exercise.
+
+    Returns:
+        None: public text retains host/source identities without credentials.
+
+    Raises:
+        AssertionError: credentials survive or useful identities disappear.
+    """
     proxy = "http://echo-user:echo-password@proxy.invalid:8080"
     monkeypatch.setenv("HTTPS_PROXY", proxy)
     child = tmp_path / tool
@@ -6260,7 +6320,19 @@ def test_child_diagnostics_redact_proxy_credentials(
 def test_proxy_redaction_preserves_nonproxy_identifiers(
     monkeypatch: pytest.MonkeyPatch, proxy: str, text: str
 ) -> None:
-    """Empty/short userinfo must not damage scoped package, SSH or email identifiers."""
+    """Empty/short userinfo must not damage scoped package, SSH or email identifiers.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped proxy environment.
+        proxy (str): empty or short proxy userinfo.
+        text (str): unrelated identifier that must remain intact.
+
+    Returns:
+        None: only the proxy userinfo is removed.
+
+    Raises:
+        AssertionError: unrelated text changes or userinfo survives.
+    """
     monkeypatch.setenv("HTTPS_PROXY", proxy)
     assert release.redact_diagnostic(f"{text} {proxy}") == f"{text} http://host"
 
@@ -6269,7 +6341,20 @@ def test_proxy_redaction_preserves_nonproxy_identifiers(
 def test_proxy_redaction_at_public_diagnostic_boundaries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, boundary: str
 ) -> None:
-    """Public logs and CLI exits redact even when a lower layer returns an unredacted error."""
+    """Public logs and CLI exits redact even when a lower layer returns a raw error.
+
+    Parameters:
+        tmp_path (Path): isolated artifact path.
+        monkeypatch (pytest.MonkeyPatch): scoped failure injection and proxy environment.
+        caplog (pytest.LogCaptureFixture): public logger output.
+        boundary (str): installer error, fallback warning or release CLI.
+
+    Returns:
+        None: public text contains only the proxy host.
+
+    Raises:
+        AssertionError: a boundary exposes credentials or drops the host.
+    """
     proxy = "http://log-user:log-password@host:8080"
     monkeypatch.setenv("HTTP_PROXY", proxy)
     error = (
@@ -6313,3 +6398,29 @@ def test_proxy_redaction_at_public_diagnostic_boundaries(
     assert "log-user" not in text
     assert "log-password" not in text
     assert "http://host:8080" in text
+
+
+def test_snapshot_does_not_authenticate_third_party_lock_integrity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Record the real snapshot's transport-trust gap without claiming broader integrity.
+
+    Parameters:
+        tmp_path (Path): isolated installation with real snapshot package declarations.
+        monkeypatch (pytest.MonkeyPatch): fake download/package-install boundaries.
+
+    Returns:
+        None: owned evidence excludes third parties and their altered lock integrity passes.
+
+    Raises:
+        AssertionError: the snapshot's authentication coverage changes and docs need updating.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    assert harness.run() == ExitCode.OK
+    assert all(item.package.startswith("@nredd/") for item in harness.snapshot.gates.owned_packages)
+    lock_path = harness.layout.agent_dir / "npm/package-lock.json"
+    lock = json.loads(lock_path.read_text())
+    third_party = next(key for key in lock["packages"] if not key.startswith("node_modules/@nredd/"))
+    lock["packages"][third_party]["integrity"] = "sha512-untrusted-registry-substitution"
+    lock_path.write_text(json.dumps(lock))
+    install.verify_owned_integrity(harness.snapshot, harness.layout.agent_dir)

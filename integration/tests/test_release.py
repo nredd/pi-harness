@@ -1330,7 +1330,11 @@ def test_shared_fetch_diagnostics_are_stable(
     error = caught.value if isinstance(caught.value, release.FetchError) else caught.value.__cause__
     assert isinstance(error, release.FetchError)
     assert error.status == status
-    assert error.__cause__ is failure
+    assert isinstance(error.__cause__, RuntimeError)
+    assert error.__cause__ is not failure
+    assert error.__context__ is None
+    assert error.__cause__.__context__ is None
+    assert type(failure).__name__ in str(error.__cause__)
     assert not destination.exists()
 
 
