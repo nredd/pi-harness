@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { isolateStackHome, loadFork, loadOwned } from "./support.ts";
 
+const launchHome = process.env.HOME;
 let home: Awaited<ReturnType<typeof isolateStackHome>>;
 beforeAll(async () => {
 	home = await isolateStackHome();
@@ -24,6 +27,22 @@ it.skipIf(process.platform !== "darwin")("holds process-scoped sleep assertions 
 	for (const type of ["PreventUserIdleSystemSleep", "PreventUserIdleDisplaySleep", "PreventSystemSleep"]) {
 		expect(owned).toContain(type);
 	}
+});
+
+it("keeps spawn-time HOME while isolating each Pi and XDG fixture", async () => {
+	expect(process.env.HOME).toBe(launchHome);
+	expect(homedir()).toBe(launchHome);
+	const fixture = await isolateStackHome();
+	try {
+		expect(process.env.HOME).toBe(launchHome);
+		expect(process.env.PI_CODING_AGENT_DIR).toBe(join(fixture.root, "agent"));
+		expect(process.env.XDG_CONFIG_HOME).toBe(join(fixture.root, ".config"));
+		expect(fixture.root).not.toBe(home.root);
+	} finally {
+		await fixture.cleanup();
+	}
+	expect(process.env.PI_CODING_AGENT_DIR).toBe(join(home.root, "agent"));
+	expect(process.env.XDG_CONFIG_HOME).toBe(join(home.root, ".config"));
 });
 
 it("loads real fork and owned entries against one host", async () => {
