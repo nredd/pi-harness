@@ -141,11 +141,6 @@ export function selectConfiguredModel(
   return { model: resolved };
 }
 
-/** The short form of {@link modelFallbackNote} for one-line surfaces (widget, fleet, row). */
-export function modelFallbackLabel(fallback: ModelFallback): string {
-  return `fallback: ${[fallback.input, ...(fallback.also ?? [])].map(i => `"${i}"`).join(", ")} -> ${fallback.used ?? "session default"}`;
-}
-
 /** API id pi gives virtual catalog entries such as `router/default`; they never reach a provider. */
 const VIRTUAL_MODEL_API = "pi-virtual";
 

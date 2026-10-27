@@ -127,6 +127,9 @@ const CASES: Case[] = [
     render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })]))).find(l => l.includes("[fallback")) ?? "",
   },
   {
+    // At 40 columns the agent-level list pane is ~10 columns wide, so the flag is
+    // clipped to a fragment there; that KNOWN LIMIT is asserted below (and in the
+    // README), not in this matrix.
     name: "workflow dialog agent list row (agent level)",
     widths: [80, 120],
     render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })], "agent"))).find(l => l.includes("[fallback")) ?? "",
@@ -170,5 +173,23 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
     const joined = lines.map(l => l.replace(/[^A-Za-z]/g, "")).join("");
     expect(joined).toContain("Q".repeat(120));
     for (const l of lines) expect(visibleWidth(l)).toBeLessThanOrEqual(70);
+  });
+
+  describe("known limits: the workflow dialog at narrow widths (tracked in nredd/pi-harness issue, see README)", () => {
+    it("at 40 columns the agent-level list pane is narrow and shows only a fragment of the flag", () => {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(40, [agentEntry({ label: UGLY.ascii })], "agent")));
+      const listRow = lines.find(l => l.includes("✔ [fal"));
+      expect(listRow, lines.join("\n")).toBeDefined();
+      expect(listRow).not.toContain("[fallback]");
+      for (const l of lines) expect(visibleWidth(l)).toBeLessThanOrEqual(40);
+    });
+
+    it("a very long note in the detail pane is clamped to the pane capacity, not shown in full", () => {
+      const longNote = `Note: ${"Q".repeat(2000)}`;
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(40, [agentEntry({ modelNote: longNote })], "agent")));
+      const shown = lines.join("").replace(/[^Q]/g, "").length;
+      expect(shown).toBeGreaterThan(0);
+      expect(shown).toBeLessThan(2000);
+    });
   });
 });
