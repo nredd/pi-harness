@@ -253,3 +253,6 @@ recovery are documented [here](releases.md#owned-npm-packages). Only a real tag-
 can prove the external OIDC binding, automatic provenance and registry acceptance end to end.
 
 Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI).
+
+Proposed, not implemented: one verification tool (Vitest on Node and Bun, Istanbul coverage,
+Python kept, `dotfiles` excepted), spec and measurements [here](verification-tool-spec.md) (#160).
