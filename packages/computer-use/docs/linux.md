@@ -10,6 +10,18 @@ Run Pi as the same user and inside the same graphical session as the target appl
 ~/.pi/agent/helpers/pi-computer-use/linux-bridge
 ```
 
+The npm package ships no Linux binary. It ships the locked Rust crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`), and building it is opt-in. On every Pi load an existing helper at that path is probed (`diagnostics`: protocol version 4 and the shared architecture invariants) and used as-is when it passes, with no setup and no compiler. A missing, non-executable, wrong-architecture or stale helper is replaced by setup (a `prebuilt/linux/<arch>/linux-bridge`, if the install has one, else the source build) and probed again.
+
+The source build needs `cargo` (Rust toolchain via [rustup](https://rustup.rs)) and a C linker (e.g. `build-essential`), and runs only when you opt in:
+
+```bash
+PI_COMPUTER_USE_ALLOW_BUILD=1 node <package>/scripts/setup-helper.mjs --platform linux
+```
+
+`<package>` is the installed `@nredd/pi-computer-use` directory. It runs `cargo build --locked --release` with its target directory in `${XDG_CACHE_HOME:-~/.cache}/pi-computer-use/linux-bridge-target` (the npm install may be read-only), then copies the binary to the helper path. Without the opt-in, a missing helper fails with an error naming that variable.
+
+In-session setup keeps its existing 60s deadline, and a cold build can exceed it. Run the command above once outside Pi first; later Pi loads accept the installed helper. If the deadline is hit the error says so, and the next Pi load retries (cargo's incremental cache is kept). `PI_COMPUTER_USE_LINUX_HELPER_PATH` overrides the helper location with the same semantics.
+
 The upstream [AT-SPI development guide](https://gnome.pages.gitlab.gnome.org/at-spi2-core/devel-docs/index.html) describes the accessibility stack. Containers, system services, `sudo`, and unrelated SSH sessions do not automatically inherit the graphical user's bus.
 
 ## Capability matrix
