@@ -104,6 +104,9 @@ bun 1.3.14    {"before":"/Users/redd","after":"/Users/redd"}
 
 Port effort and order (Vitest-on-Bun path; S < 1 day, M 1-3 days, L > 3 days):
 
+Owner for every unit: nredd (single maintainer), one agent per package directory; root files
+(`Makefile`, `package.json`, lockfile, `coverage/policy.json`, CI) stay with one coordinating owner.
+
 | Order | Unit | Work | Size |
 | --- | --- | --- | --- |
 | 1 | `subscription-router`, `preset`, `resource-sampler`, `inprocess` (410 tests) | switch `test:bun` to the full suite on Bun; delete nothing else | S |
@@ -142,6 +145,7 @@ Sources: pinned docs `docs/test/*.mdx` at tag `bun-v1.3.14`
 | Counter stability | JSC; `never.ts` `LF:1` | JSC; same file `LF:2` (M) | Istanbul identical across engines (M) | Istanbul / V8 |
 | V8 provider | n/a | n/a | 1.3.14: 0% + 15 unhandled errors (M); 1.4.4: works, 1 branch off Node (M) | yes |
 | Watch | yes | yes | yes | yes |
+| ESM / CJS | not probed separately; every workspace declares `"type": "module"` except `subagents` (no `type` field; ESM-syntax `.ts` sources) and loads in all four columns (M, via the suites) | same | same | same |
 | Parallel / shard | `--parallel`, `--shard` in `--help` (M), undocumented at that tag | documented (`parallel.mdx`), merges coverage + JUnit | pools | pools |
 | JUnit reporter | `--reporter=junit` (M, `--help`) | same | yes | yes |
 | TS path aliases | tsconfig `paths` honored (M: raw `todo` run resolves `@juicesharp/rpiv-test-utils`); Vitest `resolve.alias` ignored | same | yes | yes |
@@ -318,7 +322,7 @@ stays required because published packages keep serving stock-Pi Node users.
 | V8 provider under Bun 1.3.14 broken (0%, M) | coverage | use Istanbul (already required for `subagents`) |
 | `vitest bench` fails under Bun (M) | benches | keep benches Node-only (section 5) |
 | JSC stack/line-number differences (M: `workflow-runtime`) | error-location assertions | assert through source maps both engines agree on, or per-engine expectations with the reason in the test |
-| CI time | `owned` cells | measured locally (loaded): full Bun Vitest runs 2-25 s per package, similar to Node. Estimate +2-4 min per `owned` cell including Istanbul; record hosted numbers in PR 2 |
+| CI time | `owned` cells | measured locally (loaded): full Bun Vitest runs 2-25 s per package, similar to Node. Estimate +2-4 min per `owned` cell including Istanbul; phase 1 records hosted numbers |
 
 ## 9. Phased plan
 
@@ -438,7 +442,8 @@ With `bunfig.toml` `[test]` `coverageThreshold = { lines = 1.0, functions = 1.0 
 `coverageSkipTestFiles = true`, run `bun test --coverage --coverage-reporter=lcov` vs
 `--coverage-reporter=text --coverage-reporter=lcov`. Per-file enforcement: threshold `0.55`
 (aggregate 75%, `half.ts` 50%) exits 1 on both versions. Import-all: adding a test that imports
-`../src/never.ts` makes it appear (`FNF:1 FNH:0`), with `LF:1` on 1.3.14 and `LF:2` on 1.4.4:
+`../src/never.ts` makes it appear (`FNF:1 FNH:0`), with `LF:1` on 1.3.14 and `LF:2` on 1.4.4.
+Results WITHOUT the import-all test:
 
 ```text
 bun 1.3.14 reporters=text,lcov rc=1  never.ts in lcov: 0  BRDA: 0
