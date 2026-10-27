@@ -28,7 +28,13 @@ const HOSTILE = [
 /** Ready at once, with no disguise: the negative control fails. */
 const READY = 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);';
 
-/** Spawn only; the caller must hand the child to `supervise` before anything else can throw. */
+/**
+ * Spawn only; hand the child to supervise before anything else can throw.
+ * @param secret Random sentinel inserted into hostile metadata.
+ * @param script Child script, defaulting to the hostile fixture.
+ * @param disguise Whether argv[0] should also carry the sentinel.
+ * @returns Owned child requiring supervised cleanup.
+ */
 function launch(secret: string, script = HOSTILE, disguise = true): ChildProcess {
 	return spawn(process.execPath, ["-e", script, secret], {
 		argv0: disguise ? `npm exec ${secret} mcp` : process.execPath,
@@ -37,12 +43,21 @@ function launch(secret: string, script = HOSTILE, disguise = true): ChildProcess
 	});
 }
 
-/** True once the runtime reaped this exact child: its own wait status, never a reusable PID probe. */
+/**
+ * Inspect this exact child's wait status, never a reusable PID probe.
+ * @param child Owned child handle.
+ * @returns Whether the runtime has reaped it.
+ */
 function exited(child: ChildProcess): boolean {
 	return child.exitCode !== null || child.signalCode !== null;
 }
 
-/** Wait for `child` to exit, at most `ms`, like `integration/inprocess/support.ts`. */
+/**
+ * Wait for a child with a bounded timer, like integration/inprocess/support.ts.
+ * @param child Owned child handle.
+ * @param ms Maximum wait in milliseconds.
+ * @returns Whether the child exited before the timeout.
+ */
 async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
 	if (exited(child)) return true;
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -56,7 +71,11 @@ async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
 	}
 }
 
-/** SIGTERM, bounded wait, then SIGKILL and one more bounded wait; a survivor fails the test. */
+/**
+ * SIGTERM, bounded wait, then SIGKILL and one more bounded wait.
+ * @param child Owned child to reap.
+ * @returns Cleanup completion; rejects if the child survives SIGKILL.
+ */
 async function stop(child: ChildProcess): Promise<void> {
 	if (child.pid === undefined || exited(child)) return;
 	child.kill("SIGTERM");
@@ -65,10 +84,20 @@ async function stop(child: ChildProcess): Promise<void> {
 	if (!(await exitedWithin(child, STOP_MS))) throw new Error(`child ${child.pid} survived SIGKILL`);
 }
 
-/** Resolve on the child's `ready` line; reject on exit, spawn error or `ms`. */
+/**
+ * Wait for the child's ready line, rejecting on exit, spawn error or timeout.
+ * @param child Owned child with piped stdout.
+ * @param ms Maximum readiness wait in milliseconds.
+ * @returns Readiness completion with listeners/timer removed.
+ */
 function ready(child: ChildProcess, ms: number): Promise<void> {
 	return new Promise((resolve, reject) => {
 		let output = "";
+		/**
+		 * Settle readiness and detach its resources.
+		 * @param error Optional readiness failure.
+		 * @returns Nothing; settles the enclosing promise.
+		 */
 		const finish = (error?: Error) => {
 			clearTimeout(timer);
 			child.stdout?.off("data", data);
@@ -77,10 +106,16 @@ function ready(child: ChildProcess, ms: number): Promise<void> {
 			if (error) reject(error);
 			else resolve();
 		};
+		/**
+		 * Accumulate child readiness output.
+		 * @param chunk Stdout bytes.
+		 * @returns Nothing; settles once the ready line arrives.
+		 */
 		const data = (chunk: Buffer) => {
 			output += chunk.toString("utf8");
 			if (output.includes("ready\n")) finish();
 		};
+		/** @returns Nothing; reject readiness on early child exit. */
 		const exit = () => finish(new Error("child exited before readiness"));
 		const timer = setTimeout(() => finish(new Error(`child not ready within ${ms} ms`)), ms);
 		child.stdout?.on("data", data);
@@ -89,13 +124,24 @@ function ready(child: ChildProcess, ms: number): Promise<void> {
 	});
 }
 
+/**
+ * Format a failure without assuming it is an Error.
+ * @param error Caught failure value.
+ * @returns Readable failure description.
+ */
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
 /** Every step after spawn, readiness included, is followed by reaping the child; a cleanup failure is
  * reported with, never instead of, the step's own error. In-process only: a test worker killed by
- * SIGKILL runs no JavaScript, so nothing here can reap the child then. `reap` is injectable for tests. */
+ * SIGKILL runs no JavaScript, so nothing here can reap the child then. `reap` is injectable for tests.
+ * @param child Owned child handed over immediately after spawn.
+ * @param readyMs Readiness timeout in milliseconds.
+ * @param body Check to run with the ready child's PID.
+ * @param reap Cleanup implementation, defaulting to bounded termination/reaping.
+ * @returns Body result after cleanup; primary and cleanup failures are preserved.
+ */
 async function supervise<T>(
 	child: ChildProcess,
 	readyMs: number,
@@ -122,7 +168,12 @@ async function supervise<T>(
 	return outcome.value;
 }
 
-/** The pre-0.1.1 name sources must really carry the secret, or this test proves nothing. */
+/**
+ * Confirm the pre-0.1.1 name sources actually leak, establishing the negative control.
+ * @param pid Ready hostile child's PID.
+ * @param secret Expected sentinel in mutable metadata.
+ * @returns Whether the historical source exposes it.
+ */
 function legacySourceLeaks(pid: number, secret: string): boolean {
 	if (process.platform === "linux") return readFileSync(`/proc/${pid}/comm`, "utf8").trim() === secret.slice(0, 15);
 	return execFileSync("/bin/ps", ["-c", "-o", "comm=", "-p", String(pid)], {
@@ -131,13 +182,22 @@ function legacySourceLeaks(pid: number, secret: string): boolean {
 	}).includes(secret);
 }
 
-/** The real `stop`, then an injected failure, so the cleanup-error path runs deterministically. */
+/**
+ * Perform real cleanup then inject a deterministic cleanup failure.
+ * @param child Owned child to reap.
+ * @returns A rejected promise after the child is reaped.
+ */
 async function failingReap(child: ChildProcess): Promise<void> {
 	await stop(child);
 	throw new Error("injected cleanup failure");
 }
 
-/** Negative control, then the privacy check against the actual sampler. */
+/**
+ * Run the negative control, then privacy assertions against the actual sampler.
+ * @param pid Ready hostile child's PID, required to appear in the bounded snapshot.
+ * @param secret Sentinel whose twelve-character fragments must remain absent.
+ * @returns Check completion after sampler disposal; rejects on privacy/coverage failure.
+ */
 async function privacy(pid: number, secret: string): Promise<void> {
 	if (!legacySourceLeaks(pid, secret)) throw new Error("0.1.0 name source does not carry the secret");
 	const sampler = createResourceSampler(BOUNDS);

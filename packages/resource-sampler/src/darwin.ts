@@ -93,7 +93,11 @@ interface BunFfi {
 	};
 }
 
-/** Lazy, fixed native symbols only. Unsupported runtimes keep explicit unavailable process metrics. */
+/**
+ * Load only fixed native symbols, lazily; unsupported runtimes retain unavailable process metrics.
+ * @returns Owned syscall bindings, or undefined for unsupported platform/architecture/runtime.
+ * @throws If opening the runtime FFI library fails.
+ */
 function nativeCalls(): NativeCalls | undefined {
 	if (process.platform !== "darwin" || !["arm64", "x64"].includes(process.arch)) return undefined;
 	if (process.versions.bun) {
@@ -134,7 +138,11 @@ function nativeCalls(): NativeCalls | undefined {
 	};
 }
 
-/** Close a successfully opened library on every failed initialization, including runtime throws. */
+/**
+ * Initialize the Mach timebase; close the owned library on failure, including runtime throws.
+ * @returns Owned bindings with nanoseconds per tick, or undefined when unavailable/invalid.
+ * @throws If opening or initializing FFI throws (the caller retains fallback rows).
+ */
 function nativeLibrary(): NativeLibrary | undefined {
 	const lib = nativeCalls();
 	if (!lib) return undefined;
@@ -163,6 +171,13 @@ function nativeLibrary(): NativeLibrary | undefined {
  * reuse; microsecond start, parent and exact p_comm bytes also participate. No sanitized-name collision
  * can authenticate a baseline. Rusage CPU counters are Mach ticks; convert with mach_timebase_info,
  * not an assumed nanosecond tick (Apple Silicon here reports 125/3 nanoseconds per tick).
+ * @param pid Expected process identifier from the bounded metadata enumeration.
+ * @param before First fixed rusage_info_v0 frame.
+ * @param bsd Intervening fixed proc_bsdinfo frame.
+ * @param after Second fixed rusage_info_v0 frame.
+ * @param at Monotonic observation time in milliseconds.
+ * @param ticksToNs Positive Mach timebase ratio, in nanoseconds per tick.
+ * @returns A strong-identity counter, or null for malformed/changed/invalid native data.
  */
 export function darwinNativeCounter(
 	pid: number,
@@ -194,7 +209,11 @@ export function darwinNativeCounter(
 	const seconds = bsd.readBigUInt64LE(DARWIN_ABI.bsd.startSeconds);
 	const micros = bsd.readBigUInt64LE(DARWIN_ABI.bsd.startMicros);
 	if (seconds === DARWIN_ABI.unsetTime || micros >= MICROSECONDS_PER_SECOND) return null;
-	/** Sum cumulative user/system Mach ticks from one fixed rusage layout. */
+	/**
+	 * Sum cumulative user/system Mach ticks from one validated fixed rusage layout.
+	 * @param buffer A size-checked rusage_info_v0 frame.
+	 * @returns Cumulative CPU Mach ticks, without lossy number conversion.
+	 */
 	const cpu = (buffer: Buffer) =>
 		buffer.readBigUInt64LE(DARWIN_ABI.usage.userTicks) + buffer.readBigUInt64LE(DARWIN_ABI.usage.systemTicks);
 	if (cpu(after) < cpu(before)) return null;
@@ -224,6 +243,10 @@ export function darwinNativeCounter(
  * Enrich bounded ps rows with cheap native counters, retaining RSS/name rows when access fails.
  * Charge all admitted fixed syscall buffers to the SAME scan budget, including unsuccessful reads.
  * Synchronous syscalls, like os.cpus(), cannot be preempted; check admission before each PID.
+ * @param rows Bounded ps fallback rows, enriched in place only on successful native reads.
+ * @param budget Shared byte/deadline/abort admission state, charged even for failed syscalls.
+ * @returns The same array, retaining original rows for inaccessible or rejected PIDs.
+ * @throws If the shared abort signal is observed between native calls.
  */
 export function darwinNativeProcesses(rows: ProcessCounter[], budget: Budget): ProcessCounter[] {
 	if (!budget.ready()) return rows;

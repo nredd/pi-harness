@@ -6,7 +6,14 @@ import type { ResourceSampler, ResourceSnapshot, SamplerOptions } from "./types.
 
 export type { Metric, ProcessSample, PsiLine, ResourceSampler, ResourceSnapshot, SamplerOptions } from "./types.js";
 
-/** Validate bounded integers before collecting any host information. */
+/**
+ * Validate bounded integers before collecting host information.
+ * @param value Requested bound, if supplied.
+ * @param fallback Default bound when absent.
+ * @param min Inclusive lower bound.
+ * @param max Inclusive upper bound.
+ * @returns Validated integer; throws RangeError for invalid input.
+ */
 function bounded(value: number | undefined, fallback: number, min: number, max: number): number {
 	const result = value ?? fallback;
 	if (!Number.isInteger(result) || result < min || result > max)
@@ -14,7 +21,11 @@ function bounded(value: number | undefined, fallback: number, min: number, max: 
 	return result;
 }
 
-/** Create an isolated, passive sampler. No timers or child processes exist until sample(). */
+/**
+ * Create an isolated, passive sampler. No timers or children exist until sample().
+ * @param options Optional validated scan limits.
+ * @returns Sampler owning its own baselines and awaited collection/disposal lifecycle.
+ */
 export function createResourceSampler(options: SamplerOptions = {}): ResourceSampler {
 	const duration = bounded(options.maxDurationMs, 250, 10, 5000);
 	const maxPids = bounded(options.maxPids, 2048, 1, 16384);
@@ -28,6 +39,11 @@ export function createResourceSampler(options: SamplerOptions = {}): ResourceSam
 	let controller: AbortController | undefined;
 	let disposed = false;
 
+	/**
+	 * Collect one scan and advance baselines only after successful completion.
+	 * @param signal Combined caller/disposal cancellation signal.
+	 * @returns Typed snapshot with explicit coverage and metric availability; aborts reject.
+	 */
 	async function collect(signal: AbortSignal): Promise<ResourceSnapshot> {
 		const start = performance.now();
 		const wallTimeMs = Date.now();
@@ -108,11 +124,17 @@ export function createResourceSampler(options: SamplerOptions = {}): ResourceSam
 		};
 	}
 	return {
+		/**
+		 * Start the sole active sample.
+		 * @param signal Optional caller cancellation signal.
+		 * @returns Snapshot promise, rejecting on concurrent/disposed use or cancellation.
+		 */
 		sample(signal) {
 			if (disposed) return Promise.reject(new Error("Resource sampler is disposed"));
 			if (active) return Promise.reject(new Error("Resource sampler already has an active sample"));
 			controller = new AbortController();
 			const local = controller;
+			/** @returns Nothing; forward caller cancellation to this scan. */
 			const abort = () => local.abort(signal?.reason);
 			if (signal?.aborted) abort();
 			signal?.addEventListener("abort", abort, { once: true });
@@ -123,6 +145,7 @@ export function createResourceSampler(options: SamplerOptions = {}): ResourceSam
 			});
 			return active;
 		},
+		/** @returns Cleanup completion after aborting any scan and clearing baselines. */
 		async dispose() {
 			disposed = true;
 			controller?.abort();

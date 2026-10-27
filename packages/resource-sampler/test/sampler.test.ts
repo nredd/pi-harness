@@ -6,7 +6,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { Budget, command, darwinHostMemory } from "../src/collect.js";
 import {
-	BYTES_PER_MEBIBYTE,
 	cpuSnapshot,
 	darwinMemory,
 	darwinProcess,
@@ -22,11 +21,24 @@ import {
 } from "../src/counters.js";
 import { createResourceSampler } from "../src/index.js";
 
+/**
+ * Build one synthetic logical core with all non-user/idle counters zero.
+ * @param user Cumulative user CPU milliseconds.
+ * @param idle Cumulative idle milliseconds.
+ * @returns An independent CpuInfo fixture, not a host reading.
+ */
 const core = (user: number, idle: number): CpuInfo => ({
 	model: "fixture",
 	speed: 1000,
 	times: { user, idle, sys: 0, nice: 0, irq: 0 },
 });
+/**
+ * Build one stable synthetic process baseline.
+ * @param cpuMs Cumulative process CPU milliseconds.
+ * @param at Monotonic observation milliseconds.
+ * @param identity PID/start identity used to test reuse.
+ * @returns A process counter with fixed parent/name/RSS.
+ */
 const proc = (cpuMs: number, at: number, identity = "12:50"): ProcessCounter => ({
 	pid: 12,
 	parentPid: 1,
@@ -56,12 +68,15 @@ describe("honest counters", () => {
 	it("snapshots Bun-style lazy os.cpus() placeholders when called, not when first read", () => {
 		let now = 0;
 		// Mirrors Bun's lazyCpus wrapper: the first property access on any element reads native counters.
+		/** @returns Bun-like lazy cores that resolve counters at first property access. */
 		const lazy = (): CpuInfo[] => {
 			const array: CpuInfo[] = [];
+			/** @returns Nothing; replace placeholders with current synthetic counters. */
 			const populate = () => {
 				for (let i = 0; i < 2; i++) array[i] = core(now, now);
 			};
 			for (let i = 0; i < 2; i++) {
+				/** @returns Current core, forcing population on the first placeholder read. */
 				const read = (): CpuInfo => {
 					if (array[i] === instance) populate();
 					return array[i] as CpuInfo;
@@ -165,8 +180,8 @@ describe("Darwin host memory", () => {
 		const comparison = await readFile(new URL("./fixtures/darwin-comparison.txt", import.meta.url), "utf8");
 		const swap = comparison.split("\n").find((line) => line.startsWith("vm.swapusage:")) ?? "";
 		expect(darwinSwap(swap)).toEqual({
-			usedBytes: Math.round(3079.44 * BYTES_PER_MEBIBYTE),
-			totalBytes: 4096 * BYTES_PER_MEBIBYTE,
+			usedBytes: Math.round(3079.44 * 1024 ** 2),
+			totalBytes: 4096 * 1024 ** 2,
 		});
 		for (const broken of [
 			"",
@@ -202,7 +217,7 @@ describe("Darwin host memory", () => {
 		expect((times[1] ?? 0) - (times[0] ?? 0)).toBe(4);
 		expect(text).toContain("System-wide memory free percentage: 47%");
 		expect(darwinSwap(text.split("\n").find((line) => line.startsWith("vm.swapusage:")) ?? "")?.usedBytes).toBe(
-			Math.round(3490.88 * BYTES_PER_MEBIBYTE),
+			Math.round(3490.88 * 1024 ** 2),
 		);
 		const ps = await readFile(new URL("./fixtures/darwin-ps.txt", import.meta.url), "utf8");
 		const rows = ps

@@ -6,6 +6,11 @@ import { sortProcesses, sparkline, timeHistory, timeHistoryRows } from "../../sr
 import { snapshot } from "./fixtures.ts";
 
 const theme = { fg: (_color: string, s: string) => s, bg: (_color: string, s: string) => s, bold: (s: string) => s };
+/**
+ * Build a dashboard with identity theme and spied callbacks.
+ * @param rows Available terminal height.
+ * @returns Initialized view and its injectable options.
+ */
 function view(rows = 24) {
 	const options = { theme, rows: () => rows, requestRender: vi.fn(), onClose: vi.fn() };
 	const v = new MonView(options);
@@ -120,6 +125,11 @@ describe("mon responsive dashboard", () => {
 
 	it("fills completion-paced history contiguously, right-aligned, with only real gaps dotted", () => {
 		// Real cadence is 2000ms plus scan time; drift must not invent gaps.
+		/**
+		 * Model completion-paced scans plus one genuine pause.
+		 * @param i Zero-based sample index.
+		 * @returns Monotonic sample milliseconds, with a 15s gap from index six.
+		 */
 		const at = (i: number) => i * 2023 + (i >= 6 ? 15000 : 0);
 		const points = Array.from({ length: 10 }, (_, i) => ({ sampledAtMs: at(i), value: 50 }));
 		const line = timeHistory(points.slice(0, 6), 20);

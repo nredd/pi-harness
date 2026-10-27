@@ -40,13 +40,26 @@ Admission is checked between calls; each call is synchronous and non-preemptible
 Library handles close in `finally`. No child or persistent worker is introduced for native access.
 The existing fixed `ps`, `vm_stat` and `sysctl` helpers retain bounded capture and awaited reaping.
 
-ABI sizes, offsets, flavors and sentinels are documented once in `DARWIN_ABI`; decoder fixtures
-and native failure stubs reuse that layout. `DARWIN_NATIVE_READ_BYTES` derives the byte admission
+Production ABI sizes, offsets, flavors and sentinels are documented in `DARWIN_ABI`; decoder
+fixtures and native failure stubs deliberately retain independent SDK literals so an incorrect
+production constant cannot move both implementation and oracle together. One explicit contract
+test pins every exported shared ABI/unit/policy constant to its documented literal. `DARWIN_NATIVE_READ_BYTES` derives the byte admission
 charge from those sizes. Named microsecond/nanosecond units, `MAX_NATIVE_INTERVAL_MS` and the
 binary-MiB swap rounding bound preserve the measured arithmetic and existing anomaly policy.
 The numeric-literal sweep covered `darwin.ts`, `counters.ts`, `collect.ts` and `index.ts`; no new
 numeric policy was introduced in the latter two files, whose pre-existing scan defaults remain
-unchanged. All new named test helpers document their fixture/layout inputs and return contracts.
+unchanged. Named helpers across the touched sampler and dashboard modules/tests document their
+parameters and return contracts, including existing fixture helpers.
+
+Round 3 retains the original one-byte malformed frame and 64-byte budget assertions, adding the
+135-byte malformed boundary and a separate 335-byte budget test. The charge was already 8 + 328 =
+336 bytes at `372f318`, so 64 bytes could never admit a PID even then; this is not a new vacuity.
+It still exercises byte-cap accounting and unavailable footprint. The additional 335-byte case
+explicitly spies on native usage calls and requires none, preserving the admission-rejection intent.
+Captured RSS/footprint expectations and reuse deltas have named fixture constants with byte/tick
+arithmetic; tick deltas are not confused with microsecond units. Production executable behavior
+remains unchanged from `372f318`: only constant names, equivalent capture-group destructuring
+and documentation differ.
 
 Sources: Apple's SDK `sys/proc_info.h`, `sys/resource.h`, `mach/mach_time.h`; the installed SDK is
 `/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`. These public fixed layouts were checked against
@@ -172,7 +185,7 @@ intentionally not a prerequisite for this source PR.
 There is no `docs/coverage.md` on base main. The one new production file `src/darwin.ts` is inventoried
 above with its parser, native failure/budget, runtime and packed-contract coverage.
 
-Executed local gates: sampler Biome/tsc/build, complete Vitest 36 and pinned-Bun runtime 7;
+Executed round 3 local gates: sampler Biome/tsc/build, complete Vitest 39 and pinned-Bun runtime 7;
 session-kit Biome/tsc, complete Vitest 718 and pinned-Bun scenarios 74; packed sampler contract
 (exact 13-path tarball, native CPU/footprint required); complete `make check-scripts`, Ruff/ty,
 693 pytest and import-audit helper. Both Bun suites ran 1.3.14, not the host's newer default.
@@ -188,7 +201,10 @@ Mutation/revert proof, retained tests, restored source afterward:
 | Labelled footprint toggle | FOOT column label | all four width cases fail |
 | Used/free/swap/help | Original PR production-source reversal | four parser/mapping/render/help regressions fail |
 
-After mutation restoration: complete sampler 33 and targeted adapter/render 50 passed; the final
-sampler suite is 36 after adding three native failure/cleanup regressions. All final local package gates pass. Executed gate logs
-and mutation outputs are linked by absolute local path in the PR review receipt; remote CI links
-will provide portable evidence for the final pushed SHA.
+Round 3 shared-constant mutation: change `NANOSECONDS_PER_MILLISECOND` from `1_000_000` to `1`.
+Exactly two of 14 Darwin tests fail: the explicit constant contract (`1 != 1000000`) and the
+independent captured CPU oracle (`1646833625 != 1646.833625` ms). Restore the constant afterward;
+the full sampler suite passes 39 tests (plus 7 pinned-Bun runtime tests). The independent oracle
+fails even without relying on the dedicated constant-contract assertion. All local package gates
+pass. Execution logs and mutation output are linked by absolute local path in the PR review receipt;
+remote CI links provide separate portable evidence for the pushed SHA.

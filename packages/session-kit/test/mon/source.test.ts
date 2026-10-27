@@ -18,7 +18,7 @@ import { resourceFixture } from "./resource-fixture.ts";
 
 const theme = { fg: (_color: string, s: string) => s, bg: (_color: string, s: string) => s, bold: (s: string) => s };
 
-/** Direct children of this worker, excluding the `ps` used to ask. */
+/** @returns Direct child PIDs of this worker, excluding the ps helper used to ask. */
 function children(): number[] {
 	const ps = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" });
 	return ps.stdout
@@ -28,10 +28,16 @@ function children(): number[] {
 		.map(([pid]) => pid as number);
 }
 
+/** @returns Number of currently active timeout resources in this test worker. */
 function timers(): number {
 	return process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length;
 }
 
+/**
+ * Build a typed independent sampler fixture.
+ * @param overrides Fields replacing the stable baseline fixture.
+ * @returns Synthetic producer snapshot.
+ */
 function raw(overrides: Partial<ResourceSnapshot> = {}): ResourceSnapshot {
 	return { ...resourceFixture(), ...overrides } as ResourceSnapshot;
 }

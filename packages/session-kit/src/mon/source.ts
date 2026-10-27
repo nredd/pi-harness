@@ -37,21 +37,41 @@ type MemorySnapshot = Omit<ResourceSnapshot, "memory" | "processes"> & {
 	};
 };
 
+/**
+ * Convert nonfinite producer values to the view's unknown sentinel.
+ * @param value Producer number.
+ * @returns Finite value or null.
+ */
 function finite(value: number): number | null {
 	return Number.isFinite(value) ? value : null;
 }
 
-/** Every observed process lacks interval CPU by platform design, not because it is warming. */
+/**
+ * Distinguish unavailable process CPU from initial warming.
+ * @param snapshot Producer snapshot.
+ * @returns Whether a nonempty process list has no supported interval CPU metrics.
+ */
 function processCpuUnavailable(snapshot: ResourceSnapshot): boolean {
 	return snapshot.processes.length > 0 && snapshot.processes.every((p) => p.cpu.state === "unavailable");
 }
 
+/**
+ * Annotate unknown or potentially truncated executable names.
+ * @param snapshot Snapshot supplying platform semantics.
+ * @param name Producer's sanitized executable basename.
+ * @returns Unknown/truncated marker, or undefined for a complete known name.
+ */
 function nameState(snapshot: ResourceSnapshot, name: string): "unknown" | "truncated" | undefined {
 	if (name === "") return "unknown";
 	return snapshot.platform === "darwin" && utf8.encode(name).length >= DARWIN_NAME_BYTES ? "truncated" : undefined;
 }
 
-/** Limits that hide data the user would expect: budget caps, collector failures, unavailable host CPU. */
+/**
+ * Explain budget caps, collector failures and unavailable host CPU.
+ * @param snapshot Producer snapshot and coverage.
+ * @param baseline Whether this is the first observation.
+ * @returns User-facing limit notice, or undefined when unnecessary.
+ */
 function notice(snapshot: ResourceSnapshot, baseline: boolean): string | undefined {
 	const parts: string[] = [];
 	const { coverage } = snapshot;
@@ -67,7 +87,11 @@ function notice(snapshot: ResourceSnapshot, baseline: boolean): string | undefin
 	return parts.length ? parts.join(" · ") : undefined;
 }
 
-/** Expected platform limits, stated once so `--` and `(unknown)` are never mistaken for zero or a bug. */
+/**
+ * Explain expected platform limits so unknown metrics are not mistaken for zero.
+ * @param snapshot Producer snapshot and availability states.
+ * @returns User-facing platform hint, or undefined when unnecessary.
+ */
 function hint(snapshot: ResourceSnapshot): string | undefined {
 	const parts: string[] = [];
 	const { coverage } = snapshot;
@@ -83,6 +107,9 @@ function hint(snapshot: ResourceSnapshot): string | undefined {
 /**
  * Map one typed sampler snapshot without inventing zeros for warming/unavailable values.
  * `baseline` marks a source's first observation, whose warming CPU needs no explanation.
+ * @param snapshot Typed producer snapshot including optional native metrics.
+ * @param baseline Whether this is the source's first observation.
+ * @returns View snapshot preserving unknown/failed metrics and measurement basis.
  */
 export function toMonSnapshot(snapshot: MemorySnapshot, baseline = true): MonSnapshot {
 	const total = finite(snapshot.memory.totalBytes);
@@ -137,7 +164,11 @@ export function toMonSnapshot(snapshot: MemorySnapshot, baseline = true): MonSna
 	};
 }
 
-/** One sampler per open interaction; its baseline and child cleanup end with the view. */
+/**
+ * Own one sampler per open interaction; its baseline/cleanup end with the view.
+ * @param create Sampler factory, injectable for lifecycle tests.
+ * @returns Disposable view source with first-observation baseline tracking.
+ */
 export function createSamplerSource(
 	create: (options?: SamplerOptions) => ResourceSampler = createResourceSampler,
 ): MonSource {

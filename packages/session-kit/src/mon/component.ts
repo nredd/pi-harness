@@ -94,7 +94,11 @@ const HELP = [
 	" No kill, locks or scheduling.",
 ];
 
-/** Local wall clock `HH:MM:SS`, display only. */
+/**
+ * Format local wall clock for display only.
+ * @param ms Unix epoch milliseconds.
+ * @returns Local HH:MM:SS time.
+ */
 function clock(ms: number): string {
 	const d = new Date(ms);
 	return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
@@ -118,12 +122,22 @@ export class MonView implements Component {
 	private pageSize = 1;
 	private cache: { width: number; height: number; lines: string[] } | undefined;
 
+	/**
+	 * Initialize a single-interaction dashboard.
+	 * @param options Theme, terminal dimensions and lifecycle callbacks.
+	 */
 	constructor(private readonly options: MonViewOptions) {}
 
+	/** @returns Readonly diagnostic selection/sort/history/scroll values. */
 	get state(): { selected: string | undefined; sort: MonSort; historyLength: number; scroll: number } {
 		return { selected: this.selected, sort: this.sort, historyLength: this.history.length, scroll: this.scroll };
 	}
 
+	/**
+	 * Accept the sole sampler-data ingress and update selection/history.
+	 * @param snapshot Current live/stale/waiting observation.
+	 * @returns Nothing; requests a render.
+	 */
 	update(snapshot: MonSnapshot): void {
 		this.snapshot = snapshot;
 		// Collector success is independent of CPU: a warming sample still carries fresh memory/processes.
@@ -142,15 +156,18 @@ export class MonView implements Component {
 		this.refresh();
 	}
 
+	/** @returns Nothing; discard cached rendering without collecting data. */
 	invalidate(): void {
 		this.cache = undefined;
 	}
 
+	/** @returns Nothing; invalidate rendering and request a redraw. */
 	private refresh(): void {
 		this.invalidate();
 		this.options.requestRender();
 	}
 
+	/** @returns Nothing; sort rows while retaining selection by identity when possible. */
 	private reorder(): void {
 		const oldIndex = Math.max(
 			0,
@@ -162,6 +179,11 @@ export class MonView implements Component {
 		}
 	}
 
+	/**
+	 * Handle navigation, help, sorting, byte-column toggle and close keys.
+	 * @param data Terminal key input.
+	 * @returns Nothing; requests rendering for recognized view changes.
+	 */
 	handleInput(data: string): void {
 		if (data === "q" || matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			this.options.onClose();
@@ -207,17 +229,33 @@ export class MonView implements Component {
 		this.refresh();
 	}
 
-	/** `--` reads as absent, not as a value: dim it everywhere. */
+	/**
+	 * Dim unknown values consistently.
+	 * @param text Preformatted metric.
+	 * @param width Minimum cell width.
+	 * @returns Right-padded-to-column-start text with unknown styling.
+	 */
 	private value(text: string, width: number): string {
 		const padded = text.padStart(width);
 		return text === "--" ? this.options.theme.fg("dim", padded) : padded;
 	}
 
-	/** Host CPU severity, always paired with the number so meaning never depends on color. */
+	/**
+	 * Choose severity, always paired with a number or unknown marker.
+	 * @param value Host CPU percentage or null.
+	 * @returns Theme color for the CPU state.
+	 */
 	private cpuColor(value: number | null): Color {
 		return value === null ? "dim" : value >= 85 ? "error" : value >= 50 ? "warning" : "success";
 	}
 
+	/**
+	 * Frame a dashboard card at fixed width.
+	 * @param title Card heading.
+	 * @param lines Already formatted body rows.
+	 * @param width Outer card columns.
+	 * @returns Framed rows fitted to the card.
+	 */
 	private panel(title: string, lines: string[], width: number): string[] {
 		const { theme } = this.options;
 		const inner = Math.max(0, width - 2);
@@ -231,7 +269,11 @@ export class MonView implements Component {
 		];
 	}
 
-	/** Compact mode omits capacity and the stale suffix; the header already labels every metric STALE. */
+	/**
+	 * Format CPU state; compact mode relies on the header's stale label.
+	 * @param capacity Whether to include logical-core capacity and stale suffix.
+	 * @returns Styled CPU summary.
+	 */
 	private cpuSummary(capacity = true): string {
 		const t = this.options.theme;
 		const s = this.snapshot;
@@ -247,11 +289,17 @@ export class MonView implements Component {
 		return `${head}${state} ${t.fg("muted", `${state ? "·" : "of"} ${s?.logicalCpus || "--"} logical CPUs`)}`;
 	}
 
+	/** @returns Formatted 1/5/15-minute loads, or unknown markers. */
 	private loads(): string {
 		const load = this.snapshot?.load ?? [];
 		return load.length ? load.map((n) => (Number.isFinite(n) ? n.toFixed(2) : "--")).join(" ") : "--";
 	}
 
+	/**
+	 * Render wide CPU and memory cards with explicit measurement basis.
+	 * @param width Available dashboard columns.
+	 * @returns Side-by-side card rows including free/swap and CPU history.
+	 */
 	private cards(width: number): string[] {
 		const s = this.snapshot;
 		const t = this.options.theme;
@@ -291,6 +339,11 @@ export class MonView implements Component {
 	}
 
 	/** Compact three-line summary when cards do not fit. */
+	/**
+	 * Render the compact metric/history summary.
+	 * @param width Available dashboard columns.
+	 * @returns Fitted summary rows with explicit RAM basis labels.
+	 */
 	private summary(width: number): string[] {
 		const s = this.snapshot;
 		const t = this.options.theme;
@@ -310,19 +363,24 @@ export class MonView implements Component {
 		];
 	}
 
-	/** Why host CPU reads `--`; textual, so meaning never depends on color. */
+	/** @returns Textual reason for unknown/stale host CPU, or an empty suffix. */
 	private cpuState(): string {
 		if (this.snapshot?.status === "stale") return ` ${this.options.theme.fg("muted", "last value")}`;
 		const state = this.snapshot?.cpuState;
 		return state === "warming" || state === "unavailable" ? ` ${this.options.theme.fg("warning", state)}` : "";
 	}
 
+	/** @returns Fixed CPU scale and actual monotonic history span label. */
 	private historyLabel(): string {
 		const span = Math.max(0, (this.history.at(-1)?.sampledAtMs ?? 0) - (this.history[0]?.sampledAtMs ?? 0));
 		return `0..100% · ${(span / 1000).toFixed(1)}s span · time →`;
 	}
 
-	/** Title, collector state, and when the shown data was collected. */
+	/**
+	 * Format title, collector state and capture freshness.
+	 * @param width Available dashboard columns.
+	 * @returns Responsive styled header.
+	 */
 	private header(width: number): string {
 		const t = this.options.theme;
 		const status = this.snapshot?.status ?? "waiting";
@@ -348,6 +406,11 @@ export class MonView implements Component {
 		return gap >= 2 ? `${left}${" ".repeat(gap)}${right}` : left;
 	}
 
+	/**
+	 * Format reachable close/help/navigation keys.
+	 * @param width Available dashboard columns.
+	 * @returns Responsive footer text, fitted by the render caller.
+	 */
 	private footer(width: number): string {
 		const t = this.options.theme;
 		const keys: [string, string][] = this.help
@@ -372,7 +435,11 @@ export class MonView implements Component {
 		return ` ${keys.map(([key, label]) => `${t.fg("accent", key)} ${t.fg("muted", label)}`).join("  ")}`;
 	}
 
-	/** Process name cell: dim `(unknown)` for no name, dim `…` where the OS may have cut it. */
+	/**
+	 * Format a safe executable name with unknown/truncation markers.
+	 * @param p Process row carrying sanitized name semantics.
+	 * @returns Styled display name, never interpreted as terminal input.
+	 */
 	private nameCell(p: MonProcess): string {
 		const t = this.options.theme;
 		if (p.nameState === "unknown" || p.name === "") return t.fg("dim", "(unknown)");
@@ -380,6 +447,11 @@ export class MonView implements Component {
 		return p.nameState === "truncated" ? `${name}${t.fg("dim", "…")}` : name;
 	}
 
+	/**
+	 * Render help/dashboard within terminal bounds without collecting data.
+	 * @param width Available terminal columns.
+	 * @returns Exactly the configured terminal-height rows, each fitted to width.
+	 */
 	render(width: number): string[] {
 		const height = Math.max(1, this.options.rows());
 		width = Math.max(1, width);
@@ -445,7 +517,13 @@ export class MonView implements Component {
 		return result;
 	}
 
-	/** Column header, the visible page of rows with a scrollbar when it overflows, and a position line. */
+	/**
+	 * Append header, visible process page, scrollbar and position line.
+	 * @param lines Mutable dashboard output prefix to extend.
+	 * @param width Available terminal columns.
+	 * @param height Available terminal rows including reserved footer.
+	 * @returns Nothing; updates page/scroll state and appends formatted rows.
+	 */
 	private table(lines: string[], width: number, height: number): void {
 		const t = this.options.theme;
 		const compact = width < 60;
@@ -458,6 +536,16 @@ export class MonView implements Component {
 		const overflow = this.processes.length > this.pageSize;
 		const rowWidth = width - (overflow ? 1 : 0);
 		const nameWidth = Math.max(1, rowWidth - 1 - pidWidth - cpuWidth - rssWidth - memWidth - 2);
+		/**
+		 * Fit preformatted table cells into one terminal row.
+		 * @param mark Selection marker.
+		 * @param pid Process identifier text.
+		 * @param cpu CPU percentage text.
+		 * @param rss Selected RSS/footprint bytes text.
+		 * @param mem RSS share text, omitted in compact mode.
+		 * @param name Safe executable display name.
+		 * @returns Row fitted to the available table width.
+		 */
 		const row = (mark: string, pid: string, cpu: string, rss: string, mem: string, name: string) =>
 			fitCols(
 				`${mark}${fitCols(pid, pidWidth)}${cpu}${rss}${memWidth ? mem : ""}  ${fitCols(name, nameWidth)}`,

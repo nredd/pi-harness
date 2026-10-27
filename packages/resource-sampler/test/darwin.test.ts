@@ -2,7 +2,12 @@ import { readFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { Budget } from "../src/collect.js";
-import { MAX_NATIVE_INTERVAL_MS, processCpu } from "../src/counters.js";
+import {
+	BYTES_PER_MEBIBYTE,
+	MAX_NATIVE_INTERVAL_MS,
+	processCpu,
+	SWAP_ROUNDING_TOLERANCE_BYTES,
+} from "../src/counters.js";
 import {
 	DARWIN_ABI,
 	DARWIN_NATIVE_READ_BYTES,
@@ -18,8 +23,18 @@ const captured = JSON.parse(await readFile(new URL("./fixtures/darwin-native.jso
 const BASELINE_AT_MS = 1000;
 const SAMPLE_STEP_MS = 1000;
 const NEXT_AT_MS = BASELINE_AT_MS + SAMPLE_STEP_MS;
-/** Use the captured native ratio, never assume that a Mach tick is one nanosecond. */
-const CAPTURED_TICKS_TO_NS = captured.timebaseNumerator / captured.timebaseDenominator;
+/** Independent Apple Silicon capture: 125 nanoseconds / 3 Mach ticks. */
+const CAPTURED_TICKS_TO_NS = 125 / 3;
+/** Captured RSS: 944 KiB * 1024 bytes/KiB = 966656 bytes. */
+const CAPTURED_RSS_BYTES = 966656;
+/** Captured footprint: 1008 KiB * 1024 + 216 residual bytes = 1032408 bytes. */
+const CAPTURED_FOOTPRINT_BYTES = 1032408;
+/** Reuse advances start by 24 Mach ticks * 125/3 ns/tick = 1000 ns (one microsecond). */
+const REUSED_START_TICKS = 24n;
+/** Advance CPU by 1000000 Mach ticks * 125/3 ns/tick = 41.6666667 ms. */
+const REUSED_CPU_TICKS = 1_000_000n;
+/** Nine places allow conversion noise below 0.5 * 10^-9 ms or percentage points. */
+const DECIMAL_PRECISION = 9;
 /** Ample admitted time/capture space for isolated native-reader tests, not production defaults. */
 const TEST_BUDGET_MS = 1000;
 const TEST_BUDGET_BYTES = 4096;
@@ -27,24 +42,24 @@ const TEST_BUDGET_BYTES = 4096;
 /**
  * Reconstruct zero-filled LP64 frames using only the fixture's allowlisted numeric/p_comm fields.
  * No raw kernel struct, pbi_name, argv or environment is retained in the captured fixture.
- * @returns Two rusage_info_v0 buffers bracketing one proc_bsdinfo buffer, using DARWIN_ABI layouts.
+ * @returns Two rusage_info_v0 buffers bracketing proc_bsdinfo, using independent SDK literal layouts.
  */
 function buffers() {
-	const before = Buffer.alloc(DARWIN_ABI.usage.bytes),
-		after = Buffer.alloc(DARWIN_ABI.usage.bytes),
-		bsd = Buffer.alloc(DARWIN_ABI.bsd.bytes);
-	bsd.writeUInt32LE(captured.pid, DARWIN_ABI.bsd.pid);
-	bsd.writeUInt32LE(captured.parentPid, DARWIN_ABI.bsd.parentPid);
-	Buffer.from(captured.nameHex, "hex").copy(bsd, DARWIN_ABI.bsd.comm);
-	bsd.writeBigUInt64LE(BigInt(captured.seconds), DARWIN_ABI.bsd.startSeconds);
-	bsd.writeBigUInt64LE(BigInt(captured.micros), DARWIN_ABI.bsd.startMicros);
+	const before = Buffer.alloc(96),
+		after = Buffer.alloc(96),
+		bsd = Buffer.alloc(136);
+	bsd.writeUInt32LE(captured.pid, 12);
+	bsd.writeUInt32LE(captured.parentPid, 16);
+	Buffer.from(captured.nameHex, "hex").copy(bsd, 48);
+	bsd.writeBigUInt64LE(BigInt(captured.seconds), 120);
+	bsd.writeBigUInt64LE(BigInt(captured.micros), 128);
 	for (const buffer of [before, after]) {
-		buffer.writeBigUInt64LE(BigInt(captured.start), DARWIN_ABI.usage.startTicks);
-		buffer.writeBigUInt64LE(BigInt(captured.rssBytes), DARWIN_ABI.usage.residentBytes);
-		buffer.writeBigUInt64LE(BigInt(captured.footprintBytes), DARWIN_ABI.usage.footprintBytes);
+		buffer.writeBigUInt64LE(BigInt(captured.start), 80);
+		buffer.writeBigUInt64LE(BigInt(captured.rssBytes), 64);
+		buffer.writeBigUInt64LE(BigInt(captured.footprintBytes), 72);
 	}
-	before.writeBigUInt64LE(BigInt(captured.beforeCpuTicks), DARWIN_ABI.usage.userTicks);
-	after.writeBigUInt64LE(BigInt(captured.afterCpuTicks), DARWIN_ABI.usage.userTicks);
+	before.writeBigUInt64LE(BigInt(captured.beforeCpuTicks), 16);
+	after.writeBigUInt64LE(BigInt(captured.afterCpuTicks), 16);
 	return { before, bsd, after };
 }
 /**
@@ -76,8 +91,8 @@ function fakeNative(timebase: (buffer: Buffer) => number, usage: (pid: number, b
 				proc_pid_rusage: (pid: number, _flavor: number, buffer: Buffer) => usage(pid, buffer),
 				proc_pidinfo: (pid: number, _flavor: number, _arg: bigint, buffer: Buffer) => {
 					buffers().bsd.copy(buffer);
-					buffer.writeUInt32LE(pid, DARWIN_ABI.bsd.pid);
-					return DARWIN_ABI.bsd.bytes;
+					buffer.writeUInt32LE(pid, 12);
+					return 136;
 				},
 			},
 		}),
@@ -87,37 +102,87 @@ function fakeNative(timebase: (buffer: Buffer) => number, usage: (pid: number, b
 }
 /**
  * Populate a successful timebase frame with the captured Apple Silicon numerator/denominator.
- * @param buffer A zero-filled DARWIN_ABI.timebase.bytes buffer supplied by the native reader.
+ * @param buffer An eight-byte timebase buffer supplied by the native reader.
  * @returns The native syscall success status after writing both documented uint32_t fields.
  */
 const validTimebase = (buffer: Buffer): number => {
-	buffer.writeUInt32LE(captured.timebaseNumerator, DARWIN_ABI.timebase.numerator);
-	buffer.writeUInt32LE(captured.timebaseDenominator, DARWIN_ABI.timebase.denominator);
-	return DARWIN_ABI.success;
+	buffer.writeUInt32LE(125, 0);
+	buffer.writeUInt32LE(3, 4);
+	return 0;
 };
 
 describe("Darwin native identity and counters", () => {
+	it("pins every shared ABI, unit and policy constant to its documented literal", () => {
+		expect(DARWIN_ABI).toEqual({
+			success: 0,
+			unsetTime: 0n,
+			nulByte: 0,
+			bsd: {
+				bytes: 136,
+				flavor: 3,
+				argument: 0n,
+				pid: 12,
+				parentPid: 16,
+				comm: 48,
+				commBytes: 16,
+				startSeconds: 120,
+				startMicros: 128,
+			},
+			usage: {
+				bytes: 96,
+				flavor: 0,
+				userTicks: 16,
+				systemTicks: 24,
+				residentBytes: 64,
+				footprintBytes: 72,
+				startTicks: 80,
+				exitTicks: 88,
+			},
+			timebase: { bytes: 8, numerator: 0, denominator: 4 },
+		});
+		expect(DARWIN_NATIVE_READ_BYTES).toBe(328);
+		expect(NANOSECONDS_PER_MILLISECOND).toBe(1_000_000);
+		expect(MICROSECONDS_PER_SECOND).toBe(1_000_000n);
+		expect(MAX_NATIVE_INTERVAL_MS).toBe(60_000);
+		expect(BYTES_PER_MEBIBYTE).toBe(1024 ** 2);
+		expect(SWAP_ROUNDING_TOLERANCE_BYTES).toBe(0.02 * 1024 ** 2);
+	});
+	it("also rejects the one-byte-short metadata boundary", () => {
+		const b = buffers();
+		expect(darwinNativeCounter(captured.pid, b.before, Buffer.alloc(135), b.after, BASELINE_AT_MS, 1)).toBeNull();
+	});
+	it.skipIf(process.platform !== "darwin")("rejects a budget just below 8 + 328 bytes without a PID call", () => {
+		const usage = vi.fn(() => 0);
+		const fake = fakeNative(validTimebase, usage);
+		try {
+			const row = { ...counter(), strongIdentity: undefined, footprintBytes: undefined };
+			const budget = new Budget(performance.now() + TEST_BUDGET_MS, 335, 1, new AbortController().signal);
+			expect(darwinNativeProcesses([row], budget)[0]).toBe(row);
+			expect(usage).not.toHaveBeenCalled();
+			expect(budget.bytesRead).toBeLessThanOrEqual(335);
+			expect([...budget.reasons]).toContain("byte-limit");
+			expect(fake.close).toHaveBeenCalledOnce();
+		} finally {
+			fake.builtin.mockRestore();
+		}
+	});
 	it("converts captured Apple Silicon Mach ticks, preserving RSS and physical footprint", () => {
 		const row = counter();
 		expect(row.name).toBe("yes");
-		expect(row.cpuMs).toBeCloseTo(
-			(Number(captured.afterCpuTicks) * CAPTURED_TICKS_TO_NS) / NANOSECONDS_PER_MILLISECOND,
-			9,
-		);
-		expect(row.rssBytes).toBe(966656);
-		expect(row.footprintBytes).toBe(1032408);
+		expect(row.cpuMs).toBeCloseTo((Number(captured.afterCpuTicks) * (125 / 3)) / 1e6, DECIMAL_PRECISION);
+		expect(row.rssBytes).toBe(CAPTURED_RSS_BYTES);
+		expect(row.footprintBytes).toBe(CAPTURED_FOOTPRINT_BYTES);
 		expect(row.identity).toContain(`native:${captured.start}:${captured.seconds}:${captured.micros}`);
 		const cpu = processCpu(row, { ...row, at: NEXT_AT_MS, cpuMs: row.cpuMs + SAMPLE_STEP_MS });
 		expect(cpu.state).toBe("available");
-		if (cpu.state === "available") expect(cpu.value).toBeCloseTo(100, 9);
+		if (cpu.state === "available") expect(cpu.value).toBeCloseTo(100, DECIMAL_PRECISION);
 	});
 	it("REJECTS PID reuse within the same lstart second even when parent/name and CPU are nondecreasing", () => {
 		const previous = counter();
 		const { before, bsd, after } = buffers();
-		for (const buffer of [before, after])
-			buffer.writeBigUInt64LE(BigInt(captured.start) + 24n, DARWIN_ABI.usage.startTicks);
-		bsd.writeBigUInt64LE(BigInt(captured.micros) + 1n, DARWIN_ABI.bsd.startMicros);
-		after.writeBigUInt64LE(BigInt(captured.afterCpuTicks) + 1000000n, DARWIN_ABI.usage.userTicks);
+		for (const buffer of [before, after]) buffer.writeBigUInt64LE(BigInt(captured.start) + REUSED_START_TICKS, 80);
+		bsd.writeBigUInt64LE(BigInt(captured.micros) + 1n, 128);
+		after.writeBigUInt64LE(BigInt(captured.afterCpuTicks) + REUSED_CPU_TICKS, 16);
 		const reused = darwinNativeCounter(captured.pid, before, bsd, after, NEXT_AT_MS, CAPTURED_TICKS_TO_NS);
 		expect(reused).not.toBeNull();
 		expect(reused?.cpuMs).toBeGreaterThan(previous.cpuMs);
@@ -125,11 +190,11 @@ describe("Darwin native identity and counters", () => {
 	});
 	it("rejects identity change between reads, exited tasks, malformed layouts and counters", () => {
 		for (const change of [
-			(b: ReturnType<typeof buffers>) => b.after.writeBigUInt64LE(1n, DARWIN_ABI.usage.startTicks),
-			(b: ReturnType<typeof buffers>) => b.after.writeBigUInt64LE(1n, DARWIN_ABI.usage.exitTicks),
-			(b: ReturnType<typeof buffers>) => b.after.writeBigUInt64LE(0n, DARWIN_ABI.usage.userTicks),
-			(b: ReturnType<typeof buffers>) => b.bsd.writeBigUInt64LE(MICROSECONDS_PER_SECOND, DARWIN_ABI.bsd.startMicros),
-			(b: ReturnType<typeof buffers>) => b.bsd.writeUInt32LE(0, DARWIN_ABI.bsd.pid),
+			(b: ReturnType<typeof buffers>) => b.after.writeBigUInt64LE(1n, 80),
+			(b: ReturnType<typeof buffers>) => b.after.writeBigUInt64LE(1n, 88),
+			(b: ReturnType<typeof buffers>) => b.after.writeBigUInt64LE(0n, 16),
+			(b: ReturnType<typeof buffers>) => b.bsd.writeBigUInt64LE(1_000_000n, 128),
+			(b: ReturnType<typeof buffers>) => b.bsd.writeUInt32LE(0, 12),
 		]) {
 			const b = buffers();
 			change(b);
@@ -139,9 +204,7 @@ describe("Darwin native identity and counters", () => {
 		}
 		const b = buffers();
 		expect(darwinNativeCounter(captured.pid, b.before, b.bsd, b.after, BASELINE_AT_MS, 0)).toBeNull();
-		expect(
-			darwinNativeCounter(captured.pid, b.before, Buffer.alloc(DARWIN_ABI.bsd.bytes - 1), b.after, BASELINE_AT_MS, 1),
-		).toBeNull();
+		expect(darwinNativeCounter(captured.pid, b.before, Buffer.alloc(1), b.after, BASELINE_AT_MS, 1)).toBeNull();
 	});
 	it("rejects parent/name changes, negative CPU deltas and nonpositive/nonfinite/overlong native intervals", () => {
 		const before = counter();
@@ -151,15 +214,15 @@ describe("Darwin native identity and counters", () => {
 			{ cpuMs: 0 },
 			{ at: BASELINE_AT_MS },
 			{ at: Number.NaN },
-			{ at: BASELINE_AT_MS + MAX_NATIVE_INTERVAL_MS + SAMPLE_STEP_MS },
+			{ at: 62000 },
 		]) {
 			expect(processCpu(before, { ...before, at: NEXT_AT_MS, ...change }).state).toBe("warming");
 		}
 	});
 	it("keeps invalid UTF-8 names display-safe without confusing exact native identity", () => {
 		const b = buffers();
-		b.bsd.fill(DARWIN_ABI.nulByte, DARWIN_ABI.bsd.comm, DARWIN_ABI.bsd.comm + DARWIN_ABI.bsd.commBytes);
-		b.bsd[DARWIN_ABI.bsd.comm] = 0xff;
+		b.bsd.fill(0, 48, 64);
+		b.bsd[48] = 0xff;
 		const row = darwinNativeCounter(captured.pid, b.before, b.bsd, b.after, BASELINE_AT_MS, 1);
 		expect(row?.name).toBe("�");
 		expect(row?.identity).toMatch(/:ff$/);
@@ -180,10 +243,9 @@ describe("Darwin native identity and counters", () => {
 		const fallback = { ...counter(), pid: 2147483647, strongIdentity: undefined, footprintBytes: undefined };
 		const room = new Budget(performance.now() + TEST_BUDGET_MS, TEST_BUDGET_BYTES, 1, new AbortController().signal);
 		expect(darwinNativeProcesses([fallback], room)[0]).toEqual(fallback);
-		const tinyBytes = DARWIN_ABI.timebase.bytes + DARWIN_NATIVE_READ_BYTES - 1;
-		const tiny = new Budget(performance.now() + TEST_BUDGET_MS, tinyBytes, 1, new AbortController().signal);
+		const tiny = new Budget(performance.now() + TEST_BUDGET_MS, 64, 1, new AbortController().signal);
 		expect(darwinNativeProcesses([fallback], tiny)[0]?.footprintBytes).toBeUndefined();
-		expect(tiny.bytesRead).toBeLessThanOrEqual(tinyBytes);
+		expect(tiny.bytesRead).toBeLessThanOrEqual(64);
 		expect([...tiny.reasons]).toContain("byte-limit");
 	});
 	it.skipIf(process.platform !== "darwin")(
@@ -226,7 +288,7 @@ describe("Darwin native identity and counters", () => {
 			);
 			expect(rows[0]).toBe(row);
 			expect(rows[1]?.strongIdentity).toBe(true);
-			expect(rows[1]?.footprintBytes).toBe(1032408);
+			expect(rows[1]?.footprintBytes).toBe(CAPTURED_FOOTPRINT_BYTES);
 			expect(fake.close).toHaveBeenCalledOnce();
 		} finally {
 			fake.builtin.mockRestore();
