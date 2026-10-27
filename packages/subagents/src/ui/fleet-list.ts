@@ -98,7 +98,7 @@ function rightAlign(left: string, right: string, width: number): string {
   const rightW = visibleWidth(right);
   const maxLeft = Math.max(0, width - rightW - 1);
   const leftClamped = truncateToWidth(left, maxLeft);
-  const gap = Math.max(1, width - visibleWidth(leftClamped) - rightW);
+  const gap = Math.max(leftClamped ? 1 : 0, width - visibleWidth(leftClamped) - rightW);
   return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
 }
 
@@ -754,18 +754,38 @@ export class FleetList {
     // with similar descriptions stay distinguishable after truncation.
     const label = record.alias ? `${record.alias}: ${record.description}` : record.description;
     const description = selected ? theme.fg("text", label) : label;
-    const prefix = `  ${this.bullet(rosterIndex, sel, theme)} `;
+    let prefix = `  ${this.bullet(rosterIndex, sel, theme)} `;
     const left = `${name}  ${description}`;
     // Fixed-width slots (blank where a row has no value) keep each column at the
     // same cells on every row; an all-empty column is dropped.
-    const stats = TAIL_SLOTS.map((slot, i) => {
+    let stats = TAIL_SLOTS.map((slot, i) => {
       if (colWidths[i] === 0) return undefined;
       const pad = " ".repeat(colWidths[i] - visibleWidth(cells[i] ?? ""));
       return slot.align === "end" ? (cells[i] ?? "") + pad : pad + (cells[i] ?? "");
     }).filter((c): c is string => c !== undefined).join(" · ");
+    let flag = fallbackFlag(theme, record);
+    if (flag && visibleWidth(prefix + flag) + 1 + visibleWidth(stats) > width) {
+      // Description space is exhausted and fitColumns already dropped activity,
+      // thinking and model. Use the SHARED helper's compact marker, never slice
+      // the flag, before sacrificing any spend cell. Rendering an empty body in
+      // the flag budget selects [fb] or ! with the same policy as every renderer.
+      const flagBudget = Math.max(1, width - visibleWidth(prefix) - visibleWidth(stats) - 1);
+      flag = withLeadingFlag("", flag, "", flagBudget).trimEnd();
+      if (visibleWidth(prefix + flag) + 1 + visibleWidth(stats) > width) {
+        // A state word and padded separators are not spend. Keep its glyph and
+        // unpadded elapsed/tokens/cost, then remove navigation padding if needed.
+        const spend = cells.slice(4).filter(Boolean);
+        stats = [agentState(record.status).glyph, ...spend].join(" ");
+        if (visibleWidth(prefix + flag) + 1 + visibleWidth(stats) > width) prefix = "";
+        const remaining = width - visibleWidth(flag) - 1;
+        if (visibleWidth(stats) > remaining) stats = spend.join(" ");
+        // Only when all three cannot physically fit may elapsed yield to spend.
+        if (visibleWidth(stats) > remaining) stats = spend.slice(1).join(" ");
+      }
+    }
     const right = fgPreservingNestedStyles(theme, selected ? "text" : "dim", stats);
     // The flag leads the row (even with `showModel` off: a substituted model is
     // not cosmetic) and the name/description/tail are laid out in what is left.
-    return withLeadingFlag(prefix, fallbackFlag(theme, record), inner => rightAlign(left, right, inner), width);
+    return withLeadingFlag(prefix, flag, inner => rightAlign(left, right, inner), width);
   }
 }

@@ -1102,6 +1102,46 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
     expect(stateAt(top)).toBe(stateAt(bottom));
   });
 
+  it.each([false, true])("compacts a leading fallback flag before clipping paid stats at 40 columns (showModel=%s)", showModel => {
+    const record = makeRecord({
+      startedAt: NOW - 60_000, alias: "audit", description: "Review a deliberately long description",
+      modelFallback: { input: "ghost", used: "anthropic/x" },
+      invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+      lifetimeUsage: { input: 13_100, output: 0, cacheWrite: 0, cost: 0.0042 },
+    });
+    const lines = renderAt([record], 40, 24, 1, showModel, { styled: true, showCost: true }).map(plain);
+    const line = lines.find(l => /\[fb\]|!|\[fallback\]/.test(l))!;
+    expect(line).toMatch(/^\s*(?:[●○]\s*)?(?:\[fb\]|!)(?:\s|$)/);
+    expect(line).toContain("60s");
+    expect(line).toContain("↓ 13.1k tokens");
+    expect(line).toContain("~$0.0042");
+    for (const row of lines) expect(visibleWidth(row)).toBeLessThanOrEqual(40);
+  });
+
+  it.each(Array.from({ length: 91 }, (_, i) => i + 30))("preserves a leading flag and physically fitting spend at %i columns", columns => {
+    for (const [input, cost, tokenText, costText] of [
+      [13_100, 0.0042, "↓ 13.1k tokens", "~$0.0042"],
+      [987_654, 12.34, "↓ 987.7k tokens", "~$12.34"],
+    ] as const) {
+      const record = makeRecord({
+        startedAt: NOW - 60_000, alias: "audit", description: "A long description to truncate before spend",
+        modelFallback: { input: "ghost", used: "anthropic/x" },
+        invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+        lifetimeUsage: { input, output: 0, cacheWrite: 0, cost },
+      });
+      const lines = renderAt([record], columns, 24, 1, true, { styled: true, showCost: true }).map(plain);
+      const line = lines.find(l => /\[fallback\]|\[fb\]|!/.test(l))!;
+      expect(line).toMatch(/^\s*(?:[●○]\s*)?(?:\[fallback\]|\[fb\]|!)(?:\s|$)/);
+      // Minimum physical layout: one-cell flag, spaces, and unpadded spend cells.
+      if (visibleWidth(`! ${tokenText} ${costText}`) <= columns) {
+        expect(line).toContain(tokenText);
+        expect(line).toContain(costText);
+      }
+      if (visibleWidth(`! 60s ${tokenText} ${costText}`) <= columns) expect(line).toContain("60s");
+      for (const row of lines) expect(visibleWidth(row)).toBeLessThanOrEqual(columns);
+    }
+  });
+
   it("gives every state a glyph and a word, at 120x40", () => {
     const lines = renderAt(mixed().slice(0, 1).concat(mixed().slice(3, 7)), 120, 40);
     const text = lines.join("\n");
