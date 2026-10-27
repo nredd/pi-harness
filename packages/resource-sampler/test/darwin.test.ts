@@ -45,19 +45,23 @@ const TEST_BUDGET_BYTES = 4096;
  * @returns Two rusage_info_v0 buffers bracketing proc_bsdinfo, using independent SDK literal layouts.
  */
 function buffers() {
+	// SDK byte sizes: rusage_info_v0 = 96, proc_bsdinfo = 136 (independent of production constants).
 	const before = Buffer.alloc(96),
 		after = Buffer.alloc(96),
 		bsd = Buffer.alloc(136);
+	// proc_bsdinfo byte offsets: PID 12, PPID 16, p_comm 48, start seconds 120, start usec 128.
 	bsd.writeUInt32LE(captured.pid, 12);
 	bsd.writeUInt32LE(captured.parentPid, 16);
 	Buffer.from(captured.nameHex, "hex").copy(bsd, 48);
 	bsd.writeBigUInt64LE(BigInt(captured.seconds), 120);
 	bsd.writeBigUInt64LE(BigInt(captured.micros), 128);
+	// rusage_info_v0 byte offsets: start ticks 80, resident bytes 64, physical footprint bytes 72.
 	for (const buffer of [before, after]) {
 		buffer.writeBigUInt64LE(BigInt(captured.start), 80);
 		buffer.writeBigUInt64LE(BigInt(captured.rssBytes), 64);
 		buffer.writeBigUInt64LE(BigInt(captured.footprintBytes), 72);
 	}
+	// rusage_info_v0 user CPU Mach ticks occupy the uint64_t at byte offset 16.
 	before.writeBigUInt64LE(BigInt(captured.beforeCpuTicks), 16);
 	after.writeBigUInt64LE(BigInt(captured.afterCpuTicks), 16);
 	return { before, bsd, after };
@@ -92,7 +96,7 @@ function fakeNative(timebase: (buffer: Buffer) => number, usage: (pid: number, b
 				proc_pidinfo: (pid: number, _flavor: number, _arg: bigint, buffer: Buffer) => {
 					buffers().bsd.copy(buffer);
 					buffer.writeUInt32LE(pid, 12);
-					return 136;
+					return 136; // Successful proc_pidinfo returns sizeof(proc_bsdinfo), in bytes.
 				},
 			},
 		}),

@@ -160,6 +160,8 @@ describe("privacy-safe native parsers", () => {
 describe("Darwin host memory", () => {
 	it("parses captured Apple Silicon pages, not free-only RAM or uncompressed page equivalents", async () => {
 		const vm = await readFile(new URL("./fixtures/darwin-vm-stat.txt", import.meta.url), "utf8");
+		// Captured pages: anonymous 241117 - purgeable 2046 + wired 180763 + compressor 393195.
+		// The fixture header independently reports 16384 bytes/page, not a production page-size default.
 		const usedBytes = (241117 - 2046 + 180763 + 393195) * 16384;
 		expect(darwinMemory(vm, 16 * 1024 ** 3)).toEqual({
 			usedBytes,
@@ -193,6 +195,7 @@ describe("Darwin host memory", () => {
 	});
 	it("parses the same-second AM-style kernel capture and measured fixed ps fallback rows", async () => {
 		const text = await readFile(new URL("./fixtures/darwin-kernel-window.txt", import.meta.url), "utf8");
+		// (203941 anonymous - 2859 purgeable + 171285 wired + 363787 compressor) * 16384 bytes/page.
 		expect(darwinMemory(text, 16 * 1024 ** 3)?.usedBytes).toBe(12061147136);
 		/**
 		 * Extract a page count from the same-second kernel capture, without a page-size assumption.
