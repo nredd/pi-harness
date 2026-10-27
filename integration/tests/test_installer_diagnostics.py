@@ -787,9 +787,30 @@ def test_pathological_proxy_passwords_elide_diagnostics_safely(
     Raises:
         AssertionError: a pathological input bypasses the safety cap or leaks mask characters.
     """
-    secret = "x" * 8193 if kind == "oversized" else "*#~!^|?+="
+    # Keep these independent of implementation constants: the documented cap is 8192,
+    # and every printable ASCII candidate must be unavailable for the collision case.
+    secret = "x" * 8193 if kind == "oversized" else "".join(chr(value) for value in range(32, 127))
     monkeypatch.setenv("HTTPS_PROXY", f"http://user:{quote(secret, safe='')}@proxy.invalid")
     assert release.redact_diagnostic("diagnostic payload") == ""
+
+
+def test_large_credential_free_bypass_list_does_not_elide_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Large enterprise bypass lists without credentials must not silence installer errors.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped large credential-free bypass list.
+
+    Returns:
+        None: ordinary diagnostics and child bypass settings remain unchanged.
+
+    Raises:
+        AssertionError: the credential cap incorrectly suppresses unrelated error messages.
+    """
+    value = ",".join(f"host{number}.internal.invalid" for number in range(1000))
+    assert len(value) > 8192
+    monkeypatch.setenv("NO_PROXY", value)
+    assert release.redact_diagnostic("Connection failed") == "Connection failed"
+    assert release.child_environment({"NO_PROXY": value})["NO_PROXY"] == value
 
 
 @pytest.mark.parametrize("secret", ["päss", "p/ss", "Pa?ss"])
@@ -813,6 +834,7 @@ def test_percent_escape_hex_case_cannot_bypass_password_masking(
     lower = encoded.replace("%C3", "%c3").replace("%A4", "%a4").replace("%2F", "%2f").replace("%3F", "%3f")
     mixed = encoded.replace("%C3", "%c3").replace("%2F", "%2f").replace("%3F", "%3f")
     for value in list(dict.fromkeys((lower, mixed))):
+        assert value != encoded, "The fixture must actually vary an escape's hex-letter case"
         redacted = release.redact_diagnostic(f"UnrelatedCase prefix{value}suffix")
         assert value not in redacted
         assert encoded not in redacted

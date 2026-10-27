@@ -471,7 +471,7 @@ def redact_diagnostic(text: str) -> str:
 
     Known proxies come from `os.environ`. Password masking ignores length and word boundaries;
     a one-character mask absent from all passwords prevents growth or reintroduced secrets.
-    Oversized proxy values or exhaustion of safe mask characters elide the diagnostic.
+    Oversized potential userinfo values or exhausted safe mask characters elide diagnostics.
 
     Parameters:
         text (str): untrusted diagnostic before truncating its output tail.
@@ -487,6 +487,8 @@ def redact_diagnostic(text: str) -> str:
     passwords: set[str] = set()
     for key in sorted(PROXY_ENVIRONMENT_KEYS):
         value = os.environ.get(key, "")
+        if "@" not in value:
+            continue
         if len(value) > MAX_PROXY_REDACTION_VALUE_CHARACTERS:
             return ""
         scheme, separator, rest = value.partition("://")
