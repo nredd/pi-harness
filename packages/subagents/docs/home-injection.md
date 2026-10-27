@@ -83,9 +83,12 @@ This is not a filesystem sandbox. Before loader-level `noSkills` takes effect,
 Pi's package-manager `resolve()` automatically scans the real runtime home's
 `~/.agents/skills`. The public loader does not expose an injected-home or
 package-manager seam for that read, so this PR cannot fix it without a Pi core
-change and release. The `#179` characterization test deliberately asserts that the
-decoy ambient skill directory is scanned today; flip that assertion when the host
-fix lands. The required host follow-up is tracked [here](https://github.com/nredd/pi-harness/issues/179).
+change and release. The `#179` characterization test records every loader and
+package-manager filesystem access under its decoy ambient home, normalizes those
+paths relative to that home, deduplicates and sorts them, then asserts exact
+membership. Its expected array documents the current `~/.agents/skills` traversal;
+flip it when the host fix lands so both a new read and a removed expected read fail.
+The required host follow-up is tracked [here](https://github.com/nredd/pi-harness/issues/179).
 
 Frontmatter extension compatibility:
 

@@ -1,7 +1,7 @@
 /** Network-free real-loader probe, launched with a disposable ambient HOME at process start. */
 import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runAgent } from "../../src/agent-runner.js";
@@ -37,10 +37,10 @@ async function main(): Promise<void> {
   write(settingsPath, JSON.stringify({ packages: [scope === "global" ? { source: "~/package" } : "~/package"], extensions: ["~/extension.ts"] }));
 
   const probes: string[] = [];
-  const exists = fs.existsSync;
-  const read = fs.readFileSync;
-  fs.existsSync = new Proxy(exists, { apply(target, receiver, args) { probes.push(resolve(String(args[0]))); return Reflect.apply(target, receiver, args); } });
-  fs.readFileSync = new Proxy(read, { apply(target, receiver, args) { probes.push(resolve(String(args[0]))); return Reflect.apply(target, receiver, args); } });
+  for (const method of ["accessSync", "chmodSync", "existsSync", "globSync", "lstatSync", "mkdirSync", "openSync", "opendirSync", "readdirSync", "readFileSync", "readlinkSync", "realpathSync", "rmSync", "statSync", "writeFileSync"] as const) {
+    const original = fs[method];
+    fs[method] = new Proxy(original, { apply(target, receiver, args) { probes.push(resolve(String(args[0]))); return Reflect.apply(target, receiver, args); } });
+  }
   if (process.versions.bun) {
     // Bun does not synchronize patched built-in named exports. Replace only
     // their export table; every filesystem call still delegates to real I/O.
@@ -81,9 +81,9 @@ async function main(): Promise<void> {
   }
   const forbidden = [join(ambient, "package"), join(ambient, "extension.ts")];
   const forbiddenProbes = probes.filter(path => forbidden.some(root => path === root || path.startsWith(root + sep)));
-  const ambientSkillProbes = probes.filter(path => path === ambientSkillsDir || path.startsWith(ambientSkillsDir + sep));
+  const ambientAccesses = [...new Set(probes.filter(path => path === ambient || path.startsWith(ambient + sep)).map(path => relative(ambient, path) || "."))].sort();
   const loaded = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").trim().split("\n") : [];
-  fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", mode, scope, forbiddenProbes, ambientSkillProbes, loaded, sawInjectedPackage: probes.includes(join(home, "package", "package.json")), sawInjectedExtension: probes.includes(join(home, "extension.ts")) }));
+  fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", mode, scope, forbiddenProbes, ambientAccesses, loaded, sawInjectedPackage: probes.includes(join(home, "package", "package.json")), sawInjectedExtension: probes.includes(join(home, "extension.ts")) }));
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

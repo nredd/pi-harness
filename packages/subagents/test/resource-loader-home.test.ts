@@ -12,6 +12,19 @@ const helper = fileURLToPath(new URL("./helpers/real-loader-home.ts", import.met
 const pinnedBunVersion = readFileSync(fileURLToPath(new URL("../../../.bun-version", import.meta.url)), "utf8").trim();
 let bundleDir: string;
 
+// Flip when #179 gives the host package manager an injected-home seam.
+const EXPECTED_AMBIENT_ACCESSES = [
+  ".agents/skills",
+  ".agents/skills/.fdignore",
+  ".agents/skills/.gitignore",
+  ".agents/skills/.ignore",
+  ".agents/skills/ambient-skill",
+  ".agents/skills/ambient-skill/.fdignore",
+  ".agents/skills/ambient-skill/.gitignore",
+  ".agents/skills/ambient-skill/.ignore",
+  ".agents/skills/ambient-skill/SKILL.md",
+];
+
 beforeAll(async () => {
   if (process.env.PI_EXPECT_BUN_RUNTIME === "1") expect(process.versions.bun).toBe(pinnedBunVersion);
   // Bundle only owned TypeScript, leaving the real Pi SDK/package manager
@@ -64,8 +77,7 @@ it("#179 characterizes Pi's ambient .agents/skills scan before loader-level noSk
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
-    // Flip when #179 gives the host package manager an injected-home seam.
-    expect(result.ambientSkillProbes).not.toEqual([]);
+    expect(result.ambientAccesses).toEqual(EXPECTED_AMBIENT_ACCESSES);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
