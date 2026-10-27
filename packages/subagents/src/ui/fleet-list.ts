@@ -19,8 +19,9 @@ import type { RunningDetached } from "../detached-results.js";
 import { describeModelCall } from "../model-call.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
-import { type AgentActivity, buildInvocationTags, formatCost, type Theme } from "./agent-widget.js";
+import { type AgentActivity, buildInvocationTags, fgPreservingNestedStyles, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
+import { fallbackFlag, withLeadingFlag } from "./fallback-flag.js";
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -97,19 +98,75 @@ function rightAlign(left: string, right: string, width: number): string {
   const rightW = visibleWidth(right);
   const maxLeft = Math.max(0, width - rightW - 1);
   const leftClamped = truncateToWidth(left, maxLeft);
-  const gap = Math.max(1, width - visibleWidth(leftClamped) - rightW);
+  const gap = Math.max(leftClamped ? 1 : 0, width - visibleWidth(leftClamped) - rightW);
   return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
 }
 
-/** Agent-row tail columns, left to right; text pads right, numbers pad left. */
+/**
+ * Agent-row tail columns, left to right; text pads right, numbers pad left.
+ * `drop` ranks how early a column goes on a narrow terminal (1 first); an
+ * undefined rank is never dropped, so state, elapsed, tokens and cost survive
+ * and the description is what truncates (#144).
+ */
 const TAIL_SLOTS = [
-  { align: "end" }, // model
-  { align: "end" }, // thinking level
-  { align: "end" }, // live model-call activity
+  { align: "end" }, // state: glyph + label
+  { align: "end", drop: 3 }, // model
+  { align: "end", drop: 2 }, // thinking level
+  { align: "end", drop: 1 }, // live model-call activity
   { align: "start" }, // elapsed
   { align: "start" }, // tokens
   { align: "start" }, // cost
 ] as const;
+
+/** Columns reserved for the bullet, name and the start of the description. */
+const MIN_LEFT_WIDTH = 24;
+
+/** Which bucket a state counts under in an overflow summary. */
+type StateBucket = "running" | "queued" | "paused" | "done" | "stopped" | "failed";
+
+/** How one agent or run state reads: a glyph AND a word, so colour is never the only cue. */
+interface FleetState {
+  glyph: string;
+  label: string;
+  color: string;
+  bucket: StateBucket;
+}
+
+/** The state of an agent record. */
+function agentState(status: AgentRecord["status"]): FleetState {
+  switch (status) {
+    case "queued": return { glyph: "◦", label: "queued", color: "muted", bucket: "queued" };
+    case "running": return { glyph: "▶", label: "running", color: "accent", bucket: "running" };
+    case "completed": return { glyph: "✓", label: "done", color: "success", bucket: "done" };
+    case "steered": return { glyph: "✓", label: "limit", color: "warning", bucket: "done" };
+    case "stopped": return { glyph: "■", label: "stopped", color: "dim", bucket: "stopped" };
+    case "aborted": return { glyph: "✗", label: "aborted", color: "error", bucket: "failed" };
+    case "error": return { glyph: "✗", label: "failed", color: "error", bucket: "failed" };
+  }
+}
+
+/** The bucket a workflow run counts under in an overflow summary. */
+function workflowBucket(status: FleetWorkflow["status"]): StateBucket {
+  switch (status) {
+    case "running": return "running";
+    case "paused": return "paused";
+    case "completed": return "done";
+    case "failed":
+    case "killed": return "failed";
+  }
+}
+
+const BUCKET_ORDER: readonly StateBucket[] = ["running", "queued", "paused", "failed", "stopped", "done"];
+
+/** `3 running, 1 failed` for the rows an indicator hides. */
+function summarizeHidden(rows: readonly (WorkflowEntry | AgentEntry)[]): string {
+  const counts = new Map<StateBucket, number>();
+  for (const row of rows) {
+    const bucket = row.kind === "workflow" ? workflowBucket(row.workflow.status) : agentState(row.record.status).bucket;
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  return BUCKET_ORDER.filter(b => counts.has(b)).map(b => `${counts.get(b)} ${b}`).join(", ");
+}
 
 export class FleetList {
   private ui: FleetUICtx | undefined;
@@ -567,15 +624,26 @@ export class FleetList {
 
     // Both indicator slots remain in the row block, blank at an edge, so every
     // overflowing roster has the same height.
-    // Column widths come from the visible agent rows so every tail lines up.
+    // Column widths come from EVERY agent row, not the window, so scrolling
+    // never shifts a column; a column too wide for the terminal is dropped
+    // lowest-value first, never state, elapsed, tokens or cost.
     const cells = new Map<AgentRecord, string[]>();
-    for (const r of rows.slice(start, start + visible)) {
-      if (r.kind === "agent") cells.set(r.record, this.tailCells(r.record));
+    for (const r of rows) {
+      if (r.kind === "agent") cells.set(r.record, this.tailCells(r.record, theme));
     }
-    const colWidths = TAIL_SLOTS.map((_, i) =>
-      Math.max(0, ...[...cells.values()].map(c => visibleWidth(c[i]))));
-    if (start > 0) lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more`), width));
-    else if (overflow) lines.push("");
+    // Reserve the widest leading flag across ALL rows before fitting optional
+    // columns, so a fallback cannot hide the alias or shift columns on scroll.
+    const flagWidth = Math.max(0, ...[...cells.keys()].map(record => {
+      const flag = fallbackFlag(theme, record);
+      return flag ? visibleWidth(flag) + 1 : 0;
+    }));
+    const colWidths = this.fitColumns(
+      TAIL_SLOTS.map((_, i) => Math.max(0, ...[...cells.values()].map(c => visibleWidth(c[i])))),
+      width - flagWidth,
+    );
+    if (start > 0) {
+      lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more: ${summarizeHidden(rows.slice(0, start))}`), width));
+    } else if (overflow) lines.push("");
     for (let a = start; a < start + visible; a++) {
       const row = rows[a];
       lines.push(
@@ -584,8 +652,9 @@ export class FleetList {
         : this.renderAgentRow(a + 1, sel, row.record, width, theme, cells.get(row.record) ?? [], colWidths),
       );
     }
-    if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
-    else if (overflow) lines.push("");
+    if (hiddenBelow > 0) {
+      lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more: ${summarizeHidden(rows.slice(start + visible))}`), width));
+    } else if (overflow) lines.push("");
     // pi stacks below-editor widgets directly on its footer with no spacer (#351).
     lines.push("");
 
@@ -619,8 +688,26 @@ export class FleetList {
     return rightAlign(left, selected ? theme.fg("text", stats) : theme.fg("dim", stats), width);
   }
 
+  /** Zero the widths of droppable columns, lowest value first, until the tail leaves room for the description. */
+  private fitColumns(widths: number[], width: number): number[] {
+    const fitted = [...widths];
+    const tail = () => {
+      const used = fitted.filter(w => w > 0);
+      return used.reduce((sum, w) => sum + w, 0) + 3 * Math.max(0, used.length - 1);
+    };
+    const droppable = TAIL_SLOTS
+      .map((slot, i) => ({ i, rank: "drop" in slot ? slot.drop : 0 }))
+      .filter(c => c.rank > 0)
+      .sort((x, y) => x.rank - y.rank);
+    for (const { i } of droppable) {
+      if (width - tail() >= MIN_LEFT_WIDTH) break;
+      fitted[i] = 0;
+    }
+    return fitted;
+  }
+
   /** One agent's stats tail as {@link TAIL_SLOTS} cells; "" where a slot has no value. */
-  private tailCells(record: AgentRecord): string[] {
+  private tailCells(record: AgentRecord, theme: Theme): string[] {
     // The record, not the activity tracker — see the note in AgentWidget's
     // running line: only the record carries a nested child's spend, and only it
     // outlives the agent.
@@ -632,15 +719,18 @@ export class FleetList {
       // Leading, and paired: a thinking level means nothing without its model.
       const { modelName, tags } = buildInvocationTags(record.invocation);
       model = modelName ?? "";
-      thinking = tags.find(tag => tag.startsWith("thinking: ")) ?? "";
+      // `think:high` here, so the configured level cannot read as a duplicate
+      // of the live `thinking · 4s` activity beside it.
+      thinking = (tags.find(tag => tag.startsWith("thinking: ")) ?? "").replace(/^thinking: /, "think:");
     }
+    const state = agentState(record.status);
     // What the in-flight model call is doing, only while the agent is running:
     // a finished row has no call to describe.
     const call = record.status === "running"
       ? describeModelCall(this.activityFor(record.id)?.modelCall, this.clock.now())
       : undefined;
     const cost = this.showCost() ? formatCost(getLifetimeCost(record.lifetimeUsage)) : "";
-    return [model, thinking, call ?? "", formatFleetElapsed(elapsedMs), formatFleetTokens(tokens), cost];
+    return [theme.fg(state.color, `${state.glyph} ${state.label}`), model, thinking, call ?? "", formatFleetElapsed(elapsedMs), formatFleetTokens(tokens), cost];
   }
 
   private renderAgentRow(
@@ -660,16 +750,44 @@ export class FleetList {
     const name = renderAgentName(record.type, theme, selected
       ? { fallbackColor: "text", bold: hasAgentBadge(record.type) }
       : { fallbackColor: "muted" });
-    const description = selected ? theme.fg("text", record.description) : record.description;
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
+    // The spawner's `name` leads when there is one, so two agents of one type
+    // with similar descriptions stay distinguishable after truncation.
+    const label = record.alias ? `${record.alias}: ${record.description}` : record.description;
+    const description = selected ? theme.fg("text", label) : label;
+    let prefix = `  ${this.bullet(rosterIndex, sel, theme)} `;
+    const left = `${name}  ${description}`;
     // Fixed-width slots (blank where a row has no value) keep each column at the
     // same cells on every row; an all-empty column is dropped.
-    const stats = TAIL_SLOTS.map((slot, i) => {
+    let stats = TAIL_SLOTS.map((slot, i) => {
       if (colWidths[i] === 0) return undefined;
       const pad = " ".repeat(colWidths[i] - visibleWidth(cells[i] ?? ""));
       return slot.align === "end" ? (cells[i] ?? "") + pad : pad + (cells[i] ?? "");
     }).filter((c): c is string => c !== undefined).join(" · ");
-    const right = selected ? theme.fg("text", stats) : theme.fg("dim", stats);
-    return rightAlign(left, right, width);
+    let flag = fallbackFlag(theme, record);
+    if (flag && visibleWidth(prefix + flag) + 1 + visibleWidth(stats) > width) {
+      // Description space is exhausted and fitColumns already dropped activity,
+      // thinking and model. Use the SHARED helper's compact marker, never slice
+      // the flag, before sacrificing any spend cell. Rendering an empty body in
+      // the flag budget selects [fb] or ! with the same policy as every renderer.
+      const flagBudget = Math.max(1, width - visibleWidth(prefix) - visibleWidth(stats) - 1);
+      flag = withLeadingFlag("", flag, "", flagBudget).trimEnd();
+    }
+    // Every row preserves spend, not just rows carrying a fallback marker.
+    const markerWidth = flag ? visibleWidth(flag) + 1 : 0;
+    if (visibleWidth(prefix) + markerWidth + visibleWidth(stats) > width) {
+      // A state word and padded separators are not spend. Keep its glyph and
+      // unpadded elapsed/tokens/cost, then remove navigation padding if needed.
+      const spend = cells.slice(4).filter(Boolean);
+      stats = [agentState(record.status).glyph, ...spend].join(" ");
+      if (visibleWidth(prefix) + markerWidth + visibleWidth(stats) > width) prefix = "";
+      const remaining = width - markerWidth;
+      if (visibleWidth(stats) > remaining) stats = spend.join(" ");
+      // Only when all three cannot physically fit may elapsed yield to spend.
+      if (visibleWidth(stats) > remaining) stats = spend.slice(1).join(" ");
+    }
+    const right = fgPreservingNestedStyles(theme, selected ? "text" : "dim", stats);
+    // The flag leads the row (even with `showModel` off: a substituted model is
+    // not cosmetic) and the name/description/tail are laid out in what is left.
+    return withLeadingFlag(prefix, flag, inner => rightAlign(left, right, inner), width);
   }
 }

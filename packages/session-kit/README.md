@@ -69,7 +69,7 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
 ## Monitor
 
 - `monitor_start({argv, name, match?, wake?, timeout_s?})`: run an argv command with stdin closed,
-  no implicit shell. Five active monitors maximum, one-hour default timeout. Explicitly passing a
+  no implicit shell. Five active monitors maximum, one-hour default timeout, 7 day (`604800` s) maximum. Explicitly passing a
   shell remains arbitrary command execution; this is not a sandbox.
 - `monitor_read({id, since?})`: numbered output since a cursor. Ring buffers retain 2000 lines.
 - `monitor_stop({id})`, `/monitor list`, `/monitor stop <id|all>`: stop and inspect owned monitors.
