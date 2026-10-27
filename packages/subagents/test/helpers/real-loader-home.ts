@@ -37,21 +37,32 @@ async function main(): Promise<void> {
   const settingsPath = scope === "global" ? join(agentDir, "settings.json") : join(cwd, ".pi", "settings.json");
   write(settingsPath, JSON.stringify({ packages: [scope === "global" ? { source: "~/package" } : "~/package"], extensions: ["~/extension.ts"] }));
 
+  const nativeRealpath = fs.realpathSync.native ?? fs.realpathSync;
+  const ambientRoots = [resolve(ambient), nativeRealpath(ambient)];
   const probes: string[] = [];
   function recordPath(value: unknown): void {
     const path = value instanceof URL ? fileURLToPath(value) : Buffer.isBuffer(value) ? value.toString() : typeof value === "string" ? value : undefined;
     if (path !== undefined) probes.push(resolve(path));
   }
+  function ambientRelative(path: string): string | undefined {
+    const candidates = [path];
+    try { candidates.push(nativeRealpath(path)); } catch { /* Missing paths are still observed by their lexical form. */ }
+    for (const candidate of candidates) {
+      for (const root of ambientRoots) {
+        if (candidate === root || candidate.startsWith(root + sep)) return relative(root, candidate) || ".";
+      }
+    }
+    return undefined;
+  }
   function traceFilesystemApi(api: object): void {
     for (const [name, original] of Object.entries(api)) {
       if (typeof original !== "function") continue;
-      // Pi's current loader/package manager use synchronous APIs, but trace the
-      // whole default export and its promises object so a future ambient read
-      // cannot hide behind an unlisted node:fs method.
+      // Trace every path argument on both node:fs API surfaces. This catches
+      // two-path operations and avoids a method-specific allowlist.
       Object.defineProperty(api, name, {
         configurable: true,
         writable: true,
-        value: new Proxy(original, { apply(target, receiver, args) { recordPath(args[0]); return Reflect.apply(target, receiver, args); } }),
+        value: new Proxy(original, { apply(target, receiver, args) { for (const arg of args) recordPath(arg); return Reflect.apply(target, receiver, args); } }),
       });
     }
   }
@@ -63,6 +74,8 @@ async function main(): Promise<void> {
     const { mock } = createRequire(import.meta.url)("bun:test");
     mock.module("node:fs", () => ({ ...fs }));
     mock.module("fs", () => ({ ...fs }));
+    mock.module("node:fs/promises", () => ({ ...fs.promises }));
+    mock.module("fs/promises", () => ({ ...fs.promises }));
   } else {
     syncBuiltinESMExports();
   }
@@ -97,7 +110,7 @@ async function main(): Promise<void> {
   }
   const forbidden = [join(ambient, "package"), join(ambient, "extension.ts")];
   const forbiddenProbes = probes.filter(path => forbidden.some(root => path === root || path.startsWith(root + sep)));
-  const ambientAccesses = [...new Set(probes.filter(path => path === ambient || path.startsWith(ambient + sep)).map(path => relative(ambient, path) || "."))].sort();
+  const ambientAccesses = [...new Set(probes.map(ambientRelative).filter((path): path is string => path !== undefined))].sort();
   const loaded = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").trim().split("\n") : [];
   fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", mode, scope, forbiddenProbes, ambientAccesses, loaded, sawInjectedPackage: probes.includes(join(home, "package", "package.json")), sawInjectedExtension: probes.includes(join(home, "extension.ts")) }));
 }
