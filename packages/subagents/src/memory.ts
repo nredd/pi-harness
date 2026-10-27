@@ -13,22 +13,12 @@
 
 import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { resolveAgentDir } from "./home-paths.js";
 import type { MemoryScope } from "./types.js";
 
 /** Maximum lines to read from MEMORY.md */
 const MAX_MEMORY_LINES = 200;
-
-/** Resolve Pi's user agent directory with an injectable home directory. */
-export function resolveAgentDir(homeDir = homedir()): string {
-  const configured = process.env.PI_CODING_AGENT_DIR;
-  if (!configured) return join(homeDir, ".pi", "agent");
-  if (configured === "~" || configured.startsWith("~/") || (process.platform === "win32" && configured.startsWith("~\\"))) {
-    return configured === "~" ? homeDir : join(homeDir, configured.slice(2));
-  }
-  return configured.startsWith("file://") ? fileURLToPath(configured) : configured;
-}
 
 /**
  * Returns true if a name contains characters not allowed in agent/skill names.

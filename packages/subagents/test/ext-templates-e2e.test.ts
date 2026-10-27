@@ -67,7 +67,6 @@ const PARENT_PROMPT = "PARENT_PROMPT_MARKER";
 
 describe("ext: / tools: scoping — template-driven e2e (real pi-mono, headless)", () => {
   let prevAgentDir: string | undefined;
-  let prevHome: string | undefined;
   let hermeticDir: string;
   let faux: ReturnType<typeof registerFauxProvider>;
 
@@ -76,9 +75,7 @@ describe("ext: / tools: scoping — template-driven e2e (real pi-mono, headless)
     // and extensions can't bleed into the run.
     hermeticDir = mkdtempSync(join(tmpdir(), "subagents-tmpl-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    prevHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = hermeticDir;
-    process.env.HOME = hermeticDir;
 
     faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
 
@@ -92,8 +89,6 @@ describe("ext: / tools: scoping — template-driven e2e (real pi-mono, headless)
     faux.unregister();
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
     rmSync(hermeticDir, { recursive: true, force: true });
   });
 

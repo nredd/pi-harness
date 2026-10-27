@@ -10,9 +10,12 @@ for their type imports; no workflow code is loaded by the helpers.
 
 `.vitest.config.ts` aliases the unpublished `@juicesharp/rpiv-test-utils` to this
 barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config
-cleanup while isolating config through `XDG_CONFIG_HOME`; it leaves `HOME`
-untouched so Bun cannot read the real home through a cached `os.homedir()`.  No upstream
-test assertions or tests are removed. Keep support/config files in dot paths so
+cleanup. `TEST_HOME` and `home-fixtures.ts` explicitly inject a disposable home into
+config, tool, extension and overlay callers. `XDG_CONFIG_HOME` alone is NOT enough:
+when its config is absent, the legacy fallback must use that same injected home.
+Tests never mutate `HOME` or `USERPROFILE`. `home-injection.test.ts` asserts zero
+real-home filesystem probes for both present and missing fallback configs. No
+upstream test assertions or tests are removed. Keep support/config files in dot paths so
 upstream's unchanged ship-manifest walker does not mistake them for production.
 
 Test census:
@@ -21,8 +24,9 @@ Test census:
 - Stock split `7903c76b` with this support/config: 253 tests in 21 files pass.
 - Selected fork `3c62a0b` with this support/config: 377 tests in 26 files pass.
 - With the rendering regressions: 382 Vitest tests in 28 files pass.
-- Bun 1.3.14: two real interactive settled-row regressions pass. This is native
-  Bun coverage, not a claim that Bun runs the upstream Vitest/`vi.mock` suite.
+- `test:bun` retains the two real interactive settled-row regressions. The full
+  Vitest suite can also be run with `bun --bun ../../node_modules/.bin/vitest run
+  --config .vitest.config.ts`; record the engine version and results separately.
 
 `settled-row.ts` mounts the real core interactive harness and VirtualTerminal,
 registering this fork's renderers with a snapshot-less legacy result. Both update

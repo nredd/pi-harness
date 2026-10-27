@@ -59,15 +59,17 @@ import {
   DefaultResourceLoader,
   type ExtensionContext,
   type ExtensionToolContext,
-  getAgentDir,
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { runInChildSessionContext } from "./child-context.js";
+import { resolveAgentDir } from "./home-paths.js";
 import { agentMentionReminder } from "./mention.js";
 import type { SubagentType } from "./types.js";
 
 export interface MentionCloneOptions {
+  /** Home directory for the clone's user resources and settings. */
+  homeDir?: string;
   /** The MAIN session's context — what the spawn is attributed to, and the
    * source of both the conversation and the live system prompt. */
   ctx: ExtensionContext;
@@ -140,9 +142,10 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     // would add on top (AGENTS.md, skills, APPEND_SYSTEM.md) is already in the
     // rendered prompt, so it is suppressed, as agent-runner does.
     const systemPrompt = ctx.getSystemPrompt();
+    const agentDir = resolveAgentDir(opts.homeDir);
     const loader = new DefaultResourceLoader({
       cwd: ctx.cwd,
-      agentDir: getAgentDir(),
+      agentDir,
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
@@ -155,6 +158,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     const created = await runInChildSessionContext(() =>
       createAgentSession({
         cwd: ctx.cwd,
+        agentDir,
         // The parent's root-to-leaf path, which the clone projects itself:
         // compaction applied, branch summaries substituted. Not `getEntries()`,
         // whose last entry is not the leaf after `/tree` navigation. In memory,

@@ -51,6 +51,8 @@ import { resolveWorkflowSource } from "./saved.js";
 export const DEFAULT_GATE_TIMEOUT_MS = 10 * 60_000;
 
 export interface WorkflowHostOptions {
+  /** Home directory for nested saved workflows. */
+  homeDir?: string;
   pi: ExtensionAPI;
   ctx: ExtensionContext;
   manager: AgentManager;
@@ -211,6 +213,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 
       const config = getAgentConfig(dispatch.type);
       const selection = selectModel({
+        homeDir: deps.homeDir,
         agentType: dispatch.type, definitionModel: config?.model, paramModel: request.model,
         parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: config?.displayName,
       });
@@ -378,7 +381,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
      * comes back is a workflow; this only finds it.
      */
     loadWorkflow(ref) {
-      return resolveWorkflowSource(ref, ctx.cwd);
+      return resolveWorkflowSource(ref, ctx.cwd, deps.homeDir);
     },
 
     // Reached only for a gate the spawn did not already run — a child with no

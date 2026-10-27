@@ -19,9 +19,9 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
-import subagentsExtension from "../src/index.js";
 import { setAgentModels } from "../src/model-resolver.js";
 import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 
 const PARENT = { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };
@@ -29,7 +29,7 @@ const NOTE = 'Note: configured model "claude-haiku-4-5" did not resolve; running
 const FALLBACK = { input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" };
 
 let cwd: string;
-let saved: { cwd: string; agentDir?: string; home?: string };
+let saved: { cwd: string; agentDir?: string };
 let sessionFile: string;
 
 function ctx() {
@@ -43,11 +43,10 @@ function ctx() {
 }
 
 beforeEach(() => {
-  saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, home: process.env.HOME };
+  saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
   cwd = mkdtempSync(join(tmpdir(), "config-model-prov-"));
   process.chdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-  process.env.HOME = cwd;
   mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
   writeFileSync(join(cwd, ".pi", "agents", "scout.md"), "---\ndescription: scout\ntools: read\nmodel: claude-haiku-4-5\n---\nscout.\n");
   mkdirSync(join(cwd, "agent-dir"), { recursive: true });
@@ -65,8 +64,6 @@ afterEach(() => {
   process.chdir(saved.cwd);
   if (saved.agentDir == null) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
-  if (saved.home == null) delete process.env.HOME;
-  else process.env.HOME = saved.home;
   registerAgents(new Map());
   rmSync(cwd, { recursive: true, force: true });
 });

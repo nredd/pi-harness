@@ -3,8 +3,13 @@ import { dirname, join } from "node:path";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, createMockUI } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	__resetState,
+	registerTodoTool,
+	setActiveRenderSession,
+	type TaskAction,
+} from "./.test-support/home-fixtures.ts";
 import { TEST_HOME } from "./.test-support/setup.ts";
-import { __resetState, registerTodoTool, setActiveRenderSession, type TaskAction } from "./todo.ts";
 import { TodoOverlay } from "./todo-overlay.ts";
 
 const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
@@ -286,7 +291,7 @@ describe("TodoOverlay — scrollable window", () => {
 		]);
 		const tagged = { ...identityTheme, fg: (c: string, s: string) => `<${c}>${s}</${c}>` };
 		const ui = createMockUI() as unknown as ExtensionUIContext;
-		const o = new TodoOverlay();
+		const o = new TodoOverlay(TEST_HOME);
 		o.setUICtx(ui);
 		o.update();
 		const factory = (ui.setWidget as ReturnType<typeof vi.fn>).mock.calls[0][1] as (

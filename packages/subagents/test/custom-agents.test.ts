@@ -1,12 +1,15 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serializeAgentFile } from "../src/agent-file-toggle.js";
 import { BUILTIN_TOOL_NAMES } from "../src/agent-types.js";
-import { loadCustomAgents } from "../src/custom-agents.js";
+import { loadCustomAgents as loadCustomAgentsAtHome } from "../src/custom-agents.js";
 import { MAX_PACKAGE_RESOURCE_BYTES, resetPackageState, setProjectTrusted } from "../src/package-resources.js";
 import type { AgentConfig } from "../src/types.js";
+
+const loadCustomAgents: typeof loadCustomAgentsAtHome = (cwd, strict, opts = {}) =>
+  loadCustomAgentsAtHome(cwd, strict, { homeDir: cwd, ...opts });
 
 describe("loadCustomAgents", () => {
   let tmpDir: string;
@@ -756,8 +759,12 @@ description: second
 
 Second.`);
 
+    // Node and Bun need not return the same directory order. The existing
+    // contract is last enumerated wins, not lexicographically last wins.
+    const files = readdirSync(join(tmpDir, ".pi", "agents"));
+    const expected = files.indexOf("a-first.md") > files.indexOf("b-second.md") ? "first" : "second";
     const result = loadCustomAgents(tmpDir);
-    expect(result.get("shared")!.description).toBe("second");
+    expect(result.get("shared")!.description).toBe(expected);
     expect([...result.keys()].filter(k => k === "shared")).toHaveLength(1);
   });
 

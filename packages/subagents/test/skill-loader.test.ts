@@ -2,11 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { preloadSkills } from "../src/skill-loader.js";
+import { preloadSkills as preloadSkillsAtHome } from "../src/skill-loader.js";
 
 describe("preloadSkills", () => {
   let tmpDir: string;
   let originalAgentDir: string | undefined;
+  const preloadSkills: typeof preloadSkillsAtHome = (names, cwd, homeDir = join(tmpDir, "home")) =>
+    preloadSkillsAtHome(names, cwd, homeDir);
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-skill-test-"));

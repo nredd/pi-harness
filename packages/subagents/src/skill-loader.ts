@@ -25,7 +25,8 @@ import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { isSymlink, isUnsafeName, resolveAgentDir, safeReadFile } from "./memory.js";
+import { resolveAgentDir } from "./home-paths.js";
+import { isSymlink, isUnsafeName, safeReadFile } from "./memory.js";
 
 export interface PreloadedSkill {
   name: string;

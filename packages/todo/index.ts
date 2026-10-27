@@ -230,7 +230,7 @@ export default function (
 		if (id !== getActiveRenderSession()) return;
 		const generation = ++lifecycleGeneration;
 		uiCtx = ctx.ui;
-		collapseOnBind = event.reason === "resume" && getCollapseOnResume();
+		collapseOnBind = event.reason === "resume" && getCollapseOnResume(options.homeDir);
 		try {
 			await updateTodoOverlay(generation);
 		} finally {

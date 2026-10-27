@@ -26,7 +26,7 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 const RPC_CHANNELS = ["subagents:rpc:ping", "subagents:rpc:spawn", "subagents:rpc:stop", "subagents:rpc:consume", "subagents:rpc:steer"] as const;
 
@@ -84,7 +84,6 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   let agentDir: string;
   let prevCwd: string;
   let prevAgentDir: string | undefined;
-  let prevHome: string | undefined;
 
   beforeEach(() => {
     // Hermetic cwd + global dir with scheduling off, so session_start doesn't
@@ -92,9 +91,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     tmpDir = mkdtempSync(join(tmpdir(), "pi-142-"));
     agentDir = mkdtempSync(join(tmpdir(), "pi-142-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    prevHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.env.HOME = agentDir;
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
     writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
@@ -105,8 +102,6 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
     vi.restoreAllMocks();

@@ -75,6 +75,7 @@ export const NESTED_WORKFLOW_NO_AGENT_ERROR =
   + "Do the work directly.";
 
 interface NestedSpawnOptions {
+  homeDir?: string;
   description: string;
   model?: Model<any>;
   modelSelection?: ModelSelection;
@@ -121,6 +122,8 @@ export interface NestedAgentManager {
 }
 
 export interface NestedToolContext {
+  /** Home shared by this branch's user-resource discovery. */
+  homeDir?: string;
   manager: NestedAgentManager;
   pi: ExtensionAPI;
   parentAgentId: string;
@@ -189,7 +192,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
   // Agents resolve from a registry built for THIS branch's config root (under
   // worktree isolation, the copy). Never via registerAgents — that is
   // process-global state shared with the main session and every other agent.
-  const loadRegistry = () => buildAgentRegistry(loadCustomAgents(context.configCwd, false, { projectTrusted: context.projectTrusted }));
+  const loadRegistry = () => buildAgentRegistry(loadCustomAgents(context.configCwd, false, { projectTrusted: context.projectTrusted, homeDir: context.homeDir }));
   const allowedTypesIn = (registry: Map<string, AgentConfig>): Set<string> | undefined =>
     context.allowedSubagents === "all"
       ? undefined
@@ -285,6 +288,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         defaultRunInBackground: false,
       });
       const selection = selectModel({
+        homeDir: context.homeDir,
         agentType: resolvedType, definitionModel: config?.model, paramModel: params.model,
         parentModel: ctx.model, registry: ctx.modelRegistry, cwd: context.configCwd, agentLabel: config?.displayName,
       });
@@ -296,6 +300,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       const rootSessionId = context.manager.getRecord(context.parentAgentId)?.rootSessionId;
       const childDepth = context.depth + 1;
       const options: NestedSpawnOptions = {
+        homeDir: context.homeDir,
         description: params.description,
         model,
         modelSelection: selection,

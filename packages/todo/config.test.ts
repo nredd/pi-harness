@@ -6,12 +6,17 @@ import {
 	COLLAPSE_KEY_OFF,
 	DEFAULT_COLLAPSE_KEY,
 	DEFAULT_MAX_WIDGET_LINES,
-	getCollapseOnResume,
-	getMaxWidgetLines,
 	isValidCollapseKeySpec,
-	loadConfig,
-	resolveCollapseKey,
+	resolveCollapseKey as readCollapseKey,
+	getCollapseOnResume as readCollapseOnResume,
+	loadConfig as readConfig,
+	getMaxWidgetLines as readMaxWidgetLines,
 } from "./config.ts";
+
+const getCollapseOnResume = () => readCollapseOnResume(TEST_HOME);
+const getMaxWidgetLines = (homeDir = TEST_HOME) => readMaxWidgetLines(homeDir);
+const loadConfig = () => readConfig(TEST_HOME);
+const resolveCollapseKey = () => readCollapseKey(TEST_HOME);
 
 const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
 

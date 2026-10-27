@@ -2,7 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "../src/memory.js";
 import { buildAgentPrompt } from "../src/prompts.js";
+import { preloadSkills } from "../src/skill-loader.js";
 
 const {
   createAgentSession,
@@ -3285,6 +3287,63 @@ describe("agent-runner abort signal forwarding", () => {
     await runAgent(ctx, "Explore", "go", { pi });
 
     expect(session.abort).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent-runner injected home forwarding", () => {
+  let homeDir: string;
+  let previousAgentDir: string | undefined;
+  let previousSessionDir: string | undefined;
+
+  beforeEach(() => {
+    homeDir = mkdtempSync(join(tmpdir(), "runner-home-"));
+    previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    previousSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
+    delete process.env.PI_CODING_AGENT_DIR;
+    delete process.env.PI_CODING_AGENT_SESSION_DIR;
+    createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+  });
+
+  afterEach(() => {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousSessionDir === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
+    else process.env.PI_CODING_AGENT_SESSION_DIR = previousSessionDir;
+    rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  it("forwards the home to skill preloading", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ skills: ["injected"] }));
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    expect(preloadSkills).toHaveBeenLastCalledWith(["injected"], ctx.cwd, homeDir);
+  });
+
+  it.each([true, false])("forwards the home to memory with write=%s", async write => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ memory: "user" }));
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(write ? ["read", "write"] : ["read"]);
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    expect(write ? buildMemoryBlock : buildReadOnlyMemoryBlock).toHaveBeenLastCalledWith("test-agent", "user", ctx.cwd, homeDir);
+  });
+
+  it("forwards the home to extension tilde expansion", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: ["~/injected.ts"] }));
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    expect(lastLoaderOpts().additionalExtensionPaths).toEqual([join(homeDir, "injected.ts")]);
+  });
+
+  it("forwards the home to frontmatter session_dir", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ sessionDir: "~/sessions", persistSession: true }));
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    expect(sessionManagerCreate).toHaveBeenCalledWith(ctx.cwd, join(homeDir, "sessions"), expect.anything());
+  });
+
+  it("pins default persistent sessions, settings and resource discovery to the injected home", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    const agentDir = join(homeDir, ".pi", "agent");
+    expect(settingsManagerCreate).toHaveBeenCalledWith(ctx.cwd, agentDir, { projectTrusted: true });
+    expect(lastLoaderOpts().agentDir).toBe(agentDir);
+    expect(sessionManagerCreate).toHaveBeenCalledWith(ctx.cwd, join(agentDir, "sessions", "--tmp--"), expect.anything());
   });
 });
 

@@ -27,7 +27,8 @@ import { runInChildSessionContext } from "./child-context.js";
 import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
-import { buildMemoryBlock, buildReadOnlyMemoryBlock, resolveAgentDir } from "./memory.js";
+import { normalizeHomePath, resolveAgentDir } from "./home-paths.js";
+import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import type { ModelCallEvent } from "./model-call.js";
 import type { ModelFallback } from "./model-resolver.js";
 import { type ModelSelection, selectModel } from "./model-selection.js";
@@ -205,10 +206,7 @@ export function parseExtensionsSpec(
       names.add(entry.toLowerCase());
       continue;
     }
-    let p = entry;
-    if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) {
-      p = homeDir + p.slice(1);
-    }
+    const p = normalizeHomePath(entry, homeDir);
     const abs = isAbsolute(p) ? p : resolve(cwd, p);
     paths.push(abs);
     names.add(extensionCanonicalName(abs));
@@ -969,9 +967,8 @@ function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => 
 
 function resolveConfiguredSessionDir(sessionDir: string | undefined, cwd: string, homeDir = homedir()): string | undefined {
   if (!sessionDir) return undefined;
-  if (sessionDir === "~" || sessionDir.startsWith("~/")) return resolve(homeDir, sessionDir.slice(2));
-  if (isAbsolute(sessionDir)) return sessionDir;
-  return resolve(cwd, sessionDir);
+  const normalized = normalizeHomePath(sessionDir, homeDir);
+  return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
 }
 
 export async function runAgent(
@@ -1257,6 +1254,7 @@ export async function runAgent(
   }
 
   const selection = options.modelSelection ?? selectModel({
+    homeDir: options.homeDir,
     agentType: type, definitionModel: agentConfig?.model, paramModel: options.model,
     parentModel: ctx.model, registry: ctx.modelRegistry, cwd: configCwd, agentLabel: agentConfig?.displayName,
   });
@@ -1283,6 +1281,7 @@ export async function runAgent(
         depth: nestedRuntime.depth,
         maxSubagentDepth: effectiveMaxDepth,
         allowedSubagents: agentConfig.allowedSubagents,
+        homeDir: options.homeDir,
         configCwd,
         projectTrusted,
       })
@@ -1384,7 +1383,13 @@ export async function runAgent(
   }
 
   const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd, options.homeDir);
-  const defaultSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
+  const sessionDirSetting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
+  // SessionManager's implicit default consults the host home again. Pin the
+  // same cwd encoding under our injected agentDir instead when isolating a run.
+  const defaultSessionDir = options.homeDir === undefined
+    ? sessionDirSetting
+    : resolveConfiguredSessionDir(sessionDirSetting, effectiveCwd, options.homeDir)
+      ?? join(resolve(agentDir), "sessions", `--${resolve(effectiveCwd).replace(/^[/\\\\]/, "").replace(/[/\\\\:]/g, "-")}--`);
   // Frontmatter wins when it says anything; otherwise the project default,
   // which `rememberAgents` supplies for top-level agents only. Same precedence
   // as `outputTranscript`.
