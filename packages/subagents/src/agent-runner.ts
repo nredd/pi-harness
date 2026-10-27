@@ -14,7 +14,7 @@ import {
   createCodemodeExtension,
   createMcpExtension,
   createToolSearchExtension,
-  DefaultResourceLoader,
+  type DefaultResourceLoader,
   defineTool,
   type ExtensionAPI,
   type InlineExtension,
@@ -40,6 +40,7 @@ import {
   type NestedAgentManager,
 } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
+import { createHomeResourceLoader } from "./resource-loader.js";
 import { preloadSkills } from "./skill-loader.js";
 import { isStaleCtxError } from "./stale-ctx.js";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
@@ -206,7 +207,10 @@ export function parseExtensionsSpec(
       names.add(entry.toLowerCase());
       continue;
     }
-    const p = normalizeHomePath(entry, homeDir);
+    // This frontmatter caller historically expands both slash forms on every
+    // platform, without interpreting file URLs or Windows shell drive forms.
+    let p = entry;
+    if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) p = homeDir + p.slice(1);
     const abs = isAbsolute(p) ? p : resolve(cwd, p);
     paths.push(abs);
     names.add(extensionCanonicalName(abs));
@@ -967,8 +971,9 @@ function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => 
 
 function resolveConfiguredSessionDir(sessionDir: string | undefined, cwd: string, homeDir = homedir()): string | undefined {
   if (!sessionDir) return undefined;
-  const normalized = normalizeHomePath(sessionDir, homeDir);
-  return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
+  if (sessionDir === "~" || sessionDir.startsWith("~/")) return resolve(homeDir, sessionDir.slice(2));
+  if (isAbsolute(sessionDir)) return sessionDir;
+  return resolve(cwd, sessionDir);
 }
 
 export async function runAgent(
@@ -1149,7 +1154,7 @@ export async function runAgent(
         });
   const nestedCallGate: NestedCallGate = {};
 
-  const loader = new DefaultResourceLoader({
+  const loader = createHomeResourceLoader({
     settingsManager,
     // pi's CLI hands its built-in extensions to the loader it builds; this one starts
     // with none. Forwarded as `builtin:` resources they load as in the main session —
@@ -1181,7 +1186,7 @@ export async function runAgent(
     noContextFiles: true,
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
-  });
+  }, options.homeDir);
   await runInChildSessionContext(() => loader.reload());
 
   // Plain entries in `tools:` are expected to be built-in names (extension tools
@@ -1386,10 +1391,13 @@ export async function runAgent(
   const sessionDirSetting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
   // SessionManager's implicit default consults the host home again. Pin the
   // same cwd encoding under our injected agentDir instead when isolating a run.
+  // SDK settings go straight through SessionManager's native normalization;
+  // unlike frontmatter, file URLs expand and relative settings stay relative.
   const defaultSessionDir = options.homeDir === undefined
     ? sessionDirSetting
-    : resolveConfiguredSessionDir(sessionDirSetting, effectiveCwd, options.homeDir)
-      ?? join(resolve(agentDir), "sessions", `--${resolve(effectiveCwd).replace(/^[/\\\\]/, "").replace(/[/\\\\:]/g, "-")}--`);
+    : sessionDirSetting
+      ? normalizeHomePath(sessionDirSetting, options.homeDir)
+      : join(resolve(agentDir), "sessions", `--${resolve(effectiveCwd).replace(/^[/\\\\]/, "").replace(/[/\\\\:]/g, "-")}--`);
   // Frontmatter wins when it says anything; otherwise the project default,
   // which `rememberAgents` supplies for top-level agents only. Same precedence
   // as `outputTranscript`.

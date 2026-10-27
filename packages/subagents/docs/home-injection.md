@@ -5,7 +5,7 @@ there is no new user setting. Tests must pass a disposable home, not mutate `HOM
 
 `createSubagentsExtension({ homeDir })` binds activation, global settings, custom
 agents, package-resource discovery, saved workflows, model scope, mention clones,
-agent-file operations, and every child run to that home. `RunOptions.homeDir`
+agent-file operations, and explicit settings paths in child runs to that home. `RunOptions.homeDir`
 provides the same seam for direct runner callers. Nested children inherit it through
 the owning manager and nested-tool context. Explicit `PI_CODING_AGENT_DIR` and
 session-directory overrides still win; an explicit absolute override is intentionally
@@ -52,6 +52,7 @@ Every matching source occurrence:
 | `settings.ts` global-path comment | Intentional documentation; implementation uses `resolveAgentDir(homeDir)` |
 | `custom-agents.ts` module and hierarchy comments | Intentional documentation; agent and package tiers share the injected home |
 | `workflow/saved.ts` root comment | Intentional documentation; every resolver/listing/package call forwards its home |
+| `resource-loader.ts` leading `~/` / Windows `~\\` settings branches | Injected, through copied user/project resource entries and package sources/filters before the real package manager resolves them |
 
 Former `getAgentDir` consumers without remaining grep hits are also injected:
 `agent-file-toggle`, `enabled-models`, `enterprise-local`, `mention-clone`,
@@ -60,6 +61,54 @@ local package sources against the injected home before calling Pi's public insta
 resolver, retaining original source strings for gates and diagnostics. Its cache key
 includes both the home and resolved user directory. Enabled-model caching includes both full
 settings paths, so changing homes cannot reuse another home's result.
+
+Real loader settings:
+
+`resource-loader.ts` wraps the public scoped settings readers before constructing
+Pi's real `DefaultResourceLoader`. Its real package manager receives absolute
+injected-home entries for user and trusted-project `packages`, `extensions`,
+`skills`, `prompts` and `themes`, including package-object filters and resource
+modifiers. Snapshots are copied on each read, so reload/trust changes remain Pi's
+responsibility and persisted settings are never rewritten. Both `runAgent` and
+mention clones use this boundary; passing only `agentDir` was insufficient.
+
+`resource-loader-home.test.ts` starts separate Node/Bun processes with a disposable
+ambient home containing decoy package/extension files. It runs the real runner or
+mention clone through the real loader and package manager, with filesystem canaries
+for those explicit settings entries. Runner cases execute only the injected
+extension factories; both lanes stop before any model request. Vite bundles only
+owned TypeScript; the actual Pi SDK stays external. Pi's automatic discovery of
+ambient `~/.agents/skills` remains host-owned; this adapter is not a filesystem
+sandbox and the explicit-settings canary does not claim to cover that upstream root.
+The required public host seam is tracked [here](https://github.com/nredd/pi-harness/issues/179).
+
+Frontmatter extension compatibility:
+
+This caller retains its old expansion rules, rather than adopting every rule in
+`normalizeHomePath`. On POSIX, with `cwd=/work` and the old/new home dependency
+set to `/injected/home`, `extension-path-compatibility.test.ts` pins:
+
+| Input | Before | After injection |
+| --- | --- | --- |
+| `~` | `/injected/home` | `/injected/home` |
+| `~/x` | `/injected/home/x` | `/injected/home/x` |
+| `~\x` | `/injected/home\x` | `/injected/home\x` |
+| `file:///tmp/x` | `/work/file:/tmp/x` | `/work/file:/tmp/x` |
+| `C:\x` | `/work/C:\x` | `/work/C:\x` |
+| `C:/x` | `/work/C:/x` | `/work/C:/x` |
+| `/c/x` | `/c/x` | `/c/x` |
+| `/mnt/c/x` | `/mnt/c/x` | `/mnt/c/x` |
+| `/absolute/x` | `/absolute/x` | `/absolute/x` |
+| `./relative/x` | `/work/relative/x` | `/work/relative/x` |
+
+Drive-letter absoluteness continues to use the native platform's `isAbsolute`.
+Frontmatter `session_dir` also retains its previous caller-specific rules. SDK
+session-directory settings retain their different native contract: file URLs expand,
+relative settings remain relative, and injected homes only replace tilde expansion
+and the implicit default storage root. Three role-specific runner regressions pin
+those distinctions. The canonical Pi adapter remains appropriate for SDK settings
+and agent-directory overrides; it must
+not silently redefine these existing frontmatter callers.
 
 Tests:
 

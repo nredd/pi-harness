@@ -1253,6 +1253,7 @@ src/
 
   # Context & environment
   home-paths.ts       # Injected home normalization and Pi agent-directory defaults
+  resource-loader.ts  # Fresh scoped settings paths for Pi's real resource/package loader
   memory.ts           # Persistent agent memory (resolve, read, build prompt blocks)
   skill-loader.ts     # Preload skills (Pi-standard + Agent Skills spec layouts)
   output-file.ts      # Streaming output file transcripts for agent sessions

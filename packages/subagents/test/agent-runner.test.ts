@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "../src/memory.js";
 import { buildAgentPrompt } from "../src/prompts.js";
@@ -31,7 +32,10 @@ const {
   sessionManagerCreate: vi.fn(() => ({ kind: "persistent-session-manager" })),
   sessionManagerOpen: vi.fn(() => ({ kind: "reopened-session-manager" })),
   settingsManagerGetSessionDir: vi.fn(() => undefined as string | undefined),
-  settingsManagerCreate: vi.fn(() => ({ kind: "settings-manager", getSessionDir: settingsManagerGetSessionDir })),
+  settingsManagerCreate: vi.fn(() => ({
+    kind: "settings-manager", getSessionDir: settingsManagerGetSessionDir,
+    getGlobalSettings: () => ({}), getProjectSettings: () => ({}),
+  })),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
@@ -3335,6 +3339,27 @@ describe("agent-runner injected home forwarding", () => {
     vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ sessionDir: "~/sessions", persistSession: true }));
     await runAgent(ctx, "Explore", "go", { pi, homeDir });
     expect(sessionManagerCreate).toHaveBeenCalledWith(ctx.cwd, join(homeDir, "sessions"), expect.anything());
+  });
+
+  it("keeps SDK default session file-URL normalization", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
+    settingsManagerGetSessionDir.mockReturnValue(pathToFileURL(join(homeDir, "sessions")).href);
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    expect(sessionManagerCreate).toHaveBeenCalledWith(ctx.cwd, join(homeDir, "sessions"), expect.anything());
+  });
+
+  it("keeps SDK default relative session settings relative", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
+    settingsManagerGetSessionDir.mockReturnValue("relative/sessions");
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    expect(sessionManagerCreate).toHaveBeenCalledWith(ctx.cwd, "relative/sessions", expect.anything());
+  });
+
+  it("keeps frontmatter file URLs literal, as before injection", async () => {
+    const url = pathToFileURL(join(homeDir, "sessions")).href;
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true, sessionDir: url }));
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    expect(sessionManagerCreate).toHaveBeenCalledWith(ctx.cwd, resolve(ctx.cwd, url), expect.anything());
   });
 
   it("pins default persistent sessions, settings and resource discovery to the injected home", async () => {

@@ -56,7 +56,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
-  DefaultResourceLoader,
   type ExtensionContext,
   type ExtensionToolContext,
   SessionManager,
@@ -65,6 +64,7 @@ import {
 import { runInChildSessionContext } from "./child-context.js";
 import { resolveAgentDir } from "./home-paths.js";
 import { agentMentionReminder } from "./mention.js";
+import { createHomeResourceLoader } from "./resource-loader.js";
 import type { SubagentType } from "./types.js";
 
 export interface MentionCloneOptions {
@@ -143,7 +143,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     // rendered prompt, so it is suppressed, as agent-runner does.
     const systemPrompt = ctx.getSystemPrompt();
     const agentDir = resolveAgentDir(opts.homeDir);
-    const loader = new DefaultResourceLoader({
+    const loader = createHomeResourceLoader({
       cwd: ctx.cwd,
       agentDir,
       noExtensions: true,
@@ -153,7 +153,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
       noContextFiles: true,
       systemPromptOverride: (base: string | undefined) => systemPrompt || base,
       appendSystemPromptOverride: () => [],
-    });
+    }, opts.homeDir);
     await runInChildSessionContext(() => loader.reload());
     const created = await runInChildSessionContext(() =>
       createAgentSession({
