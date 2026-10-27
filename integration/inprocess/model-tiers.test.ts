@@ -38,6 +38,7 @@ describe("model-tier/router stack", () => {
 			join(dir, "subagents.json"),
 			JSON.stringify({
 				fleetView: false,
+				rememberAgents: true,
 				modelTiers: { cheap: members },
 				modelResolution: { onUnmapped: "error", onUnavailable: "error" },
 				agentModels: { "*": "@cheap" },
