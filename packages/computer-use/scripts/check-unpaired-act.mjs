@@ -27,6 +27,12 @@ const root = {
 	isModal: true,
 };
 const observeCalls = [];
+/**
+ * Build an unpaired observation.
+ * @param {number} n Observation sequence.
+ * @returns {object} Wire fixture.
+ * @throws {never} Fixed construction cannot fail.
+ */
 const lookPayload = (n) => ({
 	lookId: `look${n}`,
 	capturedAt: 1,
@@ -69,13 +75,39 @@ const lookPayload = (n) => ({
 	timings: { captureMs: 0, describeMs: 0, readTextMs: 0 },
 });
 Object.assign(currentPlatformBackend, {
+	/**
+	 * Grant mock permissions.
+	 * @returns {Promise<object>} Permission snapshot.
+	 * @throws {never} The mock always succeeds.
+	 */
 	ensureReady: async () => ({
 		permissionStatus: { accessibility: true, screenRecording: true },
 		lastPermissionCheckAt: Date.now(),
 	}),
+	/**
+	 * List the mock application.
+	 * @returns {Promise<object[]>} App list.
+	 * @throws {never} The mock always succeeds.
+	 */
 	listApps: async () => [{ appName: "App", pid: 7, isFrontmost: true }],
+	/**
+	 * List the unpaired root.
+	 * @returns {Promise<object[]>} Root list.
+	 * @throws {never} The mock always succeeds.
+	 */
 	listRoots: async () => [root],
+	/**
+	 * Report the mock frontmost app.
+	 * @returns {Promise<object>} App identity.
+	 * @throws {never} The mock always succeeds.
+	 */
 	getFrontmost: async () => ({ appName: "App", pid: 7 }),
+	/**
+	 * Observe the root, refusing unpaired visual capture.
+	 * @param {object} request Observation request.
+	 * @returns {Promise<object>} Semantic observation.
+	 * @throws {Error} If visual capture lacks a paired window.
+	 */
 	observe: async (request) => {
 		observeCalls.push(request);
 		if (request.includeImage !== false && !request.target.windowId)
@@ -84,7 +116,17 @@ Object.assign(currentPlatformBackend, {
 			});
 		return parseLookResponse(lookPayload(observeCalls.length));
 	},
+	/**
+	 * Model background action success.
+	 * @returns {Promise<object>} Action outcome.
+	 * @throws {never} The mock always succeeds.
+	 */
 	act: async () => ({ outcome: "worked", performed: { delivery: "pid" } }),
+	/**
+	 * Model background batch success.
+	 * @returns {Promise<object>} Batch outcome.
+	 * @throws {never} The mock always succeeds.
+	 */
 	actBatch: async () => ({
 		outcome: "worked",
 		performed: { delivery: "pid", transaction: true, actionCount: 1 },
@@ -95,10 +137,37 @@ Object.assign(currentPlatformBackend, {
 const ctx = {
 	cwd: process.cwd(),
 	hasUI: false,
-	ui: { notify() {} },
-	sessionManager: { getBranch: () => [] },
+	ui: {
+		/**
+		 * Ignore headless notifications.
+		 * @returns {void} No-op completion.
+		 * @throws {never} No side effects.
+		 */
+		notify() {},
+	},
+	sessionManager: {
+		/**
+		 * Supply an empty branch.
+		 * @returns {object[]} Empty branch.
+		 * @throws {never} The mock always succeeds.
+		 */
+		getBranch: () => [],
+	},
 };
+/**
+ * Invoke a tool with fixture context.
+ * @param {Function} fn Tool executor.
+ * @param {object} params Tool request.
+ * @returns {Promise<object>} Tool response.
+ * @throws {Error} Propagates executor failures.
+ */
 const call = (fn, params) => fn("t", params, undefined, undefined, ctx);
+/**
+ * Combine model-facing text blocks.
+ * @param {object} r Tool response.
+ * @returns {string} Joined text.
+ * @throws {TypeError} If content is malformed.
+ */
 const text = (r) =>
 	r.content
 		.filter((c) => c.type === "text")
@@ -154,6 +223,11 @@ const mainWindow = {
 	isMain: true,
 	isFocused: false,
 };
+/**
+ * Expose roots for delta assertions.
+ * @returns {Promise<object[]>} Fixture roots.
+ * @throws {never} The mock always succeeds.
+ */
 currentPlatformBackend.listRoots = async () => [mainWindow, dialog2, root];
 const appeared = [
 	{
@@ -165,11 +239,21 @@ const appeared = [
 		isModal: true,
 	},
 ];
+/**
+ * Model an action opening another dialog.
+ * @returns {Promise<object>} Outcome with root delta.
+ * @throws {never} The mock always succeeds.
+ */
 currentPlatformBackend.act = async () => ({
 	outcome: "worked",
 	performed: { delivery: "pid" },
 	rootDelta: appeared,
 });
+/**
+ * Model a batch opening another dialog.
+ * @returns {Promise<object>} Outcome with root delta.
+ * @throws {never} The mock always succeeds.
+ */
 currentPlatformBackend.actBatch = async () => ({
 	outcome: "worked",
 	performed: { delivery: "pid", transaction: true, actionCount: 1 },
@@ -198,10 +282,21 @@ assert.equal(
 assert.doesNotMatch(text(acted), /Unknown App/);
 
 // Desktop lock scope: only foreground (physical) delivery waits for desktop_input; background acts don't.
+/**
+ * Restore the single root for lock checks.
+ * @returns {Promise<object[]>} Single root.
+ * @throws {never} The mock always succeeds.
+ */
 currentPlatformBackend.listRoots = async () => [root];
 const policies = [];
 let needForeground = false;
 const fallbackRequested = deferred();
+/**
+ * Acknowledge and record foreground fallback.
+ * @param {object} request Delivery request.
+ * @returns {Promise<object>} Allowed action outcome.
+ * @throws {Error} If foreground delivery is required.
+ */
 currentPlatformBackend.act = async (request) => {
 	policies.push(request.policy);
 	if (needForeground && request.policy !== "foreground") {
@@ -226,6 +321,11 @@ const held = withDesktopLock(
 );
 await within(lockEntered.promise, "desktop lock holder to enter");
 const lockObs = await call(executeObserve, { root: "@r1", mode: "semantic" });
+/**
+ * Extract the lock-check state identity.
+ * @returns {string} State ID.
+ * @throws {TypeError} If the state marker is missing.
+ */
 const lockState = () => text(lockObs).match(/stateId ([0-9a-f-]{36})/)[1];
 const goRef = text(lockObs).match(/(@e\d+) AXButton/)[1];
 const background = await within(
@@ -279,6 +379,12 @@ assert.ok(policies.includes("foreground"));
 // only after step 2 (which may rely on focus step 1 set up), never between them.
 const order = [];
 let queuedDesk;
+/**
+ * Queue competing desktop work during physical delivery.
+ * @param {object} request Delivery request.
+ * @returns {Promise<object>} Physical action outcome.
+ * @throws {Error} If delivery is not foreground.
+ */
 currentPlatformBackend.act = async (request) => {
 	if (request.policy !== "foreground")
 		throw Object.assign(new Error("needs focus"), {

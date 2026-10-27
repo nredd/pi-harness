@@ -4,12 +4,27 @@ import http from "node:http";
 import { shutdownComputerUseSession } from "../src/bridge.ts";
 import { cdpTabForWindow } from "../src/cdp.ts";
 
+const CDP_CLOSE_TIMEOUT_MS = 1500;
+
+/**
+ * Encode a small unmasked server frame for the CDP fixture.
+ * @param {string|Buffer} value Frame payload.
+ * @param {number} [opcode=1] WebSocket opcode.
+ * @returns {Buffer} Complete frame bytes.
+ * @throws {Error} If the fixture payload exceeds the small-frame limit.
+ */
 function websocketFrame(value, opcode = 1) {
 	const payload = Buffer.from(value);
 	assert(payload.length < 126, "test frame unexpectedly large");
 	return Buffer.concat([Buffer.from([0x80 | opcode, payload.length]), payload]);
 }
 
+/**
+ * Attach a minimal CDP WebSocket responder to an upgraded fixture socket.
+ * @param {import('node:net').Socket} socket Owned upgraded connection.
+ * @returns {void} Completion of responder registration.
+ * @throws {Error} Malformed frames/JSON throw from the registered data callback.
+ */
 function serveWebsocket(socket) {
 	let buffer = Buffer.alloc(0);
 	socket.on("data", (chunk) => {
@@ -112,15 +127,14 @@ try {
 		const timer = setTimeout(
 			() =>
 				reject(new Error("CDP socket remained open after session shutdown")),
-			1_500,
+			CDP_CLOSE_TIMEOUT_MS,
 		);
 		websocket.once("close", () => {
 			clearTimeout(timer);
 			resolve();
 		});
 	});
-	await shutdownComputerUseSession();
-	await websocketClosed;
+	await Promise.all([shutdownComputerUseSession(), websocketClosed]);
 
 	const response = await fetch(`http://127.0.0.1:${port}/json/list`);
 	assert.equal(

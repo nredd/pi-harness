@@ -6,15 +6,21 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import {
+	COMMAND_KILL_WAIT_MS,
+	COMMAND_TERM_WAIT_MS,
 	DEFAULT_CHECK_TIMEOUT_MS,
 	deferred,
+	runCheckCommand,
 	SIGNAL_READINESS_POLL_MS,
 	SIGNAL_READINESS_TIMEOUT_MS,
+	stopCheckChild,
 	within,
 	writeSignalReadinessObserver,
 } from "./check-async.mjs";
 
 const NEGATIVE_CONTROL_TIMEOUT_MS = 1;
+const COMMAND_TIMEOUT_CONTROL_MS = 25;
+const HANGING_COMMAND_INTERVAL_MS = 1000;
 
 test("deferred readiness resolves through a bounded completion wait", async () => {
 	const gate = deferred();
@@ -92,6 +98,11 @@ process.send("entered");
 			"entry alone must not publish handler readiness",
 		);
 		child.send("register");
+		/**
+		 * Poll the private marker until registration or fixture cleanup.
+		 * @returns {Promise<number|undefined>} Acknowledged PID, or cleanup cancellation.
+		 * @throws {never} Missing marker files are treated as not-ready.
+		 */
 		const observed = (async () => {
 			while (!stopPolling) {
 				const pid = Number(await fs.readFile(marker, "utf8").catch(() => ""));
@@ -164,4 +175,148 @@ test("signal observer fails contextually when wrapper handlers never register", 
 		child?.kill("SIGKILL");
 		await fs.rm(dir, { recursive: true, force: true });
 	}
+});
+
+test("bounded check commands capture streams and contextual nonzero failures", async () => {
+	const result = await runCheckCommand(
+		process.execPath,
+		["-e", 'process.stdout.write("out"); process.stderr.write("err");'],
+		{ label: "capture control", timeoutMs: DEFAULT_CHECK_TIMEOUT_MS },
+	);
+	assert.deepEqual(result, { stdout: "out", stderr: "err" });
+	await assert.rejects(
+		runCheckCommand("pi-check-definitely-missing-command", [], {
+			label: "spawn control",
+			timeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+		}),
+		(error) => {
+			assert.match(error.message, /spawn control/);
+			assert.equal(error.cause.code, "ENOENT");
+			return true;
+		},
+	);
+	await assert.rejects(
+		runCheckCommand(
+			process.execPath,
+			[
+				"-e",
+				`process.stdout.write("oversized"); setInterval(() => {}, ${HANGING_COMMAND_INTERVAL_MS});`,
+			],
+			{
+				label: "buffer control",
+				timeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+				maxBuffer: 4,
+			},
+		),
+		/buffer control.*stdout exceeded 4 bytes/s,
+	);
+	await assert.rejects(
+		runCheckCommand(
+			process.execPath,
+			["-e", 'process.stderr.write("failure detail"); process.exitCode = 7;'],
+			{ label: "nonzero control", timeoutMs: DEFAULT_CHECK_TIMEOUT_MS },
+		),
+		(error) => {
+			assert.match(error.message, /nonzero control/);
+			assert.equal(error.cause.stderr, "failure detail");
+			return true;
+		},
+	);
+});
+
+test("command deadline closes its real child and reports operation context", async () => {
+	await assert.rejects(
+		runCheckCommand(
+			process.execPath,
+			["-e", `setInterval(() => {}, ${HANGING_COMMAND_INTERVAL_MS});`],
+			{
+				label: "hanging command control",
+				timeoutMs: COMMAND_TIMEOUT_CONTROL_MS,
+			},
+		),
+		(error) => {
+			assert.match(error.message, /hanging command control.*Timed out/s);
+			assert.equal(typeof error.pid, "number");
+			try {
+				assert.throws(() => process.kill(error.pid, 0), { code: "ESRCH" });
+			} finally {
+				try {
+					process.kill(error.pid, 0);
+					process.kill(error.pid, "SIGKILL");
+				} catch {
+					/* The successful path has already reaped this owned fixture. */
+				}
+			}
+			return true;
+		},
+	);
+});
+
+test("failed and missing close attempts keep cleanup bounded", {
+	timeout:
+		COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
+}, async () => {
+	const signals = [];
+	let destroyed = 0;
+	let unreferenced = false;
+	const stream = {
+		/**
+		 * Record fixture pipe teardown.
+		 * @returns {void} Completion of recording.
+		 * @throws {never} The mock cannot fail.
+		 */
+		destroy: () => {
+			destroyed += 1;
+		},
+	};
+	const child = {
+		pid: 424242,
+		stdout: stream,
+		stderr: stream,
+		/**
+		 * Record a simulated signal without contacting the kernel.
+		 * @param {string} signal Requested cleanup signal.
+		 * @returns {boolean} Simulated success.
+		 * @throws {never} The mock cannot fail.
+		 */
+		kill: (signal) => {
+			signals.push(signal);
+			return true;
+		},
+		/**
+		 * Record fixture handle release.
+		 * @returns {void} Completion of recording.
+		 * @throws {never} The mock cannot fail.
+		 */
+		unref: () => {
+			unreferenced = true;
+		},
+	};
+	await assert.rejects(
+		stopCheckChild(
+			child,
+			Promise.reject(new Error("close failed")),
+			"failed close control",
+		),
+		AggregateError,
+	);
+	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+	assert.equal(destroyed, 2);
+	assert.equal(unreferenced, true);
+	signals.length = 0;
+	destroyed = 0;
+	unreferenced = false;
+	await assert.rejects(
+		stopCheckChild(child, new Promise(() => {}), "missing close control"),
+		(error) => {
+			assert(error instanceof AggregateError);
+			assert.equal(error.errors.length, 2);
+			assert.match(error.errors[0].message, /after SIGTERM/);
+			assert.match(error.errors[1].message, /after SIGKILL/);
+			return true;
+		},
+	);
+	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+	assert.equal(destroyed, 2);
+	assert.equal(unreferenced, true);
 });

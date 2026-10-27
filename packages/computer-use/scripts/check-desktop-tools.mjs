@@ -50,6 +50,13 @@ assert.throws(
 
 if (process.platform === "darwin") {
 	const sent = [];
+	/**
+	 * Record desktop-input wire calls.
+	 * @param {string} name Wire command.
+	 * @param {object} args Action arguments.
+	 * @returns {Promise<object>} Mock delivery result.
+	 * @throws {TypeError} If action arguments are absent.
+	 */
 	macosHelper.command = async (name, args) => {
 		sent.push({ name, args });
 		return { performed: args.action, mouse: { x: 0, y: 0 } };
@@ -70,7 +77,13 @@ if (process.platform === "darwin") {
 	);
 	assert.equal(sent.length, 3, "invalid input must not reach the helper");
 
-	// New actions pass through unchanged and render model-facing text.
+	/**
+	 * Model activation and clipboard results for wire/rendering assertions.
+	 * @param {string} name Wire command.
+	 * @param {object} args Action arguments.
+	 * @returns {Promise<object>} Mock action result.
+	 * @throws {TypeError} If required action fields are missing.
+	 */
 	macosHelper.command = async (name, args) => {
 		sent.push({ name, args });
 		if (args.action === "activateApp")
@@ -111,6 +124,11 @@ if (process.platform === "darwin") {
 			.content[0].text,
 		/Clipboard set \(3 chars\)/,
 	);
+	/**
+	 * Model an unavailable application.
+	 * @returns {Promise<never>} Always rejects.
+	 * @throws {Error} Reports app_not_found.
+	 */
 	macosHelper.command = async () => {
 		throw Object.assign(new Error("No running or installed app named 'Nope'"), {
 			code: "app_not_found",
@@ -120,6 +138,13 @@ if (process.platform === "darwin") {
 		executeDesktopInput("n", { action: "activateApp", app: "Nope" }),
 		/Nope/,
 	);
+	/**
+	 * Restore successful wire recording before permission-gating checks.
+	 * @param {string} name Wire command.
+	 * @param {object} args Action arguments.
+	 * @returns {Promise<object>} Mock delivery result.
+	 * @throws {TypeError} If action arguments are absent.
+	 */
 	macosHelper.command = async (name, args) => {
 		sent.push({ name, args });
 		return { performed: args.action, mouse: { x: 0, y: 0 } };

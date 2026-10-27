@@ -4,6 +4,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+const HELPER_SETTLE_TIMEOUT_MS = 2000;
+const HELPER_POLL_INTERVAL_MS = 20;
+const PROBE_READINESS_TIMEOUT_MS = 5000;
+const INSTALL_READINESS_TIMEOUT_MS = 5000;
+const INSTALL_POLL_INTERVAL_MS = 10;
+const SLOW_DIAGNOSTICS_REPLY_MS = 5000;
+const HANGING_SETUP_INTERVAL_MS = 1000;
+const SEMANTIC_WAIT_TIMEOUT_MS = 100;
+const NO_DIAGNOSTICS_DELAY_MS = 0;
+
 const INVARIANTS = [
 	"state-scoped-observations",
 	"bounded-observation-history",
@@ -86,8 +96,13 @@ try {
 		"fixture",
 	);
 	assert.equal(
-		(await linux.waitFor({ gone: false, timeoutMs: 100, text: "fixture" }))
-			.found,
+		(
+			await linux.waitFor({
+				gone: false,
+				timeoutMs: SEMANTIC_WAIT_TIMEOUT_MS,
+				text: "fixture",
+			})
+		).found,
 		true,
 	);
 	assert.equal(
@@ -166,17 +181,28 @@ fs.chmodSync(process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH, 0o755);
 	concurrentClient.dispose();
 
 	// ---- Helper acceptance, probing and replacement ----
+	/**
+	 * Read nonempty counter/marker lines from a fixture file.
+	 * @param {string} file Fixture marker path.
+	 * @returns {Promise<string[]>} Nonempty lines, or an empty list when unreadable.
+	 * @throws {never} Missing/unreadable markers are intentionally treated as empty.
+	 */
 	const lines = async (file) =>
 		(await fs.readFile(file, "utf8").catch(() => ""))
 			.split("\n")
 			.filter(Boolean);
 	let caseIndex = 0;
-	/** A fake helper; `startFile` records each start, `protocol`/`architecture` model a stale build. */
+	/**
+	 * Generate an executable protocol helper with observable starts/probes.
+	 * @param {{protocol?: number, architecture?: number, startFile: string, diagnosticsDelayMs?: number}} options Fixture protocol and reply behavior.
+	 * @returns {string} Standalone Node helper source.
+	 * @throws {TypeError} If fixture options cannot be serialized.
+	 */
 	const helperScript = ({
 		protocol = 4,
 		architecture = 1,
 		startFile,
-		diagnosticsDelayMs = 0,
+		diagnosticsDelayMs = NO_DIAGNOSTICS_DELAY_MS,
 	}) => `#!/usr/bin/env node
 const fs = require("node:fs");
 const readline = require("node:readline");
@@ -185,11 +211,21 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   if (request.cmd === "diagnostics") fs.appendFileSync(${JSON.stringify(`${startFile}.diagnostics`)}, process.pid + "\\n");
   const result = request.cmd === "diagnostics" ? { protocolVersion: ${protocol}, architectureVersion: ${architecture}, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
+  /**
+   * Write this fixture request's protocol response.
+   * @returns {boolean} Stream backpressure result.
+   * @throws {TypeError} If fixture response data is not serializable.
+   */
   const reply = () => process.stdout.write(JSON.stringify({ protocolVersion: ${protocol}, id: request.id, ok: true, result }) + "\\n");
-  if (request.cmd === "diagnostics" && ${diagnosticsDelayMs} > 0) setTimeout(reply, ${diagnosticsDelayMs}); else reply();
+  if (request.cmd === "diagnostics" && ${diagnosticsDelayMs} > ${NO_DIAGNOSTICS_DELAY_MS}) setTimeout(reply, ${diagnosticsDelayMs}); else reply();
 });
 `;
-	/** Fresh case dir: helper path, counters and a setup script that installs `goodHelper` (or fails). */
+	/**
+	 * Create an isolated helper/install fixture and its client factory.
+	 * @param {{installs?: boolean}} [options={}] Whether setup installs the compatible helper.
+	 * @returns {Promise<object>} Paths, counters and the fresh-client factory.
+	 * @throws {Error} On fixture directory or script write failure.
+	 */
 	const makeCase = async ({ installs = true } = {}) => {
 		const dir = path.join(tempDir, `case-${caseIndex++}`);
 		await fs.mkdir(dir);
@@ -212,6 +248,11 @@ fs.writeFileSync(${JSON.stringify(c.envFile)}, process.env.PI_COMPUTER_USE_LINUX
 ${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"; fs.copyFileSync(${JSON.stringify(c.good)}, tmp); fs.chmodSync(tmp, 0o755); fs.renameSync(tmp, process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH);` : `console.error("no prebuilt and PI_COMPUTER_USE_ALLOW_BUILD not set"); process.exit(1);`}
 `,
 		);
+		/**
+		 * Create a client targeting this case without sharing installation state.
+		 * @returns {object} Fresh LinuxHelperClient for the case.
+		 * @throws {Error} Propagates client-construction failures.
+		 */
 		c.client = () =>
 			new LinuxHelperClient({
 				helperPath: c.helper,
@@ -359,6 +400,12 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		);
 		client.dispose();
 	}
+	/**
+	 * Probe the fixture-owned helper without delivering a signal.
+	 * @param {number} pid Owned helper PID.
+	 * @returns {boolean} Whether its null-signal probe succeeds.
+	 * @throws {never} Probe failures are represented as false.
+	 */
 	const alive = (pid) => {
 		try {
 			process.kill(pid, 0);
@@ -367,12 +414,19 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 			return false;
 		}
 	};
-	const settled = async (pid, timeoutMs = 2000) => {
+	/**
+	 * Await helper death with a bounded, state-based poll.
+	 * @param {number} pid Owned helper PID.
+	 * @param {number} [timeoutMs=HELPER_SETTLE_TIMEOUT_MS] Maximum settle wait.
+	 * @returns {Promise<boolean>} Whether the helper is gone at the deadline.
+	 * @throws {never} Probe failures are classified by `alive`.
+	 */
+	const settled = async (pid, timeoutMs = HELPER_SETTLE_TIMEOUT_MS) => {
 		for (
 			const deadline = Date.now() + timeoutMs;
 			alive(pid) && Date.now() < deadline;
 		)
-			await new Promise((r) => setTimeout(r, 20));
+			await new Promise((r) => setTimeout(r, HELPER_POLL_INTERVAL_MS));
 		return !alive(pid);
 	};
 
@@ -427,7 +481,10 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		const c = await makeCase();
 		await fs.writeFile(
 			c.helper,
-			helperScript({ startFile: c.starts, diagnosticsDelayMs: 5000 }),
+			helperScript({
+				startFile: c.starts,
+				diagnosticsDelayMs: SLOW_DIAGNOSTICS_REPLY_MS,
+			}),
 		);
 		await fs.chmod(c.helper, 0o755);
 		const client = c.client();
@@ -438,10 +495,10 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		);
 		const probeReady = `${c.starts}.diagnostics`;
 		for (
-			const deadline = Date.now() + 5000;
+			const deadline = Date.now() + PROBE_READINESS_TIMEOUT_MS;
 			(await lines(probeReady)).length === 0 && Date.now() < deadline;
 		)
-			await new Promise((r) => setTimeout(r, 20));
+			await new Promise((r) => setTimeout(r, HELPER_POLL_INTERVAL_MS));
 		assert.equal(
 			(await lines(probeReady)).length,
 			1,
@@ -508,17 +565,20 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 	{
 		// dispose() drops the shared install promise so nothing can join an old-generation install.
 		const c = await makeCase();
-		await fs.writeFile(c.setup, "setInterval(() => {}, 1000);\n"); // setup hangs
+		await fs.writeFile(
+			c.setup,
+			`setInterval(() => {}, ${HANGING_SETUP_INTERVAL_MS});\n`,
+		); // setup hangs
 		const client = c.client();
 		const waiter = client.command("echo", {}).then(
 			() => "resolved",
 			(error) => error.message,
 		);
 		for (
-			const deadline = Date.now() + 5000;
+			const deadline = Date.now() + INSTALL_READINESS_TIMEOUT_MS;
 			!client.installPromise && Date.now() < deadline;
 		)
-			await new Promise((r) => setTimeout(r, 10));
+			await new Promise((r) => setTimeout(r, INSTALL_POLL_INTERVAL_MS));
 		assert.ok(client.installPromise, "install in flight");
 		client.dispose();
 		assert.equal(

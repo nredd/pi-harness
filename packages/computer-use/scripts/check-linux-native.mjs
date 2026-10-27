@@ -4,15 +4,16 @@
 // the cargo-missing hint. Needs a Linux host with cargo; elsewhere it prints NOT RUN (not a pass).
 // No display, desktop, screenshot or live-UI probe runs here (see check-linux-live.mjs for those).
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import {
 	SIGNAL_READINESS_POLL_MS as POLL_INTERVAL_MS,
-	SIGNAL_READINESS_TIMEOUT_MS as READINESS_TIMEOUT_MS,
+	PARENT_READINESS_TIMEOUT_MS as READINESS_TIMEOUT_MS,
+	runCheckCommand,
+	stopCheckChild,
 	within,
 	writeSignalReadinessObserver,
 } from "./check-async.mjs";
@@ -23,8 +24,12 @@ const CANCELLATION_BACKSTOP_MS = 10_000;
 const COMPILER_EXIT_TIMEOUT_MS = 5000;
 const DIAGNOSTICS_TIMEOUT_MS = 10_000;
 const FAKE_COMPILER_LIFETIME_SECONDS = 300;
-
-const execFileAsync = promisify(execFile);
+const CARGO_TEST_TIMEOUT_MS = 15 * 60 * 1000;
+const ARM64_CHECK_TIMEOUT_MS = 15 * 60 * 1000;
+const PACKAGE_PACK_TIMEOUT_MS = 2 * 60 * 1000;
+const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
+const PERMISSION_CHANGE_TIMEOUT_MS = 30_000;
+const NATIVE_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 if (process.platform !== "linux") {
 	console.log(
@@ -56,7 +61,7 @@ assert.ok(archName, `unsupported host architecture ${process.arch}`);
  * @param {NodeJS.ProcessEnv} env Child environment, including fixture paths.
  * @param {string[]} [extraArgs=[]] Additional production CLI arguments.
  * @param {string} [observer] Test-only Node preload; never modifies production handlers.
- * @returns {{child: import('node:child_process').ChildProcess, done: Promise<object>}} Child and close outcome.
+ * @returns {{child: import('node:child_process').ChildProcess, done: Promise<object>, closed: Promise<void>, capture: {output: string}}} Child, outcomes and live diagnostic capture.
  * @throws {Error} Spawn errors reject `done`.
  */
 function startSetup(packageDir, env, extraArgs = [], observer) {
@@ -71,18 +76,21 @@ function startSetup(packageDir, env, extraArgs = [], observer) {
 		],
 		{ env, stdio: ["ignore", "pipe", "pipe"] },
 	);
-	let output = "";
+	const capture = { output: "" };
 	child.stdout.on("data", (chunk) => {
-		output += chunk;
+		capture.output += chunk;
 	});
 	child.stderr.on("data", (chunk) => {
-		output += chunk;
+		capture.output += chunk;
 	});
+	const closed = new Promise((resolve) => child.once("close", () => resolve()));
 	const done = new Promise((resolve, reject) => {
 		child.once("error", reject);
-		child.once("close", (code, signal) => resolve({ code, signal, output }));
+		child.once("close", (code, signal) =>
+			resolve({ code, signal, output: capture.output }),
+		);
 	});
-	return { child, done };
+	return { child, done, closed, capture };
 }
 
 /**
@@ -100,7 +108,7 @@ async function runSetup(
 	extraArgs = [],
 	timeoutMs = SETUP_COMPLETION_TIMEOUT_MS,
 ) {
-	const { child, done } = startSetup(packageDir, env, extraArgs);
+	const { child, done, closed } = startSetup(packageDir, env, extraArgs);
 	try {
 		return await within(
 			done,
@@ -108,18 +116,13 @@ async function runSetup(
 			timeoutMs,
 		);
 	} catch (error) {
-		child.kill("SIGTERM"); // Let the real wrapper reap its compiler group before the hard backstop.
 		try {
-			await within(
-				done,
-				"timed-out Linux setup to finish cancellation",
-				CANCELLATION_BACKSTOP_MS,
+			await stopCheckChild(child, closed, "timed-out Linux setup");
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"Linux setup completion and bounded cleanup failed",
 			);
-		} catch {
-			child.kill("SIGKILL");
-			child.stdout.destroy();
-			child.stderr.destroy();
-			child.unref();
 		}
 		throw error;
 	}
@@ -145,6 +148,13 @@ async function waitForReadyPid(file) {
 	);
 }
 
+/**
+ * Write an executable fake cargo into a disposable fixture directory.
+ * @param {string} dir Fixture PATH directory.
+ * @param {string} body Shell program after the shebang.
+ * @returns {Promise<void>} Completion of directory/file creation.
+ * @throws {Error} Propagates filesystem write errors.
+ */
 async function writeFakeCargo(dir, body) {
 	await fs.mkdir(dir, { recursive: true });
 	await fs.writeFile(path.join(dir, "cargo"), `#!/bin/sh\n${body}\n`, {
@@ -154,7 +164,7 @@ async function writeFakeCargo(dir, body) {
 
 try {
 	// 1. Crate unit/integration tests, built outside the source tree.
-	await execFileAsync(
+	await runCheckCommand(
 		"cargo",
 		[
 			"test",
@@ -164,15 +174,23 @@ try {
 			"--target-dir",
 			path.join(work, "test-target"),
 		],
-		{ maxBuffer: 64 * 1024 * 1024 },
+		{
+			label: "locked native cargo tests",
+			timeoutMs: CARGO_TEST_TIMEOUT_MS,
+			maxBuffer: NATIVE_MAX_OUTPUT_BYTES,
+		},
 	);
 	console.log("cargo test --locked passed");
 
 	// 2. Pack the real tarball and extract it read-only: the build must not write into the npm install.
-	const { stdout } = await execFileAsync(
+	const { stdout } = await runCheckCommand(
 		"npm",
 		["pack", "--ignore-scripts", "--silent", "--pack-destination", work],
-		{ cwd: rootDir, encoding: "utf8" },
+		{
+			label: "native package npm pack",
+			timeoutMs: PACKAGE_PACK_TIMEOUT_MS,
+			cwd: rootDir,
+		},
 	);
 	const tarball = path.join(
 		work,
@@ -184,9 +202,15 @@ try {
 	);
 	const extractDir = path.join(work, "extract");
 	await fs.mkdir(extractDir);
-	await execFileAsync("tar", ["-xzf", tarball, "-C", extractDir]);
+	await runCheckCommand("tar", ["-xzf", tarball, "-C", extractDir], {
+		label: "native package extraction",
+		timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+	});
 	const packageDir = path.join(extractDir, "package");
-	await execFileAsync("chmod", ["-R", "a-w", packageDir]);
+	await runCheckCommand("chmod", ["-R", "a-w", packageDir], {
+		label: "make packed native sources read-only",
+		timeoutMs: PERMISSION_CHANGE_TIMEOUT_MS,
+	});
 
 	// 3. Compiler-facing contract with a fake cargo: argv, user cache target dir, install, cargo-missing hint, cleanup.
 	const base = { ...process.env, PI_COMPUTER_USE_ALLOW_BUILD: "" };
@@ -288,19 +312,22 @@ wait`,
 		const setupReady = path.join(work, "setup-ready.pid");
 		const observer = path.join(work, "setup-observer.mjs");
 		await writeSignalReadinessObserver(observer, setupReady);
-		const { child: setupChild, done } = startSetup(
-			packageDir,
-			env,
-			["--allow-build"],
-			observer,
-		);
+		const {
+			child: setupChild,
+			done,
+			capture,
+		} = startSetup(packageDir, env, ["--allow-build"], observer);
 		let compilerReaped = false;
 		try {
 			const [compilerPid, , wrapperPid] = await Promise.all([
 				waitForReadyPid(pidFile),
 				waitForReadyPid(leaderFile),
 				Promise.race([
-					waitForReadyPid(setupReady),
+					waitForReadyPid(setupReady).catch((error) => {
+						throw new Error(`${error.message}\n${capture.output}`, {
+							cause: error,
+						});
+					}),
 					done.then((result) => {
 						throw new Error(
 							`Packed setup closed before wrapper readiness: ${result.output}`,
@@ -424,7 +451,7 @@ wait`,
 
 	// 5. ARM64 is compile-only: no runtime claim. CI opts in after `rustup target add`.
 	if (process.env.PI_CU_LINUX_ARM64_CHECK === "1") {
-		await execFileAsync(
+		await runCheckCommand(
 			"cargo",
 			[
 				"check",
@@ -436,7 +463,11 @@ wait`,
 				"--target-dir",
 				path.join(work, "arm64-target"),
 			],
-			{ maxBuffer: 64 * 1024 * 1024 },
+			{
+				label: "ARM64 native compile-only cargo check",
+				timeoutMs: ARM64_CHECK_TIMEOUT_MS,
+				maxBuffer: NATIVE_MAX_OUTPUT_BYTES,
+			},
 		);
 		console.log(
 			"aarch64-unknown-linux-gnu cargo check --locked passed (compile-only; ARM64 runtime NOT RUN)",
@@ -448,6 +479,9 @@ wait`,
 	}
 	console.log("Linux native checks passed");
 } finally {
-	await execFileAsync("chmod", ["-R", "u+w", work]).catch(() => undefined);
+	await runCheckCommand("chmod", ["-R", "u+w", work], {
+		label: "restore native scratch permissions",
+		timeoutMs: PERMISSION_CHANGE_TIMEOUT_MS,
+	});
 	await fs.rm(work, { recursive: true, force: true });
 }

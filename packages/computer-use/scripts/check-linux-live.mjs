@@ -16,6 +16,10 @@ if (process.env.PI_CU_LIVE !== "1") {
 if (process.platform !== "linux")
 	throw new Error("Live Linux E2E requires Linux.");
 
+const LIVE_EXPECT_TIMEOUT_MS = 5000;
+const LIVE_READINESS_TIMEOUT_MS = 15_000;
+const LIVE_POLL_INTERVAL_MS = 150;
+
 const scriptPath = fileURLToPath(import.meta.url);
 
 if (!process.argv.includes("--inside-session")) {
@@ -44,6 +48,11 @@ if (!process.argv.includes("--inside-session")) {
 	await runInsideSession();
 }
 
+/**
+ * Run opt-in desktop assertions inside an isolated D-Bus session.
+ * @returns {Promise<void>} Completion of live assertions and teardown.
+ * @throws {Error} On missing dependencies, readiness or assertion failure.
+ */
 async function runInsideSession() {
 	const required = [
 		"/usr/bin/Xvfb",
@@ -80,8 +89,25 @@ async function runInsideSession() {
 		executeSearchUi,
 		shutdownComputerUseSession,
 	} = await import("../src/bridge.ts");
-	const ctx = { cwd: process.cwd(), sessionManager: { getBranch: () => [] } };
+	const ctx = {
+		cwd: process.cwd(),
+		sessionManager: {
+			/**
+			 * Supply an empty transcript for the live fixture.
+			 * @returns {object[]} Empty branch.
+			 * @throws {never} The fixture mock cannot fail.
+			 */
+			getBranch: () => [],
+		},
+	};
 	let calls = 0;
+	/**
+	 * Invoke a real executor with a unique fixture call ID.
+	 * @param {Function} executor Tool executor under test.
+	 * @param {object} params Tool request.
+	 * @returns {Promise<object>} Tool response.
+	 * @throws {Error} Propagates executor failures.
+	 */
 	const tool = async (executor, params) =>
 		await executor(`linux-live-${++calls}`, params, undefined, undefined, ctx);
 
@@ -218,7 +244,11 @@ async function runInsideSession() {
 		const typed = await tool(executeAct, {
 			stateId,
 			actions: [{ action: "typeText", ref: editable.ref, text: token }],
-			expect: { ref: editable.ref, value: token, timeoutMs: 5_000 },
+			expect: {
+				ref: editable.ref,
+				value: token,
+				timeoutMs: LIVE_EXPECT_TIMEOUT_MS,
+			},
 		});
 		stateId = typed.details?.capture?.stateId;
 		assert(stateId, "background typing did not return a successor state");
@@ -242,7 +272,11 @@ async function runInsideSession() {
 		const exactTerminal = await tool(executeAct, {
 			stateId,
 			actions: [{ action: "typeText", ref: editable.ref, text: "Terminal" }],
-			expect: { ref: editable.ref, value: "Terminal", timeoutMs: 5_000 },
+			expect: {
+				ref: editable.ref,
+				value: "Terminal",
+				timeoutMs: LIVE_EXPECT_TIMEOUT_MS,
+			},
 		});
 		stateId = exactTerminal.details?.capture?.stateId;
 		assert(stateId, "exact Terminal typing did not return a successor state");
@@ -503,6 +537,14 @@ async function runInsideSession() {
 	}
 }
 
+/**
+ * Start an owned live fixture in its own process group.
+ * @param {string} command Verified executable.
+ * @param {string[]} args Executable arguments.
+ * @param {NodeJS.ProcessEnv} env Isolated desktop environment.
+ * @returns {import('node:child_process').ChildProcess} Spawned fixture.
+ * @throws {Error} On invalid spawn arguments; asynchronous errors surface on the child.
+ */
 function start(command, args, env) {
 	const child = spawn(command, args, {
 		env,
@@ -515,6 +557,12 @@ function start(command, args, env) {
 	return child;
 }
 
+/**
+ * Best-effort TERM of a fixture group during teardown.
+ * @param {import('node:child_process').ChildProcess} child Owned leader.
+ * @returns {void} Completion of the signal attempt.
+ * @throws {never} Already-gone/unavailable groups are ignored during teardown.
+ */
 function stop(child) {
 	if (child.exitCode !== null) return;
 	try {
@@ -522,6 +570,11 @@ function stop(child) {
 	} catch {}
 }
 
+/**
+ * Find an unused display in the reserved X11 range.
+ * @returns {Promise<string>} Available display name.
+ * @throws {Error} If every reserved display is occupied.
+ */
 async function unusedDisplay() {
 	for (let number = 90; number < 120; number += 1) {
 		try {
@@ -533,10 +586,25 @@ async function unusedDisplay() {
 	throw new Error("No unused X11 display was available in :90..:119.");
 }
 
+/**
+ * Discover roots through the real find tool.
+ * @param {Function} tool Invocation adapter.
+ * @param {Function} executeFind Discovery executor.
+ * @returns {Promise<object[]>} Current roots, empty when omitted.
+ * @throws {Error} Propagates discovery failures.
+ */
 async function rootsFrom(tool, executeFind) {
 	return (await tool(executeFind, {})).details?.windows ?? [];
 }
 
+/**
+ * Await a discoverable root satisfying the fixture predicate.
+ * @param {Function} tool Invocation adapter.
+ * @param {Function} executeFind Discovery executor.
+ * @param {Function} predicate Root acceptance predicate.
+ * @returns {Promise<object>} Matching root.
+ * @throws {Error} If readiness expires.
+ */
 async function waitForRoot(tool, executeFind, predicate) {
 	return await waitFor(
 		async () => (await rootsFrom(tool, executeFind)).find(predicate),
@@ -544,7 +612,15 @@ async function waitForRoot(tool, executeFind, predicate) {
 	);
 }
 
-async function waitFor(check, label, timeoutMs = 15_000) {
+/**
+ * Poll actual state, retaining the last probe error for diagnostics.
+ * @param {Function} check Asynchronous truthy-readiness predicate.
+ * @param {string} label Readiness context.
+ * @param {number} [timeoutMs=LIVE_READINESS_TIMEOUT_MS] Maximum wait.
+ * @returns {Promise<unknown>} First truthy result.
+ * @throws {Error} If readiness never becomes observable.
+ */
+async function waitFor(check, label, timeoutMs = LIVE_READINESS_TIMEOUT_MS) {
 	const deadline = Date.now() + timeoutMs;
 	let lastError;
 	while (Date.now() < deadline) {
@@ -554,13 +630,22 @@ async function waitFor(check, label, timeoutMs = 15_000) {
 		} catch (error) {
 			lastError = error;
 		}
-		await delay(150);
+		await delay(LIVE_POLL_INTERVAL_MS);
 	}
 	throw new Error(
 		`Timed out waiting for ${label}.${lastError ? ` Last error: ${lastError.message}` : ""}`,
 	);
 }
 
+/**
+ * Verify the target stayed unfocused and sentinel focused.
+ * @param {Function} tool Invocation adapter.
+ * @param {Function} executeFind Discovery executor.
+ * @param {string} targetRef Background target.
+ * @param {string} sentinelRef Foreground sentinel.
+ * @returns {Promise<void>} Successful validation.
+ * @throws {Error} On discovery or focus assertion failure.
+ */
 async function assertFocusPreserved(tool, executeFind, targetRef, sentinelRef) {
 	const roots = await rootsFrom(tool, executeFind);
 	assert.equal(
@@ -575,6 +660,12 @@ async function assertFocusPreserved(tool, executeFind, targetRef, sentinelRef) {
 	);
 }
 
+/**
+ * Validate public root identity and geometry.
+ * @param {object} root Discovered root.
+ * @returns {void} Successful validation.
+ * @throws {Error} If identity or geometry is incomplete.
+ */
 function assertRoot(root) {
 	assert(
 		root?.windowRef?.startsWith("@r"),
@@ -587,6 +678,12 @@ function assertRoot(root) {
 	);
 }
 
+/**
+ * Require successful accessibility-only delivery.
+ * @param {object} execution Tool execution details.
+ * @returns {void} Successful validation.
+ * @throws {Error} On delivery, policy or foreground assertion failure.
+ */
 function assertAxOnly(execution) {
 	assert.equal(execution?.outcome, "worked");
 	const step = execution?.steps?.[0] ?? execution;
@@ -595,6 +692,12 @@ function assertAxOnly(execution) {
 	assert.notEqual(execution?.escalatedToForeground, true);
 }
 
+/**
+ * Require guarded foreground X11 delivery.
+ * @param {object} execution Tool execution details.
+ * @returns {void} Successful validation.
+ * @throws {Error} On policy, delivery or grounding failure.
+ */
 function assertForegroundX11(execution) {
 	assert(
 		["unknown", "worked"].includes(execution?.outcome),
@@ -606,10 +709,22 @@ function assertForegroundX11(execution) {
 	assert.equal(step?.performed?.grounding, "coordinates");
 }
 
+/**
+ * Build the identity used to distinguish newly launched roots.
+ * @param {object} root Discovered root.
+ * @returns {string} Process/window identity.
+ * @throws {TypeError} If the root is missing.
+ */
 function rootIdentity(root) {
 	return `${root.pid}:${root.windowId ?? root.nativeWindowRef ?? root.windowTitle}`;
 }
 
+/**
+ * Count an accessible-outline fixture tree.
+ * @param {object|undefined} node Optional outline root.
+ * @returns {number} Node count, zero for a missing root.
+ * @throws {RangeError} On cyclic or excessively deep input.
+ */
 function countOutlineNodes(node) {
 	if (!node) return 0;
 	return (
@@ -621,9 +736,22 @@ function countOutlineNodes(node) {
 	);
 }
 
+/**
+ * Yield between state probes, never as proof of readiness.
+ * @param {number} ms Named polling interval.
+ * @returns {Promise<void>} Resolution after the interval.
+ * @throws {never} Valid fixture intervals do not reject.
+ */
 function delay(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
+/**
+ * Emit optional fixture diagnostics.
+ * @param {string} label Diagnostic context.
+ * @param {unknown} value JSON-serializable value.
+ * @returns {void} Completion of optional logging.
+ * @throws {TypeError} If enabled diagnostics are unserializable.
+ */
 function debug(label, value) {
 	if (process.env.PI_CU_LIVE_DEBUG === "1")
 		console.error(`[linux-live] ${label}: ${JSON.stringify(value)}`);

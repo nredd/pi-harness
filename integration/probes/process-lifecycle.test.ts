@@ -24,6 +24,14 @@ interface Outcome {
 
 interface Runner {
 	name: string;
+	/**
+	 * Execute a disposable lifecycle fixture through the real runner.
+	 * @param script Node fixture source.
+	 * @param cwd Fixture working directory.
+	 * @param terminateOnReady Whether the ready marker triggers cancellation.
+	 * @returns Captured outcome.
+	 * @throws On spawn or readiness failure.
+	 */
 	execute(script: string, cwd: string, terminateOnReady?: boolean): Promise<Outcome>;
 }
 
@@ -31,6 +39,14 @@ interface Runner {
 const runners: Runner[] = [
 	{
 		name: "dev-tools",
+		/**
+		 * Adapt dev-tools capture without changing spawning or cleanup.
+		 * @param script Node fixture source.
+		 * @param cwd Fixture directory.
+		 * @param terminateOnReady Whether to abort on handler readiness.
+		 * @returns Captured runner outcome.
+		 * @throws On runner failure.
+		 */
 		async execute(script, cwd, terminateOnReady = false) {
 			const controller = new AbortController();
 			const result = await run({
@@ -40,6 +56,12 @@ const runners: Runner[] = [
 				// Startup has a failure backstop, but TERM is triggered by the post-handler marker.
 				timeoutMs: terminateOnReady ? READINESS_WATCHDOG_MS : COMPLETION_WATCHDOG_MS,
 				signal: controller.signal,
+				/**
+				 * Trigger cancellation only after the handler-ready marker.
+				 * @param line Complete stderr line.
+				 * @returns Callback completion.
+				 * @throws No intentional errors; the runner isolates callback failures.
+				 */
 				onStderrLine: (line) => {
 					if (terminateOnReady && line === "ready") controller.abort();
 				},
@@ -54,18 +76,43 @@ const runners: Runner[] = [
 	},
 	{
 		name: "session-kit",
+		/**
+		 * Adapt session-kit streams while preserving real lifecycle behavior.
+		 * @param script Node fixture source.
+		 * @param cwd Fixture directory.
+		 * @param terminateOnReady Whether to terminate after handler readiness.
+		 * @returns Captured monitor outcome.
+		 * @throws On spawn, readiness or early-exit failure.
+		 */
 		async execute(script, cwd, terminateOnReady = false) {
 			let stdout = "";
 			let stderr = "";
+			/**
+			 * Placeholder until the readiness promise captures its resolver.
+			 * @returns No-op completion.
+			 * @throws No errors.
+			 */
 			let markReady: () => void = () => {};
 			const ready = new Promise<void>((resolve) => {
 				markReady = resolve;
 			});
 			const monitor = await spawnMonitor([process.execPath, "-e", script], {
 				cwd,
+				/**
+				 * Capture monitor stdout separately.
+				 * @param chunk Stream bytes.
+				 * @returns Callback completion.
+				 * @throws No intentional errors for valid buffers.
+				 */
 				onStdout: (chunk) => {
 					stdout += chunk.toString();
 				},
+				/**
+				 * Capture stderr and acknowledge complete ready markers.
+				 * @param chunk Stream bytes.
+				 * @returns Callback completion.
+				 * @throws No intentional errors for valid buffers.
+				 */
 				onStderr: (chunk) => {
 					stderr += chunk.toString();
 					if (stderr.split("\n").includes("ready")) markReady();
@@ -94,7 +141,12 @@ const runners: Runner[] = [
 	},
 ];
 
-/** Probe only the disposable descendant; unexpected signal errors must fail the test. */
+/**
+ * Probe only the disposable descendant.
+ * @param pid Owned descendant PID.
+ * @returns Whether it remains observable.
+ * @throws On signal errors other than ESRCH.
+ */
 function alive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -105,7 +157,12 @@ function alive(pid: number): boolean {
 	}
 }
 
-/** SIGKILL the fixture's own process group; an already-empty group is fine, anything else is not. */
+/**
+ * Kill only the fixture's known process group.
+ * @param leader Owned group leader PID.
+ * @returns Completion of the signal attempt.
+ * @throws On signal errors other than ESRCH.
+ */
 function killGroup(leader: number): void {
 	try {
 		process.kill(-leader, "SIGKILL");
@@ -114,7 +171,12 @@ function killGroup(leader: number): void {
 	}
 }
 
-/** Validate identities before using them to clean up a failed fixture. */
+/**
+ * Validate identities before cleanup can signal a failed fixture.
+ * @param stdout JSON identity record from the fixture.
+ * @returns Validated leader and descendant PIDs.
+ * @throws If JSON or process identities are malformed.
+ */
 function identity(stdout: string): { leader: number; child: number } {
 	const value: unknown = JSON.parse(stdout);
 	assert.ok(value !== null && typeof value === "object");

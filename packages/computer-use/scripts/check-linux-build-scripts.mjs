@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	SIGNAL_READINESS_POLL_MS as POLL_INTERVAL_MS,
-	SIGNAL_READINESS_TIMEOUT_MS as READINESS_TIMEOUT_MS,
+	PARENT_READINESS_TIMEOUT_MS as READINESS_TIMEOUT_MS,
 	within,
 	writeSignalReadinessObserver,
 } from "./check-async.mjs";
@@ -15,8 +15,9 @@ import {
 const SETUP_COMPLETION_TIMEOUT_MS = 30_000;
 const PROCESS_SETTLE_TIMEOUT_MS = 5000;
 const WRAPPER_BACKSTOP_HEADROOM_MS = 5000;
-const FIXTURE_LIFETIME_MS = 15_000;
+const FIXTURE_LIFETIME_MS = 60_000;
 const OUTER_SETUP_BACKSTOP_MS = 2000;
+const TERM_GRACE_ROUNDING_ALLOWANCE_MS = 1;
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptsDir, "..");
@@ -232,6 +233,12 @@ if (process.platform !== "win32") {
 		`reap budget ${reapBudgetMs}ms no longer fits the ${OUTER_SETUP_BACKSTOP_MS}ms outer backstop`,
 	);
 	const backstopMs = reapBudgetMs + WRAPPER_BACKSTOP_HEADROOM_MS;
+	/**
+	 * Probe fixture liveness without delivering a signal.
+	 * @param {number} pid Owned PID, or negative PGID for a group probe.
+	 * @returns {boolean} Whether the process/group exists or is permission-protected.
+	 * @throws {never} Probe errors are classified into the Boolean result.
+	 */
 	const alive = (pid) => {
 		try {
 			process.kill(pid, 0);
@@ -240,6 +247,12 @@ if (process.platform !== "win32") {
 			return error.code === "EPERM";
 		}
 	};
+	/**
+	 * Await observable fixture death within the named settle budget.
+	 * @param {number} pid Owned fixture PID.
+	 * @returns {Promise<boolean>} Whether the fixture is gone after bounded polling.
+	 * @throws {never} Probe errors are classified by `alive`.
+	 */
 	const settled = async (pid) => {
 		for (
 			const deadline = Date.now() + PROCESS_SETTLE_TIMEOUT_MS;
@@ -248,6 +261,12 @@ if (process.platform !== "win32") {
 			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 		return !alive(pid);
 	};
+	/**
+	 * Read a process-owned readiness marker with preload diagnostic headroom.
+	 * @param {string} file Private PID marker written after signal registration.
+	 * @returns {Promise<number>} Positive PID acknowledged by the fixture.
+	 * @throws {Error} If no valid marker is readable before the parent deadline.
+	 */
 	const waitForReady = async (file) => {
 		for (
 			const deadline = Date.now() + READINESS_TIMEOUT_MS;
@@ -285,6 +304,13 @@ setInterval(() => {
 import { runCancellable } from ${JSON.stringify(setupUrl)};
 const [fixture, base, behavior] = process.argv.slice(2);
 const trace = [];
+/**
+ * Trace an actual signal attempt, timestamping only after successful delivery.
+ * @param {number} pid Owned process/group target.
+ * @param {NodeJS.Signals|0} signal Signal or null-signal probe.
+ * @returns {boolean} Actual syscall result.
+ * @throws {Error} Preserves syscall failures after recording their codes.
+ */
 const kill = (pid, signal) => {
   let result;
   try { result = process.kill(pid, signal); }
@@ -299,6 +325,14 @@ process.on("exit", () => fs.writeFileSync(base + ".trace", JSON.stringify(trace)
 await running;
 `,
 	);
+	/**
+	 * Enforce delivered TERM/KILL ordering and the exported grace contract.
+	 * @param {string} name Fixture scenario label.
+	 * @param {Array<{pid: number, signal: string|number, at?: number, error?: string}>} trace Recorded syscall outcomes.
+	 * @param {number} leader Owned process-group leader PID.
+	 * @returns {void} Successful validation.
+	 * @throws {Error} If signals, successful delivery or grace timing violate the contract.
+	 */
 	const assertEscalated = (name, trace, leader) => {
 		const signals = trace.filter((event) => event.signal !== 0);
 		assert.deepEqual(
@@ -313,7 +347,8 @@ await running;
 			assert.equal(event.error, undefined, `${name}: signal syscall failed`);
 		// Date.now() in the reaper has millisecond precision; allow only its rounding, not scheduler guesses.
 		assert.ok(
-			signals[1].at - signals[0].at >= GROUP_TERM_GRACE_MS - 1,
+			signals[1].at - signals[0].at >=
+				GROUP_TERM_GRACE_MS - TERM_GRACE_ROUNDING_ALLOWANCE_MS,
 			`${name}: SIGKILL preceded the TERM grace: ${JSON.stringify(signals)}`,
 		);
 	};
@@ -392,6 +427,11 @@ await running;
 			assert.ok(alive(leader), `${name}: ready leader must be alive`);
 			if (descendant)
 				assert.ok(alive(descendant), `${name}: ready descendant must be alive`);
+			/**
+			 * Trigger the acknowledged fixture boundary and await its close event.
+			 * @returns {Promise<object>} Wrapper exit status.
+			 * @throws {Error} On release-file, signal-delivery or child-process failure.
+			 */
 			const completion = (async () => {
 				if (behavior === "exits-first")
 					await fs.writeFile(`${base}.release`, "go");

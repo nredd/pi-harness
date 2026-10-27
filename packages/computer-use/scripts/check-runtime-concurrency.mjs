@@ -25,10 +25,19 @@ assert.equal(
 	"bounded state store did not evict oldest state",
 );
 
+const MILLISECONDS_PER_SECOND = 1000;
+
+/**
+ * Parse an outline fixture into a real observed-state representation.
+ * @param {string} lookId Observation identity.
+ * @param {object[]} children Fixture outline children.
+ * @returns {object} Parsed observation.
+ * @throws {Error} Propagates malformed observation errors.
+ */
 const rawLook = (lookId, children) =>
 	parseLookResponse({
 		lookId,
-		capturedAt: Date.now() / 1000,
+		capturedAt: Date.now() / MILLISECONDS_PER_SECOND,
 		window: {
 			windowId: 1,
 			framePoints: { x: 0, y: 0, w: 800, h: 600 },
@@ -128,8 +137,25 @@ assert(editor, "editor fixture was not parsed");
 const actionEnv = {
 	headless: false,
 	image: { width: 800, height: 600 },
+	/**
+	 * Resolve an observed element.
+	 * @param {string} ref Element identity.
+	 * @returns {object|undefined} Matching element.
+	 * @throws {Error} Propagates malformed-outline errors.
+	 */
 	node: (ref) => nodeByRef(nextLook.parsedOutline, ref),
+	/**
+	 * Supply deterministic fixture coordinates.
+	 * @param {object} node Observed element.
+	 * @returns {{x: number, y: number}} Fixture point.
+	 * @throws {TypeError} If the element is absent.
+	 */
 	center: (node) => ({ x: node.rect?.x ?? 0, y: node.rect?.y ?? 0 }),
+	/**
+	 * Accept mock fixture coordinates.
+	 * @returns {undefined} No validation error.
+	 * @throws {never} The mock always accepts.
+	 */
 	validatePoint: () => undefined,
 };
 const preparedClick = prepareAction(
@@ -161,7 +187,15 @@ const pictureTarget = {
 const pictureClick = prepareAction(
 	{ action: "click", ref: pictureTarget.ref },
 	{ currentFocus: false },
-	{ ...actionEnv, node: () => pictureTarget },
+	{
+		...actionEnv,
+		/**
+		 * Resolve the picture-only fixture target.
+		 * @returns {object} Picture target.
+		 * @throws {never} The fixed mock always succeeds.
+		 */
+		node: () => pictureTarget,
+	},
 );
 assert.equal(
 	pictureClick.needsForeground,
@@ -225,6 +259,11 @@ assert.equal(
 const scheduler = new ResourceScheduler();
 let active = 0;
 let peak = 0;
+/**
+ * Track mock concurrency across one cooperative yield.
+ * @returns {Promise<void>} Completion of the simulated operation.
+ * @throws {never} The in-memory mock does not reject.
+ */
 const work = async () => {
 	active += 1;
 	peak = Math.max(peak, active);

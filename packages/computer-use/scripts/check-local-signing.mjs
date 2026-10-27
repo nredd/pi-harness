@@ -10,6 +10,9 @@ import {
 	withDirectoryLock,
 } from "./setup-helper.mjs";
 
+const SIGNING_LOCK_WAIT_MS = 2000;
+const SIGNING_LOCK_RETRY_MS = 5;
+
 const sample = `
 Policy: Code Signing
   Matching identities
@@ -50,7 +53,10 @@ try {
 					return identity;
 				},
 				(callback) =>
-					withDirectoryLock(lockPath, callback, { waitMs: 2_000, retryMs: 5 }),
+					withDirectoryLock(lockPath, callback, {
+						waitMs: SIGNING_LOCK_WAIT_MS,
+						retryMs: SIGNING_LOCK_RETRY_MS,
+					}),
 			),
 		),
 	);
