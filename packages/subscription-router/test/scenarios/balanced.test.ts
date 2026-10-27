@@ -2,6 +2,7 @@
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import { STALE_GRACE_MS } from "../../src/selection.js";
 import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "./support.js";
 
 describe("balanced router through a real session", () => {
@@ -101,9 +102,17 @@ describe("balanced router through a real session", () => {
 		expect(usage.reads).toEqual([]);
 	});
 
-	it("fresh measured B beats stale fallback", async () => {
+	it("recently stale A (1% used) beats fresh measured B (60% used)", async () => {
 		const { scenario, usage } = await setup();
-		usage.set("spike-a", 1, "stale");
+		usage.set("spike-a", 1, "stale", 6 * 60_000);
+		usage.snapshots.delete("spike-c");
+		expect(await dispatched(scenario)).toEqual(["spike-a"]);
+		expect(usage.reads).toEqual([]);
+	});
+
+	it("long-expired stale A is fallback and fresh measured B wins", async () => {
+		const { scenario, usage } = await setup();
+		usage.set("spike-a", 1, "stale", STALE_GRACE_MS + 1);
 		usage.snapshots.delete("spike-c");
 		expect(await dispatched(scenario)).toEqual(["spike-b"]);
 		expect(usage.reads).toEqual([]);
@@ -111,7 +120,7 @@ describe("balanced router through a real session", () => {
 
 	it("unmeasured fallback remains usable after B exhausts", async () => {
 		const { scenario, usage } = await setup((usage) => usage.set("spike-b", 100));
-		usage.set("spike-a", 1, "stale");
+		usage.set("spike-a", 1, "stale", STALE_GRACE_MS + 1);
 		usage.snapshots.delete("spike-c");
 		callQuotaTool(scenario, 1);
 		expect(await dispatched(scenario)).toEqual(["spike-b", "spike-a"]);
