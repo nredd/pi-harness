@@ -27,13 +27,24 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from http import HTTPStatus
+from http.client import HTTPException, HTTPMessage, IncompleteRead, RemoteDisconnected
 from pathlib import Path
+from socket import gaierror
+from ssl import SSLError
 from types import MappingProxyType
-from urllib.request import urlopen
+from typing import IO, override
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
 
 LOGGER = logging.getLogger(__name__)
+CHILD_PATH: ContextVar[str | None] = ContextVar("installer_child_path", default=None)
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 SRI_SHA512 = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
@@ -84,9 +95,236 @@ LEGACY_CHECKSUMS = MappingProxyType(
 LEGACY_RELEASE_TAGS = frozenset(LEGACY_CHECKSUMS)
 # Every asset the harness consumes, coding-agent and tui first: they are the ones npm installs.
 RELEASE_PACKAGES = ("pi-coding-agent", "pi-tui", "pi-agent-core", "pi-ai")
-ATTESTATION_WORKFLOW = "nredd/pi/.github/workflows/fork-release.yml"
-RELEASE_URL_PREFIX = "https://github.com/nredd/pi/releases/download/"
+CORE_REPO = "nredd/pi"
+ATTESTATION_WORKFLOW = f"{CORE_REPO}/.github/workflows/fork-release.yml"
+RELEASE_URL_PREFIX = f"https://github.com/{CORE_REPO}/releases/download/"
 ROOT_OVERRIDE_SCOPE = "@earendil-works/"
+ATTESTATIONS_API = "https://api.github.com"
+RATE_LIMIT_STATUSES = frozenset({403, 429})
+# Every variable `gh` reads a GitHub token from; only `gh`'s login fallback may see them.
+# https://cli.github.com/manual/gh_help_environment
+GITHUB_TOKEN_VARIABLES = frozenset(
+    {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+)
+# Runtime/location/locale only. Tool configuration and code-injection variables are not inherited.
+CHILD_ENVIRONMENT_KEYS = frozenset(
+    {
+        "HOME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "TERM",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+        "CI",
+        "GITHUB_ACTIONS",
+    }
+)
+ProvenanceCheck = Callable[[Path, str], None]
+# Bound public assets, including responses without Content-Length, before allocating their bodies.
+MAX_FETCH_BYTES = 256 * 1024 * 1024
+CONTENT_LENGTH = re.compile(r"[0-9]+")
+
+
+class HTTPSRedirectHandler(HTTPRedirectHandler):
+    """Refuse every redirect that leaves HTTPS, including cross-origin downgrades."""
+
+    @override
+    def redirect_request(
+        self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
+    ) -> Request | None:
+        """Validate the next URL before urllib can open it.
+
+        Parameters:
+            req (Request): original request.
+            fp (IO[bytes]): redirect response stream.
+            code (int): HTTP status.
+            msg (str): response reason.
+            headers (HTTPMessage): response headers.
+            newurl (str): resolved redirect destination.
+
+        Returns:
+            Request | None: urllib's redirected request.
+
+        Raises:
+            ValueError: the next hop is not HTTPS.
+        """
+        if urlsplit(newurl).scheme != "https":
+            raise ValueError(f"Redirect requires HTTPS, refused '{newurl}'")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+urlopen = build_opener(HTTPSRedirectHandler()).open
+
+
+def fetch_failure_reason(error: Exception) -> str:
+    """Translate transport exceptions into stable, single-line public reasons, never urllib repr.
+
+    Parameters:
+        error (Exception): HTTP, DNS, timeout, TLS, protocol, I/O or validation failure.
+
+    Returns:
+        str: readable reason without URL wrapping or response-body contents.
+    """
+    # Specific subclasses precede their parents: HTTPError -> URLError, and protocol/TLS
+    # failures -> HTTPException/OSError. Preserve that order when adding a transport category.
+    if isinstance(error, HTTPError):
+        try:
+            default = HTTPStatus(error.code).phrase
+        except ValueError:
+            default = "Unknown reason"
+        reason = f"HTTP {error.code} {error.reason or default}"
+    elif isinstance(error, URLError):
+        reason = (
+            fetch_failure_reason(error.reason)
+            if isinstance(error.reason, Exception)
+            else f"Network error: {error.reason}"
+        )
+    elif isinstance(error, gaierror):
+        reason = "DNS lookup failed"
+    elif isinstance(error, TimeoutError):
+        reason = "Request timed out"
+    elif isinstance(error, IncompleteRead):
+        expected = f", expected {error.expected} more" if error.expected is not None else ""
+        reason = f"Incomplete response: received {len(error.partial)} bytes{expected}"
+    elif isinstance(error, SSLError):
+        detail = error.strerror or (error.args[0] if error.args else "connection failed")
+        reason = f"TLS error: {detail}"
+    elif isinstance(error, RemoteDisconnected):
+        reason = f"Connection closed: {error}"
+    elif isinstance(error, HTTPException):
+        reason = f"HTTP protocol error: {error}"
+    elif isinstance(error, OSError):
+        reason = f"I/O error: {error.strerror or error}"
+    else:
+        reason = str(error)
+    return " ".join(reason.split())
+
+
+class FetchError(OSError):
+    """A public HTTP read failed; preserve status for the anonymous rate-limit fallback."""
+
+    def __init__(self, url: str, error: Exception) -> None:
+        """Keep the URL and reason without exposing callers to protocol-specific exceptions.
+
+        Parameters:
+            url (str): public resource URL.
+            error (Exception): HTTP, I/O, TLS, timeout or response-length failure.
+
+        Returns:
+            None: the public diagnostic names the requested URL once and retains the HTTP status.
+        """
+        self.status = error.code if isinstance(error, HTTPError) else None
+        super().__init__(f"Could not fetch '{url}': {fetch_failure_reason(error)}")
+
+
+def fetch_bytes(request: str | Request) -> bytes:
+    """Read a complete public response, normalizing HTTP and I/O failures in one place.
+
+    Parameters:
+        request (str | Request): public URL, optionally with an explicit `Accept` header only.
+
+    Returns:
+        bytes: complete response body, never a partially consumed response.
+
+    Raises:
+        FetchError: HTTPException (including IncompleteRead/RemoteDisconnected), OSError
+            (including TimeoutError/SSLError), non-HTTPS URL/redirect, invalid Content-Length,
+            length mismatch, headers other than `Accept` or response exceeding `MAX_FETCH_BYTES`.
+    """
+    url = request.full_url if isinstance(request, Request) else request
+    try:
+        # urllib forwards most caller headers across origins, including Authorization and Cookie;
+        # unredirected headers are the only general exception. Public downloads need only Accept.
+        if isinstance(request, Request) and any(key.lower() != "accept" for key, _ in request.header_items()):
+            raise ValueError("Public downloads permit only the `Accept` request header")
+        if urlsplit(url).scheme != "https":
+            raise ValueError("Download requires HTTPS")
+        with urlopen(request, timeout=120) as response:
+            lengths = response.headers.get_all("Content-Length", [])
+            length = None
+            if lengths:
+                if len(lengths) != 1 or CONTENT_LENGTH.fullmatch(lengths[0].strip()) is None:
+                    raise ValueError(f"Invalid Content-Length: '{lengths}'")
+                length = int(lengths[0])
+                if length > MAX_FETCH_BYTES:
+                    raise ValueError(f"Content-Length exceeds {MAX_FETCH_BYTES} bytes")
+                # urllib requests Connection: close. Read to EOF, not its parsed length, so
+                # both undersized and oversized declarations are checked against actual bytes.
+                response.length = None
+            body = response.read(MAX_FETCH_BYTES + 1)
+            if len(body) > MAX_FETCH_BYTES:
+                raise ValueError(f"Response exceeds {MAX_FETCH_BYTES} bytes")
+            if length is not None and len(body) != length:
+                raise ValueError(f"Content-Length mismatch: expected {length} bytes, received {len(body)}")
+            return body
+    except (HTTPException, OSError, ValueError) as error:
+        raise FetchError(url, error) from error
+
+
+class AttestationRateLimitedError(RuntimeError):
+    """GitHub's anonymous API rate limit refused an attestation lookup."""
+
+
+@contextmanager
+def pinned_child_path(node: str) -> Iterator[None]:
+    """Freeze child PATH at preflight, prioritizing the validated Node dispatcher.
+
+    Parameters:
+        node (str): preflight-selected Node path; links are not resolved.
+
+    Yields:
+        None: child environments use this run's absolute search path.
+
+    Raises:
+        OSError: the current directory cannot be determined.
+    """
+    path = os.pathsep.join(
+        [
+            str(Path(node).absolute().parent),
+            *(str(Path(entry).absolute()) for entry in os.environ.get("PATH", os.defpath).split(os.pathsep)),
+        ]
+    )
+    token = CHILD_PATH.set(path)
+    try:
+        yield
+    finally:
+        CHILD_PATH.reset(token)
+
+
+def child_environment(
+    env: Mapping[str, str],
+    *,
+    overrides: Mapping[str, str] | None = None,
+    github_tokens: bool = False,
+) -> dict[str, str]:
+    """Build every child environment from a minimal inherited allowlist and owned overrides.
+
+    Parameters:
+        env (Mapping[str, str]): untrusted parent environment, filtered by explicit key.
+        overrides (Mapping[str, str] | None): installer-owned tool settings, never parent passthrough.
+        github_tokens (bool): allow GitHub tokens and `GH_CONFIG_DIR` only for gh login fallback.
+
+    Returns:
+        dict[str, str]: explicit environment with absolute PATH entries and selected Node first.
+
+    Raises:
+        OSError: an unpinned relative PATH cannot be made absolute.
+    """
+    allowed = CHILD_ENVIRONMENT_KEYS | (
+        GITHUB_TOKEN_VARIABLES | {"GH_CONFIG_DIR"} if github_tokens else set()
+    )
+    result = {key: value for key, value in env.items() if key in allowed} | dict(overrides or {})
+    path = CHILD_PATH.get()
+    if path is None:
+        path = os.pathsep.join(
+            str(Path(entry).absolute()) for entry in result.get("PATH", os.defpath).split(os.pathsep)
+        )
+    return result | {"PATH": path}
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -102,11 +340,24 @@ def gitlink_tag(directory: Path) -> str:
         RuntimeError: the Gitlink is untagged.
     """
     try:
-        return subprocess.check_output(
-            [GIT_BIN, "-C", str(directory), "describe", "--tags", "--exact-match"],
-            text=True,
-            stderr=subprocess.STDOUT,
-        ).strip()
+        # Match the sandbox's explicit-environment/isolated-HOME policy. No inherited GIT_*,
+        # askpass, credential configuration, XDG config, or token can redirect this checkout.
+        with tempfile.TemporaryDirectory(prefix="pi-gitlink-home-") as home:
+            return subprocess.check_output(
+                [GIT_BIN, "-C", str(directory), "describe", "--tags", "--exact-match"],
+                env=child_environment(
+                    os.environ,
+                    overrides={
+                        "PATH": os.defpath,
+                        "HOME": home,
+                        "XDG_CONFIG_HOME": home,
+                        "GIT_CONFIG_NOSYSTEM": "1",
+                        "GIT_TERMINAL_PROMPT": "0",
+                    },
+                ),
+                text=True,
+                stderr=subprocess.STDOUT,
+            ).strip()
     except subprocess.CalledProcessError as error:
         raise RuntimeError(
             f"Core Gitlink at '{directory}' is untagged; release it before gating pins: {error.output}"
@@ -162,10 +413,11 @@ def release_checksums(tag: str) -> dict[str, str]:
     if tag in LEGACY_RELEASE_TAGS:
         return {release_asset_url(tag, name): digest for name, digest in LEGACY_CHECKSUMS[tag].items()}
     try:
-        with urlopen(release_asset_url(tag, "SHA256SUMS"), timeout=120) as response:
-            contents = response.read().decode("utf-8")
-    except OSError as error:
-        raise ValueError(f"Could not download release checksums for '{tag}'") from error
+        contents = fetch_bytes(release_asset_url(tag, "SHA256SUMS")).decode("utf-8")
+    except FetchError as error:
+        raise ValueError(str(error)) from error
+    except UnicodeError as error:
+        raise ValueError(f"Could not decode release checksums for '{tag}': {error}") from error
     checksums: dict[str, str] = {}
     for line in contents.splitlines():
         fields = line.split(maxsplit=1)
@@ -199,45 +451,158 @@ def _error_tail(error: subprocess.CalledProcessError | subprocess.TimeoutExpired
     return output[-6000:]
 
 
-def verify_provenance(path: Path, tag: str) -> None:
-    """Require GitHub provenance from the dedicated core-release workflow.
+def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
+    """Download the public GitHub attestation bundles for one artifact digest, without credentials.
+
+    The attestations API answers anonymously for public repositories, so a verifier needs no
+    GitHub login and no token ever leaves the machine. The bundles are only inputs to
+    `gh attestation verify --bundle`, which checks them; they are trusted for nothing else.
 
     Parameters:
-        path (Path): downloaded release artifact.
-        tag (str): exact core tag bound to the source ref.
+        repo (str): `owner/name` that must have produced the attestation.
+        path (Path): artifact whose SHA-256 selects the attestations.
+        destination (Path): JSON Lines file to write, one Sigstore bundle per line.
+
+    Returns:
+        Path: `destination`.
+
+    Raises:
+        AttestationRateLimitedError: GitHub's anonymous rate limit refused the request.
+        RuntimeError: the API could not be read, answered malformed JSON, or lists no attestation.
+    """
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    url = f"{ATTESTATIONS_API}/repos/{repo}/attestations/sha256:{digest}"
+    request = Request(url, headers={"Accept": "application/vnd.github+json"})
+    try:
+        document = json.loads(fetch_bytes(request))
+    except FetchError as error:
+        if error.status in RATE_LIMIT_STATUSES:
+            raise AttestationRateLimitedError(f"Anonymous attestations API refused: {error}") from error
+        raise RuntimeError(f"Attestation lookup failed for '{path.name}': {error}") from error
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"Could not read attestations for '{path.name}' from '{url}': {error}") from error
+    attestations = document.get("attestations") if isinstance(document, dict) else None
+    bundles = [item.get("bundle") for item in attestations or [] if isinstance(item, dict)]
+    if not bundles or not all(isinstance(bundle, dict) for bundle in bundles):
+        raise RuntimeError(f"No attestation bundle for '{path.name}' (sha256 '{digest}') in '{repo}'")
+    destination.write_text("".join(json.dumps(bundle) + "\n" for bundle in bundles))
+    return destination
+
+
+def verify_attestation(
+    path: Path,
+    repo: str,
+    signer_workflow: str,
+    source_ref: str,
+    bundle: Path | None = None,
+    *,
+    gh_bin: str | None = None,
+) -> None:
+    """Require GitHub build provenance for one artifact from an exact repository, workflow and ref.
+
+    Parameters:
+        path (Path): artifact to verify.
+        repo (str): `owner/name` the attestation must belong to.
+        signer_workflow (str): `owner/name/.github/workflows/<file>` that must have signed it.
+        source_ref (str): exact Git ref the signing run must have built.
+        bundle (Path | None): local bundle file; absent, `gh` fetches with its own login.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
 
     Raises:
         FileNotFoundError: GitHub CLI is unavailable.
         RuntimeError: the artifact lacks the required provenance identity.
     """
-    if not Path(GH_BIN).is_file():
-        raise FileNotFoundError(f"Core release verification requires `gh` at '{GH_BIN}'")
+    gh_bin = str(Path(gh_bin or GH_BIN).absolute())
+    if not Path(gh_bin).is_file():
+        raise FileNotFoundError(f"Attestation verification requires `gh` at '{gh_bin}'")
+    # A local bundle needs no GitHub API call, so `gh` gets a token only when it must fetch.
+    env = child_environment(os.environ, github_tokens=bundle is None)
     try:
         subprocess.check_output(
             [
-                GH_BIN,
+                gh_bin,
                 "attestation",
                 "verify",
                 str(path),
+                *(["--bundle", str(bundle)] if bundle is not None else []),
                 "--repo",
-                "nredd/pi",
+                repo,
                 "--signer-workflow",
-                ATTESTATION_WORKFLOW,
+                signer_workflow,
                 "--source-ref",
-                f"refs/tags/{tag}",
+                source_ref,
                 "--deny-self-hosted-runners",
             ],
+            env=env,
             text=True,
             stderr=subprocess.STDOUT,
             timeout=120,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(
-            f"Core release provenance verification failed for '{path}': {_error_tail(error)}"
+            f"GitHub provenance verification failed for '{path}': {_error_tail(error)}"
         ) from error
 
 
-def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
+def verify_public_attestation(
+    path: Path, repo: str, signer_workflow: str, source_ref: str, *, gh_bin: str | None = None
+) -> None:
+    """Verify provenance from the anonymous bundle, falling back to `gh`'s own login when rate-limited.
+
+    The fallback lets `gh` fetch the attestation with whatever login it already has (`gh auth
+    login` or `GH_TOKEN`); this module never reads a credential. Without one, the rate limit
+    stays a verification failure.
+
+    Parameters:
+        path (Path): artifact to verify.
+        repo (str): `owner/name` the attestation must belong to.
+        signer_workflow (str): workflow that must have signed it.
+        source_ref (str): exact Git ref the signing run must have built.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: no bundle exists, or the artifact lacks the required provenance identity.
+    """
+    try:
+        bundle: Path | None = attestation_bundle(repo, path, path.with_name(f"{path.name}.sigstore.jsonl"))
+    except AttestationRateLimitedError as error:
+        LOGGER.warning(f"{error}; retrying with `gh attestation verify` and gh's own login")
+        bundle = None
+    verify_attestation(path, repo, signer_workflow, source_ref, bundle, gh_bin=gh_bin)
+
+
+def verify_provenance(path: Path, tag: str, bundle: Path | None = None) -> None:
+    """Require GitHub provenance from the dedicated core-release workflow.
+
+    Parameters:
+        path (Path): downloaded release artifact.
+        tag (str): exact core tag bound to the source ref.
+        bundle (Path | None): local attestation bundle; absent, `gh` fetches with its own login.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: the artifact lacks the required provenance identity.
+    """
+    verify_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}", bundle)
+
+
+def verify_provenance_anonymously(path: Path, tag: str, *, gh_bin: str | None = None) -> None:
+    """Verify core provenance from the public attestation bundle (see `verify_public_attestation`).
+
+    Parameters:
+        path (Path): downloaded release artifact.
+        tag (str): exact core tag bound to the source ref.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: no bundle exists or it does not prove the required identity.
+    """
+    verify_public_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}", gh_bin=gh_bin)
+
+
+def verify_asset(path: Path, url: str, checksums: Mapping[str, str]) -> None:
     """Require downloaded bytes to match a recorded release identity.
 
     Parameters:
@@ -258,14 +623,22 @@ def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
     LOGGER.info(f"Release asset '{url}' sha256={actual}")
 
 
-def download_verified_asset(url: str, tag: str, checksums: dict[str, str], destination: Path) -> Path:
+def download_verified_asset(
+    url: str,
+    tag: str,
+    checksums: Mapping[str, str],
+    destination: Path,
+    provenance: ProvenanceCheck | None = None,
+) -> Path:
     """Download one release asset, then require its recorded sha256 and, for new tags, provenance.
 
     Parameters:
         url (str): canonical release URL.
         tag (str): exact core tag the URL belongs to.
-        checksums (dict[str, str]): the tag's recorded assets.
+        checksums (Mapping[str, str]): the tag's recorded assets.
         destination (Path): file to write.
+        provenance (ProvenanceCheck | None): per-asset verifier taking the asset and tag;
+            defaults to `verify_provenance` (the caller's `gh` login).
 
     Returns:
         Path: `destination`, whose bytes are verified.
@@ -274,13 +647,13 @@ def download_verified_asset(url: str, tag: str, checksums: dict[str, str], desti
         ValueError: no recorded checksum or the bytes disagree.
         RuntimeError: a non-legacy asset lacks the required provenance.
         FileNotFoundError: a non-legacy asset needs `gh`, which is unavailable.
-        OSError: the download (including `URLError`) or the write to `destination` failed.
+        FetchError: the public download failed with a normalized URL/reason diagnostic.
+        OSError: writing the downloaded bytes to `destination` failed.
     """
-    with urlopen(url, timeout=120) as response:
-        destination.write_bytes(response.read())
+    destination.write_bytes(fetch_bytes(url))
     verify_asset(destination, url, checksums)
     if tag not in LEGACY_RELEASE_TAGS:
-        verify_provenance(destination, tag)
+        (provenance or verify_provenance)(destination, tag)
     return destination
 
 
@@ -438,7 +811,29 @@ def prune_native(node_modules: Path, system: str, arch: str) -> None:
                 shutil.rmtree(directory)
 
 
-def fetch_release(tag: str, prefix: Path) -> Path:
+def release_tarballs(tag: str) -> list[str]:
+    """Return the release tarball filenames of `RELEASE_PACKAGES` for one core tag, in order.
+
+    Parameters:
+        tag (str): core fork release tag.
+
+    Returns:
+        list[str]: filenames; the first two are the ones `fetch_release` installs.
+
+    Raises:
+        ValueError: not a core fork release tag.
+    """
+    return [url.rsplit("/", 1)[1] for url in release_package_urls(tag).values()]
+
+
+def fetch_release(
+    tag: str,
+    prefix: Path,
+    provenance: ProvenanceCheck | None = None,
+    checksums: Mapping[str, str] | None = None,
+    *,
+    npm_bin: str | None = None,
+) -> Path:
     """Verify every consumed release asset, then install into a new private prefix, never the live one.
 
     New tags must publish all of `RELEASE_PACKAGES`. Legacy tags are verified for exactly the assets
@@ -448,6 +843,11 @@ def fetch_release(tag: str, prefix: Path) -> Path:
     Parameters:
         tag (str): released core tag.
         prefix (Path): empty installation prefix.
+        provenance (ProvenanceCheck | None): per-asset verifier taking the asset and tag;
+            defaults to `verify_provenance` (the caller's `gh` login).
+        checksums (Mapping[str, str] | None): release URL -> SHA-256 the downloaded bytes must
+            match; defaults to `release_checksums(tag)`.
+        npm_bin (str | None): preflight-selected dispatcher path, default `NPM_BIN`.
 
     Returns:
         Path: private pi executable.
@@ -457,18 +857,18 @@ def fetch_release(tag: str, prefix: Path) -> Path:
         RuntimeError: provenance or npm installation failed.
         FileNotFoundError: npm is unavailable.
     """
-    release_package_urls(tag)
+    urls = list(release_package_urls(tag).values())
     if prefix.exists() and any(prefix.iterdir()):
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
-    checksums = release_checksums(tag)
-    urls = list(release_package_urls(tag).values())
+    checksums = dict(release_checksums(tag) if checksums is None else checksums)
     if tag in LEGACY_RELEASE_TAGS:
         urls = [url for url in urls if url in checksums]
     for url in urls:
         if url not in checksums:
             raise ValueError(f"No recorded release checksum for '{url}'")
-    if not Path(NPM_BIN).is_file():
-        raise FileNotFoundError(f"Release installation requires `npm` at '{NPM_BIN}'")
+    npm_bin = str(Path(npm_bin or NPM_BIN).absolute())
+    if not Path(npm_bin).is_file():
+        raise FileNotFoundError(f"Release installation requires `npm` at '{npm_bin}'")
     prefix.mkdir(parents=True, exist_ok=True)
     home = prefix / "fetch-home"
     home.mkdir()
@@ -485,11 +885,11 @@ def fetch_release(tag: str, prefix: Path) -> Path:
     assets = []
     for url in urls:
         asset = prefix / url.rsplit("/", 1)[1]
-        assets.append(download_verified_asset(url, tag, checksums, asset))
+        assets.append(download_verified_asset(url, tag, checksums, asset, provenance))
     try:
         subprocess.check_output(
             [
-                NPM_BIN,
+                npm_bin,
                 "install",
                 "--global",
                 "--prefix",
@@ -501,7 +901,7 @@ def fetch_release(tag: str, prefix: Path) -> Path:
                 str(assets[0]),
             ],
             cwd=prefix,
-            env=env,
+            env=child_environment(os.environ, overrides=env),
             text=True,
             stderr=subprocess.STDOUT,
             timeout=600,

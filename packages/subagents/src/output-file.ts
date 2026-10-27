@@ -5,10 +5,11 @@
  * matching Claude Code's task output file format.
  */
 
-import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { type ModelFallback, modelFallbackNote } from "./model-resolver.js";
 
 /**
  * Project/global default for writing a subagent's `.output` transcript; a custom
@@ -78,6 +79,19 @@ export function ensureOutputFile(path: string): void {
   try {
     appendFileSync(path, "", "utf-8");
   } catch { /* ignore — streaming writes are best-effort too */ }
+}
+
+/** Append the model-fallback disclosure as a transcript line (best effort, like streaming writes). */
+export function appendModelFallbackEntry(path: string, agentId: string, fallback: ModelFallback): void {
+  try {
+    // A resumed agent reuses its transcript, which may already say it.
+    if (existsSync(path) && readFileSync(path, "utf-8").includes('"type":"model-fallback"')) return;
+    appendFileSync(
+      path,
+      `${JSON.stringify({ isSidechain: true, agentId, type: "model-fallback", modelFallback: fallback, note: modelFallbackNote(fallback), timestamp: new Date().toISOString() })}\n`,
+      "utf-8",
+    );
+  } catch { /* ignore */ }
 }
 
 /** Write the initial user prompt entry. */

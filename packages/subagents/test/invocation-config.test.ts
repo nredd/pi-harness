@@ -1,8 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveAgentInvocationConfig, resolveCwdParam, resolveJoinMode } from "../src/invocation-config.js";
-import { setAgentModels } from "../src/model-resolver.js";
 import type { AgentConfig } from "../src/types.js";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -22,7 +21,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 describe("resolveAgentInvocationConfig", () => {
-  it("uses an explicit tool-call model and locks the remaining config fields", () => {
+  it("uses explicit thinking and locks the remaining config fields", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
         model: "provider/config-model",
@@ -44,8 +43,6 @@ describe("resolveAgentInvocationConfig", () => {
       },
     );
 
-    expect(resolved.modelInput).toBe("provider/param-model");
-    expect(resolved.modelFromParams).toBe(true);
     expect(resolved.thinking).toBe("minimal");
     expect(resolved.maxTurns).toBe(42);
     expect(resolved.inheritContext).toBe(false);
@@ -65,8 +62,6 @@ describe("resolveAgentInvocationConfig", () => {
       isolation: "worktree",
     });
 
-    expect(resolved.modelInput).toBe("provider/param-model");
-    expect(resolved.modelFromParams).toBe(true);
     expect(resolved.thinking).toBe("minimal");
     expect(resolved.maxTurns).toBe(3);
     expect(resolved.inheritContext).toBe(true);
@@ -159,8 +154,6 @@ describe("resolveAgentInvocationConfig — thinking precedence", () => {
       { model: "provider/param-model", thinking: "max" },
     );
 
-    expect(resolved.modelInput).toBe("provider/param-model");
-    expect(resolved.modelFromParams).toBe(true);
     expect(resolved.thinking).toBe("max");
   });
 
@@ -178,29 +171,6 @@ describe("resolveAgentInvocationConfig — thinking precedence", () => {
       makeConfig(),
       { model: "provider/param-model", thinking: "max" },
     ).thinking).toBe("max");
-  });
-});
-
-describe("agentModels precedence", () => {
-  afterEach(() => setAgentModels(undefined));
-
-  it("orders param > agentModels[type] > agentModels['*'] > definition model", () => {
-    const config = makeConfig({ name: "Plan", model: "definition-model" });
-    setAgentModels({ Plan: "type-model", "*": "wildcard-model" });
-
-    const fromParam = resolveAgentInvocationConfig(config, { model: "param-model" }, { agentType: "Plan" });
-    expect(fromParam).toMatchObject({ modelInput: "param-model", modelFromParams: true });
-
-    const fromType = resolveAgentInvocationConfig(config, {}, { agentType: "Plan" });
-    expect(fromType).toMatchObject({ modelInput: "type-model", modelFromParams: false });
-
-    const fromWildcard = resolveAgentInvocationConfig(makeConfig({ name: "Explore", model: "definition-model" }), {}, { agentType: "Explore" });
-    expect(fromWildcard.modelInput).toBe("wildcard-model");
-
-    setAgentModels({ Plan: "type-model" });
-    expect(resolveAgentInvocationConfig(makeConfig({ name: "Explore", model: "definition-model" }), {}, { agentType: "Explore" }).modelInput)
-      .toBe("definition-model");
-    expect(resolveAgentInvocationConfig(makeConfig({ name: "Explore" }), {}, { agentType: "Explore" }).modelInput).toBeUndefined();
   });
 });
 
