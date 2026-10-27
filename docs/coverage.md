@@ -13,7 +13,7 @@ independent runtime signals keep their own ratchets. Pending packages then fail,
 
 ## Independent signals
 
-Clean local counts, report hashes and the measured +23-second (7.7%) serial runtime sample are
+Clean local counts, report hashes and the measured +26-second (8.5%) serial runtime sample are
 recorded [here](../coverage/receipts/phase0-macos.md). This is not a hosted-CI timing claim.
 
 The accounting script consumes LCOV, not runner APIs. Primary reports currently come from

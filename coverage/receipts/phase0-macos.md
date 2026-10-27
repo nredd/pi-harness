@@ -1,8 +1,12 @@
 # Phase 0 measurement receipt
 
 Production source: `67730bb718635067bb42375ecf08af9f4f904bdd` (`origin/main` at worktree creation).
-Only coverage configuration/manifests changed before these measurements; no production source or
-existing assertions changed. Fresh worktree `~/code/cov-phase0`, initialized only its core Gitlink,
+Only coverage configuration/manifests changed in this PR; no production source or existing
+assertions changed. Main advanced with #150/#151 during execution; the worktree was rebased onto
+`fd5d638269e4d11a71773a47389b345991ad4b96`. The affected subagents source was remeasured cleanly
+at that base, including the newly owned `src/ui/fallback-flag.ts`; its table entries and hashes
+below are the refreshed measurements. Other measured production packages were unchanged by
+those main commits. Computer-use's changed source remains explicitly unmeasured. Fresh worktree `~/code/cov-phase0`, initialized only its core Gitlink,
 `make install` exit 0. macOS 27.2 arm64, Node 26.12.0, pinned Bun 1.3.14 (isolated npm install,
 not the workstation's Bun 1.4.4). Vitest 5.0.3/V8 except todo 4.1.12/V8 and subagents
 4.1.12/Istanbul. c8 12.0.0. Run serially, one workspace at a time; one Vitest worker.
@@ -25,7 +29,7 @@ explicitly inventoried subset, never a complete-source denominator and never mer
 | todo | 957 / 220 | 121 / 20 | 1273 / 94 | 936 / 71 | 387 / 0 |
 | plan-mode | 2994 / 699 | 552 / 138 | 6127 / 541 | 3479 / 245 | 539 / 0 |
 | session-kit | 3526 / 824 | 111 / 31 | 5587 / 814 | 859 / 116 | 711 / 0 |
-| subagents | 6557 / 1291 | 533 / 73 | 13214 / 1066 | 7727 / 506 | 2769 / 7 |
+| subagents | 6630 / 1309 | 525 / 72 | 13383 / 1085 | 7821 / 515 | 2969 / 7 |
 | inprocess | 180 / 56 | 15 / 4 | 354 / 66 | 22 / 4 | 64 / 0 |
 | import-audit | 161 / 7 | 9 / 0 | N/A | N/A | 8 / 0 |
 | probes | 45 / 1 | 45 / 1 | N/A | N/A | 15 / 0 |
@@ -47,13 +51,13 @@ removed. This extra control execution is measurement work ONLY, not CI wiring.
 | todo | 10 | 10 | 0 | 1 |
 | plan-mode | 22 | 25 | 1 | 1 |
 | session-kit | 57 | 62 | 6 | 7 |
-| subagents | 137 | 148 | 2 | 2 |
+| subagents | 144 | 158 | 2 | 2 |
 | inprocess | 23 | 25 | 8 | 8 |
 | import-audit | 1 | 0 | N/A | N/A |
 | probes | 8 | 9 | N/A | N/A |
-| Total | 276 | 297 | 23 | 25 |
+| Total | 283 | 307 | 23 | 25 |
 
-Measured aggregate delta: **23 seconds**, 299 -> 322 seconds (**7.7%**), excluding install,
+Measured aggregate delta: **26 seconds**, 306 -> 332 seconds (**8.5%**), excluding install,
 lint/type checks and pending packages. Seconds are coarse wall-clock samples on a variable-load
 host, not a CI promise; 0 means under one second, not zero work. Accounting alone took about
 0.5 seconds. Initial duplicate `--maxWorkers=1` sampler invocations failed argument parsing;
@@ -71,7 +75,8 @@ line is `src/presentation.ts:78`. The initial policy uses that clean native-chec
 retaining both LCOV hashes rather than silently claiming the lower sample is stable.
 CI/Linux deltas have not yet been measured.
 
-Local raw logs and snapshots: `/tmp/cov-phase0-results/`, including `timing.txt` and
+Local raw logs and snapshots: `/tmp/cov-phase0-results/`, including `timing.txt`,
+`refresh-timing.txt`, the `subagents-refresh-*.log` files, `base-refresh-gates.log` and
 `baseline-lcov/`. SHA-256 binds the following clean-run raw LCOV bytes (before source-only
 accounting removes test helpers, sibling imports and justified generated duplicates):
 
@@ -87,8 +92,8 @@ accounting removes test helpers, sibling imports and justified generated duplica
 | session-kit primary (111, clean second run) | `75a114dbada4abdc3a57fdbe7ada8c2afce4d608d815494090e2484864a139bf` |
 | session-kit primary (110, first timing sample) | `cfac269a0ad761cd561a961cb4ebe9e2e41e8b72c97198705e89505d9df6cc27` |
 | session-kit bun | `dfa4c11f17f88f89ae5d0d52f9402271c0f0d78c3e98d2c47d7040f46ffdd26e` |
-| subagents primary | `56dc7a70abc90c3e4ec8392a0a98057836b5ec1b822a7c0e876a5fa0906953ef` |
-| subagents bun | `8b15c590df22e86a3147bc00fe6564b63c68bf1784726ed139df27b006c178b5` |
+| subagents primary (refreshed base) | `cdeee11bf817eeefc751fc710b6d136c807235c13e4f5136596e6d9a5d4dfefa` |
+| subagents bun (refreshed base) | `348aa0afb1baa4fbbcbb1242323f9d424cce3fac7535b432b4a5e0bda8c718f1` |
 | subscription-router primary | `67e3fa0dec4b13d1cb75156a78af98e5ad517c81067513cabb87ab7ba7147f89` |
 | subscription-router bun | `3e4396ec1880cc5393712479a6ef7ea2382b31ed279b8a31e01ae19c0b9b0f20` |
 | todo primary | `5cd18fbcfd31744ec74ca3f0b2e9106e1355782b69e8b7804444a27ae80fb32d` |
@@ -104,8 +109,11 @@ Gate receipts:
   whole-workspace linters; package-local `coverage/` ignores fix that generated-output issue.
 - The corrected native `plan-mode` and `inprocess` checks both passed, including their primary
   and declared Bun suites. Other package checks passed in the full gate except dev-tools.
-- `make check-scripts`: formatter, ruff, ty, 721 tests and the 8-test c8 import audit passed.
-  Three subsequently added wiring regressions passed with all accounting/producer tests (37 total).
+  After the base refresh, subagents' clean control/primary/Bun runs, lint and typecheck passed;
+  computer-use's changed native check also passed, with Linux-native/live checks explicitly NOT RUN
+  on this macOS host.
+- `make check-scripts` after the base refresh: formatter, ruff, ty, 728 tests (including all
+  37 accounting/producer tests) and the 8-test c8 import audit passed.
 - `make check-integration`: formatter, ruff, ty, 272 tests and the 15-test Node probe gate passed.
 - `make check-benchmark`: 91 passed with isolated Codex 0.154.0; combined coverage 92.98% clears
   its unchanged 90% gate. No performance baseline was regenerated.

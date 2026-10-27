@@ -105,6 +105,8 @@ def test_pinned_bun_lcov_only_threshold_bypass(tmp_path: Path) -> None:
     )
     argv = [executable, "test", "--coverage", "--coverage-reporter=lcov"]
     bypass = subprocess.run(argv, cwd=tmp_path, capture_output=True, check=False)
+    actual_lcov = (tmp_path / "coverage/lcov.info").read_text()
+    assert "FNF:2\nFNH:1\n" in actual_lcov
     enforced = subprocess.run(
         [*argv, "--coverage-reporter=text"], cwd=tmp_path, capture_output=True, check=False
     )

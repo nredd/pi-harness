@@ -126,7 +126,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 533, "functions": 73 },
+          "max_uncovered": { "lines": 525, "functions": 72 },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -143,7 +143,7 @@
             "src/quota-admission.ts", "src/schedule-store.ts", "src/schedule.ts", "src/settings.ts",
             "src/skill-loader.ts", "src/startup-error.ts", "src/status-note.ts", "src/structured-output.ts",
             "src/ui/agent-mention.ts", "src/ui/agent-row.ts", "src/ui/agent-widget.ts",
-            "src/ui/conversation-viewer.ts", "src/ui/fleet-list.ts", "src/ui/notification-view.ts",
+            "src/ui/conversation-viewer.ts", "src/ui/fallback-flag.ts", "src/ui/fleet-list.ts", "src/ui/notification-view.ts",
             "src/ui/schedule-menu.ts", "src/ui/select-item.ts", "src/ui/viewer-keys.ts",
             "src/ui/workflow-card.ts", "src/ui/workflow-dialog.ts", "src/ui/workflow-menu.ts", "src/usage.ts",
             "src/workflow/collisions.ts", "src/workflow/entry.ts", "src/workflow/host.ts",
@@ -152,7 +152,7 @@
             "src/workflow/task.ts", "src/workflow/tool-description.ts", "src/workflow/worker-source.ts",
             "src/worktree.ts", "src/xml.ts"
           ],
-          "max_uncovered": { "lines": 7727, "functions": 506 },
+          "max_uncovered": { "lines": 7821, "functions": 515 },
           "reporters": ["text", "lcov"]
         }
       }
