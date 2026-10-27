@@ -133,6 +133,8 @@ CA_FILE_ENVIRONMENT_KEYS = frozenset(
 )
 CA_ENVIRONMENT_KEYS = CA_FILE_ENVIRONMENT_KEYS | {"SSL_CERT_DIR"}
 CONNECTIVITY_ENVIRONMENT_KEYS = PROXY_ENVIRONMENT_KEYS | CA_ENVIRONMENT_KEYS
+# Fixed-width percent escapes have no greedy/unanchored scheme-search behavior.
+PERCENT_ESCAPE = re.compile(r"%[0-9a-fA-F]{2}")
 URL_SCHEME_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
 URL_AUTHORITY_DELIMITERS = frozenset("/\"'<>?#")
 PASSWORD_MASK_CHARACTERS = "*#~!^|?+="
@@ -523,6 +525,10 @@ def redact_diagnostic(text: str) -> str:
         text = replace_diagnostic_token(text, token)
     if not passwords:
         return text
+    # Escaped hex digits are case-insensitive. Normalize only escape spelling, never
+    # ordinary letters, so mixed `%c3%A4` forms cannot bypass literal password passes.
+    text = normalize_percent_escape_case(text)
+    passwords = {normalize_percent_escape_case(password) for password in passwords}
     alphabet = set("".join(passwords))
     mask = next((character for character in PASSWORD_MASK_CHARACTERS if character not in alphabet), "")
     if not mask:
@@ -533,6 +539,21 @@ def redact_diagnostic(text: str) -> str:
         if password:
             text = text.replace(password, mask)
     return text
+
+
+def normalize_percent_escape_case(text: str) -> str:
+    """Canonicalize percent-escape hex case in linear time without decoding or lowercasing text.
+
+    Parameters:
+        text (str): diagnostic or known password representation.
+
+    Returns:
+        str: text with only fixed-width percent-escape hex digits uppercased.
+
+    Raises:
+        None: valid string inputs do not raise.
+    """
+    return PERCENT_ESCAPE.sub(lambda match: match[0].upper(), text)
 
 
 def redact_url_userinfo(text: str) -> str:

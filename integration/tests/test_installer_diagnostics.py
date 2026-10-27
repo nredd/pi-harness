@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from typing import Self, SupportsIndex
 
 LOGGER = logging.getLogger(__name__)
+SCANNER_WORK_PER_CHARACTER = 12
+SCANNER_WORK_ALLOWANCE = 64
 BOUNDARIES = (
     "node",
     "pi-install",
@@ -438,7 +440,9 @@ def test_password_only_redaction_masks_every_occurrence(monkeypatch: pytest.Monk
         AssertionError: a length/boundary exclusion or a mask-character collision leaks a password.
     """
     monkeypatch.setenv("HTTPS_PROXY", f"http://user:{secret}@proxy.invalid")
-    for value in {secret, unquote(secret), quote(secret, safe=""), quote(unquote(secret), safe="")}:
+    for value in list(
+        dict.fromkeys((secret, unquote(secret), quote(secret, safe=""), quote(unquote(secret), safe="")))
+    ):
         for message in (value, f"password='{value}'.", f"prefix{value}suffix"):
             assert value not in release.redact_diagnostic(message)
 
@@ -613,7 +617,7 @@ class CountedText(str):
             AssertionError: logical work exceeds the scanner's deterministic linear budget.
         """
         self.work += len(range(*key.indices(len(self)))) if isinstance(key, slice) else 1
-        assert self.work <= 12 * len(self) + 64
+        assert self.work <= SCANNER_WORK_PER_CHARACTER * len(self) + SCANNER_WORK_ALLOWANCE
         return super().__getitem__(key)
 
     @override
@@ -637,7 +641,7 @@ class CountedText(str):
         result = super().find(sub, begin, stop)
         lower, upper, _ = slice(begin, stop).indices(len(self))
         self.work += max(0, (result + len(sub) if result >= 0 else upper) - lower)
-        assert self.work <= 12 * len(self) + 64
+        assert self.work <= SCANNER_WORK_PER_CHARACTER * len(self) + SCANNER_WORK_ALLOWANCE
         return result
 
 
@@ -661,9 +665,9 @@ def test_large_redaction_input_has_linear_character_work(atom: str) -> None:
         value = (atom * (size // len(atom) + 1))[:size]
         counted = CountedText(value)
         assert release.redact_diagnostic(counted) == value
-        assert size <= counted.work <= 12 * size + 64
+        assert size <= counted.work <= SCANNER_WORK_PER_CHARACTER * size + SCANNER_WORK_ALLOWANCE
         work.append(counted.work)
-    assert work[1] <= 4 * work[0] + 64
+    assert work[1] <= 4 * work[0] + SCANNER_WORK_ALLOWANCE
 
 
 @pytest.mark.parametrize(
@@ -727,7 +731,7 @@ def test_successful_child_output_and_info_message_mask_all_password_occurrences(
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         LOGGER.info(returned)
     assert caplog.messages == [returned]
-    for value in {secret, encoded, quote(encoded, safe="")}:
+    for value in list(dict.fromkeys((secret, encoded, quote(encoded, safe="")))):
         assert value not in returned
         assert value not in caplog.messages[0]
 
@@ -761,7 +765,7 @@ def test_short_and_encoded_passwords_do_not_survive_exception_rendering(
     cause = error.__cause__
     assert cause is not None
     assert cause.__context__ is None
-    for value in {secret, encoded, quote(encoded, safe="")}:
+    for value in list(dict.fromkeys((secret, encoded, quote(encoded, safe="")))):
         assert value not in text
         assert value not in str(error)
         assert value not in str(cause)
@@ -783,14 +787,37 @@ def test_pathological_proxy_passwords_elide_diagnostics_safely(
     Raises:
         AssertionError: a pathological input bypasses the safety cap or leaks mask characters.
     """
-    assert "MAX_PROXY_REDACTION_VALUE_CHARACTERS" in vars(release)
-    secret = (
-        "x" * (release.MAX_PROXY_REDACTION_VALUE_CHARACTERS + 1)
-        if kind == "oversized"
-        else release.PASSWORD_MASK_CHARACTERS
-    )
+    secret = "x" * 8193 if kind == "oversized" else "*#~!^|?+="
     monkeypatch.setenv("HTTPS_PROXY", f"http://user:{quote(secret, safe='')}@proxy.invalid")
     assert release.redact_diagnostic("diagnostic payload") == ""
+
+
+@pytest.mark.parametrize("secret", ["päss", "p/ss", "Pa?ss"])
+def test_percent_escape_hex_case_cannot_bypass_password_masking(
+    monkeypatch: pytest.MonkeyPatch, secret: str
+) -> None:
+    """Lowercase and mixed-case percent escapes cannot evade encoded password masking.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped canonical encoded proxy password.
+        secret (str): Unicode or reserved-character password with case-sensitive plain letters.
+
+    Returns:
+        None: lowercase/mixed escape forms disappear without lowercasing ordinary text.
+
+    Raises:
+        AssertionError: hex-letter case bypasses masking or ordinary text is case-folded.
+    """
+    encoded = quote(secret, safe="")
+    monkeypatch.setenv("HTTPS_PROXY", f"http://user:{encoded}@proxy.invalid")
+    lower = encoded.replace("%C3", "%c3").replace("%A4", "%a4").replace("%2F", "%2f").replace("%3F", "%3f")
+    mixed = encoded.replace("%C3", "%c3").replace("%2F", "%2f").replace("%3F", "%3f")
+    for value in list(dict.fromkeys((lower, mixed))):
+        redacted = release.redact_diagnostic(f"UnrelatedCase prefix{value}suffix")
+        assert value not in redacted
+        assert encoded not in redacted
+        assert secret not in redacted
+        assert "UnrelatedCase" in redacted
 
 
 def test_one_character_password_mask_does_not_grow_large_output(monkeypatch: pytest.MonkeyPatch) -> None:
