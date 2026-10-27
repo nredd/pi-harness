@@ -1,7 +1,7 @@
 /**
  * fallback-flag-renderers.test.ts -- ONE table walks EVERY renderer that shows
  * model info with a fallback record and pathological text, and asserts the
- * `[fallback` flag is present, comes BEFORE the unbounded text, and the line
+ * fallback flag is present (compact for a narrow fleet), comes BEFORE the unbounded text, and the line
  * fits the width. A renderer that bypasses `src/ui/fallback-flag.ts` and appends
  * its marker after the label/stats fails here at the narrow widths.
  */
@@ -44,6 +44,8 @@ interface Case {
   render: (ugly: string, width: number) => string;
   /** Widths where this renderer shows a row at all (the agent-level dialog has no list pane when narrow). */
   widths?: number[];
+  /** Fleet rows compact the shared flag before clipping spend at narrow widths. */
+  compactFlagAt?: number;
 }
 
 const record = (over: Partial<AgentRecord> = {}): AgentRecord =>
@@ -75,7 +77,7 @@ function fleetLine(rec: AgentRecord, width: number): string {
   } as FleetUICtx);
   fleet.update();
   const lines: string[] = factory({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, theme).render(width);
-  return lines.find(l => l.includes("[fallback")) ?? lines.join("\n");
+  return lines.find(l => /\[fallback|\[fb\]|^\s*[●○]\s+!/.test(l)) ?? lines.join("\n");
 }
 
 const agentEntry = (over: Partial<WorkflowAgentEntry>): WorkflowAgentEntry =>
@@ -146,7 +148,7 @@ const CASES: Case[] = [
       return lines.find(l => l.includes("↳")) ?? lines.join("\n");
     },
   },
-  { name: "fleet list row", render: (u, w) => fleetLine(record({ description: u, invocation: { modelName: u } }), w) },
+  { name: "fleet list row", compactFlagAt: 40, render: (u, w) => fleetLine(record({ description: u, invocation: { modelName: u } }), w) },
 ];
 
 describe("every renderer keeps a leading [fallback] flag that unbounded text cannot hide", () => {
@@ -156,7 +158,9 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
         it(`${c.name} / ${kind} / ${width} cols`, () => {
           const line = c.render(ugly, width);
           const text = strip(line);
-          const flagAt = text.indexOf("[fallback");
+          const flagAt = c.compactFlagAt !== undefined && width <= c.compactFlagAt
+            ? text.search(/\[fallback|\[fb\]|!/)
+            : text.indexOf("[fallback");
           expect(flagAt, `flag missing in: ${JSON.stringify(text)}`).toBeGreaterThanOrEqual(0);
           const marker = strip(ugly)[0]!;
           const markerAt = text.indexOf(marker);
