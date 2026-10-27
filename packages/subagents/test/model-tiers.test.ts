@@ -28,7 +28,7 @@ beforeEach(async () => {
   registry = new ModelRegistry(runtime);
   registry.registerProvider("tier-test", {
     api: "openai-completions", baseUrl: "http://localhost:1", apiKey: "fixture-not-a-secret",
-    models: ["parent", "a", "b", "gpt-6-luna", "gpt-7-luna", "tier-unique-pin"].map(id => ({
+    models: ["parent", "a", "b", "gpt-6-luna", "gpt-7-luna", "tier-unique-pin", "revision@20240620"].map(id => ({
       id, name: id, reasoning: false, input: ["text"], contextWindow: 1000, maxTokens: 100, cost: costs,
     })),
   });
@@ -75,6 +75,16 @@ describe("exact model tiers", () => {
     const admit = vi.fn(async (model: string) => ({ quotaSignal: true, block: { model, resetAt: 1234, wait: false } }));
     expect(await resolveTier("cheap", { registry, admit })).toMatchObject({ kind: "exhausted", tier: "cheap", block: { wait: false }, skipped: [{ why: "quota" }, { why: "quota" }] });
     expect(admit.mock.calls.map(([model]) => model)).toEqual([ref("a"), ref("b")]);
+  });
+
+  it("accepts exact revision-qualified model ids without treating @ as tier nesting", async () => {
+    const member = ref("revision@20240620");
+    setModelTiers({ cheap: [member] }, {});
+    expect(await resolveTier("cheap", { registry, admit: open })).toMatchObject({ kind: "static", member, model: { id: "revision@20240620" } });
+    setModelAliases({ enterprise: [member] });
+    expect(select("enterprise")).toMatchObject({ model: { id: "revision@20240620" }, tierBinding: { kind: "static" } });
+    expect(selectModel({ agentType: "Scout", definitionModel: member, parentModel: registry.find("tier-test", "parent"), registry, cwd: dir })).toMatchObject({ outcome: "resolved", model: { id: "revision@20240620" } });
+    expect(parseTierBinding("cheap", ["@other"])).toBeUndefined();
   });
 
   it("keeps fuzzy matching exclusive to explicit non-tier tool inputs", () => {

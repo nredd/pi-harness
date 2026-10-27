@@ -48,7 +48,7 @@ export interface TierAdmission {
 }
 
 const TIER_NAME = /^[a-z0-9][a-z0-9._-]*$/;
-const MODEL_REF = /^[^\s/@]+\/[^\s@]+$/;
+const MODEL_REF = /^[^\s/]+\/\S+$/;
 let bindings: Record<string, string[]> = {};
 let policy: ModelResolution = {};
 
