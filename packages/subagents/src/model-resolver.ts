@@ -40,14 +40,9 @@ export function setAgentModels(models: Record<string, string> | undefined): void
   agentModels = new Map(Object.entries(models ?? {}).map(([type, model]) => [type.toLowerCase(), model]));
 }
 
-/**
- * The model input a spawn of `type` should use when the caller named none:
- * `agentModels[type]`, then `agentModels["*"]`, then the agent definition's own
- * `model:` (`definitionModel`). The parent model is the floor, applied by the
- * caller when this returns `undefined`.
- */
-export function configuredAgentModel(type: string, definitionModel: string | undefined): string | undefined {
-  return agentModels.get(type.toLowerCase()) ?? agentModels.get("*") ?? definitionModel;
+/** A snapshot for the shared selection policy; callers cannot mutate configuration. */
+export function getAgentModels(): ReadonlyMap<string, string> {
+  return new Map(agentModels);
 }
 
 /**
@@ -119,26 +114,6 @@ export function modelFallbackNote(fallback: ModelFallback | undefined): string {
   const inputs = [fallback.input, ...(fallback.also ?? [])];
   const named = inputs.length === 1 ? `model "${inputs[0]}" did` : `models ${inputs.map(i => `"${i}"`).join(", ")} did`;
   return `Note: configured ${named} not resolve; running on ${used}.`;
-}
-
-/**
- * The model a spawn that named none runs on: `agentModels[type]`, then
- * `agentModels["*"]`, then the definition's `model:` (see `configuredAgentModel`),
- * resolved with the same `resolveModel` the `Agent` tool uses, else the parent.
- * `fallback` is set when a configured input did not resolve. The one selection
- * step for every spawn path that has no tool-call model (runner, scheduler).
- */
-export function selectConfiguredModel(
-  type: string,
-  definitionModel: string | undefined,
-  parent: { provider: string; id: string } | undefined,
-  registry: ModelRegistry,
-): { model: any; fallback?: ModelFallback } {
-  const input = configuredAgentModel(type, definitionModel);
-  if (input === undefined) return { model: parent };
-  const resolved = resolveModel(input, registry);
-  if (typeof resolved === "string") return { model: parent, fallback: modelFallbackTo(input, parent) };
-  return { model: resolved };
 }
 
 /** API id pi gives virtual catalog entries such as `router/default`; they never reach a provider. */

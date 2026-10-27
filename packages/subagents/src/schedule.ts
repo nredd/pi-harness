@@ -15,7 +15,6 @@
  *     `subagent-notification` path. No new delivery code.
  */
 
-import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
@@ -23,7 +22,7 @@ import type { AgentManager } from "./agent-manager.js";
 import { normalizeMaxTurns } from "./agent-runner.js";
 import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
-import { configuredAgentModel, type ModelFallback, modelFallbackTo, resolveModel, selectConfiguredModel } from "./model-resolver.js";
+import { type ModelSelection, selectModel } from "./model-selection.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
 import type { ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
@@ -247,24 +246,29 @@ export class SubagentScheduler {
 
     store.update(id, { lastStatus: "running" });
 
-    // Resolve model at fire time — registry contents may have changed since the
-    // job was created (auth added/removed). Fall back silently to spawn-default
-    // if resolution fails; the spawn path handles undefined model gracefully.
-    let resolvedModel: Model<any> | undefined;
-    let unresolvedModel: string | undefined;
-    if (job.model) {
-      const r = resolveModel(job.model, ctx.modelRegistry);
-      if (typeof r !== "string") resolvedModel = r;
-      else unresolvedModel = job.model;
+    // Resolve the original request at fire time, using the same type and model
+    // policy as a manual dispatch. Never drop a failed explicit override.
+    const dispatch = resolveSpawnType(job.subagent_type);
+    const config = dispatch.ok ? getAgentConfig(dispatch.type) : undefined;
+    const selection = dispatch.ok ? selectModel({
+      agentType: dispatch.type, definitionModel: config?.model, agentLabel: config?.displayName,
+      paramModel: job.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd,
+    }) : dispatch.message;
+    if (typeof selection === "string") {
+      store.update(id, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.emit({ type: "error", jobId: id, error: selection });
+      return;
     }
+
+    if (selection.scopeWarning) ctx.ui.notify(selection.scopeWarning, "warning");
 
     // A quota-parked job re-asks the router before starting: the window it
     // waited for may have refilled while another is still exhausted.
-    const admissionModel = resolvedModel ?? ctx.model;
+    const admissionModel = selection.model;
     if (job.quotaParked && admissionModel) {
       void checkAdmission(pi.events, modelRef(admissionModel)).then(block => {
         if (!block) {
-          this.spawnJob(id, resolvedModel, unresolvedModel);
+          this.spawnJob(id, selection);
         } else if (mayPark(block) && block.resetAt > this.clock.now()) {
           this.repark(id, block.resetAt);
         } else {
@@ -277,18 +281,7 @@ export class SubagentScheduler {
       });
       return;
     }
-    this.spawnJob(id, resolvedModel, unresolvedModel);
-  }
-
-  /** What the runner will pick for a spawn with no model, as a fallback away from `input`. */
-  private selectionAfterUnresolved(input: string, type: string): ModelFallback {
-    const definitionModel = getAgentConfig(type)?.model;
-    const selection = selectConfiguredModel(type, definitionModel, this.ctx?.model, this.ctx?.modelRegistry as never);
-    const agentsOwn = configuredAgentModel(type, definitionModel) !== undefined && !selection.fallback;
-    // Both failures are kept: the manager records only one fallback, and the
-    // stored model must not hide a failed `agentModels` override.
-    const also = selection.fallback && selection.fallback.input !== input ? [selection.fallback.input] : undefined;
-    return { ...modelFallbackTo(input, selection.model), via: agentsOwn ? "agent" : "parent", ...(also ? { also } : {}) };
+    this.spawnJob(id, selection);
   }
 
   /** Re-arm a quota-parked one-shot at a later reset instead of starting it. */
@@ -302,7 +295,7 @@ export class SubagentScheduler {
   }
 
   /** Spawn a fired job (bypassing the concurrency queue) and persist its outcome. */
-  private spawnJob(id: string, resolvedModel: Model<any> | undefined, unresolvedModel?: string): void {
+  private spawnJob(id: string, selection: ModelSelection): void {
     const store = this.store;
     const pi = this.pi;
     const ctx = this.ctx;
@@ -325,11 +318,8 @@ export class SubagentScheduler {
         description: job.description,
         isBackground: true,
         bypassQueue: true,
-        model: resolvedModel,
-        // An unresolved stored model leaves `model` unset, so selection is the
-        // runner's: the definition's `model:` when it resolves, else the parent.
-        // Selection is unchanged; the record names the failed input and what ran.
-        ...(unresolvedModel !== undefined ? { modelFallback: this.selectionAfterUnresolved(unresolvedModel, dispatch.type) } : {}),
+        model: selection.model,
+        modelSelection: selection,
         maxTurns: job.max_turns,
         isolated: job.isolated,
         thinkingLevel: job.thinking,
