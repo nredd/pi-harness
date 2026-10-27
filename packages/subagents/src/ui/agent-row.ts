@@ -26,6 +26,7 @@ import {
   SPINNER,
   type Theme,
 } from "./agent-widget.js";
+import { fallbackFlag } from "./fallback-flag.js";
 
 /** Lines of the result shown when expanded; the rest is one `get_subagent_result` away. */
 const EXPANDED_RESULT_LINES = 50;
@@ -106,7 +107,9 @@ export function agentRowSummary(
   if (tokenText) parts.push(tokenText);
   if (cost) parts.push(cost);
   if (!finished && details.backgroundHint && elapsed >= 2000) parts.push("(ctrl+b to run in background)");
-  return `${icon} ${parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(` ${theme.fg("dim", "·")} `)}`;
+  // Leading, ahead of the status text, which may carry a 300-char error.
+  const flag = fallbackFlag(theme, record?.modelFallback ? record : details);
+  return `${icon} ${flag ? `${flag} ` : ""}${parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(` ${theme.fg("dim", "·")} `)}`;
 }
 
 /**
@@ -116,7 +119,9 @@ export function agentRowSummary(
  */
 function tagsLine(details: AgentDetails, theme: Theme): string | undefined {
   const parts = [...(details.modelName ? [details.modelName] : []), ...(details.tags ?? [])];
-  return parts.length > 0 ? theme.fg("dim", `↳ ${parts.join(" · ")}`) : undefined;
+  const flag = fallbackFlag(theme, details);
+  if (parts.length === 0 && !flag) return undefined;
+  return `${theme.fg("dim", "↳")} ${flag ? `${flag} ` : ""}${theme.fg("dim", parts.join(" · "))}`;
 }
 
 /** The transcript as an OSC 8 hyperlink, so a click opens it. */
@@ -195,6 +200,7 @@ export class AgentResultView implements Component {
     const record = this.details.agentId ? this.live.getRecord(this.details.agentId) : undefined;
     const tags = tagsLine(this.details, this.theme);
     if (tags) lines.push(truncateToWidth(tags, width));
+    if (this.details.modelNote) lines.push(...wrapTextWithAnsi(this.theme.fg("warning", this.details.modelNote), width));
     const transcript = record?.outputFile ?? this.details.outputFile;
     if (transcript) lines.push(truncateToWidth(transcriptLink(transcript, this.theme), width));
 

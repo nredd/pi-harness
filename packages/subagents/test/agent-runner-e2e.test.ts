@@ -362,4 +362,65 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
       expect(active).not.toContain("codemode");
     });
   });
+
+  describe("a definition `model:` that does not resolve reports its fallback (real runAgent)", () => {
+    async function fallbacksFor(model: string | undefined, explicit?: boolean): Promise<unknown[]> {
+      registerAgents(
+        new Map([
+          [
+            "e2e",
+            {
+              name: "e2e",
+              description: "e2e",
+              builtinToolNames: BUILTINS,
+              skills: false,
+              systemPrompt: "You are e2e.",
+              promptMode: "replace",
+              inheritContext: false,
+              runInBackground: false,
+              isolated: false,
+              ...(model !== undefined ? { model } : {}),
+            } as AgentConfig,
+          ],
+        ]),
+      );
+      const parent = faux.getModel();
+      const modelRegistry: any = {
+        find: (provider: string, id: string) => (provider === parent.provider && id === parent.id ? parent : undefined),
+        getAll: () => [parent],
+        getAvailable: () => [parent],
+        hasConfiguredAuth: () => true,
+        isUsingOAuth: () => false,
+        getApiKeyAndHeaders: async () => ({ apiKey: "faux", headers: {} }),
+        registerProvider: () => {},
+        unregisterProvider: () => {},
+      };
+      const ctx: any = { cwd, getSystemPrompt: () => "PARENT", isProjectTrusted: () => true, model: parent, modelRegistry };
+      const reported: unknown[] = [];
+      try {
+        await runAgent(ctx, "e2e", "go", {
+          pi: makePi(),
+          ...(explicit ? { model: parent } : {}),
+          onModelFallback: (fallback) => reported.push(fallback),
+        });
+      } catch {
+        // The prompt turn may fail without a live model; the fallback is
+        // reported before any session exists.
+      }
+      return reported;
+    }
+
+    it("reports the unresolved input and the parent model it ran on", async () => {
+      expect(await fallbacksFor("nope/missing")).toEqual([{ input: "nope/missing", used: "faux/faux-1" }]);
+    });
+
+    it("reports nothing when the configured model resolves", async () => {
+      expect(await fallbacksFor("faux/faux-1")).toEqual([]);
+    });
+
+    it("reports nothing when no model is configured, or the caller already chose one", async () => {
+      expect(await fallbacksFor(undefined)).toEqual([]);
+      expect(await fallbacksFor("nope/missing", true)).toEqual([]);
+    });
+  });
 });

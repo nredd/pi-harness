@@ -417,6 +417,12 @@ describe("per-agent detail", () => {
     expect(rightRows(rows).map(bare).join("\n")).toContain("anthropic/claude-haiku-4-5");
   });
 
+  it("names the model fallback note in the detail pane", () => {
+    const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model a/b.';
+    const rows = detail({ progress: [agentEntry({ index: 0, state: "done", modelNote })] });
+    expect(rightRows(rows).map(bare).join("\n")).toContain("did not resolve");
+  });
+
   it("shows the thinking level and discloses one that was clamped", () => {
     const rows = detail({
       progress: [agentEntry({ index: 0, state: "done", thinking: "low", requestedThinking: "max" })],

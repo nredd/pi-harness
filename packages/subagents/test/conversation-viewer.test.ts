@@ -139,6 +139,16 @@ describe("ConversationViewer invocation line", () => {
     })).toBe("↳ anthropic/claude-haiku-4-5 · thinking: low (asked max)");
   });
 
+  it("names the model fallback on the row, between the model and the tags", () => {
+    const viewer = new ConversationViewer(
+      mockTui(30, 200), mockSession([]),
+      mockRecord({ invocation: { modelName: "sonnet 4.6", modelId: "anthropic/claude-sonnet-4-6", thinking: "high" }, modelFallback: { input: "ghost", used: "anthropic/claude-sonnet-4-6" } }),
+      undefined, { fg: (_c: string, t: string) => t, bold: (t: string) => t } as any, vi.fn(),
+    );
+    const row = viewer.render(200).find(l => l.includes("↳")) ?? "";
+    expect(row).toContain("[fallback] anthropic/claude-sonnet-4-6 · thinking: high");
+  });
+
   it("renders no row at all for a record with no invocation", () => {
     expect(invocationLine(undefined)).toBe("");
   });

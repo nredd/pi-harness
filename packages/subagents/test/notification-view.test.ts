@@ -56,6 +56,36 @@ describe("collapsed notice", () => {
   });
 });
 
+describe("model fallback", () => {
+  const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+
+  const long = "x".repeat(300);
+
+  it("is spelled out when expanded, and a LEADING flag survives a long description when collapsed", () => {
+    expect(render(details({ modelNote }), true).join("\n")).toContain(modelNote);
+    for (const width of [80, 120]) {
+      const [line] = render(details({ modelNote, description: long }), false, true, width);
+      expect(line).toContain("[fallback]");
+    }
+    expect(render(details(), false).join("")).not.toContain("fallback");
+    expect(render(details(), true).join("\n")).not.toContain("did not resolve");
+  });
+
+  it("counts fallback members in the group heading even when the fallback member is listed last", () => {
+    const members = [
+      details({ id: "a", description: long }),
+      details({ id: "b", description: long }),
+      details({ id: "c", description: "last", modelNote }),
+      details({ id: "d", description: "also", modelNote }),
+    ];
+    for (const width of [80, 120]) {
+      const [line] = renderNotification({ ...members[0]!, others: members.slice(1) }, false, theme, true).render(width);
+      expect(line).toContain("[fallback x2]");
+    }
+    expect(groupSummary([details(), details({ id: "z" })], theme)).not.toContain("fallback");
+  });
+});
+
 describe("grouped notice", () => {
   const group = {
     ...details({ description: "a" }),

@@ -16,7 +16,7 @@ to remaining capacity and reset timing, without adding network reads or changing
 Install:
 
 ```sh
-pi install npm:@nredd/pi-subscription-router@0.4.0
+pi install npm:@nredd/pi-subscription-router@0.4.1
 ```
 
 Config lives in `<agentDir>/subscription-router.json` (`~/.pi/agent/` by default). No file means
@@ -53,7 +53,7 @@ Routing:
 Balanced scoring (conditional fairness guarantees and exclusions [here](https://github.com/nredd/pi-harness/blob/main/packages/subscription-router/docs/fairness.md)):
 
 - For each applicable provider/family window, `remaining = 1 - usedPercent / 100`, `timeLeft = clamp((resetAt - now) / durationMs, 0.05, 1)`, `score = remaining / timeLeft`. The tightest (minimum-score) window limits the model. Past/equal reset windows are ignored; missing usable reset/duration uses `timeLeft = 1`
-- Fresh unlimited ranks above fresh measured, then missing/stale/failed/empty or non-applicable usage. Ties retain chain order. Stale unlimited is still fallback, not unlimited
+- Fresh unlimited ranks above measured, then missing/failed/empty/non-applicable usage. Ties retain chain order. Usage whose snapshot is at most `STALE_GRACE_MS` (15 min, `src/selection.ts`) old, measured from retrieval (about 10 min past the 5 min TTL), still scores as measured, flagged `stale` in status and the decision log, so a child's first route is not biased to `chain[0]` by a racing background refresh; older stale usage is fallback. Stale unlimited is never unlimited
 - New prompts keep an eligible measured incumbent unless the challenger is *strictly* more than 20% better (floating-point normalization and boundary roundoff are treated as a tie, including near-exhausted windows). A measured challenger promotes an unmeasured incumbent; if all are unmeasured, the incumbent stays. Fresh unlimited promotes measured and remains sticky
 - The same pure scoring and cached selection feed routing, recovery, admission and status. Scores never block quota, fetch data, or enter the system prompt. Adding a provider needs only a normalized collector and chain entry, not another algorithm
 
@@ -100,7 +100,8 @@ fallback when absent). Older or third-party snapshots without durations still sc
 Surfaces:
 
 - `subscription_usage` tool: windows plus active blocks. Usage buckets are also added to the system prompt as a `subscription_usage` section
-- `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all blocks. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
+- `router:decision` session entries: one per profile's first scored pick in a session and each later change of chosen model, not every route. This slows growth but is not a hard bound: entries are never pruned, flapping between models and every session restart still append (profile, reason, chosen model, each candidate's score, limiting window, stale flag and data age, ineligible entries). Sticky continuations and repeat picks of the same model are not persisted; status still lists the last five. Read them from the session file to prove why a model was picked
+- `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all blocks. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. Status also lists the last five routing decisions of the process. The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
 - `pi.events` RPC with the pi-subagents envelope (`{ requestId, ... }`, reply on `<channel>:reply:<requestId>` as `{ success, data | error }`):
   - `router:rpc:admit` `{ model }` -> `{ ok, resolvedModel?, resetAt?, wait? }` (`wait`, only when refused: the caller may park until `resetAt`, see `exhaustionPolicy`; a physical model uses the default `wait` policy). Unknown models are admitted. A `router/*` profile is refused only when a quota block leaves no entry eligible; a chain unusable for config or credential reasons is admitted so the child reports the real cause. Before the first `session_start`, everything is admitted
   - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads both collected providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model

@@ -10,7 +10,19 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
 - Never change a dirty fork checkout during bootstrap. Parent worktrees do not isolate submodule edits automatically.
 - Run format checks, lint, type checks, tests, and relevant real-input/failure-path checks before review.
 - Do not regenerate baselines or relax thresholds to make a failing gate pass.
-- Never expose credentials to public PR code or the benchmark runner.
+- Keep credentials out of public PR code and the benchmark runner, with one exception: installer
+  CI provisions a temporary `gh` login using a read-only job token (`contents: read`, `attestations: read`)
+  for main pushes/dispatches and same-repo PRs; fork PRs and non-main dispatches stay anonymous.
+  Hosted runner IPs share GitHub's anonymous 60 requests/hour limit. A PATH-prepended gh shim selects it;
+  `make`/pytest receive only its nonsecret directory path (`INSTALLER_GH_CONFIG_DIR`), not a token.
+  The shim alone sets `GH_CONFIG_DIR`; `uvx`, Git and package builds receive neither variable nor token.
+  TRUST assumption: same-repo branches are owner-reviewed code, not fork-sandboxed. Their authors can
+  edit the PR workflow to request write permissions or reference secrets; the read-only permissions
+  constrain the submitted workflow only, not arbitrary same-repo PR code.
+  KNOWN RESIDUAL: same-UID package code inherits the gh shim through PATH (including uvx, installer,
+  pi/npm scripts and Git subprocesses that preserve PATH). It can invoke gh or read the shim's config
+  path and plaintext hosts.yml. Environment scrubbing is NOT credential-capability isolation. This
+  remains within the same-repo TRUST assumption and the submitted workflow's read-only token scope.
 - Do not activate the distribution, alter the live Pi install, or archive old repositories as part of staging.
 
 # Mandatory PR review

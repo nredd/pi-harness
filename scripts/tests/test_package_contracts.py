@@ -380,6 +380,52 @@ def test_sandbox_env_is_scrubbed(sandbox: pc.Sandbox, monkeypatch: pytest.Monkey
     }
 
 
+def test_ensure_stock_pi_resolves_a_symlinked_prefix(tmp_path: Path) -> None:
+    """A symlinked temp dir (macOS `/var` -> `/private/var`) must not skew npm's lockfile keys.
+
+    The fake `npm` mimics npm 11: given a prefix that is not its own realpath it keys the lockfile
+    `../<real path>/node_modules/...`, which `verify_stock_pi` cannot find.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    fake_npm = tmp_path / "npm"
+    fake_npm.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "prefix = sys.argv[sys.argv.index('--prefix') + 1]\n"
+        "key = f'node_modules/{sys.argv[-1]}'\n"
+        "if os.path.realpath(prefix) != prefix:\n"
+        "    key = os.path.relpath(os.path.realpath(prefix), prefix) + '/' + key\n"
+        "entry = {'version': sys.argv[-3], 'integrity': sys.argv[-2]}\n"
+        "json.dump({'packages': {key: entry}}, open(os.path.join(prefix, 'package-lock.json'), 'w'))\n"
+        "bin_dir = os.path.join(prefix, 'node_modules', '.bin')\n"
+        "os.makedirs(bin_dir)\n"
+        "pi = os.path.join(bin_dir, 'pi')\n"
+        "open(pi, 'w').write('#!/bin/sh\\necho ' + sys.argv[-3] + '\\n')\n"
+        "os.chmod(pi, 0o755)\n"
+    )
+    fake_npm.chmod(0o755)
+    tools = dataclasses.replace(pc.locate_tools(), npm=fake_npm)
+    sandbox = pc.Sandbox(tmp_path / "sandbox", tools)
+    original_run = pc.run
+
+    def run_with_pins(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Append the pins the fake `npm` echoes into the lockfile."""
+        if Path(str(cmd[0])) == fake_npm:
+            cmd = [*cmd, pc.STOCK_PI_VERSION, pc.STOCK_PI_INTEGRITY, pc.STOCK_PI_PACKAGE]
+        return original_run(cmd, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pc, "run", run_with_pins)
+        pi_bin = pc.ensure_stock_pi(link / "stock", sandbox)
+    assert pi_bin == real / "stock" / "node_modules" / ".bin" / "pi"
+
+
 def test_run_rejects_relative_executable(tmp_path: Path) -> None:
     """Commands resolve through absolute paths only.
 
@@ -2839,15 +2885,30 @@ def test_shared_runner_unknown_package_exits_before_packing(
 
 
 def test_audit_files_computer_use_exact_payload() -> None:
-    """The pinned 45 paths pass; stray, missing and duplicated paths are each reported."""
+    """The pinned 56 paths pass; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 45
+    assert len(packed) == 56
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])
     assert any("src/view.ts" in problem for problem in missing)
     duplicated = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/view.ts"])
     assert any("listed 2 times" in problem for problem in duplicated)
+
+
+@pytest.mark.parametrize(
+    "stray",
+    [
+        "native/linux/bridge-rs/target/release/linux-bridge",
+        "native/linux/bridge-rs/tests/protocol_tests.rs",
+        "native/linux/bridge-rs/.gitignore",
+        "prebuilt/linux/x64/linux-bridge",
+    ],
+)
+def test_audit_files_computer_use_rejects_linux_build_output(stray: str) -> None:
+    """Only locked Linux crate source ships; build output, crate tests and prebuilts are rejected."""
+    packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
+    assert any(stray in problem for problem in pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, stray]))
 
 
 def test_scenario_computer_use_rejects_unpacked_helper_source(

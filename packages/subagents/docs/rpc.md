@@ -16,7 +16,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 |---|---|---|
 | `description` | string | What the agent is doing. Shown in the widget, FleetView and the completion notification |
 | `name` | string | A memorable second handle (`@auth-audit`). Slugged, never validated — anything unusable degrades rather than failing the spawn |
-| `model` | `Model` **or** `"provider/modelId"` | Strings are resolved at the RPC boundary against `ctx.modelRegistry`. `null` means inherit, not override. Resolution is fuzzy — see [Model Scope](../README.md#model-scope) |
+| `model` | `Model` **or** `"provider/modelId"` | Strings are validated at the RPC boundary against `ctx.modelRegistry`; the shared spawn selector retains the raw request and stores its outcome on the record. `null` means no explicit override: `agentModels[type]`, `agentModels["*"]`, definition, then parent apply. Resolution is fuzzy — see [Model Scope](../README.md#model-scope) |
 | `maxTurns` | number | Turn ceiling for the run |
 | `isolated` | boolean | Strips extensions, skills and nested tools. Applies only when the agent file leaves `isolated:` unset — frontmatter is authoritative. **Not** a git worktree — see the trap table below |
 | `inheritContext` | boolean | Fork the parent conversation into the child. Only this option decides — an agent file's `inherit_context:` does not apply to RPC spawns |
@@ -43,6 +43,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 | `resumeSessionFile` | Worse: it names a file to **open and replay** as a conversation. Dispatcher only, and only from a path this extension itself recorded |
 | `reclaim` | Bypasses handle allocation, so a forged value would duplicate a live agent's name and make `@handle` ambiguous |
 | `blocking` | Every spawn through here is detached. A forged `blocking` would charge it to the foreground pool and defer it behind a queue whose gate nobody is holding |
+| `modelSelection`, `modelFallback` | Internal resolution outcomes. A caller cannot forge a different selection, bypass scope validation, or invent a fallback disclosure |
 
 **Silently overwritten** — `onToolActivity`, `onTextDelta`, `onTurnEnd`, `onSessionCreated` and `onAssistantUsage` are replaced by the activity tracker's own (`spawnResolved`, `src/index.ts`). Every programmatic spawn passes through one funnel so none can supply half-wired callbacks; a half-wired tracker renders worse than none, which is the bug behind a row that reads `thinking…` for an agent's whole life ([#181](https://github.com/tintinweb/pi-subagents/pull/181)).
 
@@ -111,7 +112,7 @@ Two asymmetries to know about, stated as they are:
 
 The same predicate silently scopes the events. **Every lifecycle event is top-level only** — `subagents:started`, `:completed`, `:failed`, `:steered` and `:compacted` all return early for nested and workflow-owned agents (the `isTopLevelAgent` checks in the `AgentManager` callbacks, `src/index.ts`). `subagents:usage` is the one event that is not scoped: it fires for every agent's messages, nested and workflow-owned included, so a ledger sees a workflow's children spend even though it never sees them start or finish.
 
-**`subagents:disposed` follows actual shutdown disposal, not detachment.** It is emitted only after this activation's manager and retained child sessions are disposed. A session switch (`new`, `resume`, `fork`, `reload`) that keeps background work alive emits no disposed event, including when that detached manager later finishes. Its usage messages can continue after the switch. This is activation-local, not a process-global usage barrier: other detached managers can still report spend. On quit a listener gets only its synchronous prefix: `pi.events.emit` does not await listeners, and pi exits once shutdown handlers return. Flush with `writeFileSync`, not `fs.promises`. Fields, and the other events, are in README's [event table](../README.md#events).
+**`subagents:disposed` follows actual shutdown disposal, not detachment.** It is emitted only after this activation's manager and retained child sessions are disposed. A session switch (`new`, `resume`, `fork`, `reload`) that keeps background work alive emits no disposed event, including when that detached manager later finishes. Its `subagents:usage` and `subagents:compacted` events do *not* continue after the switch: the detached manager's `pi` belongs to the replaced session and is stale, so those observers fail and are dropped (the run itself is unaffected). A ledger therefore under-counts any agent that runs across `new`, `resume`, `fork` or `reload`; `reportUsage` pooling is lost for it too. Its completion is still delivered, through the session spool, to the session that spawned it. This is activation-local: an activation that was never detached keeps emitting. On quit a listener gets only its synchronous prefix: `pi.events.emit` does not await listeners, and pi exits once shutdown handlers return. Flush with `writeFileSync`, not `fs.promises`. Fields, and the other events, are in README's [event table](../README.md#events).
 
 ## The notification race
 
@@ -172,6 +173,8 @@ So: send `consume` unconditionally and ignore the outcome — an older build has
 
 The consequence is worth stating plainly: **a session that excludes pi-subagents is indistinguishable from pi-subagents not being installed.** It emits no `subagents:ready` and answers nothing. Give discovery a timeout and treat expiry as "not available here" rather than waiting indefinitely. The payload is `{}` — read nothing off it. Handlers are torn down and `rpcHandle` reset in the `session_shutdown` handler, so a later `session_start` re-registers and re-emits.
 
+**Model fallback provenance on events.** The shared spawn path selects before `subagents:started`, even when the RPC names no model. An unresolved configured input runs on the parent, with `modelFallback` and `modelNote` present on `started`, `usage`, `compacted` and `completed`/`failed`. Each reads the same recorded provenance. Callers cannot forge it (see the stripped-fields table).
+
 One more trap on the way in: an RPC-spawned agent emits **no `subagents:created`**. The only three emit sites, all in `src/index.ts`, are the `Agent` tool's `run_in_background` branch, a detached resume (`startBackgroundResume`), and a foreground `Agent` call handed to the background with ctrl+b or the viewer's `b` (`sendForegroundToBackground`) — that one fires after the agent's `subagents:started`, as resume does. Your first event for your own agent is `subagents:started` (the manager's start callback), so key your bookkeeping off the id that `spawn` handed you, not off `subagents:created`.
 
 ## What the tests pin
@@ -183,6 +186,7 @@ This document has no test of its own, so it is worth knowing which claims are ac
 | `test/cross-extension-rpc.test.ts` | Mocked `SpawnCapable` | Envelope shape, per-channel error strings (including steer's), model resolution and scope enforcement |
 | `test/rpc-lifecycle-gating.test.ts` | Real extension factory | Nothing wired at factory time, everything once at `session_start`, and live widget activity for RPC spawns ([#142](https://github.com/tintinweb/pi-subagents/issues/142)/[#181](https://github.com/tintinweb/pi-subagents/pull/181)) |
 | `test/rpc-result-consumption.test.ts` | Real delivery path | The notification firing, and not firing, around `consume` |
+| `test/model-selection-paths.test.ts` | Real entry paths, manager and Pi registry; child execution stubbed | RPC/Agent/nested/scheduled/direct-mention/workflow parity for precedence, aliases, virtual selections, parent fallback and scope; live resume retains the original selection |
 
 Not pinned anywhere, so treat them as descriptions rather than contracts: the `SpawnOptions.cwd` error strings, `subagents:ready`'s `{}` payload, consume's handle resolution, and its missing `workflowId` check.
 

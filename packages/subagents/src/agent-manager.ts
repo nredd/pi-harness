@@ -30,7 +30,9 @@ import { getAgentConfig } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { ModelCallEvent } from "./model-call.js";
-import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel } from "./model-resolver.js";
+import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback, modelFallbackNote } from "./model-resolver.js";
+import { type ModelSelection, selectModel } from "./model-selection.js";
+import { appendModelFallbackEntry } from "./output-file.js";
 import {
   assertWithinBudgetDepth,
   BUDGET_QUEUE_FULL_ERROR,
@@ -41,6 +43,7 @@ import {
   releaseBudget,
   tryAcquireBudget,
 } from "./process-budget.js";
+import { isStaleCtxError } from "./stale-ctx.js";
 import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, Pool, SubagentType, ThinkingLevel } from "./types.js";
 import { addUsage, type LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
@@ -163,12 +166,15 @@ export interface EvictedNote {
   evictedAfterMin: number;
   /** The `.output` transcript when one was written, else the session file. */
   transcript?: string;
+  /** The run's model fallback, so even an evicted agent's id still discloses it. */
+  modelFallback?: ModelFallback;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
 export function describeEvicted(note: EvictedNote): string {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
-  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}`;
+  const fallback = note.modelFallback ? `\n${modelFallbackNote(note.modelFallback)}` : "";
+  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
 }
 
 /**
@@ -308,7 +314,11 @@ interface SpawnOptions {
    * `spawnTopLevel` strips it from anything a caller sends.
    */
   reclaim?: { handle: string; alias?: string };
-  model?: Model<any>;
+  model?: Model<any> | string;
+  /** Internal preflight outcome, stored on the record without resolving again. */
+  modelSelection?: ModelSelection;
+  /** Original provenance retained when reopening an evicted conversation. Internal only. */
+  modelFallback?: ModelFallback;
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
@@ -490,6 +500,29 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
   try { session?.dispose?.(); } catch { /* ignore */ }
 }
 
+/**
+ * Wrap an observer the child's own agent loop calls (usage, compaction) so a
+ * throw cannot reach that loop. pi records a throw from a session listener as
+ * the turn's failure, so an observer closed over a replaced session's `pi`
+ * ("This extension ctx is stale ...") used to end a detached child with an
+ * empty error turn and "No output" (#145). That failure is expected after a
+ * reload and dropped silently. Any other throw is a real observer defect: it
+ * is logged once per observer and also kept from killing the run.
+ */
+function guardObserver<A extends unknown[]>(name: string, observer: ((...args: A) => void) | undefined): ((...args: A) => void) | undefined {
+  if (!observer) return undefined;
+  let logged = false;
+  return (...args: A) => {
+    try {
+      observer(...args);
+    } catch (error) {
+      if (isStaleCtxError(error) || logged) return;
+      logged = true;
+      console.error(`pi-subagents: ${name} observer failed; further failures are not logged`, error);
+    }
+  };
+}
+
 export class AgentManager {
   private agents = new Map<string, AgentRecord>();
   private cleanupInterval: TimerHandle;
@@ -564,8 +597,8 @@ export class AgentManager {
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
-    this.onCompact = onCompact;
-    this.onUsage = onUsage;
+    this.onCompact = guardObserver("compaction", onCompact);
+    this.onUsage = guardObserver("usage", onUsage);
     this.onSteered = onSteered;
     this.maxConcurrent = maxConcurrent;
     // Sweep finished records past their retention window (see cleanup()).
@@ -645,6 +678,18 @@ export class AgentManager {
     // call, not minutes later at drain. Throw (not warn): programmatic callers
     // can fix and retry; the RPC layer converts throws into error envelopes.
     assertValidSpawnCwd(options.cwd);
+    const selection = options.modelSelection ?? selectModel({
+      agentType: type,
+      definitionModel: getAgentConfig(type)?.model,
+      paramModel: options.model,
+      parentModel: ctx.model,
+      registry: ctx.modelRegistry,
+      cwd: options.configCwd ?? ctx.cwd,
+      agentLabel: getAgentConfig(type)?.displayName,
+    });
+    if (typeof selection === "string") throw new Error(selection);
+    if (selection.scopeWarning && !options.modelSelection) ctx.ui.notify(selection.scopeWarning, "warning");
+    options = { ...options, model: selection.model, modelSelection: selection };
 
     const id = randomUUID().slice(0, 17);
     const abortController = new AbortController();
@@ -684,6 +729,8 @@ export class AgentManager {
       // `options` has stopped being the interesting object.
       blocking: options.blocking,
       invocation: options.invocation,
+      modelFallback: options.modelFallback ?? selection.fallback,
+      modelSelection: selection,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,
@@ -1036,7 +1083,8 @@ export class AgentManager {
     const promise = runAgent(ctx, type, prompt, {
       pi,
       agentId: id,
-      model: options.model,
+      model: options.modelSelection?.model,
+      modelSelection: options.modelSelection,
       maxTurns: options.maxTurns,
       isolated: options.isolated,
       inheritContext: options.inheritContext,
@@ -1117,6 +1165,8 @@ export class AgentManager {
             }
           }
         }
+        // The transcript says it too: it is what someone opens to find out what ran.
+        if (record.modelFallback && record.outputFile) appendModelFallbackEntry(record.outputFile, record.id, record.modelFallback);
         // Flush any steers that arrived before the session was ready
         if (record.pendingSteers?.length) {
           for (const msg of record.pendingSteers) {
@@ -1862,6 +1912,7 @@ export class AgentManager {
       description: record.description,
       sessionFile: record.sessionFile,
       completedAt: record.completedAt ?? this.clock.now(),
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
     // Bound the memory a long session can accumulate. Oldest first, since the
     // agent someone still wants to reach is the one they used most recently.
@@ -1882,6 +1933,7 @@ export class AgentManager {
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - completedAt) / 60_000)),
       transcript: record.outputFile ?? record.sessionFile,
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
     while (this.evictedNotes.size > MAX_EVICTED_NOTES) {
       const oldest = this.evictedNotes.keys().next().value;

@@ -87,11 +87,11 @@ it("virtual child row repaints physical model after first response", async () =>
   fixture.clock.advance(200);
   await host.settle();
   const row = () => host.viewport().find(line => /^\s+[●○] Agent\s+probe child/.test(line)) ?? "";
-  expect(row()).toMatch(/vroute default \(routing\) · thinking: /);
+  expect(row()).toMatch(/vroute default \(routing\) · think:/);
   stream.release();
   await hold.entered;
   fixture.clock.advance(200);
   await host.settle();
-  expect(row()).toMatch(/physical · thinking: /);
+  expect(row()).toMatch(/physical · think:/);
   expect(row()).not.toContain("(routing)");
 });

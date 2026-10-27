@@ -4,7 +4,6 @@ description: Web and docs researcher. Answers a question from primary sources (o
 tools: read, grep, find, ext:pi-web-access
 extensions: [pi-web-access]
 skills: false
-thinking: medium
 max_turns: 60
 prompt_mode: replace
 ---

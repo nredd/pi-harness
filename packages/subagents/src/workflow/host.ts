@@ -36,8 +36,8 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../agent-manager.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
-import { configuredAgentModel, resolveModel } from "../model-resolver.js";
-import { checkModelScope } from "../model-scope.js";
+import { modelFallbackNote } from "../model-resolver.js";
+import { selectModel } from "../model-selection.js";
 import type { AgentRecord, ThinkingLevel } from "../types.js";
 import { getLifetimeTotal } from "../usage.js";
 import type { WorkflowGateResult, WorkflowHost, WorkflowSpawnResult } from "./runtime.js";
@@ -113,10 +113,12 @@ function resolvedInfo(record: AgentRecord | undefined) {
     modelId: invocation.modelId,
     thinking: invocation.thinking,
     requestedThinking: invocation.requestedThinking,
+    // From the record, so a resumed child reports the model it actually ran on.
+    ...(record?.modelFallback ? { modelNote: modelFallbackNote(record.modelFallback) } : {}),
   };
 }
 
-function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
+function toSpawnResult(record: AgentRecord, opts: { resumed?: boolean } = {}): WorkflowSpawnResult {
   const tokens = getLifetimeTotal(record.lifetimeUsage);
   // Reported separately from `tokens`, which is the lifetime total. The script's
   // `budget` counts *output* tokens, as Claude Code's does — billing the input
@@ -131,15 +133,26 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
     ...(cwd !== undefined ? { cwd } : {}),
   };
 
+  // Disclosed in the text/error the script reads AND as a field. A schema'd
+  // payload is JSON the script parses, so the note is only a field there.
+  const note = modelFallbackNote(record.modelFallback);
+  const lead = note ? `${note}\n\n` : "";
+  const modelNote = note ? { modelNote: note } : {};
+
   if (succeeded(record)) {
     return {
       ...common,
+      ...modelNote,
       ok: true,
       // The schema'd payload when there is one: `result` is prose, and for a
       // worktree child it has had the branch note appended, so it would not
       // parse. A child asked for a schema that produced none never reaches
       // here — `runAgent` reports that through `failure`.
-      text: record.structuredJson ?? record.result ?? "",
+      // A RESUMED child answers in prose (resume forbids `schema`), but its record
+      // still holds the original run's `structuredJson`; returning that would hand
+      // the script a stale payload with no note, and the worker only injects or
+      // logs for schema calls. So a resume reads `result` and leads with the note.
+      text: !opts.resumed && record.structuredJson !== undefined ? record.structuredJson : `${lead}${record.result ?? ""}`,
       ...(record.structuredRetried ? { structuredRetried: true } : {}),
     };
   }
@@ -147,9 +160,9 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
   // fleet list, a workflow abort. That is the same thing the workflows dialog's
   // skip action means, so it renders as skipped rather than failed.
   if (record.status === "stopped") {
-    return { ...common, ok: false, skipped: true, error: record.error ?? "Stopped." };
+    return { ...common, ...modelNote, ok: false, skipped: true, error: `${lead}${record.error ?? "Stopped."}` };
   }
-  return { ...common, ok: false, error: record.error ?? `Agent ${record.status}.` };
+  return { ...common, ...modelNote, ok: false, error: `${lead}${record.error ?? `Agent ${record.status}.`}` };
 }
 
 /** Shell used to run a `gate` command, mirroring how a user would type it. */
@@ -196,45 +209,16 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       const dispatch = resolveSpawnType(request.agentType);
       if (!dispatch.ok) return { ok: false, error: dispatch.message };
 
-      // Same precedence as the Agent tool: the caller's model wins, then the
-      // `agentModels` setting, the agent definition's is next, and the parent's
-      // is the floor. A model the script
-      // named and we cannot resolve is an error; one the definition named falls
-      // back to the parent silently, because the script never asked for it.
-      let model = ctx.model;
       const config = getAgentConfig(dispatch.type);
-      const modelInput = request.model ?? configuredAgentModel(dispatch.type, config?.model);
-      if (modelInput !== undefined) {
-        const resolved = resolveModel(modelInput, ctx.modelRegistry);
-        if (typeof resolved === "string") {
-          if (request.model !== undefined) return { ok: false, error: resolved };
-        } else {
-          model = resolved;
-        }
-      }
-
-      // Same scopeModels policy as the Agent tool and the nested delegation
-      // tools: a script's `agent({ model })` is a runtime LLM choice, and the
-      // script is written by the model, so it must not reach a model the user's
-      // enabledModels list excludes. `callerSupplied` keys off `request.model`
-      // and NOT `modelInput` — the latter has already absorbed the agent file's
-      // own `model:`, which is user-authored config and so earns the
-      // warn-and-proceed branch rather than a refusal.
-      const scopeVerdict = checkModelScope({
-        model,
-        cwd: ctx.cwd,
-        modelRegistry: ctx.modelRegistry,
-        callerSupplied: request.model !== undefined,
-        agentLabel: config?.displayName ?? dispatch.type,
-        modelInput,
+      const selection = selectModel({
+        agentType: dispatch.type, definitionModel: config?.model, paramModel: request.model,
+        parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: config?.displayName,
       });
-      // This agent's failure, not the run's — the same shape a bad agent type
-      // takes above. The script sees `null` and its siblings carry on, which is
-      // the difference between one refused model and a discarded fan-out.
-      if (scopeVerdict.kind === "error") return { ok: false, error: scopeVerdict.message };
-      if (scopeVerdict.kind === "warn" && !warnedScopeMessages.has(scopeVerdict.message)) {
-        warnedScopeMessages.add(scopeVerdict.message);
-        ctx.ui.notify(scopeVerdict.message, "warning");
+      if (typeof selection === "string") return { ok: false, error: selection };
+      const model = selection.model;
+      if (selection.scopeWarning && !warnedScopeMessages.has(selection.scopeWarning)) {
+        warnedScopeMessages.add(selection.scopeWarning);
+        ctx.ui.notify(selection.scopeWarning, "warning");
       }
 
       /**
@@ -298,6 +282,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
           request.prompt,
           {
             description: request.label,
+            modelSelection: selection,
             // Same as the Agent tool: `isolated` comes off the agent definition.
             // Left out, a hermetic agent's script-spawned children loaded every
             // host extension and picked up its MCP and web tools.
@@ -364,6 +349,12 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       if (id === undefined) {
         return { ok: false, error: `Cannot resume "${agentId}" — it never started.` };
       }
+      // The provenance is already on the record, so the running row shows it
+      // now rather than only once the resume has finished.
+      const existing = manager.getRecord(id);
+      if (existing?.modelFallback) {
+        onResolved?.({ recordId: id, modelNote: modelFallbackNote(existing.modelFallback) });
+      }
       const record = await manager.resume(id, prompt, deps.signal);
       if (record === undefined) {
         return {
@@ -379,7 +370,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       onResolved?.({ recordId: id });
       const info = resolvedInfo(record);
       if (info !== undefined) onResolved?.(info);
-      return toSpawnResult(record);
+      return toSpawnResult(record, { resumed: true });
     },
 
     /**

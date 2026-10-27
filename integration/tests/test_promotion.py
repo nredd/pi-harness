@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -48,6 +48,9 @@ from harness.promotion import (
 from harness.publish_gate import PublishError, release_state, verify_tag_target
 from harness.release import LEGACY_CHECKSUMS
 from harness.stack import Stack
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CI_WORKFLOW = Path(__file__).parents[2] / ".github/workflows/ci.yml"
@@ -322,23 +325,51 @@ def test_stack_runs_accept_renamed_job_with_valid_artifact_evidence() -> None:
     assert not hasattr(promotion, "PERSONAL_STACK_JOB")
 
 
+def merge_evidence(*path: str | int, **values: Any) -> Callable[[dict[str, Any], dict[str, Any]], None]:
+    """Build a named merge edit for one run/artifact fixture object.
+
+    Parameters:
+        *path (str | int): keys/indices from the run/artifacts fixture roots.
+        **values (Any): fields to merge into that object.
+
+    Returns:
+        Callable[[dict[str, Any], dict[str, Any]], None]: documented dictionary-merge edit.
+    """
+
+    def merge(run: dict[str, Any], artifacts: dict[str, Any]) -> None:
+        """Apply malformed evidence using a statement merge, never an update expression.
+
+        Parameters:
+            run (dict[str, Any]): recorded workflow run.
+            artifacts (dict[str, Any]): recorded artifact pages.
+
+        Returns:
+            None: selected evidence fields are merged in place.
+
+        Raises:
+            KeyError | IndexError: the fixture lacks the selected path.
+        """
+        target: Any = {"run": run, "artifacts": artifacts}
+        for key in path:
+            target = target[key]
+        target |= values
+
+    return merge
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda run, artifacts: run.update(event="pull_request"),
-        lambda run, artifacts: run.update(headBranch="topic"),
-        lambda run, artifacts: run.update(conclusion="failure"),
-        lambda run, artifacts: run.update(headSha="b" * 40),
+        merge_evidence("run", event="pull_request"),
+        merge_evidence("run", headBranch="topic"),
+        merge_evidence("run", conclusion="failure"),
+        merge_evidence("run", headSha="b" * 40),
         lambda run, artifacts: artifacts.clear(),
         lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"].clear(),
-        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(expired=True),
-        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3].update(
-            name="stack-macos-14-personal"
-        ),
-        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(
-            head_sha="b" * 40
-        ),
-        lambda run, artifacts: artifacts[str(FIXTURE_RUN)][0]["artifacts"][3]["workflow_run"].update(id=1),
+        merge_evidence("artifacts", str(FIXTURE_RUN), 0, "artifacts", 3, expired=True),
+        merge_evidence("artifacts", str(FIXTURE_RUN), 0, "artifacts", 3, name="stack-macos-14-personal"),
+        merge_evidence("artifacts", str(FIXTURE_RUN), 0, "artifacts", 3, "workflow_run", head_sha="b" * 40),
+        merge_evidence("artifacts", str(FIXTURE_RUN), 0, "artifacts", 3, "workflow_run", id=1),
     ],
 )
 def test_stack_runs_reject_absent_expired_or_mismatched_evidence(mutate: Any) -> None:
@@ -661,6 +692,13 @@ def fake_fetch(url: str, destination: Path) -> None:
     Parameters:
         url (str): requested asset URL, which must be the tag's release URL.
         destination (Path): file to write.
+
+    Returns:
+        None: asset fixture bytes are written.
+
+    Raises:
+        AssertionError: the asset URL differs from the expected release.
+        OSError: fixture write failed.
     """
     assert url == f"https://github.com/nredd/pi/releases/download/{NEW_CORE_TAG}/{NEW_ASSET}"
     destination.write_bytes(ASSET_BYTES)
@@ -721,19 +759,18 @@ def test_default_core_boundaries_translate_failures(tmp_path: Path, monkeypatch:
         verify_core_assets(stack, tmp_path / "a", fake_fetch)
     assert isinstance(attest_error.value.__cause__, RuntimeError)
 
-    def offline(url: str, timeout: int) -> None:
+    def offline(url: str) -> None:
         """Simulate an unreachable release host.
 
         Parameters:
             url (str): requested URL.
-            timeout (int): requested timeout.
 
         Raises:
             OSError: always.
         """
         raise OSError("offline")
 
-    monkeypatch.setattr(promotion, "urlopen", offline)
+    monkeypatch.setattr(promotion, "fetch_bytes", offline)
     with pytest.raises(EvidenceError, match="Could not download") as fetch_error:
         verify_core_assets(stack, tmp_path / "b")
     assert isinstance(fetch_error.value.__cause__, OSError)
@@ -758,7 +795,7 @@ def test_legacy_core_tags_skip_attestation(tmp_path: Path, monkeypatch: pytest.M
         """
         pytest.fail("legacy tags must not download or attest")
 
-    monkeypatch.setattr(promotion, "urlopen", forbidden)
+    monkeypatch.setattr(promotion, "fetch_bytes", forbidden)
     monkeypatch.setattr(promotion, "verify_provenance", forbidden)
     stack = Stack.model_validate_json(stack_path.read_bytes())
     verify_core_assets(stack, tmp_path / "core")
@@ -989,6 +1026,9 @@ def stub_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     Parameters:
         monkeypatch (pytest.MonkeyPatch): patches the module.
         tmp_path (Path): fixture directory.
+
+    Returns:
+        None: candidate construction is replaced for this test.
     """
 
     def build(ctx: promotion_verify.VerifyContext, source_sha: str) -> None:
@@ -997,6 +1037,13 @@ def stub_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         Parameters:
             ctx (promotion_verify.VerifyContext): runner context.
             source_sha (str): selected commit.
+
+        Returns:
+            None: candidate snapshot bytes are written.
+
+        Raises:
+            OSError: fixture write failed.
+            ValueError: the snapshot fixture is invalid.
         """
         (ctx.promo / "stack-snapshot.json").write_text(snapshot(tmp_path, source_sha).model_dump_json())
 

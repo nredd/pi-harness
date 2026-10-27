@@ -40,14 +40,9 @@ export function setAgentModels(models: Record<string, string> | undefined): void
   agentModels = new Map(Object.entries(models ?? {}).map(([type, model]) => [type.toLowerCase(), model]));
 }
 
-/**
- * The model input a spawn of `type` should use when the caller named none:
- * `agentModels[type]`, then `agentModels["*"]`, then the agent definition's own
- * `model:` (`definitionModel`). The parent model is the floor, applied by the
- * caller when this returns `undefined`.
- */
-export function configuredAgentModel(type: string, definitionModel: string | undefined): string | undefined {
-  return agentModels.get(type.toLowerCase()) ?? agentModels.get("*") ?? definitionModel;
+/** A snapshot for the shared selection policy; callers cannot mutate configuration. */
+export function getAgentModels(): ReadonlyMap<string, string> {
+  return new Map(agentModels);
 }
 
 /**
@@ -85,6 +80,40 @@ export function describeModel(
     modelName: (model.name ?? model.id).replace(/^Claude\s+/i, "").toLowerCase(),
     modelId: `${model.provider}/${model.id}`,
   };
+}
+
+/**
+ * A CONFIG model (`agentModels`, an agent's `model:`, a stored job's model) that
+ * did not resolve, so the spawn ran on the parent model instead. Recorded once on
+ * the `AgentRecord` by the shared spawn path; every surface reads it from there.
+ */
+export interface ModelFallback {
+  /** The configured input that failed to resolve. */
+  input: string;
+  /** Further configured inputs that also failed (e.g. a stored job model AND an `agentModels` override). */
+  also?: string[];
+  /** `provider/id` of the model actually used; absent when the session default (a parent with no model) ran. */
+  used?: string;
+  /** Whose model `used` is: the parent's (default) or the agent's own configured model (`agentModels` / definition `model:`), which took over from an unresolved stored model. */
+  via?: "parent" | "agent";
+}
+
+/** The fallback outcome for `input` when the spawn ran on `parent`. */
+export function modelFallbackTo(input: string, parent: { provider: string; id: string } | undefined): ModelFallback {
+  return parent ? { input, used: `${parent.provider}/${parent.id}` } : { input };
+}
+
+/**
+ * The disclosure line for a fallback: same `Note:` prefix as the unknown-agent-type
+ * note. Empty string when there was none, so callers can concatenate it blindly.
+ */
+export function modelFallbackNote(fallback: ModelFallback | undefined): string {
+  if (!fallback) return "";
+  const whose = fallback.via === "agent" ? "the agent's own model" : "parent model";
+  const used = fallback.used ? `${whose} ${fallback.used}` : "the session default model";
+  const inputs = [fallback.input, ...(fallback.also ?? [])];
+  const named = inputs.length === 1 ? `model "${inputs[0]}" did` : `models ${inputs.map(i => `"${i}"`).join(", ")} did`;
+  return `Note: configured ${named} not resolve; running on ${used}.`;
 }
 
 /** API id pi gives virtual catalog entries such as `router/default`; they never reach a provider. */

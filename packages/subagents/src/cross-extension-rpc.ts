@@ -14,8 +14,8 @@
  */
 
 import { isTopLevelAgent } from "./agent-manager.js";
-import { type ModelRegistry, resolveModel } from "./model-resolver.js";
-import { checkModelScope } from "./model-scope.js";
+import type { ModelRegistry } from "./model-resolver.js";
+import { selectModel } from "./model-selection.js";
 import type { AgentRecord } from "./types.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
@@ -112,13 +112,9 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
       const ctx = getCtx();
       if (!ctx) throw new Error("No active session");
 
-      // Cross-extension RPC callers (e.g. pi-tasks TaskExecute) naturally
-      // forward serializable values, so options.model can be a string like
-      // "openai-codex/gpt-5.5". Resolve it to a real Model instance here
-      // — same pattern the scheduler path already uses — so the spawned
-      // agent's auth lookup doesn't crash with "No API key found for
-      // undefined".
-      let normalizedOptions = options ?? {};
+      // Validate serializable overrides through the shared selector. Preserve
+      // the raw request for spawn, which records its source and outcome.
+      const normalizedOptions = options ?? {};
       // `!= null` on purpose: a JSON-forwarding caller can serialize an unset
       // field as null, and the runner reads `options.model ?? default`, so null
       // means "inherit" — not an override to resolve or scope-check.
@@ -131,34 +127,11 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
         if (!modelRegistry) {
           throw new Error(`Model override "${label}" provided but ctx.modelRegistry is unavailable`);
         }
-        let model = override;
-        if (typeof override === "string") {
-          const resolved = resolveModel(override, modelRegistry);
-          if (typeof resolved === "string") {
-            // resolveModel returns a human-readable error string when the
-            // input doesn't match any available model. Surface it instead of
-            // silently falling back so the caller sees the auth/typo issue.
-            throw new Error(resolved);
-          }
-          model = resolved;
-          normalizedOptions = { ...normalizedOptions, model: resolved };
-        }
-
-        // A model on the RPC payload is an orchestrator-level choice, exactly
-        // like Agent({ model }) — so it gets the Agent tool's hard error, never
-        // the frontmatter warn (#240). The check reads the RESOLVED model:
-        // resolveModel is fuzzy, so a bare "sonnet" can land on a provider the
-        // caller never named. Frontmatter-pinned and parent-inherited models are
-        // resolved later, in agent-runner, and keep warn-and-proceed.
-        const verdict = checkModelScope({
-          model,
-          cwd: cwd ?? process.cwd(),
-          modelRegistry,
-          callerSupplied: true,
-          agentLabel: type,
-          modelInput: label,
+        const selection = selectModel({
+          agentType: type, paramModel: override, parentModel: undefined,
+          registry: modelRegistry, cwd: cwd ?? process.cwd(),
         });
-        if (verdict.kind === "error") throw new Error(verdict.message);
+        if (typeof selection === "string") throw new Error(selection);
       }
 
       const id = manager.spawn(pi, ctx, type, prompt, normalizedOptions);

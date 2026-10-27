@@ -567,6 +567,39 @@ describe("abort", () => {
       expect(rows.at(-1)?.model).toBe("haiku 4.5");
     });
 
+    it("forwards the model fallback note onto the row while the agent is still running", async () => {
+      const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+      const seen: WorkflowEntry[][] = [];
+      const host = {
+        async spawnAgent(request: any) {
+          request.onResolved?.({ modelName: "sonnet 4.6", modelNote });
+          // The result deliberately carries no note, so only the `onResolved`
+          // forwarding can put it on the in-flight row.
+          return { ok: true, text: "done", outputTokens: 1 };
+        },
+        abortAgent() {},
+      };
+
+      await run('return await agent("go");', { host, onProgress(entries) { seen.push([...entries]); } });
+
+      const inFlight = rowsFor(seen, 0).find(r => r.modelNote !== undefined);
+      expect(inFlight?.modelNote).toBe(modelNote);
+      expect(inFlight?.state).not.toBe("done");
+    });
+
+    it("puts the note a settled result carries on the final row", async () => {
+      const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+      const seen: WorkflowEntry[][] = [];
+      const host = {
+        async spawnAgent() { return { ok: true, text: "done", outputTokens: 1, modelNote }; },
+        abortAgent() {},
+      };
+
+      await run('return await agent("go");', { host, onProgress(entries) { seen.push([...entries]); } });
+
+      expect(rowsFor(seen, 0).at(-1)?.modelNote).toBe(modelNote);
+    });
+
     it("fills in a row for an agent that named no model at all", async () => {
       const seen: WorkflowEntry[][] = [];
       const host = {
@@ -1040,6 +1073,102 @@ describe("structured output", () => {
 
     expect(result.status).toBe("completed");
     expect(JSON.parse(result.value as string)).toEqual(["object", true, true, 2]);
+  });
+
+  describe("model fallback disclosure at the script boundary", () => {
+    const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
+
+    it("a schema'd payload keeps its shape, gains a sibling _modelNote, and the run log carries the note", async () => {
+      const stub = stubHost(() => ({ ok: true, text: '{"findings":["a"]}', modelNote }));
+      const result = await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });
+
+      expect(result.value).toEqual({ findings: ["a"], _modelNote: modelNote });
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+    });
+
+    it("a failed agent is still a null, with the note in the run log", async () => {
+      const stub = stubHost(() => ({ ok: false, error: "boom", modelNote }));
+      const result = await run("return await agent('go') === null;", { host: stub.host });
+
+      expect(result.value).toBe(true);
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+    });
+
+    it("leaves a payload's own _modelNote alone and still logs the note", async () => {
+      const stub = stubHost(() => ({ ok: true, text: '{"findings":[],"_modelNote":"mine"}', modelNote }));
+      const result = await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });
+
+      expect((result.value as any)._modelNote).toBe("mine");
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+    });
+
+    it("never injects when the SCHEMA declares _modelNote, even if the child omitted the optional field; logs instead", async () => {
+      const schema = JSON.stringify({
+        type: "object",
+        properties: { findings: { type: "array", items: { type: "string" } }, _modelNote: { type: "number" } },
+        required: ["findings"],
+      });
+      const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}', modelNote }));
+      const result = await run(`return await agent('go', { schema: ${schema} });`, { host: stub.host });
+
+      expect(result.value).toEqual({ findings: [] });
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+    });
+
+    it("never injects into a schema that composes (allOf/anyOf/$ref/patternProperties) or forbids extras; logs instead", async () => {
+      const composed = [
+        { type: "object", allOf: [{ properties: { _modelNote: { type: "number" } } }], properties: { findings: { type: "array" } } },
+        { type: "object", anyOf: [{ properties: { _modelNote: { type: "number" } } }, { type: "object" }], properties: { findings: { type: "array" } } },
+        { type: "object", patternProperties: { "^_": { type: "number" } }, properties: { findings: { type: "array" } } },
+        { type: "object", additionalProperties: false, properties: { findings: { type: "array" } } },
+        { type: "object", properties: { findings: { type: "array" } }, additionalProperties: { type: "number" } },
+      ];
+      for (const schema of composed) {
+        const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}', modelNote }));
+        const result = await run(`return await agent('go', { schema: ${JSON.stringify(schema)} });`, { host: stub.host });
+
+        expect(result.value, JSON.stringify(schema)).toEqual({ findings: [] });
+        expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+      }
+    });
+
+    it("journals the note and replays it: _modelNote, log line and row all survive a resume", async () => {
+      const script = `return await agent('go', { schema: ${schemaLiteral} });`;
+      const entries: WorkflowJournalEntry[] = [];
+      const live = stubHost(() => ({ ok: true, text: '{"findings":["a"]}', modelNote }));
+      await run(script, { host: live.host, journal: { append: e => entries.push(e) } });
+      expect(entries[0]?.modelNote).toBe(modelNote);
+
+      const replayHost = stubHost();
+      const rerun: WorkflowJournalEntry[] = [];
+      const result = await run(script, { host: replayHost.host, journal: { entries, append: e => rerun.push(e) } });
+
+      expect(replayHost.calls).toHaveLength(0);
+      expect(result.value).toEqual({ findings: ["a"], _modelNote: modelNote });
+      expect(result.progress.filter(e => e.type === "workflow_log").map(e => e.message)).toContain(modelNote);
+      expect(agentEntries(result.progress).at(-1)?.modelNote).toBe(modelNote);
+      // Re-recorded, so a resume of a resume still has it.
+      expect(rerun[0]?.modelNote).toBe(modelNote);
+    });
+
+    it("replays a journal written before modelNote existed with no note and no error", async () => {
+      const script = `return await agent('go', { schema: ${schemaLiteral} });`;
+      const old: WorkflowJournalEntry[] = [];
+      await run(script, { host: stubHost(() => ({ ok: true, text: '{"findings":[]}' })).host, journal: { append: e => old.push(e) } });
+      expect("modelNote" in old[0]!).toBe(false);
+
+      const result = await run(script, { host: stubHost().host, journal: { entries: old } });
+
+      expect(result.status).toBe("completed");
+      expect(result.value).toEqual({ findings: [] });
+    });
+
+    it("adds nothing when the host reports no note", async () => {
+      const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}' }));
+      const result = await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });
+
+      expect(result.value).toEqual({ findings: [] });
+    });
   });
 
   it("passes the compiled schema to the host", async () => {

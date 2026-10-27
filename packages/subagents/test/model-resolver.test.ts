@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { configuredAgentModel, describeModel, getModelAliases, type ModelRegistry, parseModelVersion, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
+import { describeModel, getModelAliases, type ModelRegistry, modelFallbackNote, modelFallbackTo, parseModelVersion, resolveModel, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
 
 // Mock model entries matching typical pi model registry shape
 const MODELS = [
@@ -350,22 +350,22 @@ describe("fuzzy resolution ranks by version, then score", () => {
   });
 });
 
-describe("configuredAgentModel", () => {
-  afterEach(() => {
-    setAgentModels(undefined);
+describe("modelFallbackNote", () => {
+  it("names the unresolved input and the parent model actually used", () => {
+    const fallback = modelFallbackTo("claude-haiku-4-5", { provider: "anthropic", id: "claude-sonnet-5-5" });
+    expect(fallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
+    expect(modelFallbackNote(fallback)).toBe(
+      'Note: configured model "claude-haiku-4-5" did not resolve; running on parent model anthropic/claude-sonnet-5-5.',
+    );
   });
 
-  it("prefers the type, then the wildcard, then the definition's own model", () => {
-    setAgentModels({ Plan: "opus", "*": "sonnet" });
-    expect(configuredAgentModel("Plan", "haiku")).toBe("opus");
-    expect(configuredAgentModel("Explore", "haiku")).toBe("sonnet");
-    setAgentModels({ Plan: "opus" });
-    expect(configuredAgentModel("Explore", "haiku")).toBe("haiku");
-    expect(configuredAgentModel("Explore", undefined)).toBeUndefined();
+  it("says so when the parent has no model either", () => {
+    expect(modelFallbackNote(modelFallbackTo("ghost", undefined))).toBe(
+      'Note: configured model "ghost" did not resolve; running on the session default model.',
+    );
   });
 
-  it("matches the type case-insensitively", () => {
-    setAgentModels({ Plan: "opus" });
-    expect(configuredAgentModel("plan", undefined)).toBe("opus");
+  it("is empty when there was no fallback", () => {
+    expect(modelFallbackNote(undefined)).toBe("");
   });
 });

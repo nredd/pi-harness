@@ -8,6 +8,13 @@ dependencies = [
     "pydantic>=2.12,<3",
 ]
 
+[project.scripts]
+pi-stack-install = "harness.install:main"
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0",
@@ -19,7 +26,13 @@ dev = [
 ]
 
 [tool.uv]
+# The `harness` package is built only for `uvx --from git+...#subdirectory=integration
+# pi-stack-install` (docs/install.md); development and CI keep running from the source tree.
 package = false
+
+[tool.uv.build-backend]
+module-name = "harness"
+module-root = ""
 
 [tool.ruff]
 line-length = 110
@@ -57,4 +70,5 @@ markers = [
     "bench: timing benchmarks against stored baselines",
     "live: real providers, opt-in, costs money",
     "slow: real-time waits of minutes; still part of `make verify`",
+    "installer: real one-shot installer against a published promotion; network, explicit INSTALLER_SPEC/STACK_SHA",
 ]

@@ -425,21 +425,35 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "native/macos/bridge.swift",
         "prebuilt/macos/arm64/bridge",
         "prebuilt/macos/x64/bridge",
+        "native/linux/bridge-rs/Cargo.lock",
+        "native/linux/bridge-rs/Cargo.toml",
+        "native/linux/bridge-rs/src/atspi.rs",
+        "native/linux/bridge-rs/src/error.rs",
+        "native/linux/bridge-rs/src/lib.rs",
+        "native/linux/bridge-rs/src/main.rs",
+        "native/linux/bridge-rs/src/protocol.rs",
+        "native/linux/bridge-rs/src/state.rs",
+        "native/linux/bridge-rs/src/wayland.rs",
+        "native/linux/bridge-rs/src/x11.rs",
     ),
-    # Only macOS ships: the arm64/x64 prebuilts below are the sole helper binaries, so no `prebuilt/linux`
-    # or `prebuilt/windows` pattern exists, and no Windows crate or Windows/Linux doc is packed. The
+    # macOS ships prebuilts; Linux ships only the locked Rust source (`Cargo.toml`, `Cargo.lock`, `src/*.rs`,
+    # no `target/` or `tests/`) that `setup-helper.mjs` builds on opt-in. No `prebuilt/linux` or
+    # `prebuilt/windows` pattern exists and no Windows crate or doc is packed. The
     # `src/platform` pattern is source the TypeScript backends reference. `scenario_computer_use`
     # additionally parses each prebuilt's Mach-O header and mode from the tarball.
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
         re.compile(r"^assets/reference/img\.jpg$"),
-        re.compile(r"^docs/(?:architecture|configuration|macos-root-targeting|troubleshooting|usage)\.md$"),
+        re.compile(
+            r"^docs/(?:architecture|configuration|linux|macos-root-targeting|troubleshooting|usage)\.md$"
+        ),
         re.compile(r"^extensions/[a-z-]+\.ts$"),
         re.compile(
             r"^src/(?:[a-z0-9-]+|platform/[a-z0-9-]+|platform/(?:linux|macos|windows)/[a-z0-9-]+(?:\.d)?)\.(?:ts|mts|mjs)$"
         ),
         re.compile(r"^scripts/(?:build-native|setup-helper)\.mjs$"),
         re.compile(r"^native/macos/(?:bridge|agent_cursor|agent_cursor_motion)\.swift$"),
+        re.compile(r"^native/linux/bridge-rs/(?:Cargo\.(?:toml|lock)|src/[a-z0-9_]+\.rs)$"),
         re.compile(r"^prebuilt/macos/(?:arm64|x64)/bridge$"),
     ),
     exposes_tools=frozenset(
@@ -466,10 +480,21 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "assets/reference/img.jpg",
         "docs/architecture.md",
         "docs/configuration.md",
+        "docs/linux.md",
         "docs/macos-root-targeting.md",
         "docs/troubleshooting.md",
         "docs/usage.md",
         "extensions/computer-use.ts",
+        "native/linux/bridge-rs/Cargo.lock",
+        "native/linux/bridge-rs/Cargo.toml",
+        "native/linux/bridge-rs/src/atspi.rs",
+        "native/linux/bridge-rs/src/error.rs",
+        "native/linux/bridge-rs/src/lib.rs",
+        "native/linux/bridge-rs/src/main.rs",
+        "native/linux/bridge-rs/src/protocol.rs",
+        "native/linux/bridge-rs/src/state.rs",
+        "native/linux/bridge-rs/src/wayland.rs",
+        "native/linux/bridge-rs/src/x11.rs",
         "native/macos/agent_cursor.swift",
         "native/macos/agent_cursor_motion.swift",
         "native/macos/bridge.swift",
@@ -1421,6 +1446,9 @@ def ensure_stock_pi(prefix: Path, sandbox: Sandbox) -> Path:
     Raises:
         ContractError: If the installed version or registry integrity differs from the pins.
     """
+    # npm keys its lockfile by realpath; a symlinked prefix (macOS `/var` -> `/private/var`) would
+    # yield `../../private/...` keys that `verify_stock_pi` cannot find.
+    prefix = prefix.resolve()
     prefix.mkdir(parents=True, exist_ok=True)
     manifest = prefix / "package.json"
     if not manifest.exists():
