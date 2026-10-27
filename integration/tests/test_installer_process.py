@@ -60,7 +60,18 @@ def test_cleanup_keeps_leader_unreaped_until_group_quiescence(monkeypatch: pytes
     checks = 0
 
     def live_members(pgid: int, timeout: float) -> bool:
-        """Force a second signal after the leader exits, without reaping it."""
+        """Force a second signal after the leader exits, without reaping it.
+
+        Parameters:
+            pgid (int): owned process group.
+            timeout (float): positive observation deadline.
+
+        Returns:
+            bool: true only on the first observation.
+
+        Raises:
+            AssertionError: group or timeout is incorrect.
+        """
         nonlocal checks
         assert pgid == process.pid
         assert timeout > 0
@@ -68,12 +79,30 @@ def test_cleanup_keeps_leader_unreaped_until_group_quiescence(monkeypatch: pytes
         return checks == 1
 
     def owned_wait(timeout: float | None = None) -> int:
-        """Reject any reap before all scoped signalling has finished."""
+        """Reject any reap before all scoped signalling has finished.
+
+        Parameters:
+            timeout (float | None): wait deadline.
+
+        Returns:
+            int: leader exit status.
+
+        Raises:
+            AssertionError: signalling is incomplete.
+            subprocess.TimeoutExpired: leader did not exit.
+        """
         assert checks >= 2, "Leader reaped before group quiescence"
         return wait(timeout=timeout)
 
     def no_poll() -> int | None:
-        """Polling is also a waitpid and would release the ownership anchor."""
+        """Polling is also a waitpid and would release the ownership anchor.
+
+        Returns:
+            int | None: never returned.
+
+        Raises:
+            pytest.fail.Exception: polling would release group ownership.
+        """
         pytest.fail("Leader polled before group quiescence")
 
     try:
@@ -103,18 +132,53 @@ def test_cleanup_preserves_marker_and_cleanup_errors(monkeypatch: pytest.MonkeyP
     wait = process.wait
 
     def failed_reap(timeout: float | None = None) -> int:
-        """Retain a final reap diagnostic without leaving the fixture alive."""
+        """Retain a final reap diagnostic without leaving the fixture alive.
+
+        Parameters:
+            timeout (float | None): wait deadline.
+
+        Returns:
+            int: never returned.
+
+        Raises:
+            OSError: injected reap failure after actual reaping.
+            subprocess.TimeoutExpired: leader did not exit.
+        """
         wait(timeout=timeout)
         raise error
 
     def denied(pgid: int, sig: int) -> None:
-        """Inject a live-group permission failure without signalling another group."""
+        """Inject a live-group permission failure without signalling another group.
+
+        Parameters:
+            pgid (int): owned process group.
+            sig (int): requested kill signal.
+
+        Returns:
+            None: never returned.
+
+        Raises:
+            PermissionError: signalling the live group is denied.
+            AssertionError: signal or group is incorrect.
+        """
         assert pgid == process.pid
         assert sig == signal.SIGKILL
         raise error
 
     def live_members(pgid: int, timeout: float) -> bool:
-        """Inject a process-table failure or an observable live member."""
+        """Inject a process-table failure or an observable live member.
+
+        Parameters:
+            pgid (int): owned process group.
+            timeout (float): positive observation deadline.
+
+        Returns:
+            bool: whether the selected fixture models a live member.
+
+        Raises:
+            OSError: selected process-table failure.
+            AssertionError: group or timeout is incorrect.
+        """
         assert pgid == process.pid
         assert timeout > 0
         if failure == "process-table":
@@ -150,7 +214,19 @@ def test_cleanup_tolerates_permission_denied_on_zombie_only_group(monkeypatch: p
     signalled: list[int] = []
 
     def denied(pgid: int, sig: int) -> None:
-        """Model the zombie-only group refusal without signalling another group."""
+        """Model the zombie-only group refusal without signalling another group.
+
+        Parameters:
+            pgid (int): owned process group.
+            sig (int): signal to record.
+
+        Returns:
+            None: never returned.
+
+        Raises:
+            PermissionError: zombie-only group signalling is refused.
+            AssertionError: group is incorrect.
+        """
         assert pgid == process.pid
         signalled.append(sig)
         raise PermissionError("zombie-only group")
@@ -182,7 +258,18 @@ def test_group_cleanup_deadline_is_shared_and_reaps(monkeypatch: pytest.MonkeyPa
     signalled = False
 
     def signal_once(pgid: int, sig: int) -> None:
-        """Kill the fixture, then model successful delivery despite a stale live snapshot."""
+        """Kill the fixture, then model successful delivery despite a stale live snapshot.
+
+        Parameters:
+            pgid (int): owned process group.
+            sig (int): requested signal.
+
+        Returns:
+            None: only the first signal is actually delivered.
+
+        Raises:
+            OSError: initial signal delivery failed.
+        """
         nonlocal signalled
         if not signalled:
             killpg(pgid, sig)
@@ -203,7 +290,19 @@ def test_group_cleanup_deadline_is_shared_and_reaps(monkeypatch: pytest.MonkeyPa
 
 
 def read_ack(descriptor: int, timeout: float) -> bytes:
-    """Read a bounded writer acknowledgement, or EOF once every writer has exited."""
+    """Read a bounded writer acknowledgement, or EOF once every writer has exited.
+
+    Parameters:
+        descriptor (int): acknowledgement pipe reader.
+        timeout (float): readiness deadline.
+
+    Returns:
+        bytes: acknowledgement or empty bytes for EOF.
+
+    Raises:
+        AssertionError: no pipe readiness before the deadline.
+        OSError: pipe read failed.
+    """
     with selectors.DefaultSelector() as selector:
         selector.register(descriptor, selectors.EVENT_READ)
         assert selector.select(timeout), "Writer pipe did not quiesce within its hard lifetime"
@@ -217,6 +316,17 @@ def fork_writer_trial(staging: Path) -> None:
     leader/per-fork alarms also bound writer startup and broken-helper paths. No fallback
     signals a potentially recycled numeric PID/PGID. Pipe EOF proves every writer
     closed its descriptor before this supervisor reaps its direct child.
+
+    Parameters:
+        staging (Path): disposable writer destination.
+
+    Returns:
+        None: every writer quiesced and the staging tree was removed.
+
+    Raises:
+        AssertionError: a writer survived or exceeded its hard lifetime.
+        OSError: pipe setup or process creation failed.
+        subprocess.TimeoutExpired: leader reaping exceeded its deadline.
     """
     staging.mkdir(parents=True)
     request_read, request_write = os.pipe()
@@ -319,13 +429,31 @@ def test_writer_supervisor_closes_pipes_when_spawn_fails(
     descriptors: list[int] = []
 
     def tracked_pipe() -> tuple[int, int]:
-        """Record the descriptors whose ownership transfers to the supervisor."""
+        """Record the descriptors whose ownership transfers to the supervisor.
+
+        Returns:
+            tuple[int, int]: real pipe endpoints recorded for cleanup assertions.
+
+        Raises:
+            OSError: pipe creation failed.
+        """
         pair = pipe()
         descriptors.extend(pair)
         return pair
 
     def failed_spawn(*args: object, **kwargs: object) -> subprocess.Popen[str]:
-        """Model Popen's failed-exec path, which already reaps its startup child."""
+        """Model Popen's failed-exec path, which already reaps its startup child.
+
+        Parameters:
+            *args (object): ignored spawn arguments.
+            **kwargs (object): ignored spawn options.
+
+        Returns:
+            subprocess.Popen[str]: never returned.
+
+        Raises:
+            OSError: always, modeling failed exec.
+        """
         raise OSError("injected exec failure")
 
     monkeypatch.setattr(os, "pipe", tracked_pipe)

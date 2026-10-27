@@ -27,7 +27,9 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from http.client import HTTPException, HTTPMessage
 from pathlib import Path
 from types import MappingProxyType
@@ -39,6 +41,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
 
 LOGGER = logging.getLogger(__name__)
+CHILD_PATH: ContextVar[str | None] = ContextVar("installer_child_path", default=None)
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 SRI_SHA512 = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
@@ -197,6 +200,53 @@ def fetch_bytes(request: str | Request) -> bytes:
 
 class AttestationRateLimitedError(RuntimeError):
     """GitHub's anonymous API rate limit refused an attestation lookup."""
+
+
+@contextmanager
+def pinned_child_path(node: str) -> Iterator[None]:
+    """Freeze child PATH at preflight, prioritizing the validated Node dispatcher.
+
+    Parameters:
+        node (str): preflight-selected Node path; links are not resolved.
+
+    Yields:
+        None: child environments use this run's absolute search path.
+
+    Raises:
+        OSError: the current directory cannot be determined.
+    """
+    path = os.pathsep.join(
+        [
+            str(Path(node).absolute().parent),
+            *(str(Path(entry).absolute()) for entry in os.environ.get("PATH", os.defpath).split(os.pathsep)),
+        ]
+    )
+    token = CHILD_PATH.set(path)
+    try:
+        yield
+    finally:
+        CHILD_PATH.reset(token)
+
+
+def child_environment(env: Mapping[str, str], *, github_tokens: bool = False) -> dict[str, str]:
+    """Build every installer child environment with stable executable lookup.
+
+    Parameters:
+        env (Mapping[str, str]): caller's allowed environment.
+        github_tokens (bool): retain tokens only for authenticated gh lookup.
+
+    Returns:
+        dict[str, str]: fresh environment with absolute PATH entries and selected Node first.
+
+    Raises:
+        OSError: an unpinned relative PATH cannot be made absolute.
+    """
+    path = CHILD_PATH.get()
+    if path is None:
+        path = os.pathsep.join(
+            str(Path(entry).absolute()) for entry in env.get("PATH", os.defpath).split(os.pathsep)
+        )
+    return (dict(env) if github_tokens else without_github_tokens(env)) | {"PATH": path}
 
 
 def without_github_tokens(env: Mapping[str, str]) -> dict[str, str]:
@@ -397,7 +447,7 @@ def verify_attestation(
     if not Path(gh_bin).is_file():
         raise FileNotFoundError(f"Attestation verification requires `gh` at '{gh_bin}'")
     # A local bundle needs no GitHub API call, so `gh` gets a token only when it must fetch.
-    env = without_github_tokens(os.environ) if bundle is not None else None
+    env = child_environment(os.environ, github_tokens=bundle is None)
     try:
         subprocess.check_output(
             [
@@ -781,7 +831,7 @@ def fetch_release(
                 str(assets[0]),
             ],
             cwd=prefix,
-            env=env,
+            env=child_environment(env),
             text=True,
             stderr=subprocess.STDOUT,
             timeout=600,

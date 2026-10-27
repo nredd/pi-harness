@@ -70,15 +70,16 @@ from harness.promotion import (
     verify_core_assets,
 )
 from harness.release import (
+    child_environment,
     fetch_bytes,
     fetch_release,
+    pinned_child_path,
     release_asset_url,
     release_checksums,
     release_tarballs,
     verify_asset,
     verify_provenance_anonymously,
     verify_public_attestation,
-    without_github_tokens,
 )
 from harness.sandbox import deep_merge
 from harness.stack import (
@@ -322,7 +323,7 @@ def node_version(node: str) -> tuple[int, int, int]:
             text=True,
             stderr=subprocess.STDOUT,
             timeout=VERSION_TIMEOUT,
-            env=without_github_tokens(os.environ),
+            env=child_environment(os.environ),
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise UnsupportedError(f"Could not run '{node} --version': {error}") from error
@@ -840,8 +841,35 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
                 f"'{target}'" in message for message in plan.overwrites
             ):
                 plan.overwrites.append(f"replace '{target}' (backed up)")
+        declare_permanent_creates(layout, plan)
         require_backup_store(layout)
     return plan
+
+
+def declare_permanent_creates(layout: Layout, plan: Plan) -> None:
+    """Declare state and exact parent mkdirs, never authorizing arbitrary descendants.
+
+    Parameters:
+        layout (Layout): installer paths.
+        plan (Plan): nonempty plan receiving permanent CREATE declarations.
+
+    Returns:
+        None: absent permanent state and parent paths are added to the public plan.
+
+    Raises:
+        OSError: a parent cannot be inspected.
+    """
+    if not layout.state.exists(follow_symlinks=False):
+        plan.creates.append(f"write installed state '{layout.state}'")
+    directories = [layout.root, layout.agent_dir, layout.backups]
+    if plan.install_core:
+        directories.append(layout.root / "core")
+    if plan.link is not None:
+        directories.append(layout.bin_dir)
+    parents = dict.fromkeys(parent for path in directories for parent in (*reversed(path.parents), path))
+    for parent in parents:
+        if not parent.exists(follow_symlinks=False):
+            plan.creates.append(f"create directory '{parent}'")
 
 
 def replaced_targets(layout: Layout, plan: Plan, core: Path | None = None) -> list[Path]:
@@ -1100,9 +1128,19 @@ class Journal:
         self.check_store()
 
     def persist(self) -> None:
-        """Persist the current two-phase journal before continuing the switch."""
+        """Persist the bounded two-phase journal before continuing the switch.
+
+        Returns:
+            None: the private journal is atomically replaced.
+
+        Raises:
+            OSError: serialization exceeds the journal bound or persistence failed.
+        """
         document = {"backups": str(self.backups), "steps": self.steps}
-        write_atomic(self.path, json.dumps(document, indent=2), mode=JOURNAL_MODE)
+        text = json.dumps(document, indent=2)
+        if len(text.encode()) > MAX_JOURNAL_BYTES:
+            raise OSError("Recovery journal exceeds the byte limit; restore by hand")
+        write_atomic(self.path, text, mode=JOURNAL_MODE)
 
     def record(self, target: Path, name: str) -> Path | None:
         """Durably record a step before it runs.
@@ -1189,6 +1227,7 @@ class RestoreHasher:
 
     remaining_bytes: int = MAX_RESTORE_BYTES
     remaining_entries: int = MAX_RESTORE_ENTRIES
+    manifest: dict[str, RestoreIdentity] | None = None
 
     def consume(self, count: int) -> None:
         """Charge bytes before hashing them, refusing an oversized restore.
@@ -1215,15 +1254,19 @@ class RestoreHasher:
             digest.update(chunk)
         return digest.hexdigest()
 
-    def tree_digest(self, descriptor: int, depth: int) -> str:
+    def tree_digest(self, descriptor: int, depth: int, relative: str) -> str:
         """Hash sorted child names, kinds and content digests with length-prefixed framing.
 
         Parameters:
             descriptor (int): no-follow directory descriptor.
             depth (int): current depth, bounded before descending.
+            relative (str): manifest-relative directory name.
 
         Returns:
             str: recursive SHA-256; symlinks are entries, never traversed.
+
+        Raises:
+            OSError: a child changed, has a refused kind, or exceeds a hashing bound.
         """
         names = []
         with os.scandir(descriptor) as entries:
@@ -1236,19 +1279,27 @@ class RestoreHasher:
                 names.append(entry.name)
         digest = hashlib.sha256()
         for name in sorted(names, key=os.fsencode):
-            child = self.identity(name, dir_fd=descriptor, depth=depth + 1)
+            child = self.identity(
+                name,
+                dir_fd=descriptor,
+                depth=depth + 1,
+                relative=f"{relative}/{name}" if relative else name,
+            )
             for value in (os.fsencode(name), child.kind.encode(), child.sha256.encode()):
                 digest.update(len(value).to_bytes(8, "big"))
                 digest.update(value)
         return digest.hexdigest()
 
-    def identity(self, path: Path | str, *, dir_fd: int | None = None, depth: int = 0) -> RestoreIdentity:
+    def identity(
+        self, path: Path | str, *, dir_fd: int | None = None, depth: int = 0, relative: str = ""
+    ) -> RestoreIdentity:
         """Hash one entry without following links and corroborate its opened identity.
 
         Parameters:
             path (Path | str): live path or backup basename relative to `dir_fd`.
             dir_fd (int | None): anchored parent descriptor, or normal live lookup.
             depth (int): recursive tree depth.
+            relative (str): manifest-relative entry name; empty for its root.
 
         Returns:
             RestoreIdentity: entry kind, device, inode and decisive content hash.
@@ -1276,7 +1327,9 @@ class RestoreHasher:
                 if os.fstat(descriptor) != info:
                     raise OSError(f"Restore entry '{path}' changed before hashing")
                 digest = (
-                    self.file_digest(descriptor) if kind == "file" else self.tree_digest(descriptor, depth)
+                    self.file_digest(descriptor)
+                    if kind == "file"
+                    else self.tree_digest(descriptor, depth, relative)
                 )
                 after = os.fstat(descriptor)
             finally:
@@ -1290,7 +1343,10 @@ class RestoreHasher:
                 info.st_ctime_ns,
             ):
                 raise OSError(f"Restore entry '{path}' changed while hashing")
-        return RestoreIdentity(kind, info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size, digest)
+        result = RestoreIdentity(kind, info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size, digest)
+        if self.manifest is not None:
+            self.manifest[relative] = result
+        return result
 
 
 @dataclass(frozen=True)
@@ -1300,6 +1356,7 @@ class RestoreAside:
     path: Path
     identity: RestoreIdentity
     cleaning: bool = False
+    manifest: dict[str, RestoreIdentity] | None = None
 
     def record(self) -> dict[str, Any]:
         """Serialize the sibling path and the content it must still hold.
@@ -1310,6 +1367,8 @@ class RestoreAside:
         result = {"path": str(self.path), "identity": asdict(self.identity)}
         if self.cleaning:
             result["cleaning"] = True
+        if self.manifest is not None:
+            result["manifest"] = {name: asdict(identity) for name, identity in self.manifest.items()}
         return result
 
 
@@ -1501,7 +1560,7 @@ def aside_metadata(value: object, target: Path) -> RestoreAside | None:
         return None
     if (
         not isinstance(value, dict)
-        or set(value) not in ({"path", "identity"}, {"path", "identity", "cleaning"})
+        or set(value) - {"cleaning", "manifest"} != {"path", "identity"}
         or type(value.get("cleaning", False)) is not bool
         or not isinstance(value["path"], str)
     ):
@@ -1515,7 +1574,55 @@ def aside_metadata(value: object, target: Path) -> RestoreAside | None:
         or RESTORE_ASIDE_ID.fullmatch(path.name.removeprefix(prefix)) is None
     ):
         raise ValueError(f"restore aside '{path}' is not a private sibling of '{target}'")
-    return RestoreAside(path, content_identity(value["identity"]), value.get("cleaning", False))
+    manifest = cleanup_manifest(value.get("manifest"))
+    identity = content_identity(value["identity"])
+    if manifest is not None and manifest[""] != identity:
+        raise ValueError("Restore aside manifest root does not match its identity")
+    return RestoreAside(path, identity, value.get("cleaning", False), manifest)
+
+
+def cleanup_manifest(value: object) -> dict[str, RestoreIdentity] | None:
+    """Validate bounded relative entry identities before permitting interrupted deletion.
+
+    Parameters:
+        value (object): serialized cleanup manifest, or absent legacy metadata.
+
+    Returns:
+        dict[str, RestoreIdentity] | None: validated entries, including the empty root name.
+
+    Raises:
+        ValueError: names, identities or resource bounds are invalid.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict) or "" not in value or len(value) > MAX_RESTORE_ENTRIES:
+        raise ValueError("Invalid restore cleanup manifest")
+    result = {}
+    budget = 0
+    for name, raw in value.items():
+        if not isinstance(name, str) or (
+            name
+            and (
+                str(Path(name)) != name
+                or Path(name).is_absolute()
+                or any(part in {".", ".."} for part in name.split("/"))
+                or len(Path(name).parts) > MAX_RESTORE_DEPTH
+            )
+        ):
+            raise ValueError("Invalid restore cleanup manifest path")
+        identity = content_identity(raw)
+        budget += len(os.fsencode(name)) + (identity.size if identity.kind != "directory" else 0)
+        if budget > MAX_RESTORE_BYTES:
+            raise ValueError("Restore cleanup manifest exceeds byte limit")
+        result[name] = identity
+    for name in result:
+        if not name:
+            continue
+        parent = str(Path(name).parent) if Path(name).parent != Path() else ""
+        identity = result.get(parent)
+        if identity is None or identity.kind != "directory":
+            raise ValueError("Restore cleanup manifest has a missing or non-directory parent")
+    return result
 
 
 def pending_identity(raw: dict[str, Any], target: Path) -> tuple[bool, tuple[int, int, int] | None]:
@@ -1678,12 +1785,27 @@ def check_aside(step: Step) -> bool:
 
     Returns:
         bool: whether its recorded aside exists.
+
+    Raises:
+        OSError: restored original or remaining aside content cannot be verified.
     """
     if step.aside is None or not step.aside.path.exists(follow_symlinks=False):
         return False
     if step.aside.cleaning:
         if step.restoring is None or live_content(step.target) != step.restoring:
             raise OSError(f"Original target '{step.target}' changed during aside cleanup; restore by hand")
+        if step.aside.manifest is None:
+            raise OSError(f"Restore aside '{step.aside.path}' has no cleanup manifest; restore by hand")
+        remaining: dict[str, RestoreIdentity] = {}
+        RestoreHasher(manifest=remaining).identity(step.aside.path)
+        for name, identity in remaining.items():
+            recorded = step.aside.manifest.get(name)
+            if recorded is None or (
+                (identity.kind, identity.device, identity.inode)
+                != (recorded.kind, recorded.device, recorded.inode)
+                or (identity.kind != "directory" and identity != recorded)
+            ):
+                raise OSError(f"Restore aside '{step.aside.path}' changed during cleanup; restore by hand")
         return True
     if live_content(step.aside.path) != step.aside.identity:
         raise OSError(f"Restore aside '{step.aside.path}' changed; restore by hand")
@@ -1757,12 +1879,23 @@ def finish_aside(journal: Journal, step: Step, index: int) -> None:
         journal (Journal): open journal receiving write-ahead cleanup intent.
         step (Step): step with optional aside metadata.
         index (int): journal position.
+
+    Returns:
+        None: a verified aside is removed, or was already absent.
+
+    Raises:
+        OSError: the original, aside or manifest cannot be verified or safely persisted.
     """
     if check_aside(step):
         assert step.aside is not None
         if step.restoring is None or live_content(step.target) != step.restoring:
             raise OSError(f"Original target '{step.target}' is not safely restored; aside kept")
-        cleaning = replace(step, aside=replace(step.aside, cleaning=True))
+        manifest = step.aside.manifest
+        if not step.aside.cleaning:
+            manifest = {}
+            if RestoreHasher(manifest=manifest).identity(step.aside.path) != step.aside.identity:
+                raise OSError(f"Restore aside '{step.aside.path}' changed before cleanup; restore by hand")
+        cleaning = replace(step, aside=replace(step.aside, cleaning=True, manifest=manifest))
         journal.steps[index] = cleaning.record()
         journal.persist()
         remove(step.aside.path)
@@ -1919,7 +2052,7 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
             subprocess.check_output(
                 [str(pi_bin), "install", source],
                 cwd=home,
-                env=env | install_overrides(stack, package),
+                env=child_environment(env | install_overrides(stack, package)),
                 text=True,
                 stderr=subprocess.STDOUT,
                 timeout=INSTALL_TIMEOUT,
@@ -2165,7 +2298,7 @@ def post_check(layout: Layout) -> str:
             text=True,
             stderr=subprocess.STDOUT,
             timeout=VERSION_TIMEOUT,
-            env=without_github_tokens(os.environ) | {"PI_SKIP_VERSION_CHECK": "1", "PI_OFFLINE": "1"},
+            env=child_environment(os.environ) | {"PI_SKIP_VERSION_CHECK": "1", "PI_OFFLINE": "1"},
         ).strip()
     except (OSError, subprocess.SubprocessError) as error:
         raise InstallError(f"Installed '{layout.link}' does not run: {error}") from error
@@ -2331,6 +2464,32 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
         with locked(layout):
             recover(layout, opts.assume_yes, ask)
     tools = preflight(platform.system(), platform.machine())
+    with pinned_child_path(tools["node"]):
+        return run_preflighted(opts, env, ask, layout, tools)
+
+
+def run_preflighted(
+    opts: Options,
+    env: Mapping[str, str],
+    ask: Callable[[str], str] | None,
+    layout: Layout,
+    tools: Mapping[str, str],
+) -> ExitCode:
+    """Verify and install using the preflight-frozen child executable environment.
+
+    Parameters:
+        opts (Options): requested operation.
+        env (Mapping[str, str]): original layout/search environment.
+        ask (Callable[[str], str] | None): consent prompt.
+        layout (Layout): admitted installation paths.
+        tools (Mapping[str, str]): absolute preflight-selected executables.
+
+    Returns:
+        ExitCode: successful install or unchanged plan.
+
+    Raises:
+        InstallError: verification, consent, staging or recovery failed.
+    """
     require_one_filesystem(layout)
     with tempfile.TemporaryDirectory(prefix="pi-stack-verify-") as temporary:
         workdir = Path(temporary)

@@ -675,6 +675,12 @@ def test_legacy_fetch_rejects_a_wrong_asset(
         Parameters:
             *_args (Any): ignored.
             **_kwargs (Any): ignored.
+
+        Returns:
+            None: never returned.
+
+        Raises:
+            pytest.fail.Exception: npm installation was unexpectedly reached.
         """
         pytest.fail("npm install reached despite a checksum mismatch")
 
@@ -819,7 +825,9 @@ def test_public_attestation_falls_back_to_gh_login_only_when_rate_limited(
         assert not GITHUB_TOKEN_VARIABLES & set(env)
         assert "ghp_sentinel-not-a-real-token" not in env.values()
     else:
-        assert env is None
+        assert env is not None
+        assert env["GH_TOKEN"] == "ghp_sentinel-not-a-real-token"
+        assert all(Path(entry).is_absolute() for entry in env["PATH"].split(os.pathsep))
     assert argv[argv.index("--signer-workflow") + 1] == "o/r/.github/workflows/w.yml"
     assert argv[argv.index("--source-ref") + 1] == "refs/heads/main"
     assert "--deny-self-hosted-runners" in argv
@@ -909,6 +917,12 @@ def merge_at(*path: str, values: dict[str, Any]) -> Edit:
 
         Parameters:
             document (dict[str, Any]): parsed fixture to mutate.
+
+        Returns:
+            None: selected entries are merged in place.
+
+        Raises:
+            KeyError: the fixture lacks the selected path.
         """
         target = document
         for key in path:
@@ -924,6 +938,13 @@ def rewrite(path: Path, edit: Edit) -> None:
     Parameters:
         path (Path): JSON file.
         edit (Edit): callable mutating the parsed document.
+
+    Returns:
+        None: the edited fixture is written in place.
+
+    Raises:
+        OSError: fixture read or write failed.
+        ValueError: fixture is not JSON.
     """
     document = json.loads(path.read_text())
     edit(document)
@@ -1236,7 +1257,14 @@ def http_responses(
         """Serve exact malformed headers/bodies and silence request logs."""
 
         def do_GET(self) -> None:
-            """Write one controlled response and close it, as urllib requests."""
+            """Write one controlled response and close it, as urllib requests.
+
+            Returns:
+                None: response headers and body were written.
+
+            Raises:
+                OSError: response socket write failed.
+            """
             requests.append(self.path)
             if received is not None:
                 received.append(dict(self.headers.items()))
@@ -1249,7 +1277,15 @@ def http_responses(
             self.close_connection = True
 
         def log_message(self, format: str, *args: Any) -> None:
-            """Suppress the fixture's HTTP access log."""
+            """Suppress the fixture's HTTP access log.
+
+            Parameters:
+                format (str): ignored log format.
+                *args (Any): ignored log values.
+
+            Returns:
+                None: no log output is emitted.
+            """
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -1316,7 +1352,14 @@ def test_nonlegacy_core_truncation_is_exit_three(
     sums = "".join(f"{digest}  {name}\n" for name, digest in core.integrity.items()).encode()
 
     def reply(path: str) -> tuple[dict[str, str], bytes]:
-        """Serve valid checksums, then a genuinely truncated chunked asset."""
+        """Serve valid checksums, then a genuinely truncated chunked asset.
+
+        Parameters:
+            path (str): requested URL path.
+
+        Returns:
+            tuple[dict[str, str], bytes]: framing headers and controlled wire body.
+        """
         if path.endswith("SHA256SUMS"):
             return {"Content-Length": str(len(sums))}, sums
         return {"Transfer-Encoding": "chunked"}, b"10\r\npartial"
@@ -1372,7 +1415,17 @@ def test_wire_content_length_failure_is_exit_three(
         monkeypatch.setattr(release, "urlopen", opener)
 
         def run(*args: Any) -> install.ExitCode:
-            """Run the real download and CLI error boundary without other verification setup."""
+            """Run the real download and CLI error boundary without other verification setup.
+
+            Parameters:
+                *args (Any): ignored installer invocation arguments.
+
+            Returns:
+                install.ExitCode: successful download status.
+
+            Raises:
+                install.VerificationError: invalid wire response.
+            """
             install.download(base + "/asset", destination)
             return install.ExitCode.OK
 
@@ -1392,7 +1445,14 @@ def test_insecure_download_is_exit_three(
     target = ""
 
     def reply(path: str) -> tuple[dict[str, str], bytes]:
-        """Make the insecure target reachable so an unsafe follow would actually succeed."""
+        """Make the insecure target reachable so an unsafe follow would actually succeed.
+
+        Parameters:
+            path (str): requested URL path.
+
+        Returns:
+            tuple[dict[str, str], bytes]: redirect or successful target response.
+        """
         if path == "/redirect":
             return {"Location": target}, b""
         return {"Content-Length": "2"}, b"ok"
@@ -1403,7 +1463,17 @@ def test_insecure_download_is_exit_three(
         url = base + "/redirect" if redirect else base.replace("https:", "http:") + "/plain"
 
         def run(*args: Any) -> install.ExitCode:
-            """Exercise download's normal exit-3 mapping."""
+            """Exercise download's normal exit-3 mapping.
+
+            Parameters:
+                *args (Any): ignored installer invocation arguments.
+
+            Returns:
+                install.ExitCode: successful download status.
+
+            Raises:
+                install.VerificationError: insecure URL or redirect.
+            """
             install.download(url, tmp_path / "asset")
             return install.ExitCode.OK
 

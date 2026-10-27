@@ -337,7 +337,18 @@ def merge_evidence(*path: str | int, **values: Any) -> Callable[[dict[str, Any],
     """
 
     def merge(run: dict[str, Any], artifacts: dict[str, Any]) -> None:
-        """Apply malformed evidence using a statement merge, never an update expression."""
+        """Apply malformed evidence using a statement merge, never an update expression.
+
+        Parameters:
+            run (dict[str, Any]): recorded workflow run.
+            artifacts (dict[str, Any]): recorded artifact pages.
+
+        Returns:
+            None: selected evidence fields are merged in place.
+
+        Raises:
+            KeyError | IndexError: the fixture lacks the selected path.
+        """
         target: Any = {"run": run, "artifacts": artifacts}
         for key in path:
             target = target[key]
@@ -681,6 +692,13 @@ def fake_fetch(url: str, destination: Path) -> None:
     Parameters:
         url (str): requested asset URL, which must be the tag's release URL.
         destination (Path): file to write.
+
+    Returns:
+        None: asset fixture bytes are written.
+
+    Raises:
+        AssertionError: the asset URL differs from the expected release.
+        OSError: fixture write failed.
     """
     assert url == f"https://github.com/nredd/pi/releases/download/{NEW_CORE_TAG}/{NEW_ASSET}"
     destination.write_bytes(ASSET_BYTES)
@@ -1008,6 +1026,9 @@ def stub_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     Parameters:
         monkeypatch (pytest.MonkeyPatch): patches the module.
         tmp_path (Path): fixture directory.
+
+    Returns:
+        None: candidate construction is replaced for this test.
     """
 
     def build(ctx: promotion_verify.VerifyContext, source_sha: str) -> None:
@@ -1016,6 +1037,13 @@ def stub_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         Parameters:
             ctx (promotion_verify.VerifyContext): runner context.
             source_sha (str): selected commit.
+
+        Returns:
+            None: candidate snapshot bytes are written.
+
+        Raises:
+            OSError: fixture write failed.
+            ValueError: the snapshot fixture is invalid.
         """
         (ctx.promo / "stack-snapshot.json").write_text(snapshot(tmp_path, source_sha).model_dump_json())
 

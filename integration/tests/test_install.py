@@ -134,6 +134,9 @@ class Harness:
         Parameters:
             tmp_path (Path): private directory.
             monkeypatch (pytest.MonkeyPatch): module patcher.
+
+        Returns:
+            None: isolated HOME and network seams are ready.
         """
         self.home = (tmp_path / "home").resolve()
         self.home.mkdir()
@@ -158,7 +161,11 @@ class Harness:
 
     @property
     def layout(self) -> Layout:
-        """The installer layout for this HOME."""
+        """Resolve the installer layout for this HOME.
+
+        Returns:
+            Layout: canonical fixture paths.
+        """
         return Layout.from_env(self.env, self.home, None)
 
     def fetch_release(
@@ -347,7 +354,17 @@ def test_eof_prompt_declines_without_changes(
     calls = harness.calls()
 
     def eof(prompt: str) -> str:
-        """Model a terminal closing while input waits for consent."""
+        """Model a terminal closing while input waits for consent.
+
+        Parameters:
+            prompt (str): consent question.
+
+        Returns:
+            str: never returned.
+
+        Raises:
+            EOFError: always, modeling closed input.
+        """
         raise EOFError
 
     with pytest.raises(ConsentError, match="nothing changed"):
@@ -419,7 +436,19 @@ def test_installer_root_creation_failure_is_clean_refusal(
         original = Path.mkdir
 
         def refuse(path: Path, *args: Any, **kwargs: Any) -> None:
-            """Inject the actual filesystem error at installer-root creation only."""
+            """Inject the actual filesystem error at installer-root creation only.
+
+            Parameters:
+                path (Path): directory to create.
+                *args (Any): mkdir arguments.
+                **kwargs (Any): mkdir options.
+
+            Returns:
+                None: unrelated directories are created.
+
+            Raises:
+                OSError: installer-root creation failed.
+            """
             if path == root:
                 raise OSError(number, os.strerror(number), str(path))
             original(path, *args, **kwargs)
@@ -534,7 +563,19 @@ def test_unstarted_backup_rename_rolls_back_cleanly(
     attempts: list[Path] = []
 
     def fail_rename(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Fail at the original-to-backup syscall, after record persisted but before any move."""
+        """Fail at the original-to-backup syscall, after record persisted but before any move.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): descriptor-relative rename options.
+
+        Returns:
+            None: unrelated renames complete.
+
+        Raises:
+            OSError: the selected backup rename failed.
+        """
         if Path(src) == layout.agent_dir / "npm":
             attempts.append(Path(src))
             if failure == "eacces":
@@ -563,7 +604,19 @@ def test_missing_backup_after_pending_rename_still_fails_loudly(
     original = os.replace
 
     def lose_backup_after_move(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Simulate loss after the original moved, before save can mark the pending entry saved."""
+        """Simulate loss after the original moved, before save marks it saved.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: unrelated renames complete.
+
+        Raises:
+            OSError: the selected backup disappeared.
+        """
         original(src, dst, **kwargs)
         if Path(src) == layout.agent_dir / "npm":
             (backup,) = layout.backups.glob("*/npm")
@@ -640,7 +693,14 @@ def test_backup_store_swap_cannot_redirect_backups(
     original_switch, original_replace = install.switch, os.replace
 
     def swap_store() -> None:
-        """Replace the checked store with an attacker-controlled symlink."""
+        """Replace the checked store with an attacker-controlled symlink.
+
+        Returns:
+            None: the backup-store ancestor is replaced.
+
+        Raises:
+            OSError: fixture rename or link creation failed.
+        """
         nonlocal attacked
         attacked = True
         layout.backups.mkdir(parents=True, exist_ok=True)
@@ -648,12 +708,35 @@ def test_backup_store_swap_cannot_redirect_backups(
         layout.backups.symlink_to(outside)
 
     def before_switch(*args: Any, **kwargs: Any) -> None:
-        """Swap after the last kind check but before switch opens its directory."""
+        """Swap after the last kind check but before switch opens its directory.
+
+        Parameters:
+            *args (Any): forwarded switch arguments.
+            **kwargs (Any): forwarded switch options.
+
+        Returns:
+            None: validation and the selected store swap complete.
+
+        Raises:
+            UnsupportedError: the store kind is refused.
+        """
         swap_store()
         original_switch(*args, **kwargs)
 
     def during_replace(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Swap at the actual rename, then hide it with an empty real store before rollback."""
+        """Swap at the actual rename, then hide it with an empty real store before rollback.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: the injected rename completed.
+
+        Raises:
+            OSError: the underlying rename failed.
+        """
         if Path(src) != layout.agent_dir / "npm":
             original_replace(src, dst, **kwargs)
             return
@@ -701,7 +784,19 @@ def test_rollback_store_swap_restores_from_open_directory(
     attacked = False
 
     def swap(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Replace the ancestor after validation but at the restore syscall boundary."""
+        """Replace the ancestor after validation but at the restore syscall boundary.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: the rename completed against its anchored parent.
+
+        Raises:
+            OSError: the underlying rename failed.
+        """
         nonlocal attacked
         if Path(dst) == layout.agent_dir / "npm":
             attacked = True
@@ -921,7 +1016,19 @@ def test_malformed_verified_core_manifest_is_verification_failure(
     before = tree(tmp_path)
 
     def verify_metadata(opts: Options, env: object, ask: object) -> ExitCode:
-        """Exercise the real digest and manifest readers through the CLI outcome boundary."""
+        """Exercise the real digest and manifest readers through the CLI outcome boundary.
+
+        Parameters:
+            opts (Options): requested stack.
+            env (object): unused environment.
+            ask (object): unused consent callback.
+
+        Returns:
+            ExitCode: successful verification.
+
+        Raises:
+            VerificationError: manifest validation failed.
+        """
         install.verify_asset(tarball, url, {url: digest})
         required_node(tarball)
         return ExitCode.OK
@@ -1005,11 +1112,29 @@ def test_http_read_failures_are_clean_verification_failures(
         headers = Message()
 
         def read(self, size: int | None = -1) -> bytes:
-            """Simulate an interrupted or malformed transfer after headers were accepted."""
+            """Simulate an interrupted or malformed transfer after headers were accepted.
+
+            Parameters:
+                size (int | None): ignored read bound.
+
+            Returns:
+                bytes: never returned.
+
+            Raises:
+                OSError | HTTPException | ValueError: selected transfer failure.
+            """
             raise error
 
     def open_response(request: Any, **kwargs: Any) -> BrokenResponse:
-        """Record the exact caller URL and inject a body read failure."""
+        """Record the exact caller URL and inject a body read failure.
+
+        Parameters:
+            request (Any): requested URL or request object.
+            **kwargs (Any): ignored transport options.
+
+        Returns:
+            BrokenResponse: stream failing on its first read.
+        """
         requests.append(request.full_url if hasattr(request, "full_url") else str(request))
         return BrokenResponse(b"partial")
 
@@ -1021,7 +1146,19 @@ def test_http_read_failures_are_clean_verification_failures(
         monkeypatch.setattr(install, "download", lambda url, destination: artifact)
 
     def verify(opts: Options, env: object, ask: object) -> ExitCode:
-        """Use the real verification caller and CLI error mapping, with only the HTTP opener replaced."""
+        """Use the real verification caller and CLI error mapping.
+
+        Parameters:
+            opts (Options): requested stack.
+            env (object): unused environment.
+            ask (object): unused consent callback.
+
+        Returns:
+            ExitCode: successful verification.
+
+        Raises:
+            VerificationError: the simulated transfer failed.
+        """
         if caller == "download":
             install.download("https://downloads.example.invalid/core.tgz", tmp_path / "download")
         elif caller == "checksums":
@@ -1380,6 +1517,9 @@ def interrupt(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     Parameters:
         harness (Harness): seeded HOME.
         monkeypatch (pytest.MonkeyPatch): module patcher.
+
+    Returns:
+        None: the interrupted switch leaves its journal for recovery.
     """
     layout = harness.layout
     plan = plan_install(layout, harness.verified)
@@ -1445,6 +1585,13 @@ def edit_journal(harness: Harness, change: Callable[[dict[str, Any]], None]) -> 
     Parameters:
         harness (Harness): HOME with a pending journal.
         change (Callable[[dict[str, Any]], None]): mutates the decoded journal.
+
+    Returns:
+        None: private journal bytes are replaced.
+
+    Raises:
+        OSError: journal read or write failed.
+        ValueError: journal fixture cannot be decoded.
     """
     journal = harness.layout.journal
     document = json.loads(journal.read_text())
@@ -1468,6 +1615,9 @@ def add_step(target: Path | str, backup: Path | str | None = None) -> Callable[[
 
         Parameters:
             document (dict[str, Any]): decoded journal.
+
+        Returns:
+            None: the step is appended in place.
         """
         document["steps"].append({"target": str(target), "backup": None if backup is None else str(backup)})
 
@@ -1490,6 +1640,9 @@ def set_backup(name: str, backup: str) -> Callable[[dict[str, Any]], None]:
 
         Parameters:
             document (dict[str, Any]): decoded journal.
+
+        Returns:
+            None: the backup reference is replaced in place.
         """
         (step,) = [step for step in document["steps"] if Path(step["target"]).name == name]
         step["backup"] = backup
@@ -1538,7 +1691,14 @@ def set_journal_fields(**values: Any) -> Callable[[dict[str, Any]], None]:
     """
 
     def edit(document: dict[str, Any]) -> None:
-        """Merge this fixture's malformed fields into the journal."""
+        """Merge this fixture's malformed fields into the journal.
+
+        Parameters:
+            document (dict[str, Any]): journal fixture.
+
+        Returns:
+            None: document is mutated in place.
+        """
         document |= values
 
     return edit
@@ -1889,6 +2049,12 @@ def make_special(path: Path, kind: str, monkeypatch: pytest.MonkeyPatch) -> None
         path (Path): entry to create; its parent exists.
         kind (str): `fifo`, `fifo-link` or `socket`.
         monkeypatch (pytest.MonkeyPatch): restores the working directory a socket bind uses.
+
+    Returns:
+        None: the selected special entry exists.
+
+    Raises:
+        OSError: entry creation failed.
     """
     match kind:
         case "fifo":
@@ -2041,6 +2207,12 @@ def test_journal_is_private_before_any_data(tmp_path: Path, monkeypatch: pytest.
 
         Parameters:
             descriptor (int): open file.
+
+        Returns:
+            None: flush-time permissions are recorded and fsync completes.
+
+        Raises:
+            OSError: descriptor lookup or fsync failed.
         """
         modes.append(install.os.fstat(descriptor).st_mode & 0o777)
         fsync(descriptor)
@@ -2210,6 +2382,12 @@ def write_ci_gh_login(cfg: Path) -> None:
 
     Parameters:
         cfg (Path): existing private login directory.
+
+    Returns:
+        None: the synthetic gh login is written.
+
+    Raises:
+        OSError: fixture write failed.
 
     References:
         https://github.com/cli/cli/blob/trunk/internal/config/config.go
@@ -2496,7 +2674,17 @@ def test_core_replacement_is_backed_up_and_offline_recoverable(
     if interrupt_switch:
 
         def interrupt_file(*args: object) -> None:
-            """Interrupt after the core switch, before writing the installed state."""
+            """Interrupt after the core switch, before writing the installed state.
+
+            Parameters:
+                *args (object): ignored file replacement arguments.
+
+            Returns:
+                None: never returned.
+
+            Raises:
+                KeyboardInterrupt: installed-state write was interrupted.
+            """
             raise RuntimeError("interrupt")
 
         monkeypatch.setattr(install, "replace_file", interrupt_file)
@@ -3105,7 +3293,19 @@ def test_partial_rollback_resumes_completed_restores(tmp_path: Path, monkeypatch
     attempts: list[Path] = []
 
     def fail_second(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Fail only the second backup-to-live rename, not atomic journal rewrites."""
+        """Fail only the second backup-to-live rename, not atomic journal rewrites.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: other renames complete.
+
+        Raises:
+            OSError: the selected second rename failed.
+        """
         if kwargs.get("src_dir_fd") is not None:
             attempts.append(Path(dst))
             if Path(dst).name == install.SETTINGS_FILE:
@@ -3132,7 +3332,19 @@ def test_recorded_restore_rejects_changed_live_state(tmp_path: Path, monkeypatch
     original_replace = os.replace
 
     def fail_second(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Leave recovery interrupted after installed.json was restored."""
+        """Leave recovery interrupted after installed.json was restored.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: other renames complete.
+
+        Raises:
+            KeyboardInterrupt: the next restore was interrupted.
+        """
         if kwargs.get("src_dir_fd") is not None and Path(dst).name == install.SETTINGS_FILE:
             raise OSError("second restore refused")
         original_replace(src, dst, **kwargs)
@@ -3159,7 +3371,19 @@ def test_rollback_unlink_failure_leaves_completed_journal(
     original_unlink = Path.unlink
 
     def fail_cleanup(path: Path, *args: Any, **kwargs: Any) -> None:
-        """Refuse transaction cleanup after all restore renames have succeeded."""
+        """Refuse transaction cleanup after all restore renames have succeeded.
+
+        Parameters:
+            path (Path): unlink destination.
+            *args (Any): unlink arguments.
+            **kwargs (Any): unlink options.
+
+        Returns:
+            None: unrelated unlinks complete.
+
+        Raises:
+            OSError: journal unlink failed.
+        """
         if path == layout.journal:
             raise OSError(errno.EACCES, "journal cleanup refused")
         original_unlink(path, *args, **kwargs)
@@ -3244,7 +3468,18 @@ def test_wrong_staged_manifest_identity_is_refused(
     original = subprocess.check_output
 
     def install_wrong_identity(argv: list[str], **kwargs: Any) -> str:
-        """Run fake pi, then corrupt one installed manifest before staging verifies it."""
+        """Run fake pi, then corrupt one installed manifest before staging verifies it.
+
+        Parameters:
+            argv (list[str]): child command.
+            **kwargs (Any): child options.
+
+        Returns:
+            str: child output after manifest corruption.
+
+        Raises:
+            subprocess.SubprocessError: the child failed.
+        """
         output = original(argv, **kwargs)
         if argv[1:] == ["install", "npm:pi-memory@0.4.2"]:
             agent = Path(kwargs["env"]["PI_CODING_AGENT_DIR"])
@@ -3284,7 +3519,18 @@ def test_restore_every_call_boundary_is_retryable(
             calls = 0
 
             def fault(call: Callable[[], None], point: int = injection) -> None:
-                """Fail once at this exact sequence index, before or after the operation."""
+                """Fail once at this exact sequence index, before or after the operation.
+
+                Parameters:
+                    call (Callable[[], None]): operation to run.
+                    point (int): selected fault index.
+
+                Returns:
+                    None: non-failing operations complete.
+
+                Raises:
+                    OSError | KeyboardInterrupt: injected interruption.
+                """
                 nonlocal calls
                 index = calls
                 calls += 1
@@ -3295,11 +3541,35 @@ def test_restore_every_call_boundary_is_retryable(
                     raise failure("restore boundary")
 
             def write(path: Path, text: str, mode: int | None = None) -> None:
-                """Fault only the atomic journal rewrite seam."""
+                """Fault only the atomic journal rewrite seam.
+
+                Parameters:
+                    path (Path): write destination.
+                    text (str): new contents.
+                    mode (int | None): requested permissions.
+
+                Returns:
+                    None: the atomic write completes unless interrupted.
+
+                Raises:
+                    OSError | KeyboardInterrupt: injected interruption.
+                """
                 fault(lambda: original_write(path, text, mode))
 
             def rename(src: Any, dst: Any, **kwargs: Any) -> None:
-                """Fault only backup-to-live renames, not journal replacements."""
+                """Fault only backup-to-live renames, not journal replacements.
+
+                Parameters:
+                    src (Any): rename source.
+                    dst (Any): rename destination.
+                    **kwargs (Any): rename options.
+
+                Returns:
+                    None: the rename completes unless interrupted.
+
+                Raises:
+                    OSError | KeyboardInterrupt: injected interruption.
+                """
                 if kwargs.get("src_dir_fd") is not None:
                     fault(lambda: original_replace(src, dst, **kwargs))
                 else:
@@ -3328,7 +3598,19 @@ def test_restore_intent_does_not_excuse_lost_backup(
     original = os.replace
 
     def interrupt_restore(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Interrupt just after installed.json's backup is consumed."""
+        """Interrupt just after installed.json's backup is consumed.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: unrelated renames complete.
+
+        Raises:
+            KeyboardInterrupt: the backup rename completed before interruption.
+        """
         original(src, dst, **kwargs)
         if kwargs.get("src_dir_fd") is not None:
             raise KeyboardInterrupt
@@ -3376,6 +3658,12 @@ def recovery_entry(path: Path, kind: str, contents: str) -> None:
         path (Path): entry to create or replace.
         kind (str): file, directory or symlink.
         contents (str): file/child bytes or readlink target.
+
+    Returns:
+        None: the selected entry is created.
+
+    Raises:
+        OSError: fixture mutation failed.
     """
     install.remove(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -3426,6 +3714,12 @@ def forge_recovery_entry(path: Path, kind: str, *, replace: bool = False, identi
         kind (str): file, directory or symlink.
         replace (bool): substitute a separate entry rather than change bytes in place.
         identical (bool): retain content to isolate the device/inode corroboration check.
+
+    Returns:
+        None: the entry is forged with preserved size and mtime.
+
+    Raises:
+        OSError: fixture mutation failed.
     """
     info = path.lstat()
     value = "ORIGINAL" if identical else "FORGERY!"
@@ -3453,7 +3747,19 @@ def test_restore_intent_rejects_preserved_metadata_forgery(
     original_replace = os.replace
 
     def interrupt(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Consume the original backup, then interrupt before the completion journal rewrite."""
+        """Consume the original backup, then interrupt before the completion journal rewrite.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: unrelated renames complete.
+
+        Raises:
+            KeyboardInterrupt: restore completed before progress was saved.
+        """
         original_replace(src, dst, **kwargs)
         if kwargs.get("src_dir_fd") is not None:
             raise KeyboardInterrupt
@@ -3484,7 +3790,19 @@ def test_backup_content_is_rechecked_after_restore_intent(
     attacked = False
 
     def tamper(path: Path, text: str, mode: int | None = None) -> None:
-        """Modify the backup immediately after write-ahead intent becomes durable."""
+        """Modify the backup immediately after write-ahead intent becomes durable.
+
+        Parameters:
+            path (Path): atomic write destination.
+            text (str): serialized journal.
+            mode (int | None): requested permissions.
+
+        Returns:
+            None: the write and selected corruption complete.
+
+        Raises:
+            OSError: the atomic write failed.
+        """
         nonlocal attacked
         original_write(path, text, mode)
         if path == harness.layout.journal and not attacked:
@@ -3533,7 +3851,19 @@ def test_every_existing_switch_write_is_classified_before_consent(
     original_record = Journal.record
 
     def record(journal: Journal, target: Path, name: str) -> Path | None:
-        """Observe the actual switch write set before each original is moved."""
+        """Observe the actual switch write set before each original is moved.
+
+        Parameters:
+            journal (Journal): transaction under observation.
+            target (Path): switch destination.
+            name (str): backup basename.
+
+        Returns:
+            Path | None: recorded backup or original absence.
+
+        Raises:
+            OSError: journal recording failed.
+        """
         if target.exists(follow_symlinks=False):
             captured.append(target)
         return original_record(journal, target, name)
@@ -3555,6 +3885,12 @@ class MutationAudit:
             harness (Harness): isolated installer home.
             patch (pytest.MonkeyPatch): observer lifetime.
             plan (install.Plan): pre-consent classification.
+
+        Returns:
+            None: mutation observers and independent write sets are initialized.
+
+        Raises:
+            OSError: fixture inventory failed.
         """
         self.layout, self.plan = harness.layout, plan
         self.prefix = self.layout.core(harness.snapshot.stack.core.tag)
@@ -3573,7 +3909,20 @@ class MutationAudit:
         original_open, original_close, original_record = os.open, os.close, Journal.record
 
         def opened(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
-            """Resolve relative descriptor destinations against the actual opened parent."""
+            """Resolve relative descriptor destinations against the actual opened parent.
+
+            Parameters:
+                path (Any): open operand.
+                flags (int): open flags.
+                *args (Any): permission arguments.
+                **kwargs (Any): descriptor-relative options.
+
+            Returns:
+                int: tracked open descriptor.
+
+            Raises:
+                OSError: open failed.
+            """
             resolved = self.path(path, kwargs.get("dir_fd"))
             existed = resolved is not None and resolved.exists(follow_symlinks=False)
             descriptor = original_open(path, flags, *args, **kwargs)
@@ -3586,12 +3935,34 @@ class MutationAudit:
             return descriptor
 
         def closed(descriptor: int) -> None:
-            """Do not attribute a recycled descriptor to a previous directory."""
+            """Do not attribute a recycled descriptor to a previous directory.
+
+            Parameters:
+                descriptor (int): descriptor to close.
+
+            Returns:
+                None: tracking and descriptor are released.
+
+            Raises:
+                OSError: close failed.
+            """
             self.descriptors.pop(descriptor, None)
             original_close(descriptor)
 
         def recorded(journal: Journal, target: Path, name: str) -> Path | None:
-            """Collect claimed journal coverage separately from observed mutation destinations."""
+            """Collect claimed journal coverage separately from observed mutation destinations.
+
+            Parameters:
+                journal (Journal): transaction under observation.
+                target (Path): switch destination.
+                name (str): backup basename.
+
+            Returns:
+                Path | None: recorded backup or original absence.
+
+            Raises:
+                OSError: journal recording failed.
+            """
             backup = original_record(journal, target, name)
             self.journaled.add(target)
             self.backup_runs.add(journal.backups)
@@ -3643,6 +4014,9 @@ class MutationAudit:
 
         Parameters:
             before (list[tuple[Path, bool]]): operands and their pre-call existence.
+
+        Returns:
+            None: in-scope mutation events are recorded.
         """
         roots = (self.layout.root, self.layout.agent_dir, self.layout.bin_dir)
         for path, existed in before:
@@ -3660,11 +4034,27 @@ class MutationAudit:
             patch (pytest.MonkeyPatch): observer lifetime.
             owner (Any): builtins or io module.
             name (str): open primitive.
+
+        Returns:
+            None: the open observer is installed.
         """
         original = getattr(owner, name)
 
         def opened(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
-            """Record writable-open destinations and track their file descriptors."""
+            """Record writable-open destinations and track their file descriptors.
+
+            Parameters:
+                file (Any): open operand.
+                mode (str): requested access mode.
+                *args (Any): open arguments.
+                **kwargs (Any): open options.
+
+            Returns:
+                Any: real tracked file handle.
+
+            Raises:
+                OSError: open failed.
+            """
             path = self.path(file)
             existed = path is not None and path.exists(follow_symlinks=False)
             handle = original(file, mode, *args, **kwargs)
@@ -3684,6 +4074,9 @@ class MutationAudit:
             owner (Any): module or class.
             name (str): mutation primitive.
             positions (tuple[int, ...]): mutated argument positions (rename source AND destination).
+
+        Returns:
+            None: the mutation observer is installed.
         """
         original = getattr(owner, name)
         try:
@@ -3693,7 +4086,18 @@ class MutationAudit:
             parameters = ("path",)
 
         def mutation(*args: Any, **kwargs: Any) -> Any:
-            """Capture real pre-mutation existence, including descriptor-relative rename paths."""
+            """Capture real pre-mutation existence, including descriptor-relative rename paths.
+
+            Parameters:
+                *args (Any): real mutation operands.
+                **kwargs (Any): real mutation options, including directory descriptors.
+
+            Returns:
+                Any: underlying mutation result, unchanged.
+
+            Raises:
+                OSError: underlying mutation failed, so no successful event is recorded.
+            """
             before = []
             for position in positions:
                 key = "src_dir_fd" if position == 0 and name in {"replace", "rename"} else "dst_dir_fd"
@@ -3711,7 +4115,14 @@ class MutationAudit:
         patch.setattr(owner, name, mutation)
 
     def assert_classified(self) -> None:
-        """Require independent CREATE and OVERWRITE classifications, including transient entries."""
+        """Require independent CREATE and OVERWRITE classifications, including transient entries.
+
+        Returns:
+            None: every observed mutation is independently authorized.
+
+        Raises:
+            AssertionError: an unjournaled or unplanned mutation was observed.
+        """
         infrastructure = {self.layout.journal, self.layout.root / "lock"}
         for path in self.events:
             # Staging is disposable installer scratch, never live user state. Do not exempt root/core/state.
@@ -3739,18 +4150,17 @@ class MutationAudit:
         if self.plan.install_packages:
             assert any(f"'{self.layout.agent_dir}'" in message for message in self.plan.creates)
             declared |= {self.layout.agent_dir / tree for tree in install.PACKAGE_TREES}
-        # installed.json is always created for a nonempty fresh plan; report_plan describes
-        # the installed state through its core/package/config CREATEs, not a separate line.
-        if not self.plan.empty and not any(
-            f"'{self.layout.state}'" in message for message in self.plan.overwrites
-        ):
-            declared.add(self.layout.state)
-        parents = {
-            self.layout.root,
-            self.layout.agent_dir,
-            self.layout.bin_dir,
+        directories = (
             self.layout.root / "core",
             self.layout.backups,
+            self.layout.agent_dir,
+            self.layout.bin_dir,
+        )
+        parents = {
+            parent
+            for directory in directories
+            for parent in (*directory.parents, directory)
+            if f"create directory '{parent}'" in self.plan.creates
         }
         # Rename-based OVERWRITEs recreate their original destination; that is not a new CREATE.
         recreated = {
@@ -3785,7 +4195,7 @@ class MutationAudit:
                 for target in atomic_targets
             ):
                 continue
-            # Infrastructure parents and lock/journal implement staging and transaction ownership.
+            # Permanent parent mkdirs require exact planner declarations; lock/journal are scratch.
             if path in parents | infrastructure:
                 continue
             assert any(path == target or path.is_relative_to(target) for target in declared | recreated), (
@@ -3971,7 +4381,14 @@ def test_malformed_restoring_hash_is_refused_without_changes(
         identity["sha256"] = bad_hash
 
     def corrupt(document: dict[str, Any]) -> None:
-        """Replace the intent with this case's malformed hash fixture."""
+        """Replace the intent with this case's malformed hash fixture.
+
+        Parameters:
+            document (dict[str, Any]): journal fixture.
+
+        Returns:
+            None: document is mutated in place.
+        """
         document["steps"][0] |= {"restoring": identity}
 
     edit_journal(harness, corrupt)
@@ -3990,7 +4407,14 @@ def test_legacy_mtime_only_restore_intent_requires_manual_recovery(
     info = (journal.backups / target.name).stat()
 
     def weaken(document: dict[str, Any]) -> None:
-        """Model an older intent that has no content hash or inode corroboration."""
+        """Model an older intent that has no content hash or inode corroboration.
+
+        Parameters:
+            document (dict[str, Any]): journal fixture.
+
+        Returns:
+            None: document is mutated in place.
+        """
         document["steps"][0] |= {"restoring": [info.st_mtime_ns, info.st_size]}
 
     edit_journal(harness, weaken)
@@ -4010,7 +4434,19 @@ def test_content_bound_restore_resumes_after_rename(
     original = os.replace
 
     def interrupt(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Interrupt after the backup is consumed, leaving only write-ahead intent."""
+        """Interrupt after the backup is consumed, leaving only write-ahead intent.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: unrelated renames complete.
+
+        Raises:
+            KeyboardInterrupt: restore completed before progress was saved.
+        """
         original(src, dst, **kwargs)
         if kwargs.get("src_dir_fd") is not None:
             raise KeyboardInterrupt
@@ -4038,7 +4474,18 @@ def test_restore_hashing_streams_and_bounds_content(tmp_path: Path, monkeypatch:
     original_read = os.read
 
     def read(descriptor: int, count: int) -> bytes:
-        """Record requested chunk sizes on the actual fd read path."""
+        """Record requested chunk sizes on the actual fd read path.
+
+        Parameters:
+            descriptor (int): open file descriptor.
+            count (int): requested read size.
+
+        Returns:
+            bytes: real file contents for this read.
+
+        Raises:
+            OSError: the underlying read failed.
+        """
         reads.append(count)
         return original_read(descriptor, count)
 
@@ -4148,7 +4595,20 @@ def test_replacement_identity_is_durable_before_switch_rename(
     observed = False
 
     def inspect(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Inspect the actual durable journal immediately before installed.json lands."""
+        """Inspect the actual durable journal immediately before installed.json lands.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: the inspected rename completes.
+
+        Raises:
+            AssertionError: write-ahead identity is missing.
+            OSError: rename failed.
+        """
         nonlocal observed
         if Path(dst) == layout.state and kwargs.get("src_dir_fd") is None:
             document = json.loads(layout.journal.read_text())
@@ -4181,7 +4641,19 @@ def test_failed_backup_rename_preserves_live_and_backup(
     original = os.replace
 
     def refuse(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Inject a real EXDEV/EIO result at the backup-to-live syscall only."""
+        """Inject a real EXDEV/EIO result at the backup-to-live syscall only.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: unrelated renames complete.
+
+        Raises:
+            OSError: the selected restore syscall failed.
+        """
         if kwargs.get("src_dir_fd") is not None:
             raise OSError(failure, os.strerror(failure))
         original(src, dst, **kwargs)
@@ -4210,7 +4682,19 @@ def test_interrupted_restore_aside_reconciles_without_losing_entries(
     original_replace, original_unlink = os.replace, Path.unlink
 
     def rename(src: Any, dst: Any, **kwargs: Any) -> None:
-        """Interrupt after one of the two restore renames, not journal rewrites."""
+        """Interrupt after one of the two restore renames, not journal rewrites.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): rename options.
+
+        Returns:
+            None: unrelated renames complete.
+
+        Raises:
+            KeyboardInterrupt: the selected rename completed.
+        """
         original_replace(src, dst, **kwargs)
         if (moment == "aside-moved" and Path(src) == target) or (
             moment == "backup-restored" and kwargs.get("src_dir_fd") is not None
@@ -4218,7 +4702,19 @@ def test_interrupted_restore_aside_reconciles_without_losing_entries(
             raise KeyboardInterrupt
 
     def unlink(path: Path, *args: Any, **kwargs: Any) -> None:
-        """Interrupt after cleanup consumed the aside but before progress was recorded."""
+        """Interrupt after cleanup consumed the aside but before progress was recorded.
+
+        Parameters:
+            path (Path): entry to unlink.
+            *args (Any): unlink arguments.
+            **kwargs (Any): unlink options.
+
+        Returns:
+            None: unrelated unlinks complete.
+
+        Raises:
+            KeyboardInterrupt: the aside was consumed.
+        """
         original_unlink(path, *args, **kwargs)
         if moment == "aside-deleted" and ".pi-stack-restore-" in path.name:
             raise KeyboardInterrupt
@@ -4245,7 +4741,19 @@ def test_cross_device_restore_is_refused_before_mutation(
     identity = install.RestoreHasher().identity(backup)
 
     def stat_backup(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
-        """Model a backup on another mounted device without requiring mount privileges."""
+        """Model a backup on another mounted device without requiring mount privileges.
+
+        Parameters:
+            path (Any): stat operand.
+            *args (Any): stat arguments.
+            **kwargs (Any): stat options.
+
+        Returns:
+            os.stat_result: real metadata with the selected device replaced.
+
+        Raises:
+            OSError: stat failed.
+        """
         info = original_stat(path, *args, **kwargs)
         if kwargs.get("dir_fd") is not None and str(path) == backup.name:
             values = list(info)
@@ -4254,7 +4762,19 @@ def test_cross_device_restore_is_refused_before_mutation(
         return info
 
     def hash_backup(hasher: Any, path: Any, **kwargs: Any) -> Any:
-        """Keep content hashing independent of the simulated layout-device probe."""
+        """Keep content hashing independent of the simulated layout-device probe.
+
+        Parameters:
+            hasher (Any): content hasher.
+            path (Any): hash operand.
+            **kwargs (Any): descriptor-relative hash options.
+
+        Returns:
+            Any: real content identity.
+
+        Raises:
+            OSError: hashing failed.
+        """
         if kwargs.get("dir_fd") is not None and str(path) == backup.name:
             return identity
         return original_identity(hasher, path, **kwargs)
@@ -4293,7 +4813,19 @@ def test_mutation_audit_detects_deliberately_unjournaled_overwrite(
     original = install.switch_anchored
 
     def unclassified(layout: Layout, *args: Any, **kwargs: Any) -> None:
-        """Deliberately violate the write contract after the real switch has finished."""
+        """Deliberately violate the write contract after the real switch has finished.
+
+        Parameters:
+            layout (Layout): live paths.
+            *args (Any): switch arguments.
+            **kwargs (Any): switch options.
+
+        Returns:
+            None: the switch and unplanned write complete.
+
+        Raises:
+            OSError: a fixture mutation failed.
+        """
         original(layout, *args, **kwargs)
         target = layout.agent_dir / "auth.json"
         source = tmp_path / "rogue-source"
@@ -4343,7 +4875,17 @@ def test_backup_validation_permission_error_is_normalized(
     original = install.entry_kind
 
     def denied(path: Path) -> str | None:
-        """Model an unsearchable backup parent at the validation boundary."""
+        """Model an unsearchable backup parent at the validation boundary.
+
+        Parameters:
+            path (Path): entry to classify.
+
+        Returns:
+            str | None: real entry kind for unrelated paths.
+
+        Raises:
+            PermissionError: backup lookup was denied.
+        """
         if path == journal.backups:
             raise PermissionError(errno.EACCES, "backup parent unsearchable")
         return original(path)
@@ -4404,7 +4946,18 @@ def test_journal_memory_failure_is_untrusted(tmp_path: Path, monkeypatch: pytest
     pending_file_restore(harness)
 
     def exhausted(*args: Any, **kwargs: Any) -> object:
-        """Model allocation failure inside the bounded JSON parser."""
+        """Model allocation failure inside the bounded JSON parser.
+
+        Parameters:
+            *args (Any): ignored JSON input.
+            **kwargs (Any): ignored decoding options.
+
+        Returns:
+            object: never returned.
+
+        Raises:
+            MemoryError: the bounded parser exhausted memory.
+        """
         raise MemoryError("bounded parse allocation failed")
 
     monkeypatch.setattr(install.json, "loads", exhausted)
@@ -4413,19 +4966,36 @@ def test_journal_memory_failure_is_untrusted(tmp_path: Path, monkeypatch: pytest
 
 
 @pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+@pytest.mark.parametrize("mutation", [None, "new-child", "edited-child", "symlink-child"])
 def test_partial_directory_aside_cleanup_retries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: type[BaseException]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: type[BaseException], mutation: str | None
 ) -> None:
-    """Partial rmtree is cleanup progress, never evidence that the safely restored original changed."""
+    """Partial rmtree permits only verified remnants, never post-interruption additions or edits.
+
+    Parameters:
+        tmp_path (Path): isolated fixture parent.
+        monkeypatch (pytest.MonkeyPatch): cleanup fault injection.
+        failure (type[BaseException]): interruption class.
+        mutation (str | None): post-interruption user mutation, or no edit.
+
+    Returns:
+        None: valid remnants complete; edited remnants refuse twice without mutation.
+    """
     harness = Harness(tmp_path, monkeypatch)
     _, target = saved_recovery_entry(harness, "directory")
     (target / "second").write_text("replacement child")
+    (target / "nested").mkdir()
+    (target / "nested" / "removed").write_text("nested replacement child")
+    (target / "untouched-link").symlink_to("outside-not-followed")
 
     def replacement(document: dict[str, Any]) -> None:
         """Record both children as the switch's known replacement before starting recovery.
 
         Parameters:
             document (dict[str, Any]): journal fixture to edit.
+
+        Returns:
+            None: both replacement children are recorded.
         """
         document["steps"][0]["replacement"] = asdict(install.RestoreHasher().identity(target))
 
@@ -4441,6 +5011,9 @@ def test_partial_directory_aside_cleanup_retries(
             path (Path): directory to remove.
             dir_fd (int | None): optional anchored parent descriptor.
 
+        Returns:
+            None: unrelated directory removals complete.
+
         Raises:
             OSError | KeyboardInterrupt: the parametrized cleanup interruption.
         """
@@ -4448,6 +5021,7 @@ def test_partial_directory_aside_cleanup_retries(
         if ".pi-stack-restore-" in Path(path).name:
             aside = Path(path)
             (aside / "child").unlink()
+            (aside / "nested" / "removed").unlink()
             raise failure("partial cleanup")
         original_rmtree(path, dir_fd=dir_fd)
 
@@ -4459,11 +5033,144 @@ def test_partial_directory_aside_cleanup_retries(
     assert aside.exists()
     assert tree(target) == original_tree
     assert harness.layout.journal.exists()
+    if mutation is not None:
+        if mutation == "new-child":
+            (aside / "new").write_text("NEW USER DATA")
+        elif mutation == "edited-child":
+            (aside / "second").write_text("edited replacement child")
+        else:
+            (aside / "second").unlink()
+            (aside / "second").symlink_to("NEW USER DATA")
+        before = tree(harness.home)
+        for _ in range(2):
+            with pytest.raises(RollbackError, match=r"aside.*changed"):
+                rollback(harness.layout)
+            assert tree(harness.home) == before
+        return
     rollback(harness.layout)
     assert tree(target) == original_tree
     assert not aside.exists()
     assert not harness.layout.journal.exists()
     assert rollback(harness.layout) == []
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink"])
+@pytest.mark.parametrize("recreated", ["file", "directory", "symlink"])
+def test_cleaning_aside_rejects_recreated_user_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, recreated: str
+) -> None:
+    """A consumed aside name never authorizes deletion of newly created user content.
+
+    Parameters:
+        tmp_path (Path): isolated fixture parent.
+        monkeypatch (pytest.MonkeyPatch): cleanup interruption injection.
+        kind (str): original replacement entry kind.
+        recreated (str): new user entry kind.
+
+    Returns:
+        None: assertions verify two refusal retries preserve all entries.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    _, target = saved_recovery_entry(harness, kind)
+    original_remove = install.remove
+    consumed: list[Path] = []
+
+    def interrupted(path: Path) -> None:
+        """Interrupt after deletion, before completion is journaled.
+
+        Parameters:
+            path (Path): cleanup operand.
+
+        Returns:
+            None: non-aside removals complete normally.
+
+        Raises:
+            OSError: the aside was consumed.
+        """
+        original_remove(path)
+        if ".pi-stack-restore-" in path.name:
+            consumed.append(path)
+            raise OSError("cleanup interrupted after removal")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(install, "remove", interrupted)
+        with pytest.raises(RollbackError, match="cleanup interrupted"):
+            rollback(harness.layout)
+    (aside,) = consumed
+    recovery_entry(aside, recreated, "NEW USER DATA")
+    before = tree(harness.home)
+    for _ in range(2):
+        with pytest.raises(RollbackError, match=r"aside.*changed"):
+            rollback(harness.layout)
+        assert tree(harness.home) == before
+        assert aside.exists(follow_symlinks=False)
+        assert harness.layout.journal.exists()
+    assert target.exists(follow_symlinks=False)
+
+
+def test_cleanup_manifest_must_fit_journal_before_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refuse an oversized manifest before removing any aside content.
+
+    Parameters:
+        tmp_path (Path): isolated fixture parent.
+        monkeypatch (pytest.MonkeyPatch): journal byte limit injection.
+
+    Returns:
+        None: the intact aside and previous journal remain recoverable.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    _, target = saved_recovery_entry(harness, "directory")
+    persist = Journal.persist
+
+    def bounded(journal: Journal) -> None:
+        """Make only the cleaning rewrite exceed the journal bound.
+
+        Parameters:
+            journal (Journal): pending recovery progress.
+
+        Returns:
+            None: non-cleaning rewrites persist normally.
+
+        Raises:
+            OSError: cleaning metadata exceeds the injected limit.
+        """
+        if any(step.get("aside", {}).get("cleaning") for step in journal.steps):
+            with monkeypatch.context() as patch:
+                patch.setattr(install, "MAX_JOURNAL_BYTES", 1)
+                persist(journal)
+        else:
+            persist(journal)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Journal, "persist", bounded)
+        with pytest.raises(RollbackError, match="journal exceeds"):
+            rollback(harness.layout)
+    aside = install.load_journal(harness.layout)[1][0].aside
+    assert aside is not None
+    assert tree(aside.path) == {"child": b"NEW FILE"}
+    assert tree(target) == {"child": b"ORIGINAL"}
+    rollback(harness.layout)
+    assert not aside.path.exists()
+    assert not harness.layout.journal.exists()
+
+
+@pytest.mark.parametrize("bad_path", ["../escape", "/absolute", "a//b", "a/./b", "missing/child"])
+def test_cleanup_manifest_rejects_noncanonical_or_orphan_entries(tmp_path: Path, bad_path: str) -> None:
+    """Malformed manifest paths cannot authorize deletion.
+
+    Parameters:
+        tmp_path (Path): entry identity fixture.
+        bad_path (str): invalid relative entry name.
+
+    Returns:
+        None: schema validation rejects the manifest.
+    """
+    tmp_path.joinpath("file").write_text("fixture")
+    identity = asdict(install.RestoreHasher().identity(tmp_path / "file"))
+    with pytest.raises(ValueError, match="manifest"):
+        install.cleanup_manifest({"": identity, bad_path: identity})
 
 
 @pytest.mark.parametrize("live", ["original", "new"])
@@ -4516,6 +5223,12 @@ def test_mutation_audit_detects_unplanned_create(
             layout (Layout): live destination paths.
             *args (Any): remaining switch arguments.
             **kwargs (Any): switch options.
+
+        Returns:
+            None: the switch and unplanned creation complete.
+
+        Raises:
+            OSError: fixture mutation failed.
         """
         original(layout, *args, **kwargs)
         target = layout.agent_dir / "unplanned"
@@ -4529,6 +5242,66 @@ def test_mutation_audit_detects_unplanned_create(
         test_switch_write_set_classification_includes_core_and_shims(tmp_path, monkeypatch, existing=False)
 
 
+@pytest.mark.parametrize(
+    "module", ["test_install.py", "test_release.py", "test_installer_process.py", "test_promotion.py"]
+)
+def test_test_helpers_have_typed_contracts(module: str) -> None:
+    """Keep helper and nested callback contracts consistent across all installer test modules.
+
+    Parameters:
+        module (str): test module to inspect independently of production code.
+
+    Returns:
+        None: every helper documents typed inputs and its result or failure contract.
+    """
+    source = ast.parse((Path(__file__).parent / module).read_text())
+    for node in ast.walk(source):
+        if not isinstance(node, ast.FunctionDef) or node.name.startswith("test_"):
+            continue
+        doc = ast.get_docstring(node)
+        label = f"{module}:{node.lineno} {node.name}"
+        assert doc, label
+        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+        arguments += [arg for arg in (node.args.vararg, node.args.kwarg) if arg is not None]
+        for arg in arguments:
+            if arg.arg in {"self", "cls"}:
+                continue
+            assert arg.annotation is not None, label
+            assert "Parameters:" in doc, label
+            assert f"{arg.arg} ({ast.unparse(arg.annotation)}):" in doc, label
+        assert node.returns is not None, label
+        assert any(section in doc for section in ("Returns:", "Yields:", "Raises:")), label
+
+
+def test_plan_reports_state_and_permanent_parent_creates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The public plan must authorize every permanent write, not an oracle-only exception.
+
+    Parameters:
+        tmp_path (Path): isolated fixture parent.
+        monkeypatch (pytest.MonkeyPatch): offline installer seams.
+        caplog (pytest.LogCaptureFixture): public plan output.
+
+    Returns:
+        None: plan-only output declares state and exact permanent directories without writes.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    caplog.set_level("INFO")
+    before = tree(harness.home)
+    assert install.run(Options(SHA, False, True, None), harness.env, None) == ExitCode.OK
+    assert f"CREATE write installed state '{harness.layout.state}'" in caplog.text
+    for path in (
+        harness.layout.root,
+        harness.layout.backups,
+        harness.layout.root / "core",
+        harness.layout.agent_dir,
+        harness.layout.bin_dir,
+    ):
+        assert f"CREATE create directory '{path}'" in caplog.text
+    assert tree(harness.home) == before
+
+
 def write_tool_shims(harness: Harness, commands: Path, log: Path) -> None:
     """Write executable recording shims, with npm building the fixture's core prefix.
 
@@ -4536,6 +5309,12 @@ def write_tool_shims(harness: Harness, commands: Path, log: Path) -> None:
         harness (Harness): isolated install and package identities.
         commands (Path): shim directory to create.
         log (Path): absolute argv recording destination.
+
+    Returns:
+        None: executable tool shims are written.
+
+    Raises:
+        OSError: shim creation failed.
     """
     commands.mkdir()
     for name in ("gh", "npm", "node"):
@@ -4563,23 +5342,141 @@ def write_tool_shims(harness: Harness, commands: Path, log: Path) -> None:
         (commands / name).chmod(0o755)
 
 
-def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, assert_absolute: bool) -> None:
+def assert_child_command(argv: Any, kwargs: Any, commands: Path, assert_absolute: bool) -> None:
+    """Validate both subprocess boundaries independently of production environment construction.
+
+    Parameters:
+        argv (Any): actual child command.
+        kwargs (Any): actual subprocess options.
+        commands (Path): selected Node directory.
+        assert_absolute (bool): additionally require an absolute executable.
+
+    Returns:
+        None: command and interpreter search path retain preflight identities.
+
+    Raises:
+        AssertionError: child lookup differs from the preflight selection.
+    """
+    if not assert_absolute:
+        return
+    assert Path(argv[0]).is_absolute(), argv
+    child_path = kwargs["env"]["PATH"].split(os.pathsep)
+    assert all(Path(entry).is_absolute() for entry in child_path), child_path
+    assert child_path[0] == str(commands), child_path
+
+
+def shim_core_tarball() -> bytes:
+    """Build the minimal digest-bound core fixture for real npm shim execution.
+
+    Returns:
+        bytes: valid gzip tar containing the tui package manifest.
+
+    Raises:
+        tarfile.TarError: fixture archive construction failed.
+    """
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+        data = b"{}"
+        member = tarfile.TarInfo("package/package.json")
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    return payload.getvalue()
+
+
+def configure_tool_interpreters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    commands: Path,
+    shebang: str | None,
+    different_node: bool,
+) -> None:
+    """Configure real interpreter lookup and an optional failing earlier Node.
+
+    Parameters:
+        tmp_path (Path): preflight cwd.
+        monkeypatch (pytest.MonkeyPatch): environment lifetime.
+        commands (Path): executable shim directory.
+        shebang (str | None): npm shebang override.
+        different_node (bool): insert the unvalidated Node decoy.
+
+    Returns:
+        None: shim interpreters and relative PATH are configured.
+
+    Raises:
+        OSError: fixture read or write failed.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", f"./bin{os.pathsep}{os.defpath}")
+    if shebang is not None:
+        npm = commands / "npm"
+        interpreter = f"#!{sys.executable}" if shebang == "absolute" else shebang
+        npm.write_text(interpreter + "\n" + npm.read_text().split("\n", 1)[1])
+        node = commands / "node"
+        script = node.read_text().replace(
+            "print('v22.19.0')",
+            (
+                "if sys.argv[1:] == ['--version']:\n    print('v22.19.0')\n"
+                "else:\n    import os\n"
+                f"    os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])"
+            ),
+        )
+        node.write_text(script)
+    if different_node:
+        decoy = tmp_path / "decoy"
+        decoy.mkdir()
+        (decoy / "node").write_text("#!/bin/sh\nexit 91\n")
+        (decoy / "node").chmod(0o755)
+        monkeypatch.setenv("PATH", f"{decoy}{os.pathsep}./bin{os.pathsep}{os.defpath}")
+
+
+def relative_tool_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    assert_absolute: bool,
+    shebang: str | None = None,
+    different_node: bool = False,
+) -> None:
     """Run verification, npm staging, package installs and post-check through relative-PATH shims.
 
     Parameters:
         tmp_path (Path): isolated home and shim directory.
         monkeypatch (pytest.MonkeyPatch): offline network seams and subprocess observer.
         assert_absolute (bool): reject any relative executable at both subprocess boundaries.
+        shebang (str | None): npm interpreter form, using the recording node shim.
+        different_node (bool): place a failing node earlier than the explicitly validated node.
+
+    Returns:
+        None: complete install and executable-selection assertions pass.
+
+    Raises:
+        AssertionError: a tool, child PATH or installed result differs from the fixture contract.
+        InstallError: the fixture installation failed.
     """
     harness = Harness(tmp_path, monkeypatch)
     commands, log = tmp_path / "bin", tmp_path / "tools.jsonl"
     write_tool_shims(harness, commands, log)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("PATH", f"./bin{os.pathsep}{os.defpath}")
+    configure_tool_interpreters(tmp_path, monkeypatch, commands, shebang, different_node)
     # Stale relative import-time globals must NOT win over this run's preflight paths.
     monkeypatch.setattr(release, "NPM_BIN", "./bin/npm")
     monkeypatch.setattr(release, "GH_BIN", "./bin/gh")
-    monkeypatch.setattr(install, "preflight", preflight)
+
+    def selected(system: str, machine: str) -> dict[str, str]:
+        """Select the explicitly validated node independently of an earlier PATH decoy.
+
+        Parameters:
+            system (str): host operating system.
+            machine (str): host architecture.
+
+        Returns:
+            dict[str, str]: discovered absolute tools with the chosen Node dispatcher.
+        """
+        tools = preflight(system, machine)
+        if different_node:
+            tools["node"] = str(commands / "node")
+        return tools
+
+    monkeypatch.setattr(install, "preflight", selected)
     monkeypatch.setattr(install, "verify_snapshot", verify_snapshot)
     monkeypatch.setattr(install, "fetch_release", release.fetch_release)
     monkeypatch.setattr(install, "fetch_bytes", lambda request: FIXTURE.read_bytes())
@@ -4599,13 +5496,7 @@ def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, as
         return destination
 
     monkeypatch.setattr(release, "attestation_bundle", bundle)
-    payload = io.BytesIO()
-    with tarfile.open(fileobj=payload, mode="w:gz") as archive:
-        data = b"{}"
-        member = tarfile.TarInfo("package/package.json")
-        member.size = len(data)
-        archive.addfile(member, io.BytesIO(data))
-    tarball = payload.getvalue()
+    tarball = shim_core_tarball()
     monkeypatch.setattr(release, "fetch_bytes", lambda request: tarball)
     checksums = {
         url: hashlib.sha256(tarball).hexdigest()
@@ -4646,8 +5537,7 @@ def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, as
             Any: the real subprocess result.
         """
         seen.append(str(argv[0]))
-        if assert_absolute:
-            assert Path(argv[0]).is_absolute(), argv
+        assert_child_command(argv, kwargs, commands, assert_absolute)
         return original_run(argv, *args, **kwargs)
 
     def checked_popen(argv: Any, *args: Any, **kwargs: Any) -> Any:
@@ -4661,8 +5551,7 @@ def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, as
         Returns:
             Any: the real child process handle.
         """
-        if assert_absolute:
-            assert Path(argv[0]).is_absolute(), argv
+        assert_child_command(argv, kwargs, commands, assert_absolute)
         return original_popen(argv, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", checked_run)
@@ -4670,6 +5559,8 @@ def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, as
     assert harness.run() == ExitCode.OK
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert {call[0] for call in calls} == {str(commands / name) for name in ("gh", "npm", "node")}
+    if shebang is not None and shebang != "absolute":
+        assert any(call[:2] == [str(commands / "node"), str(commands / "npm")] for call in calls)
     assert {str(commands / name) for name in ("gh", "npm", "node")} <= set(seen)
     assert not harness.layout.journal.exists()
 
@@ -4679,6 +5570,31 @@ def test_install_relative_path_dispatchers_survive_staging_cwd(
 ) -> None:
     """Preflight's absolute, non-resolved paths must reach gh and npm, including npm's changed cwd."""
     relative_tool_install(tmp_path, monkeypatch, assert_absolute=False)
+
+
+@pytest.mark.parametrize("shebang", ["#!/usr/bin/env node", "#!/usr/bin/env -S node", "absolute"])
+@pytest.mark.parametrize("different_node", [False, True])
+def test_install_npm_shebang_uses_validated_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shebang: str, different_node: bool
+) -> None:
+    """An npm env-node shebang must retain preflight's Node across the staging cwd change.
+
+    Parameters:
+        tmp_path (Path): isolated tools and home.
+        monkeypatch (pytest.MonkeyPatch): environment and network seams.
+        shebang (str): actual kernel interpreter directive.
+        different_node (bool): earlier PATH node must not override the validated one.
+
+    Returns:
+        None: the complete install succeeds and the Node marker proves interpreter selection.
+    """
+    relative_tool_install(
+        tmp_path,
+        monkeypatch,
+        assert_absolute=False,
+        shebang=shebang,
+        different_node=different_node,
+    )
 
 
 def test_install_never_spawns_relative_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
