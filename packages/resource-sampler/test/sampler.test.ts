@@ -175,6 +175,26 @@ describe("Darwin host memory", () => {
 	it("parses the same-second AM-style kernel capture and measured fixed ps fallback rows", async () => {
 		const text = await readFile(new URL("./fixtures/darwin-kernel-window.txt", import.meta.url), "utf8");
 		expect(darwinMemory(text, 16 * 1024 ** 3)?.usedBytes).toBe(12061147136);
+		const pages = (name: string): number =>
+			Number(
+				text
+					.split("\n")
+					.find((line) => line.startsWith(`${name}:`))
+					?.match(/:\s+(\d+)\./)?.[1],
+			);
+		expect({
+			app: (pages("Anonymous pages") - pages("Pages purgeable")) * 16384,
+			wired: pages("Pages wired down") * 16384,
+			compressed: pages("Pages occupied by compressor") * 16384,
+			cached: (pages("File-backed pages") + pages("Pages purgeable")) * 16384,
+		}).toEqual({ app: 3294527488, wired: 2806333440, compressed: 5960286208, cached: 3607904256 });
+		const times = (text.split("\n")[0] ?? "").split(" ").map((value) => Date.parse(value));
+		expect(Math.floor((times[0] ?? 0) / 1000)).toBe(Math.floor((times[1] ?? 0) / 1000));
+		expect((times[1] ?? 0) - (times[0] ?? 0)).toBe(4);
+		expect(text).toContain("System-wide memory free percentage: 47%");
+		expect(darwinSwap(text.split("\n").find((line) => line.startsWith("vm.swapusage:")) ?? "")?.usedBytes).toBe(
+			Math.round(3490.88 * 1024 ** 2),
+		);
 		const ps = await readFile(new URL("./fixtures/darwin-ps.txt", import.meta.url), "utf8");
 		const rows = ps
 			.trim()

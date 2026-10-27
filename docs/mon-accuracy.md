@@ -8,7 +8,8 @@ environment, localized process titles or Activity Monitor window contents were c
 `darwin.ts` lazily loads the runtime's builtin FFI (`node:ffi` on Node >=26.1, `bun:ffi` on Bun,
 including the pinned 1.3.14). It calls only three fixed symbols in `/usr/lib/libproc.dylib`:
 `proc_pidinfo(PROC_PIDTBSDINFO)`, `proc_pid_rusage(RUSAGE_INFO_V0)` and `mach_timebase_info`.
-No new binary, addon, compiler, Python runtime or package dependency is installed or needed.
+No new production binary, addon, compiler, Python runtime or package dependency is needed.
+Tests use the existing CI-pinned Bun version (fetched into npm's tool cache, not a project dependency).
 Node's builtin emits its experimental-FFI warning on first collection; import/construction does not
 load FFI. Node 22-25 and unsupported architectures retain ps metadata/RSS with unavailable native
 CPU/footprint, not a decaying CPU substitute. Supported native ABIs are Darwin arm64 and x64 LP64.
@@ -151,7 +152,8 @@ intentionally not a prerequisite for this source PR.
   same-second PID reuse with unchanged parent/name and nondecreasing CPU, in-read reuse, exited
   tasks, parent/name changes, counter rollback, invalid/overlong intervals and malformed layouts.
   It pins the Apple Silicon Mach timebase conversion, invalid UTF-8 handling, failed PID metrics,
-  byte/deadline admission and missing builtin FFI.
+  byte/deadline admission, missing builtin FFI, timebase initialization failure/throws, per-PID
+  runtime exceptions and abort-time handle closure.
 - Native real self CPU and footprint are required under both Node and pinned Bun in runtime tests;
   existing hostile-child redaction/fragment tests and cancellation/reaping tests remain mandatory.
 - Source/component regressions cover independent CPU/footprint states, failed PIDs as unknown,
@@ -162,7 +164,7 @@ intentionally not a prerequisite for this source PR.
 There is no `docs/coverage.md` on base main. The one new production file `src/darwin.ts` is inventoried
 above with its parser, native failure/budget, runtime and packed-contract coverage.
 
-Executed local gates: sampler Biome/tsc/build, complete Vitest 33 and pinned-Bun runtime 7;
+Executed local gates: sampler Biome/tsc/build, complete Vitest 36 and pinned-Bun runtime 7;
 session-kit Biome/tsc, complete Vitest 718 and pinned-Bun scenarios 74; packed sampler contract
 (exact 13-path tarball, native CPU/footprint required); complete `make check-scripts`, Ruff/ty,
 693 pytest and import-audit helper. Both Bun suites ran 1.3.14, not the host's newer default.
@@ -178,6 +180,7 @@ Mutation/revert proof, retained tests, restored source afterward:
 | Labelled footprint toggle | FOOT column label | all four width cases fail |
 | Used/free/swap/help | Original PR production-source reversal | four parser/mapping/render/help regressions fail |
 
-After restoration: complete sampler 33 and targeted adapter/render 50 pass. Executed gate logs
+After mutation restoration: complete sampler 33 and targeted adapter/render 50 passed; the final
+sampler suite is 36 after adding three native failure/cleanup regressions. All final local package gates pass. Executed gate logs
 and mutation outputs are linked by absolute local path in the PR review receipt; remote CI links
 will provide portable evidence for the final pushed SHA.

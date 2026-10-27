@@ -32,6 +32,32 @@ function counter(at = 1000) {
 	return result;
 }
 
+/** Fixed Node builtin stub for failure paths; no real library or unrelated builtin is replaced. */
+function fakeNative(timebase: (buffer: Buffer) => number, usage: (pid: number, buffer: Buffer) => number) {
+	const close = vi.fn();
+	const ffi = {
+		dlopen: () => ({
+			lib: { close },
+			functions: {
+				mach_timebase_info: timebase,
+				proc_pid_rusage: (pid: number, _flavor: number, buffer: Buffer) => usage(pid, buffer),
+				proc_pidinfo: (pid: number, _flavor: number, _arg: bigint, buffer: Buffer) => {
+					buffers().bsd.copy(buffer);
+					buffer.writeUInt32LE(pid, 12);
+					return 136;
+				},
+			},
+		}),
+	};
+	const builtin = vi.spyOn(process, "getBuiltinModule").mockReturnValue(ffi);
+	return { close, builtin };
+}
+const validTimebase = (buffer: Buffer): number => {
+	buffer.writeUInt32LE(125, 0);
+	buffer.writeUInt32LE(3, 4);
+	return 0;
+};
+
 describe("Darwin native identity and counters", () => {
 	it("converts captured Apple Silicon Mach ticks, preserving RSS and physical footprint", () => {
 		const row = counter();
@@ -112,6 +138,64 @@ describe("Darwin native identity and counters", () => {
 		expect(darwinNativeProcesses([fallback], tiny)[0]?.footprintBytes).toBeUndefined();
 		expect(tiny.bytesRead).toBeLessThanOrEqual(64);
 		expect([...tiny.reasons]).toContain("byte-limit");
+	});
+	it.skipIf(process.platform !== "darwin")(
+		"closes a loaded library when timebase initialization throws or fails",
+		() => {
+			for (const initialize of [
+				(_buffer: Buffer): number => {
+					throw new Error("timebase runtime failure");
+				},
+				(_buffer: Buffer): number => -1,
+				(_buffer: Buffer): number => 0,
+			]) {
+				const fake = fakeNative(initialize, () => 0);
+				try {
+					const rows = [counter()];
+					expect(
+						darwinNativeProcesses(rows, new Budget(performance.now() + 1000, 4096, 2, new AbortController().signal)),
+					).toBe(rows);
+					expect(fake.close).toHaveBeenCalledOnce();
+				} finally {
+					fake.builtin.mockRestore();
+				}
+			}
+		},
+	);
+	it.skipIf(process.platform !== "darwin")("retains a PID whose FFI read throws and still samples the next PID", () => {
+		const row = { ...counter(), strongIdentity: undefined, footprintBytes: undefined };
+		const fake = fakeNative(validTimebase, (pid, buffer) => {
+			if (pid === row.pid) throw new Error("per-PID native failure");
+			buffers().after.copy(buffer);
+			return 0;
+		});
+		try {
+			const rows = darwinNativeProcesses(
+				[row, { ...row, pid: row.pid + 1 }],
+				new Budget(performance.now() + 1000, 4096, 2, new AbortController().signal),
+			);
+			expect(rows[0]).toBe(row);
+			expect(rows[1]?.strongIdentity).toBe(true);
+			expect(rows[1]?.footprintBytes).toBe(1032408);
+			expect(fake.close).toHaveBeenCalledOnce();
+		} finally {
+			fake.builtin.mockRestore();
+		}
+	});
+	it.skipIf(process.platform !== "darwin")("propagates a native-read abort and closes the library", () => {
+		const controller = new AbortController();
+		const fake = fakeNative(validTimebase, () => {
+			controller.abort(new Error("native read aborted"));
+			return 0;
+		});
+		try {
+			expect(() =>
+				darwinNativeProcesses([counter()], new Budget(performance.now() + 1000, 4096, 1, controller.signal)),
+			).toThrow("native read aborted");
+			expect(fake.close).toHaveBeenCalledOnce();
+		} finally {
+			fake.builtin.mockRestore();
+		}
 	});
 	it("keeps ps metadata and unavailable footprint when builtin FFI is absent", () => {
 		const builtin = vi.spyOn(process, "getBuiltinModule").mockReturnValue(undefined);

@@ -7,11 +7,14 @@ const BSD_BYTES = 136;
 const USAGE_BYTES = 96;
 const READ_BYTES = BSD_BYTES + 2 * USAGE_BYTES;
 
-interface NativeLibrary {
+interface NativeCalls {
 	bsd(pid: number, buffer: Buffer): number;
 	usage(pid: number, buffer: Buffer): number;
-	ticksToNs: number;
+	timebase(buffer: Buffer): number;
 	close(): void;
+}
+interface NativeLibrary extends NativeCalls {
+	ticksToNs: number;
 }
 
 /** Minimal Bun builtin surface; no dependency on Bun types or an external FFI package. */
@@ -31,7 +34,7 @@ interface BunFfi {
 }
 
 /** Lazy, fixed native symbols only. Unsupported runtimes keep explicit unavailable process metrics. */
-function nativeLibrary(): NativeLibrary | undefined {
+function nativeCalls(): NativeCalls | undefined {
 	if (process.platform !== "darwin" || !["arm64", "x64"].includes(process.arch)) return undefined;
 	if (process.versions.bun) {
 		const ffi = process.getBuiltinModule("bun:ffi") as BunFfi | undefined;
@@ -41,13 +44,8 @@ function nativeLibrary(): NativeLibrary | undefined {
 			proc_pid_rusage: { args: ["i32", "i32", "ptr"], returns: "i32" },
 			mach_timebase_info: { args: ["ptr"], returns: "i32" },
 		});
-		const timebase = Buffer.alloc(8);
-		if (lib.symbols.mach_timebase_info(ffi.ptr(timebase)) !== 0 || timebase.readUInt32LE(4) === 0) {
-			lib.close();
-			return undefined;
-		}
 		return {
-			ticksToNs: timebase.readUInt32LE(0) / timebase.readUInt32LE(4),
+			timebase: (buffer) => lib.symbols.mach_timebase_info(ffi.ptr(buffer)),
 			bsd: (pid, buffer) => lib.symbols.proc_pidinfo(pid, 3, 0n, ffi.ptr(buffer), BSD_BYTES),
 			usage: (pid, buffer) => lib.symbols.proc_pid_rusage(pid, 0, ffi.ptr(buffer)),
 			close: () => lib.close(),
@@ -60,17 +58,28 @@ function nativeLibrary(): NativeLibrary | undefined {
 		proc_pid_rusage: { arguments: ["i32", "i32", "pointer"], return: "i32" },
 		mach_timebase_info: { arguments: ["pointer"], return: "i32" },
 	});
-	const timebase = Buffer.alloc(8);
-	if (lib.functions.mach_timebase_info(timebase) !== 0 || timebase.readUInt32LE(4) === 0) {
-		lib.lib.close();
-		return undefined;
-	}
 	return {
-		ticksToNs: timebase.readUInt32LE(0) / timebase.readUInt32LE(4),
+		timebase: (buffer) => lib.functions.mach_timebase_info(buffer),
 		bsd: (pid, buffer) => lib.functions.proc_pidinfo(pid, 3, 0n, buffer, BSD_BYTES),
 		usage: (pid, buffer) => lib.functions.proc_pid_rusage(pid, 0, buffer),
 		close: () => lib.lib.close(),
 	};
+}
+
+/** Close a successfully opened library on every failed initialization, including runtime throws. */
+function nativeLibrary(): NativeLibrary | undefined {
+	const lib = nativeCalls();
+	if (!lib) return undefined;
+	let initialized = false;
+	try {
+		const timebase = Buffer.alloc(8);
+		if (lib.timebase(timebase) !== 0 || timebase.readUInt32LE(0) === 0 || timebase.readUInt32LE(4) === 0)
+			return undefined;
+		initialized = true;
+		return { ...lib, ticksToNs: timebase.readUInt32LE(0) / timebase.readUInt32LE(4) };
+	} finally {
+		if (!initialized) lib.close();
+	}
 }
 
 /**
@@ -153,16 +162,21 @@ export function darwinNativeProcesses(rows: ProcessCounter[], budget: Budget): P
 			const before = Buffer.alloc(USAGE_BYTES);
 			const bsd = Buffer.alloc(BSD_BYTES);
 			const after = Buffer.alloc(USAGE_BYTES);
-			if (
-				lib.usage(row.pid, before) !== 0 ||
-				!budget.ready() ||
-				lib.bsd(row.pid, bsd) !== BSD_BYTES ||
-				!budget.ready() ||
-				lib.usage(row.pid, after) !== 0
-			)
-				continue;
-			const counter = darwinNativeCounter(row.pid, before, bsd, after, performance.now(), lib.ticksToNs);
-			if (counter) rows[i] = counter;
+			try {
+				if (
+					lib.usage(row.pid, before) !== 0 ||
+					!budget.ready() ||
+					lib.bsd(row.pid, bsd) !== BSD_BYTES ||
+					!budget.ready() ||
+					lib.usage(row.pid, after) !== 0
+				)
+					continue;
+				const counter = darwinNativeCounter(row.pid, before, bsd, after, performance.now(), lib.ticksToNs);
+				if (counter) rows[i] = counter;
+			} catch {
+				// Runtime FFI failures belong to this PID, not the entire already-collected ps list.
+				budget.signal.throwIfAborted();
+			}
 		}
 		return rows;
 	} finally {
