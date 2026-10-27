@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { assertHomeDirectory } from "./home-guard.ts";
 
+const FAILURE_EXIT_STATUS = 1;
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 
 test("matching HOME and homedir pass", () => {
@@ -53,7 +54,7 @@ export default mergeConfig(config, { test: {
 			},
 		);
 		expect(result.error).toBeUndefined();
-		expect(result.status).toBe(1);
+		expect(result.status).toBe(FAILURE_EXIT_STATUS);
 		expect(result.stdout + result.stderr).toMatch(/HOMEDIR GUARD: .*todo.invalidation.test.ts/);
 		expect(result.stdout + result.stderr).toContain("Inject the home directory");
 	} finally {
@@ -94,7 +95,7 @@ test("boundary mismatch", () => { ${boundary === "afterEach" ? mismatch : ""} })
 				{ cwd: home, env: { ...process.env, HOME: home }, encoding: "utf8" },
 			);
 			expect(result.error).toBeUndefined();
-			expect(result.status).toBe(1);
+			expect(result.status).toBe(FAILURE_EXIT_STATUS);
 			expect(result.stdout + result.stderr).toMatch(/HOMEDIR GUARD: .*boundary.test.ts/);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });

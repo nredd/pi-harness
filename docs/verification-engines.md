@@ -18,7 +18,8 @@ No coverage-provider, threshold, required-check-name or runtime-pin change is in
 
 Python stays on pytest, uv, ruff and ty. The separate dotfiles repository stays on dependency-free
 `node --test`: its bootstrap gate runs before dependency installation. Vitest benches stay on
-Node. Istanbul consolidation and coverage-policy changes belong to phase 3.
+Node. Coverage PR #162 integrates these producers after this PR, as specified in the handoff
+below; broader Istanbul consolidation remains phase 3.
 
 ## Home boundaries
 
@@ -57,6 +58,43 @@ HOME for every test. The same probe passes 387/387 on Node. Excluding the spec's
 assertion failures would leave 372 guard failures. There is deliberately no skip list and no
 informational-only guard. Phase 2 must inject home paths, install this setup in todo/subagents,
 and establish full-suite green on both engines. Phase 1 does not touch that worktree or source.
+
+## Coverage handoff
+
+Merge #175 first. Then update [#162](https://github.com/nredd/pi-harness/pull/162)
+(`coverage-phase0`) against the merged source; phase 1 deliberately adds no coverage flags.
+The four full Bun producers must keep the entry point `node ../../scripts/run-vitest.ts bun`
+and pass Vitest options through it, not restore native `bun test`:
+
+```sh
+node ../../scripts/run-vitest.ts bun --coverage --coverage.provider=istanbul \
+  --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/bun
+```
+
+Keep the sampler's `--maxWorkers=1`. Install the Istanbul provider version compatible with the
+pinned Vitest. Istanbul works on pinned Bun 1.3.14; do not substitute its broken V8 provider or
+Bun-native coverage flags. Both `text` and `lcov` reporters are mandatory. Set explicit
+per-signal source inventories and matching instrumentation includes in #162, including
+never-imported files where full-source coverage is claimed; test counts alone are not source
+coverage. Expected reports, relative to the repository root:
+
+- `packages/subscription-router/coverage/bun/lcov.info`
+- `packages/preset/coverage/bun/lcov.info`
+- `packages/resource-sampler/coverage/bun/lcov.info`
+- `integration/inprocess/coverage/bun/lcov.info`
+
+Keep Bun signals **report-only** with their reasons and per-OS references; keep primary signals
+enforced. Changing producers is not an enforcement promotion, permission to merge engine
+counters, or permission to raise budgets. #162 must adapt its producer-contract tests and
+refresh clean macOS/Linux receipts for these full-suite signals.
+
+On that rebase, #162 must also inventory `scripts/run-vitest.ts` and the new
+`integration/inprocess/verification/*` sources, specifically executable `home-guard.ts` and
+`home-setup.ts`, plus the new router/sampler Vitest configs. Use measured/pending declarations
+or exact reasoned verification-helper classification as appropriate under `docs/coverage.md`;
+conventional `*.test.ts` files remain tests, not production coverage exclusions. Do not let
+these new files disappear from the repository source-classification scan. That inventory
+cannot be added here: `coverage/policy.json` is not on main yet and belongs to #162.
 
 ## Add a package
 
