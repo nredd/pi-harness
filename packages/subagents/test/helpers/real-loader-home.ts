@@ -1,4 +1,7 @@
-/** Network-free real-loader probe, launched with a disposable ambient HOME at process start. */
+/**
+ * Network-free real-loader probe, launched with a disposable ambient HOME at process start.
+ * Best-effort JavaScript detector: native syscalls, child processes, and `process.binding("fs")` bypass it.
+ */
 import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -9,11 +12,15 @@ import { runAgent } from "../../src/agent-runner.js";
 import { registerAgents } from "../../src/agent-types.js";
 import { runMentionClone } from "../../src/mention-clone.js";
 import type { AgentConfig } from "../../src/types.js";
+import { type AmbientAccessBypass, exerciseAmbientAccessBypass } from "./ambient-access-bypass.js";
+
+type TracedFunction = (...args: never[]) => unknown;
 
 async function main(): Promise<void> {
   const root = process.env.PI_HOME_FIXTURE_ROOT;
   const mode = process.env.PI_HOME_FIXTURE_MODE;
   const scope = process.env.PI_HOME_FIXTURE_SCOPE;
+  const bypass = process.env.PI_HOME_FIXTURE_BYPASS as AmbientAccessBypass | undefined;
   if (!root || !mode || !scope) throw new Error("Expected root, runner|clone and global|project");
   const ambient = join(root, "ambient");
   if (process.env.HOME !== ambient) throw new Error("Probe must start with disposable HOME");
@@ -33,6 +40,9 @@ async function main(): Promise<void> {
   }
   const ambientSkillsDir = join(ambient, ".agents", "skills");
   write(join(ambientSkillsDir, "ambient-skill", "SKILL.md"), "---\nname: ambient-skill\ndescription: #179 fixture\n---\nambient\n");
+  write(join(ambient, ".agents", "native-realpath"), "native");
+  write(join(ambient, ".agents", "read-stream"), "read");
+  fs.mkdirSync(join(ambient, ".agents", "glob-cwd"), { recursive: true });
   fs.mkdirSync(cwd, { recursive: true });
   const settingsPath = scope === "global" ? join(agentDir, "settings.json") : join(cwd, ".pi", "settings.json");
   write(settingsPath, JSON.stringify({ packages: [scope === "global" ? { source: "~/package" } : "~/package"], extensions: ["~/extension.ts"] }));
@@ -40,10 +50,17 @@ async function main(): Promise<void> {
   const nativeRealpath = fs.realpathSync.native ?? fs.realpathSync;
   const ambientRoots = [resolve(ambient), nativeRealpath(ambient)];
   const probes: string[] = [];
+  /** Record a path-like argument, pattern array, or `cwd` option without I/O. */
   function recordPath(value: unknown): void {
+    if (Array.isArray(value)) {
+      for (const entry of value) recordPath(entry);
+      return;
+    }
+    if (value !== null && typeof value === "object" && "cwd" in value) recordPath(value.cwd);
     const path = value instanceof URL ? fileURLToPath(value) : Buffer.isBuffer(value) ? value.toString() : typeof value === "string" ? value : undefined;
     if (path !== undefined) probes.push(resolve(path));
   }
+  /** Return the decoy-home-relative form of a lexical or canonical observed path. */
   function ambientRelative(path: string): string | undefined {
     const candidates = [path];
     try { candidates.push(nativeRealpath(path)); } catch { /* Missing paths are still observed by their lexical form. */ }
@@ -54,20 +71,28 @@ async function main(): Promise<void> {
     }
     return undefined;
   }
+  /** Trace calls and constructors, including `realpath*.native`, on a filesystem API surface. */
   function traceFilesystemApi(api: object): void {
-    for (const [name, original] of Object.entries(api)) {
-      if (typeof original !== "function") continue;
-      // Trace every path argument on both node:fs API surfaces. This catches
-      // two-path operations and avoids a method-specific allowlist.
-      Object.defineProperty(api, name, {
-        configurable: true,
-        writable: true,
-        value: new Proxy(original, { apply(target, receiver, args) { for (const arg of args) recordPath(arg); return Reflect.apply(target, receiver, args); } }),
+    function traceFunction(original: TracedFunction): TracedFunction {
+      const traced = new Proxy(original, {
+        apply(target, receiver, args) { for (const arg of args) recordPath(arg); return Reflect.apply(target, receiver, args); },
+        construct(target, args, newTarget) { for (const arg of args) recordPath(arg); return Reflect.construct(target, args, newTarget); },
       });
+      const native = Reflect.get(original, "native");
+      if (typeof native === "function") Object.defineProperty(traced, "native", { configurable: true, writable: true, value: traceFunction(native as TracedFunction) });
+      return traced;
+    }
+    for (const [name, original] of Object.entries(api)) {
+      if (typeof original === "function") Object.defineProperty(api, name, { configurable: true, writable: true, value: traceFunction(original as TracedFunction) });
     }
   }
   traceFilesystemApi(fs);
   traceFilesystemApi(fs.promises);
+  const runtime = globalThis as typeof globalThis & { Bun?: { file(path: string): unknown } };
+  if (runtime.Bun) {
+    const file = runtime.Bun.file.bind(runtime.Bun);
+    runtime.Bun.file = new Proxy(file, { apply(target, receiver, args) { for (const arg of args) recordPath(arg); return Reflect.apply(target, receiver, args); } });
+  }
   if (process.versions.bun) {
     // Bun does not synchronize patched built-in named exports. Replace only
     // their export table; every filesystem call still delegates to real I/O.
@@ -79,6 +104,8 @@ async function main(): Promise<void> {
   } else {
     syncBuiltinESMExports();
   }
+
+  if (bypass) await exerciseAmbientAccessBypass(ambient, bypass);
 
   const ctx = {
     cwd, model: undefined, modelRegistry: {},

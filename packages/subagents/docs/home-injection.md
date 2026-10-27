@@ -83,12 +83,16 @@ This is not a filesystem sandbox. Before loader-level `noSkills` takes effect,
 Pi's package-manager `resolve()` automatically scans the real runtime home's
 `~/.agents/skills`. The public loader does not expose an injected-home or
 package-manager seam for that read, so this PR cannot fix it without a Pi core
-change and release. The `#179` characterization test records every loader and
-package-manager filesystem access under its decoy ambient home, normalizes those
-paths relative to that home, deduplicates and sorts them, then asserts exact
-membership. Its expected array documents the current `~/.agents/skills` traversal;
-flip it when the host fix lands so both a new read and a removed expected read fail.
-The required host follow-up is tracked [here](https://github.com/nredd/pi-harness/issues/179).
+change and release. The `#179` characterization is a *best-effort* JavaScript
+regression detector, not a syscall sandbox. It traces `node:fs`, `fs`, their
+promise aliases, `realpath*.native`, `Bun.file()`, stream constructors, and
+path-bearing pattern/`cwd` arguments under its decoy ambient home. It normalizes,
+deduplicates and sorts those paths, then asserts exact membership. Raw syscalls in
+native addons, child processes spawned by the SDK, and dynamic
+`process.binding("fs")` calls remain outside this probe. Its expected array
+documents the current `~/.agents/skills` traversal; flip it when the host fix lands
+so both a new read and a removed expected read fail. The required host follow-up is
+tracked [here](https://github.com/nredd/pi-harness/issues/179).
 
 Frontmatter extension compatibility:
 
