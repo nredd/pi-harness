@@ -27,7 +27,11 @@ artifact, run `uv run --locked --project integration python scripts/coverage_acc
 --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json` (use `darwin` and its
 artifact for macOS). The full download/replay and independent-two-run comparison procedure is
 [here](coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Branches
-are reported only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
+are reported only: `Counts`, the accounting budget predicate and the base ratchet enforce only
+lines/functions. Darwin sampler branch variation (#164) changes no floor. Linux session-kit primary
+uses the transitional observed maximum 110/32 from two independent hosted runs; the coalescing/teardown
+race and deterministic-test fix (#163) are documented in the coverage guide. Once established, that
+per-OS floor can only decrease under the base ratchet. Another `always()` step retains LCOV and the per-package/per-file JSON summary
 on either outcome. Bun counters are separately ratcheted, never merged into primary coverage.
 `computer-use` is not measured, tracked; `dev-tools` awaits a clean cargo baseline after #155.
 Neither is silently called 100%. Python tooling/harness code, remaining boundary probes/providers,

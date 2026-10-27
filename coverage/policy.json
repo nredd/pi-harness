@@ -121,11 +121,11 @@
         { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
       ],
       "status": "measured",
-      "note": "Per-OS floors measured from hosted run 40441614924. Local 110/111-line receipts are advisory; the independent hosted comparison is recorded in coverage receipts.",
+      "note": "Per-OS floors measured from hosted runs 40441614924 and 40452767971. Linux primary 110 lines / 32 functions is a TRANSITIONAL observed maximum: incidental coverage of the messages.ts sort comparator depends on a monitor coalescing/teardown race. The per-OS base ratchet permits this floor only to go down after policy establishment; the deterministic test in https://github.com/nredd/pi-harness/issues/163 is the real fix. Local receipts remain advisory.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 110, "functions": 32 }, "linux": { "lines": 110, "functions": 31 } },
+          "max_uncovered": { "darwin": { "lines": 110, "functions": 32 }, "linux": { "lines": 110, "functions": 32 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -174,7 +174,7 @@
             "src/model-call.ts", "src/model-resolver.ts", "src/model-selection.ts", "src/model-scope.ts", "src/nested-tools.ts",
             "src/output-file.ts", "src/package-resources.ts", "src/process-budget.ts", "src/prompts.ts",
             "src/quota-admission.ts", "src/schedule-store.ts", "src/schedule.ts", "src/settings.ts",
-            "src/skill-loader.ts", "src/startup-error.ts", "src/status-note.ts", "src/structured-output.ts",
+            "src/skill-loader.ts", "src/stale-ctx.ts", "src/startup-error.ts", "src/status-note.ts", "src/structured-output.ts",
             "src/ui/agent-mention.ts", "src/ui/agent-row.ts", "src/ui/agent-widget.ts",
             "src/ui/conversation-viewer.ts", "src/ui/fallback-flag.ts", "src/ui/fleet-list.ts", "src/ui/notification-view.ts",
             "src/ui/schedule-menu.ts", "src/ui/select-item.ts", "src/ui/viewer-keys.ts",

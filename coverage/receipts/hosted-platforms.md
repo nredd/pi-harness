@@ -69,7 +69,43 @@ Isolated revert proofs, `/tmp/cov-platform-proofs/summary.json`:
 Unmodified proof control: 20 passed. Mutations run only in disposable copies, not the worktree.
 No timeouts/retries, test skips, source exclusions or producer commands changed.
 
-Second independent hosted measurement: pending the new commit's CI run. This receipt does not
-claim determinism from one hosted run. Compare every package/signal/OS after that fresh run,
-not a retry. Any changed counts require investigation and an explicitly linked issue before
-retaining observed maxima; no floor has been widened speculatively.
+## Second measurement and transitional maximum
+
+Fresh hosted run [40452767971](https://github.com/nredd/pi-harness/actions/runs/40452767971)
+at `dc8db06aea075c0eb2c2534d18ccd8f763501d85` completed: Darwin owned passed, Linux owned failed
+only accounting after its producer gates passed. All other checks passed. No run was retried.
+All 36 package/signal/OS line/function measurements match the first run except Linux
+`session-kit/primary`: 110/31 -> 110/32. Its diagnostic uncovered branches changed 334 -> 335.
+LCOV isolates the entire difference to the sort comparator at `src/monitor/messages.ts:38`
+(1 -> 0 hits) and multiple-match branch at line 48. Direct fixtures provide at most one match;
+the manager's two-match case does not wait for coalesced delivery before teardown cancels it.
+
+The initial Linux floor is now the **TRANSITIONAL observed maximum** 110/32, not a speculative
+allowance. It can only go down under the base ratchet after policy establishment. The deterministic
+multi-match formatter test in [#163](https://github.com/nredd/pi-harness/issues/163) is the real fix.
+No other uncovered line/function floor changed.
+
+Darwin `resource-sampler/primary` diagnostic branches changed 53 -> 54; its gated 58/2 stayed
+unchanged. The late stdout guard at `src/collect.ts:110` depends on stream delivery after kill,
+tracked in [#164](https://github.com/nredd/pi-harness/issues/164). Branches are report-only:
+`Counts`, `account()` and `check_ratchet()` enforce only lines/functions, and the existing
+branch-only LCOV test passes. No sampler or branch floor changed.
+
+## Main merge and third measurement preparation
+
+Fetched origin before this follow-up; main advanced to `6d979f6` (#153). Plain
+`git merge origin/main` completed without conflicts as `11fcf55ced90fa90ebcf42791666cb361a6673f5`;
+no `git merge --continue` was necessary. Main changes subagents source/tests and adds
+`src/stale-ctx.ts`. Its existing ownership glob already includes it; primary instrumentation
+now explicitly includes it too. The real declared Bun suite passed and emitted that module,
+so its expected-file subset also names it. Subagents floors are unchanged.
+
+The local advisory Bun result is 7763/515 versus the unchanged hosted floor 7728/512; the new
+module itself is fully covered (4 lines / 1 function). This changed-source result is not an
+independent same-source determinism measurement and does not authorize a floor increase.
+The third hosted comparison must name the changed source/denominators and report any failure,
+not silently widen another package. The third run is pending the follow-up push.
+
+Follow-up gates: `make check-scripts` passes formatter, ruff, ty, 819 pytest tests and 8 Node
+import-audit tests; the 22-test subagents Bun suite passes. `git diff --check` is clean.
+Logs: `/tmp/cov-third-scripts-gate.log`, `/tmp/cov-third-subagents-bun.log`.

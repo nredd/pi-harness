@@ -193,6 +193,22 @@ retain the maximum actually observed per counter with a documented cause and fol
 Never average platforms or combine their maxima. Once the policy is on main, the base ratchet still
 forbids raising it; measurement mode is diagnostic, not a bypass.
 
+The initial Linux `session-kit/primary` floor is the **TRANSITIONAL observed maximum** of 110
+uncovered lines / 32 functions across hosted runs `40441614924` (110/31) and `40452767971`
+(110/32), not an allowance beyond measured results. `src/monitor/messages.ts:38` sorts matched
+lines; its comparator is incidentally covered when the two-match manager fixture's coalescer
+flushes before teardown, and uncovered when teardown cancels it. The floor can only go down
+under the per-OS base ratchet after policy establishment. A deterministic multi-match formatter
+test is the real fix, tracked [here](https://github.com/nredd/pi-harness/issues/163).
+
+Darwin `resource-sampler/primary` diagnostic uncovered branches changed 53 -> 54 between those
+runs, while its gated uncovered lines/functions stayed 58/2. The late-stdout guard at
+`src/collect.ts:110` depends on stream delivery after cancellation, tracked
+[here](https://github.com/nredd/pi-harness/issues/164). **No branch floor is added or changed.**
+`Counts` contains only `lines` and `functions`; both `account()`'s budget predicate and
+`check_ratchet()` compare only those two counters. Branch totals/misses remain JSON diagnostics,
+never enforced thresholds; the existing branch-only LCOV regression explicitly passes.
+
 Linux in-process primary coverage in run `40441614924` is 25 uncovered lines / 8 functions versus
 Darwin's 15 / 4. The entire delta is `integration/inprocess/support.ts` (21 / 5 versus 11 / 1);
 `goal-support.ts` and `native-timers.ts` have identical counters. `isolateStackHome()` only spawns
