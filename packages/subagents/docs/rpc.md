@@ -16,7 +16,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 |---|---|---|
 | `description` | string | What the agent is doing. Shown in the widget, FleetView and the completion notification |
 | `name` | string | A memorable second handle (`@auth-audit`). Slugged, never validated — anything unusable degrades rather than failing the spawn |
-| `model` | `Model`, `"@tier"` **or** `"provider/modelId"` | Strings are validated at the RPC boundary against `ctx.modelRegistry`; the shared spawn selector retains the raw request and stores its outcome on the record. `null` means no explicit override: `agentModels[type]`, `agentModels["*"]`, definition, then parent apply. Resolution is fuzzy — see [Model Scope](../README.md#model-scope) |
+| `model` | `Model`, `"@tier"` **or** `"provider/modelId"` | Strings are validated at the RPC boundary against `ctx.modelRegistry`; the shared spawn selector retains the raw request and stores its outcome on the record. `null` means no explicit override: `agentModels[type]`, `agentModels["*"]`, definition, then parent apply. Only explicit non-tier strings retain fuzzy matching; tiers and alias members resolve exactly, independently of `enabledModels` — see [Model tiers](../README.md#model-tiers) |
 | `maxTurns` | number | Turn ceiling for the run |
 | `isolated` | boolean | Strips extensions, skills and nested tools. Applies only when the agent file leaves `isolated:` unset — frontmatter is authoritative. **Not** a git worktree — see the trap table below |
 | `inheritContext` | boolean | Fork the parent conversation into the child. Only this option decides — an agent file's `inherit_context:` does not apply to RPC spawns |
