@@ -15,12 +15,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
-from urllib.request import urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness.release import (
     LEGACY_RELEASE_TAGS,
+    FetchError,
+    fetch_bytes,
     release_asset_url,
     release_checksums,
     verify_provenance,
@@ -36,8 +37,12 @@ SHA_PATTERN = re.compile(rf"[0-9a-f]{{{GIT_SHA_LENGTH}}}")
 OPERATIONS = ("verify-only", "promote")
 GIT_BIN = "/usr/bin/git"
 STACK_CHECK_TIMEOUT = 900
-ASSET_TIMEOUT = 120
 STRICT = ConfigDict(extra="forbid", strict=True, frozen=True)
+# The consumer contract: who must have signed a `stack/<sha>` snapshot, and from which ref.
+SNAPSHOT_REPO = "nredd/pi-harness"
+SNAPSHOT_ASSET = "stack-snapshot.json"
+SNAPSHOT_SIGNER_WORKFLOW = f"{SNAPSHOT_REPO}/.github/workflows/promote-stack.yml"
+SNAPSHOT_SOURCE_REF = "refs/heads/main"
 
 
 class PromotionError(Exception):
@@ -205,6 +210,41 @@ def build_snapshot(stack_path: Path, source_sha: str, gates: GateEvidence) -> St
     return StackSnapshot(
         schema_version=1, source_sha=source_sha, stack_sha256=canonical.sha256, stack=stack, gates=gates
     )
+
+
+def snapshot_url(source_sha: str) -> str:
+    """Return the immutable release URL of one promoted snapshot.
+
+    Parameters:
+        source_sha (str): the pinned, promoted `main` commit.
+
+    Returns:
+        str: `stack/<source_sha>` release asset URL.
+    """
+    return f"https://github.com/{SNAPSHOT_REPO}/releases/download/stack/{source_sha}/{SNAPSHOT_ASSET}"
+
+
+def load_promoted_snapshot(contents: bytes, pinned_sha: str) -> StackSnapshot:
+    """Validate attested snapshot bytes and require them to be the pinned promotion.
+
+    Call only after the bytes' attestation was verified against `SNAPSHOT_SIGNER_WORKFLOW` and
+    `SNAPSHOT_SOURCE_REF`; this checks what the attestation cannot: the schema, the canonical
+    stack digest and that the snapshot names the commit the consumer pinned.
+
+    Parameters:
+        contents (bytes): downloaded `stack-snapshot.json`.
+        pinned_sha (str): the `source_sha` the consumer asked for.
+
+    Returns:
+        StackSnapshot: the validated snapshot.
+
+    Raises:
+        ValueError: the bytes are not a valid snapshot, or it promotes another commit.
+    """
+    snapshot = StackSnapshot.model_validate_json(contents)
+    if snapshot.source_sha != pinned_sha:
+        raise ValueError(f"Snapshot promotes '{snapshot.source_sha}', not the pinned '{pinned_sha}'")
+    return snapshot
 
 
 def flatten_pages(value: object) -> list[Any]:
@@ -517,8 +557,9 @@ def _fetch_asset(url: str, destination: Path) -> None:
         EvidenceError: the download failed.
     """
     try:
-        with urlopen(url, timeout=ASSET_TIMEOUT) as response:
-            destination.write_bytes(response.read())
+        destination.write_bytes(fetch_bytes(url))
+    except FetchError as error:
+        raise EvidenceError(str(error)) from error
     except OSError as error:
         raise EvidenceError(f"Could not download '{url}': {error}") from error
 
