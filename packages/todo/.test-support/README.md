@@ -18,6 +18,15 @@ real-home filesystem probes for both present and missing fallback configs. No
 upstream test assertions or tests are removed. Keep support/config files in dot paths so
 upstream's unchanged ship-manifest walker does not mistake them for production.
 
+Path audit: `config.ts` imports `homedir` for the call-time `loadConfig` default;
+its `XDG_CONFIG_HOME` read and `~/` expansion use the injected home. Both config
+candidates, including the always-legacy fallback, stay under that home unless an
+absolute XDG override explicitly points elsewhere. `getMaxWidgetLines`,
+`getCollapseOnResume` and `resolveCollapseKey` forward the home. This matches
+`@juicesharp/rpiv-config`'s one-way fallback: a present malformed XDG file returns
+its parse result and never falls back to legacy. The existing JSON loader remains
+upstream's `loadJsonConfig`, not a second parser.
+
 Test census:
 
 - Before bootstrap: `npm test` exits 127 (`vitest: command not found`), zero tests.

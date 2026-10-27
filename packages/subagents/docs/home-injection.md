@@ -25,7 +25,15 @@ Audit command:
 grep -nE 'getAgentDir|homedir|HOME|USERPROFILE|XDG_|~/' packages/subagents/src/*.ts packages/subagents/src/workflow/*.ts
 ```
 
-Every matching code boundary and prose occurrence, grouped by symbol:
+The requested exhaustive audit scope is `packages/subagents/src`. Every matching
+code boundary and prose occurrence is grouped by symbol below. Test-side default
+API assertions in `agent-runner.test.ts` and `invocation-config.test.ts` compare
+`homedir()` values without filesystem access. `helpers/print-mode-runner.ts` and
+`output-file-compaction-e2e.test.ts` intentionally use `getAgentDir()` after setting
+`PI_CODING_AGENT_DIR` to their disposable fixture; the print helper's explicit live
+mode remains opt-in and intentionally uses host credentials.
+
+Every matching source occurrence:
 
 | File / occurrence | Verdict |
 | --- | --- |
