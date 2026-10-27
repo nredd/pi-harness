@@ -30,6 +30,8 @@ async function main(): Promise<void> {
     write(join(base, "package", "package.json"), JSON.stringify({ name: "home-fixture", pi: { extensions: ["./index.ts"] } }));
     write(join(base, "package", "index.ts"), extension("package"));
   }
+  const ambientSkillsDir = join(ambient, ".agents", "skills");
+  write(join(ambientSkillsDir, "ambient-skill", "SKILL.md"), "---\nname: ambient-skill\ndescription: #179 fixture\n---\nambient\n");
   fs.mkdirSync(cwd, { recursive: true });
   const settingsPath = scope === "global" ? join(agentDir, "settings.json") : join(cwd, ".pi", "settings.json");
   write(settingsPath, JSON.stringify({ packages: [scope === "global" ? { source: "~/package" } : "~/package"], extensions: ["~/extension.ts"] }));
@@ -79,8 +81,9 @@ async function main(): Promise<void> {
   }
   const forbidden = [join(ambient, "package"), join(ambient, "extension.ts")];
   const forbiddenProbes = probes.filter(path => forbidden.some(root => path === root || path.startsWith(root + sep)));
+  const ambientSkillProbes = probes.filter(path => path === ambientSkillsDir || path.startsWith(ambientSkillsDir + sep));
   const loaded = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").trim().split("\n") : [];
-  fs.writeFileSync(join(root, "result.json"), JSON.stringify({ mode, scope, forbiddenProbes, loaded, sawInjectedPackage: probes.includes(join(home, "package", "package.json")), sawInjectedExtension: probes.includes(join(home, "extension.ts")) }));
+  fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", mode, scope, forbiddenProbes, ambientSkillProbes, loaded, sawInjectedPackage: probes.includes(join(home, "package", "package.json")), sawInjectedExtension: probes.includes(join(home, "extension.ts")) }));
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

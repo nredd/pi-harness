@@ -38,6 +38,7 @@ describe("real resource-loader settings home", () => {
         const child = spawnSync(process.execPath, args, { env, encoding: "utf8", timeout: 10000 });
         expect(child.status, child.stdout + child.stderr).toBe(0);
         const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+        expect(result.runtime).toBe(process.versions.bun ?? "node");
         expect(result.forbiddenProbes).toEqual([]);
         expect(result.sawInjectedPackage).toBe(true);
         expect(result.sawInjectedExtension).toBe(true);
@@ -46,6 +47,25 @@ describe("real resource-loader settings home", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+  }
+});
+
+it("#179 characterizes Pi's ambient .agents/skills scan before loader-level noSkills", () => {
+  const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+  const ambient = join(root, "ambient");
+  mkdirSync(ambient);
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: ambient, USERPROFILE: ambient, XDG_CONFIG_HOME: join(ambient, ".config"), PI_OFFLINE: "1", PI_HOME_FIXTURE_ROOT: root, PI_HOME_FIXTURE_MODE: "runner", PI_HOME_FIXTURE_SCOPE: "global" };
+  delete env.PI_CODING_AGENT_DIR;
+  delete env.PI_CODING_AGENT_SESSION_DIR;
+  try {
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
+    expect(child.status, child.stdout + child.stderr).toBe(0);
+    const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+    expect(result.runtime).toBe(process.versions.bun ?? "node");
+    // Flip when #179 gives the host package manager an injected-home seam.
+    expect(result.ambientSkillProbes).not.toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

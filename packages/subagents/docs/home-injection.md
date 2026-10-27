@@ -77,10 +77,15 @@ ambient home containing decoy package/extension files. It runs the real runner o
 mention clone through the real loader and package manager, with filesystem canaries
 for those explicit settings entries. Runner cases execute only the injected
 extension factories; both lanes stop before any model request. Vite bundles only
-owned TypeScript; the actual Pi SDK stays external. Pi's automatic discovery of
-ambient `~/.agents/skills` remains host-owned; this adapter is not a filesystem
-sandbox and the explicit-settings canary does not claim to cover that upstream root.
-The required public host seam is tracked [here](https://github.com/nredd/pi-harness/issues/179).
+owned TypeScript; the actual Pi SDK stays external.
+
+This is not a filesystem sandbox. Before loader-level `noSkills` takes effect,
+Pi's package-manager `resolve()` automatically scans the real runtime home's
+`~/.agents/skills`. The public loader does not expose an injected-home or
+package-manager seam for that read, so this PR cannot fix it without a Pi core
+change and release. The `#179` characterization test deliberately asserts that the
+decoy ambient skill directory is scanned today; flip that assertion when the host
+fix lands. The required host follow-up is tracked [here](https://github.com/nredd/pi-harness/issues/179).
 
 Frontmatter extension compatibility:
 
@@ -122,6 +127,9 @@ Tests:
   extension tilde, frontmatter `session_dir`, resource/settings and default-session
   forwarding. Each forwarding argument can be removed independently to make its
   regression fail.
+- `resource-loader-home.test.ts` is in `test:bun` through Bun-launched Vitest;
+  its child asserts the same Bun runtime so the cached-home regression cannot be
+  Node-only coverage.
 - `test/helpers/home-extension.ts` binds wiring tests to their disposable agent
   directory; `scenario-session.ts` passes its explicit root to the factory.
 - `custom-agents.test.ts` and `skill-loader.test.ts` bind every loader invocation to
