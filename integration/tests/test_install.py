@@ -18,12 +18,14 @@ import inspect
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
 import subprocess
 import sys
 import tarfile
+from dataclasses import asdict
 from email.message import Message
 from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from pathlib import Path
@@ -71,6 +73,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "stack-snapshot-24889f7.json"
 INTEGRATION = Path(__file__).resolve().parent.parent
 INSTALLER_WORKFLOW = INTEGRATION.parent / ".github" / "workflows" / "installer.yml"
 SHA = "24889f7896be7157bf9077a41465a3b29620879f"
+ATOMIC_SUFFIX = re.compile(r"[0-9a-f]{32}\.(tmp|replacement)")
 FAKE_PI = """\
 #!{python}
 # Fake `pi`: `install npm:<name>@<version>` writes the package and its lockfile entry.
@@ -147,8 +150,10 @@ class Harness:
         # Generic installer units model a native host, even when this test suite runs on WSL.
         monkeypatch.setattr(install, "is_wsl", lambda: False)
         monkeypatch.setattr(install, "preflight", lambda system, machine: {"node": "node"})
-        monkeypatch.setattr(install, "verify_snapshot", lambda sha, workdir: self.snapshot)
-        monkeypatch.setattr(install, "verify_release", lambda snapshot, node, workdir: self.verified)
+        monkeypatch.setattr(install, "verify_snapshot", lambda sha, workdir, **kwargs: self.snapshot)
+        monkeypatch.setattr(
+            install, "verify_release", lambda snapshot, node, workdir, **kwargs: self.verified
+        )
         monkeypatch.setattr(install, "fetch_release", self.fetch_release)
 
     @property
@@ -162,6 +167,8 @@ class Harness:
         prefix: Path,
         provenance: object = None,
         checksums: Mapping[str, str] | None = None,
+        *,
+        npm_bin: str | None = None,
     ) -> Path:
         """Write a fake core prefix whose `pi` is the recording fake.
 
@@ -170,6 +177,7 @@ class Harness:
             prefix (Path): empty prefix.
             provenance (object): ignored verifier.
             checksums (Mapping[str, str] | None): recorded digests the download is bound to.
+            npm_bin (str | None): ignored dispatcher, since this fake writes the prefix directly.
 
         Returns:
             Path: the fake executable.
@@ -1078,7 +1086,7 @@ def serve_snapshot(monkeypatch: pytest.MonkeyPatch, contents: bytes) -> list[tup
     monkeypatch.setattr(
         install,
         "verify_public_attestation",
-        lambda path, repo, signer, ref: identities.append((repo, signer, ref)),
+        lambda path, repo, signer, ref, **kwargs: identities.append((repo, signer, ref)),
     )
     return identities
 
@@ -1097,7 +1105,7 @@ def test_verify_snapshot_rejects_failed_attestation(tmp_path: Path, monkeypatch:
     """A tampered or foreign-signed snapshot stops before anything is parsed or installed."""
     serve_snapshot(monkeypatch, FIXTURE.read_bytes())
 
-    def reject(*args: object) -> None:
+    def reject(*args: object, **kwargs: object) -> None:
         """Reject like `gh attestation verify` on a digest mismatch.
 
         Parameters:
@@ -1283,7 +1291,7 @@ def test_verify_release_binds_staged_core_to_the_snapshot(
     monkeypatch.setattr(install, "node_version", lambda node: (22, 19, 0))
     verified = verify_release(snapshot, "node", tmp_path / "work")
     assert verified.core_checksums == recorded | extra
-    monkeypatch.setattr(install, "verify_release", lambda snapshot, node, workdir: verified)
+    monkeypatch.setattr(install, "verify_release", lambda snapshot, node, workdir, **kwargs: verified)
     assert harness.run() == ExitCode.OK
     assert harness.fetched == [recorded | extra]
 
@@ -1826,7 +1834,9 @@ def test_kind_changed_mid_run_rolls_back_and_fails(tmp_path: Path, monkeypatch: 
     before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
     original = install.stage
 
-    def stage_then_swap(layout: Layout, verified: Verified, plan: install.Plan, staging: Path) -> Path | None:
+    def stage_then_swap(
+        layout: Layout, verified: Verified, plan: install.Plan, staging: Path, **kwargs: Any
+    ) -> Path | None:
         """Stage, then turn the `pi` link into a directory before the switch reaches it.
 
         Parameters:
@@ -1838,7 +1848,7 @@ def test_kind_changed_mid_run_rolls_back_and_fails(tmp_path: Path, monkeypatch: 
         Returns:
             Path | None: the staged agent tree.
         """
-        staged = original(layout, verified, plan, staging)
+        staged = original(layout, verified, plan, staging, **kwargs)
         make_unsupported(layout, "bin-pi-directory")
         return staged
 
@@ -1864,8 +1874,8 @@ snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
 sources = [source_string(package) for package in snapshot.stack.sources]
 install.is_wsl = lambda: False
 install.preflight = lambda system, machine: {"node": "node"}
-install.verify_snapshot = lambda sha, workdir: snapshot
-install.verify_release = lambda snapshot, node, workdir: install.Verified(snapshot, sources, {})
+install.verify_snapshot = lambda sha, workdir, **kwargs: snapshot
+install.verify_release = lambda snapshot, node, workdir, **kwargs: install.Verified(snapshot, sources, {})
 sys.exit(install.main(sys.argv[2:]))
 """
 
@@ -3545,10 +3555,18 @@ class MutationAudit:
             plan (install.Plan): pre-consent classification.
         """
         self.layout, self.plan = harness.layout, plan
+        self.prefix = self.layout.core(harness.snapshot.stack.core.tag)
+        self.existing = {
+            path
+            for root in (self.layout.root, self.layout.agent_dir, self.layout.bin_dir)
+            for path in (root, *root.rglob("*"))
+            if path.exists(follow_symlinks=False)
+        }
         self.created: set[Path] = set()
         self.events: list[Path] = []
         self.journaled: set[Path] = set()
         self.backups: set[Path] = set()
+        self.backup_runs: set[Path] = set()
         self.descriptors: dict[int, Path] = {}
         original_open, original_close, original_record = os.open, os.close, Journal.record
 
@@ -3560,7 +3578,7 @@ class MutationAudit:
             if resolved is not None:
                 self.descriptors[descriptor] = resolved
                 if flags & os.O_CREAT and not existed:
-                    self.created.add(resolved)
+                    self.observe([(resolved, False)])
                 elif flags & os.O_ACCMODE in {os.O_WRONLY, os.O_RDWR}:
                     self.observe([(resolved, existed)])
             return descriptor
@@ -3574,6 +3592,7 @@ class MutationAudit:
             """Collect claimed journal coverage separately from observed mutation destinations."""
             backup = original_record(journal, target, name)
             self.journaled.add(target)
+            self.backup_runs.add(journal.backups)
             if backup is not None:
                 self.backups.add(backup)
             return backup
@@ -3690,7 +3709,7 @@ class MutationAudit:
         patch.setattr(owner, name, mutation)
 
     def assert_classified(self) -> None:
-        """Require every pre-existing mutation to be journaled/classified or explicit installer scratch."""
+        """Require independent CREATE and OVERWRITE classifications, including transient entries."""
         infrastructure = {self.layout.journal, self.layout.root / "lock"}
         for path in self.events:
             # Staging is disposable installer scratch, never live user state. Do not exempt root/core/state.
@@ -3702,6 +3721,74 @@ class MutationAudit:
                 continue
             assert path in self.journaled, f"Unjournaled existing mutation: '{path}'"
             assert any(f"'{path}'" in message for message in self.plan.overwrites), path
+        # The package CREATE names the agent directory, but authorizes only npm/git trees,
+        # never arbitrary new personal files beside them.
+        declared = {
+            path
+            for path in (
+                self.layout.link,
+                self.layout.state,
+                self.layout.agent_dir / install.SETTINGS_FILE,
+                self.layout.agent_dir / install.SUBAGENTS_FILE,
+                self.prefix,
+            )
+            if any(f"'{path}'" in message for message in self.plan.creates)
+        }
+        if self.plan.install_packages:
+            assert any(f"'{self.layout.agent_dir}'" in message for message in self.plan.creates)
+            declared |= {self.layout.agent_dir / tree for tree in install.PACKAGE_TREES}
+        # installed.json is always created for a nonempty fresh plan; report_plan describes
+        # the installed state through its core/package/config CREATEs, not a separate line.
+        if not self.plan.empty and not any(
+            f"'{self.layout.state}'" in message for message in self.plan.overwrites
+        ):
+            declared.add(self.layout.state)
+        parents = {
+            self.layout.root,
+            self.layout.agent_dir,
+            self.layout.bin_dir,
+            self.layout.root / "core",
+            self.layout.backups,
+        }
+        # Rename-based OVERWRITEs recreate their original destination; that is not a new CREATE.
+        recreated = {
+            path for path in self.existing if any(f"'{path}'" in message for message in self.plan.overwrites)
+        }
+        planned = declared | recreated
+        for path in self.created:
+            # Named scratch exemptions, deliberately not blanket root/agent/bin allowances:
+            # staging: disposable npm/core build workspace, never a live destination.
+            if path.is_relative_to(self.layout.root / "staging"):
+                continue
+            # backup run: one switch's originals, created through the anchored backup writer.
+            if path in self.backups | self.backup_runs:
+                continue
+            # atomic journal/config temporary: only UUID siblings of known write destinations.
+            atomic_targets = planned | infrastructure
+            if any(
+                path.parent == target.parent
+                and (
+                    (
+                        path.name.startswith(f".{target.name}.")
+                        and ATOMIC_SUFFIX.fullmatch(path.name.removeprefix(f".{target.name}.")) is not None
+                    )
+                    or (
+                        path.name.startswith(f"..{target.name}.")
+                        and len(parts := path.name.removeprefix(f"..{target.name}.").split(".replacement."))
+                        == 2
+                        and ATOMIC_SUFFIX.fullmatch(parts[0] + ".replacement") is not None
+                        and ATOMIC_SUFFIX.fullmatch(parts[1]) is not None
+                    )
+                )
+                for target in atomic_targets
+            ):
+                continue
+            # Infrastructure parents and lock/journal implement staging and transaction ownership.
+            if path in parents | infrastructure:
+                continue
+            assert any(path == target or path.is_relative_to(target) for target in declared | recreated), (
+                f"Unplanned CREATE: '{path}'"
+            )
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -4321,3 +4408,222 @@ def test_journal_memory_failure_is_untrusted(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(install.json, "loads", exhausted)
     with pytest.raises(RollbackError, match=r"not trusted.*bounded parse allocation failed"):
         rollback(harness.layout)
+
+
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+def test_partial_directory_aside_cleanup_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: type[BaseException]
+) -> None:
+    """Partial rmtree is cleanup progress, never evidence that the safely restored original changed."""
+    harness = Harness(tmp_path, monkeypatch)
+    _, target = saved_recovery_entry(harness, "directory")
+    (target / "second").write_text("replacement child")
+
+    def replacement(document: dict[str, Any]) -> None:
+        """Record both children as the switch's known replacement before starting recovery."""
+        document["steps"][0]["replacement"] = asdict(install.RestoreHasher().identity(target))
+
+    edit_journal(harness, replacement)
+    original_tree = {"child": b"ORIGINAL"}
+    original_rmtree = shutil.rmtree
+    aside: Path | None = None
+
+    def partial(path: Path, *, dir_fd: int | None = None) -> None:
+        """Delete one of two children before the real cleanup syscall sequence finishes."""
+        nonlocal aside
+        if ".pi-stack-restore-" in Path(path).name:
+            aside = Path(path)
+            (aside / "child").unlink()
+            raise failure("partial cleanup")
+        original_rmtree(path, dir_fd=dir_fd)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(shutil, "rmtree", partial)
+        with pytest.raises(RollbackError if failure is OSError else KeyboardInterrupt):
+            rollback(harness.layout)
+    assert aside is not None
+    assert aside.exists()
+    assert tree(target) == original_tree
+    assert harness.layout.journal.exists()
+    rollback(harness.layout)
+    assert tree(target) == original_tree
+    assert not aside.exists()
+    assert not harness.layout.journal.exists()
+    assert rollback(harness.layout) == []
+
+
+@pytest.mark.parametrize("live", ["original", "new"])
+def test_restoring_backup_corruption_preflights_entire_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live: str
+) -> None:
+    """A corrupt middle backup refuses before the first reverse-order step or journal can change."""
+    harness = Harness(tmp_path, monkeypatch)
+    backup = seed_recovery_matrix(harness, "restoring", "present", live)
+    # Replace, not write through the hard link used by the matching-live-original cell.
+    backup.unlink()
+    backup.write_bytes(b"CORRUPTED")
+    layout = harness.layout
+    document = json.loads(layout.journal.read_text())
+    # The last recorded step would be restored first. Both neighboring steps are valid
+    # new targets, so a per-step check would delete one before discovering the middle fault.
+    neighbors = []
+    for name in (install.SETTINGS_FILE, install.SUBAGENTS_FILE):
+        target = layout.agent_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("new target")
+        neighbors.append(
+            {
+                "target": str(target),
+                "backup": None,
+                "replacement": matrix_content_identity(target, b"new target"),
+            }
+        )
+    document["steps"] = [neighbors[0], *document["steps"], neighbors[1]]
+    install.write_atomic(layout.journal, json.dumps(document), mode=install.JOURNAL_MODE)
+    before = tree(harness.home)
+    identities = {Path(raw["target"]): Path(raw["target"]).lstat() for raw in document["steps"]}
+    with pytest.raises(RollbackError, match="content identity changed"):
+        rollback(layout)
+    assert tree(harness.home) == before
+    assert {path: path.lstat() for path in identities} == identities
+
+
+@pytest.mark.parametrize("mutation", ["mkdir", "symlink"])
+def test_mutation_audit_detects_unplanned_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """An extra new directory or symlink must fail the independent CREATE oracle."""
+    original = install.switch_anchored
+
+    def unplanned(layout: Layout, *args: Any, **kwargs: Any) -> None:
+        """Inject a write outside every declared CREATE, without touching an existing entry."""
+        original(layout, *args, **kwargs)
+        target = layout.agent_dir / "unplanned"
+        if mutation == "mkdir":
+            target.mkdir()
+        else:
+            target.symlink_to("missing-target")
+
+    monkeypatch.setattr(install, "switch_anchored", unplanned)
+    with pytest.raises(AssertionError, match=r"Unplanned CREATE:.*unplanned"):
+        test_switch_write_set_classification_includes_core_and_shims(tmp_path, monkeypatch, existing=False)
+
+
+def write_tool_shims(harness: Harness, commands: Path, log: Path) -> None:
+    """Write executable recording shims, with npm building the fixture's core prefix.
+
+    Parameters:
+        harness (Harness): isolated install and package identities.
+        commands (Path): shim directory to create.
+        log (Path): absolute argv recording destination.
+    """
+    commands.mkdir()
+    for name in ("gh", "npm", "node"):
+        script = (
+            f"#!{sys.executable}\nimport json,pathlib,sys\n"
+            f"with pathlib.Path({str(log)!r}).open('a') as handle:\n"
+            "    handle.write(json.dumps(sys.argv) + '\\n')\n"
+        )
+        if name == "node":
+            script += "print('v22.19.0')\n"
+        elif name == "npm":
+            fake_pi = FAKE_PI.format(
+                python=sys.executable,
+                log=str(harness.log),
+                fail=[],
+                integrity=harness.integrity,
+                tokens=sorted(GITHUB_TOKEN_VARIABLES),
+            )
+            script += (
+                "prefix = pathlib.Path(sys.argv[sys.argv.index('--prefix') + 1])\n"
+                "binary = prefix / 'bin/pi'\nbinary.parent.mkdir(parents=True)\n"
+                f"binary.write_text({fake_pi!r})\nbinary.chmod(0o755)\n"
+            )
+        (commands / name).write_text(script)
+        (commands / name).chmod(0o755)
+
+
+def relative_tool_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, assert_absolute: bool) -> None:
+    """Run verification, npm staging, package installs and post-check through relative-PATH shims.
+
+    Parameters:
+        tmp_path (Path): isolated home and shim directory.
+        monkeypatch (pytest.MonkeyPatch): offline network seams and subprocess observer.
+        assert_absolute (bool): reject any relative executable at both subprocess boundaries.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    commands, log = tmp_path / "bin", tmp_path / "tools.jsonl"
+    write_tool_shims(harness, commands, log)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", f"./bin{os.pathsep}{os.defpath}")
+    # Stale relative import-time globals must NOT win over this run's preflight paths.
+    monkeypatch.setattr(release, "NPM_BIN", "./bin/npm")
+    monkeypatch.setattr(release, "GH_BIN", "./bin/gh")
+    monkeypatch.setattr(install, "preflight", preflight)
+    monkeypatch.setattr(install, "verify_snapshot", verify_snapshot)
+    monkeypatch.setattr(install, "fetch_release", release.fetch_release)
+    monkeypatch.setattr(install, "fetch_bytes", lambda request: FIXTURE.read_bytes())
+
+    def bundle(repo: str, path: Path, destination: Path) -> Path:
+        """Provide a local attestation input while retaining the real gh subprocess boundary."""
+        destination.write_text("{}\n")
+        return destination
+
+    monkeypatch.setattr(release, "attestation_bundle", bundle)
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+        data = b"{}"
+        member = tarfile.TarInfo("package/package.json")
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    tarball = payload.getvalue()
+    monkeypatch.setattr(release, "fetch_bytes", lambda request: tarball)
+    checksums = {
+        url: hashlib.sha256(tarball).hexdigest()
+        for url in release.release_package_urls(harness.snapshot.stack.core.tag).values()
+    }
+
+    def verified(snapshot: StackSnapshot, node: str, workdir: Path, **kwargs: Any) -> Verified:
+        """Keep real dispatcher executions; tarball identity is this offline fixture's digest."""
+        assert install.node_version(node) == (22, 19, 0)
+        artifact = workdir / "core.tgz"
+        artifact.write_bytes(tarball)
+        release.verify_provenance_anonymously(artifact, snapshot.stack.core.tag, **kwargs)
+        return Verified(snapshot, harness.verified.sources, checksums)
+
+    monkeypatch.setattr(install, "verify_release", verified)
+    seen: list[str] = []
+    original_run, original_popen = subprocess.run, subprocess.Popen
+
+    def checked_run(argv: Any, *args: Any, **kwargs: Any) -> Any:
+        """Observe check_output's run boundary before cwd can reinterpret an executable."""
+        seen.append(str(argv[0]))
+        if assert_absolute:
+            assert Path(argv[0]).is_absolute(), argv
+        return original_run(argv, *args, **kwargs)
+
+    def checked_popen(argv: Any, *args: Any, **kwargs: Any) -> Any:
+        """Also catch direct Popen users, independently of subprocess.run."""
+        if assert_absolute:
+            assert Path(argv[0]).is_absolute(), argv
+        return original_popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", checked_run)
+    monkeypatch.setattr(subprocess, "Popen", checked_popen)
+    assert harness.run() == ExitCode.OK
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert {call[0] for call in calls} == {str(commands / name) for name in ("gh", "npm", "node")}
+    assert {str(commands / name) for name in ("gh", "npm", "node")} <= set(seen)
+    assert not harness.layout.journal.exists()
+
+
+def test_install_relative_path_dispatchers_survive_staging_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preflight's absolute, non-resolved paths must reach gh and npm, including npm's changed cwd."""
+    relative_tool_install(tmp_path, monkeypatch, assert_absolute=False)
+
+
+def test_install_never_spawns_relative_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every run/Popen executable in a full installer flow must be absolute."""
+    relative_tool_install(tmp_path, monkeypatch, assert_absolute=True)

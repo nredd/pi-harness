@@ -1327,7 +1327,7 @@ def test_nonlegacy_core_truncation_is_exit_three(
         # Keep the old downloader local too when this test is run with finding 1 reverted.
         monkeypatch.setattr(promotion, "urlopen", opener, raising=False)
         monkeypatch.setattr(install, "preflight", lambda *args: {"node": "node"})
-        monkeypatch.setattr(install, "verify_snapshot", lambda *args: snapshot)
+        monkeypatch.setattr(install, "verify_snapshot", lambda *args, **kwargs: snapshot)
         monkeypatch.setattr(
             install, "verify_provenance_anonymously", lambda *args: pytest.fail("attested partial bytes")
         )

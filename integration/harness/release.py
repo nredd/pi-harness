@@ -371,7 +371,13 @@ def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
 
 
 def verify_attestation(
-    path: Path, repo: str, signer_workflow: str, source_ref: str, bundle: Path | None = None
+    path: Path,
+    repo: str,
+    signer_workflow: str,
+    source_ref: str,
+    bundle: Path | None = None,
+    *,
+    gh_bin: str | None = None,
 ) -> None:
     """Require GitHub build provenance for one artifact from an exact repository, workflow and ref.
 
@@ -381,19 +387,21 @@ def verify_attestation(
         signer_workflow (str): `owner/name/.github/workflows/<file>` that must have signed it.
         source_ref (str): exact Git ref the signing run must have built.
         bundle (Path | None): local bundle file; absent, `gh` fetches with its own login.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
 
     Raises:
         FileNotFoundError: GitHub CLI is unavailable.
         RuntimeError: the artifact lacks the required provenance identity.
     """
-    if not Path(GH_BIN).is_file():
-        raise FileNotFoundError(f"Attestation verification requires `gh` at '{GH_BIN}'")
+    gh_bin = str(Path(gh_bin or GH_BIN).absolute())
+    if not Path(gh_bin).is_file():
+        raise FileNotFoundError(f"Attestation verification requires `gh` at '{gh_bin}'")
     # A local bundle needs no GitHub API call, so `gh` gets a token only when it must fetch.
     env = without_github_tokens(os.environ) if bundle is not None else None
     try:
         subprocess.check_output(
             [
-                GH_BIN,
+                gh_bin,
                 "attestation",
                 "verify",
                 str(path),
@@ -417,7 +425,9 @@ def verify_attestation(
         ) from error
 
 
-def verify_public_attestation(path: Path, repo: str, signer_workflow: str, source_ref: str) -> None:
+def verify_public_attestation(
+    path: Path, repo: str, signer_workflow: str, source_ref: str, *, gh_bin: str | None = None
+) -> None:
     """Verify provenance from the anonymous bundle, falling back to `gh`'s own login when rate-limited.
 
     The fallback lets `gh` fetch the attestation with whatever login it already has (`gh auth
@@ -429,6 +439,7 @@ def verify_public_attestation(path: Path, repo: str, signer_workflow: str, sourc
         repo (str): `owner/name` the attestation must belong to.
         signer_workflow (str): workflow that must have signed it.
         source_ref (str): exact Git ref the signing run must have built.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
 
     Raises:
         FileNotFoundError: GitHub CLI is unavailable.
@@ -439,7 +450,7 @@ def verify_public_attestation(path: Path, repo: str, signer_workflow: str, sourc
     except AttestationRateLimitedError as error:
         LOGGER.warning(f"{error}; retrying with `gh attestation verify` and gh's own login")
         bundle = None
-    verify_attestation(path, repo, signer_workflow, source_ref, bundle)
+    verify_attestation(path, repo, signer_workflow, source_ref, bundle, gh_bin=gh_bin)
 
 
 def verify_provenance(path: Path, tag: str, bundle: Path | None = None) -> None:
@@ -457,18 +468,19 @@ def verify_provenance(path: Path, tag: str, bundle: Path | None = None) -> None:
     verify_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}", bundle)
 
 
-def verify_provenance_anonymously(path: Path, tag: str) -> None:
+def verify_provenance_anonymously(path: Path, tag: str, *, gh_bin: str | None = None) -> None:
     """Verify core provenance from the public attestation bundle (see `verify_public_attestation`).
 
     Parameters:
         path (Path): downloaded release artifact.
         tag (str): exact core tag bound to the source ref.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
 
     Raises:
         FileNotFoundError: GitHub CLI is unavailable.
         RuntimeError: no bundle exists or it does not prove the required identity.
     """
-    verify_public_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}")
+    verify_public_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}", gh_bin=gh_bin)
 
 
 def verify_asset(path: Path, url: str, checksums: Mapping[str, str]) -> None:
@@ -699,6 +711,8 @@ def fetch_release(
     prefix: Path,
     provenance: ProvenanceCheck | None = None,
     checksums: Mapping[str, str] | None = None,
+    *,
+    npm_bin: str | None = None,
 ) -> Path:
     """Verify every consumed release asset, then install into a new private prefix, never the live one.
 
@@ -713,6 +727,7 @@ def fetch_release(
             defaults to `verify_provenance` (the caller's `gh` login).
         checksums (Mapping[str, str] | None): release URL -> SHA-256 the downloaded bytes must
             match; defaults to `release_checksums(tag)`.
+        npm_bin (str | None): preflight-selected dispatcher path, default `NPM_BIN`.
 
     Returns:
         Path: private pi executable.
@@ -731,8 +746,9 @@ def fetch_release(
     for url in urls:
         if url not in checksums:
             raise ValueError(f"No recorded release checksum for '{url}'")
-    if not Path(NPM_BIN).is_file():
-        raise FileNotFoundError(f"Release installation requires `npm` at '{NPM_BIN}'")
+    npm_bin = str(Path(npm_bin or NPM_BIN).absolute())
+    if not Path(npm_bin).is_file():
+        raise FileNotFoundError(f"Release installation requires `npm` at '{npm_bin}'")
     prefix.mkdir(parents=True, exist_ok=True)
     home = prefix / "fetch-home"
     home.mkdir()
@@ -753,7 +769,7 @@ def fetch_release(
     try:
         subprocess.check_output(
             [
-                NPM_BIN,
+                npm_bin,
                 "install",
                 "--global",
                 "--prefix",

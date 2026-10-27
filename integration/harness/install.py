@@ -44,6 +44,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import IntEnum
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -471,12 +472,13 @@ def download(url: str, destination: Path) -> Path:
     return destination
 
 
-def verify_snapshot(source_sha: str, workdir: Path) -> StackSnapshot:
+def verify_snapshot(source_sha: str, workdir: Path, *, gh_bin: str | None = None) -> StackSnapshot:
     """Download a promoted snapshot, verify its attestation, then validate it against the pin.
 
     Parameters:
         source_sha (str): pinned promoted commit.
         workdir (Path): private temporary directory.
+        gh_bin (str | None): preflight-selected GitHub CLI dispatcher.
 
     Returns:
         StackSnapshot: the verified snapshot.
@@ -487,7 +489,13 @@ def verify_snapshot(source_sha: str, workdir: Path) -> StackSnapshot:
     """
     path = download(snapshot_url(source_sha), workdir / SNAPSHOT_ASSET)
     try:
-        verify_public_attestation(path, SNAPSHOT_REPO, SNAPSHOT_SIGNER_WORKFLOW, SNAPSHOT_SOURCE_REF)
+        verify_public_attestation(
+            path,
+            SNAPSHOT_REPO,
+            SNAPSHOT_SIGNER_WORKFLOW,
+            SNAPSHOT_SOURCE_REF,
+            gh_bin=gh_bin,
+        )
     except (OSError, RuntimeError) as error:
         raise VerificationError(f"Snapshot attestation rejected: {error}") from error
     try:
@@ -501,13 +509,16 @@ def verify_snapshot(source_sha: str, workdir: Path) -> StackSnapshot:
     return snapshot
 
 
-def verify_release(snapshot: StackSnapshot, node: str, workdir: Path) -> Verified:
+def verify_release(
+    snapshot: StackSnapshot, node: str, workdir: Path, *, gh_bin: str | None = None
+) -> Verified:
     """Verify the snapshot's core release and that the installed Node.js can run it.
 
     Parameters:
         snapshot (StackSnapshot): verified snapshot.
         node (str): absolute `node` path.
         workdir (Path): private temporary directory.
+        gh_bin (str | None): preflight-selected GitHub CLI dispatcher.
 
     Returns:
         Verified: the verified installation input.
@@ -525,7 +536,9 @@ def verify_release(snapshot: StackSnapshot, node: str, workdir: Path) -> Verifie
         missing = [name for name in tarballs if name not in stack.core.integrity]
         if missing:
             raise ValueError(f"the snapshot records no integrity for installed asset(s) {', '.join(missing)}")
-        verify_core_assets(stack, workdir / "core", attest=verify_provenance_anonymously)
+        verify_core_assets(
+            stack, workdir / "core", attest=partial(verify_provenance_anonymously, gh_bin=gh_bin)
+        )
     except (ValueError, PromotionError, RuntimeError) as error:
         raise VerificationError(f"Core release '{tag}' rejected: {error}") from error
     core_checksums = checksums | {
@@ -1286,6 +1299,7 @@ class RestoreAside:
 
     path: Path
     identity: RestoreIdentity
+    cleaning: bool = False
 
     def record(self) -> dict[str, Any]:
         """Serialize the sibling path and the content it must still hold.
@@ -1293,7 +1307,10 @@ class RestoreAside:
         Returns:
             dict[str, Any]: validated aside metadata.
         """
-        return {"path": str(self.path), "identity": asdict(self.identity)}
+        result = {"path": str(self.path), "identity": asdict(self.identity)}
+        if self.cleaning:
+            result["cleaning"] = True
+        return result
 
 
 @dataclass(frozen=True)
@@ -1484,7 +1501,8 @@ def aside_metadata(value: object, target: Path) -> RestoreAside | None:
         return None
     if (
         not isinstance(value, dict)
-        or set(value) != {"path", "identity"}
+        or set(value) not in ({"path", "identity"}, {"path", "identity", "cleaning"})
+        or type(value.get("cleaning", False)) is not bool
         or not isinstance(value["path"], str)
     ):
         raise ValueError(f"invalid restore aside for '{target}'")
@@ -1497,7 +1515,7 @@ def aside_metadata(value: object, target: Path) -> RestoreAside | None:
         or RESTORE_ASIDE_ID.fullmatch(path.name.removeprefix(prefix)) is None
     ):
         raise ValueError(f"restore aside '{path}' is not a private sibling of '{target}'")
-    return RestoreAside(path, content_identity(value["identity"]))
+    return RestoreAside(path, content_identity(value["identity"]), value.get("cleaning", False))
 
 
 def pending_identity(raw: dict[str, Any], target: Path) -> tuple[bool, tuple[int, int, int] | None]:
@@ -1663,6 +1681,10 @@ def check_aside(step: Step) -> bool:
     """
     if step.aside is None or not step.aside.path.exists(follow_symlinks=False):
         return False
+    if step.aside.cleaning:
+        if step.restoring is None or live_content(step.target) != step.restoring:
+            raise OSError(f"Original target '{step.target}' changed during aside cleanup; restore by hand")
+        return True
     if live_content(step.aside.path) != step.aside.identity:
         raise OSError(f"Restore aside '{step.aside.path}' changed; restore by hand")
     return True
@@ -1681,6 +1703,14 @@ def check_restore_step(journal: Journal, step: Step) -> bool:
     Raises:
         OSError: unknown live content, lost backups/asides, or a cross-device restore.
     """
+    if step.backup is not None and step.restoring is not None:
+        try:
+            actual = RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd)
+        except FileNotFoundError:
+            pass
+        else:
+            if actual != step.restoring:
+                raise OSError(f"Backup '{step.backup}' content identity changed; restore by hand")
     aside_exists = check_aside(step)
     if step.restored:
         if step.live_identity() != step.original or (
@@ -1720,14 +1750,21 @@ def check_restore_step(journal: Journal, step: Step) -> bool:
     return False
 
 
-def finish_aside(step: Step) -> None:
+def finish_aside(journal: Journal, step: Step, index: int) -> None:
     """Remove a verified displaced entry only after its original is safely live.
 
     Parameters:
+        journal (Journal): open journal receiving write-ahead cleanup intent.
         step (Step): step with optional aside metadata.
+        index (int): journal position.
     """
     if check_aside(step):
         assert step.aside is not None
+        if step.restoring is None or live_content(step.target) != step.restoring:
+            raise OSError(f"Original target '{step.target}' is not safely restored; aside kept")
+        cleaning = replace(step, aside=replace(step.aside, cleaning=True))
+        journal.steps[index] = cleaning.record()
+        journal.persist()
         remove(step.aside.path)
 
 
@@ -1748,7 +1785,6 @@ def rename_restore(journal: Journal, step: Step) -> None:
         if step.aside is not None and not step.target.exists(follow_symlinks=False):
             step.aside.path.replace(step.target)
         raise
-    finish_aside(step)
 
 
 def restore_backup(journal: Journal, step: Step, index: int) -> RestoreIdentity | None:
@@ -1779,6 +1815,7 @@ def restore_backup(journal: Journal, step: Step, index: int) -> RestoreIdentity 
     if RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd) != identity:
         raise OSError(f"Backup '{step.backup}' content identity changed; restore by hand")
     rename_restore(journal, intent)
+    finish_aside(journal, intent, index)
     journal.check_store()
     return identity
 
@@ -1826,7 +1863,7 @@ def rollback(layout: Layout) -> list[str]:
                     content = restore_backup(journal, step, index)
                     restored.append(str(step.target))
                 else:
-                    finish_aside(step)
+                    finish_aside(journal, step, index)
                     if step.backup is not None:
                         content = live_content(step.target)
                 identity = step.live_identity() if step.backup is not None else None
@@ -1899,7 +1936,14 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
     return agent
 
 
-def stage(layout: Layout, verified: Verified, plan: Plan, staging: Path) -> Path | None:
+def stage(
+    layout: Layout,
+    verified: Verified,
+    plan: Plan,
+    staging: Path,
+    *,
+    tools: Mapping[str, str] | None = None,
+) -> Path | None:
     """Install the core and packages outside the live tree.
 
     Parameters:
@@ -1907,6 +1951,7 @@ def stage(layout: Layout, verified: Verified, plan: Plan, staging: Path) -> Path
         verified (Verified): verified installation input.
         plan (Plan): planned changes.
         staging (Path): private staging directory.
+        tools (Mapping[str, str] | None): preflight-selected absolute dispatcher paths.
 
     Returns:
         Path | None: the staged agent tree, `None` when packages are already installed.
@@ -1924,8 +1969,9 @@ def stage(layout: Layout, verified: Verified, plan: Plan, staging: Path) -> Path
             fetch_release(
                 stack.core.tag,
                 staged_core,
-                provenance=verify_provenance_anonymously,
+                provenance=partial(verify_provenance_anonymously, gh_bin=(tools or {}).get("gh")),
                 checksums=verified.core_checksums,
+                npm_bin=(tools or {}).get("npm"),
             )
         except (OSError, ValueError, RuntimeError) as error:
             raise InstallError(f"Core '{stack.core.tag}' installation failed: {error}") from error
@@ -2043,7 +2089,9 @@ def replace_file(journal: Journal, live: Path, name: str, text: str) -> None:
         remove(temporary)
 
 
-def apply(layout: Layout, verified: Verified, plan: Plan) -> tuple[Path, str]:
+def apply(
+    layout: Layout, verified: Verified, plan: Plan, *, tools: Mapping[str, str] | None = None
+) -> tuple[Path, str]:
     """Stage, switch under a journal and run the post-check; any failure restores the previous state.
 
     The installed `pi --version` runs before the journal commits, so an install that does not
@@ -2053,6 +2101,7 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> tuple[Path, str]:
         layout (Layout): installer paths.
         verified (Verified): verified installation input.
         plan (Plan): planned changes.
+        tools (Mapping[str, str] | None): preflight-selected absolute dispatcher paths.
 
     Returns:
         tuple[Path, str]: backup directory holding everything that was replaced, and the
@@ -2069,7 +2118,7 @@ def apply(layout: Layout, verified: Verified, plan: Plan) -> tuple[Path, str]:
     backups = layout.backups / f"{stamp}-{verified.snapshot.source_sha[:12]}-{uuid.uuid4().hex[:6]}"
     staging.mkdir(parents=True)
     try:
-        staged_agent = stage(layout, verified, plan, staging)
+        staged_agent = stage(layout, verified, plan, staging, tools=tools)
         # Staging is slow: check the store again just before the first journaled step.
         require_backup_store(layout)
         journal = Journal(layout, backups)
@@ -2285,7 +2334,12 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
     require_one_filesystem(layout)
     with tempfile.TemporaryDirectory(prefix="pi-stack-verify-") as temporary:
         workdir = Path(temporary)
-        verified = verify_release(verify_snapshot(opts.source_sha, workdir), tools["node"], workdir)
+        verified = verify_release(
+            verify_snapshot(opts.source_sha, workdir, gh_bin=tools.get("gh")),
+            tools["node"],
+            workdir,
+            gh_bin=tools.get("gh"),
+        )
     if opts.plan_only:
         report_plan(plan_install(layout, verified), verified)
         return ExitCode.OK
@@ -2307,7 +2361,7 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
             LOGGER.info(f"Already installed: `stack/{opts.source_sha}`: {version}, nothing to do")
             return ExitCode.OK
         consent(plan, opts.assume_yes, ask)
-        backups, version = apply(layout, verified, plan)
+        backups, version = apply(layout, verified, plan, tools=tools)
     LOGGER.info(f"Installed `stack/{opts.source_sha}`: {version} at '{layout.link}'")
     if backups.exists():
         LOGGER.info(f"Replaced state is kept in '{backups}'")
