@@ -6,8 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import {
+	DEFAULT_CHECK_TIMEOUT_MS,
 	deferred,
 	SIGNAL_READINESS_POLL_MS,
+	SIGNAL_READINESS_TIMEOUT_MS,
 	within,
 	writeSignalReadinessObserver,
 } from "./check-async.mjs";
@@ -107,6 +109,58 @@ process.send("entered");
 		await within(closed, "observer fixture to close");
 	} finally {
 		stopPolling = true;
+		child?.kill("SIGKILL");
+		await fs.rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("signal observer fails contextually when wrapper handlers never register", async () => {
+	const dir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "pi-signal-observer-missing-"),
+	);
+	const observer = path.join(dir, "observer.mjs");
+	const marker = path.join(dir, "wrapper.pid");
+	let child;
+	try {
+		await writeSignalReadinessObserver(observer, marker);
+		child = spawn(
+			process.execPath,
+			[
+				"--import",
+				pathToFileURL(observer).href,
+				"-e",
+				`setInterval(() => {}, ${SIGNAL_READINESS_POLL_MS});`,
+			],
+			{ stdio: ["ignore", "ignore", "pipe"] },
+		);
+		let stderr = "";
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk;
+		});
+		const closed = new Promise((resolve, reject) => {
+			child.once("error", reject);
+			child.once("close", (code) => resolve(code));
+		});
+		assert.equal(
+			await within(
+				closed,
+				"unregistered observer to report its deadline failure",
+				SIGNAL_READINESS_TIMEOUT_MS + DEFAULT_CHECK_TIMEOUT_MS,
+			),
+			1,
+		);
+		assert.match(
+			stderr,
+			/Timed out observing wrapper signal-handler registration: SIGTERM, SIGINT, SIGHUP, exit/,
+		);
+		assert.equal(
+			await fs.stat(marker).then(
+				() => true,
+				() => false,
+			),
+			false,
+		);
+	} finally {
 		child?.kill("SIGKILL");
 		await fs.rm(dir, { recursive: true, force: true });
 	}

@@ -229,7 +229,7 @@ if (process.platform !== "win32") {
 	const reapBudgetMs = GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
 	assert.ok(
 		reapBudgetMs < OUTER_SETUP_BACKSTOP_MS,
-		`reap budget ${reapBudgetMs}ms no longer fits the 2s outer backstop`,
+		`reap budget ${reapBudgetMs}ms no longer fits the ${OUTER_SETUP_BACKSTOP_MS}ms outer backstop`,
 	);
 	const backstopMs = reapBudgetMs + WRAPPER_BACKSTOP_HEADROOM_MS;
 	const alive = (pid) => {
@@ -383,7 +383,9 @@ await running;
 				behavior === "reaped" ? undefined : await waitForReady(`${base}.desc`);
 			if (descendant) pids.add(descendant);
 			assert.equal(
-				await waitForReady(wrapperReady),
+				await waitForReady(wrapperReady).catch((error) => {
+					throw new Error(`${error.message}\n${output}`, { cause: error });
+				}),
 				child.pid,
 				`${name}: wrapper handlers must be live before cancellation`,
 			);

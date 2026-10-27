@@ -21,6 +21,7 @@ const SETUP_COMPLETION_TIMEOUT_MS = 30_000;
 const SOURCE_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 const CANCELLATION_BACKSTOP_MS = 10_000;
 const COMPILER_EXIT_TIMEOUT_MS = 5000;
+const DIAGNOSTICS_TIMEOUT_MS = 10_000;
 const FAKE_COMPILER_LIFETIME_SECONDS = 300;
 
 const execFileAsync = promisify(execFile);
@@ -298,7 +299,14 @@ wait`,
 			const [compilerPid, , wrapperPid] = await Promise.all([
 				waitForReadyPid(pidFile),
 				waitForReadyPid(leaderFile),
-				waitForReadyPid(setupReady),
+				Promise.race([
+					waitForReadyPid(setupReady),
+					done.then((result) => {
+						throw new Error(
+							`Packed setup closed before wrapper readiness: ${result.output}`,
+						);
+					}),
+				]),
 			]);
 			assert.equal(
 				wrapperPid,
@@ -401,7 +409,7 @@ wait`,
 		const diagnostics = await client.command(
 			"diagnostics",
 			{},
-			{ timeoutMs: 10_000 },
+			{ timeoutMs: DIAGNOSTICS_TIMEOUT_MS },
 		);
 		assert.equal(diagnostics.protocolVersion, 4);
 		assert.equal(diagnostics.os, "linux");
