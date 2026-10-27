@@ -246,6 +246,12 @@ Spawns one subagent and resolves to its final text — or, with `schema`, to a v
 | `resume` | string | Continue the child that ran under that label instead of starting fresh |
 | `schema` | object | A JSON Schema with an object root. Resolves to the validated object instead of text |
 
+**Model fallback disclosure.** When a child's configured model (`agentModels` or the agent file's `model:`) did not resolve and it ran on another model, the script is told, never silently:
+
+- Without `schema`, the returned text starts with `Note: configured model "x" did not resolve; running on parent model p/id.` and a blank line.
+- With `schema`, the payload must stay exactly what the schema describes, so the note is not put in the text. On an object payload it is added as a sibling `_modelNote` string, and in every case it is written to the run log. The field is added only when the schema is a plain `{ type: 'object', properties, required }` schema that does not itself declare `_modelNote` (extra keywords such as `allOf`, `anyOf`, `oneOf`, `$ref`, `patternProperties`, a schema-valued or `false` `additionalProperties` all count as not plain). Otherwise, and whenever the payload already has its own `_modelNote`, your value is left untouched and only the log line carries the note, so name your own field something else if you need it to survive a fallback. A child that failed (`null`) still logs the note. A `resume` result is plain text (resume forbids `schema`) and leads with the note.
+- The note is journaled with the answer, so a resumed run replays the same `_modelNote`, log line and row annotation. Journals written before this existed replay with no note.
+
 Any other key is rejected **by name** at the call. Note that this checks option *keys*, not option *values* — an `agentType` that names no known agent falls back to `general-purpose` silently.
 
 Combination rules: `resume` cannot be combined with `agentType`, `model`, `effort`, `isolation`, `gate` or `schema` — a resumed child keeps the agent type, model and tree it was started with, and its session predates the `StructuredOutput` tool.

@@ -897,6 +897,13 @@ describe("FleetList model and activity", () => {
     expect(out).not.toContain("thinking: high");
   });
 
+  it("flags a model fallback first on the row, even with showModel off", () => {
+    const fallback = { input: "ghost", used: "anthropic/x" };
+    expect(row(withModel({ modelFallback: fallback }), true)).toContain("[fallback]");
+    expect(row(withModel({ modelFallback: fallback }), false)).toContain("[fallback]");
+    expect(row(withModel(), false)).not.toContain("fallback");
+  });
+
   it("aligns populated tail columns with Unicode and truncation", () => {
     // Markup-free theme: escape-less tags would otherwise count as visible cells when `left` truncates.
     const markupFree = { fg: (_c: string, text: string) => text, bold: (text: string) => text };

@@ -36,7 +36,7 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../agent-manager.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
-import { configuredAgentModel, resolveModel } from "../model-resolver.js";
+import { configuredAgentModel, type ModelFallback, modelFallbackNote, modelFallbackTo, resolveModel } from "../model-resolver.js";
 import { checkModelScope } from "../model-scope.js";
 import type { AgentRecord, ThinkingLevel } from "../types.js";
 import { getLifetimeTotal } from "../usage.js";
@@ -113,10 +113,12 @@ function resolvedInfo(record: AgentRecord | undefined) {
     modelId: invocation.modelId,
     thinking: invocation.thinking,
     requestedThinking: invocation.requestedThinking,
+    // From the record, so a resumed child reports the model it actually ran on.
+    ...(record?.modelFallback ? { modelNote: modelFallbackNote(record.modelFallback) } : {}),
   };
 }
 
-function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
+function toSpawnResult(record: AgentRecord, opts: { resumed?: boolean } = {}): WorkflowSpawnResult {
   const tokens = getLifetimeTotal(record.lifetimeUsage);
   // Reported separately from `tokens`, which is the lifetime total. The script's
   // `budget` counts *output* tokens, as Claude Code's does — billing the input
@@ -131,15 +133,26 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
     ...(cwd !== undefined ? { cwd } : {}),
   };
 
+  // Disclosed in the text/error the script reads AND as a field. A schema'd
+  // payload is JSON the script parses, so the note is only a field there.
+  const note = modelFallbackNote(record.modelFallback);
+  const lead = note ? `${note}\n\n` : "";
+  const modelNote = note ? { modelNote: note } : {};
+
   if (succeeded(record)) {
     return {
       ...common,
+      ...modelNote,
       ok: true,
       // The schema'd payload when there is one: `result` is prose, and for a
       // worktree child it has had the branch note appended, so it would not
       // parse. A child asked for a schema that produced none never reaches
       // here — `runAgent` reports that through `failure`.
-      text: record.structuredJson ?? record.result ?? "",
+      // A RESUMED child answers in prose (resume forbids `schema`), but its record
+      // still holds the original run's `structuredJson`; returning that would hand
+      // the script a stale payload with no note, and the worker only injects or
+      // logs for schema calls. So a resume reads `result` and leads with the note.
+      text: !opts.resumed && record.structuredJson !== undefined ? record.structuredJson : `${lead}${record.result ?? ""}`,
       ...(record.structuredRetried ? { structuredRetried: true } : {}),
     };
   }
@@ -147,9 +160,9 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
   // fleet list, a workflow abort. That is the same thing the workflows dialog's
   // skip action means, so it renders as skipped rather than failed.
   if (record.status === "stopped") {
-    return { ...common, ok: false, skipped: true, error: record.error ?? "Stopped." };
+    return { ...common, ...modelNote, ok: false, skipped: true, error: `${lead}${record.error ?? "Stopped."}` };
   }
-  return { ...common, ok: false, error: record.error ?? `Agent ${record.status}.` };
+  return { ...common, ...modelNote, ok: false, error: `${lead}${record.error ?? `Agent ${record.status}.`}` };
 }
 
 /** Shell used to run a `gate` command, mirroring how a user would type it. */
@@ -200,14 +213,16 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       // `agentModels` setting, the agent definition's is next, and the parent's
       // is the floor. A model the script
       // named and we cannot resolve is an error; one the definition named falls
-      // back to the parent silently, because the script never asked for it.
+      // back to the parent, recorded on the child so the row says so.
       let model = ctx.model;
+      let modelFallback: ModelFallback | undefined;
       const config = getAgentConfig(dispatch.type);
       const modelInput = request.model ?? configuredAgentModel(dispatch.type, config?.model);
       if (modelInput !== undefined) {
         const resolved = resolveModel(modelInput, ctx.modelRegistry);
         if (typeof resolved === "string") {
           if (request.model !== undefined) return { ok: false, error: resolved };
+          modelFallback = modelFallbackTo(modelInput, ctx.model);
         } else {
           model = resolved;
         }
@@ -310,6 +325,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
             // never queued behind it.
             ...(deps.workflowId !== undefined ? { workflowId: deps.workflowId } : {}),
             ...(model !== undefined ? { model } : {}),
+            ...(modelFallback !== undefined ? { modelFallback } : {}),
             // Validated worker-side against the same list pi accepts, so the
             // cast asserts what the boundary has already checked. Left unset,
             // the agent definition's `thinking` (then the parent's) still wins —
@@ -364,6 +380,12 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       if (id === undefined) {
         return { ok: false, error: `Cannot resume "${agentId}" — it never started.` };
       }
+      // The provenance is already on the record, so the running row shows it
+      // now rather than only once the resume has finished.
+      const existing = manager.getRecord(id);
+      if (existing?.modelFallback) {
+        onResolved?.({ recordId: id, modelNote: modelFallbackNote(existing.modelFallback) });
+      }
       const record = await manager.resume(id, prompt, deps.signal);
       if (record === undefined) {
         return {
@@ -379,7 +401,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       onResolved?.({ recordId: id });
       const info = resolvedInfo(record);
       if (info !== undefined) onResolved?.(info);
-      return toSpawnResult(record);
+      return toSpawnResult(record, { resumed: true });
     },
 
     /**

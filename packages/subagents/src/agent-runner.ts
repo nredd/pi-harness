@@ -30,6 +30,7 @@ import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import type { ModelCallEvent } from "./model-call.js";
+import { type ModelFallback, selectConfiguredModel } from "./model-resolver.js";
 import {
   createNestedSubagentTools,
   getMaxSubagentDepth,
@@ -474,37 +475,6 @@ const FINAL_REPORT_PROMPT =
   + "Write your complete final report now: everything you found, concrete file paths and line numbers, "
   + "what you changed or concluded, and anything unfinished or unverified.";
 
-/**
- * Try to find the right model for an agent type.
- * Priority: explicit option > config.model > parent model.
- */
-export function resolveDefaultModel(
-  parentModel: Model<any> | undefined,
-  registry: { find(provider: string, modelId: string): Model<any> | undefined; getAvailable?(): Model<any>[] },
-  configModel?: string,
-): Model<any> | undefined {
-  if (configModel) {
-    const slashIdx = configModel.indexOf("/");
-    if (slashIdx !== -1) {
-      const provider = configModel.slice(0, slashIdx);
-      const modelId = configModel.slice(slashIdx + 1);
-
-      // Build a set of available model keys for fast lookup
-      const available = registry.getAvailable?.();
-      const availableKeys = available
-        ? new Set(available.map((m: any) => `${m.provider}/${m.id}`))
-        : undefined;
-      const isAvailable = (p: string, id: string) =>
-        !availableKeys || availableKeys.has(`${p}/${id}`);
-
-      const found = registry.find(provider, modelId);
-      if (found && isAvailable(provider, modelId)) return found;
-    }
-  }
-
-  return parentModel;
-}
-
 /** Info about a tool event in the subagent. */
 export interface ToolActivity {
   type: "start" | "end";
@@ -592,6 +562,8 @@ export interface RunOptions {
   /** Called for every streaming event of each model call, so a UI can say what an in-flight call is doing. */
   onModelCall?: (event: ModelCallEvent) => void;
   onSessionCreated?: (session: AgentSession) => void;
+  /** Called when the agent definition's `model:` did not resolve and the parent model is used. */
+  onModelFallback?: (fallback: ModelFallback) => void;
   /** Called at the end of each agentic turn with the cumulative count. */
   onTurnEnd?: (turnCount: number) => void;
   /**
@@ -1178,9 +1150,16 @@ export async function runAgent(
   }
 
   // Resolve model: explicit option > config.model > parent model
-  const model = options.model ?? resolveDefaultModel(
-    ctx.model, ctx.modelRegistry, agentConfig?.model,
-  );
+  // An explicit option was already resolved (and any fallback disclosed) by
+  // the caller; only this path can fall back unseen, so it reports itself.
+  // Nullish, not `=== undefined`: an RPC caller may forward `model: null`, which
+  // means "inherit" (see cross-extension-rpc.ts).
+  let model = options.model ?? undefined;
+  if (model === undefined) {
+    const selection = selectConfiguredModel(type, agentConfig?.model, ctx.model, ctx.modelRegistry);
+    model = selection.model;
+    if (selection.fallback) options.onModelFallback?.(selection.fallback);
+  }
 
   // Resolve thinking level: explicit option > agent config > undefined (inherit)
   const thinkingLevel = options.thinkingLevel ?? agentConfig?.thinking;
