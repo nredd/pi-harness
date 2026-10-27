@@ -28,14 +28,17 @@ export interface FallbackCarrier {
 export const hasFallback = (carrier: FallbackCarrier | undefined): boolean =>
   carrier?.modelFallback !== undefined || carrier?.modelNote !== undefined || carrier?.modelTier !== undefined;
 
-/** Plain flag text: `[fallback]`, or `[fallback x3]` for a count of members. */
-export const fallbackFlagText = (count = 1, tier?: string, outcome?: TierDisclosure["kind"]): string => tier !== undefined
-  ? `[@${tier}${outcome && outcome !== "routed" && outcome !== "static" ? ` ${outcome}` : ""}]`
-  : (count > 1 ? `[fallback x${count}]` : "[fallback]");
+/** Plain tier/outcome flag, or `[fallback]`; group counts retain the same identity. */
+export function fallbackFlagText(count = 1, carrier?: FallbackCarrier): string {
+  const tier = carrier?.modelTier;
+  const suffix = count > 1 ? ` x${count}` : "";
+  return tier ? `[@${tier.tier}${tier.kind !== "routed" && tier.kind !== "static" ? ` ${tier.kind}` : ""}${suffix}]`
+    : `[fallback${suffix}]`;
+}
 
 /** The themed flag for `carrier`, or "" when it did not fall back. */
 export function fallbackFlag(theme: FlagTheme, carrier: FallbackCarrier | undefined, count = 1): string {
-  return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count, carrier?.modelTier?.tier, carrier?.modelTier?.kind)) : "";
+  return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count, carrier)) : "";
 }
 
 /** What a flag degrades to when even it does not fit; plain so it cannot depend on a theme. */

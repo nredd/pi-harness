@@ -55,8 +55,15 @@ export function groupSummary(all: NotificationDetails[], theme: Theme): string {
   const names = all.map(d => `${icon(d, theme)} ${d.description}`).join(theme.fg("dim", ", "));
   // In the heading, ahead of the member list that truncation eats from the end,
   // so a fallback member listed last is still counted.
-  const fellBack = all.filter(d => hasFallback(d)).length;
-  const flag = fellBack > 0 ? ` ${theme.fg("warning", fallbackFlagText(fellBack))}` : "";
+  const groups = new Map<string, { carrier: NotificationDetails; count: number }>();
+  for (const carrier of all.filter(d => hasFallback(d))) {
+    const key = fallbackFlagText(1, carrier);
+    const group = groups.get(key);
+    if (group) group.count++;
+    else groups.set(key, { carrier, count: 1 });
+  }
+  const flags = [...groups.values()].map(({ carrier, count }) => fallbackFlag(theme, carrier, count)).join(" ");
+  const flag = flags ? ` ${flags}` : "";
   return `${theme.bold(`${all.length} agents finished`)}${flag} ${theme.fg("dim", "·")} ${names}`;
 }
 

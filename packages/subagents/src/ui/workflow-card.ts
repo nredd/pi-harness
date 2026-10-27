@@ -356,6 +356,7 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
     const rail = lastGroup ? "  " : `${glyphs.vertical} `;
     group.agents.forEach((entry, agentIndex) => {
       const lastAgent = agentIndex === group.agents.length - 1;
+      const flag = hasFallback(entry) ? fallbackFlagText(1, entry) : "";
       const segments: WorkflowCardLine = [
         { text: "  " },
         { text: rail, color: "dim" },
@@ -363,7 +364,7 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
         rowGlyph(entry, glyphs),
         { text: " " },
         // Leading, ahead of the label: the row is clamped from the right.
-        ...(hasFallback(entry) ? [{ text: `${fallbackFlagText()} `, color: "warning" as const }] : []),
+        ...(flag ? [{ text: `${flag} `, color: "warning" as const }] : []),
       ];
 
       // Prepended rather than folded into `agentStatSegments`, which is the
@@ -373,7 +374,7 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
       const statParts = entry.cached
         ? [REPLAYED_ANNOTATION, ...agentStatSegments(entry)]
         : agentStatSegments(entry);
-      const pad = Math.max(0, labelColumn - visibleWidth(entry.label) - (hasFallback(entry) ? visibleWidth(fallbackFlagText()) + 1 : 0));
+      const pad = Math.max(0, labelColumn - visibleWidth(entry.label) - (flag ? visibleWidth(flag) + 1 : 0));
       segments.push({ text: statParts.length > 0 ? entry.label + " ".repeat(pad) : entry.label });
       for (const part of statParts) {
         segments.push({ text: " · ", color: "dim" }, { text: part, color: "dim" });

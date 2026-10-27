@@ -1,10 +1,12 @@
 /** Tier requests traverse the real Pi registry, router extension, child sessions and schedule store. */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { createTestUiContext, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { setAgentModels } from "../../packages/subagents/src/model-resolver.ts";
+import { setModelTiers, type TierDisclosure } from "../../packages/subagents/src/model-tiers.ts";
 import type { ChainEntry } from "../../packages/subscription-router/src/config.ts";
 import {
 	createSubscriptionRouter,
@@ -25,7 +27,7 @@ describe("model-tier/router stack", () => {
 		delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-harness:tier-router")];
 	});
 
-	function configure(members = ["router/cheap"]): void {
+	function configure(members = ["router/cheap"], overrides: Record<string, unknown> = {}): void {
 		const dir = join(stack.home.root, "agent");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
@@ -39,6 +41,7 @@ describe("model-tier/router stack", () => {
 				modelTiers: { cheap: members },
 				modelResolution: { onUnmapped: "error", onUnavailable: "error" },
 				agentModels: { "*": "@cheap" },
+				...overrides,
 			}),
 		);
 	}
@@ -59,6 +62,273 @@ describe("model-tier/router stack", () => {
 		(globalThis as Record<symbol, unknown>)[Symbol.for("pi-harness:tier-router")] = options;
 		return createSubscriptionRouter(options);
 	}
+
+	/** The public manager registry, not a replacement manager or admission mock. */
+	function manager() {
+		const entry = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:manager")];
+		if (!entry) throw new Error("Missing real subagent manager");
+		return entry as {
+			waitForAll(): Promise<void>;
+			getRecord(id: string):
+				| {
+						id: string;
+						modelTier?: TierDisclosure;
+						previousModelTier?: TierDisclosure;
+						outputFile?: string;
+						sessionFile?: string;
+				  }
+				| undefined;
+		};
+	}
+
+	it.each(["Agent", "nested", "RPC", "mention"] as const)(
+		"real-router %s honors wildcard and definition tiers",
+		async (path) => {
+			stack = await GoalStack.create();
+			configure(undefined, {
+				modelTiers: { cheap: ["router/cheap"], defined: ["router/cheap"] },
+				agentModels: { "*": "@cheap", delegator: ref(0) },
+				agentMentions: "direct",
+			});
+			const agents = join(stack.home.root, "agent/agents");
+			mkdirSync(agents, { recursive: true });
+			writeFileSync(
+				join(agents, "scout.md"),
+				"---\ndescription: Tier scout\nmodel: '@defined'\ntools: read\n---\nAnswer.",
+			);
+			for (const source of ["wildcard", "definition"])
+				writeFileSync(
+					join(agents, `scout-${source}.md`),
+					"---\ndescription: Tier scout\nmodel: '@defined'\ntools: read\n---\nAnswer.",
+				);
+			writeFileSync(
+				join(agents, "delegator.md"),
+				"---\ndescription: Delegator\nallowed_subagents: scout\ntools: read\n---\nDelegate.",
+			);
+			const physical = stack.registerPhysical(CHAIN);
+			stack.usage.set(CHAIN[0]?.provider, 100);
+			let pi!: ExtensionAPI;
+			const admissions: string[] = [];
+			const usages: unknown[] = [];
+			const h = await stack.start(
+				[
+					await stack.subagents(),
+					router(),
+					(api) => {
+						pi = api;
+						api.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
+						api.events.on("subagents:usage", (raw) => usages.push(raw));
+					},
+				],
+				{ useModelRuntimeStream: true },
+			);
+			h.session.extensionRunner.setUIContext(
+				createTestUiContext({ notify: (text) => stack.notifications.push(text) }),
+				"tui",
+			);
+			for (const source of ["wildcard", "definition"] as const) {
+				setAgentModels(source === "wildcard" ? { "*": "@cheap", delegator: ref(1) } : { delegator: ref(1) });
+				physical[1]?.setResponses(
+					path === "nested"
+						? [
+								tool("Agent", { subagent_type: "scout", description: "nested tier", prompt: "answer" }),
+								fauxAssistantMessage("NESTED TIER ANSWER"),
+								fauxAssistantMessage("DELEGATOR DONE"),
+							]
+						: [fauxAssistantMessage("TIER ANSWER")],
+				);
+				const before = usages.length;
+				if (path === "RPC") {
+					const requestId = `tier-${source}`;
+					const reply = new Promise<unknown>((resolve) =>
+						pi.events.on(`subagents:rpc:spawn:reply:${requestId}`, resolve),
+					);
+					pi.events.emit("subagents:rpc:spawn", { requestId, type: "scout", prompt: "answer" });
+					expect(await reply).toMatchObject({ success: true });
+					await manager().waitForAll();
+				} else if (path === "mention") {
+					// Fresh handle per iteration: the second dispatch must select the definition, not resume the first.
+					const name = `scout-${source}`;
+					expect(await h.session.extensionRunner.emitInput(`@${name} answer`, undefined, "interactive")).toMatchObject({
+						action: "handled",
+					});
+					await manager().waitForAll();
+				} else {
+					h.setResponses([
+						tool("Agent", {
+							subagent_type: path === "nested" ? "delegator" : "scout",
+							description: "parity tier",
+							prompt: "answer",
+							run_in_background: false,
+						}),
+						fauxAssistantMessage("DRIVER DONE"),
+					]);
+					await h.session.prompt("dispatch");
+				}
+				expect(usages.slice(before)).toContainEqual(
+					expect.objectContaining({
+						model: ref(1),
+						modelTier: expect.objectContaining({
+							kind: "routed",
+							tier: source === "wildcard" ? "cheap" : "defined",
+							profile: "router/cheap",
+							admitted: ref(1),
+							answered: ref(1),
+						}),
+					}),
+				);
+			}
+			expect(admissions.filter((model) => model.startsWith("router/"))).toEqual(["router/cheap", "router/cheap"]);
+			expect(physical[0]?.state.callCount).toBe(0);
+			expect(physical[1]?.state.callCount).toBe(path === "nested" ? 6 : 2);
+		},
+	);
+
+	it("runs the original admitted selection even if bindings change before runner construction", async () => {
+		stack = await GoalStack.create();
+		configure([ref(0), ref(1)]);
+		const physical = stack.registerPhysical(CHAIN);
+		stack.usage.set(CHAIN[0]?.provider, 100);
+		const admissions: string[] = [];
+		const h = await stack.start(
+			[
+				await stack.subagents(),
+				router(),
+				(pi) => {
+					pi.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
+					pi.events.on("subagents:started", () => {
+						setModelTiers({ cheap: [ref(0)] }, {});
+						setAgentModels({ "*": ref(0) });
+					});
+				},
+			],
+			{ useModelRuntimeStream: true },
+		);
+		physical[1]?.setResponses([fauxAssistantMessage("ADMITTED MEMBER ANSWER")]);
+		h.setResponses([
+			tool("Agent", {
+				subagent_type: "general-purpose",
+				description: "one admission",
+				prompt: "answer",
+				run_in_background: false,
+			}),
+			fauxAssistantMessage("DRIVER DONE"),
+		]);
+		await h.session.prompt("dispatch");
+		expect(admissions).toEqual([ref(0), ref(1)]);
+		expect(physical.map((p) => p.state.callCount)).toEqual([0, 1]);
+		expect(outcomes(h, "Agent")[0]?.text).toContain(`Model: @cheap -> ${ref(1)} (static)`);
+		expect(outcomes(h, "Agent")[0]?.text).toContain("ADMITTED MEMBER ANSWER");
+	});
+
+	it.each([
+		"changed",
+		"unavailable-inherit",
+		"unmapped-inherit",
+		"unavailable-error",
+		"unmapped-error",
+		"live",
+	] as const)("real-router continuation discloses its actual outcome: %s", async (change) => {
+		stack = await GoalStack.create();
+		configure(undefined, { agentMentions: "direct" });
+		const physical = stack.registerPhysical(CHAIN);
+		const started: unknown[] = [];
+		const completed: { id: string; modelTier?: unknown; modelNote?: string }[] = [];
+		const admissions: string[] = [];
+		const h = await stack.start(
+			[
+				await stack.subagents(),
+				router(),
+				(api) => {
+					api.events.on("subagents:started", (raw) => started.push(raw));
+					api.events.on("subagents:completed", (raw) => completed.push(raw as (typeof completed)[number]));
+					api.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
+				},
+			],
+			{ useModelRuntimeStream: true },
+		);
+		physical[0]?.setResponses([fauxAssistantMessage("ORIGINAL")]);
+		h.setResponses([
+			tool("Agent", {
+				subagent_type: "general-purpose",
+				description: "continuation",
+				prompt: "answer",
+				run_in_background: false,
+			}),
+			fauxAssistantMessage("DRIVER DONE"),
+		]);
+		await h.session.prompt("dispatch");
+		const first = completed[0];
+		if (!first) throw new Error("Original tier did not complete");
+		const original = manager().getRecord(first.id);
+		if (!original) throw new Error("Original tier record missing");
+		const previous = original.modelTier;
+		expect(previous).toMatchObject({ kind: "routed", profile: "router/cheap", admitted: ref(0) });
+		if (change !== "live") {
+			stack.clock.advance(11 * 60_000);
+			expect(manager().getRecord(original.id)).toBeUndefined();
+		}
+		const unavailable = change.startsWith("unavailable");
+		const unmapped = change.startsWith("unmapped");
+		setModelTiers(unmapped ? {} : { cheap: [unavailable ? "router/absent" : ref(1)] }, {
+			onUnavailable: change.endsWith("error") ? "error" : "inherit",
+			onUnmapped: change.endsWith("error") ? "error" : "inherit",
+		});
+		h.session.extensionRunner.setUIContext(
+			createTestUiContext({ notify: (text) => stack.notifications.push(text) }),
+			"tui",
+		);
+		physical[1]?.setResponses([fauxAssistantMessage("CONTINUED")]);
+		physical[0]?.setResponses([fauxAssistantMessage("LIVE CONTINUED")]);
+		h.setResponses([fauxAssistantMessage("PARENT INHERITED")]);
+		await h.session.extensionRunner.emitInput("@general-purpose continue", undefined, "interactive");
+		await manager().waitForAll();
+		if (change.endsWith("error")) {
+			expect(completed).toHaveLength(1);
+			expect(started).toHaveLength(1);
+			expect(stack.notifications.join("\n")).toContain(`@cheap is ${unavailable ? "unavailable" : "unmapped"}`);
+			expect(physical.map((p) => p.state.callCount)).toEqual([1, 0]);
+			return;
+		}
+		const latest = completed.at(-1);
+		if (!latest) throw new Error("Continuation did not complete");
+		const record = manager().getRecord(latest.id);
+		if (!record) throw new Error("Continuation record missing");
+		if (change === "live") {
+			expect(record.id).toBe(original.id);
+			expect(record.modelTier).toMatchObject({ kind: "routed", admitted: ref(0) });
+			expect(admissions).toEqual(["router/cheap"]);
+		} else {
+			expect(record.previousModelTier).toEqual(previous);
+			const kind = unavailable ? "unavailable" : unmapped ? "unmapped" : "static";
+			expect(record.modelTier).toMatchObject({ kind, tier: "cheap" });
+			expect(latest.modelTier).toEqual(record.modelTier);
+			expect(started.at(-1)).toMatchObject({ modelTier: expect.objectContaining({ kind }) });
+			if (change === "changed") {
+				expect(latest.modelNote).toContain(`Model: @cheap -> ${ref(1)} (static)`);
+				expect(admissions).toEqual(["router/cheap", ref(1)]);
+			} else {
+				expect(latest.modelNote).toContain(`@cheap is ${kind}; inheriting the parent model`);
+				expect(latest.modelNote).not.toContain("via router/cheap");
+				expect(admissions).toEqual(["router/cheap"]);
+			}
+		}
+		// Result, durable history and transcript must agree with the actual continuation.
+		h.setResponses([tool("get_subagent_result", { agent_id: latest.id }), fauxAssistantMessage("DRIVER DONE")]);
+		await h.session.prompt("read the actual result");
+		expect(outcomes(h, "get_subagent_result").at(-1)?.text).toContain(latest.modelNote);
+		if (record.outputFile) expect(readFileSync(record.outputFile, "utf8")).toContain(JSON.stringify(record.modelTier));
+		else {
+			if (!record.sessionFile) throw new Error("Continuation session was not persisted");
+			expect(readFileSync(record.sessionFile, "utf8")).toContain(
+				change === "live" ? "LIVE CONTINUED" : change === "changed" ? "CONTINUED" : "PARENT INHERITED",
+			);
+		}
+		const history = h.session.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type === "custom" && entry.customType === "subagents:record");
+		expect(JSON.stringify(history.at(-1))).toContain(JSON.stringify(record.modelTier));
+	});
 
 	it.each([false, true])(
 		"labels the admitted model before the first answer, blocked first member=%s",

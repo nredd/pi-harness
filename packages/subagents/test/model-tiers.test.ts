@@ -6,6 +6,7 @@ import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describeEvicted } from "../src/agent-manager.js";
+import { DEFAULT_AGENTS } from "../src/default-agents.js";
 import { setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
 import { admitModelSelection, describeSelection, modelSelectionNote, selectModel } from "../src/model-selection.js";
@@ -54,6 +55,22 @@ function select(model: string) {
 const open = async () => ({ quotaSignal: false });
 
 describe("exact model tiers", () => {
+  it("keeps Explore's bare stopgap pinned to exact authenticated Anthropic Haiku without local aliases", async () => {
+    registry.registerProvider("anthropic", {
+      api: "anthropic-messages", baseUrl: "http://localhost:1", apiKey: "fixture-not-a-secret",
+      models: ["claude-haiku-4-5", "claude-haiku-5-5"].map(id => ({ id, name: id, reasoning: false, input: ["text"], contextWindow: 1000, maxTokens: 100, cost: costs })),
+    });
+    const request = { agentType: "Explore", definitionModel: DEFAULT_AGENTS.get("Explore")?.model,
+      parentModel: registry.find("tier-test", "parent"), registry, cwd: dir };
+    setModelTiers({}, { onUnavailable: "error" });
+    expect(selectModel(request)).toMatchObject({ source: "definition", outcome: "resolved", model: { provider: "anthropic", id: "claude-haiku-4-5" } });
+    setModelAliases({ "claude-haiku-4-5": [ref("b")] });
+    expect(selectModel(request)).toMatchObject({ tierBinding: { kind: "static", members: [ref("b")] } });
+    setModelAliases(undefined);
+    for (const definitionModel of ["claude-haiku-4.5", "constructor", "toString", "__proto__"]) {
+      expect(selectModel({ ...request, definitionModel })).toContain("Model not found");
+    }
+  });
   it("selects the first credentialed static member and lists skips without a router", async () => {
     setModelTiers({ cheap: ["no-tier-credentials/a", ref("b")] }, {});
     const outcome = await resolveTier("cheap", { registry, admit: open });

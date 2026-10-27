@@ -8,6 +8,7 @@
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
+import type { TierDisclosure } from "../src/model-tiers.js";
 import type { AgentRecord, NotificationDetails } from "../src/types.js";
 import { AgentResultView } from "../src/ui/agent-row.js";
 import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
@@ -91,6 +92,45 @@ function dialogInput(width: number, progress: WorkflowAgentEntry[], level: "phas
 
 const notice = (over: Partial<NotificationDetails>): NotificationDetails => ({
   id: "a", description: "d", status: "completed", toolUses: 1, turnCount: 1, totalTokens: 1, durationMs: 1, resultPreview: "r", ...over,
+});
+
+const TIER_FLAGS: { modelTier: TierDisclosure; flag: string }[] = [
+  { modelTier: { kind: "routed", tier: "cheap", profile: "router/cheap", model: { provider: "router", id: "cheap", name: "Cheap", api: "pi-virtual" } }, flag: "[@cheap]" },
+  { modelTier: { kind: "static", tier: "cheap", member: "fixture/fast", model: { provider: "fixture", id: "fast", name: "Fast", api: "openai-completions" }, skipped: [], quotaSignal: true }, flag: "[@cheap]" },
+  { modelTier: { kind: "unavailable", tier: "cheap", tried: ["router/cheap"] }, flag: "[@cheap unavailable]" },
+];
+
+it("workflow cards use the actual tier flag ahead of long labels, not a healthy fallback", () => {
+  for (const { modelTier, flag } of TIER_FLAGS) {
+    for (const width of [40, 80, 120]) {
+      const lines = plainWorkflowCardLines(layoutWorkflowCard({ width, now: NOW, task,
+        progress: [agentEntry({ label: UGLY.ascii, modelNote: undefined, modelTier })] }));
+      const row = lines.find(line => line.includes(flag));
+      expect(row, lines.join("\n")).toBeDefined();
+      expect(row).not.toContain("[fallback]");
+      if (!row) throw new Error("Missing tier card row");
+      expect(row.indexOf(flag)).toBeLessThan(row.indexOf("Z"));
+      expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+    }
+  }
+});
+
+it("individual and grouped notices distinguish tiers, outcome and real fallback counts", () => {
+  for (const { modelTier, flag } of TIER_FLAGS) {
+    const member = notice({ description: UGLY.ascii, modelTier });
+    const individual = strip(renderNotification(member, false, theme, false).render(120)[0]!);
+    expect(individual).toContain(flag);
+    expect(individual).not.toContain("[fallback]");
+    const grouped = groupSummary([member, notice({ modelTier }), notice({ modelNote: NOTE })], theme);
+    expect(grouped).toContain(flag.replace("]", " x2]"));
+    expect(grouped).toContain("[fallback]");
+    expect(grouped).not.toContain("[fallback x3]");
+    expect(grouped.indexOf(flag.replace("]", " x2]"))).toBeLessThan(grouped.indexOf("Z"));
+  }
+  const mixed = groupSummary([notice({ modelTier: TIER_FLAGS[0]!.modelTier }), notice({ modelTier: { kind: "unmapped", tier: "deep" } })], theme);
+  expect(mixed).toContain("[@cheap]");
+  expect(mixed).toContain("[@deep unmapped]");
+  expect(mixed).not.toContain("[fallback");
 });
 
 const CASES: Case[] = [

@@ -288,8 +288,10 @@ export interface AgentRecord {
    * original conversation's disclosure even when the new selection resolves.
    */
   modelSelection?: ModelSelection;
-  /** Serializable tier provenance, preserved through eviction and replay. */
+  /** Actual run's tier provenance, preserved through eviction and replay. */
   modelTier?: TierDisclosure;
+  /** Prior evicted run's outcome, never the continuation's selection or disclosure. */
+  previousModelTier?: TierDisclosure;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
   /**

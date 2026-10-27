@@ -43,7 +43,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 | `resumeSessionFile` | Worse: it names a file to **open and replay** as a conversation. Dispatcher only, and only from a path this extension itself recorded |
 | `reclaim` | Bypasses handle allocation, so a forged value would duplicate a live agent's name and make `@handle` ambiguous |
 | `blocking` | Every spawn through here is detached. A forged `blocking` would charge it to the foreground pool and defer it behind a queue whose gate nobody is holding |
-| `modelSelection`, `modelFallback`, `modelTier` | Internal resolution outcomes. A caller cannot forge a different selection, bypass scope validation, or invent a fallback disclosure |
+| `modelSelection`, `modelFallback`, `modelTier`, `previousModelTier` | Internal resolution outcomes. A caller cannot forge a different selection, bypass scope validation, or invent a fallback disclosure |
 
 **Silently overwritten** — `onToolActivity`, `onTextDelta`, `onTurnEnd`, `onSessionCreated` and `onAssistantUsage` are replaced by the activity tracker's own (`spawnResolved`, `src/index.ts`). Every programmatic spawn passes through one funnel so none can supply half-wired callbacks; a half-wired tracker renders worse than none, which is the bug behind a row that reads `thinking…` for an agent's whole life ([#181](https://github.com/tintinweb/pi-subagents/pull/181)).
 

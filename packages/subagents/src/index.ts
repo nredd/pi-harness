@@ -841,6 +841,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     delete safeOptions.modelFallback;
     delete safeOptions.modelSelection;
     delete safeOptions.modelTier;
+    delete safeOptions.previousModelTier;
     return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
   };
 
@@ -1145,7 +1146,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           resumeSessionFile: entry.sessionFile,
           // The original failure, not whatever the CURRENT config would say.
           ...(entry.modelFallback ? { modelFallback: entry.modelFallback } : {}),
-          ...(entry.modelTier ? { modelTier: entry.modelTier } : {}),
+          ...(entry.modelTier ? { previousModelTier: entry.modelTier } : {}),
           isBackground: true,
         });
         // The agent may still be starting — wait, so a startup failure lands in
@@ -1225,7 +1226,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     }
 
     try {
-      // Nothing else to pass: runAgent resolves model, thinking, max turns and
+      // Nothing else to pass: the manager resolves model; runAgent resolves thinking, max turns and
       // `isolated` from the agent's own config when the spawn omits them, and the
       // manager's onStart/onComplete callbacks own the widget, the fleet list
       // and the completion notification — the same contract the scheduler and

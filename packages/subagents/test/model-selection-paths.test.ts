@@ -399,7 +399,7 @@ it("reopens an evicted mention with current selection and retained original fall
   expect(root.getRecord(options!.agentId!)?.modelFallback).toEqual(record?.modelFallback);
 });
 
-it("preserves a tier outcome across eviction and mention reopen", async () => {
+it("keeps the prior tier separate from an evicted mention's new literal selection", async () => {
   setModelTiers({ cheap: [ref("typed")] }, {});
   setAgentModels({ scout: "@cheap" });
   const { record } = await invoke("Agent");
@@ -412,7 +412,9 @@ it("preserves a tier outcome across eviction and mention reopen", async () => {
   const options = vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3];
   const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
   expect(options?.resumeSessionFile).toBe(record?.sessionFile);
-  expect(root.getRecord(options!.agentId!)?.modelTier).toEqual(originalTier);
+  expect(root.getRecord(options!.agentId!)?.previousModelTier).toEqual(originalTier);
+  expect(root.getRecord(options!.agentId!)?.modelTier).toBeUndefined();
+  expect(options?.modelSelection).toMatchObject({ outcome: "resolved", model: { id: "explicit" } });
 });
 
 it("retains the tier selection and disclosure on a live resume despite changed bindings", async () => {

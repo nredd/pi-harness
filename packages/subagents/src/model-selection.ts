@@ -5,6 +5,11 @@ import { checkModelScope } from "./model-scope.js";
 import { exactTierModel, getModelResolution, parseTierBinding, resolveTier, type TierBinding, type TierDisclosure, type TierOutcome, tierBinding, tierNote } from "./model-tiers.js";
 import { type AdmissionEvents, admissionOutcome, type QuotaBlock } from "./quota-admission.js";
 
+/** Exact compatibility pins until built-in definitions migrate to tiers. User aliases win. */
+const LEGACY_MODEL_PINS = new Map([
+  ["claude-haiku-4-5", "anthropic/claude-haiku-4-5"],
+]);
+
 /** The winning precedence level, before resolution or fallback. */
 export type ModelSource = "param" | "agentModels:type" | "agentModels:*" | "definition" | "parent";
 
@@ -81,7 +86,7 @@ export function selectModel(request: {
     } else {
       const resolved = request.paramModel != null && typeof request.paramModel === "object"
         ? request.paramModel : input.source === "param" ? resolveModel(requested, request.registry)
-        : exactTierModel(requested, request.registry) ?? `Model not found: "${requested}".`;
+        : exactTierModel(LEGACY_MODEL_PINS.get(requested) ?? requested, request.registry) ?? `Model not found: "${requested}".`;
       if (typeof resolved !== "string") selection = { ...input, model: resolved, outcome: "resolved" };
       else {
         if (input.source === "param" || getModelResolution().onUnavailable === "error") return resolved;

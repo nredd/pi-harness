@@ -325,7 +325,8 @@ interface SpawnOptions {
   model?: Model<any> | string;
   /** Internal preflight outcome, stored on the record without resolving again. */
   modelSelection?: ModelSelection;
-  modelTier?: TierDisclosure;
+  /** Historical outcome only, never used to label the continuation. */
+  previousModelTier?: TierDisclosure;
   /** Original provenance retained when reopening an evicted conversation. Internal only. */
   modelFallback?: ModelFallback;
   maxTurns?: number;
@@ -740,7 +741,8 @@ export class AgentManager {
       invocation: options.invocation,
       modelFallback: options.modelFallback ?? selection.fallback,
       modelSelection: selection,
-      modelTier: options.modelTier ?? (selection.tier ? tierDisclosure(selection.tier) : undefined),
+      modelTier: selection.tier ? tierDisclosure(selection.tier) : undefined,
+      previousModelTier: options.previousModelTier,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,
@@ -1015,7 +1017,7 @@ export class AgentManager {
     try {
       if (options.modelSelection?.tierBinding && !options.modelSelection.tierAdmitted) {
         const block = await admitModelSelection(options.modelSelection, ctx.modelRegistry, pi.events);
-        record.modelTier = options.modelTier ?? (options.modelSelection.tier ? tierDisclosure(options.modelSelection.tier) : undefined);
+        record.modelTier = options.modelSelection.tier ? tierDisclosure(options.modelSelection.tier) : undefined;
         record.modelFallback = options.modelFallback ?? options.modelSelection.fallback;
         if (block) throw new Error(`${modelSelectionNote(record)} ${describeBlock(block)} The agent was not started.`);
         if (record.abortController?.signal.aborted || options.signal?.aborted) throw new Error("Agent aborted during model admission.");
@@ -1112,7 +1114,7 @@ export class AgentManager {
       pi,
       agentId: id,
       model: options.modelSelection?.model,
-      modelSelection: options.modelSelection,
+      modelSelection: record.modelSelection!,
       maxTurns: options.maxTurns,
       isolated: options.isolated,
       inheritContext: options.inheritContext,
