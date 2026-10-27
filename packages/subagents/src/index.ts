@@ -43,10 +43,10 @@ import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
-import { describeModel, describeVirtualModel, isVirtualModel, type ModelRegistry, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
+import { describeModel, describeVirtualModel, isVirtualModel, type ModelFallback, type ModelRegistry, modelFallbackNote, modelFallbackTo, resolveModel, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
 import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
-import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import { appendModelFallbackEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
@@ -204,6 +204,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
     record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
     `<status>${escapeXml(status)}</status>`,
     `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}</summary>`,
+    record.modelFallback ? `<model-note>${escapeXml(modelFallbackNote(record.modelFallback))}</model-note>` : null,
     `<result>${escapeXml(resultPreview)}</result>`,
     `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}${costXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
@@ -212,7 +213,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
 
 /** Build AgentDetails from a base + record-specific fields. */
 function buildDetails(
-  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "tags">,
+  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "modelNote" | "modelFallback" | "tags">,
   record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; outputFile?: string; lifetimeUsage: LifetimeUsage },
   activity?: AgentActivity,
   overrides?: Partial<AgentDetails>,
@@ -255,6 +256,7 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
     outputFile: record.outputFile,
     error: record.error,
+    modelNote: record.modelFallback ? modelFallbackNote(record.modelFallback) : undefined,
     resultPreview: record.result
       ? record.result.length > resultMaxLen
         ? record.result.slice(0, resultMaxLen) + "…"
@@ -571,6 +573,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       durationMs,
       tokens,
       usage,
+      // Present only on a fallback, so the payload keeps its shape otherwise.
+      ...(record.modelFallback
+        ? { modelFallback: record.modelFallback, modelNote: modelFallbackNote(record.modelFallback) }
+        : {}),
     };
   }
 
@@ -580,6 +586,23 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    */
   let detachedSessionFile: string | undefined;
 
+  /** `modelFallback` + `modelNote` event fields, or nothing. Only what is KNOWN when the event fires. */
+  function fallbackFields(record: AgentRecord | undefined): Record<string, unknown> {
+    return record?.modelFallback
+      ? { modelFallback: record.modelFallback, modelNote: modelFallbackNote(record.modelFallback) }
+      : {};
+  }
+
+  /** The `subagents:record` history entry; the ONE builder, shared by live completion and the detached spool. */
+  function historyRecord(record: AgentRecord): Record<string, unknown> {
+    return {
+      id: record.id, type: record.type, description: record.description,
+      status: record.status, result: record.result, error: record.error,
+      startedAt: record.startedAt, completedAt: record.completedAt,
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
+    };
+  }
+
   function spoolDetachedResult(sessionFile: string, record: AgentRecord) {
     if (record.resultConsumed) return;
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : "";
@@ -588,11 +611,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         id: record.id,
         content: formatTaskNotification(record, 500, showCost) + footer,
         details: buildNotificationDetails(record, 500),
-        record: {
-          id: record.id, type: record.type, description: record.description,
-          status: record.status, result: record.result, error: record.error,
-          startedAt: record.startedAt, completedAt: record.completedAt,
-        },
+        record: historyRecord(record),
       });
     } catch { /* spool unwritable: the transcript file still has the result */ }
   }
@@ -641,11 +660,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     }
 
     // Persist final record for cross-extension history reconstruction
-    pi.appendEntry("subagents:record", {
-      id: record.id, type: record.type, description: record.description,
-      status: record.status, result: record.result, error: record.error,
-      startedAt: record.startedAt, completedAt: record.completedAt,
-    });
+    pi.appendEntry("subagents:record", historyRecord(record));
 
     // Skip notification if result was already consumed via get_subagent_result
     if (record.resultConsumed) {
@@ -685,6 +700,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id,
       type: record.type,
       description: record.description,
+      ...fallbackFields(record),
     });
   }, (record, info) => {
     if (!isTopLevelAgent(record)) return;
@@ -696,6 +712,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       reason: info.reason,
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
+      ...fallbackFields(record),
     });
   }, (record, usage) => {
     // Every assistant message from every agent — nested included, exactly once.
@@ -731,6 +748,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       // clamped it to the model, or an agent file outranked it), so a ledger
       // can show `low (asked minimal)` instead of silently relabelling.
       ...(invocation?.requestedThinking !== undefined ? { requestedThinking: invocation.requestedThinking } : {}),
+      ...fallbackFields(record),
       depth: record.depth ?? 1,
       ...(record.parentAgentId !== undefined ? { parentAgentId: record.parentAgentId } : {}),
       ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
@@ -814,6 +832,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // awaits nothing. A forged `blocking` would charge it to the foreground
     // pool and could defer it behind a queue whose gate nobody is holding.
     delete safeOptions.blocking;
+    // The spawn path's own disclosure; a caller-supplied one could hide a
+    // fallback or invent one. The runner reports the real outcome itself.
+    delete safeOptions.modelFallback;
     return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
   };
 
@@ -1116,6 +1137,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           description: entry.description,
           reclaim: { handle: entry.handle, alias: entry.alias },
           resumeSessionFile: entry.sessionFile,
+          // The original failure, not whatever the CURRENT config would say.
+          ...(entry.modelFallback ? { modelFallback: entry.modelFallback } : {}),
           isBackground: true,
         });
         // The agent may still be starting — wait, so a startup failure lands in
@@ -1348,6 +1371,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           type: record.type,
           description: record.description,
           isBackground: true,
+          ...fallbackFields(record),
         });
       }
     }
@@ -1584,6 +1608,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     if (opts.outputTranscript) {
       existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
       ensureOutputFile(existing.outputFile);
+      // A fresh transcript for a later resume must still say what the agent ran on.
+      if (existing.modelFallback) appendModelFallbackEntry(existing.outputFile, id, existing.modelFallback);
     }
     // Anchor streaming past the turns already on disk, captured BEFORE the
     // run starts. The resumed prompt lands as an ordinary user message at
@@ -1642,6 +1668,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       type: existing.type,
       description: existing.description,
       isBackground: true,
+      ...fallbackFields(existing),
     });
 
     return record;
@@ -2040,7 +2067,7 @@ Terse command-style prompts produce shallow, generic work.
       // foreground path. Resume deliberately doesn't: it replays the stored
       // session and ignores `subagent_type` entirely, so a note about type
       // substitution would be describing something that didn't happen.
-      const fallbackNote = dispatch.ok && dispatch.fellBackFrom !== undefined
+      const typeNote = dispatch.ok && dispatch.fellBackFrom !== undefined
         ? `Note: Unknown agent type "${dispatch.fellBackFrom}" — using ${resolveType(subagentType) ? subagentType : "the fallback agent config"}.\n\n`
         : "";
 
@@ -2057,11 +2084,13 @@ Terse command-style prompts produce shallow, generic work.
 
       // Resolve an explicit tool-call model first; agent config supplies only a default.
       let model = ctx.model;
+      let modelFallback: ModelFallback | undefined;
       if (resolvedConfig.modelInput) {
         const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
         if (typeof resolved === "string") {
           if (resolvedConfig.modelFromParams) return textResult(resolved);
-          // config-specified: silent fallback to parent
+          // Config-specified: still falls back to the parent, but says so.
+          modelFallback = modelFallbackTo(resolvedConfig.modelInput, ctx.model);
         } else {
           model = resolved;
         }
@@ -2126,11 +2155,32 @@ Terse command-style prompts produce shallow, generic work.
       const modeLabel = getPromptModeLabel(subagentType);
       const { tags: invocationTags } = buildInvocationTags(agentInvocation);
       const agentTags = modeLabel ? [modeLabel, ...invocationTags] : invocationTags;
+      /**
+       * The lead-in for a result: the type note, then the model note. The model
+       * note is read off the record the shared spawn path created. Before a
+       * record exists (scheduling) it is this call's own resolution, the only
+       * one there is. Never recomputed for a resume, which runs on its old session.
+       */
+      const modelNoteOf = (rec: AgentRecord | undefined): string | undefined =>
+        modelFallbackNote(rec ? rec.modelFallback : modelFallback) || undefined;
+      const modelFallbackOf = (rec: AgentRecord | undefined): ModelFallback | undefined =>
+        rec ? rec.modelFallback : modelFallback;
+      /** A resume's lead-in: the record's note only (the type note describes a spawn, not a resume). */
+      const resumeNoteFor = (rec: AgentRecord): string => {
+        const note = modelNoteOf(rec);
+        return note ? `${note}\n\n` : "";
+      };
+      const fallbackNoteFor = (rec: AgentRecord | undefined): string => {
+        const modelNote = modelNoteOf(rec);
+        return typeNote + (modelNote ? `${modelNote}\n\n` : "");
+      };
       const detailBase = {
         displayName,
         description: params.description,
         subagentType,
         modelName,
+        modelNote: modelNoteOf(undefined),
+        modelFallback: modelFallbackOf(undefined),
         tags: agentTags.length > 0 ? agentTags : undefined,
       };
 
@@ -2148,7 +2198,10 @@ Terse command-style prompts produce shallow, generic work.
        * buildInvocationTags would silently drop `twin`.
        */
       const detailBaseFor = (rec: AgentRecord | undefined): typeof detailBase => {
-        if (!rec?.invocation) return detailBase;
+        // A record's disclosure outranks this call's, even before its session
+        // reports an invocation: resume reuses the old session, so this call's
+        // config says nothing about what ran.
+        if (!rec?.invocation) return rec ? { ...detailBase, modelNote: modelNoteOf(rec), modelFallback: modelFallbackOf(rec) } : detailBase;
         const type = rec.type;
         const { modelName: recModelName, tags } = buildInvocationTags(rec.invocation);
         const recModeLabel = getPromptModeLabel(type);
@@ -2158,6 +2211,8 @@ Terse command-style prompts produce shallow, generic work.
           description: rec.description,
           subagentType: type,
           modelName: recModelName,
+          modelNote: modelNoteOf(rec),
+          modelFallback: modelFallbackOf(rec),
           tags: recTags.length > 0 ? recTags : undefined,
         };
       };
@@ -2199,7 +2254,7 @@ Terse command-style prompts produce shallow, generic work.
           });
           const next = scheduler.getNextRun(job.id);
           return textResult(
-            `${fallbackNote}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}). ` +
+            `${fallbackNoteFor(undefined)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}). ` +
             `Next run: ${next ?? "(unknown)"}. ` +
             `Manage via /agents → Scheduled jobs.`,
           );
@@ -2252,7 +2307,7 @@ Terse command-style prompts produce shallow, generic work.
 
           const isQueued = record.status === "queued";
           return textResult(
-            `Agent ${isQueued ? "queued" : "resumed"} in background.\n` +
+            `${resumeNoteFor(record)}Agent ${isQueued ? "queued" : "resumed"} in background.\n` +
             `Agent ID: ${id}\n` +
             `Type: ${existing.type}\n` +
             (record.outputFile ? `Output file: ${record.outputFile}\n` : "") +
@@ -2294,10 +2349,10 @@ Terse command-style prompts produce shallow, generic work.
         // A failed resume surfaces the error, plus any partial output THIS
         // resume produced (never the previous turn's answer, #144).
         if (record.status === "error") {
-          return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record, resumeState));
+          return textResult(`${resumeNoteFor(record)}Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record, resumeState));
         }
         return textResult(
-          record.result?.trim() || "No output.",
+          `${resumeNoteFor(record)}${record.result?.trim() || "No output."}`,
           buildDetails(detailBaseFor(record), record, resumeState),
         );
       }
@@ -2308,7 +2363,7 @@ Terse command-style prompts produce shallow, generic work.
       const backgroundResult = (id: string, record: AgentRecord | undefined) => {
         const isQueued = record?.status === "queued";
         return textResult(
-          `${fallbackNote}Agent ${isQueued ? "queued" : "started"} in background.\n` +
+          `${fallbackNoteFor(record)}Agent ${isQueued ? "queued" : "started"} in background.\n` +
           `Agent ID: ${id}\n` +
           `Type: ${displayName}\n` +
           `Description: ${params.description}\n` +
@@ -2349,7 +2404,7 @@ Terse command-style prompts produce shallow, generic work.
           quotaParked: true,
         });
         return textResult(
-          `${fallbackNote}${describeBlock(quotaBlock)} Queued "${job.name}" (id: ${job.id}) to start at ` +
+          `${fallbackNoteFor(undefined)}${describeBlock(quotaBlock)} Queued "${job.name}" (id: ${job.id}) to start at ` +
           `${scheduler.getNextRun(job.id) ?? job.schedule}. Manage via /agents → Scheduled jobs.`,
         );
       }
@@ -2378,6 +2433,7 @@ Terse command-style prompts produce shallow, generic work.
           description: params.description,
           name: params.name as string | undefined,
           model,
+          modelFallback,
           maxTurns: effectiveMaxTurns,
           isolated,
           inheritContext,
@@ -2420,6 +2476,7 @@ Terse command-style prompts produce shallow, generic work.
           type: subagentType,
           description: params.description,
           isBackground: true,
+          ...fallbackFields(manager.getRecord(id)),
         });
 
         return backgroundResult(id, record);
@@ -2531,6 +2588,7 @@ Terse command-style prompts produce shallow, generic work.
           description: params.description,
           name: params.name as string | undefined,
           model,
+          modelFallback,
           maxTurns: effectiveMaxTurns,
           isolated,
           inheritContext,
@@ -2591,7 +2649,7 @@ Terse command-style prompts produce shallow, generic work.
 
       if (record.status === "error") {
         // Error headline + any partial output the run produced before failing.
-        return textResult(`${fallbackNote}Agent failed: ${record.error}${partialOutputSuffix(record)}`, details);
+        return textResult(`${fallbackNoteFor(record)}Agent failed: ${record.error}${partialOutputSuffix(record)}`, details);
       }
 
       const durationMs = (record.completedAt ?? Date.now()) - record.startedAt;
@@ -2602,7 +2660,7 @@ Terse command-style prompts produce shallow, generic work.
         if (costText) statsParts.push(costText);
       }
       return textResult(
-        `${fallbackNote}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n\n` +
+        `${fallbackNoteFor(record)}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n\n` +
         (record.result?.trim() || "No output."),
         details,
       );
@@ -3150,7 +3208,9 @@ Terse command-style prompts produce shallow, generic work.
       let output =
         `Agent: ${record.id}\n` +
         `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
-        `Description: ${record.description}\n\n`;
+        `Description: ${record.description}\n` +
+        (record.modelFallback ? `${modelFallbackNote(record.modelFallback)}\n` : "") +
+        `\n`;
 
       if (record.status === "running") {
         output += "Agent is still running. Use wait: true or check back later.";

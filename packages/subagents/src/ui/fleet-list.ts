@@ -21,6 +21,7 @@ import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, buildInvocationTags, fgPreservingNestedStyles, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
+import { fallbackFlag, withLeadingFlag } from "./fallback-flag.js";
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -630,9 +631,15 @@ export class FleetList {
     for (const r of rows) {
       if (r.kind === "agent") cells.set(r.record, this.tailCells(r.record, theme));
     }
+    // Reserve the widest leading flag across ALL rows before fitting optional
+    // columns, so a fallback cannot hide the alias or shift columns on scroll.
+    const flagWidth = Math.max(0, ...[...cells.keys()].map(record => {
+      const flag = fallbackFlag(theme, record);
+      return flag ? visibleWidth(flag) + 1 : 0;
+    }));
     const colWidths = this.fitColumns(
       TAIL_SLOTS.map((_, i) => Math.max(0, ...[...cells.values()].map(c => visibleWidth(c[i])))),
-      width,
+      width - flagWidth,
     );
     if (start > 0) {
       lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more: ${summarizeHidden(rows.slice(0, start))}`), width));
@@ -747,7 +754,8 @@ export class FleetList {
     // with similar descriptions stay distinguishable after truncation.
     const label = record.alias ? `${record.alias}: ${record.description}` : record.description;
     const description = selected ? theme.fg("text", label) : label;
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
+    const prefix = `  ${this.bullet(rosterIndex, sel, theme)} `;
+    const left = `${name}  ${description}`;
     // Fixed-width slots (blank where a row has no value) keep each column at the
     // same cells on every row; an all-empty column is dropped.
     const stats = TAIL_SLOTS.map((slot, i) => {
@@ -756,6 +764,8 @@ export class FleetList {
       return slot.align === "end" ? (cells[i] ?? "") + pad : pad + (cells[i] ?? "");
     }).filter((c): c is string => c !== undefined).join(" · ");
     const right = fgPreservingNestedStyles(theme, selected ? "text" : "dim", stats);
-    return rightAlign(left, right, width);
+    // The flag leads the row (even with `showModel` off: a substituted model is
+    // not cosmetic) and the name/description/tail are laid out in what is left.
+    return withLeadingFlag(prefix, fallbackFlag(theme, record), inner => rightAlign(left, right, inner), width);
   }
 }

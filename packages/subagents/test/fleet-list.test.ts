@@ -897,6 +897,13 @@ describe("FleetList model and activity", () => {
     expect(out).not.toContain("think:high");
   });
 
+  it("flags a model fallback first on the row, even with showModel off", () => {
+    const fallback = { input: "ghost", used: "anthropic/x" };
+    expect(row(withModel({ modelFallback: fallback }), true)).toContain("[fallback]");
+    expect(row(withModel({ modelFallback: fallback }), false)).toContain("[fallback]");
+    expect(row(withModel(), false)).not.toContain("fallback");
+  });
+
   it("aligns populated tail columns with Unicode and truncation", () => {
     // Markup-free theme: escape-less tags would otherwise count as visible cells when `left` truncates.
     const markupFree = { fg: (_c: string, text: string) => text, bold: (text: string) => text };
@@ -1064,6 +1071,36 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
     const lines = factory!({ requestRender: () => {}, terminal: { columns, rows } }, extra.styled ? styledTheme : plainTheme).render(columns);
     return extra.styled ? lines : lines.map(plain);
   }
+
+  it.each([[80, 24], [120, 40]])("keeps leading fallback flags, aliases and aligned state/stats at %ix%i", (columns, rows) => {
+    const agents = mixed().slice(1, 3);
+    agents[0].modelFallback = { input: "ghost", used: "anthropic/x" };
+    for (const agent of agents) agent.invocation = { modelName: "opus 4.6", modelId: "a/o", thinking: "high" };
+    for (const showModel of [false, true]) {
+      const lines = renderAt(agents, columns, rows, 1, showModel, { styled: true }).map(plain);
+      const flagged = lines.find(l => l.includes("[fallback]"))!;
+      expect(flagged).toContain("pr-1412:");
+      expect(flagged.indexOf("[fallback]")).toBeLessThan(flagged.indexOf("pr-1412:"));
+      const agentRows = lines.filter(l => l.includes("▶ running"));
+      expect(agentRows).toHaveLength(2);
+      expect(new Set(agentRows.map(l => visibleWidth(l.split("▶ running")[0]))).size).toBe(1);
+      expect(new Set(agentRows.map(l => visibleWidth(l.split("tokens")[0]))).size).toBe(1);
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+    }
+  });
+
+  it("reserves a hidden row's fallback flag before fitting columns", () => {
+    const agents = mixed();
+    for (const agent of agents) agent.invocation = { modelName: "opus 4.6", modelId: "a/o", thinking: "high" };
+    agents[5].modelFallback = { input: "ghost", used: "anthropic/x" };
+    const top = renderAt(agents, 75, 24);
+    const bottom = renderAt(agents, 75, 24, 7);
+    expect(top.join("\n")).not.toContain("[fallback]");
+    expect(top.join("\n")).not.toContain("opus 4.6");
+    expect(bottom.join("\n")).toContain("[fallback]");
+    const stateAt = (lines: string[]) => lines.find(l => l.includes("tokens"))!.indexOf(" · ");
+    expect(stateAt(top)).toBe(stateAt(bottom));
+  });
 
   it("gives every state a glyph and a word, at 120x40", () => {
     const lines = renderAt(mixed().slice(0, 1).concat(mixed().slice(3, 7)), 120, 40);
