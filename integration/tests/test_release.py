@@ -101,6 +101,12 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
     Parameters:
         monkeypatch (pytest.MonkeyPatch): substitute successful and failing git output.
         tmp_path (Path): explicit Gitlink directory.
+
+    Returns:
+        None: exact lookup succeeds and failures retain sanitized diagnostic causes.
+
+    Raises:
+        AssertionError: the command, operation message or detached cause contract changes.
     """
     calls = []
 
@@ -113,6 +119,9 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
 
         Returns:
             str: simulated tagged git output.
+
+        Raises:
+            AssertionError: subprocess capture options differ from the contract.
         """
         calls.append(argv)
         assert kwargs["text"]
@@ -130,6 +139,9 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
             *args (Any): subprocess positional arguments.
             **kwargs (Any): subprocess capture options.
 
+        Returns:
+            str: never returned by this failure fixture.
+
         Raises:
             subprocess.CalledProcessError: exact tag lookup failed with captured output.
         """
@@ -138,7 +150,9 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setattr(subprocess, "check_output", untagged)
     with pytest.raises(RuntimeError, match=r"untagged; release it.*fatal: no tag exactly matches") as caught:
         gitlink_tag(tmp_path)
-    assert isinstance(caught.value.__cause__, subprocess.CalledProcessError)
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert "CalledProcessError" in str(caught.value.__cause__)
+    assert caught.value.__context__ is None
 
 
 def test_gitlink_tag_scrubs_hostile_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -522,12 +536,18 @@ def test_fetch_refuses_bad_tag_or_reused_prefix_before_network(tmp_path: Path) -
 def test_subprocess_timeouts_become_chained_runtime_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stage: str
 ) -> None:
-    """Turn a hung `gh` or `npm` into a `RuntimeError` chained from `TimeoutExpired`.
+    """Turn hung `gh`/`npm` into a `RuntimeError` with a detached sanitized timeout cause.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): make the chosen subprocess time out.
         tmp_path (Path): isolated prefix and fake binaries.
         stage (str): which subprocess hangs.
+
+    Returns:
+        None: partial output is retained without chaining the original timeout object.
+
+    Raises:
+        AssertionError: the error text, sanitized cause or context contract changes.
     """
     gh_bin = tmp_path / "gh"
     gh_bin.touch()
@@ -560,7 +580,9 @@ def test_subprocess_timeouts_become_chained_runtime_errors(
     monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(contents))
     with pytest.raises(RuntimeError, match=r"partial .* output") as caught:
         fetch_release(tag, tmp_path / "prefix")
-    assert isinstance(caught.value.__cause__, subprocess.TimeoutExpired)
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert "TimeoutExpired" in str(caught.value.__cause__)
+    assert caught.value.__context__ is None
     if stage == "provenance":
         assert "provenance" in str(caught.value)
     else:
@@ -1269,6 +1291,9 @@ def test_shared_fetch_diagnostics_are_stable(
 
     Returns:
         None: exact text, URL cardinality, status and exception chaining match the contract.
+
+    Raises:
+        AssertionError: a consumer changes the normalized text, status or sanitized exception graph.
     """
     artifact = tmp_path / "snapshot.json"
     artifact.write_bytes(b"snapshot")
@@ -1330,7 +1355,11 @@ def test_shared_fetch_diagnostics_are_stable(
     error = caught.value if isinstance(caught.value, release.FetchError) else caught.value.__cause__
     assert isinstance(error, release.FetchError)
     assert error.status == status
-    assert error.__cause__ is failure
+    assert isinstance(error.__cause__, RuntimeError)
+    assert error.__cause__ is not failure
+    assert error.__context__ is None
+    assert error.__cause__.__context__ is None
+    assert type(failure).__name__ in str(error.__cause__)
     assert not destination.exists()
 
 
