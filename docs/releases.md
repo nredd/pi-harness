@@ -7,6 +7,8 @@
 - Gitlink-only selections may pass no `--artifact`: the generated `artifacts: []` records source provenance, not a new core asset release. The assembled-stack checksum reader skips these snapshots and still requires every downloaded asset's digest from an artifact-bearing manifest; absent, conflicting or invalid checksums still block before installation.
 - Deliberately omitted: profiles, runtime-tree archives, and a complete third-party resolution lock. Those inputs do not exist in this minimal slice yet.
 
+The integration core Gitlink's exact-tag lookup uses a minimal explicit Git environment with a temporary empty HOME/XDG config and no system config. Parent `GIT_DIR`, `GIT_WORK_TREE`, `GIT_CONFIG_*`, askpass variables and tokens cannot redirect that lookup to another checkout or load the caller's credential configuration.
+
 ## Root override gate
 
 - The CI signature check is bypassable by an edited workflow in a tagged commit; the creation control is `nredd/pi`'s tag ruleset `Fork release tags` (id `25519508`, [here](https://github.com/nredd/pi/rules/25519508)), which blocks creating, moving or deleting `refs/tags/v*-nredd.*` for everyone except the repository admin role (the owner, the only admin), the same shape as `npm release tags` below. Inspect with `gh api repos/nredd/pi/rulesets/25519508`.

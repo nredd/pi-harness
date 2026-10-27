@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from harness.stack import find_package
+from harness.stack import find_package, package_manifest
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -53,7 +53,7 @@ def kit_args(box: Sandbox, *, explicit: bool = False) -> list[str]:
     if not explicit:
         return []
     directory = find_package(KIT, box.settings().get("packages", []), box.agent_dir)
-    manifest = json.loads((directory / "package.json").read_text())
+    manifest = package_manifest(directory)
     return ["-e", str(directory / manifest["pi"]["extensions"][0])]
 
 
