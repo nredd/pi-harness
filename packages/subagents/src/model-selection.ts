@@ -16,20 +16,20 @@ export interface ModelSelection {
   scopeWarning?: string;
 }
 
-/** Choose the input once: explicit parameter > type > wildcard > definition. */
+/** Choose the input once: explicit parameter > type > wildcard > definition; blank strings are unset. */
 export function modelRequest(type: string, definitionModel?: string, paramModel?: string | Model<Api> | null): {
   requested?: string;
   source: ModelSource;
 } {
-  if (paramModel != null) {
+  if (paramModel != null && (typeof paramModel !== "string" || paramModel.trim() !== "")) {
     return { requested: typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}`, source: "param" };
   }
   const overrides = getAgentModels();
   const typed = overrides.get(type.toLowerCase());
-  if (typed !== undefined) return { requested: typed, source: "agentModels:type" };
+  if (typed?.trim()) return { requested: typed, source: "agentModels:type" };
   const wildcard = overrides.get("*");
-  if (wildcard !== undefined) return { requested: wildcard, source: "agentModels:*" };
-  if (definitionModel !== undefined) return { requested: definitionModel, source: "definition" };
+  if (wildcard?.trim()) return { requested: wildcard, source: "agentModels:*" };
+  if (definitionModel?.trim()) return { requested: definitionModel, source: "definition" };
   return { source: "parent" };
 }
 
