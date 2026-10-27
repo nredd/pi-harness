@@ -72,6 +72,7 @@ from harness.promotion import (
 from harness.release import (
     FetchError,
     child_environment,
+    detached_exception,
     fetch_bytes,
     fetch_release,
     pinned_child_path,
@@ -327,13 +328,16 @@ def node_version(node: str) -> tuple[int, int, int]:
             timeout=VERSION_TIMEOUT,
             env=child_environment(os.environ),
         )
+        match = SEMVER.search(output)
+        if match is None:
+            raise UnsupportedError(
+                redact_diagnostic(f"`node --version` printed no version: '{output.strip()}'")
+            )
+        major, minor, patch = (int(part) for part in match.groups())
+        return major, minor, patch
     except (OSError, subprocess.SubprocessError) as error:
-        raise UnsupportedError(redact_diagnostic(f"Could not run '{node} --version': {error}")) from error
-    match = SEMVER.search(output)
-    if match is None:
-        raise UnsupportedError(redact_diagnostic(f"`node --version` printed no version: '{output.strip()}'"))
-    major, minor, patch = (int(part) for part in match.groups())
-    return major, minor, patch
+        failure = detached_exception(UnsupportedError(f"Could not run '{node} --version': {error}"), error)
+    raise failure from failure.__cause__
 
 
 def preflight(
@@ -502,7 +506,11 @@ def verify_snapshot(source_sha: str, workdir: Path, *, gh_bin: str | None = None
             gh_bin=gh_bin,
         )
     except (OSError, RuntimeError) as error:
-        raise VerificationError(f"Snapshot attestation rejected: {error}") from error
+        failure = detached_exception(VerificationError(f"Snapshot attestation rejected: {error}"), error)
+    else:
+        failure = None
+    if failure is not None:
+        raise failure from failure.__cause__
     try:
         snapshot = load_promoted_snapshot(path.read_bytes(), source_sha)
         validate_shipped_stack(snapshot.stack)
@@ -544,8 +552,12 @@ def verify_release(
         verify_core_assets(
             stack, workdir / "core", attest=partial(verify_provenance_anonymously, gh_bin=gh_bin)
         )
-    except (ValueError, PromotionError, RuntimeError) as error:
-        raise VerificationError(f"Core release '{tag}' rejected: {error}") from error
+    except (OSError, ValueError, PromotionError, RuntimeError) as error:
+        failure = detached_exception(VerificationError(f"Core release '{tag}' rejected: {error}"), error)
+    else:
+        failure = None
+    if failure is not None:
+        raise failure from failure.__cause__
     core_checksums = checksums | {
         release_asset_url(tag, name): digest for name, digest in stack.core.integrity.items()
     }
@@ -2087,13 +2099,19 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
                 timeout=INSTALL_TIMEOUT,
             )
         except subprocess.CalledProcessError as error:
-            raise InstallError(
-                f"`pi install` failed for '{source}': {redact_diagnostic(error.output)[-4000:]}"
-            ) from error
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise InstallError(
-                redact_diagnostic(f"`pi install` could not complete for '{source}': {error}")
-            ) from error
+            failure = detached_exception(
+                InstallError(
+                    f"`pi install` failed for '{source}': {redact_diagnostic(error.output)[-4000:]}"
+                ),
+                error,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            failure = detached_exception(
+                InstallError(f"`pi install` could not complete for '{source}': {error}"), error
+            )
+        else:
+            continue
+        raise failure from failure.__cause__
     try:
         installed_identities(stack, verified.sources, agent)
     except (OSError, ValueError) as error:
@@ -2140,7 +2158,13 @@ def stage(
                 npm_bin=(tools or {}).get("npm"),
             )
         except (OSError, ValueError, RuntimeError) as error:
-            raise InstallError(f"Core '{stack.core.tag}' installation failed: {error}") from error
+            failure = detached_exception(
+                InstallError(f"Core '{stack.core.tag}' installation failed: {error}"), error
+            )
+        else:
+            failure = None
+        if failure is not None:
+            raise failure from failure.__cause__
         for leftover in ("fetch-home", "npm-cache", "tui-resource"):
             remove(staged_core / leftover)
         write_atomic(staged_core / CORE_MARKER, json.dumps(stack.core.model_dump(mode="json"), indent=2))
@@ -2288,6 +2312,7 @@ def apply(
         # Staging is slow: check the store again just before the first journaled step.
         require_backup_store(layout)
         journal = Journal(layout, backups)
+        failure: InstallError | None = None
         try:
             switch(
                 layout,
@@ -2302,9 +2327,12 @@ def apply(
             )
         except BaseException as error:
             restored = rollback(layout)
-            raise InstallError(
-                f"Switch failed and was rolled back ({len(restored)} steps restored): {error}"
-            ) from error
+            failure = detached_exception(
+                InstallError(f"Switch failed and was rolled back ({len(restored)} steps restored): {error}"),
+                error,
+            )
+        if failure is not None:
+            raise failure from failure.__cause__
         journal.commit()
     finally:
         remove(staging)
@@ -2340,9 +2368,10 @@ def post_check(layout: Layout) -> str:
                 },
             ),
         )
+        return redact_diagnostic(output.strip())
     except (OSError, subprocess.SubprocessError) as error:
-        raise InstallError(redact_diagnostic(f"Installed '{layout.link}' does not run: {error}")) from error
-    return redact_diagnostic(output.strip())
+        failure = detached_exception(InstallError(f"Installed '{layout.link}' does not run: {error}"), error)
+    raise failure from failure.__cause__
 
 
 def checked_version(layout: Layout, kept_core: Path | None) -> str:
@@ -2364,12 +2393,16 @@ def checked_version(layout: Layout, kept_core: Path | None) -> str:
     try:
         return post_check(layout)
     except InstallError as error:
-        if kept_core is None:
-            raise
-        raise InstallError(
-            f"{error}. Core '{kept_core}' was kept because its marker matches the snapshot; if it is "
-            "damaged, remove it and rerun to reinstall it"
-        ) from error
+        message = (
+            str(error)
+            if kept_core is None
+            else (
+                f"{error}. Core '{kept_core}' was kept because its marker matches the snapshot; if it is "
+                "damaged, remove it and rerun to reinstall it"
+            )
+        )
+        failure = detached_exception(InstallError(message), error)
+    raise failure from failure.__cause__
 
 
 @contextmanager
@@ -2558,12 +2591,17 @@ def run_preflighted(
             try:
                 version = checked_version(layout, layout.core(verified.stack.core.tag))
             except InstallError as error:
-                raise InstallError(
-                    f"`stack/{opts.source_sha}` matches the snapshot but is not healthy, nothing was "
-                    f"changed: {error}"
-                ) from error
-            LOGGER.info(f"Already installed: `stack/{opts.source_sha}`: {version}, nothing to do")
-            return ExitCode.OK
+                failure = detached_exception(
+                    InstallError(
+                        f"`stack/{opts.source_sha}` matches the snapshot but is not healthy, "
+                        f"nothing was changed: {error}"
+                    ),
+                    error,
+                )
+            else:
+                LOGGER.info(f"Already installed: `stack/{opts.source_sha}`: {version}, nothing to do")
+                return ExitCode.OK
+            raise failure from failure.__cause__
         consent(plan, opts.assume_yes, ask)
         backups, version = apply(layout, verified, plan, tools=tools)
     LOGGER.info(f"Installed `stack/{opts.source_sha}`: {version} at '{layout.link}'")

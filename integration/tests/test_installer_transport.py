@@ -69,7 +69,22 @@ INSTALLER_SPAWNS = {
 
 @dataclass(frozen=True)
 class LocalTransport:
-    """Ephemeral HTTPS origin and recording CONNECT proxy, never public network traffic."""
+    """Describe the ephemeral HTTPS origin and recording CONNECT proxy.
+
+    Parameters:
+        certificate (Path): generated fixture trust root.
+        ca_directory (Path): OpenSSL-hashed root directory.
+        proxy (str): authenticated loopback CONNECT proxy URL.
+        url (str): loopback-resolved HTTPS origin resource.
+        port (int): HTTPS origin listener port.
+        connects (list[bytes]): synthetic recorded CONNECT requests.
+
+    Returns:
+        LocalTransport: immutable fixture endpoints with mutable request observations.
+
+    Raises:
+        TypeError: a required constructor argument is absent.
+    """
 
     certificate: Path
     ca_directory: Path
@@ -88,6 +103,9 @@ def isolated_connectivity(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Returns:
         None: each test starts with no inherited connectivity configuration.
+
+    Raises:
+        OSError: the process environment cannot be modified.
     """
     for key in CONNECTIVITY_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -99,6 +117,9 @@ def running_server(server: ThreadingHTTPServer | ThreadingTCPServer) -> Iterator
 
     Parameters:
         server (ThreadingHTTPServer | ThreadingTCPServer): bound fixture listener.
+
+    Returns:
+        Iterator[None]: context-managed fixture listener lifetime.
 
     Yields:
         None: fixture requests can be served.
@@ -125,6 +146,9 @@ def local_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     Parameters:
         tmp_path (Path): ephemeral private key, certificate and OpenSSL config.
         monkeypatch (pytest.MonkeyPatch): resolve only fixture hostnames to loopback.
+
+    Returns:
+        Iterator[LocalTransport]: bounded fixture endpoint lifetime.
 
     Yields:
         LocalTransport: ready listeners and recording proxy requests.
@@ -171,7 +195,19 @@ def local_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     (ca_directory / f"{digest}.0").write_bytes(certificate.read_bytes())
 
     class Origin(BaseHTTPRequestHandler):
-        """Return a small HTTPS payload without process-global logging."""
+        """Serve a small HTTPS payload without process-global logging.
+
+        Parameters:
+            request (socket.socket): accepted TLS connection.
+            client_address (tuple[str, int]): loopback client address.
+            server (ThreadingHTTPServer): fixture origin listener.
+
+        Returns:
+            Origin: HTTP request handler executing the fixed fixture response.
+
+        Raises:
+            OSError: the accepted connection fails during initialization or response.
+        """
 
         def do_GET(self) -> None:
             """Serve the fixed body.
@@ -197,6 +233,9 @@ def local_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
 
             Returns:
                 None: no fixture traffic is logged.
+
+            Raises:
+                None: this silent fixture hook does not raise.
             """
 
     origin = ThreadingHTTPServer(("127.0.0.1", 0), Origin)
@@ -207,7 +246,19 @@ def local_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     connects: list[bytes] = []
 
     class Proxy(BaseRequestHandler):
-        """Relay CONNECT bytes to the loopback origin, never resolve an external host."""
+        """Relay CONNECT bytes to the loopback origin without external DNS.
+
+        Parameters:
+            request (socket.socket): accepted plaintext CONNECT connection.
+            client_address (tuple[str, int]): loopback client address.
+            server (ThreadingTCPServer): fixture proxy listener.
+
+        Returns:
+            Proxy: handler that records synthetic headers and relays the TLS stream.
+
+        Raises:
+            OSError: a tunnel connection fails during initialization or relay.
+        """
 
         @override
         def handle(self) -> None:
@@ -251,6 +302,9 @@ def local_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
 
         Returns:
             Any: native resolver results for loopback or the unchanged nonfixture host.
+
+        Raises:
+            socket.gaierror: the native resolver cannot resolve the requested host.
         """
         return getaddrinfo(
             "127.0.0.1" if host in {"origin.invalid", "sub.origin.invalid"} else host, *args, **kwargs

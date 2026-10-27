@@ -150,6 +150,9 @@ def isolate_connectivity(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Returns:
         None: only explicitly set synthetic connectivity values can reach the shims.
+
+    Raises:
+        OSError: the process environment cannot be modified.
     """
     for key in CONNECTIVITY_PROBE_KEYS:
         monkeypatch.delenv(key, raising=False)

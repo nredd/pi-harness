@@ -133,7 +133,8 @@ CA_FILE_ENVIRONMENT_KEYS = frozenset(
 )
 CA_ENVIRONMENT_KEYS = CA_FILE_ENVIRONMENT_KEYS | {"SSL_CERT_DIR"}
 CONNECTIVITY_ENVIRONMENT_KEYS = PROXY_ENVIRONMENT_KEYS | CA_ENVIRONMENT_KEYS
-PROXY_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)[^\s/\"'<>@]*@")
+PROXY_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)[^\s/\"'<>?#]*@")
+MIN_PROXY_PASSWORD_TOKEN_LENGTH = 8
 # Runtime/location/locale only. Tool configuration and code-injection variables are not inherited.
 CHILD_ENVIRONMENT_KEYS = frozenset(
     {
@@ -297,6 +298,33 @@ def format_exception_redacted(error: BaseException) -> str:
     return redact_diagnostic("".join(traceback.format_exception(error)))
 
 
+def detached_exception[Error: BaseException](replacement: Error, error: BaseException) -> Error:
+    """Prepare a redacted replacement with a sanitized cause and no original exception graph.
+
+    Callers must raise the returned exception OUTSIDE their except handler so Python cannot
+    reattach the raw exception as implicit `__context__`.
+
+    Parameters:
+        replacement (Error): operation-specific exception, preserving its domain type/metadata.
+        error (BaseException): untrusted underlying error and complete cause/context chain.
+
+    Returns:
+        Error: replacement with sanitized message and formatted cause, no raw traceback/context.
+
+    Raises:
+        ValueError: the original error was supplied as its own replacement.
+    """
+    if replacement is error:
+        raise ValueError("A detached exception requires a distinct replacement")
+    replacement.args = (redact_diagnostic(str(replacement)),)
+    if isinstance(replacement, SystemExit) and isinstance(replacement.code, str):
+        replacement.code = redact_diagnostic(replacement.code)
+    replacement.__cause__ = RuntimeError(format_exception_redacted(error))
+    replacement.__context__ = None
+    replacement.__traceback__ = None
+    return replacement
+
+
 def fetch_failure_reason(error: Exception) -> str:
     """Translate transport exceptions into stable, single-line public reasons, never urllib repr.
 
@@ -399,9 +427,7 @@ def fetch_bytes(request: str | Request) -> bytes:
                 raise ValueError(f"Content-Length mismatch: expected {length} bytes, received {len(body)}")
             return body
     except (HTTPException, OSError, ValueError) as error:
-        failure = FetchError(url, error)
-        # Retain a useful sanitized cause, not urllib's original args/reason/context graph.
-        failure.__cause__ = RuntimeError(format_exception_redacted(error))
+        failure = detached_exception(FetchError(url, error), error)
     # Raising outside the handler prevents Python attaching the raw error as __context__.
     raise failure from failure.__cause__
 
@@ -445,13 +471,70 @@ def redact_diagnostic(text: str) -> str:
     Returns:
         str: diagnostic retaining the scheme and host, never username/password userinfo.
     """
-    for key in PROXY_ENVIRONMENT_KEYS:
+    representations: dict[str, str] = {}
+    tokens: set[str] = set()
+    for key in sorted(PROXY_ENVIRONMENT_KEYS):
         value = os.environ.get(key, "")
-        authority = value.split("://", 1)[-1].split("/", 1)[0]
-        if "@" in authority:
-            credentials = authority.rsplit("@", 1)[0] + "@"
-            text = text.replace(value, value.replace(credentials, "", 1))
-    return PROXY_USERINFO.sub(lambda match: match["scheme"] or "", text)
+        scheme, separator, rest = value.partition("://")
+        if not separator:
+            rest = value
+        authority = rest.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        if "@" not in authority:
+            continue
+        userinfo = authority.rsplit("@", 1)[0]
+        clean_rest = rest[len(userinfo) + 1 :]
+        prefix = scheme + separator if separator else ""
+        for original, clean in ((value, prefix + clean_rest), (rest, clean_rest)):
+            representations[original] = clean
+            representations[unquote(original)] = unquote(clean)
+        # Split before decoding: an encoded colon may belong to the username itself.
+        password = userinfo.partition(":")[2]
+        if password:
+            for credentials in (userinfo, unquote(userinfo)):
+                tokens |= {credentials, credentials + "@"}
+            for secret in (password, unquote(password)):
+                if len(secret) >= MIN_PROXY_PASSWORD_TOKEN_LENGTH:
+                    tokens.add(secret)
+    for original in sorted(representations, key=lambda value: (-len(value), value)):
+        clean = representations[original]
+        text = (
+            text.replace(original, clean)
+            if "://" in original
+            else replace_diagnostic_token(text, original, clean)
+        )
+    # Greedy authority matching consumes through the FINAL '@', not a decoded password's '@'.
+    text = PROXY_USERINFO.sub(lambda match: match["scheme"] or "", text)
+    for token in sorted(tokens, key=lambda value: (-len(value), value)):
+        text = replace_diagnostic_token(text, token)
+    return text
+
+
+def replace_diagnostic_token(text: str, token: str, replacement: str = "[redacted]") -> str:
+    """Replace a known diagnostic token only at non-word boundaries, never word substrings.
+
+    Parameters:
+        text (str): diagnostic after complete URL redaction.
+        token (str): known authority, userinfo or sufficiently long password, encoded or decoded.
+        replacement (str): clean authority or the default `[redacted]` marker.
+
+    Returns:
+        str: diagnostic with only matching whole tokens replaced.
+
+    Raises:
+        ValueError: an empty token would make scanning ambiguous.
+    """
+    if not token:
+        raise ValueError("A redaction token must not be empty")
+    parts: list[str] = []
+    offset = 0
+    while (position := text.find(token, offset)) >= 0:
+        end = position + len(token)
+        before = text[position - 1] if position else ""
+        after = text[end] if end < len(text) else ""
+        whole = not (before.isalnum() or before == "_" or after.isalnum() or after == "_")
+        parts.extend((text[offset:position], replacement if whole else token))
+        offset = end
+    return "".join(parts) + text[offset:]
 
 
 def connectivity_environment(env: Mapping[str, str]) -> dict[str, str]:
@@ -560,11 +643,15 @@ def gitlink_tag(directory: Path) -> str:
                 text=True,
                 stderr=subprocess.STDOUT,
             ).strip()
-    except subprocess.CalledProcessError as error:
-        raise RuntimeError(
-            f"Core Gitlink at '{directory}' is untagged; release it before gating pins: "
-            f"{redact_diagnostic(error.output)}"
-        ) from error
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = error.output if isinstance(error, subprocess.CalledProcessError) else str(error)
+        failure = detached_exception(
+            RuntimeError(
+                f"Core Gitlink at '{directory}' is untagged; release it before gating pins: {detail}"
+            ),
+            error,
+        )
+    raise failure from failure.__cause__
 
 
 def release_asset_url(tag: str, name: str) -> str:
@@ -741,10 +828,18 @@ def verify_attestation(
             stderr=subprocess.STDOUT,
             timeout=120,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError(
-            f"GitHub provenance verification failed for '{path}': {_error_tail(error)}"
-        ) from error
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = (
+            _error_tail(error)
+            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired))
+            else str(error)
+        )
+        failure = detached_exception(
+            RuntimeError(f"GitHub provenance verification failed for '{path}': {detail}"), error
+        )
+    else:
+        return
+    raise failure from failure.__cause__
 
 
 def verify_public_attestation(
@@ -1111,8 +1206,17 @@ def fetch_release(
             stderr=subprocess.STDOUT,
             timeout=600,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError(f"Core release npm installation failed: {_error_tail(error)}") from error
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = (
+            _error_tail(error)
+            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired))
+            else str(error)
+        )
+        failure = detached_exception(RuntimeError(f"Core release npm installation failed: {detail}"), error)
+    else:
+        failure = None
+    if failure is not None:
+        raise failure from failure.__cause__
     modules = prefix / "lib/node_modules/@earendil-works/pi-coding-agent/node_modules"
     destination = modules / "@earendil-works/pi-tui"
     if destination.exists():
@@ -1153,8 +1257,12 @@ def main() -> None:
         try:
             verify_root_overrides(args.root.resolve())
         except (ValueError, RuntimeError, OSError) as error:
-            raise SystemExit(redact_diagnostic(f"Root core override verification failed: {error}")) from error
-        return
+            failure = detached_exception(
+                SystemExit(f"Root core override verification failed: {error}"), error
+            )
+        else:
+            return
+        raise failure from failure.__cause__
     if args.prefix is None:
         parser.error("`--prefix` is required with `--tag` or `--gitlink`")
     tag = args.tag or gitlink_tag(args.gitlink.resolve())
