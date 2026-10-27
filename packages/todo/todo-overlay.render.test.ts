@@ -3,10 +3,11 @@ import { dirname, join } from "node:path";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, createMockUI } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_HOME } from "./.test-support/setup.ts";
 import { __resetState, registerTodoTool, setActiveRenderSession, type TaskAction } from "./todo.ts";
 import { TodoOverlay } from "./todo-overlay.ts";
 
-const CONFIG_PATH = join(process.env.HOME!, ".config", "rpiv-todo", "config.json");
+const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
 
 function writeConfigFile(contents: string): void {
 	mkdirSync(dirname(CONFIG_PATH), { recursive: true });
@@ -37,7 +38,7 @@ async function setup(
 		await tool.execute?.("tc", p as never, undefined as never, undefined as never, ctx as never);
 	}
 	const ui = createMockUI(uiOverrides) as unknown as ExtensionUIContext;
-	const overlay = new TodoOverlay();
+	const overlay = new TodoOverlay(TEST_HOME);
 	overlay.setUICtx(ui);
 	overlay.update();
 	const setWidget = ui.setWidget as ReturnType<typeof vi.fn>;

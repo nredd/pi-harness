@@ -4,8 +4,9 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
+import { resolveAgentDir } from "./memory.js";
 import {
   isPackageResourceExcluded,
   isProjectTrusted,
@@ -55,6 +56,8 @@ export interface LoadCustomAgentsOptions {
    * answer is recorded.
    */
   projectTrusted?: boolean;
+  /** Home directory for the default global agent directory. Defaults at call time. */
+  homeDir?: string;
 }
 
 /**
@@ -94,7 +97,7 @@ export function loadCustomAgents(
   strict = false,
   opts: LoadCustomAgentsOptions = {},
 ): Map<string, AgentConfig> {
-  const globalDir = join(getAgentDir(), "agents");
+  const globalDir = join(resolveAgentDir(opts.homeDir), "agents");
   const workspaceProjectDir = join(cwd, ".agents", "agents");
   const projectDir = join(cwd, ".pi", "agents");
 
@@ -131,7 +134,7 @@ function loadFromDir(
 
   let files: string[];
   try {
-    files = readdirSync(dir).filter(f => f.endsWith(".md"));
+    files = readdirSync(dir).filter(f => f.endsWith(".md")).sort();
   } catch {
     return;
   }

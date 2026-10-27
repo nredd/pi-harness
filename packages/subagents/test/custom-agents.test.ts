@@ -10,15 +10,12 @@ import type { AgentConfig } from "../src/types.js";
 
 describe("loadCustomAgents", () => {
   let tmpDir: string;
-  let originalHome: string | undefined;
   let originalAgentDir: string | undefined;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-test-"));
-    originalHome = process.env.HOME;
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.HOME = tmpDir;
-    delete process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tmpDir, ".pi", "agent");
     // These suites exercise project agent files, which load only for a trusted
     // project. Untrusted behaviour lives in project-agent-trust.test.ts.
     resetPackageState();
@@ -26,8 +23,6 @@ describe("loadCustomAgents", () => {
   });
 
   afterEach(() => {
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
     resetPackageState();
@@ -51,6 +46,21 @@ describe("loadCustomAgents", () => {
   it("returns empty map when custom agent dirs do not exist", () => {
     const result = loadCustomAgents(tmpDir);
     expect(result.size).toBe(0);
+  });
+
+  it("reads global agents from an injected home, not the runtime home", () => {
+    const injectedHome = join(tmpDir, "injected-home");
+    const agentDir = join(injectedHome, ".pi", "agent", "agents");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "injected.md"), "---\ndescription: Injected\n---\nPrompt.");
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    delete process.env.PI_CODING_AGENT_DIR;
+    try {
+      expect(loadCustomAgents(tmpDir, false, { homeDir: injectedHome }).get("injected")?.description).toBe("Injected");
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
   });
 
   it("loads a workspace project agent from .agents/agents", () => {
@@ -1202,17 +1212,14 @@ Good body.`);
 describe("package-provided agents", () => {
   let tmpDir: string;
   let pkgDir: string;
-  let originalHome: string | undefined;
   let originalAgentDir: string | undefined;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-test-pkg-"));
     pkgDir = join(tmpDir, "package", "agents");
     mkdirSync(pkgDir, { recursive: true });
-    originalHome = process.env.HOME;
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.HOME = tmpDir;
-    delete process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tmpDir, ".pi", "agent");
     // These suites exercise project agent files, which load only for a trusted
     // project. Untrusted behaviour lives in project-agent-trust.test.ts.
     resetPackageState();
@@ -1220,8 +1227,6 @@ describe("package-provided agents", () => {
   });
 
   afterEach(() => {
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
     resetPackageState();

@@ -190,6 +190,7 @@ export function extensionCanonicalNames(extPath: string): string[] {
 export function parseExtensionsSpec(
   entries: string[],
   cwd: string,
+  homeDir = homedir(),
 ): { names: Set<string>; paths: string[]; wildcard: boolean } {
   const names = new Set<string>();
   const paths: string[] = [];
@@ -207,7 +208,7 @@ export function parseExtensionsSpec(
     }
     let p = entry;
     if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) {
-      p = homedir() + p.slice(1);
+      p = homeDir + p.slice(1);
     }
     const abs = isAbsolute(p) ? p : resolve(cwd, p);
     paths.push(abs);
@@ -533,6 +534,8 @@ export interface RunOptions {
   workflow?: boolean;
   /** Override working directory (e.g. for worktree isolation). */
   cwd?: string;
+  /** Home directory for tilde expansion and user-scoped storage. Defaults at run time. */
+  homeDir?: string;
   /**
    * Directory the worktree copy was created from. Set only when `cwd` points
    * into a worktree — the prompt then tells the agent to stay in the copy
@@ -965,9 +968,9 @@ function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => 
   return () => signal.removeEventListener("abort", onAbort);
 }
 
-function resolveConfiguredSessionDir(sessionDir: string | undefined, cwd: string): string | undefined {
+function resolveConfiguredSessionDir(sessionDir: string | undefined, cwd: string, homeDir = homedir()): string | undefined {
   if (!sessionDir) return undefined;
-  if (sessionDir === "~" || sessionDir.startsWith("~/")) return resolve(homedir(), sessionDir.slice(2));
+  if (sessionDir === "~" || sessionDir.startsWith("~/")) return resolve(homeDir, sessionDir.slice(2));
   if (isAbsolute(sessionDir)) return sessionDir;
   return resolve(cwd, sessionDir);
 }
@@ -1009,7 +1012,7 @@ export async function runAgent(
 
   // Skill preloading: when skills is string[], preload their content into prompt
   if (Array.isArray(skills)) {
-    const loaded = preloadSkills(skills, configCwd);
+    const loaded = preloadSkills(skills, configCwd, options.homeDir);
     if (loaded.length > 0) {
       extras.skillBlocks = loaded;
     }
@@ -1029,12 +1032,12 @@ export async function runAgent(
       // Read-write memory: add any missing memory tool names (read/write/edit)
       const extraNames = getMemoryToolNames(existingNames);
       if (extraNames.length > 0) toolNames = [...toolNames, ...extraNames];
-      extras.memoryBlock = buildMemoryBlock(agentConfig.name, agentConfig.memory, configCwd);
+      extras.memoryBlock = buildMemoryBlock(agentConfig.name, agentConfig.memory, configCwd, options.homeDir);
     } else {
       // Read-only memory: only add read tool name, use read-only prompt
       const extraNames = getReadOnlyMemoryToolNames(existingNames);
       if (extraNames.length > 0) toolNames = [...toolNames, ...extraNames];
-      extras.memoryBlock = buildReadOnlyMemoryBlock(agentConfig.name, agentConfig.memory, configCwd);
+      extras.memoryBlock = buildReadOnlyMemoryBlock(agentConfig.name, agentConfig.memory, configCwd, options.homeDir);
     }
   }
 
@@ -1095,7 +1098,7 @@ export async function runAgent(
   const noExtensions = extensions === false;
 
   const extensionsSpec = Array.isArray(extensions)
-    ? parseExtensionsSpec(extensions, configCwd)
+    ? parseExtensionsSpec(extensions, configCwd, options.homeDir)
     : undefined;
   const keepNames = extensionsSpec?.names ?? new Set<string>();
   // `exclude_extensions:` is a denylist applied AFTER the include set — exclude wins.
@@ -1381,7 +1384,7 @@ export async function runAgent(
     sessionExcludeTools = [...denyTools];
   }
 
-  const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd);
+  const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd, options.homeDir);
   const defaultSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
   // Frontmatter wins when it says anything; otherwise the project default,
   // which `rememberAgents` supplies for top-level agents only. Same precedence

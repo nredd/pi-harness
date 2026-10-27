@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { TEST_HOME } from "./.test-support/setup.ts";
 import {
 	COLLAPSE_KEY_OFF,
 	DEFAULT_COLLAPSE_KEY,
@@ -12,7 +13,7 @@ import {
 	resolveCollapseKey,
 } from "./config.ts";
 
-const CONFIG_PATH = join(process.env.HOME!, ".config", "rpiv-todo", "config.json");
+const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
 
 function writeConfigFile(contents: string): void {
 	mkdirSync(dirname(CONFIG_PATH), { recursive: true });
@@ -26,6 +27,18 @@ beforeEach(removeConfigFile);
 afterEach(removeConfigFile);
 
 describe("getMaxWidgetLines", () => {
+	it("reads an injected home instead of the runtime home", () => {
+		const previousXdg = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = "relative-config-dir";
+		try {
+			writeConfigFile(JSON.stringify({ maxWidgetLines: 23 }));
+			expect(getMaxWidgetLines(TEST_HOME)).toBe(23);
+		} finally {
+			if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = previousXdg;
+		}
+	});
+
 	it("returns the default when no config is present", () => {
 		expect(getMaxWidgetLines()).toBe(DEFAULT_MAX_WIDGET_LINES);
 	});

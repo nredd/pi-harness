@@ -252,7 +252,6 @@ describe("preloadSkills", () => {
   });
 
   describe("user roots follow symlinks like Pi", () => {
-    let originalHome: string | undefined;
     const home = () => join(tmpDir, "home");
     const userAgentsRoot = () => join(home(), ".agents", "skills");
     /** A real skill dir outside every root, the way installers keep vendored skills. */
@@ -260,16 +259,6 @@ describe("preloadSkills", () => {
       writeSkillDir(join(tmpDir, "vendor"), name, content);
       return join(tmpDir, "vendor", name);
     };
-
-    beforeEach(() => {
-      originalHome = process.env.HOME;
-      process.env.HOME = home();
-    });
-
-    afterEach(() => {
-      if (originalHome === undefined) delete process.env.HOME;
-      else process.env.HOME = originalHome;
-    });
 
     it("loads a symlinked skill directory from getAgentDir()/skills", () => {
       mkdirSync(globalRoot(), { recursive: true });
@@ -280,10 +269,10 @@ describe("preloadSkills", () => {
     it("loads a symlinked skill directory from ~/.agents/skills, also when cwd is home", () => {
       mkdirSync(userAgentsRoot(), { recursive: true });
       symlinkSync(vendor("codebase-design", "VOCAB"), join(userAgentsRoot(), "codebase-design"));
-      expect(preloadSkills(["codebase-design"], tmpDir)[0].content).toBe("VOCAB");
+      expect(preloadSkills(["codebase-design"], tmpDir, home())[0].content).toBe("VOCAB");
       // cwd == home makes <cwd>/.agents/skills the same directory: the strict project pass
       // refuses the link, the user pass still loads it.
-      expect(preloadSkills(["codebase-design"], home())[0].content).toBe("VOCAB");
+      expect(preloadSkills(["codebase-design"], home(), home())[0].content).toBe("VOCAB");
     });
 
     it("follows a symlinked user root, symlinked intermediate dirs and symlinked files", () => {
@@ -300,7 +289,7 @@ describe("preloadSkills", () => {
       symlinkSync(join(realRoot, "flat-real.md"), join(inner, "SKILL.md"));
       symlinkSync(inner, join(globalRoot(), "inner"));
 
-      const [flat, nested, flatLink, inSkill] = preloadSkills(["flat-real", "nested", "flat-link", "inner"], tmpDir);
+      const [flat, nested, flatLink, inSkill] = preloadSkills(["flat-real", "nested", "flat-link", "inner"], tmpDir, home());
       expect(flat.content).toBe("FLAT");
       expect(nested.content).toBe("NESTED");
       expect(flatLink.content).toBe("FLAT");
@@ -316,7 +305,7 @@ describe("preloadSkills", () => {
       symlinkSync(join(tmpDir, "nowhere.md"), join(globalRoot(), "broken-flat.md"));
       writeSkillDir(join(globalRoot(), "zz"), "deep", "DEEP");
 
-      const [missing, broken, brokenFlat, deep] = preloadSkills(["missing", "broken", "broken-flat", "deep"], tmpDir);
+      const [missing, broken, brokenFlat, deep] = preloadSkills(["missing", "broken", "broken-flat", "deep"], tmpDir, home());
       expect(missing.content).toContain("not found");
       expect(broken.content).toContain("not found");
       expect(brokenFlat.content).toContain("not found");
