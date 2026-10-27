@@ -57,8 +57,11 @@ Round 3 retains the original one-byte malformed frame and 64-byte budget asserti
 It still exercises byte-cap accounting and unavailable footprint. The additional 335-byte case
 explicitly spies on native usage calls and requires none, preserving the admission-rejection intent.
 Captured RSS/footprint expectations and reuse deltas have named fixture constants with byte/tick
-arithmetic; tick deltas are not confused with microsecond units. Production executable behavior
-remains unchanged from `372f318`: only constant names, equivalent capture-group destructuring
+arithmetic; tick deltas are not confused with microsecond units. `OVERLONG_AT_MS` independently
+pins the 62_000 ms observation: minus the 1000 ms baseline gives 61_000 ms elapsed, exceeding the
+documented 60_000 ms native window without deriving the oracle from the production threshold.
+Other deliberate SDK offsets, malformed mutations and small-budget literals carry fixture context.
+Production executable behavior remains unchanged from `372f318`: only constant names, equivalent capture-group destructuring
 and documentation differ.
 
 Sources: Apple's SDK `sys/proc_info.h`, `sys/resource.h`, `mach/mach_time.h`; the installed SDK is

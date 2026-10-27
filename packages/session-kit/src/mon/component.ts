@@ -233,7 +233,7 @@ export class MonView implements Component {
 	 * Dim unknown values consistently.
 	 * @param text Preformatted metric.
 	 * @param width Minimum cell width.
-	 * @returns Right-padded-to-column-start text with unknown styling.
+	 * @returns Left-padded, right-aligned text with unknown styling.
 	 */
 	private value(text: string, width: number): string {
 		const padded = text.padStart(width);

@@ -23,6 +23,12 @@ const captured = JSON.parse(await readFile(new URL("./fixtures/darwin-native.jso
 const BASELINE_AT_MS = 1000;
 const SAMPLE_STEP_MS = 1000;
 const NEXT_AT_MS = BASELINE_AT_MS + SAMPLE_STEP_MS;
+/** Independent observation: 62_000 - 1000 baseline = 61_000 ms, above MAX_NATIVE_INTERVAL_MS's
+ * documented 60_000 ms strong-identity window. Never derive this oracle from the production limit.
+ */
+const OVERLONG_AT_MS = 62_000;
+/** Signed int32 maximum: an absent Darwin PID for exercising failed native access. */
+const ABSENT_PID = 2_147_483_647;
 /** Independent Apple Silicon capture: 125 nanoseconds / 3 Mach ticks. */
 const CAPTURED_TICKS_TO_NS = 125 / 3;
 /** Captured RSS: 944 KiB * 1024 bytes/KiB = 966656 bytes. */
@@ -110,6 +116,7 @@ function fakeNative(timebase: (buffer: Buffer) => number, usage: (pid: number, b
  * @returns The native syscall success status after writing both documented uint32_t fields.
  */
 const validTimebase = (buffer: Buffer): number => {
+	// Independent mach_timebase_info uint32_t byte offsets: numerator 0, denominator 4.
 	buffer.writeUInt32LE(125, 0);
 	buffer.writeUInt32LE(3, 4);
 	return 0;
@@ -173,6 +180,7 @@ describe("Darwin native identity and counters", () => {
 	it("converts captured Apple Silicon Mach ticks, preserving RSS and physical footprint", () => {
 		const row = counter();
 		expect(row.name).toBe("yes");
+		// Mach ticks * 125/3 ns/tick / 1_000_000 ns/ms, independent of production conversion units.
 		expect(row.cpuMs).toBeCloseTo((Number(captured.afterCpuTicks) * (125 / 3)) / 1e6, DECIMAL_PRECISION);
 		expect(row.rssBytes).toBe(CAPTURED_RSS_BYTES);
 		expect(row.footprintBytes).toBe(CAPTURED_FOOTPRINT_BYTES);
@@ -185,6 +193,7 @@ describe("Darwin native identity and counters", () => {
 		const previous = counter();
 		const { before, bsd, after } = buffers();
 		for (const buffer of [before, after]) buffer.writeBigUInt64LE(BigInt(captured.start) + REUSED_START_TICKS, 80);
+		// Advance the wall-clock start by one microsecond within the same second (byte offset 128).
 		bsd.writeBigUInt64LE(BigInt(captured.micros) + 1n, 128);
 		after.writeBigUInt64LE(BigInt(captured.afterCpuTicks) + REUSED_CPU_TICKS, 16);
 		const reused = darwinNativeCounter(captured.pid, before, bsd, after, NEXT_AT_MS, CAPTURED_TICKS_TO_NS);
@@ -193,6 +202,8 @@ describe("Darwin native identity and counters", () => {
 		expect(processCpu(previous, reused ?? previous).state).toBe("warming");
 	});
 	it("rejects identity change between reads, exited tasks, malformed layouts and counters", () => {
+		// Independent mutations: changed start ticks, nonzero exit ticks, CPU rollback,
+		// invalid one-second microsecond field, and a mismatched zero PID, at SDK byte offsets.
 		for (const change of [
 			(b: ReturnType<typeof buffers>) => b.after.writeBigUInt64LE(1n, 80),
 			(b: ReturnType<typeof buffers>) => b.after.writeBigUInt64LE(1n, 88),
@@ -218,13 +229,14 @@ describe("Darwin native identity and counters", () => {
 			{ cpuMs: 0 },
 			{ at: BASELINE_AT_MS },
 			{ at: Number.NaN },
-			{ at: 62000 },
+			{ at: OVERLONG_AT_MS },
 		]) {
 			expect(processCpu(before, { ...before, at: NEXT_AT_MS, ...change }).state).toBe("warming");
 		}
 	});
 	it("keeps invalid UTF-8 names display-safe without confusing exact native identity", () => {
 		const b = buffers();
+		// Clear the 16-byte p_comm span [48, 64), then inject one invalid UTF-8 byte (0xff).
 		b.bsd.fill(0, 48, 64);
 		b.bsd[48] = 0xff;
 		const row = darwinNativeCounter(captured.pid, b.before, b.bsd, b.after, BASELINE_AT_MS, 1);
@@ -244,9 +256,10 @@ describe("Darwin native identity and counters", () => {
 	it.skipIf(
 		process.platform !== "darwin" || (!process.versions.bun && Number(process.versions.node.split(".")[0]) < 26),
 	)("keeps failed PID metrics absent and accounts fixed native buffers within the shared cap", () => {
-		const fallback = { ...counter(), pid: 2147483647, strongIdentity: undefined, footprintBytes: undefined };
+		const fallback = { ...counter(), pid: ABSENT_PID, strongIdentity: undefined, footprintBytes: undefined };
 		const room = new Budget(performance.now() + TEST_BUDGET_MS, TEST_BUDGET_BYTES, 1, new AbortController().signal);
 		expect(darwinNativeProcesses([fallback], room)[0]).toEqual(fallback);
+		// Retain the original 64-byte cap, far below the independent 8 + 328-byte admission charge.
 		const tiny = new Budget(performance.now() + TEST_BUDGET_MS, 64, 1, new AbortController().signal);
 		expect(darwinNativeProcesses([fallback], tiny)[0]?.footprintBytes).toBeUndefined();
 		expect(tiny.bytesRead).toBeLessThanOrEqual(64);
