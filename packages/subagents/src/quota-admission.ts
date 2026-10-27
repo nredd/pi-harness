@@ -4,7 +4,7 @@
  * Quota tracking lives in a separate extension (nredd/pi-subscription-router),
  * reached over `pi.events` with the same envelope as `cross-extension-rpc.ts`:
  * emit `router:rpc:admit` `{ requestId, model }`, reply on
- * `router:rpc:admit:reply:<requestId>` as `{ success, data?: { ok, resolvedModel?, resetAt?, wait? } }` (`resolvedModel` is ignored).
+ * `router:rpc:admit:reply:<requestId>` as `{ success, data?: { ok, resolvedModel?, resetAt?, wait? } }` (`resolvedModel` labels the admitted physical model).
  *
  * Admission fails open. No router installed, a slow router, a malformed reply
  * or a router error all admit the dispatch: quota is advisory here, and the
@@ -13,6 +13,7 @@
 
 import { nanoid } from "nanoid";
 import { type Clock, realClock } from "./clock.js";
+import type { TierAdmission } from "./model-tiers.js";
 
 export const ADMIT_CHANNEL = "router:rpc:admit";
 
@@ -50,34 +51,45 @@ export function modelRef(model: { provider: string; id: string }): string {
 }
 
 /** Resolve to the block when the router refuses `model`, else undefined. */
-export function checkAdmission(
+export async function checkAdmission(
   events: AdmissionEvents,
   model: string,
   timeoutMs = ADMIT_TIMEOUT_MS,
   clock: Clock = realClock,
 ): Promise<QuotaBlock | undefined> {
+  return (await admissionOutcome(events, model, timeoutMs, clock)).block;
+}
+
+/** Retain the physical admission label and whether the router supplied a signal. */
+export function admissionOutcome(
+  events: AdmissionEvents,
+  model: string,
+  timeoutMs = ADMIT_TIMEOUT_MS,
+  clock: Clock = realClock,
+): Promise<TierAdmission> {
   const requestId = nanoid();
   return new Promise(resolve => {
     let done = false;
-    const finish = (block: QuotaBlock | undefined) => {
+    const finish = (outcome: TierAdmission) => {
       if (done) return;
       done = true;
       timer.cancel();
       unsubscribe();
-      resolve(block);
+      resolve(outcome);
     };
     const unsubscribe = events.on(`${ADMIT_CHANNEL}:reply:${requestId}`, raw => {
-      const reply = raw as { success?: unknown; data?: { ok?: unknown; resetAt?: unknown; wait?: unknown } } | undefined;
-      if (reply?.success !== true || reply.data?.ok !== false) return finish(undefined);
+      const reply = raw as { success?: unknown; data?: { ok?: unknown; resolvedModel?: unknown; resetAt?: unknown; wait?: unknown } } | undefined;
+      if (reply?.success !== true || typeof reply.data?.ok !== "boolean") return finish({ quotaSignal: false });
+      if (reply.data.ok) return finish({ quotaSignal: true, resolvedModel: typeof reply.data.resolvedModel === "string" ? reply.data.resolvedModel : undefined });
       const resetAt = reply.data.resetAt;
       const wait = reply.data.wait;
-      finish({
+      finish({ quotaSignal: true, block: {
         model,
         resetAt: typeof resetAt === "number" && Number.isFinite(resetAt) ? resetAt : undefined,
         ...(typeof wait === "boolean" ? { wait } : {}),
-      });
+      } });
     });
-    const timer = clock.setTimeout(() => finish(undefined), timeoutMs);
+    const timer = clock.setTimeout(() => finish({ quotaSignal: false }), timeoutMs);
     events.emit(ADMIT_CHANNEL, { requestId, model });
   });
 }

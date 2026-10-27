@@ -1,16 +1,17 @@
 /** Actual entry paths + manager, real Pi registry/resolver; only child execution is stubbed. */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentManager } from "../src/agent-manager.js";
+import { AgentManager, describeEvicted } from "../src/agent-manager.js";
 import * as runner from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { createSubagentsExtension } from "../src/index.js";
 import { setAgentModels, setModelAliases } from "../src/model-resolver.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
+import { setModelTiers } from "../src/model-tiers.js";
 import { createNestedSubagentTools } from "../src/nested-tools.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
@@ -36,6 +37,7 @@ let clock: FakeClock;
 let blockedUntil: number | undefined;
 let admissionModels: string[];
 let refuseStaleParent: boolean;
+let admittedModel: string | undefined;
 
 function bus() {
   const handlers = new Map<string, Set<(data: unknown) => void>>();
@@ -69,6 +71,7 @@ beforeEach(async () => {
   blockedUntil = undefined;
   admissionModels = [];
   refuseStaleParent = false;
+  admittedModel = undefined;
   boot = makePi();
   boot.pi.events = bus();
   // Answer admission synchronously, without any real router or network calls.
@@ -76,7 +79,7 @@ beforeEach(async () => {
     admissionModels.push(model);
     boot.pi.events.emit(`router:rpc:admit:reply:${requestId}`, { success: true,
       data: blockedUntil !== undefined ? { ok: false, resetAt: blockedUntil }
-        : refuseStaleParent && model === ref("parent") ? { ok: false, wait: false } : { ok: true },
+        : refuseStaleParent && model === ref("parent") ? { ok: false, wait: false } : { ok: true, resolvedModel: admittedModel },
     });
   });
   createSubagentsExtension({ clock })(boot.pi);
@@ -99,7 +102,7 @@ afterEach(async () => {
   scheduler.stop();
   await manager.dispose();
   await boot.lifecycle.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, context);
-  setAgentModels(undefined); setModelAliases(undefined); setScopeModelsEnabled(false);
+  setAgentModels(undefined); setModelAliases(undefined); setScopeModelsEnabled(false); setModelTiers(undefined, undefined);
   delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:manager")];
   sandbox.restore();
 });
@@ -132,6 +135,22 @@ async function invoke(path: Path, model?: string | null) {
 }
 
 describe.each(paths)("%s model selection parity", path => {
+  it("retains the same exact tier outcome across entry paths", async () => {
+    setModelTiers({ cheap: [ref("typed")] }, {});
+    setAgentModels({ scout: "@cheap", "*": ref("wildcard") });
+    const { invocation, record } = await invoke(path);
+    expect(invocation?.[3].model).toMatchObject({ provider: "selection-path", id: "typed" });
+    expect(record?.modelTier).toMatchObject({ kind: "static", tier: "cheap", member: ref("typed"), skipped: [] });
+    expect(record?.modelSelection).toMatchObject({ requested: "@cheap", source: "agentModels:type" });
+  });
+
+  if (path !== "mention") it("honors an explicit tier over agentModels", async () => {
+    setModelTiers({ cheap: [ref("explicit")] }, {});
+    setAgentModels({ scout: ref("typed") });
+    const { invocation, record } = await invoke(path, "@cheap");
+    expect(invocation?.[3].model).toMatchObject({ id: "explicit" });
+    expect(record?.modelSelection).toMatchObject({ requested: "@cheap", source: "param" });
+  });
   it("honors a type override over wildcard and frontmatter", async () => {
     setAgentModels({ SCOUT: ref("typed"), "*": ref("wildcard") });
     const { invocation, record } = await invoke(path);
@@ -226,6 +245,76 @@ describe.each(paths)("%s model selection parity", path => {
   });
 });
 
+it("reserves the concurrency slot before awaiting tier admission", async () => {
+  setModelTiers({ cheap: [ref("typed")] }, {});
+  setAgentModels({ scout: "@cheap" });
+  manager.setMaxConcurrent(1);
+  const first = manager.spawn(boot.pi, context, "scout", "first", { description: "first", isBackground: true });
+  const second = manager.spawn(boot.pi, context, "scout", "second", { description: "second", isBackground: true });
+  expect(manager.getRecord(first)?.status).toBe("running");
+  expect(manager.getRecord(second)?.status).toBe("queued");
+  await manager.waitForAll();
+  expect(runner.runAgent).toHaveBeenCalledTimes(2);
+});
+
+it("releases the concurrency slot on tier refusal before starting another child", async () => {
+  setModelTiers({ cheap: [ref("typed")] }, {});
+  setAgentModels({ scout: "@cheap" });
+  manager.setMaxConcurrent(1);
+  blockedUntil = clock.now() + 1000;
+  const refused = manager.spawn(boot.pi, context, "scout", "refused", { description: "refused", isBackground: true });
+  await expect(manager.awaitStartup(refused)).rejects.toThrow("Model: @cheap is exhausted");
+  expect(runner.runAgent).not.toHaveBeenCalled();
+  blockedUntil = undefined;
+  const next = manager.spawn(boot.pi, context, "scout", "next", { description: "next", isBackground: true });
+  expect(manager.getRecord(next)?.status).toBe("running");
+  await manager.waitForAll();
+  expect(runner.runAgent).toHaveBeenCalledTimes(1);
+});
+
+it("does not launch a child aborted during tier admission", async () => {
+  setModelTiers({ cheap: [ref("typed")] }, {});
+  setAgentModels({ scout: "@cheap" });
+  const signal = new AbortController();
+  const id = manager.spawn(boot.pi, context, "scout", "cancelled", { description: "cancelled", isBackground: true, signal: signal.signal });
+  signal.abort();
+  await expect(manager.awaitStartup(id)).rejects.toThrow("Agent aborted during model admission");
+  expect(runner.runAgent).not.toHaveBeenCalled();
+});
+
+it("updates workflow resolution from the admitted model to the answering model", async () => {
+  setModelTiers({ cheap: ["router/default"] }, {});
+  const resolved: { recordId?: string; modelId?: string; modelNote?: string }[] = [];
+  const transcript = join(sandbox.dir, "tier-answer.output");
+  admittedModel = ref("typed");
+  vi.mocked(runner.runAgent).mockImplementationOnce(async (_ctx, _type, _prompt, options) => {
+    const session = { model: options.model, dispose: vi.fn(), sessionManager: { getSessionFile: () => undefined } } as unknown as AgentSession;
+    await Promise.resolve();
+    const record = manager.getRecord(options.agentId!);
+    if (!record) throw new Error("Missing workflow record");
+    record.outputFile = transcript;
+    options.onSessionCreated?.(session);
+    options.onAssistantUsage?.({ input: 1, output: 1, cacheWrite: 0, cost: 0 }, { api: "openai-completions", provider: "selection-path", model: "explicit" });
+    return { responseText: "answer", session, aborted: false, steered: false };
+  });
+  const result = await createWorkflowHost({ pi: boot.pi, ctx: context, manager }).spawnAgent({ agentId: "tier-workflow", index: 0,
+    agentType: "scout", label: "tier workflow", prompt: "go", model: "@cheap", onResolved: info => resolved.push(info) });
+  expect(result.modelTier).toMatchObject({ kind: "routed", tier: "cheap", profile: "router/default" });
+  expect(resolved.some(info => info.modelId === ref("typed"))).toBe(true);
+  expect(resolved.at(-1)?.modelId).toBe(ref("explicit"));
+  expect(result.modelNote).toContain(`switched from ${ref("typed")} within tier`);
+  expect(result.modelTier).toMatchObject({ admitted: ref("typed"), answered: ref("explicit") });
+  const lines = readFileSync(transcript, "utf-8").trim().split("\n").map(line => JSON.parse(line));
+  expect(lines.at(-1)).toMatchObject({ type: "model-tier", modelTier: { answered: ref("explicit") }, note: result.modelNote });
+  const id = resolved.find(info => info.recordId)?.recordId;
+  if (!id) throw new Error("Workflow did not report a record id");
+  clock.advance(11 * 60_000);
+  const evicted = manager.getEvictedNote(id);
+  expect(evicted?.modelTier).toMatchObject({ answered: ref("explicit") });
+  if (!evicted) throw new Error("Missing evicted workflow note");
+  expect(describeEvicted(evicted)).toContain(`Model: @cheap -> ${ref("explicit")}`);
+});
+
 it("shows the same configured model in the agents menu instead of the definition default", async () => {
   setAgentModels({ scout: "router/default" });
   initTheme("dark", false);
@@ -308,6 +397,39 @@ it("reopens an evicted mention with current selection and retained original fall
   expect(options?.modelSelection).toMatchObject({ requested: "router/default", source: "agentModels:type" });
   expect(options?.modelSelection?.fallback).toBeUndefined();
   expect(root.getRecord(options!.agentId!)?.modelFallback).toEqual(record?.modelFallback);
+});
+
+it("preserves a tier outcome across eviction and mention reopen", async () => {
+  setModelTiers({ cheap: [ref("typed")] }, {});
+  setAgentModels({ scout: "@cheap" });
+  const { record } = await invoke("Agent");
+  const originalTier = record?.modelTier;
+  expect(originalTier).toMatchObject({ kind: "static", tier: "cheap", member: ref("typed") });
+  clock.advance(11 * 60_000);
+  setAgentModels({ scout: ref("explicit") });
+  await boot.lifecycle.get("input")?.({ type: "input", text: "@scout again", source: "interactive" } as never, context);
+  await flush();
+  const options = vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3];
+  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
+  expect(options?.resumeSessionFile).toBe(record?.sessionFile);
+  expect(root.getRecord(options!.agentId!)?.modelTier).toEqual(originalTier);
+});
+
+it("retains the tier selection and disclosure on a live resume despite changed bindings", async () => {
+  setModelTiers({ cheap: [ref("typed")] }, {});
+  setAgentModels({ scout: "@cheap" });
+  const { record } = await invoke("Agent");
+  const tier = record!.modelTier;
+  setModelTiers({ cheap: [ref("explicit")] }, {});
+  const result = await boot.tools.get("Agent").execute("tier-resume", {
+    subagent_type: "scout", description: "again", prompt: "again", resume: record!.id,
+    model: "@missing", run_in_background: false,
+  }, undefined, undefined, context);
+  expect(record!.modelTier).toBe(tier);
+  expect(record!.session?.model).toMatchObject({ id: "typed" });
+  expect(result.details.modelTier).toEqual(tier);
+  expect(result.content[0].text).toContain(`Model: @cheap -> ${ref("typed")}`);
+  expect(result.content[0].text).not.toContain("@missing");
 });
 
 it("ignores new model inputs on Agent resume and reads the original record disclosure", async () => {

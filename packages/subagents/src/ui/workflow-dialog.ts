@@ -645,7 +645,7 @@ function agentRow(options: {
     dialogRowGlyph(display, glyphs, options.spinnerFrame),
     { text: " " },
     // Leading, ahead of the label, in both pane modes: the row clamps from the right.
-    ...(hasFallback(entry) ? [{ text: `${fallbackFlagText()} `, color: "warning" as const }] : []),
+    ...(hasFallback(entry) ? [{ text: `${fallbackFlagText(1, entry.modelTier?.tier, entry.modelTier?.kind)} `, color: "warning" as const }] : []),
     { text: entry.label, color: selected ? "accent" : undefined },
   ];
   // The narrow pane holds the label and nothing else; there is no room for a

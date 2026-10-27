@@ -31,7 +31,7 @@ import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import type { ModelCallEvent } from "./model-call.js";
 import type { ModelFallback } from "./model-resolver.js";
-import { type ModelSelection, selectModel } from "./model-selection.js";
+import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.js";
 import {
   createNestedSubagentTools,
   getMaxSubagentDepth,
@@ -1259,6 +1259,8 @@ export async function runAgent(
     parentModel: ctx.model, registry: ctx.modelRegistry, cwd: configCwd, agentLabel: agentConfig?.displayName,
   });
   if (typeof selection === "string") throw new Error(selection);
+  const tierBlock = await admitModelSelection(selection, ctx.modelRegistry, options.pi.events);
+  if (tierBlock) throw new Error(`Model tier @${selection.tier?.tier} is exhausted; the agent was not started.`);
   const model = selection.model;
   if (selection.fallback) options.onModelFallback?.(selection.fallback);
 

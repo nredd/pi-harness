@@ -10,6 +10,7 @@
  * renderer and fails the ones that do not.
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { TierDisclosure } from "../model-tiers.js";
 
 /** Minimal theme surface, so this module has no dependency on the widgets that use it. */
 interface FlagTheme {
@@ -20,18 +21,21 @@ interface FlagTheme {
 export interface FallbackCarrier {
   modelFallback?: unknown;
   modelNote?: string;
+  modelTier?: TierDisclosure;
 }
 
 /** Whether `carrier` ran on a substituted model. */
 export const hasFallback = (carrier: FallbackCarrier | undefined): boolean =>
-  carrier?.modelFallback !== undefined || carrier?.modelNote !== undefined;
+  carrier?.modelFallback !== undefined || carrier?.modelNote !== undefined || carrier?.modelTier !== undefined;
 
 /** Plain flag text: `[fallback]`, or `[fallback x3]` for a count of members. */
-export const fallbackFlagText = (count = 1): string => (count > 1 ? `[fallback x${count}]` : "[fallback]");
+export const fallbackFlagText = (count = 1, tier?: string, outcome?: TierDisclosure["kind"]): string => tier !== undefined
+  ? `[@${tier}${outcome && outcome !== "routed" && outcome !== "static" ? ` ${outcome}` : ""}]`
+  : (count > 1 ? `[fallback x${count}]` : "[fallback]");
 
 /** The themed flag for `carrier`, or "" when it did not fall back. */
 export function fallbackFlag(theme: FlagTheme, carrier: FallbackCarrier | undefined, count = 1): string {
-  return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count)) : "";
+  return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count, carrier?.modelTier?.tier, carrier?.modelTier?.kind)) : "";
 }
 
 /** What a flag degrades to when even it does not fit; plain so it cannot depend on a theme. */
