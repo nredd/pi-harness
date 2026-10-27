@@ -4,6 +4,8 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { ModelFallback } from "./model-resolver.js";
+import type { ModelSelection } from "./model-selection.js";
 import type { BudgetLease } from "./process-budget.js";
 import type { LifetimeUsage } from "./usage.js";
 
@@ -147,6 +149,8 @@ export interface AgentTombstone {
   description: string;
   /** Always set — a record with no session file is never tombstoned. */
   sessionFile: string;
+  /** The evicted run's model fallback, handed back to the record `@handle` reopens it as. */
+  modelFallback?: ModelFallback;
   completedAt: number;
 }
 
@@ -270,6 +274,18 @@ export interface AgentRecord {
   isBackground?: boolean;
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
   invocation?: AgentInvocation;
+  /**
+   * Set when a configured model did not resolve and the agent runs on the parent
+   * model. The single source for every disclosure surface; a resume reuses it
+   * as is, never recomputes it from the resuming call's config.
+   */
+  modelFallback?: ModelFallback;
+  /**
+   * This record's selection, retained across live resumes and physical relabelling.
+   * An evicted-session reopen selects anew; modelFallback separately retains the
+   * original conversation's disclosure even when the new selection resolves.
+   */
+  modelSelection?: ModelSelection;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
   /**
@@ -350,6 +366,8 @@ export interface NotificationDetails {
   durationMs: number;
   outputFile?: string;
   error?: string;
+  /** The `Note:` line when the agent ran on the parent model because its configured one did not resolve. */
+  modelNote?: string;
   resultPreview: string;
   /** Additional agents in a group notification. */
   others?: NotificationDetails[];
