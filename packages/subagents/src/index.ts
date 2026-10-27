@@ -870,6 +870,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   // --- Cross-extension RPC via pi.events ---
   let currentCtx: ExtensionContext | undefined;
+  let unwatchFleetSchedules: (() => void) | undefined;
   // RPC handlers + the `subagents:ready` broadcast are wired on `session_start`
   // (a bound lifecycle event), not at factory time. pi runs every extension
   // factory before the `extensions:` filter and only fires lifecycle events for
@@ -934,6 +935,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       widget.setUICtx(ctx.ui);
       fleet.setUICtx(ctx.ui as any);
       watchHandoffKey(ctx.ui);
+      unwatchFleetSchedules ??= pi.events.on("subagents:scheduled", () => fleet.update());
     }
     manager.clearCompleted(true);
     const sessionFile = ctx.sessionManager?.getSessionFile?.();
@@ -979,6 +981,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       pi.events.emit("subagents:ready", {});
     }
     if (isSchedulingEnabled() && !scheduler.isActive()) startScheduler(ctx);
+    fleet.update(); // restored quota-parked jobs have no agent record
     // Stack `@handle` suggestions on pi's built-in autocomplete. Registered at
     // most once per activation: pi appends wrappers to a list it never prunes,
     // so a second call would layer a duplicate provider on the first. TUI only
@@ -1301,6 +1304,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     widget.dispose();
     outbox.dispose();
     fleet.dispose();
+    unwatchFleetSchedules?.();
+    unwatchFleetSchedules = undefined;
     unsubHandoffKey?.();
     unsubHandoffKey = undefined;
     handoffKeyUi = undefined;
@@ -1438,6 +1443,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     getFullscreenScrollbar, backgroundActionFor, isShowModelEnabled,
     // Agents the previous instance of this session left running (/reload, /new, ...).
     () => listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.()), clock);
+  fleet.setParkedSource(() => scheduler.list().filter(job => job.enabled && job.quotaParked && job.lastStatus !== "running").length);
   /** What the Agent tool row reads at render time, so its summary stays live. */
   const agentRowLive: AgentRowLive = {
     getRecord: (id) => manager.getRecord(id),

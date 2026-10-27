@@ -1,6 +1,7 @@
 /**
  * fleet-list.ts — Claude Code-style "FleetView" list rendered below the editor.
  *
+ * Starts as a one-line state/count summary; ctrl+shift+a toggles the full list.
  * Shows `main` + each running/queued subagent as a navigable list. Pressing ↓ (or
  * ←) at an empty prompt activates the list; ↑/↓ move the selection (filled ● marker),
  * Enter opens the selected agent's live conversation overlay, Esc returns to the prompt.
@@ -21,7 +22,10 @@ import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, buildInvocationTags, fgPreservingNestedStyles, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
-import { fallbackFlag, withLeadingFlag } from "./fallback-flag.js";
+import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.js";
+
+/** Matches the todo/monitor disclosure shortcut family; arrows keep their navigation roles. */
+export const FLEET_COLLAPSE_KEY = "ctrl+shift+a";
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -168,6 +172,36 @@ function summarizeHidden(rows: readonly (WorkflowEntry | AgentEntry)[]): string 
   return BUCKET_ORDER.filter(b => counts.has(b)).map(b => `${counts.get(b)} ${b}`).join(", ");
 }
 
+/** One bounded line, including zero agents; the controller still hides an empty fleet. */
+export function renderFleetSummary(
+  agents: readonly AgentRecord[],
+  workflows: readonly FleetWorkflow[],
+  parked: number,
+  showCost: boolean,
+  width: number,
+  theme: Theme,
+): string {
+  const rows: (AgentEntry | WorkflowEntry)[] = [
+    ...agents.map(record => ({ kind: "agent" as const, record })),
+    ...workflows.map(workflow => ({ kind: "workflow" as const, workflow })),
+  ];
+  const failed = rows.filter(row => row.kind === "agent"
+    ? agentState(row.record.status).bucket === "failed"
+    : workflowBucket(row.workflow.status) === "failed").length;
+  const paused = workflows.filter(run => run.status === "paused").length;
+  const fallback = agents.filter(hasFallback).length;
+  // Put actionable counts FIRST, not after a list that a narrow terminal clips.
+  // Compact words retain the counts at 20 columns, even with all four alerts.
+  const alerts = [failed ? `${failed} failed` : "", parked ? `${parked} parked` : "", paused ? `${paused} paused` : "", fallback ? `${fallback} fallback` : ""].filter(Boolean);
+  const fullFlag = alerts.length ? `[${alerts.join(", ")}]` : "";
+  const compactFlag = [failed ? `E${failed}` : "", parked ? `P${parked}` : "", paused ? `B${paused}` : "", fallback ? `F${fallback}` : ""].filter(Boolean).join(" ");
+  const flag = theme.fg(failed ? "error" : "warning", visibleWidth(fullFlag) > width ? `[${compactFlag}]` : fullFlag);
+  const cost = showCost ? formatCost(agents.reduce((sum, agent) => sum + getLifetimeCost(agent.lifetimeUsage), 0)) : "";
+  const summary = summarizeHidden(rows) || "0 running";
+  const text = `agents: ${summary}${parked ? `, ${parked} parked` : ""}${cost ? ` · ${cost}` : ""} · ${FLEET_COLLAPSE_KEY} to expand`;
+  return withLeadingFlag("", alerts.length ? flag : "", theme.fg("dim", text), width);
+}
+
 export class FleetList {
   private ui: FleetUICtx | undefined;
   private tui: any | undefined;
@@ -178,6 +212,10 @@ export class FleetList {
   private timer: TimerHandle | undefined;
 
   private enabled = true;
+  /** Explicit session choice. Navigation temporarily reveals rows without changing it. */
+  private collapsed = true;
+  /** Quota parking has no AgentRecord; the scheduler supplies its enabled-job count. */
+  private parkedSource: () => number = () => 0;
   /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
   private active = false;
   /** 0 = `main`, 1..N = subagents. */
@@ -240,6 +278,20 @@ export class FleetList {
     private readonly clock: Clock = realClock,
   ) {}
 
+  /** UI-only disclosure; never claims a dialog's key or touches running work. */
+  toggleCollapse(): void {
+    if (!this.enabled || !this.ui || this.viewerClose || this.viewingWorkflowId || !this.editorHasFocus()) return;
+    this.collapsed = this.active ? true : !this.collapsed;
+    this.active = false;
+    this.selectedIndex = 0;
+    this.update();
+  }
+
+  /** Inject scheduler display data, without coupling the fleet to scheduling behavior. */
+  setParkedSource(source: () => number): void {
+    this.parkedSource = source;
+  }
+
   // ---- Lifecycle ----
 
   setEnabled(enabled: boolean): void {
@@ -294,11 +346,9 @@ export class FleetList {
   /** Re-register/refresh the below-editor widget; clears it when nothing remains. */
   update(): void {
     if (!this.ui) return;
-    // A run with no agents of its own left in the list is still worth a row —
-    // it is the thing the user opens to see what its children did. Read off the
-    // roster for the same reason activation does: two counts of "is there
-    // anything here" drifted apart once before.
-    const hasRows = this.enabled && this.roster().length > 1;
+    // Summary existence includes pending starts and quota parking: neither has
+    // an openable row yet. Navigation still uses the openable roster only.
+    const hasRows = this.enabled && (this.agentRecords(true).length > 0 || this.workflows().length > 0 || this.parkedSource() > 0);
 
     if (!hasRows) {
       if (this.widgetRegistered) {
@@ -359,10 +409,10 @@ export class FleetList {
    * started sooner sit at the top. Every row is openable (has a session), so Enter
    * never dead-ends. Included: running/queued, plus the agent currently being
    * viewed, plus recently-finished ones (they linger briefly before dropping out).
-   * Pending agents with no session yet are hidden until they start.
+   * Pending agents have no openable row; includePending counts them in the summary.
    * (`listAgents()` is newest-first, so we re-sort.)
    */
-  private agentRecords(): AgentRecord[] {
+  private agentRecords(includePending = false): AgentRecord[] {
     const now = this.clock.now();
     // Orphans are live objects, so a settled one is simply skipped; the
     // registry drops it itself. Own records win if an id appears in both.
@@ -370,7 +420,7 @@ export class FleetList {
     const ownIds = new Set(own.map(a => a.id));
     const orphans = this.detachedSource().map(d => d.record).filter(r => !ownIds.has(r.id));
     return [...own, ...orphans]
-      .filter(a => isTopLevelAgent(a) && a.session && (
+      .filter(a => isTopLevelAgent(a) && (includePending || a.session) && (
         a.status === "running" || a.status === "queued"
         || a.id === this.viewingAgentId
         || (a.completedAt != null && now - a.completedAt < FINISHED_LINGER_MS)
@@ -454,6 +504,11 @@ export class FleetList {
     if (!this.editorHasFocus()) {
       if (this.active) this.deactivate();
       return undefined;
+    }
+
+    if (matchesKey(data, FLEET_COLLAPSE_KEY)) {
+      this.toggleCollapse();
+      return { consume: true };
     }
 
     if (!this.active) {
@@ -600,14 +655,16 @@ export class FleetList {
 
   private renderBar(width: number, theme: Theme): string[] {
     const rows = this.roster().slice(1) as (WorkflowEntry | AgentEntry)[];
-    if (rows.length === 0) return [];
+    if ((this.collapsed && !this.active) || rows.length === 0) {
+      return [renderFleetSummary(this.agentRecords(true), this.workflows(), this.parkedSource(), this.showCost(), width, theme)];
+    }
     // Clamp locally so a render between a roster shrink and the next update()
     // (e.g. on terminal resize) never loses the selection marker.
     const sel = Math.min(this.selectedIndex, rows.length);
 
     const hint = this.active
       ? "↑↓ select · enter view · esc back"
-      : "esc to interrupt · ← for agents · ↓ to manage";
+      : `esc to interrupt · ← for agents · ↓ to manage · ${FLEET_COLLAPSE_KEY} to collapse`;
     const lines: string[] = [];
     lines.push(truncateToWidth("  " + theme.fg("dim", hint), width));
     lines.push("");

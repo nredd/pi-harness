@@ -122,6 +122,7 @@ function makeWorkflow(over: Partial<FleetWorkflow> = {}): FleetWorkflow {
 function harness(
   agents: AgentRecord[],
   opts: {
+    collapsed?: boolean;
     tuiMode?: TuiMode;
     viewerMarkdown?: () => ViewerMarkdownMode;
     onViewerMarkdown?: (mode: ViewerMarkdownMode) => void;
@@ -160,6 +161,7 @@ function harness(
   const manager = fakeManager(agents);
   const fleet = new FleetList(manager, new Map(), undefined, opts.viewerMarkdown, opts.onViewerMarkdown, undefined, opts.backgroundAction);
   fleet.setUICtx(ui);
+  if (!opts.collapsed) fleet.toggleCollapse(); // existing row tests exercise the expanded rendering
   let workflows: FleetWorkflow[] = [];
   const openedWorkflows: string[] = [];
   let closeWorkflowDialog: (() => void) | undefined;
@@ -224,6 +226,7 @@ describe("FleetList detached agents", () => {
     const fleet = new FleetList(fakeManager(own), new Map(), undefined, undefined, undefined, undefined, undefined, undefined, orphans);
     fleet.setUICtx(ui);
     fleet.update();
+    fleet.toggleCollapse();
     const render = () => (factory ? factory({ requestRender: () => {} }, theme).render(120).join("\n") : "");
     return { fleet, render };
   }
@@ -398,7 +401,7 @@ describe("FleetList navigation", () => {
       const record = makeRecord({ id: "late", session: undefined });
       const h = harness([record]);
       h.fleet.update(); // spawn time: running but no session yet, so no rows
-      expect(h.render()).toEqual([]);
+      expect(h.render().join("\n")).toContain("1 running"); // summary includes pending starts
       (record as { session?: unknown }).session = FAKE_SESSION;
       vi.advanceTimersByTime(250); // the tick must still be armed to pick it up
       expect(h.render().join("\n")).toContain("Sleep then report 1");
@@ -833,6 +836,7 @@ describe("FleetList cost display", () => {
     };
     fleet.setUICtx(ui);
     fleet.update();
+    fleet.toggleCollapse();
     return factory!({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
   }
 
@@ -882,6 +886,7 @@ describe("FleetList model and activity", () => {
     };
     fleet.setUICtx(ui);
     fleet.update();
+    fleet.toggleCollapse();
     return factory!({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme).render(160).join("\n");
   }
 
@@ -936,6 +941,7 @@ describe("FleetList model and activity", () => {
     fleet.setUICtx(ui);
     fleet.update();
 
+    fleet.toggleCollapse();
     const cellStart = (line: string, text: string) => {
       expect(line).toContain(text);
       return visibleWidth(line.split(text, 1)[0]);

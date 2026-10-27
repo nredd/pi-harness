@@ -19,6 +19,9 @@ it("fleet opens viewer and raw mouse closes its footer", async () => {
   await stream.entered;
   fixture.clock.advance(200);
   await host.settle();
+  expect(host.viewport().join("\n")).toContain("agents: 1 running");
+  host.input("\x1b[97;6u"); // explicitly expand for this viewer round trip
+  await host.settle();
   const fleetRow = /^\s+[●○] Agent\s+viewer child/m;
   expect(host.viewport().join("\n")).toMatch(fleetRow);
   expect(host.viewport().join("\n")).toContain("↓ to manage");

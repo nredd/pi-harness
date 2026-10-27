@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Claude Code look & feel** — same tool names, calling conventions, and UI patterns (`Agent`, `get_subagent_result`, `steer_subagent`) — feels native
 - **Parallel background agents** — spawn multiple agents that run concurrently with automatic queuing (configurable concurrency limit, default 10) and completion notifications that reach the parent at its next boundary, several at once when they finish together
 - **Live widget UI** — persistent above-editor widget with animated spinners, live tool activity, token counts, and colored status icons. Configurable via `/agents → Settings → Widget`: `all` (every agent), `background` (default — hides foreground runs, which already render inline as the `Agent` tool result), or `off`
-- **FleetView** — Claude Code-style navigable list of `main` + every running subagent rendered below the editor (earliest-launched first). Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
+- **FleetView** — one-line summary below the editor by default; `ctrl+shift+a` expands the Claude Code-style navigable list of `main` + every running subagent (earliest-launched first). Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
 - **Conversation viewer** — select any agent in `/agents` to open a live-scrolling overlay of its full conversation (auto-follows new content, scroll up to pause). In pi's fullscreen mode it is a borderless, full-terminal observer with mouse support. Steer a running agent inline by pressing `Enter` to open a composer, typing, then `Enter` to send (`Esc` or an empty submit returns) — the message appears as a user message and redirects the agent after its current tool. Press `b` on a running foreground `Agent` call to hand that run to the background (see [Sending a foreground agent to the background](#sending-a-foreground-agent-to-the-background)). Stop a still-running agent by pressing `x` (then `x` again to confirm) — steer and stop both work for background agents too. Assistant text renders as Markdown; `m` cycles that between off, assistant-only and everything (see [Viewer markdown](#persistent-settings))
 - **Custom agent types** — define agents in `.pi/agents/<name>.md` or `.agents/agents/<name>.md` (project) or globally, with YAML frontmatter: custom system prompts, model selection, thinking levels, tool restrictions, and Claude Code-compatible colored name badges
 - **Package-shipped agents** — a pi package can declare its own subagents (and workflow scripts) with `"pi": { "subagents": { "agents": ["./agents"] } }` in its `package.json`, so `pi install` is the whole setup: no copying files into `.pi/agents/` on every machine or container start. Only packages pi has actually installed are read (never `node_modules`), package definitions rank below every agent you wrote, and `/agents` shows them read-only with Eject and Disable. Narrow or switch it off with `packageAgents` / `packageWorkflows`. **[Full guide](https://github.com/tintinweb/pi-subagents/blob/master/docs/packages.md)**
@@ -219,7 +219,18 @@ The status, elapsed time and tokens are read from the agent record on every rend
 
 ### FleetView
 
-While subagents are running, a Claude Code-style navigable list renders **below** the editor:
+FleetView starts **collapsed**, rendering exactly one line below the editor, with no overflow rows or blank spacer. Always-collapsed is deliberate: it saves space even for one agent and avoids resizing when a fan-out crosses a threshold. `ctrl+shift+a` toggles it; the explicit choice survives ticks, roster changes and widget resets (including Plan-mode round trips) for this extension session. A fresh session or `/reload` starts collapsed again. This uses the fleet's existing focus-aware terminal-input handler, like its arrows and the foreground `ctrl+b` handoff; there is no subagent key-rebinding setting. Todo's `ctrl+shift+t`, monitors' `ctrl+shift+m`, and pi's `ctrl+o` keep their existing roles.
+
+```text
+agents: 3 running, 2 queued, 4 done · ~$28.70 · ctrl+shift+a to expand
+[1 failed, 2 parked, 1 fallback] agents: 3 running, 1 failed, 2 parked · ctrl+shift+a to expand
+```
+
+Counts cover top-level records, including running starts and queued/waiting agents without a session, plus workflow containers (not their children). `steered` counts as done; errors and aborted runs count as failed; stopped runs stay distinct. Completed records retain the existing four-second linger. Enabled quota-parked schedules awaiting dispatch count as parked even with no agent record. Failed/parked/paused-workflow/fallback counts lead in a shared, uncut flag; at narrow widths these compact to `[E1 P2 B1 F1]` (failed, parked, blocked/paused, fallback). Cost uses record-borne estimates only when `showCost` is on; it is the sum for the agents currently summarized, not a session ledger, and excludes workflow-container spend. Narrow lines drop trailing detail and the hint before leading alerts. An empty fleet still hides entirely; the standalone summary renderer has a one-line zero-count form.
+
+At an empty prompt, `↓` or `←` temporarily reveals the list and starts navigation. `Esc`, selecting `main`, or typing returns to the explicit disclosure choice; dialogs and conversation overlays keep their keys. `ctrl+shift+a` while navigating collapses and returns to the editor. The separate above-editor activity widget (`widgetMode`) and transcript/result/notice renderers are unchanged.
+
+Expanded, the existing navigable list renders **below** the editor:
 
 ```
   esc to interrupt · ← for agents · ↓ to manage
@@ -1268,7 +1279,7 @@ src/
     agent-widget.ts       # Persistent widget: spinners, activity, status icons, theming
     agent-row.ts          # The Agent tool row: live one-line summary, expanded prompt/tags/transcript
     notification-view.ts  # Completion notice renderer: one-line collapsed, stats/preview/link expanded
-    fleet-list.ts         # FleetView: navigable agent list below the editor
+    fleet-list.ts         # FleetView: one-line summary/disclosure and navigable list below the editor
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
     viewer-keys.ts        # Viewer scroll keys resolved through user keybindings
     agent-mention.ts      # `@` roster (running, resumable, and startable agents) + popup rows
