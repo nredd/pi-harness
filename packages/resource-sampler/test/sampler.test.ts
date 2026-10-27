@@ -1,13 +1,15 @@
-import { mkdtemp, readlink, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, readlink, rm, symlink } from "node:fs/promises";
 import { type CpuInfo, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { Budget, command } from "../src/collect.js";
+import { Budget, command, darwinHostMemory } from "../src/collect.js";
 import {
 	cpuSnapshot,
+	darwinMemory,
 	darwinProcess,
+	darwinSwap,
 	executableName,
 	hostCpu,
 	linuxRss,
@@ -139,6 +141,50 @@ describe("privacy-safe native parsers", () => {
 	});
 });
 
+describe("Darwin host memory", () => {
+	it("parses captured Apple Silicon pages, not free-only RAM or uncompressed page equivalents", async () => {
+		const vm = await readFile(new URL("./fixtures/darwin-vm-stat.txt", import.meta.url), "utf8");
+		const usedBytes = (241117 - 2046 + 180763 + 393195) * 16384;
+		expect(darwinMemory(vm, 16 * 1024 ** 3)).toEqual({
+			usedBytes,
+			availableBytes: 16 * 1024 ** 3 - usedBytes,
+			basis: "app+wired+compressed",
+		});
+		for (const broken of [
+			vm.replace("16384", "0"),
+			vm.replace("241117", "-1"),
+			vm.replace("2046", "999999"),
+			`${vm}Anonymous pages: 1.\n`,
+			vm.replace("Pages occupied by compressor:", "missing:"),
+		]) {
+			expect(darwinMemory(broken, 16 * 1024 ** 3)).toBeNull();
+		}
+		expect(darwinMemory(vm, 1)).toBeNull();
+		expect(darwinMemory(vm, Number.NaN)).toBeNull();
+		const comparison = await readFile(new URL("./fixtures/darwin-comparison.txt", import.meta.url), "utf8");
+		const swap = comparison.split("\n").find((line) => line.startsWith("vm.swapusage:")) ?? "";
+		expect(darwinSwap(swap)).toEqual({ usedBytes: Math.round(3079.44 * 1024 ** 2), totalBytes: 4096 * 1024 ** 2 });
+		for (const broken of [
+			"",
+			swap.replace("3079.44", "99999.00"),
+			swap.replace("1016.56", "0.00"),
+			swap.replace("4096.00", "Infinity"),
+		])
+			expect(darwinSwap(broken)).toBeNull();
+	});
+	it("does not spawn native readers after byte or deadline admission fails; absence is never zero", async () => {
+		for (const budget of [
+			new Budget(performance.now() - 1, 4096, 1, new AbortController().signal),
+			new Budget(performance.now() + 1000, 0, 1, new AbortController().signal),
+		]) {
+			const memory = await darwinHostMemory(budget, 16 * 1024 ** 3);
+			expect(memory.usage?.state).toBe("unavailable");
+			expect(memory.swap?.state).toBe("unavailable");
+			expect(budget.bytesRead).toBe(0);
+		}
+	});
+});
+
 describe("bounded child lifecycle", () => {
 	it("reaps the child on cancellation before returning", async () => {
 		const controller = new AbortController();
@@ -229,6 +275,13 @@ describe("real local sampler", () => {
 			const own = second.processes.find((entry) => entry.pid === process.pid);
 			expect(own?.cpu.state).toBe(process.platform === "linux" ? "available" : "unavailable");
 			expect(second.coverage.bytesRead).toBeLessThanOrEqual(2_097_152);
+			if (process.platform === "darwin") {
+				expect(second.memory.usage?.state).toBe("available");
+				expect(second.memory.swap?.state).toBe("available");
+			} else {
+				expect(second.memory.usage).toBeUndefined();
+				expect(second.memory.swap).toBeUndefined();
+			}
 			console.info(
 				JSON.stringify({
 					platform: second.platform,

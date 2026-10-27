@@ -17,6 +17,11 @@ export interface MonSnapshot {
 	logicalCpus: number;
 	memoryUsedBytes: number | null;
 	memoryTotalBytes: number | null;
+	/** Explicit measurement basis; older fixtures/producers default to total-free. */
+	memoryBasis?: "total-free" | "app+wired+compressed";
+	memoryFreeBytes?: number | null;
+	swapUsedBytes?: number | null;
+	swapTotalBytes?: number | null;
 	load: readonly number[];
 	processes: readonly MonProcess[];
 	/** Wall-clock capture time, for display only (it can jump). Never persisted. */

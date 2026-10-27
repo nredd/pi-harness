@@ -1,6 +1,7 @@
 /** Production /mon source: a thin mapping over the published shared sampler. No collector lives here. */
 import {
 	createResourceSampler,
+	type Metric,
 	type ResourceSampler,
 	type ResourceSnapshot,
 	type SamplerOptions,
@@ -20,12 +21,20 @@ const REASONS: Readonly<Record<string, string>> = {
 	"byte-limit": "read budget",
 	"file-byte-limit": "read budget",
 	[ROUTINE_SKIP]: "unreadable or exited",
-	"command-unavailable": "ps unavailable",
-	"command-failed": "ps failed",
+	"command-unavailable": "OS reader unavailable",
+	"command-failed": "OS reader failed",
 	"malformed-process-row": "unparsed rows",
 	"process-collection-unavailable": "process list unavailable",
 };
 const utf8 = new TextEncoder();
+
+/** Additive v1 memory fields; keep the adapter compatible with the currently published 0.1.1. */
+type MemorySnapshot = ResourceSnapshot & {
+	memory: ResourceSnapshot["memory"] & {
+		usage?: Metric<{ usedBytes: number; availableBytes: number; basis: "app+wired+compressed" }>;
+		swap?: Metric<{ usedBytes: number; totalBytes: number }>;
+	};
+};
 
 function finite(value: number): number | null {
 	return Number.isFinite(value) ? value : null;
@@ -74,16 +83,29 @@ function hint(snapshot: ResourceSnapshot): string | undefined {
  * Map one typed sampler snapshot without inventing zeros for warming/unavailable values.
  * `baseline` marks a source's first observation, whose warming CPU needs no explanation.
  */
-export function toMonSnapshot(snapshot: ResourceSnapshot, baseline = true): MonSnapshot {
+export function toMonSnapshot(snapshot: MemorySnapshot, baseline = true): MonSnapshot {
 	const total = finite(snapshot.memory.totalBytes);
 	const free = finite(snapshot.memory.freeBytes);
+	const usage = snapshot.memory.usage;
+	const swap = snapshot.memory.swap;
+	const measuredUsed = usage?.state === "available" ? finite(usage.value.usedBytes) : null;
+	const nativeUsed =
+		measuredUsed !== null && measuredUsed >= 0 && total !== null && measuredUsed <= total ? measuredUsed : null;
 	const text = notice(snapshot, baseline);
 	const note = hint(snapshot);
 	return {
 		cpuPercent: snapshot.cpu.state === "available" ? finite(snapshot.cpu.value) : null,
 		logicalCpus: snapshot.logicalCpus,
-		memoryUsedBytes: total !== null && total > 0 && free !== null ? Math.max(0, total - free) : null,
+		memoryUsedBytes: usage
+			? nativeUsed
+			: total !== null && total > 0 && free !== null && free >= 0 && free <= total
+				? total - free
+				: null,
 		memoryTotalBytes: total !== null && total > 0 ? total : null,
+		memoryBasis: usage ? "app+wired+compressed" : "total-free",
+		memoryFreeBytes: free !== null && free >= 0 ? free : null,
+		swapUsedBytes: swap?.state === "available" ? finite(swap.value.usedBytes) : null,
+		swapTotalBytes: swap?.state === "available" ? finite(swap.value.totalBytes) : null,
 		load: snapshot.loadAverage,
 		processes: snapshot.processes.map((p) => {
 			const state = nameState(snapshot, p.name);

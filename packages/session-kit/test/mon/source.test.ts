@@ -173,6 +173,41 @@ describe("sampler snapshot mapping", () => {
 		expect(linux.notice).toBeUndefined();
 	});
 
+	it("prefers additive native memory and never falls back to total-free when that reader fails", () => {
+		const input = {
+			...raw({ platform: "darwin" }),
+			memory: {
+				totalBytes: 16 * 1024 ** 3,
+				freeBytes: 1024 ** 3,
+				usage: {
+					state: "available" as const,
+					value: { usedBytes: 12 * 1024 ** 3, availableBytes: 4 * 1024 ** 3, basis: "app+wired+compressed" as const },
+				},
+				swap: { state: "available" as const, value: { usedBytes: 3 * 1024 ** 3, totalBytes: 4 * 1024 ** 3 } },
+			},
+		};
+		const mapped = toMonSnapshot(input);
+		expect(mapped.memoryUsedBytes).toBe(12 * 1024 ** 3);
+		expect(mapped.memoryBasis).toBe("app+wired+compressed");
+		expect(mapped.swapUsedBytes).toBe(3 * 1024 ** 3);
+		expect(mapped.memoryFreeBytes).toBe(1024 ** 3);
+		const failed = toMonSnapshot({
+			...input,
+			memory: {
+				...input.memory,
+				usage: { state: "unavailable", reason: "budget" },
+				swap: { state: "unavailable", reason: "budget" },
+			},
+		});
+		expect(failed.memoryUsedBytes).toBeNull();
+		expect(failed.swapUsedBytes).toBeNull();
+		const legacy = toMonSnapshot(
+			raw({ platform: "darwin", memory: { totalBytes: 16 * 1024 ** 3, freeBytes: 1024 ** 3 } }),
+		);
+		expect(legacy.memoryUsedBytes).toBe(15 * 1024 ** 3);
+		expect(legacy.memoryBasis).toBe("total-free");
+	});
+
 	it("treats missing memory or non-finite values as unknown", () => {
 		const zero = toMonSnapshot(raw({ memory: { totalBytes: 0, freeBytes: 0 }, durationMs: Number.NaN }));
 		expect(zero.memoryTotalBytes).toBeNull();

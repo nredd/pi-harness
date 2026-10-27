@@ -264,6 +264,19 @@ await supervise(hostile, async () => {
         const second = await sampler.sample();
         assert.equal(second.cpu.state, 'available');
         assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
+        if (process.platform === 'darwin') {
+            assert.equal(second.memory.usage?.state, 'available', 'native memory usage missing');
+            assert.equal(second.memory.usage.value.basis, 'app+wired+compressed');
+            const { usedBytes, availableBytes } = second.memory.usage.value;
+            assert.ok(usedBytes >= 0 && usedBytes <= second.memory.totalBytes);
+            assert.equal(usedBytes + availableBytes, second.memory.totalBytes);
+            assert.equal(second.memory.swap?.state, 'available', 'native swap missing');
+            assert.ok(second.memory.swap.value.usedBytes <= second.memory.swap.value.totalBytes);
+            assert.ok(second.processes.every(p => p.cpu.state === 'unavailable'));
+        } else if (process.platform === 'linux') {
+            assert.equal(second.memory.usage, undefined);
+            assert.equal(second.memory.swap, undefined);
+        }
         const coverage = JSON.stringify(second.coverage);
         const seen = pid => second.processes.some(p => p.pid === pid);
         assert.ok(seen(process.pid), `probe not observed within bounds: ${coverage}`);

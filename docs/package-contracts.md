@@ -226,7 +226,13 @@ both OSes and uploads its report with the other `*contracts*.json` artifacts.
 `make check-resource-sampler-contract` (also a prerequisite of `make check-package-contracts`)
 builds, packs, audits and installs `@nredd/pi-resource-sampler` alone, then runs the descriptor's
 fixed Node ESM consumer against those exact installed bytes. It samples the real host twice,
-checks aggregate CPU range and self-process visibility, and exercises cancellation and disposal. A
+checks aggregate CPU range and self-process visibility, and exercises cancellation and disposal.
+On Darwin it also requires additive v1 `memory.usage` (`app+wired+compressed`, used + available =
+total) and `memory.swap` metrics, with unavailable never substituted by zero. Linux retains absent
+native-Darwin fields. `test_library_probe_rejects_missing_native_memory` executes the probe against
+older/broken synthetic producers to prove each missing field fails and the hostile child is reaped.
+This library gate tests the newly packed sampler, not the consumers' still-pinned registry `0.1.1`;
+see [measurement and release limitations](mon-accuracy.md). A
 child's argv[0], process title and Linux comm hold a random 32-hex secret; the probe first proves the
 0.1.0 name source (`ps -c` comm on Darwin, `/proc/PID/comm` on Linux) shows it, then requires the
 child in the second snapshot and no 12-character window of the secret anywhere in either snapshot.

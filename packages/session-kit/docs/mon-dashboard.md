@@ -67,9 +67,20 @@ sample, including its `ps` child on macOS. Mapping rules:
   columns before it are blank, including the warming baseline. Stale snapshots add no point. The caption states the actual span. The latest sample in a bucket wins.
   Stale views show the last successful capture's UTC timestamp (or `none`). Waiting/live/stale and
   CPU warming/unavailable use semantic theme colors and text, so meaning does not depend on color.
-- Memory is total minus free, explicitly **non-free**, not available memory or a pressure score
-  (on macOS free pages are small by design). Load averages are not percentages. Process CPU is
-  interval CPU, where 100% is one logical CPU and multithreaded processes can exceed 100%.
+- Memory labels its actual basis. Older samplers report **total-free** (`T-F` in the compact
+  summary), which includes cached files and is NOT Activity Monitor's Memory Used. Additive v1
+  `memory.usage` metrics instead render **used (A+W+C)** (`A+W+C` compact), an estimate of resident
+  App + Wired + Compressed physical RAM. A failed native metric stays `--`, never total-free under
+  a used label. Cards also show free pages and swap used/allocated; missing swap stays `--/--`.
+  `?` explains each basis, RSS excluding compressed pages versus Activity Monitor's footprint,
+  executable names (`pi` runs as `node`), and decaying `ps %cpu` versus interval CPU.
+  Load averages are not percentages. Process CPU is interval CPU, where 100% is one logical CPU and
+  multithreaded processes can exceed 100%.
+- Release sequencing: the registry dependency remains `0.1.1`, which lacks native host-memory
+  metrics. This adapter accepts the new optional fields and tests them, but the production view
+  remains honestly labelled total-free until a new sampler is published, its common dependency pin
+  and nested registry lock entries are updated, and both consumer registry tests pass. Do NOT claim
+  the new native used/swap line is active with the old registry pin.
 - The process viewport preserves selection by sampler identity, not PID or sorted row.
   Exited identities choose a bounded neighboring row; PID reuse cannot inherit selection.
   Unknown/non-finite measurements sort last with deterministic PID/identity tie breaks.

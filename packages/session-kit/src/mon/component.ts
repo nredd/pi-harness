@@ -56,7 +56,12 @@ const HELP = [
 	" CPU is interval usage, not lifetime.",
 	" Process CPU can exceed 100% (one core).",
 	" -- is unavailable, never zero.",
-	" RAM is total minus free, not pressure.",
+	" T-F / RAM total-free includes cache;",
+	" it is NOT Activity Monitor Memory Used.",
+	" macOS used (A+W+C) estimates resident",
+	" app + wired + compressed physical RAM.",
+	" Free is free pages, not available RAM.",
+	" Swap is used / allocated, not RAM.",
 	" MEM% is RSS over total RAM.",
 	" Load 1/5/15 min: not percent.",
 	" History: elapsed time, newest right;",
@@ -65,12 +70,17 @@ const HELP = [
 	"*Processes",
 	" Names are executable files, never",
 	" arguments; still untrusted text.",
+	" pi runs as node: executable, not title.",
+	" RSS excludes compressed pages.",
+	" Activity Monitor's Memory column:",
+	" footprint, not RSS, with compression.",
 	" (unknown): no access, e.g. another",
 	" user's process on Linux.",
 	" macOS keeps 16 bytes of a name;",
 	" a trailing … marks a possible cut.",
 	" macOS: ps start time is whole seconds,",
 	" so process CPU stays -- (sort: RSS).",
+	" ps %cpu is decaying, NOT interval CPU.",
 	" Lists can be partial; notices say why.",
 	" Selection follows identity, not row.",
 	" No kill, locks or scheduling.",
@@ -251,14 +261,16 @@ export class MonView implements Component {
 				` ${this.cpuSummary()}`,
 				...timeHistoryRows(this.history, chartWidth, 2).map((row) => ` ${t.fg("accent", row)}`),
 				` ${t.fg("dim", this.historyLabel())}`,
+				"",
 			],
 			leftWidth,
 		);
 		const memory = this.panel(
 			"MEMORY / load",
 			[
-				` ${t.bold(bytes(used))} ${t.fg("muted", `/ ${bytes(total)} non-free`)}`,
+				` ${t.bold(bytes(used))} ${t.fg("muted", `/ ${bytes(total)} ${s?.memoryBasis === "app+wired+compressed" ? "used (A+W+C)" : "total-free"}`)}`,
 				` ${t.fg("accent", "━".repeat(full))}${t.fg("borderMuted", "─".repeat(meterWidth - full))} ${ratio === null ? t.fg("dim", "--") : `${Math.round(ratio * 100)}%`}`,
+				` ${t.fg("muted", "free")} ${bytes(s?.memoryFreeBytes ?? null)} ${t.fg("muted", "swap")} ${bytes(s?.swapUsedBytes ?? null)}/${bytes(s?.swapTotalBytes ?? null)}`,
 				` ${t.fg("muted", "load")} ${this.loads()}`,
 				` ${t.fg("muted", "1/5/15 min ·")} ${perCpu === "--" ? t.fg("dim", perCpu) : perCpu} ${t.fg("muted", "per CPU")}`,
 			],
@@ -276,7 +288,7 @@ export class MonView implements Component {
 		const ram = `${bytes(used)}/${bytes(total)}`;
 		const metrics = [
 			`${t.fg("muted", "CPU")} ${this.cpuSummary(false)}`,
-			`${t.fg("muted", "RAM")} ${ram}`,
+			`${t.fg("muted", s?.memoryBasis === "total-free" ? "T-F" : s?.memoryBasis === "app+wired+compressed" ? "A+W+C" : "RAM")} ${ram}`,
 			`${t.fg("muted", "load")} ${this.loads().split(" ")[0]}`,
 		];
 		const spaced = ` ${metrics.join("  ")}`;

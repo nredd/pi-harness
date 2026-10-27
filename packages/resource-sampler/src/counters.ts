@@ -140,6 +140,56 @@ export function darwinProcess(line: string, at: number): ProcessCounter | null {
 	return { pid, parentPid, rssBytes, identity: `${pid}:${match[3]}`, name: safeName(match[6]), cpuMs: 0, at };
 }
 
+/**
+ * vm_stat counters are pages, with the page size in the header (16KiB on Apple Silicon).
+ * App resident pages = anonymous - purgeable; add wired and physical compressor pages, NOT pages
+ * stored in the compressor. Available here means total minus this used estimate, not pressure.
+ */
+export function darwinMemory(
+	text: string,
+	total: number,
+): {
+	usedBytes: number;
+	availableBytes: number;
+	basis: "app+wired+compressed";
+} | null {
+	const header = /^Mach Virtual Memory Statistics: \(page size of (\d+) bytes\)\r?$/m.exec(text);
+	const pageSize = Number(header?.[1]);
+	if (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(pageSize) || pageSize <= 0) return null;
+	const read = (name: string): number | null => {
+		const rows = text.split("\n").filter((line) => line.startsWith(`${name}:`));
+		const value = rows.length === 1 ? /^.*:\s+(\d+)\.\s*$/.exec(rows[0] ?? "")?.[1] : undefined;
+		const count = value === undefined ? Number.NaN : Number(value);
+		return Number.isSafeInteger(count) && count >= 0 ? count : null;
+	};
+	const anonymous = read("Anonymous pages");
+	const purgeable = read("Pages purgeable");
+	const wired = read("Pages wired down");
+	const compressed = read("Pages occupied by compressor");
+	if (anonymous === null || purgeable === null || wired === null || compressed === null || purgeable > anonymous)
+		return null;
+	const usedBytes = (anonymous - purgeable + wired + compressed) * pageSize;
+	if (!Number.isSafeInteger(usedBytes) || usedBytes < 0 || usedBytes > total) return null;
+	return { usedBytes, availableBytes: total - usedBytes, basis: "app+wired+compressed" };
+}
+
+/** sysctl's fixed C-locale swapusage format uses binary MiB, including fractional MiB. */
+export function darwinSwap(text: string): { usedBytes: number; totalBytes: number } | null {
+	const match =
+		/^vm\.swapusage: total = (\d+\.\d+)M\s+used = (\d+\.\d+)M\s+free = (\d+\.\d+)M(?:\s+\(encrypted\))?\s*$/.exec(text);
+	if (!match) return null;
+	const totalBytes = Math.round(Number(match[1]) * 1024 ** 2);
+	const usedBytes = Math.round(Number(match[2]) * 1024 ** 2);
+	const freeBytes = Math.round(Number(match[3]) * 1024 ** 2);
+	if (
+		![totalBytes, usedBytes, freeBytes].every(Number.isSafeInteger) ||
+		usedBytes > totalBytes ||
+		Math.abs(totalBytes - usedBytes - freeBytes) > 0.02 * 1024 ** 2
+	)
+		return null;
+	return { usedBytes, totalBytes };
+}
+
 /** Parse native PSI percentages and cumulative stall microseconds, rejecting malformed values. */
 export function psi(text: string): { some: PsiLine; full: PsiLine | null } | null {
 	const rows = new Map<string, PsiLine>();

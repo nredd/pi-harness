@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Replace `/mon`'s ambiguous non-free label with `total-free` (`T-F` compact); accept additive native App+Wired+Compressed and swap metrics without silently substituting free-page subtraction
+- Explain RSS versus footprint, compressed pages, executable names (`pi` as `node`) and unavailable macOS interval CPU in `?`; the native memory adapter requires the subsequent published sampler dependency bump
+
 - Raise the `monitor_start` `timeout_s` cap from 24h to 7 days (`604800`) so monitors can outlive long jobs
 
 ## 0.8.0

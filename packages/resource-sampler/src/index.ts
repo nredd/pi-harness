@@ -1,6 +1,6 @@
 import { type CpuInfo, cpus, freemem, loadavg, platform, totalmem } from "node:os";
 import { performance } from "node:perf_hooks";
-import { Budget, command, darwinProcesses, linuxProcesses, pressure } from "./collect.js";
+import { Budget, command, darwinHostMemory, darwinProcesses, linuxProcesses, pressure } from "./collect.js";
 import { cpuSnapshot, hostCpu, type ProcessCounter, processCpu } from "./counters.js";
 import type { ResourceSampler, ResourceSnapshot, SamplerOptions } from "./types.js";
 
@@ -39,6 +39,8 @@ export function createResourceSampler(options: SamplerOptions = {}): ResourceSam
 				? { state: "warming" as const, reason: "invalid monotonic interval" }
 				: hostCpu(previousCpus, currentCpus);
 		const nativePressure = await pressure(budget, host);
+		const totalBytes = totalmem();
+		const nativeMemory = host === "darwin" ? await darwinHostMemory(budget, totalBytes) : {};
 		let counters: ProcessCounter[] = [];
 		try {
 			if (host === "linux") {
@@ -84,7 +86,7 @@ export function createResourceSampler(options: SamplerOptions = {}): ResourceSam
 			cpu,
 			logicalCpus: currentCpus.length,
 			loadAverage: host === "win32" ? [] : loadavg(),
-			memory: { totalBytes: totalmem(), freeBytes: freemem() },
+			memory: { totalBytes, freeBytes: freemem(), ...nativeMemory },
 			processes,
 			coverage: {
 				complete: budget.reasons.size === 0,

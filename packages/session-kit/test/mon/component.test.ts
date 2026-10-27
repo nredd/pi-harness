@@ -51,7 +51,7 @@ describe("mon responsive dashboard", () => {
 		const selected = v.state.selected;
 		v.handleInput("?");
 		const seen: string[] = [];
-		for (let i = 0; i < 40; i++) {
+		for (let i = 0; i < 90; i++) {
 			seen.push(...v.render(40));
 			v.handleInput("j");
 		}
@@ -60,7 +60,12 @@ describe("mon responsive dashboard", () => {
 			"interval usage",
 			"exceed 100%",
 			"unavailable",
-			"minus free",
+			"total-free",
+			"compressed pages",
+			"footprint, not RSS",
+			"pi runs as node",
+			"NOT interval CPU",
+			"app + wired + compressed",
 			"not percent",
 			"elapsed time",
 			"scheduling",
@@ -71,6 +76,23 @@ describe("mon responsive dashboard", () => {
 		expect(v.render(40).join("\n")).toContain("Keys");
 		v.handleInput("\u001b[6~");
 		expect(v.render(40).join("\n")).not.toContain("Keys");
+	});
+
+	it("labels the measurement basis and displays free and swap without calling total-free used memory", () => {
+		const { v } = view(40);
+		v.update({
+			...snapshot(),
+			memoryBasis: "app+wired+compressed",
+			memoryFreeBytes: 1024 ** 3,
+			swapUsedBytes: 3 * 1024 ** 3,
+			swapTotalBytes: 4 * 1024 ** 3,
+		});
+		expect(v.render(120).join("\n")).toContain("used (A+W+C)");
+		expect(v.render(120).join("\n")).toContain("free 1.0G swap 3.0G/4.0G");
+		v.update({ ...snapshot(), memoryBasis: "total-free" });
+		expect(v.render(120).join("\n")).toContain("total-free");
+		expect(v.render(40).join("\n")).toContain("T-F");
+		expect(v.render(120).join("\n")).not.toContain("non-free");
 	});
 
 	it("fills completion-paced history contiguously, right-aligned, with only real gaps dotted", () => {

@@ -38,7 +38,14 @@ export interface ResourceSnapshot {
 	cpu: Metric<number>;
 	logicalCpus: number;
 	loadAverage: number[];
-	memory: { totalBytes: number; freeBytes: number };
+	memory: {
+		totalBytes: number;
+		/** Free pages only, not reclaimable cache. */
+		freeBytes: number;
+		/** Optional additive v1 fields; absent in older producers and on non-Darwin platforms. */
+		usage?: Metric<{ usedBytes: number; availableBytes: number; basis: "app+wired+compressed" }>;
+		swap?: Metric<{ usedBytes: number; totalBytes: number }>;
+	};
 	processes: ProcessSample[];
 	coverage: {
 		complete: boolean;

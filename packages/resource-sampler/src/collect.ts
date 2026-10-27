@@ -1,7 +1,16 @@
 import { spawn } from "node:child_process";
 import { open, opendir, readlink } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import { darwinProcess, executableName, linuxRss, linuxStat, type ProcessCounter, psi } from "./counters.js";
+import {
+	darwinMemory,
+	darwinProcess,
+	darwinSwap,
+	executableName,
+	linuxRss,
+	linuxStat,
+	type ProcessCounter,
+	psi,
+} from "./counters.js";
 import type { ResourceSnapshot } from "./types.js";
 
 /** Linux PATH_MAX: Node (libuv `pathconf`) and Bun (`PathBuffer`) readlink buffer size on Linux. */
@@ -204,6 +213,25 @@ export async function darwinProcesses(budget: Budget): Promise<ProcessCounter[]>
 		}
 	}
 	return result;
+}
+
+/** Fixed metadata-only helpers share the process scan's deadline, byte cap and awaited reaping. */
+export async function darwinHostMemory(
+	budget: Budget,
+	total: number,
+): Promise<Pick<ResourceSnapshot["memory"], "usage" | "swap">> {
+	const vm = await command("/usr/bin/vm_stat", [], budget);
+	const usage = vm.complete ? darwinMemory(vm.text, total) : null;
+	const swap = await command("/usr/sbin/sysctl", ["vm.swapusage"], budget);
+	const parsedSwap = swap.complete ? darwinSwap(swap.text) : null;
+	return {
+		usage: usage
+			? { state: "available", value: usage }
+			: { state: "unavailable", reason: "vm_stat invalid, unavailable or over budget" },
+		swap: parsedSwap
+			? { state: "available", value: parsedSwap }
+			: { state: "unavailable", reason: "swapusage invalid, unavailable or over budget" },
+	};
 }
 
 /** PSI is optional and platform-specific; absence is not zero pressure. */

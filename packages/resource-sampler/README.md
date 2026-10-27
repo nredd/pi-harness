@@ -44,7 +44,18 @@ Semantics:
   RSS/name/parent PID remain useful. No native helper until this limitation justifies one separately.
 - `wallTimeMs` labels the start; `monotonicTimeMs` controls intervals. Per-process reads have their own
   monotonic timestamps internally; the scan is not atomic. `durationMs` includes collection.
-- `memory.freeBytes` means free, NOT available or pressure. `loadAverage` is load, NOT percent.
+- `memory.freeBytes` means free, NOT available or pressure. Darwin adds optional v1 `memory.usage`
+  and `memory.swap` metrics. `usage.value.usedBytes` estimates resident App + Wired + Compressed RAM:
+  `(Anonymous pages - Pages purgeable + Pages wired down + Pages occupied by compressor) * page size`
+  from fixed `/usr/bin/vm_stat` output. The page size comes from its header, never an assumed 4KiB.
+  `availableBytes` is total minus that estimate (reclaimable cache included), NOT a pressure score or
+  an allocation guarantee. Compressor occupancy is physical RAM, not `Pages stored in compressor`.
+  Swap used/allocated bytes come from fixed `/usr/sbin/sysctl vm.swapusage` (binary MiB).
+  Invalid/missing/over-budget counters are `unavailable`, never zero or a silent total-free fallback.
+  Older producers and non-Darwin platforms omit these additive fields. Linux's existing free-page/PSI
+  semantics are unchanged; this library did not expose Linux MemAvailable.
+  Both helpers share the existing scan budget, fixed environment, output bound and awaited reaping.
+  `loadAverage` is load, NOT percent.
   Linux memory PSI preserves native `some`/optional `full`, avg10/60/300 percentages and cumulative
   stall microseconds. Missing/invalid PSI is unavailable. Other platforms explicitly have no PSI.
 - `processes[].name` is an executable basename from kernel metadata. It excludes argv, environment,
@@ -87,6 +98,10 @@ Bounds:
   Helpers spawn no descendants, use no shell, stdin ignored, fixed environment, bounded stdout/stderr,
   immediate SIGKILL on abort/deadline/cap, and resolve only on close. No persistent children or workers.
 - Unsupported platforms keep native host metrics but report process coverage unavailable.
+
+macOS measurement/definition comparison and unresolved CPU/native-ABI limitations:
+[here](../../docs/mon-accuracy.md). Process `rssBytes` still excludes compressed pages; it is not
+Activity Monitor's physical footprint. Names remain executable names, so Pi commonly appears as `node`.
 
 Local overhead observation (2026-10-22, Darwin arm64, Node 26.12.0, 10 logical CPUs, 16GiB RAM,
 load about 6, not a quiet-runner benchmark): ten scans of 557 processes took 17.5-24.9ms each,
