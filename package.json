@@ -5,7 +5,10 @@
   "description": "Development monorepo for owned Pi plugins, integration tests, and benchmarks.",
   "license": "MIT",
   "packageManager": "npm@11.20.0",
-  "workspaces": ["packages/*", "integration/inprocess"],
+  "workspaces": [
+    "packages/*",
+    "integration/inprocess"
+  ],
   "scripts": {
     "lint": "npm run lint --workspaces",
     "typecheck": "npm run typecheck --workspaces",
@@ -13,11 +16,14 @@
     "check": "npm run check --workspaces"
   },
   "devDependencies": {
+    "c8": "12.0.0",
     "nanoid": "5.1.16",
     "semver": "7.8.5"
   },
   "overrides": {
-    "pi-web-access": { "@modelcontextprotocol/sdk": "1.32.1" },
+    "pi-web-access": {
+      "@modelcontextprotocol/sdk": "1.32.1"
+    },
     "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.7/earendil-works-pi-coding-agent-1.3.0.tgz",
     "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.7/earendil-works-pi-tui-1.3.0.tgz",
     "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-agent-core-1.3.0.tgz",

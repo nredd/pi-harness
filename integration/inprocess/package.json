@@ -5,8 +5,8 @@
 	"scripts": {
 		"lint": "biome check --error-on-warnings .",
 		"typecheck": "tsc --noEmit",
-		"test": "vitest run",
-		"test:bun": "bun test .",
+		"test": "vitest run --coverage",
+		"test:bun": "bun test . --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun",
 		"check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
 	},
 	"devDependencies": {

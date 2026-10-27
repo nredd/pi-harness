@@ -14,6 +14,19 @@ The publish job alone requests a short-lived npm OIDC identity.
 
 On the `owned` job, `@nredd/pi-computer-use`'s macOS-only checks (`test:invariants` INV-8/INV-17, `test:macos-native`, `test:desktop`'s helper wire mapping and gating, `test:macos-live`) print `NOT RUN` lines on Linux and are not passes. Conversely, `test:linux-native` runs headless on the Ubuntu cell only (`NOT RUN` on macOS): the crate's `cargo test --locked`, a source build from the *packed* tarball into a user-cache target dir, the built x64 helper's real `diagnostics` (protocol 4, shared architecture invariants), the cargo-missing hint and compiler cleanup on `SIGTERM`. The aarch64 target (`rustup target add`) is `cargo check --locked` compile-only; ARM64 runtime, WSL, desktop/display and live UI are NOT RUN. This is coverage inside the existing `owned` job, not a new required check (`test:linux-native` prints `Linux native checks passed` on Ubuntu, `NOT RUN` on macOS.)
 
+Phase 0 coverage runs inside the existing primary and declared Bun test invocations, never a
+second CI test pass. Each Vitest config explicitly includes owned source, uses text + LCOV and
+`reportOnFailure`; `subagents` retains Istanbul because V8 reload merging is incorrect. The
+existing Node helper gates use c8. An `always()` step after owned tests consumes those independent
+reports with `scripts/coverage_accounting.py`, compares integer uncovered-line/function budgets
+with the PR base's `coverage/policy.json`, and fails closed on missing/invalid input. Branches
+are reported only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
+on either outcome. Bun counters are separately ratcheted, never merged into primary coverage.
+`computer-use` is not measured, tracked; `dev-tools` awaits a clean cargo baseline after #155.
+Neither is silently called 100%. The policy's eventual global-zero flip refuses pending packages.
+No job or required-check name changes. Definition, exclusions, receipts and ratcheting:
+[here](coverage.md).
+
 The resource sampler's package gate runs real host sampling and bounded helper cleanup in each
 `owned` OS cell. `check-package-contracts` also builds/audits/installs its exact ESM tarball and
 runs an isolated Node consumer in each `contracts` OS cell. This library has no Pi entrypoint;
