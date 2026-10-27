@@ -24,6 +24,12 @@ In-session setup keeps its existing 60s deadline, and a cold build can exceed it
 
 The upstream [AT-SPI development guide](https://gnome.pages.gitlab.gnome.org/at-spi2-core/devel-docs/index.html) describes the accessibility stack. Containers, system services, `sudo`, and unrelated SSH sessions do not automatically inherit the graphical user's bus.
 
+## Cancellation checks
+
+`npm run test:linux-scripts` runs real POSIX process groups on macOS and Linux. Each fixture process publishes readiness only after installing its TERM handler; the exit-first leader waits for an explicit release after both markers arrive. The checks record injected group signals and require TERM followed by KILL after the grace period, plus dead descendants and an empty group. A TERM-responsive negative control must fail that same escalation assertion. The reaped-group guard requires TERM without a later exit-hook KILL; the injected EPERM case has no real process to synchronize.
+
+Readiness and wrapper completion have bounded waits with explicit failures, rather than startup sleeps or elapsed-wrapper-time lower bounds. `npm run test:linux-native` also waits for the fake compiler and leader to publish signal readiness before cancelling the packed-source setup. Its cargo/build checks require Linux and report NOT RUN elsewhere.
+
 ## Capability matrix
 
 | Capability | X11 | Wayland | Delivery |
