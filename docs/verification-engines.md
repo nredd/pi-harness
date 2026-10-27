@@ -41,7 +41,9 @@ explicitly supplied through other environment variables.
 
 Unit tests cover matching, mismatched and missing homes, the four-workspace wiring contract,
 and launcher failure/cleanup/argument forwarding. Two subprocess fixtures pin the beforeEach
-and afterEach boundaries independently. A subprocess negative control runs the real
+and afterEach boundaries independently, using canonicalized symlinked temporary homes:
+Bun/Vite's bundled config loader otherwise fails through macOS `/var` aliases before reaching
+the guard. A subprocess negative control runs the real
 `todo.invalidation.test.ts` with todo's existing setup and this guard under Bun: it MUST fail
 with `HOMEDIR GUARD`, before test execution. This does not enable or alter todo's normal gate.
 `support.test.ts` pins the fixed launch home and independent fixture paths on both engines.
