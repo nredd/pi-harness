@@ -771,17 +771,19 @@ export class FleetList {
       // the flag budget selects [fb] or ! with the same policy as every renderer.
       const flagBudget = Math.max(1, width - visibleWidth(prefix) - visibleWidth(stats) - 1);
       flag = withLeadingFlag("", flag, "", flagBudget).trimEnd();
-      if (visibleWidth(prefix + flag) + 1 + visibleWidth(stats) > width) {
-        // A state word and padded separators are not spend. Keep its glyph and
-        // unpadded elapsed/tokens/cost, then remove navigation padding if needed.
-        const spend = cells.slice(4).filter(Boolean);
-        stats = [agentState(record.status).glyph, ...spend].join(" ");
-        if (visibleWidth(prefix + flag) + 1 + visibleWidth(stats) > width) prefix = "";
-        const remaining = width - visibleWidth(flag) - 1;
-        if (visibleWidth(stats) > remaining) stats = spend.join(" ");
-        // Only when all three cannot physically fit may elapsed yield to spend.
-        if (visibleWidth(stats) > remaining) stats = spend.slice(1).join(" ");
-      }
+    }
+    // Every row preserves spend, not just rows carrying a fallback marker.
+    const markerWidth = flag ? visibleWidth(flag) + 1 : 0;
+    if (visibleWidth(prefix) + markerWidth + visibleWidth(stats) > width) {
+      // A state word and padded separators are not spend. Keep its glyph and
+      // unpadded elapsed/tokens/cost, then remove navigation padding if needed.
+      const spend = cells.slice(4).filter(Boolean);
+      stats = [agentState(record.status).glyph, ...spend].join(" ");
+      if (visibleWidth(prefix) + markerWidth + visibleWidth(stats) > width) prefix = "";
+      const remaining = width - markerWidth;
+      if (visibleWidth(stats) > remaining) stats = spend.join(" ");
+      // Only when all three cannot physically fit may elapsed yield to spend.
+      if (visibleWidth(stats) > remaining) stats = spend.slice(1).join(" ");
     }
     const right = fgPreservingNestedStyles(theme, selected ? "text" : "dim", stats);
     // The flag leads the row (even with `showModel` off: a substituted model is
