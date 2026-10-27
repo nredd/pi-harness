@@ -30,7 +30,8 @@ import { getAgentConfig } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { ModelCallEvent } from "./model-call.js";
-import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel } from "./model-resolver.js";
+import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback, modelFallbackNote } from "./model-resolver.js";
+import { appendModelFallbackEntry } from "./output-file.js";
 import {
   assertWithinBudgetDepth,
   BUDGET_QUEUE_FULL_ERROR,
@@ -164,12 +165,15 @@ export interface EvictedNote {
   evictedAfterMin: number;
   /** The `.output` transcript when one was written, else the session file. */
   transcript?: string;
+  /** The run's model fallback, so even an evicted agent's id still discloses it. */
+  modelFallback?: ModelFallback;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
 export function describeEvicted(note: EvictedNote): string {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
-  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}`;
+  const fallback = note.modelFallback ? `\n${modelFallbackNote(note.modelFallback)}` : "";
+  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
 }
 
 /**
@@ -310,6 +314,12 @@ interface SpawnOptions {
    */
   reclaim?: { handle: string; alias?: string };
   model?: Model<any>;
+  /**
+   * Set by a caller that resolved a configured model itself and fell back to the
+   * parent (passing the parent as `model`). Without it the spawn path cannot tell
+   * that from an explicit pick. Stored on the record, where every surface reads it.
+   */
+  modelFallback?: ModelFallback;
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
@@ -708,6 +718,7 @@ export class AgentManager {
       // `options` has stopped being the interesting object.
       blocking: options.blocking,
       invocation: options.invocation,
+      modelFallback: options.modelFallback,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,
@@ -1105,6 +1116,9 @@ export class AgentManager {
         depth: record.depth ?? 1,
         maxSubagentDepth: record.maxSubagentDepth,
       },
+      // The runner's own fallback (no model passed, definition `model:` unresolved).
+      // A caller-reported fallback is already on the record and wins.
+      onModelFallback: (fallback) => { record.modelFallback ??= fallback; },
       onSessionCreated: (session) => {
         record.session = session;
         // Capture now, while the session object exists: after eviction this
@@ -1141,6 +1155,8 @@ export class AgentManager {
             }
           }
         }
+        // The transcript says it too: it is what someone opens to find out what ran.
+        if (record.modelFallback && record.outputFile) appendModelFallbackEntry(record.outputFile, record.id, record.modelFallback);
         // Flush any steers that arrived before the session was ready
         if (record.pendingSteers?.length) {
           for (const msg of record.pendingSteers) {
@@ -1886,6 +1902,7 @@ export class AgentManager {
       description: record.description,
       sessionFile: record.sessionFile,
       completedAt: record.completedAt ?? this.clock.now(),
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
     // Bound the memory a long session can accumulate. Oldest first, since the
     // agent someone still wants to reach is the one they used most recently.
@@ -1906,6 +1923,7 @@ export class AgentManager {
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - completedAt) / 60_000)),
       transcript: record.outputFile ?? record.sessionFile,
+      ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
     while (this.evictedNotes.size > MAX_EVICTED_NOTES) {
       const oldest = this.evictedNotes.keys().next().value;

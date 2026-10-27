@@ -17,7 +17,7 @@ import {
 } from "./agent-types.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
-import { resolveModel } from "./model-resolver.js";
+import { type ModelFallback, modelFallbackNote, modelFallbackTo, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import {
   createOutputFilePath,
@@ -77,6 +77,8 @@ export const NESTED_WORKFLOW_NO_AGENT_ERROR =
 interface NestedSpawnOptions {
   description: string;
   model?: Model<any>;
+  /** The configured model that did not resolve, when `model` is the parent standing in for it. */
+  modelFallback?: ModelFallback;
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
@@ -160,6 +162,13 @@ function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): rec
 type ResultPosition = "inline" | "fetched";
 
 function formatRecord(record: AgentRecord, position: ResultPosition): string {
+  // Read off the record, so a fetched or resumed child reports what ran, not
+  // what the current call would have configured.
+  const note = modelFallbackNote(record.modelFallback);
+  return note ? `${note}\n\n${formatOutcome(record, position)}` : formatOutcome(record, position);
+}
+
+function formatOutcome(record: AgentRecord, position: ResultPosition): string {
   if (record.status === "error") {
     return `Agent failed: ${record.error ?? "unknown error"}${partialOutputSuffix(record)}`;
   }
@@ -278,10 +287,13 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         defaultRunInBackground: false,
       });
       let model = ctx.model;
+      let modelFallback: ModelFallback | undefined;
       if (invocation.modelInput) {
         const resolvedModel = resolveModel(invocation.modelInput, ctx.modelRegistry);
         if (typeof resolvedModel === "string") {
           if (invocation.modelFromParams) return textResult(resolvedModel, true);
+          // Config-specified: still falls back to the parent, but says so.
+          modelFallback = modelFallbackTo(invocation.modelInput, ctx.model);
         } else {
           model = resolvedModel;
         }
@@ -307,6 +319,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       const options: NestedSpawnOptions = {
         description: params.description,
         model,
+        modelFallback,
         maxTurns: invocation.maxTurns,
         isolated: invocation.isolated,
         inheritContext: invocation.inheritContext,

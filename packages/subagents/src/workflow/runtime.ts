@@ -95,6 +95,8 @@ export interface WorkflowSpawnRequest {
     modelId?: string;
     thinking?: string;
     requestedThinking?: string;
+    /** `Note:` line when the child ran on the parent model because its configured one did not resolve. */
+    modelNote?: string;
   }): void;
   /**
    * Compiled from the script's `agent({ schema })`.
@@ -125,6 +127,8 @@ export interface WorkflowSpawnResult {
   text?: string;
   /** Why it failed. Present when not `ok`. */
   error?: string;
+  /** `Note:` line when the child ran on a different model than configured; also leads `text`/`error` (not a schema'd payload). */
+  modelNote?: string;
   /** The user dismissed it rather than it failing; renders as skipped. */
   skipped?: boolean;
   tokens?: number;
@@ -733,14 +737,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       options.onProgress?.(entries);
     };
 
-    const respond = (callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean) => {
+    const respond = (callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean, modelNote?: string) => {
       // Cleared before the settled check: a launch answered by a run that is
       // already finishing is not an unawaited launch either.
       openLaunches.delete(callId);
       if (settled) return;
       // `spent` rides on every response, so the worker's `budget.spent()` is a
       // mirror of this number rather than a second tally of its own.
-      worker.postMessage({ type: "response", callId, ok, value, error, fatal, spent: spentOutputTokens });
+      worker.postMessage({ type: "response", callId, ok, value, error, fatal, modelNote, spent: spentOutputTokens });
     };
 
     const finish = (result: Omit<WorkflowRunResult, "meta" | "progress" | "agentCount" | "replayedCount">) => {
@@ -908,6 +912,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             // dialog to annotate it "from resume journal" rather than letting a
             // 0ms agent look like one that did the work impossibly fast.
             cached: true,
+            ...(replayed.modelNote !== undefined ? { modelNote: replayed.modelNote } : {}),
             resultPreview: preview(replayedText),
           },
         ]);
@@ -915,8 +920,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         // Re-recorded so this run's journal is complete on its own terms: a
         // resume of a resume must not have to walk back through a chain of
         // earlier files to find the prefix.
-        recordJournal?.({ index, key: replayed.key, ok: true, text: replayedText });
-        respond(callId, true, replayedText);
+        recordJournal?.({ index, key: replayed.key, ok: true, text: replayedText, ...(replayed.modelNote !== undefined ? { modelNote: replayed.modelNote } : {}) });
+        respond(callId, true, replayedText, undefined, undefined, replayed.modelNote);
         return;
       }
 
@@ -992,12 +997,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             modelId?: string;
             thinking?: string;
             requestedThinking?: string;
+            modelNote?: string;
           }) => {
             if (info.recordId !== undefined) base.recordId = info.recordId;
             if (info.modelName !== undefined) base.model = info.modelName;
             if (info.modelId !== undefined) base.modelId = info.modelId;
             if (info.thinking !== undefined) base.thinking = info.thinking;
             if (info.requestedThinking !== undefined) base.requestedThinking = info.requestedThinking;
+            if (info.modelNote !== undefined) base.modelNote = info.modelNote;
             // `base.state` is still "start", so emitting after the row reached a
             // terminal state would revert it to running under last-write-wins.
             // Not reachable from this repo's host, which reports during startup
@@ -1091,13 +1098,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             durationMs: finishedAt - startedAt,
             ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
             ...(result.toolCalls !== undefined ? { toolCalls: result.toolCalls } : {}),
+            ...(result.modelNote !== undefined ? { modelNote: result.modelNote } : {}),
           };
 
           if (result.ok) {
             const text = result.text ?? "";
             emit([{ ...common, state: "done", resultPreview: preview(text) }]);
-            recordJournal?.({ index, key, ok: true, text, ...resumeMark });
-            respond(callId, true, text);
+            recordJournal?.({ index, key, ok: true, text, ...(result.modelNote !== undefined ? { modelNote: result.modelNote } : {}), ...resumeMark });
+            respond(callId, true, text, undefined, undefined, result.modelNote);
             return;
           }
           // Recorded as a failure rather than left out: a gap would be read as an
@@ -1118,7 +1126,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
               ...(result.skipped ? { skipped: true } : {}),
             },
           ]);
-          respond(callId, true, null);
+          respond(callId, true, null, undefined, undefined, result.modelNote);
           return;
         }
       } finally {

@@ -11,8 +11,10 @@ import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
 import { getConfig } from "../agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import { describeModelCall, type ModelCallState } from "../model-call.js";
+import type { ModelFallback } from "../model-resolver.js";
 import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
+import { fallbackFlag } from "./fallback-flag.js";
 
 // ---- Constants ----
 
@@ -83,6 +85,10 @@ export interface AgentDetails {
   backgroundHint?: boolean;
   /** Short label for the model the run used, e.g. "haiku 4.5". */
   modelName?: string;
+  /** Set when a configured model did not resolve and the run fell back to the parent model. */
+  modelNote?: string;
+  /** The structured form of {@link modelNote}, for the one-line label. */
+  modelFallback?: ModelFallback;
   /** Notable config tags (e.g. ["thinking: high", "isolated"]). */
   tags?: string[];
   /** Current turn count. */
@@ -389,7 +395,7 @@ export class AgentWidget {
   }
 
   /** Render a finished agent line. */
-  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage }, theme: Theme): string {
+  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage; modelFallback?: ModelFallback }, theme: Theme): string {
     const modeLabel = getPromptModeLabel(a.type);
     const duration = formatMs((a.completedAt ?? this.clock.now()) - a.startedAt);
 
@@ -418,6 +424,7 @@ export class AgentWidget {
     const activity = this.agentActivity.get(a.id);
     if (activity) parts.push(formatTurns(activity.turnCount, activity.maxTurns));
     if (a.toolUses > 0) parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
+    // Not gated by `showModel`: a substituted model is never a cosmetic detail.
     // From the record, not the activity tracker: that entry is deleted the
     // moment an agent finishes, and "what did it cost" is a question asked
     // about finished agents.
@@ -426,7 +433,8 @@ export class AgentWidget {
     parts.push(duration);
 
     const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
-    return `${icon} ${renderAgentName(a.type, theme, { fallbackColor: "dim" })}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
+    const flag = fallbackFlag(theme, a) ? `${fallbackFlag(theme, a)} ` : "";
+    return `${icon} ${flag}${renderAgentName(a.type, theme, { fallbackColor: "dim" })}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
   }
 
   /**
@@ -466,6 +474,7 @@ export class AgentWidget {
     for (const a of running) {
       const modeLabel = getPromptModeLabel(a.type);
       const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
+    const flag = fallbackFlag(theme, a) ? `${fallbackFlag(theme, a)} ` : "";
       const elapsed = formatMs(this.clock.now() - a.startedAt);
 
       const bg = this.agentActivity.get(a.id);
@@ -489,7 +498,7 @@ export class AgentWidget {
         const thinkingTag = tags.find(tag => tag.startsWith("thinking: "));
         if (thinkingTag) parts.push(thinkingTag);
       }
-      if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
+        if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
       if (toolUses > 0) parts.push(`${toolUses} tool use${toolUses === 1 ? "" : "s"}`);
       if (tokenText) parts.push(tokenText);
       if (costText) parts.push(costText);
@@ -499,7 +508,7 @@ export class AgentWidget {
       const activity = bg ? describeActivity(bg.activeTools, bg.responseText, bg.modelCall, this.clock.now()) : "thinking…";
 
       runningLines.push([
-        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
+        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${flag}${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
         truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
       ]);
     }

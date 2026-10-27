@@ -58,6 +58,12 @@ export interface WorkflowJournalEntry {
   /** The agent's answer, when it had one. */
   text?: string;
   /**
+   * The `Note:` line when the child ran on another model than configured.
+   * Replayed with the text so a resumed run discloses it too; absent on
+   * journals written before it existed, which means "no note", not an error.
+   */
+  modelNote?: string;
+  /**
    * Whether the call continued an earlier child (`agent({ resume })`).
    *
    * A replayed agent leaves no session behind in the run that replays it — the
@@ -159,6 +165,7 @@ function isEntry(value: unknown): value is WorkflowJournalEntry {
     typeof entry.key === "string" &&
     typeof entry.ok === "boolean" &&
     (entry.text === undefined || typeof entry.text === "string") &&
+    (entry.modelNote === undefined || typeof entry.modelNote === "string") &&
     (entry.resumed === undefined || entry.resumed === true)
   );
 }

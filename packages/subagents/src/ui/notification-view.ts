@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { type Component, hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { NotificationDetails } from "../types.js";
 import { formatCost, formatMs, formatTokens, formatTurns, type Theme } from "./agent-widget.js";
+import { fallbackFlag, fallbackFlagText, hasFallback } from "./fallback-flag.js";
 
 /** Lines of the result preview shown when expanded. */
 const EXPANDED_PREVIEW_LINES = 30;
@@ -41,7 +42,10 @@ function statParts(d: NotificationDetails, showCost: boolean): string[] {
 /** `✓ desc · 12 tools · 33.8k token · ~$0.0042 · 41.2s`. */
 export function noticeSummary(d: NotificationDetails, theme: Theme, showCost: boolean): string {
   const dot = ` ${theme.fg("dim", "·")} `;
-  const head = `${icon(d, theme)} ${theme.bold(d.description)}`;
+  // Leading, before the unbounded description: the collapsed line is truncated
+  // from the right, and a substituted model must not be what gets cut.
+  const flag = fallbackFlag(theme, d) ? `${fallbackFlag(theme, d)} ` : "";
+  const head = `${icon(d, theme)} ${flag}${theme.bold(d.description)}`;
   const stats = statParts(d, showCost).map(p => theme.fg("dim", p));
   return [head, ...stats].join(dot);
 }
@@ -49,7 +53,11 @@ export function noticeSummary(d: NotificationDetails, theme: Theme, showCost: bo
 /** `3 agents finished · ✓ a, ✓ b, ✗ c`. */
 export function groupSummary(all: NotificationDetails[], theme: Theme): string {
   const names = all.map(d => `${icon(d, theme)} ${d.description}`).join(theme.fg("dim", ", "));
-  return `${theme.bold(`${all.length} agents finished`)} ${theme.fg("dim", "·")} ${names}`;
+  // In the heading, ahead of the member list that truncation eats from the end,
+  // so a fallback member listed last is still counted.
+  const fellBack = all.filter(d => hasFallback(d)).length;
+  const flag = fellBack > 0 ? ` ${theme.fg("warning", fallbackFlagText(fellBack))}` : "";
+  return `${theme.bold(`${all.length} agents finished`)}${flag} ${theme.fg("dim", "·")} ${names}`;
 }
 
 /** The transcript as an OSC 8 hyperlink, so a click opens it. */
@@ -68,6 +76,7 @@ function detailLines(d: NotificationDetails, theme: Theme, showCost: boolean, in
   stats.push(...statParts(d, showCost));
   if (stats.length > 0) lines.push(indent + theme.fg("dim", stats.join(" · ")));
   if (d.error) lines.push(indent + theme.fg("error", d.error));
+  if (d.modelNote) lines.push(indent + theme.fg("warning", d.modelNote));
   for (const line of d.resultPreview.split("\n").slice(0, EXPANDED_PREVIEW_LINES)) {
     lines.push(indent + theme.fg("dim", line));
   }
