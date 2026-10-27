@@ -31,6 +31,7 @@ from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
+from urllib.error import HTTPError, URLError
 
 import pytest
 import yaml
@@ -1203,10 +1204,120 @@ def test_http_read_failures_are_clean_verification_failures(
     assert install.main([SHA]) == ExitCode.VERIFICATION
     assert len(requests) == 1
     assert requests[0] in caplog.text
-    assert str(error) in caplog.text
+    reasons = {
+        "truncated": "Incomplete response: received 7 bytes, expected 100 more",
+        "protocol": "HTTP protocol error: bad HTTP response",
+        "disconnected": "Connection closed: peer disconnected",
+        "io": "I/O error: read failed",
+        "timeout": "Request timed out",
+        "tls": "TLS error: TLS read failed",
+        "length": "bad Content-Length",
+    }
+    assert reasons[failure] in caplog.text
+    assert caplog.text.count(requests[0]) == 1
     assert "VERIFICATION FAILED, nothing changed" in caplog.text
     assert "Traceback" not in caplog.text
     assert not (tmp_path / "download").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "reason"),
+    [
+        ("404", "HTTP 404 Not Found"),
+        ("403", "HTTP 403 Forbidden"),
+        ("500", "HTTP 500 Internal Server Error"),
+        ("dns", "DNS lookup failed"),
+        ("timeout", "Request timed out"),
+        ("truncated", "Incomplete response: received 3 bytes, expected 7 more"),
+    ],
+)
+def test_snapshot_fetch_cli_has_one_stable_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+    reason: str,
+) -> None:
+    """Exit three with one URL and the exact public reason, never nested urllib diagnostics.
+
+    Parameters:
+        tmp_path (Path): isolated installer HOME.
+        monkeypatch (pytest.MonkeyPatch): HTTP failure and offline prerequisite seams.
+        caplog (pytest.LogCaptureFixture): CLI log output.
+        kind (str): concrete failure category.
+        reason (str): literal expected user-facing reason.
+
+    Returns:
+        None: the CLI contract is exact and the home remains unchanged.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(harness.layout.agent_dir))
+    monkeypatch.setenv("XDG_DATA_HOME", str(harness.layout.root.parent))
+    failures = {
+        "404": HTTPError("https://error.invalid/", 404, "Not Found", Message(), None),
+        "403": HTTPError("https://error.invalid/", 403, "Forbidden", Message(), None),
+        "500": HTTPError("https://error.invalid/", 500, "Internal Server Error", Message(), None),
+        "dns": URLError(socket.gaierror(-2, "platform-specific DNS detail")),
+        "timeout": TimeoutError("platform-specific timeout detail"),
+        "truncated": IncompleteRead(b"abc", 7),
+    }
+
+    def failed(request: Any, **kwargs: Any) -> Any:
+        """Raise this case's concrete transport failure.
+
+        Parameters:
+            request (Any): ignored URL/request.
+            **kwargs (Any): ignored transport options.
+
+        Returns:
+            Any: never returned.
+
+        Raises:
+            Exception: selected HTTP, DNS, timeout or incomplete-read fixture.
+        """
+        raise failures[kind]
+
+    monkeypatch.setattr(release, "urlopen", failed)
+    monkeypatch.setattr(install, "verify_snapshot", verify_snapshot)
+    before = tree(harness.home)
+    assert install.main([SHA, "--plan"]) == ExitCode.VERIFICATION
+    url = f"https://github.com/nredd/pi-harness/releases/download/stack/{SHA}/stack-snapshot.json"
+    assert caplog.messages == [f"VERIFICATION FAILED, nothing changed: Could not fetch '{url}': {reason}"]
+    assert tree(harness.home) == before
+
+
+def test_acceptance_plan_staging_and_rerun_text_contracts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Lock the installer-owned text matched by acceptance consent, staging and rerun checks.
+
+    Parameters:
+        tmp_path (Path): isolated installer HOME.
+        monkeypatch (pytest.MonkeyPatch): offline core/network fixture.
+        caplog (pytest.LogCaptureFixture): actual message producer output.
+
+    Returns:
+        None: overwrite/source, kill-marker, version and no-op messages retain stable contracts.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    settings = harness.layout.agent_dir / install.SETTINGS_FILE
+    document = json.loads(settings.read_text()) | {"packages": ["npm:pi-mine@1.0.0"]}
+    settings.write_text(json.dumps(document))
+    caplog.set_level("INFO")
+    with pytest.raises(ConsentError):
+        harness.run()
+    assert "OVERWRITE stop loading packages not in the stack: npm:pi-mine@1.0.0" in caplog.messages
+    caplog.clear()
+    assert harness.run(yes=True) == ExitCode.OK
+    assert "pi install 'npm:pi-web-access@0.43.0'" in caplog.messages
+    assert any(message.startswith(acceptance.KILL_AFTER) for message in caplog.messages)
+    assert install.post_check(harness.layout) == "1.3.0"
+    caplog.clear()
+    assert harness.run() == ExitCode.OK
+    assert f"Already installed: `stack/{SHA}`: 1.3.0, nothing to do" in caplog.messages
 
 
 def test_old_node_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

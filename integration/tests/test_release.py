@@ -20,13 +20,15 @@ import tarfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from email.message import Message
-from http.client import HTTPConnection
+from functools import partial
+from http.client import HTTPConnection, IncompleteRead
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socket import gaierror
 from threading import Thread
 from types import MappingProxyType
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 import pytest
@@ -1220,6 +1222,117 @@ def test_cli_verify_flag_reports_failure_and_rejects_prefix(
     assert caught.value.code == 2
 
 
+@pytest.mark.parametrize("caller", ["fetch", "snapshot", "checksums", "asset", "promotion", "attestation"])
+@pytest.mark.parametrize(
+    ("failure", "reason", "status"),
+    [
+        (HTTPError("https://error.invalid/", 404, "Not Found", Message(), None), "HTTP 404 Not Found", 404),
+        (HTTPError("https://error.invalid/", 403, "Forbidden", Message(), None), "HTTP 403 Forbidden", 403),
+        (
+            HTTPError("https://error.invalid/", 500, "Internal Server Error", Message(), None),
+            "HTTP 500 Internal Server Error",
+            500,
+        ),
+        (
+            HTTPError("https://error.invalid/", 429, "Too Many Requests", Message(), None),
+            "HTTP 429 Too Many Requests",
+            429,
+        ),
+        (HTTPError("https://error.invalid/", 404, "", Message(), None), "HTTP 404 Not Found", 404),
+        (HTTPError("https://error.invalid/", 599, "", Message(), None), "HTTP 599 Unknown reason", 599),
+        (URLError(gaierror(-2, "platform-specific DNS detail")), "DNS lookup failed", None),
+        (TimeoutError("platform-specific timeout detail"), "Request timed out", None),
+        (URLError(TimeoutError("wrapped timeout detail")), "Request timed out", None),
+        (IncompleteRead(b"abc", 7), "Incomplete response: received 3 bytes, expected 7 more", None),
+        (IncompleteRead(b"abc"), "Incomplete response: received 3 bytes", None),
+    ],
+)
+def test_shared_fetch_diagnostics_are_stable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    caller: str,
+    failure: Exception,
+    reason: str,
+    status: int | None,
+) -> None:
+    """Preserve one clean URL/reason across every shared download boundary and rate-limit fallback.
+
+    Parameters:
+        tmp_path (Path): isolated artifact and output paths.
+        monkeypatch (pytest.MonkeyPatch): deterministic failed network boundary.
+        caller (str): shared-fetch consumer under test.
+        failure (Exception): concrete urllib/protocol failure.
+        reason (str): literal public diagnostic contract, independent of exception repr.
+        status (int | None): HTTP status retained for rate-limit decisions.
+
+    Returns:
+        None: exact text, URL cardinality, status and exception chaining match the contract.
+    """
+    artifact = tmp_path / "snapshot.json"
+    artifact.write_bytes(b"snapshot")
+    destination = tmp_path / "download"
+    url = "https://downloads.example.invalid/core.tgz"
+    if caller == "checksums":
+        url = f"https://github.com/nredd/pi/releases/download/{NEW_TAG}/SHA256SUMS"
+    elif caller == "attestation":
+        url = (
+            "https://api.github.com/repos/o/r/attestations/sha256:" + hashlib.sha256(b"snapshot").hexdigest()
+        )
+    requests: list[str] = []
+
+    def failed(request: Any, **kwargs: Any) -> Any:
+        """Raise the selected real exception before a response can be consumed.
+
+        Parameters:
+            request (Any): public URL or request.
+            **kwargs (Any): ignored transport options.
+
+        Returns:
+            Any: never returned.
+
+        Raises:
+            Exception: selected HTTP, DNS, timeout or incomplete-read fixture.
+        """
+        requests.append(request.full_url if isinstance(request, Request) else request)
+        raise failure
+
+    monkeypatch.setattr(release, "urlopen", failed)
+    calls = {
+        "fetch": partial(release.fetch_bytes, url),
+        "snapshot": partial(install.download, url, destination),
+        "checksums": partial(release.release_checksums, NEW_TAG),
+        "asset": partial(release.download_verified_asset, url, NEW_TAG, {}, destination),
+        "promotion": partial(promotion._fetch_asset, url, destination),
+        "attestation": partial(release.attestation_bundle, "o/r", artifact, destination),
+    }
+    expected_types = {
+        "fetch": release.FetchError,
+        "snapshot": install.VerificationError,
+        "checksums": ValueError,
+        "asset": release.FetchError,
+        "promotion": promotion.EvidenceError,
+        "attestation": AttestationRateLimitedError if status in {403, 429} else RuntimeError,
+    }
+    expected = f"Could not fetch '{url}': {reason}"
+    if caller == "attestation":
+        expected = (
+            "Anonymous attestations API refused: "
+            if status in {403, 429}
+            else "Attestation lookup failed for 'snapshot.json': "
+        ) + expected
+    with pytest.raises(expected_types[caller]) as caught:
+        calls[caller]()
+    assert str(caught.value) == expected
+    assert str(caught.value).count(url) == 1
+    assert requests == [url]
+    error = caught.value if isinstance(caught.value, release.FetchError) else caught.value.__cause__
+    assert isinstance(error, release.FetchError)
+    assert error.status == status
+    assert error.__cause__ is failure
+    assert not destination.exists()
+
+
 class LocalHTTPTransport(HTTPSHandler):
     """Replace only TLS transport, keeping real HTTP parsing and redirect policy in tests."""
 
@@ -1383,7 +1496,7 @@ def test_nonlegacy_core_truncation_is_exit_three(
         assert requests[0].endswith("SHA256SUMS")
         assert requests[1].endswith(".tgz")
     assert "VERIFICATION FAILED" in caplog.text
-    assert "IncompleteRead" in caplog.text
+    assert "Incomplete response" in caplog.text
     assert "Traceback" not in caplog.text
     assert not (tmp_path / ".local").exists()
 
@@ -1433,7 +1546,7 @@ def test_wire_content_length_failure_is_exit_three(
         assert install.main(["a" * 40]) == install.ExitCode.VERIFICATION
         assert requests == ["/asset"]
     assert "VERIFICATION FAILED" in caplog.text
-    assert any(reason in caplog.text for reason in ("Content-Length", "exceeds", "IncompleteRead"))
+    assert any(reason in caplog.text for reason in ("Content-Length", "exceeds", "Incomplete response"))
     assert not destination.exists()
 
 

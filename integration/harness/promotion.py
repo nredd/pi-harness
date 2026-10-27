@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness.release import (
     LEGACY_RELEASE_TAGS,
+    FetchError,
     fetch_bytes,
     release_asset_url,
     release_checksums,
@@ -557,6 +558,8 @@ def _fetch_asset(url: str, destination: Path) -> None:
     """
     try:
         destination.write_bytes(fetch_bytes(url))
+    except FetchError as error:
+        raise EvidenceError(str(error)) from error
     except OSError as error:
         raise EvidenceError(f"Could not download '{url}': {error}") from error
 

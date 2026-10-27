@@ -30,11 +30,14 @@ import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from http.client import HTTPException, HTTPMessage
+from http import HTTPStatus
+from http.client import HTTPException, HTTPMessage, IncompleteRead, RemoteDisconnected
 from pathlib import Path
+from socket import gaierror
+from ssl import SSLError
 from types import MappingProxyType
 from typing import IO, override
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -158,6 +161,48 @@ class HTTPSRedirectHandler(HTTPRedirectHandler):
 urlopen = build_opener(HTTPSRedirectHandler()).open
 
 
+def fetch_failure_reason(error: Exception) -> str:
+    """Translate transport exceptions into stable, single-line public reasons, never urllib repr.
+
+    Parameters:
+        error (Exception): HTTP, DNS, timeout, TLS, protocol, I/O or validation failure.
+
+    Returns:
+        str: readable reason without URL wrapping or response-body contents.
+    """
+    if isinstance(error, HTTPError):
+        try:
+            default = HTTPStatus(error.code).phrase
+        except ValueError:
+            default = "Unknown reason"
+        reason = f"HTTP {error.code} {error.reason or default}"
+    elif isinstance(error, URLError):
+        reason = (
+            fetch_failure_reason(error.reason)
+            if isinstance(error.reason, Exception)
+            else f"Network error: {error.reason}"
+        )
+    elif isinstance(error, gaierror):
+        reason = "DNS lookup failed"
+    elif isinstance(error, TimeoutError):
+        reason = "Request timed out"
+    elif isinstance(error, IncompleteRead):
+        expected = f", expected {error.expected} more" if error.expected is not None else ""
+        reason = f"Incomplete response: received {len(error.partial)} bytes{expected}"
+    elif isinstance(error, SSLError):
+        detail = error.strerror or (error.args[0] if error.args else "connection failed")
+        reason = f"TLS error: {detail}"
+    elif isinstance(error, RemoteDisconnected):
+        reason = f"Connection closed: {error}"
+    elif isinstance(error, HTTPException):
+        reason = f"HTTP protocol error: {error}"
+    elif isinstance(error, OSError):
+        reason = f"I/O error: {error.strerror or error}"
+    else:
+        reason = str(error)
+    return " ".join(reason.split())
+
+
 class FetchError(OSError):
     """A public HTTP read failed; preserve status for the anonymous rate-limit fallback."""
 
@@ -167,9 +212,12 @@ class FetchError(OSError):
         Parameters:
             url (str): public resource URL.
             error (Exception): HTTP, I/O, TLS, timeout or response-length failure.
+
+        Returns:
+            None: the public diagnostic names the requested URL once and retains the HTTP status.
         """
         self.status = error.code if isinstance(error, HTTPError) else None
-        super().__init__(f"Could not fetch '{url}': {error}")
+        super().__init__(f"Could not fetch '{url}': {fetch_failure_reason(error)}")
 
 
 def fetch_bytes(request: str | Request) -> bytes:
@@ -193,7 +241,7 @@ def fetch_bytes(request: str | Request) -> bytes:
         if isinstance(request, Request) and any(key.lower() != "accept" for key, _ in request.header_items()):
             raise ValueError("Public downloads permit only the `Accept` request header")
         if urlsplit(url).scheme != "https":
-            raise ValueError(f"Download requires HTTPS, refused '{url}'")
+            raise ValueError("Download requires HTTPS")
         with urlopen(request, timeout=120) as response:
             lengths = response.headers.get_all("Content-Length", [])
             length = None
@@ -364,8 +412,10 @@ def release_checksums(tag: str) -> dict[str, str]:
         return {release_asset_url(tag, name): digest for name, digest in LEGACY_CHECKSUMS[tag].items()}
     try:
         contents = fetch_bytes(release_asset_url(tag, "SHA256SUMS")).decode("utf-8")
-    except (FetchError, UnicodeError) as error:
-        raise ValueError(f"Could not download release checksums for '{tag}': {error}") from error
+    except FetchError as error:
+        raise ValueError(str(error)) from error
+    except UnicodeError as error:
+        raise ValueError(f"Could not decode release checksums for '{tag}': {error}") from error
     checksums: dict[str, str] = {}
     for line in contents.splitlines():
         fields = line.split(maxsplit=1)
@@ -425,10 +475,8 @@ def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
         document = json.loads(fetch_bytes(request))
     except FetchError as error:
         if error.status in RATE_LIMIT_STATUSES:
-            raise AttestationRateLimitedError(
-                f"Anonymous attestations API refused '{url}': {error}"
-            ) from error
-        raise RuntimeError(f"Could not read attestations for '{path.name}' from '{url}': {error}") from error
+            raise AttestationRateLimitedError(f"Anonymous attestations API refused: {error}") from error
+        raise RuntimeError(f"Attestation lookup failed for '{path.name}': {error}") from error
     except (OSError, ValueError) as error:
         raise RuntimeError(f"Could not read attestations for '{path.name}' from '{url}': {error}") from error
     attestations = document.get("attestations") if isinstance(document, dict) else None

@@ -70,6 +70,7 @@ from harness.promotion import (
     verify_core_assets,
 )
 from harness.release import (
+    FetchError,
     child_environment,
     fetch_bytes,
     fetch_release,
@@ -468,6 +469,8 @@ def download(url: str, destination: Path) -> Path:
     """
     try:
         destination.write_bytes(fetch_bytes(url))
+    except FetchError as error:
+        raise VerificationError(str(error)) from error
     except OSError as error:
         raise VerificationError(f"Could not download '{url}': {error}") from error
     return destination
