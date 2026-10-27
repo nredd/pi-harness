@@ -74,10 +74,36 @@ INTEGRATION = Path(__file__).resolve().parent.parent
 INSTALLER_WORKFLOW = INTEGRATION.parent / ".github" / "workflows" / "installer.yml"
 SHA = "24889f7896be7157bf9077a41465a3b29620879f"
 ATOMIC_SUFFIX = re.compile(r"[0-9a-f]{32}\.(tmp|replacement)")
+# Probe only synthetic/nonsecret keys, never dump arbitrary workstation credentials.
+CHILD_ENV_PROBE_KEYS = (
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "NODE_EXTRA_CA_CERTS",
+    "NPM_CONFIG_PREFIX",
+    "npm_config_prefix",
+    "PI_FOO",
+    "PI_CODING_AGENT_DIR",
+    "HOME",
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "TERM",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR",
+    "CI",
+    "GITHUB_ACTIONS",
+)
 FAKE_PI = """\
 #!{python}
 # Fake `pi`: `install npm:<name>@<version>` writes the package and its lockfile entry.
 import json, os, pathlib, sys
+with pathlib.Path({log!r}).with_suffix('.env.jsonl').open('a') as env_log:
+    keys = {env_keys!r}
+    env_log.write(json.dumps({{key: os.environ[key] for key in keys if key in os.environ}}) + "\\n")
 if sys.argv[1:] == ["--version"]:
     leaked = sorted(set(os.environ).intersection({tokens!r}))
     print("1.3.0", *(["LEAKED", *leaked] if leaked else []))
@@ -199,6 +225,7 @@ class Harness:
                 fail=self.fail,
                 integrity=self.integrity,
                 tokens=sorted(GITHUB_TOKEN_VARIABLES),
+                env_keys=CHILD_ENV_PROBE_KEYS,
             )
         )
         binary.chmod(0o755)
@@ -574,7 +601,9 @@ def test_unstarted_backup_rename_rolls_back_cleanly(
             None: unrelated renames complete.
 
         Raises:
-            OSError: the selected backup rename failed.
+            PermissionError: the selected backup rename was denied.
+            KeyboardInterrupt: interrupted before the selected backup rename.
+            OSError: an unrelated rename failed.
         """
         if Path(src) == layout.agent_dir / "npm":
             attempts.append(Path(src))
@@ -615,7 +644,8 @@ def test_missing_backup_after_pending_rename_still_fails_loudly(
             None: unrelated renames complete.
 
         Raises:
-            OSError: the selected backup disappeared.
+            KeyboardInterrupt: the selected backup was removed after renaming.
+            OSError: rename or fixture mutation failed.
         """
         original(src, dst, **kwargs)
         if Path(src) == layout.agent_dir / "npm":
@@ -2055,6 +2085,7 @@ def make_special(path: Path, kind: str, monkeypatch: pytest.MonkeyPatch) -> None
 
     Raises:
         OSError: entry creation failed.
+        ValueError: the requested special-entry kind is unknown.
     """
     match kind:
         case "fifo":
@@ -2683,7 +2714,7 @@ def test_core_replacement_is_backed_up_and_offline_recoverable(
                 None: never returned.
 
             Raises:
-                KeyboardInterrupt: installed-state write was interrupted.
+                RuntimeError: installed-state write was interrupted.
             """
             raise RuntimeError("interrupt")
 
@@ -3343,7 +3374,7 @@ def test_recorded_restore_rejects_changed_live_state(tmp_path: Path, monkeypatch
             None: other renames complete.
 
         Raises:
-            KeyboardInterrupt: the next restore was interrupted.
+            OSError: the next restore was refused.
         """
         if kwargs.get("src_dir_fd") is not None and Path(dst).name == install.SETTINGS_FILE:
             raise OSError("second restore refused")
@@ -3991,6 +4022,19 @@ class MutationAudit:
         for name in ("move", "copy", "copy2", "copyfile", "copytree"):
             self.watch(patch, shutil, name, (1,))
 
+    @property
+    def parent_paths(self) -> set[Path]:
+        """Include exact permanent ancestors without observing arbitrary sibling files.
+
+        Returns:
+            set[Path]: ancestors of the installer, agent and link roots.
+        """
+        return {
+            parent
+            for root in (self.layout.root, self.layout.agent_dir, self.layout.bin_dir)
+            for parent in root.parents
+        }
+
     def path(self, value: Any, descriptor: int | None = None) -> Path | None:
         """Resolve a mutation operand without following its final symlink.
 
@@ -4020,7 +4064,9 @@ class MutationAudit:
         """
         roots = (self.layout.root, self.layout.agent_dir, self.layout.bin_dir)
         for path, existed in before:
-            if not any(path == root or path.is_relative_to(root) for root in roots):
+            if path not in self.parent_paths and not any(
+                path == root or path.is_relative_to(root) for root in roots
+            ):
                 continue
             if existed and path not in self.created:
                 self.events.append(path)
@@ -4607,6 +4653,7 @@ def test_replacement_identity_is_durable_before_switch_rename(
 
         Raises:
             AssertionError: write-ahead identity is missing.
+            KeyboardInterrupt: intent was inspected before the state-file rename.
             OSError: rename failed.
         """
         nonlocal observed
@@ -5242,6 +5289,82 @@ def test_mutation_audit_detects_unplanned_create(
         test_switch_write_set_classification_includes_core_and_shims(tmp_path, monkeypatch, existing=False)
 
 
+def explicit_raise_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Collect statically named exceptions raised by this helper, excluding nested definitions.
+
+    Parameters:
+        node (ast.FunctionDef | ast.AsyncFunctionDef): helper syntax tree.
+
+    Returns:
+        set[str]: explicit exception class names; dynamic instances and propagated errors are unknown.
+    """
+    names: set[str] = set()
+    pending: list[ast.AST] = list(node.body)
+    while pending:
+        child = pending.pop()
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(child, ast.Raise) and child.exc is not None:
+            exception = child.exc.func if isinstance(child.exc, ast.Call) else child.exc
+            if isinstance(exception, (ast.Name, ast.Attribute)):
+                name = ast.unparse(exception)
+                if name.rsplit(".", 1)[-1][:1].isupper():
+                    names.add(name)
+        pending.extend(ast.iter_child_nodes(child))
+    return names
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("raise RuntimeError('interrupt')", {"RuntimeError"}),
+        ("raise KeyboardInterrupt", {"KeyboardInterrupt"}),
+        ("raise OSError('refused') from error", {"OSError"}),
+        ("raise error", set()),
+        ("raise failure('dynamic')", set()),
+        ("def nested():\n    raise ValueError('nested')\nreturn None", set()),
+    ],
+)
+def test_exception_contract_oracle_separates_explicit_and_unknown_raises(
+    body: str,
+    expected: set[str],
+) -> None:
+    """Check literal raises without inventing contracts for dynamic, propagated or nested errors.
+
+    Parameters:
+        body (str): helper body fixture.
+        expected (set[str]): statically knowable exception names.
+
+    Returns:
+        None: the bounded syntax oracle identifies only this helper's explicit classes.
+    """
+    module = ast.parse("def helper():\n" + "\n".join("    " + line for line in body.splitlines()))
+    (helper,) = module.body
+    assert isinstance(helper, ast.FunctionDef)
+    assert explicit_raise_names(helper) == expected
+
+
+def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
+    """Keep the interrupted-core fixture's literal exception and failure contract aligned.
+
+    Returns:
+        None: the callback documents RuntimeError, not KeyboardInterrupt.
+    """
+    module = ast.parse(Path(__file__).read_text())
+    callbacks = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.FunctionDef) and node.name == "interrupt_file"
+    ]
+    (callback,) = callbacks
+    assert explicit_raise_names(callback) == {"RuntimeError"}
+    doc = ast.get_docstring(callback)
+    assert doc is not None
+    raises = doc.split("Raises:", 1)[1]
+    assert "RuntimeError:" in raises
+    assert "KeyboardInterrupt" not in raises
+
+
 @pytest.mark.parametrize(
     "module", ["test_install.py", "test_release.py", "test_installer_process.py", "test_promotion.py"]
 )
@@ -5256,7 +5379,7 @@ def test_test_helpers_have_typed_contracts(module: str) -> None:
     """
     source = ast.parse((Path(__file__).parent / module).read_text())
     for node in ast.walk(source):
-        if not isinstance(node, ast.FunctionDef) or node.name.startswith("test_"):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name.startswith("test_"):
             continue
         doc = ast.get_docstring(node)
         label = f"{module}:{node.lineno} {node.name}"
@@ -5271,6 +5394,9 @@ def test_test_helpers_have_typed_contracts(module: str) -> None:
             assert f"{arg.arg} ({ast.unparse(arg.annotation)}):" in doc, label
         assert node.returns is not None, label
         assert any(section in doc for section in ("Returns:", "Yields:", "Raises:")), label
+        for exception in explicit_raise_names(node):
+            assert "Raises:" in doc, label
+            assert exception in doc.split("Raises:", 1)[1], (label, exception)
         if ast.unparse(node.returns) != "None" and any(
             isinstance(child, ast.Return) and child.value is not None for child in ast.walk(node)
         ):
@@ -5306,6 +5432,79 @@ def test_plan_reports_state_and_permanent_parent_creates(
     assert tree(harness.home) == before
 
 
+@pytest.mark.parametrize("layout_state", ["fresh", "existing-root", "symlink-root", "dangling-root-link"])
+def test_normal_and_dry_plans_declare_the_same_permanent_creates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    layout_state: str,
+) -> None:
+    """Lock mkdirs must remain in the actual normal-run plan, not just the dry-run plan.
+
+    Parameters:
+        tmp_path (Path): isolated installer fixture.
+        monkeypatch (pytest.MonkeyPatch): mutation observers and plan recorder.
+        caplog (pytest.LogCaptureFixture): public CREATE output.
+        layout_state (str): fresh, existing directory, resolved symlink, or dangling root link.
+
+    Returns:
+        None: public CREATE lists agree and the actual normal plan authorizes every mutation.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    target = harness.home / "real-root"
+    if layout_state == "existing-root":
+        harness.layout.root.mkdir(parents=True)
+    elif layout_state in {"symlink-root", "dangling-root-link"}:
+        if layout_state == "symlink-root":
+            target.mkdir()
+        else:
+            target = harness.home / "absent/ancestors/real-root"
+        data = harness.home / "data"
+        data.mkdir()
+        (data / "pi-stack").symlink_to(target, target_is_directory=True)
+        harness.env["XDG_DATA_HOME"] = str(data)
+    caplog.set_level("INFO")
+    assert install.run(Options(SHA, False, True, None), harness.env, None) == ExitCode.OK
+    expected = [record.message for record in caplog.records if record.message.startswith("CREATE ")]
+    caplog.clear()
+    reports: list[install.Plan] = []
+    report = install.report_plan
+
+    def recorded(plan: install.Plan, verified: Verified) -> None:
+        """Record the actual normal-run plan independently of the test's pre-lock plan.
+
+        Parameters:
+            plan (install.Plan): actual public plan.
+            verified (Verified): verified fixture snapshot.
+
+        Returns:
+            None: plan and public report are captured.
+        """
+        reports.append(plan)
+        report(plan, verified)
+
+    with monkeypatch.context() as patch:
+        audit = MutationAudit(harness, patch, plan_install(harness.layout, harness.verified))
+        patch.setattr(install, "report_plan", recorded)
+        assert harness.run() == ExitCode.OK
+    (actual,) = reports
+    audit.plan = actual
+    assert [record.message for record in caplog.records if record.message.startswith("CREATE ")] == expected
+    audit.assert_classified()
+    # The lock is transaction scratch, never a permanent payload CREATE; its parent still is.
+    assert not any(f"'{harness.layout.root / 'lock'}'" in line for line in actual.creates)
+    if layout_state in {"fresh", "dangling-root-link"}:
+        assert f"create directory '{harness.layout.root}'" in actual.creates
+        assert f"create directory '{harness.layout.root.parent}'" in actual.creates
+        assert harness.layout.root.parent in audit.created
+    else:
+        assert f"create directory '{harness.layout.root}'" not in actual.creates
+        assert f"create directory '{harness.layout.agent_dir.parent}'" in actual.creates
+    if layout_state in {"symlink-root", "dangling-root-link"}:
+        assert (harness.home / "data/pi-stack").is_symlink()
+        assert (harness.home / "data/pi-stack").readlink() == target
+
+
 def write_tool_shims(harness: Harness, commands: Path, log: Path) -> None:
     """Write executable recording shims, with npm building the fixture's core prefix.
 
@@ -5323,7 +5522,11 @@ def write_tool_shims(harness: Harness, commands: Path, log: Path) -> None:
     commands.mkdir()
     for name in ("gh", "npm", "node"):
         script = (
-            f"#!{sys.executable}\nimport json,pathlib,sys\n"
+            f"#!{sys.executable}\nimport json,os,pathlib,sys\n"
+            f"with pathlib.Path({str(log)!r}).with_suffix('.env.jsonl').open('a') as env_log:\n"
+            f"    keys = {CHILD_ENV_PROBE_KEYS!r}\n"
+            "    env_log.write(json.dumps({key: os.environ[key] for key in keys if key in os.environ})"
+            " + '\\n')\n"
             f"with pathlib.Path({str(log)!r}).open('a') as handle:\n"
             "    handle.write(json.dumps(sys.argv) + '\\n')\n"
         )
@@ -5336,6 +5539,7 @@ def write_tool_shims(harness: Harness, commands: Path, log: Path) -> None:
                 fail=[],
                 integrity=harness.integrity,
                 tokens=sorted(GITHUB_TOKEN_VARIABLES),
+                env_keys=CHILD_ENV_PROBE_KEYS,
             )
             script += (
                 "prefix = pathlib.Path(sys.argv[sys.argv.index('--prefix') + 1])\n"
@@ -5618,6 +5822,102 @@ def test_install_npm_shebang_uses_validated_node(
         shebang=shebang,
         different_node=different_node,
     )
+
+
+@pytest.mark.parametrize("shebang", ["#!/usr/bin/env node", "#!/usr/bin/env -S node", "absolute"])
+def test_every_child_uses_the_minimal_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shebang: str,
+) -> None:
+    """Real node/npm/gh/pi shims must see the allowlist, never parent runtime injection.
+
+    Parameters:
+        tmp_path (Path): isolated shims, environment logs and home.
+        monkeypatch (pytest.MonkeyPatch): hostile and allowlisted parent settings.
+        shebang (str): actual npm interpreter form.
+
+    Returns:
+        None: every observed child receives safe inherited keys and owned overrides only.
+    """
+    hostile = {
+        "NODE_OPTIONS": f"--require {tmp_path / 'marker.js'}",
+        "NODE_PATH": "parent-node-module-injection",
+        "NODE_EXTRA_CA_CERTS": "parent-extra-ca",
+        "NPM_CONFIG_PREFIX": "parent-uppercase-prefix",
+        "npm_config_prefix": "parent-lowercase-prefix",
+        "PI_FOO": "parent-pi-injection",
+        "PI_CODING_AGENT_DIR": "parent-agent-redirect",
+    }
+    allowed = {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TMPDIR": str(tmp_path),
+        "TERM": "dumb",
+        "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
+        "XDG_CONFIG_HOME": str(tmp_path / "xdg-config"),
+        "XDG_CACHE_HOME": str(tmp_path / "xdg-cache"),
+        "XDG_STATE_HOME": str(tmp_path / "xdg-state"),
+        "XDG_RUNTIME_DIR": str(tmp_path / "xdg-runtime"),
+        "CI": "1",
+        "GITHUB_ACTIONS": "true",
+    }
+    for key, value in (hostile | allowed).items():
+        monkeypatch.setenv(key, value)
+    relative_tool_install(tmp_path, monkeypatch, assert_absolute=False, shebang=shebang)
+    logs = (tmp_path / "tools.env.jsonl", tmp_path / "pi-calls.env.jsonl")
+    environments = [json.loads(line) for log in logs for line in log.read_text().splitlines()]
+    assert len(environments) >= 6
+    for env in environments:
+        for key, value in hostile.items():
+            assert env.get(key) != value, (key, env)
+        for key, value in allowed.items():
+            assert env[key] == value, (key, env)
+        assert Path(env["HOME"]).is_absolute()
+        assert all(Path(entry).is_absolute() for entry in env["PATH"].split(os.pathsep))
+    final = json.loads(logs[1].read_text().splitlines()[-1])
+    assert final["PI_CODING_AGENT_DIR"] == str((tmp_path / "home/.pi/agent").resolve())
+
+
+def test_node_version_does_not_execute_parent_preloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Node version dispatcher must not execute an inherited --require module.
+
+    Parameters:
+        tmp_path (Path): synthetic preload and execution marker.
+        monkeypatch (pytest.MonkeyPatch): parent NODE_OPTIONS injection.
+
+    Returns:
+        None: Node reports its version without creating the preload marker.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Real Node is unavailable for the preload negative control")
+    marker = tmp_path / "preload-ran"
+    preload = tmp_path / "marker.js"
+    preload.write_text(f"require('node:fs').writeFileSync({json.dumps(str(marker))}, 'loaded');\n")
+    options = f"--require {preload}"
+    # Node's direct --version fast path need not evaluate preloads. A version-manager dispatcher
+    # can evaluate JS while finding its version, so prove the preload works, then test that boundary.
+    subprocess.check_output(
+        [str(Path(node).absolute()), "-p", "process.version"],
+        env={"NODE_OPTIONS": options, "PATH": os.defpath},
+        text=True,
+        stderr=subprocess.STDOUT,
+        timeout=install.VERSION_TIMEOUT,
+    )
+    assert marker.read_text() == "loaded"
+    marker.unlink()
+    dispatcher = tmp_path / "node"
+    dispatcher.write_text(
+        f"#!{sys.executable}\nimport os\nos.execv({node!r}, [{node!r}, '-p', 'process.version'])\n"
+    )
+    dispatcher.chmod(0o700)
+    monkeypatch.setenv("NODE_OPTIONS", options)
+    assert install.node_version(dispatcher.as_posix()) > (0, 0, 0)
+    assert not marker.exists()
 
 
 def test_install_never_spawns_relative_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

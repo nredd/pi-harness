@@ -771,12 +771,15 @@ def packages_ready(layout: Layout, verified: Verified) -> bool:
     return True
 
 
-def plan_install(layout: Layout, verified: Verified) -> Plan:
+def plan_install(
+    layout: Layout, verified: Verified, *, missing_before_lock: frozenset[Path] = frozenset()
+) -> Plan:
     """Compare the live installation with the snapshot and list every change.
 
     Parameters:
         layout (Layout): installer paths.
         verified (Verified): verified installation input.
+        missing_before_lock (frozenset[Path]): absent permanent directories before locking.
 
     Returns:
         Plan: additions and overwrites, empty when already installed.
@@ -841,17 +844,39 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
                 f"'{target}'" in message for message in plan.overwrites
             ):
                 plan.overwrites.append(f"replace '{target}' (backed up)")
-        declare_permanent_creates(layout, plan)
+        declare_permanent_creates(layout, plan, missing_before_lock)
         require_backup_store(layout)
     return plan
 
 
-def declare_permanent_creates(layout: Layout, plan: Plan) -> None:
+def missing_permanent_directories(layout: Layout) -> frozenset[Path]:
+    """Capture absent permanent directories before lock acquisition can create them.
+
+    Parameters:
+        layout (Layout): canonical installer paths, including resolved directory symlinks.
+
+    Returns:
+        frozenset[Path]: absent directories and ancestors, not the named scratch lock file.
+
+    Raises:
+        OSError: filesystem inspection failed.
+    """
+    directories = (layout.root / "core", layout.backups, layout.agent_dir, layout.bin_dir)
+    return frozenset(
+        parent
+        for path in directories
+        for parent in (*path.parents, path)
+        if not parent.exists(follow_symlinks=False)
+    )
+
+
+def declare_permanent_creates(layout: Layout, plan: Plan, missing_before_lock: frozenset[Path]) -> None:
     """Declare state and exact parent mkdirs, never authorizing arbitrary descendants.
 
     Parameters:
         layout (Layout): installer paths.
         plan (Plan): nonempty plan receiving permanent CREATE declarations.
+        missing_before_lock (frozenset[Path]): absent directories before any lock mkdir.
 
     Returns:
         None: absent permanent state and parent paths are added to the public plan.
@@ -868,7 +893,7 @@ def declare_permanent_creates(layout: Layout, plan: Plan) -> None:
         directories.append(layout.bin_dir)
     parents = dict.fromkeys(parent for path in directories for parent in (*reversed(path.parents), path))
     for parent in parents:
-        if not parent.exists(follow_symlinks=False):
+        if parent in missing_before_lock or not parent.exists(follow_symlinks=False):
             plan.creates.append(f"create directory '{parent}'")
 
 
@@ -2052,7 +2077,7 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
             subprocess.check_output(
                 [str(pi_bin), "install", source],
                 cwd=home,
-                env=child_environment(env | install_overrides(stack, package)),
+                env=child_environment(os.environ, overrides=env | install_overrides(stack, package)),
                 text=True,
                 stderr=subprocess.STDOUT,
                 timeout=INSTALL_TIMEOUT,
@@ -2298,7 +2323,14 @@ def post_check(layout: Layout) -> str:
             text=True,
             stderr=subprocess.STDOUT,
             timeout=VERSION_TIMEOUT,
-            env=child_environment(os.environ) | {"PI_SKIP_VERSION_CHECK": "1", "PI_OFFLINE": "1"},
+            env=child_environment(
+                os.environ,
+                overrides={
+                    "PI_CODING_AGENT_DIR": str(layout.agent_dir),
+                    "PI_SKIP_VERSION_CHECK": "1",
+                    "PI_OFFLINE": "1",
+                },
+            ),
         ).strip()
     except (OSError, subprocess.SubprocessError) as error:
         raise InstallError(f"Installed '{layout.link}' does not run: {error}") from error
@@ -2456,6 +2488,7 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
     if SHA_PATTERN.fullmatch(opts.source_sha) is None:
         raise UnsupportedError(f"Stack SHA must be 40 lowercase hex characters, got '{opts.source_sha}'")
     layout = Layout.from_env(env, Path.home(), opts.bin_dir)
+    missing_before_lock = missing_permanent_directories(layout)
     if layout.journal.exists(follow_symlinks=False):
         if opts.plan_only:
             report_pending(layout, restoring=False)
@@ -2465,7 +2498,7 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
             recover(layout, opts.assume_yes, ask)
     tools = preflight(platform.system(), platform.machine())
     with pinned_child_path(tools["node"]):
-        return run_preflighted(opts, env, ask, layout, tools)
+        return run_preflighted(opts, env, ask, layout, tools, missing_before_lock=missing_before_lock)
 
 
 def run_preflighted(
@@ -2474,6 +2507,8 @@ def run_preflighted(
     ask: Callable[[str], str] | None,
     layout: Layout,
     tools: Mapping[str, str],
+    *,
+    missing_before_lock: frozenset[Path],
 ) -> ExitCode:
     """Verify and install using the preflight-frozen child executable environment.
 
@@ -2483,6 +2518,7 @@ def run_preflighted(
         ask (Callable[[str], str] | None): consent prompt.
         layout (Layout): admitted installation paths.
         tools (Mapping[str, str]): absolute preflight-selected executables.
+        missing_before_lock (frozenset[Path]): absent permanent directories before any lock.
 
     Returns:
         ExitCode: successful install or unchanged plan.
@@ -2500,13 +2536,13 @@ def run_preflighted(
             gh_bin=tools.get("gh"),
         )
     if opts.plan_only:
-        report_plan(plan_install(layout, verified), verified)
+        report_plan(plan_install(layout, verified, missing_before_lock=missing_before_lock), verified)
         return ExitCode.OK
     with locked(layout):
         # Another run may have been interrupted while this one verified.
         recover(layout, opts.assume_yes, ask)
         remove(layout.root / "staging")
-        plan = plan_install(layout, verified)
+        plan = plan_install(layout, verified, missing_before_lock=missing_before_lock)
         report_plan(plan, verified)
         if plan.empty:
             # Matching files are not a working install: it must still run.

@@ -103,6 +103,24 @@ RATE_LIMIT_STATUSES = frozenset({403, 429})
 GITHUB_TOKEN_VARIABLES = frozenset(
     {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 )
+# Runtime/location/locale only. Tool configuration and code-injection variables are not inherited.
+CHILD_ENVIRONMENT_KEYS = frozenset(
+    {
+        "HOME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "TERM",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+        "CI",
+        "GITHUB_ACTIONS",
+    }
+)
 ProvenanceCheck = Callable[[Path, str], None]
 # Bound public assets, including responses without Content-Length, before allocating their bodies.
 MAX_FETCH_BYTES = 256 * 1024 * 1024
@@ -228,37 +246,35 @@ def pinned_child_path(node: str) -> Iterator[None]:
         CHILD_PATH.reset(token)
 
 
-def child_environment(env: Mapping[str, str], *, github_tokens: bool = False) -> dict[str, str]:
-    """Build every installer child environment with stable executable lookup.
+def child_environment(
+    env: Mapping[str, str],
+    *,
+    overrides: Mapping[str, str] | None = None,
+    github_tokens: bool = False,
+) -> dict[str, str]:
+    """Build every child environment from a minimal inherited allowlist and owned overrides.
 
     Parameters:
-        env (Mapping[str, str]): caller's allowed environment.
-        github_tokens (bool): retain tokens only for authenticated gh lookup.
+        env (Mapping[str, str]): untrusted parent environment, filtered by explicit key.
+        overrides (Mapping[str, str] | None): installer-owned tool settings, never parent passthrough.
+        github_tokens (bool): allow GitHub tokens and `GH_CONFIG_DIR` only for gh login fallback.
 
     Returns:
-        dict[str, str]: fresh environment with absolute PATH entries and selected Node first.
+        dict[str, str]: explicit environment with absolute PATH entries and selected Node first.
 
     Raises:
         OSError: an unpinned relative PATH cannot be made absolute.
     """
+    allowed = CHILD_ENVIRONMENT_KEYS | (
+        GITHUB_TOKEN_VARIABLES | {"GH_CONFIG_DIR"} if github_tokens else set()
+    )
+    result = {key: value for key, value in env.items() if key in allowed} | dict(overrides or {})
     path = CHILD_PATH.get()
     if path is None:
         path = os.pathsep.join(
-            str(Path(entry).absolute()) for entry in env.get("PATH", os.defpath).split(os.pathsep)
+            str(Path(entry).absolute()) for entry in result.get("PATH", os.defpath).split(os.pathsep)
         )
-    return (dict(env) if github_tokens else without_github_tokens(env)) | {"PATH": path}
-
-
-def without_github_tokens(env: Mapping[str, str]) -> dict[str, str]:
-    """Return a child environment with every GitHub token variable removed.
-
-    Parameters:
-        env (Mapping[str, str]): environment to copy.
-
-    Returns:
-        dict[str, str]: `env` minus `GITHUB_TOKEN_VARIABLES`.
-    """
-    return {key: value for key, value in env.items() if key not in GITHUB_TOKEN_VARIABLES}
+    return result | {"PATH": path}
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -279,13 +295,16 @@ def gitlink_tag(directory: Path) -> str:
         with tempfile.TemporaryDirectory(prefix="pi-gitlink-home-") as home:
             return subprocess.check_output(
                 [GIT_BIN, "-C", str(directory), "describe", "--tags", "--exact-match"],
-                env={
-                    "PATH": os.defpath,
-                    "HOME": home,
-                    "XDG_CONFIG_HOME": home,
-                    "GIT_CONFIG_NOSYSTEM": "1",
-                    "GIT_TERMINAL_PROMPT": "0",
-                },
+                env=child_environment(
+                    os.environ,
+                    overrides={
+                        "PATH": os.defpath,
+                        "HOME": home,
+                        "XDG_CONFIG_HOME": home,
+                        "GIT_CONFIG_NOSYSTEM": "1",
+                        "GIT_TERMINAL_PROMPT": "0",
+                    },
+                ),
                 text=True,
                 stderr=subprocess.STDOUT,
             ).strip()
@@ -831,7 +850,7 @@ def fetch_release(
                 str(assets[0]),
             ],
             cwd=prefix,
-            env=child_environment(env),
+            env=child_environment(os.environ, overrides=env),
             text=True,
             stderr=subprocess.STDOUT,
             timeout=600,
