@@ -124,7 +124,7 @@ CA_FILE_ENVIRONMENT_KEYS = frozenset(
 )
 CA_ENVIRONMENT_KEYS = CA_FILE_ENVIRONMENT_KEYS | {"SSL_CERT_DIR"}
 CONNECTIVITY_ENVIRONMENT_KEYS = PROXY_ENVIRONMENT_KEYS | CA_ENVIRONMENT_KEYS
-PROXY_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)?[^\s/\"'<>:@]+(?::[^\s/\"'<>@]*)?@")
+PROXY_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)[^\s/\"'<>@]*@")
 # Runtime/location/locale only. Tool configuration and code-injection variables are not inherited.
 CHILD_ENVIRONMENT_KEYS = frozenset(
     {
@@ -329,7 +329,7 @@ def redact_diagnostic(text: str) -> str:
         authority = value.split("://", 1)[-1].split("/", 1)[0]
         if "@" in authority:
             credentials = authority.rsplit("@", 1)[0] + "@"
-            text = text.replace(credentials, "")
+            text = text.replace(value, value.replace(credentials, "", 1))
     return PROXY_USERINFO.sub(lambda match: match["scheme"] or "", text)
 
 
@@ -627,7 +627,9 @@ def verify_public_attestation(
     try:
         bundle: Path | None = attestation_bundle(repo, path, path.with_name(f"{path.name}.sigstore.jsonl"))
     except AttestationRateLimitedError as error:
-        LOGGER.warning(f"{error}; retrying with `gh attestation verify` and gh's own login")
+        LOGGER.warning(
+            redact_diagnostic(f"{error}; retrying with `gh attestation verify` and gh's own login")
+        )
         bundle = None
     verify_attestation(path, repo, signer_workflow, source_ref, bundle, gh_bin=gh_bin)
 
@@ -1008,7 +1010,7 @@ def main() -> None:
         try:
             verify_root_overrides(args.root.resolve())
         except (ValueError, RuntimeError, OSError) as error:
-            raise SystemExit(f"Root core override verification failed: {error}") from error
+            raise SystemExit(redact_diagnostic(f"Root core override verification failed: {error}")) from error
         return
     if args.prefix is None:
         parser.error("`--prefix` is required with `--tag` or `--gitlink`")

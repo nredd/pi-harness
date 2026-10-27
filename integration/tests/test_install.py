@@ -6194,13 +6194,14 @@ def test_proxy_redaction_before_tail_truncation(monkeypatch: pytest.MonkeyPatch,
     expected = proxy.replace(proxy.rsplit("://", maxsplit=1)[-1].split("@", maxsplit=1)[0] + "@", "")
     message = json.dumps({"HTTPS_PROXY": proxy}) + " " + proxy
     assert release.redact_diagnostic(message) == json.dumps({"HTTPS_PROXY": expected}) + " " + expected
+    clean_message = json.dumps({"HTTPS_PROXY": expected}) + " " + expected
     for output in (message, message.encode()):
         error = subprocess.CalledProcessError(1, ["npm"], output=output)
-        assert release._error_tail(error) == release.redact_diagnostic(message)
+        assert release._error_tail(error) == clean_message
     # If slicing came first, credentials straddling the boundary would remain visible.
     output = proxy + "x" * 5995
     error = subprocess.CalledProcessError(1, ["gh"], output=output)
-    assert release._error_tail(error) == release.redact_diagnostic(output)[-6000:]
+    assert release._error_tail(error) == (expected + "x" * 5995)[-6000:]
 
 
 @pytest.mark.parametrize("tool", ["node", "pi", "pi-install", "npm", "gh"])
@@ -6248,3 +6249,67 @@ def test_child_diagnostics_redact_proxy_credentials(
     assert "echo-user" not in text
     assert "echo-password" not in text
     assert "http://proxy.invalid:8080" in text
+    if tool == "pi-install":
+        assert harness.verified.sources[0] in text
+
+
+@pytest.mark.parametrize("proxy", ["http://@host", "http://a@host"])
+@pytest.mark.parametrize(
+    "text", ["npm:@nredd/pkg@1.0", "git@github.com:repo", "email@example.com", "name@host"]
+)
+def test_proxy_redaction_preserves_nonproxy_identifiers(
+    monkeypatch: pytest.MonkeyPatch, proxy: str, text: str
+) -> None:
+    """Empty/short userinfo must not damage scoped package, SSH or email identifiers."""
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    assert release.redact_diagnostic(f"{text} {proxy}") == f"{text} http://host"
+
+
+@pytest.mark.parametrize("boundary", ["installer", "fallback-warning", "release-cli"])
+def test_proxy_redaction_at_public_diagnostic_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, boundary: str
+) -> None:
+    """Public logs and CLI exits redact even when a lower layer returns an unredacted error."""
+    proxy = "http://log-user:log-password@host:8080"
+    monkeypatch.setenv("HTTP_PROXY", proxy)
+    error = (
+        InstallError(proxy)
+        if boundary == "installer"
+        else release.AttestationRateLimitedError(proxy)
+        if boundary == "fallback-warning"
+        else RuntimeError(proxy)
+    )
+
+    def fail(*args: object, **kwargs: object) -> None:
+        """Inject a raw transport diagnostic at the public boundary.
+
+        Parameters:
+            *args (object): unused operation inputs.
+            **kwargs (object): unused operation options.
+
+        Returns:
+            None: never returned.
+
+        Raises:
+            RuntimeError: the raw diagnostic for this boundary.
+        """
+        raise error
+
+    if boundary == "installer":
+        monkeypatch.setattr(install, "run", fail)
+        assert install.main([SHA]) == ExitCode.FAILED
+        text = caplog.text
+    elif boundary == "fallback-warning":
+        monkeypatch.setattr(release, "attestation_bundle", fail)
+        monkeypatch.setattr(release, "verify_attestation", lambda *args, **kwargs: None)
+        release.verify_public_attestation(tmp_path / "asset", "repo", "workflow", "ref")
+        text = caplog.text
+    else:
+        monkeypatch.setattr(release, "verify_root_overrides", fail)
+        monkeypatch.setattr(sys, "argv", ["release", "--verify-root-overrides"])
+        with pytest.raises(SystemExit) as caught:
+            release.main()
+        text = str(caught.value)
+    assert "log-user" not in text
+    assert "log-password" not in text
+    assert "http://host:8080" in text
