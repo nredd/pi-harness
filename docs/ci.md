@@ -19,7 +19,7 @@ second CI test pass. Each Vitest config explicitly includes owned source, uses t
 `reportOnFailure`; `subagents` retains Istanbul because V8 reload merging is incorrect. The
 existing Node helper gates use c8. An `always()` step after owned tests consumes those independent
 reports with `scripts/coverage_accounting.py`, selects `darwin` / `linux` integer uncovered-line/function
-floors using `sys.platform`, compares **every OS's** floors with the PR base's `coverage/policy.json`,
+floors using `sys.platform`, compares **every OS's enforced floors** with the PR base's `coverage/policy.json`,
 and fails closed on missing/invalid input or a missing OS floor. Hosted artifacts, not a local Mac,
 establish per-runner floors. Windows/WSL owned-source coverage is not measured. The WSL2 scenarios
 are separate acceptance evidence, not coverage. To regenerate a review-only policy diff from an
@@ -32,7 +32,25 @@ lines/functions. Darwin sampler branch variation (#164) changes no floor. Linux 
 uses the transitional observed maximum 110/32 from two independent hosted runs; the coalescing/teardown
 race and deterministic-test fix (#163) are documented in the coverage guide. Once established, that
 per-OS floor can only decrease under the base ratchet. Another `always()` step retains LCOV and the per-package/per-file JSON summary
-on either outcome. Bun counters are separately ratcheted, never merged into primary coverage.
+on either outcome. All current Bun signals explicitly use `enforcement: "report-only"` with
+mandatory reasons linked to #160. They retain fail-closed LCOV parsing, expected-file checks,
+per-OS references, inventory ratcheting, and text+LCOV reporter checks. Counts and signed deltas
+from references are logged and included under JSON `signals`; budget excess alone cannot fail
+these advisory signals. Primary budgets stay enforced and define the 100% goal. Never merge
+Bun counters into primary coverage.
+
+The owner's roughly 1-7% small-subset description is not a measured source-coverage percentage:
+hosted run `40455349710` has plan-mode 8/539 Bun/primary tests (1.5%), subagents 22/3078 (0.7%)
+and todo 2/387 (0.5%); preset and in-process run their full test sets. The precise limitation is
+incomplete verified source scope. A strict Bun budget blocked main #153's primary-tested additions
+(subagents Bun 7728/512 -> 7763/515, primary unchanged at 500/68 on both OSes).
+
+A package flips to `enforced` only after its full suite runs under Bun on both OSes AND Bun's
+inventory covers every owned executable source file, including never-imported files, as specified
+by #160. Accounting rejects enforced partial Bun inventories. Any later enforced-to-report-only
+flip requires a new reasoned `enforcement_changes` entry relative to base; standing reasons or
+historical approvals cannot silently waive enforcement. Initial policy introduction is allowed.
+Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
 `computer-use` is not measured, tracked; `dev-tools` awaits a clean cargo baseline after #155.
 Neither is silently called 100%. Python tooling/harness code, remaining boundary probes/providers,
 benchmark source and producer configurations are also explicitly inventoried as measurement-pending.

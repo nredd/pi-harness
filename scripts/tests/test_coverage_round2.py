@@ -20,6 +20,7 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from coverage_accounting import (
     Counts,
+    EnforcementChange,
     Exclusion,
     Package,
     Policy,
@@ -145,7 +146,16 @@ def test_serialized_policy_fields_have_descriptions() -> None:
     Raises:
         AssertionError: A policy field lacks its documented contract.
     """
-    for model in [Counts, Exclusion, Signal, Package, Policy, Reclassification, VerificationHelper]:
+    for model in [
+        Counts,
+        EnforcementChange,
+        Exclusion,
+        Signal,
+        Package,
+        Policy,
+        Reclassification,
+        VerificationHelper,
+    ]:
         for name, field in model.model_fields.items():
             assert field.description, f"{model.__name__}.{name}"
             assert field.description.strip(), f"{model.__name__}.{name}"

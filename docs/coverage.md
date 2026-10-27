@@ -7,12 +7,15 @@ without the change. Phase 0 adds accounting only, not tests for existing product
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
 zero uncovered lines/functions. Schema version 2 keys each signal's transitional `max_uncovered`
-integer budgets by runner OS: `darwin` (`macos-14`) and `linux` (`ubuntu-24.04`), never rounded
+integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
+`linux` (`ubuntu-24.04`), never rounded
 percentages or platform averages. Windows and WSL coverage are **not measured**; the WSL scenario
 job is not an owned-source coverage measurement. Unsupported OSes and missing selected-OS floors
 fail closed, including when the global target is enabled. `enforce_target: false` is intentional; the final PR flips that field to
 `true`, without changing the accounting implementation. That flip applies to primary signals;
-independent runtime signals keep their own ratchets. Pending packages then fail, too.
+independent runtime signals retain their declared enforcement modes. Primary signals always remain
+`enforced`; the 100% goal is measured by PRIMARY signals, not the Bun compatibility subset.
+Pending packages then fail, too.
 
 ## Independent signals
 
@@ -26,8 +29,13 @@ Vitest/V8, except `subagents` uses Istanbul: real Pi reloads produce demonstrabl
 merges there. The `node --test` import-audit and probe helpers use c8. Those verification
 utilities and the in-process host are tracked alongside the production packages.
 
-Every declared `test:bun` command also emits an independent `bun` LCOV signal. These are
-compatibility-suite measurements, NOT the owned-source denominator: Bun 1.3.14 omits
+Every declared `test:bun` command also emits an independent `bun` LCOV signal. All eight current
+Bun signals explicitly declare `enforcement: "report-only"`, with a mandatory nonblank `reason`
+and a link to [#160](https://github.com/nredd/pi-harness/issues/160). Their stored `max_uncovered`
+values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
+`enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
+rely on that default. These are compatibility-suite measurements, NOT the owned-source denominator:
+Bun 1.3.14 omits
 never-imported files. The policy explicitly lists the files currently measured by each signal;
 missing expected files fail. Files outside that Bun subset remain mandatory in primary
 coverage. Imported sibling production source and dedicated test/helper directories are outside
@@ -35,11 +43,38 @@ that package's signal. Unknown production report paths fail. Never merge JSC, V8
 counters or average platforms. Replacing producers with a single Bun runner later only changes
 the producer wiring and reviewed signal inventory, not the accounting algorithm (issue #160).
 
+The policy decision's roughly **1-7%** small-subset characterization must not be mistaken for a
+measured source-coverage percentage or a universal suite ratio. Hosted run `40455349710` measured
+8 Bun tests versus 539 primary tests for plan-mode (1.5%), 22 versus 3078 for subagents (0.7%) and
+2 versus 387 for todo (0.5%). There are exceptions: preset runs all 127 tests under Bun, and the
+in-process host runs the same 64 cases (one intentionally skipped on Linux). Other package ratios
+also differ. LCOV imported-file denominators and JSC/V8/Istanbul executable counters differ, so
+these test-count ratios cannot be presented as percentages of production source covered.
+
+A strict uncovered-count Bun ratchet penalized primary-tested source additions that the small Bun
+suite never exercises: after main #153, subagents Bun rose from 7728/512 to 7763/515 uncovered
+lines/functions on both OSes while primary stayed 500/68. Report-only avoids that ergonomics trap
+without calling absent source covered. Every report is still required, parsed and validated;
+missing/empty/malformed reports, missing expected files and inventory losses still fail closed.
+Counts and signed deltas from the stored per-OS references appear in logs and the JSON `signals`
+map. Report-only excess never fails accounting; its reference-number changes are not a budget
+ratchet. Per-OS reference membership is still required, and branches remain report-only everywhere.
+
+Flip a package's Bun signal to `enforced` **only when its full suite runs under Bun on both owned
+OSes and its Bun inventory covers every owned executable source file**, including never-imported
+modules through explicit import-all/instrumentation. A green compatibility subset alone is not
+that evidence, even when its test count matches primary. Follow #160's reviewed migration spec;
+record complete-source receipts before establishing enforced Bun floors. Accounting rejects an
+enforced Bun signal whose file subset omits owned source. Enforced-to-enforced budgets ratchet;
+a report-only-to-enforced promotion establishes the new complete-source floor.
+
 Bun's `coverageThreshold` is bypassed by **lcov-only** reporting on pinned 1.3.14: a 50%-function
 fixture exits 0 with `lcov`, and nonzero with `text` plus `lcov`. Both reporters are mandatory
 in signal declarations and actual `test:bun` commands. `scripts/tests/test_coverage_producers.py`
 executes that reproduction with the pinned Bun and checks producer commands. Do not remove
-`text` as a cosmetic CI cleanup. Generic LCOV accounting independently enforces integer budgets.
+`text` as a cosmetic CI cleanup, even for report-only signals. Generic LCOV accounting independently
+enforces integer budgets for `enforced` signals only; producer declarations and the real pinned-Bun
+threshold-bypass reproduction remain mandatory in either mode.
 LCOV producers may emit aggregate-only function totals; those must be internally consistent.
 Signed branch hit counts are retained as reported-only diagnostics, never used to gate lines or
 functions. Missing/empty reports, inconsistent counters, zero total owned lines, unknown files
@@ -126,12 +161,29 @@ make check-coverage BASE=origin/main
 This consumes reports without executing tests, writes `coverage/summary.json`, and compares
 each independent per-OS budget with `git show <base>:coverage/policy.json`. The default OS is
 `sys.platform`; `--os darwin` or `--os linux` is explicit for artifact replay and tests. Raising
-either uncovered counter on **any** OS, removing any previously declared OS floor or measured
-package/signal, or disabling an enabled global target fails. The base ratchet checks both OSes,
+either uncovered counter of an enforced-to-enforced signal on **any** OS, removing any previously
+declared OS reference/floor or measured package/signal, or disabling an enabled global target fails. The base ratchet checks both OSes,
 not just the host running accounting. A missing selected-OS floor never falls back to the other OS. Only
 the initial addition of a policy has no base counterpart; invalid Git bases still fail.
 
-The second ratchet compares **expanded source membership**, not just budgets. The base policy
+Changing an already-enforced independent signal to `report-only` requires a new, exact,
+base-relative `enforcement_changes` entry, separate from its standing signal reason:
+
+```json
+{
+  "package": "example",
+  "signal": "bun",
+  "reason": "Reviewed migration rollback with issue URL and concrete justification."
+}
+```
+
+Missing, blank, duplicate, unrelated or recycled historical entries fail. The initial addition of
+this policy on main has no base policy and requires no fictitious downgrade history. New signals
+also have no previous enforcement to downgrade. Primary signals cannot become report-only even
+with an entry. A declaration is review evidence, not permission to hide missing reports or source.
+
+The second ratchet compares **expanded source membership**, not just budgets. It applies equally
+to enforced and report-only signals. The base policy
 comes from `git show` and its globs expand against that base commit's `git ls-tree` paths, never
 the current checkout. Current globs expand against the working tree. Shrinking `owned`, changing
 a root, introducing an exclusion, moving source into fixture scope or shrinking a compatibility

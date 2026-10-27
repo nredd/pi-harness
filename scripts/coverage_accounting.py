@@ -28,8 +28,8 @@ class StrictModel(BaseModel):
 
 
 class Counts(StrictModel):
-    lines: int = Field(ge=0, description="Maximum number of uncovered executable lines.")
-    functions: int = Field(ge=0, description="Maximum number of uncovered functions.")
+    lines: int = Field(ge=0, description="Stored uncovered executable-line budget or advisory reference.")
+    functions: int = Field(ge=0, description="Stored uncovered-function budget or advisory reference.")
 
 
 class Exclusion(StrictModel):
@@ -87,9 +87,16 @@ class Signal(StrictModel):
         default=None, description="Expected source paths; null means full inventory."
     )
     max_uncovered: dict[str, Counts] = Field(
-        description="Independent integer uncovered-counter budgets keyed by measured runner OS."
+        description="Independent integer uncovered-counter budgets or report-only references by measured OS."
     )
     reporters: list[str] = Field(description="Required producer output formats, including text and LCOV.")
+    enforcement: Literal["enforced", "report-only"] = Field(
+        default="enforced",
+        description="Enforce budgets or only report validated counters and reference deltas.",
+    )
+    reason: str = Field(
+        default="", description="Mandatory explanation and migration issue for report-only signals."
+    )
 
     @model_validator(mode="after")
     def text_and_lcov(self) -> Signal:
@@ -100,8 +107,10 @@ class Signal(StrictModel):
         Returns:
             Signal: Validated independent reporting contract.
         Raises:
-            ValueError: Required reporters are absent or file declarations are empty/duplicated.
+            ValueError: A report-only reason, reporters, OS keys or expected-file declarations are invalid.
         """
+        if self.enforcement == "report-only" and not self.reason.strip():
+            raise ValueError("A report-only signal requires a nonblank `reason`")
         if self.max_uncovered.keys() - {"darwin", "linux"}:
             raise ValueError("Coverage floors support only measured darwin/linux OSes")
         if not {"text", "lcov"}.issubset(self.reporters):
@@ -133,12 +142,14 @@ class Package(StrictModel):
         Returns:
             Package: Validated package status and signal declarations.
         Raises:
-            ValueError: Pending status lacks a note or measured status lacks a primary signal.
+            ValueError: Pending status is invalid or measured primary enforcement is missing/disabled.
         """
         if self.status == "pending" and (not self.note.strip() or self.signals):
             raise ValueError("Pending package requires a note and no invented measurements")
         if self.status == "measured" and "primary" not in self.signals:
             raise ValueError("Measured package requires a primary signal")
+        if "primary" in self.signals and self.signals["primary"].enforcement != "enforced":
+            raise ValueError("Primary signals must remain enforced")
         return self
 
 
@@ -172,6 +183,27 @@ class Reclassification(StrictModel):
         return self
 
 
+class EnforcementChange(StrictModel):
+    package: str = Field(min_length=1, description="Package whose enforced signal becomes report-only.")
+    signal: str = Field(min_length=1, description="Exact signal whose enforcement is explicitly relaxed.")
+    reason: str = Field(min_length=1, description="Reviewed reason for this specific enforcement downgrade.")
+
+    @model_validator(mode="after")
+    def nonblank_reason(self) -> EnforcementChange:
+        """Require a substantive reason separate from the signal's standing note.
+
+        Parameters:
+            None.
+        Returns:
+            EnforcementChange: Validated explicit downgrade declaration.
+        Raises:
+            ValueError: The reason contains only whitespace.
+        """
+        if not self.reason.strip():
+            raise ValueError("An `enforcement_changes` entry requires a nonblank reason")
+        return self
+
+
 class Policy(StrictModel):
     version: Literal[2] = Field(description="Coverage policy schema version; per-OS budgets.")
     target: Counts = Field(description="Final zero-uncovered primary coverage target.")
@@ -186,6 +218,11 @@ class Policy(StrictModel):
     reclassifications: list[Reclassification] = Field(
         default_factory=list,
         description="Explicit reviewed source-membership changes relative to the PR base.",
+    )
+
+    enforcement_changes: list[EnforcementChange] = Field(
+        default_factory=list,
+        description="New reviewed declarations required for enforced-to-report-only signal transitions.",
     )
 
     @model_validator(mode="after")
@@ -583,19 +620,55 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
     return unknown
 
 
+def check_enforcement_changes(current: Policy, base: Policy) -> None:
+    """Require fresh, exact declarations for every enforced-to-report-only transition.
+
+    Parameters:
+        current (Policy): Current signal enforcement and reviewed change ledger.
+        base (Policy): Base-tree enforcement and historical ledger entries.
+    Returns:
+        None: All downgrades have new, unambiguous reasoned entries.
+    Raises:
+        ValueError: A downgrade lacks a new entry, or an entry is duplicate or stale.
+    """
+    downgrades = {
+        (name, signal_name)
+        for name, package in base.packages.items()
+        for signal_name, signal in package.signals.items()
+        if signal.enforcement == "enforced"
+        and name in current.packages
+        and signal_name in current.packages[name].signals
+        and current.packages[name].signals[signal_name].enforcement == "report-only"
+    }
+    historical = {entry.model_dump_json() for entry in base.enforcement_changes}
+    declared: set[tuple[str, str]] = set()
+    for entry in current.enforcement_changes:
+        if entry.model_dump_json() in historical:
+            continue
+        key = (entry.package, entry.signal)
+        if key not in downgrades or key in declared:
+            raise ValueError(f"Duplicate or stale `enforcement_changes` entry: '{key}'")
+        declared.add(key)
+    if downgrades - declared:
+        raise ValueError(
+            f"Enforcement downgrade requires new `enforcement_changes`: '{sorted(downgrades - declared)}'"
+        )
+
+
 def check_ratchet(current: Policy, base: Policy) -> None:
-    """Reject removed signals/packages or increased uncovered budgets.
+    """Ratchet enforced budgets and require explicit declarations for enforcement downgrades.
 
     Parameters:
         current (Policy): Current working-tree policy.
         base (Policy): Policy read from the PR base commit.
     Returns:
-        None: Every integer budget preserves the base ratchet.
+        None: Enforced budgets, OS membership and enforcement declarations preserve the base ratchet.
     Raises:
-        ValueError: A package/signal disappears, a budget increases or the final target is disabled.
+        ValueError: Membership, enforced budgets, enforcement transitions or the final target are weakened.
     """
     if base.enforce_target and not current.enforce_target:
         raise ValueError("Cannot disable global target")
+    check_enforcement_changes(current, base)
     for name, previous in base.packages.items():
         if name not in current.packages:
             raise ValueError(f"Removed package: '{name}'")
@@ -608,7 +681,9 @@ def check_ratchet(current: Policy, base: Policy) -> None:
                 if runner_os not in new.max_uncovered:
                     raise ValueError(f"Missing OS floor: '{name}/{signal_name}/{runner_os}'")
                 budget = new.max_uncovered[runner_os]
-                if budget.lines > floor.lines or budget.functions > floor.functions:
+                if old.enforcement == new.enforcement == "enforced" and (
+                    budget.lines > floor.lines or budget.functions > floor.functions
+                ):
                     raise ValueError(f"Ratchet violation: '{name}/{signal_name}/{runner_os}'")
 
 
@@ -676,6 +751,27 @@ def scoped_records(
     return records
 
 
+def validate_signal_inventory(owned: set[str], signal_name: str, signal: Signal) -> None:
+    """Validate expected-source scope independently of whether counts are enforced.
+
+    Parameters:
+        owned (set[str]): Complete expanded package-relative production inventory.
+        signal_name (str): Primary or independent compatibility signal name.
+        signal (Signal): Expected-source subset and enforcement declaration.
+    Returns:
+        None: Expected files belong to production, with complete enforced primary/Bun scope.
+    Raises:
+        ValueError: A subset is outside ownership or an enforced complete-source signal is partial.
+    """
+    expected = set(signal.files) if signal.files is not None else owned
+    if not expected.issubset(owned):
+        raise ValueError("Signal files are outside owned inventory")
+    if signal_name == "primary" and expected != owned:
+        raise ValueError("Primary signal must measure every owned executable file")
+    if signal_name == "bun" and signal.enforcement == "enforced" and expected != owned:
+        raise ValueError("Enforced Bun signal must measure every owned executable file")
+
+
 def account(
     root: Path,
     policy: Policy,
@@ -710,11 +806,7 @@ def account(
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
             try:
-                expected = set(signal.files) if signal.files is not None else owned
-                if not expected.issubset(owned):
-                    raise ValueError("Signal files are outside owned inventory")
-                if signal_name == "primary" and expected != owned:
-                    raise ValueError("Primary signal must measure every owned executable file")
+                validate_signal_inventory(owned, signal_name, signal)
                 if not measure and runner_os not in signal.max_uncovered:
                     raise ValueError(f"Missing OS floor: '{runner_os}'")
                 records = scoped_records(root, policy, package, signal, reports_root)
@@ -727,8 +819,17 @@ def account(
                     results.append(item)
                     LOGGER.info(f"{label} {path}: {counters}")
                 LOGGER.info(
-                    f"{label}/{runner_os}: uncovered lines={uncovered_lines}, functions={uncovered_functions}"
+                    f"{label}/{runner_os} ({signal.enforcement}): "
+                    f"uncovered lines={uncovered_lines}, functions={uncovered_functions}"
                 )
+                reference = signal.max_uncovered.get(runner_os)
+                if reference is not None:
+                    LOGGER.info(
+                        f"{label}/{runner_os}: reference lines={reference.lines}, "
+                        f"functions={reference.functions}; "
+                        f"delta lines={uncovered_lines - reference.lines:+d}, "
+                        f"functions={uncovered_functions - reference.functions:+d}"
+                    )
                 if measure:
                     continue
                 budget = (
@@ -736,13 +837,48 @@ def account(
                     if policy.enforce_target and signal_name == "primary"
                     else signal.max_uncovered[runner_os]
                 )
-                if uncovered_lines > budget.lines or uncovered_functions > budget.functions:
+                if signal.enforcement == "enforced" and (
+                    uncovered_lines > budget.lines or uncovered_functions > budget.functions
+                ):
                     raise ValueError(
                         f"Budget exceeded: {uncovered_lines} lines, {uncovered_functions} functions"
                     )
             except (OSError, ValueError) as error:
                 errors.append(f"{label}: {error}")
     return results, errors
+
+
+def signal_comparisons(
+    policy: Policy, totals: dict[str, dict[str, int]], runner_os: str
+) -> dict[str, dict[str, object]]:
+    """Expose each signal's enforcement and signed deltas from its stored reference.
+
+    Parameters:
+        policy (Policy): Validated current reference and enforcement declarations.
+        totals (dict[str, dict[str, int]]): Measured aggregate counters by package/signal.
+        runner_os (str): OS associated with the measured reports.
+    Returns:
+        dict[str, dict[str, object]]: Enforcement, reason, reference and signed uncovered deltas.
+    Raises:
+        KeyError: Aggregate labels do not belong to the validated policy.
+    """
+    comparisons: dict[str, dict[str, object]] = {}
+    for label, counts in totals.items():
+        name, signal_name = label.split("/")
+        signal = policy.packages[name].signals[signal_name]
+        reference = signal.max_uncovered.get(runner_os)
+        comparisons[label] = {
+            "enforcement": signal.enforcement,
+            "reason": signal.reason,
+            "reference": reference.model_dump() if reference is not None else None,
+            "delta": {
+                "lines": counts["uncovered_lines"] - reference.lines,
+                "functions": counts["uncovered_functions"] - reference.functions,
+            }
+            if reference is not None
+            else None,
+        }
+    return comparisons
 
 
 def log_measured_diff(policy: Policy, floors: dict[str, dict[str, dict[str, int]]], runner_os: str) -> None:
@@ -817,6 +953,7 @@ def main() -> int:
     errors: list[str] = []
     results: list[dict[str, object]] = []
     pending: dict[str, str] = {}
+    policy: Policy | None = None
     try:
         policy = Policy.model_validate_json((root / "coverage/policy.json").read_text())
         pending = {
@@ -860,7 +997,7 @@ def main() -> int:
         label: {args.os: {"lines": counts["uncovered_lines"], "functions": counts["uncovered_functions"]}}
         for label, counts in totals.items()
     }
-    if args.measure and not errors:
+    if args.measure and not errors and policy is not None:
         log_measured_diff(policy, floors, args.os)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     args.summary.write_text(
@@ -870,6 +1007,7 @@ def main() -> int:
                 "measurement_only": args.measure,
                 "measured_floors": floors,
                 "packages": totals,
+                "signals": signal_comparisons(policy, totals, args.os) if policy is not None else {},
                 "files": results,
                 "not_measured": pending,
                 "errors": errors,

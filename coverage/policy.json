@@ -3,6 +3,7 @@
   "target": { "lines": 0, "functions": 0 },
   "enforce_target": false,
   "reclassifications": [],
+  "enforcement_changes": [],
   "verification_helpers": [
     { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
     { "path": "integration/probes/anthropic-block-types.mjs", "reason": "Offline assertion probe for synthetic Anthropic block classification; no production entrypoint or real credentials." },
@@ -69,6 +70,8 @@
             "src/tool-selection.ts", "src/workflow-mutex.ts"
           ],
           "max_uncovered": { "darwin": { "lines": 3479, "functions": 245 }, "linux": { "lines": 3479, "functions": 245 } },
+          "enforcement": "report-only",
+          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -89,6 +92,8 @@
           "report": "coverage/bun/lcov.info",
           "files": ["extensions/expanded-footer.ts", "lib/footer-cache.ts", "lib/footer-quota.ts"],
           "max_uncovered": { "darwin": { "lines": 244, "functions": 15 }, "linux": { "lines": 244, "functions": 15 } },
+          "enforcement": "report-only",
+          "reason": "Current Bun producer is not yet verified as a full source-complete port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -109,6 +114,8 @@
           "report": "coverage/bun/lcov.info",
           "files": ["src/collect.ts", "src/counters.ts", "src/index.ts"],
           "max_uncovered": { "darwin": { "lines": 163, "functions": 14 }, "linux": { "lines": 46, "functions": 8 } },
+          "enforcement": "report-only",
+          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -146,6 +153,8 @@
             "src/stats/ticks.ts", "src/titles/aliases.ts", "src/titles/index.ts", "src/titles/logic.ts"
           ],
           "max_uncovered": { "darwin": { "lines": 859, "functions": 116 }, "linux": { "lines": 859, "functions": 114 } },
+          "enforcement": "report-only",
+          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -186,6 +195,8 @@
             "src/worktree.ts", "src/xml.ts"
           ],
           "max_uncovered": { "darwin": { "lines": 7728, "functions": 512 }, "linux": { "lines": 7728, "functions": 512 } },
+          "enforcement": "report-only",
+          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -206,6 +217,8 @@
           "report": "coverage/bun/lcov.info",
           "files": ["src/config.ts", "src/exhaustion.ts", "src/index.ts", "src/model-ref.ts", "src/recovery.ts", "src/router.ts", "src/selection.ts", "src/usage.ts"],
           "max_uncovered": { "darwin": { "lines": 226, "functions": 31 }, "linux": { "lines": 226, "functions": 31 } },
+          "enforcement": "report-only",
+          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -226,6 +239,8 @@
           "report": "coverage/bun/lcov.info",
           "files": ["config.ts", "state/i18n-bridge.ts", "state/invariants.ts", "state/plan.ts", "state/replay.ts", "state/selectors.ts", "state/state-reducer.ts", "state/state.ts", "state/store.ts", "state/task-graph.ts", "todo.ts", "tool/response-envelope.ts", "tool/sanitize.ts", "tool/types.ts", "view/format.ts"],
           "max_uncovered": { "darwin": { "lines": 936, "functions": 71 }, "linux": { "lines": 936, "functions": 71 } },
+          "enforcement": "report-only",
+          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -352,6 +367,8 @@
           "report": "coverage/bun/lcov.info",
           "files": ["support.ts", "goal-support.ts", "native-timers.ts"],
           "max_uncovered": { "darwin": { "lines": 22, "functions": 4 }, "linux": { "lines": 37, "functions": 5 } },
+          "enforcement": "report-only",
+          "reason": "Current Bun producer is not yet verified as a full source-complete port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
