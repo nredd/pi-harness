@@ -794,7 +794,7 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
         plan.settings = desired
         changed = sorted(key for key in desired if desired.get(key) != current.get(key))
         message = f"set {', '.join(f'`{key}`' for key in changed)} in '{settings_path}'"
-        (plan.overwrites if current else plan.creates).append(message)
+        (plan.overwrites if settings_path.exists(follow_symlinks=False) else plan.creates).append(message)
         existing = current.get("packages")
         existing = existing if isinstance(existing, list) else []
         dropped = sorted(set(map(declared_source, existing)) - set(verified.sources))
@@ -807,7 +807,7 @@ def plan_install(layout: Layout, verified: Verified) -> Plan:
         refuse_symlink(subagents_path)
         plan.subagents = desired_subagents
         message = f"set `packageAgents: false` in '{subagents_path}' so filtered packages stay filtered"
-        (plan.overwrites if current_subagents else plan.creates).append(message)
+        (plan.overwrites if subagents_path.exists(follow_symlinks=False) else plan.creates).append(message)
     if not plan.empty:
         # Before consent: a kind the journal cannot restore must never be moved into a backup.
         for target in replaced_targets(layout, plan):
@@ -1134,6 +1134,16 @@ class Step:
     pending: bool = False
     original: tuple[int, int, int] | None = None
     restored: bool = False
+    restoring: tuple[int, int] | None = None
+
+    def live_identity(self) -> tuple[int, int, int] | None:
+        """Return the live entry's device/inode/ctime, or absence, without following links.
+
+        Returns:
+            tuple[int, int, int] | None: identity used to validate pending and completed steps.
+        """
+        info = self.target.lstat() if self.target.exists(follow_symlinks=False) else None
+        return (info.st_dev, info.st_ino, info.st_ctime_ns) if info else None
 
     def record(self) -> dict[str, Any]:
         """Serialize validated progress for the next atomic journal rewrite.
@@ -1149,6 +1159,8 @@ class Step:
             result |= {"pending": self.pending, "original": list(self.original)}
         if self.restored:
             result["restored"] = True
+        if self.restoring is not None:
+            result["restoring"] = list(self.restoring)
         return result
 
 
@@ -1233,6 +1245,34 @@ def read_journal(path: Path) -> object:
             raise ValueError(f"it is not readable JSON: {error}") from error
 
 
+def restoring_identity(raw: dict[str, Any]) -> tuple[int, int] | None:
+    """Validate a write-ahead restore identity before it can excuse a consumed backup.
+
+    Parameters:
+        raw (dict[str, Any]): journal step with otherwise validated progress metadata.
+
+    Returns:
+        tuple[int, int] | None: original mtime and size, or no restore intent.
+
+    Raises:
+        ValueError: restore intent is malformed or conflicts with another step state.
+    """
+    if "restoring" not in raw:
+        return None
+    identity = raw["restoring"]
+    if (
+        not isinstance(identity, list)
+        or len(identity) != 2
+        or any(type(value) is not int for value in identity)
+        or identity[1] < 0
+        or raw["backup"] is None
+        or raw.get("restored", False)
+        or raw.get("pending", False)
+    ):
+        raise ValueError(f"step for '{raw['target']}' has invalid restoring mtime/size metadata")
+    return identity[0], identity[1]
+
+
 def validate_journal(layout: Layout, document: object) -> list[Step]:
     """Check every journal step against the paths a switch can touch, before anything is restored.
 
@@ -1264,7 +1304,7 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         raise ValueError(f"'{backups}' is not owned by the current user")
     steps: list[Step] = []
     for raw in raw_steps:
-        if not isinstance(raw, dict) or set(raw) not in (
+        if not isinstance(raw, dict) or set(raw) - {"restoring"} not in (
             {"target", "backup"},
             {"target", "backup", "pending", "original"},
             {"target", "backup", "restored"},
@@ -1293,6 +1333,7 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
             if raw["backup"] is None:
                 raise ValueError(f"step for '{target}' has original metadata without a backup")
             pending, original = raw["pending"], (identity[0], identity[1], identity[2])
+        restoring = restoring_identity(raw)
         if raw["backup"] is None:
             steps.append(Step(target, None, restored=restored))
             continue
@@ -1301,7 +1342,7 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         kind = entry_kind(backup)
         if kind is not None and kind not in kinds:
             raise ValueError(f"backup '{backup}' is a {kind}, expected {' or '.join(sorted(kinds))}")
-        steps.append(Step(target, backup, pending, original, restored))
+        steps.append(Step(target, backup, pending, original, restored, restoring))
     return steps
 
 
@@ -1330,6 +1371,27 @@ def load_journal(layout: Layout) -> tuple[Path, list[Step]]:
             "`PI_CODING_AGENT_DIR`, rerun with the same ones. Otherwise restore by hand from "
             f"'{layout.backups}'"
         ) from error
+
+
+def restore_backup(journal: Journal, step: Step, index: int) -> None:
+    """Persist restore intent before consuming a backup, or remove a newly created target.
+
+    Parameters:
+        journal (Journal): validated journal with its backup directory held open.
+        step (Step): validated restore step.
+        index (int): step position in the journal's original order.
+    """
+    if step.backup is not None:
+        info = os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
+        # Rename changes ctime, but preserves mtime and size for files, links and trees.
+        journal.steps[index] = Step(
+            step.target, step.backup, restoring=(info.st_mtime_ns, info.st_size)
+        ).record()
+        journal.persist()
+    remove(step.target)
+    if step.backup is not None:
+        os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
+    journal.check_store()
 
 
 def rollback(layout: Layout) -> list[str]:
@@ -1365,26 +1427,25 @@ def rollback(layout: Layout) -> list[str]:
             # at the live path. Saved/legacy steps or a changed live identity must fail loudly.
             for step in steps:
                 if step.restored:
-                    info = step.target.lstat() if step.target.exists(follow_symlinks=False) else None
-                    identity = (info.st_dev, info.st_ino, info.st_ctime_ns) if info else None
-                    if identity != step.original:
+                    if step.live_identity() != step.original:
                         raise OSError(f"Restored target '{step.target}' changed; restore by hand")
                     continue
                 if step.backup is not None:
                     try:
                         os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
                     except FileNotFoundError as error:
-                        if step.pending and step.original is not None:
-                            try:
-                                info = step.target.lstat()
-                            except FileNotFoundError:
-                                info = None
-                            if (
-                                info is not None
-                                and (info.st_dev, info.st_ino, info.st_ctime_ns) == step.original
-                            ):
+                        if step.restoring is not None:
+                            info = step.target.lstat() if step.target.exists(follow_symlinks=False) else None
+                            if info is not None and (info.st_mtime_ns, info.st_size) == step.restoring:
                                 not_started.add(step.target)
                                 continue
+                        if (
+                            step.pending
+                            and step.original is not None
+                            and step.live_identity() == step.original
+                        ):
+                            not_started.add(step.target)
+                            continue
                         raise OSError(
                             f"Expected backup '{step.backup}' is missing; restore by hand"
                         ) from error
@@ -1394,13 +1455,9 @@ def rollback(layout: Layout) -> list[str]:
                 if step.restored:
                     continue
                 if step.target not in not_started:
-                    remove(step.target)
-                    if step.backup is not None:
-                        os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
-                    journal.check_store()
+                    restore_backup(journal, step, index)
                     restored.append(str(step.target))
-                info = step.target.lstat() if step.backup is not None else None
-                identity = (info.st_dev, info.st_ino, info.st_ctime_ns) if info else None
+                identity = step.live_identity() if step.backup is not None else None
                 journal.steps[index] = Step(step.target, step.backup, False, identity, True).record()
                 journal.persist()
             journal.steps = []

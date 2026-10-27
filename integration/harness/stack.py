@@ -444,7 +444,7 @@ def package_declarations(stack: Stack, sources: list[str]) -> list[str | dict[st
 
 
 def installed_identities(stack: Stack, sources: list[str], agent_dir: Path) -> list[dict[str, str]]:
-    """Read every installed package manifest and require npm versions to equal their pins.
+    """Read every installed package manifest and require npm names and versions to equal their pins.
 
     Parameters:
         stack (Stack): validated stack.
@@ -456,7 +456,7 @@ def installed_identities(stack: Stack, sources: list[str], agent_dir: Path) -> l
 
     Raises:
         FileNotFoundError: a declared source is not installed.
-        ValueError: a manifest has no string `name` and `version`, or an installed npm version
+        ValueError: a manifest has no string `name` and `version`, or an installed npm identity
             differs from its pin.
     """
     identities = []
@@ -465,8 +465,10 @@ def installed_identities(stack: Stack, sources: list[str], agent_dir: Path) -> l
         for key in ("name", "version"):
             if not isinstance(manifest.get(key), str) or not manifest[key]:
                 raise ValueError(f"Installed manifest of '{resolved}' lacks a non-empty string `{key}`")
-        if resolved.startswith("npm:") and manifest["version"] != resolved.rsplit("@", 1)[1]:
-            raise ValueError(f"Installed npm `version` differs from '{resolved}': '{manifest['version']}'")
+        if resolved.startswith("npm:"):
+            for key, expected in (("name", npm_identity(resolved)), ("version", resolved.rsplit("@", 1)[1])):
+                if manifest[key] != expected:
+                    raise ValueError(f"Installed npm `{key}` differs from '{resolved}': '{manifest[key]}'")
         identities.append({"name": manifest["name"], "version": manifest["version"], "source": resolved})
     return identities
 

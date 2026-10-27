@@ -2757,6 +2757,7 @@ def test_agent_dir_file_url_is_refused_before_anything_changes(
 
 
 MALFORMED_MANIFESTS = {
+    "wrong-name": '{"name": "wrong-package", "version": "0.4.2"}',
     "empty-object": "{}",
     "no-version": '{"name": "pi-memory"}',
     "no-name": '{"version": "0.4.2"}',
@@ -2785,6 +2786,7 @@ def test_malformed_manifest_identity_is_a_value_error(tmp_path: Path) -> None:
     package = agent / "npm" / "node_modules" / "pi-memory"
     package.mkdir(parents=True)
     fields = {
+        "wrong-name": "name",
         "empty-object": "name",
         "no-version": "version",
         "no-name": "name",
@@ -3176,6 +3178,165 @@ def test_bounded_journal_failures_exit_cleanly(tmp_path: Path, flags: list[str],
         assert "exceeds 1048576 bytes" in result.stderr
     assert "Traceback" not in result.stderr
     assert {k: v for k, v in tree(tmp_path).items() if not k.endswith("pi-stack/lock")} == before
+
+
+@pytest.mark.parametrize("name", [install.SETTINGS_FILE, install.SUBAGENTS_FILE])
+@pytest.mark.parametrize("text", ["{}", ""])
+def test_existing_empty_config_never_bypasses_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, text: str
+) -> None:
+    """An empty object is still existing state; empty bytes remain corrupt JSON, never CREATE."""
+    harness = Harness(tmp_path, monkeypatch)
+    path = harness.layout.agent_dir / name
+    path.parent.mkdir(parents=True)
+    path.write_text(text)
+    before = tree(harness.home)
+    if text:
+        plan = plan_install(harness.layout, harness.verified)
+        assert any(str(path) in line for line in plan.overwrites)
+        assert not any(str(path) in line for line in plan.creates if "install " not in line)
+        with pytest.raises(ConsentError):
+            harness.run()
+    else:
+        with pytest.raises(InstallError, match="not readable JSON"):
+            harness.run()
+    assert path.read_text() == text
+    assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
+    assert harness.calls() == []
+
+
+@pytest.mark.parametrize("field", ["name", "version"])
+def test_wrong_staged_manifest_identity_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    """A successful npm command cannot stage a foreign identity at the pinned package path."""
+    harness = Harness(tmp_path, monkeypatch)
+    original = subprocess.check_output
+
+    def install_wrong_identity(argv: list[str], **kwargs: Any) -> str:
+        """Run fake pi, then corrupt one installed manifest before staging verifies it."""
+        output = original(argv, **kwargs)
+        if argv[1:] == ["install", "npm:pi-memory@0.4.2"]:
+            agent = Path(kwargs["env"]["PI_CODING_AGENT_DIR"])
+            manifest = agent / "npm/node_modules/pi-memory/package.json"
+            document = json.loads(manifest.read_text())
+            document[field] = "wrong-package" if field == "name" else "9.9.9"
+            manifest.write_text(json.dumps(document))
+        return output
+
+    monkeypatch.setattr(subprocess, "check_output", install_wrong_identity)
+    with pytest.raises(InstallError, match=rf"Staged packages.*`{field}`"):
+        harness.run()
+    assert not harness.layout.state.exists()
+    assert not harness.layout.agent_dir.exists()
+
+
+@pytest.mark.parametrize("operation", ["write", "rename"])
+@pytest.mark.parametrize("after", [False, True], ids=["before", "after"])
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt], ids=["io", "interrupt"])
+def test_restore_every_call_boundary_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    after: bool,
+    failure: type[BaseException],
+) -> None:
+    """Interrupt every journal rewrite/restore rename, including both sides of the consumed-backup gap."""
+    # Two restores, each with an intent and completion rewrite, then the empty completion record.
+    count = 5 if operation == "write" else 2
+    original_write, original_replace = install.write_atomic, os.replace
+    for injection in range(count):
+        case = tmp_path / str(injection)
+        case.mkdir()
+        with monkeypatch.context() as patch:
+            harness = Harness(case, patch)
+            originals = pending_file_restore(harness)
+            calls = 0
+
+            def fault(call: Callable[[], None], point: int = injection) -> None:
+                """Fail once at this exact sequence index, before or after the operation."""
+                nonlocal calls
+                index = calls
+                calls += 1
+                if index == point and not after:
+                    raise failure("restore boundary")
+                call()
+                if index == point and after:
+                    raise failure("restore boundary")
+
+            def write(path: Path, text: str, mode: int | None = None) -> None:
+                """Fault only the atomic journal rewrite seam."""
+                fault(lambda: original_write(path, text, mode))
+
+            def rename(src: Any, dst: Any, **kwargs: Any) -> None:
+                """Fault only backup-to-live renames, not journal replacements."""
+                if kwargs.get("src_dir_fd") is not None:
+                    fault(lambda: original_replace(src, dst, **kwargs))
+                else:
+                    original_replace(src, dst, **kwargs)
+
+            with patch.context() as fault_patch:
+                fault_patch.setattr(
+                    install, "write_atomic", write if operation == "write" else original_write
+                )
+                fault_patch.setattr(os, "replace", rename if operation == "rename" else original_replace)
+                with pytest.raises((RollbackError, KeyboardInterrupt), match="restore boundary"):
+                    rollback(harness.layout)
+            assert calls == injection + 1
+            rollback(harness.layout)
+            assert {path: path.read_bytes() for path in originals} == originals
+            assert not harness.layout.journal.exists()
+
+
+@pytest.mark.parametrize("mismatch", ["size", "mtime", "absent"])
+def test_restore_intent_does_not_excuse_lost_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mismatch: str
+) -> None:
+    """A consumed backup is excused only while live mtime and size match the write-ahead identity."""
+    harness = Harness(tmp_path, monkeypatch)
+    pending_file_restore(harness)
+    original = os.replace
+
+    def interrupt_restore(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Interrupt just after installed.json's backup is consumed."""
+        original(src, dst, **kwargs)
+        if kwargs.get("src_dir_fd") is not None:
+            raise KeyboardInterrupt
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", interrupt_restore)
+        with pytest.raises(KeyboardInterrupt):
+            rollback(harness.layout)
+    state = harness.layout.state
+    info = state.stat()
+    if mismatch == "size":
+        state.write_bytes(state.read_bytes() + b" ")
+        os.utime(state, ns=(info.st_atime_ns, info.st_mtime_ns))
+    elif mismatch == "mtime":
+        os.utime(state, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+    else:
+        state.unlink()
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match=r"Expected backup.*missing"):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
+    assert harness.layout.journal.exists()
+
+
+def test_installer_linux_helper_policy_documentation() -> None:
+    """Installer policy is not a claim that the package lacks opt-in Linux support."""
+    text = (INTEGRATION.parent / "docs/install.md").read_text()
+    assert "Linux has no supported helper" not in text
+    assert "../packages/computer-use/docs/linux.md" in text
+    assert "disabled by installer policy" in text
+
+
+def test_installer_restore_retry_documentation() -> None:
+    """The retry contract names write-ahead reconciliation and its lost-backup refusal."""
+    text = (INTEGRATION.parent / "docs/install.md").read_text()
+    assert "`restoring`" in text
+    assert "mtime and size" in text
+    assert "missing backup with a nonmatching live target fails loudly" in text
 
 
 def test_journal_memory_failure_is_untrusted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

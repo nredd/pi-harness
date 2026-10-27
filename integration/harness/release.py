@@ -155,7 +155,7 @@ def fetch_bytes(request: str | Request) -> bytes:
     """Read a complete public response, normalizing HTTP and I/O failures in one place.
 
     Parameters:
-        request (str | Request): public URL, optionally with explicit non-credential headers.
+        request (str | Request): public URL, optionally with an explicit `Accept` header only.
 
     Returns:
         bytes: complete response body, never a partially consumed response.
@@ -163,10 +163,14 @@ def fetch_bytes(request: str | Request) -> bytes:
     Raises:
         FetchError: HTTPException (including IncompleteRead/RemoteDisconnected), OSError
             (including TimeoutError/SSLError), non-HTTPS URL/redirect, invalid Content-Length,
-            length mismatch or response exceeding `MAX_FETCH_BYTES`.
+            length mismatch, headers other than `Accept` or response exceeding `MAX_FETCH_BYTES`.
     """
     url = request.full_url if isinstance(request, Request) else request
     try:
+        # urllib forwards most caller headers across origins, including Authorization and Cookie;
+        # unredirected headers are the only general exception. Public downloads need only Accept.
+        if isinstance(request, Request) and any(key.lower() != "accept" for key, _ in request.header_items()):
+            raise ValueError("Public downloads permit only the `Accept` request header")
         if urlsplit(url).scheme != "https":
             raise ValueError(f"Download requires HTTPS, refused '{url}'")
         with urlopen(request, timeout=120) as response:

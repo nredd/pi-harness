@@ -1218,11 +1218,14 @@ HTTPReply = Callable[[str], tuple[dict[str, str], bytes]]
 
 
 @contextmanager
-def http_responses(reply: HTTPReply) -> Iterator[tuple[str, Callable[..., Any], list[str]]]:
+def http_responses(
+    reply: HTTPReply, *, received: list[dict[str, str]] | None = None
+) -> Iterator[tuple[str, Callable[..., Any], list[str]]]:
     """Serve controlled wire responses with the production HTTPS redirect handler.
 
     Parameters:
         reply (HTTPReply): response headers and wire body selected by path.
+        received (list[dict[str, str]] | None): optional captured request headers.
 
     Yields:
         tuple[str, Callable[..., Any], list[str]]: logical base URL, opener and requested paths.
@@ -1235,6 +1238,8 @@ def http_responses(reply: HTTPReply) -> Iterator[tuple[str, Callable[..., Any], 
         def do_GET(self) -> None:
             """Write one controlled response and close it, as urllib requests."""
             requests.append(self.path)
+            if received is not None:
+                received.append(dict(self.headers.items()))
             headers, body = reply(self.path)
             self.send_response(302 if "Location" in headers else 200)
             for key, value in headers.items():
@@ -1257,6 +1262,45 @@ def http_responses(reply: HTTPReply) -> Iterator[tuple[str, Callable[..., Any], 
         thread.join(timeout=5)
         server.server_close()
         assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    "header", ["Authorization", "Cookie", "Proxy-Authorization", "X-Api-Key", "X-Auth-Token", "Accept"]
+)
+@pytest.mark.parametrize("unredirected", [False, True])
+def test_public_fetch_redirect_header_contract(
+    monkeypatch: pytest.MonkeyPatch, header: str, unredirected: bool
+) -> None:
+    """Real different-port origins may receive Accept, never arbitrary caller credential headers."""
+    received: list[dict[str, str]] = []
+    with (
+        http_responses(lambda path: ({"Content-Length": "2"}, b"ok"), received=received) as (
+            target,
+            _,
+            target_paths,
+        ),
+        http_responses(lambda path: ({"Location": target + "/asset"}, b"")) as (
+            origin,
+            opener,
+            origin_paths,
+        ),
+    ):
+        monkeypatch.setattr(release, "urlopen", opener)
+        request = Request(origin + "/redirect")
+        if unredirected:
+            request.add_unredirected_header(header, "sentinel")
+        else:
+            request.add_header(header, "sentinel")
+        if header == "Accept":
+            assert release.fetch_bytes(request) == b"ok"
+            assert origin_paths == ["/redirect"]
+            assert target_paths == ["/asset"]
+            assert received[0].get("Accept") == (None if unredirected else "sentinel")
+        else:
+            with pytest.raises(release.FetchError, match="only the `Accept`"):
+                release.fetch_bytes(request)
+            assert origin_paths == target_paths == []
+            assert received == []
 
 
 def test_nonlegacy_core_truncation_is_exit_three(
