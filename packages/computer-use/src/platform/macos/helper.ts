@@ -75,8 +75,8 @@ async function isResolvedHelperExecutable(filePath?: string): Promise<boolean> {
 }
 
 /** True when the daemon process started before the installed binary was last written (it runs old code). */
-export function helperPredatesBinary(processStartMs: number, binaryMtimeMs: number): boolean {
-	return Number.isFinite(processStartMs) && Number.isFinite(binaryMtimeMs) && processStartMs + 1_000 < binaryMtimeMs;
+export function helperPredatesBinary(processStartMs: number, binaryChangeMs: number): boolean {
+	return Number.isFinite(processStartMs) && Number.isFinite(binaryChangeMs) && processStartMs + 1_000 < binaryChangeMs;
 }
 
 async function daemonRunsOldBinary(pid: number): Promise<boolean> {

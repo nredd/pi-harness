@@ -58,7 +58,7 @@ assert.deepEqual(result.details.successors, []);
 rootsAfter([{ pid: 7, rootRef: "ax:dlg", windowRef: "ax:dlg" }]);
 result = await terminalDesktopActionResult(target, "s1", { strategy: "act" }, codeError("Root is not available through Accessibility", "root_not_found"));
 assert.equal(result.details.status, "post_action_observation_failed");
-assert.equal(result.details.error.code, "root_stale");
+assert.equal(result.details.error.code, "root_stale", "coded stale root must report root_stale");
 assert.match(result.details.error.message, /find_roots/);
 assert.equal(result.details.cause, undefined);
 

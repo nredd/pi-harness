@@ -97,6 +97,21 @@ try {
 
 // ---- runCancellable reaps its whole process group, even descendants that ignore SIGTERM (POSIX) ----
 if (process.platform !== "win32") {
+	// Prove escalation with an injected group before spawning any real descendants. The negative
+	// control can remove SIGKILL without orphaning a process or waiting on inherited stdout pipes.
+	const { reapProcessGroup: fakeReap } = await import(pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href);
+	const signals = [];
+	let fakeAlive = true;
+	await fakeReap(424242, (_pid, signal) => {
+		if (signal === 0) {
+			if (!fakeAlive) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+			return;
+		}
+		signals.push(signal);
+		if (signal === "SIGKILL") fakeAlive = false;
+	});
+	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"], "compiler cleanup must escalate to group SIGKILL");
+	assert.equal(fakeAlive, false);
 	const groupDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-cancel-"));
 	const setupUrl = pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href;
 	const wrapper = path.join(groupDir, "wrapper.mjs");

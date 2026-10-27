@@ -23,10 +23,10 @@ const cases = [
 	{
 		name: "daemon age guard (1eabebd/50cbfe2)",
 		file: "src/platform/macos/helper.ts",
-		before: "processStartMs + 1_000 < binaryMtimeMs",
+		before: "processStartMs + 1_000 < binaryChangeMs",
 		after: "false",
 		check: "check-macos-observe-target.mjs",
-		failure: /false !== true/,
+		failure: /older daemon must be stale/,
 	},
 	{
 		name: "ctime freshness after preserved-mtime replacement (50cbfe2)",
@@ -62,6 +62,15 @@ const cases = [
 		darwinOnly: true,
 	},
 	{
+		name: "desktop_control opt-out (c6a27ca)",
+		file: "src/desktop.ts",
+		before: "if (!config.desktop_control)",
+		after: "if (false)",
+		check: "check-desktop-tools.mjs",
+		failure: /Missing expected rejection/,
+		darwinOnly: true,
+	},
+	{
 		name: "transaction-scoped desktop lease (c6a27ca/50cbfe2/400f784/3fd2fe3)",
 		file: "src/desktop.ts",
 		before: "return await desktopLeaseStorage.run(lease, work);",
@@ -79,12 +88,56 @@ const cases = [
 		darwinOnly: true,
 	},
 	{
+		name: "per-process ref epoch (50cbfe2/3fd2fe3)",
+		file: "native/macos/bridge.swift",
+		before: "String(UInt32.random(in: 0x1000...0xFFFF_FFFF), radix: 16)",
+		after: '"1000"',
+		check: "check-macos-native-pure.mjs",
+		failure: /another store \(helper process\) never reissues the same ref/,
+		darwinOnly: true,
+	},
+	{
+		name: "bounded unowned ref FIFO (400f784/3fd2fe3)",
+		file: "native/macos/bridge.swift",
+		before: "if unowned.count > unownedCapacity {",
+		after: "if false {",
+		check: "check-macos-native-pure.mjs",
+		failure: /unowned refs capped at 3/,
+		darwinOnly: true,
+	},
+	{
+		name: "look-owned ref eviction (400f784/50cbfe2)",
+		file: "native/macos/bridge.swift",
+		before: "for ref in refsByOwner.removeValue(forKey: owner) ?? [] { removeElement(ref) }",
+		after: "/* owned refs leaked */",
+		check: "check-macos-native-pure.mjs",
+		failure: /dropping a look frees only its refs/,
+		darwinOnly: true,
+	},
+	{
 		name: "single root delta mapping (50cbfe2/4d596ca)",
 		file: "src/bridge.ts",
 		before: "if (!execution.rootDelta?.length) return;",
 		after: "return;",
 		check: "check-unpaired-act.mjs",
 		failure: /delta line missing an @r ref/,
+	},
+	{
+		name: "coded stale root outcome (50cbfe2)",
+		file: "src/bridge.ts",
+		before:
+			'const rootExpired = exactRootAvailable === true && (error as { code?: string } | undefined)?.code === "root_not_found";',
+		after: "const rootExpired = false;",
+		check: "check-act-outcomes.mjs",
+		failure: /coded stale root must report root_stale/,
+	},
+	{
+		name: "replacement root kind filtering (50cbfe2)",
+		file: "src/bridge.ts",
+		before: "REPLACEMENT_ROOT_KINDS.has(delta.kind)",
+		after: "true",
+		check: "check-act-outcomes.mjs",
+		failure: /menus, dead and foreign roots must not count as replacements/,
 	},
 	{
 		name: "ranked app activation (400f784/3fd2fe3)",
@@ -100,7 +153,7 @@ const cases = [
 		before: "</clipboard>",
 		after: "clipboard-end",
 		check: "check-desktop-tools.mjs",
-		failure: /clipboard/,
+		failure: /clipboard content must be fenced as untrusted data/,
 		darwinOnly: true,
 	},
 	{
@@ -110,6 +163,14 @@ const cases = [
 		after: '"--target-dir-dropped", linuxBuildTargetDir',
 		check: "check-linux-build-scripts.mjs",
 		failure: /target-dir/,
+	},
+	{
+		name: "Linux compiler group escalation (harness c59eb11)",
+		file: "scripts/setup-helper.mjs",
+		before: 'signalGroup("SIGKILL");',
+		after: "/* compiler group not killed */",
+		check: "check-linux-build-scripts.mjs",
+		failure: /compiler cleanup must escalate to group SIGKILL/,
 	},
 	{
 		name: "cursor source packaging (harness 6207189)",
@@ -122,6 +183,8 @@ const cases = [
 ];
 
 try {
+	// Test sources/fixtures are intentionally NOT the npm payload: package.json `files` excludes
+	// them. Keep this self-contained package-root fixture list aligned with the checks selected above.
 	for (const entry of [
 		"src",
 		"extensions",
@@ -132,6 +195,7 @@ try {
 		"assets",
 		"package.json",
 		"README.md",
+		"UPSTREAM.md",
 		"LICENSE",
 	]) {
 		cpSync(path.join(root, entry), path.join(sandbox, entry), {

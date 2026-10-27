@@ -39,7 +39,9 @@ The note is historical evidence, not validation of this sync.
 ## Conflict resolutions
 
 - Keep upstream's compact observation rendering, `detail: outline`, find validation, activity glow,
-  headless synthesized-input rejection and Linux/Windows native fixes.
+  headless synthesized-input rejection and Linux/Windows native fixes. Glow tracks the same 11
+  upstream state-scoped tools, not the two carried desktop tools: do not expand its overlay into
+  whole-display capture as an incidental sync change.
 - Merge `desktop_control` alongside `activity_glow` in config and public registration. This avoids
   the six activity-glow TypeScript errors from the trial rebase.
 - Keep one Swift PURE block, not duplicate modal/capture definitions from upstream's #95 salvage.
@@ -125,16 +127,20 @@ git -C ~/code/pi-computer-use worktree remove ~/code/cu-sync-src
 ## Verification boundaries
 
 `test:sync-reverts` disables one carried behavior at a time in a disposable package copy and requires
-its named existing check to fail for the expected reason. This is a negative-control/drop proof,
+its named existing check to fail for the expected reason. Cases separately remove headless and
+`desktop_control` gates, ref transfer/epoch/FIFO/eviction, canonical deltas/stale outcomes/replacement
+filtering, and Linux cache-target/escalation behavior. This is a negative-control/drop proof,
 not replay of the original overlapping commit diffs. Native dispatch/ranking/cursor checks are
 source-wiring checks; mocked tools and compiled PURE Swift checks do not validate live AX/HID/TCC.
-Additional packaging and platform-policy negative cases live in `scripts/tests/test_package_contracts.py`.
+Darwin-only controls print explicit NOT RUN on other hosts; the required macOS CI job exercises
+those cases. A Linux exit 0 is not proof of those skipped controls. Additional packaging and
+platform-policy negative cases live in `scripts/tests/test_package_contracts.py`.
 
 Recorded on the implementation Mac (2026-10-27):
 - `npm run check`: passed, including Swift typecheck and compiled native PURE checks. Live tests print
   NOT RUN. `test:commits` is adapted to the harness's capitalized imperative subjects rather than
   applying upstream's incompatible conventional-commit policy to monorepo commits.
-- `npm run test:sync-reverts`: 13 expected failures demonstrated, one behavior disabled at a time.
+- `npm run test:sync-reverts`: 20 expected failures demonstrated, one behavior disabled at a time.
 - `npm run test:windows-scripts`: 23 assertions, 0 failures, using isolated helper/build paths.
   Native Windows Rust compilation and an actual Windows desktop remain NOT RUN.
 - `make check-computer-use-package-contract`: passed against exact stock Pi 1.3.0; all 13 macOS tools,
