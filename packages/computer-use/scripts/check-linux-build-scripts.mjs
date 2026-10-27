@@ -411,19 +411,27 @@ await running;
 				child.once("error", reject);
 				child.once("close", (code, signal) => resolve({ code, signal }));
 			});
-			const leader = await waitForReady(`${base}.leader`);
-			pids.add(leader);
-			groups.add(leader);
-			const descendant =
-				behavior === "reaped" ? undefined : await waitForReady(`${base}.desc`);
-			if (descendant) pids.add(descendant);
-			assert.equal(
-				await waitForReady(wrapperReady).catch((error) => {
-					throw new Error(`${error.message}\n${output}`, { cause: error });
-				}),
-				child.pid,
-				`${name}: wrapper handlers must be live before cancellation`,
-			);
+			let leader;
+			let descendant;
+			try {
+				leader = await waitForReady(`${base}.leader`);
+				pids.add(leader);
+				groups.add(leader);
+				descendant =
+					behavior === "reaped"
+						? undefined
+						: await waitForReady(`${base}.desc`);
+				if (descendant) pids.add(descendant);
+				assert.equal(
+					await waitForReady(wrapperReady),
+					child.pid,
+					`${name}: wrapper handlers must be live before cancellation`,
+				);
+			} catch (error) {
+				throw new Error(`${name}: ${error.message}\n${output}`, {
+					cause: error,
+				});
+			}
 			assert.ok(alive(leader), `${name}: ready leader must be alive`);
 			if (descendant)
 				assert.ok(alive(descendant), `${name}: ready descendant must be alive`);

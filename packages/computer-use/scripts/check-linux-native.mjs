@@ -20,13 +20,16 @@ import {
 } from "./check-async.mjs";
 
 const SETUP_COMPLETION_TIMEOUT_MS = 30_000;
+// Cold Rust dependency compilation on a loaded runner needs minutes, not fixture seconds.
 const SOURCE_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 const CANCELLATION_BACKSTOP_MS = 10_000;
 const COMPILER_EXIT_TIMEOUT_MS = 5000;
 const DIAGNOSTICS_TIMEOUT_MS = 10_000;
 const FAKE_COMPILER_LIFETIME_SECONDS = 300;
+// Tests and the alternate target each compile in cold scratch caches under CI contention.
 const CARGO_TEST_TIMEOUT_MS = 15 * 60 * 1000;
 const ARM64_CHECK_TIMEOUT_MS = 15 * 60 * 1000;
+// --ignore-scripts only archives local files: no compiler/network work, even on a loaded runner.
 const PACKAGE_PACK_TIMEOUT_MS = 2 * 60 * 1000;
 const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
 const PERMISSION_CHANGE_TIMEOUT_MS = 30_000;
@@ -110,7 +113,11 @@ async function runSetup(
 	extraArgs = [],
 	timeoutMs = SETUP_COMPLETION_TIMEOUT_MS,
 ) {
-	const { child, done, closed } = startSetup(packageDir, env, extraArgs);
+	const { child, done, closed, capture } = startSetup(
+		packageDir,
+		env,
+		extraArgs,
+	);
 	try {
 		return await within(
 			done,
@@ -118,15 +125,18 @@ async function runSetup(
 			timeoutMs,
 		);
 	} catch (error) {
+		const failure = new Error(`${error.message}\n${capture.output}`, {
+			cause: error,
+		});
 		try {
 			await stopCheckChild(child, closed, "timed-out Linux setup");
 		} catch (cleanupError) {
 			throw new AggregateError(
-				[error, cleanupError],
+				[failure, cleanupError],
 				"Linux setup completion and bounded cleanup failed",
 			);
 		}
-		throw error;
+		throw failure;
 	}
 }
 
@@ -326,18 +336,21 @@ wait`,
 				waitForReadyPid(pidFile),
 				waitForReadyPid(leaderFile),
 				Promise.race([
-					waitForReadyPid(setupReady).catch((error) => {
-						throw new Error(`${error.message}\n${capture.output}`, {
-							cause: error,
-						});
-					}),
+					waitForReadyPid(setupReady),
 					done.then((result) => {
 						throw new Error(
 							`Packed setup closed before wrapper readiness: ${result.output}`,
 						);
 					}),
 				]),
-			]);
+			]).catch((error) => {
+				throw new Error(
+					`Packed setup readiness: ${error.message}\n${capture.output}`,
+					{
+						cause: error,
+					},
+				);
+			});
 			assert.equal(
 				wrapperPid,
 				setupChild.pid,

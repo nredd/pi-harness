@@ -11,6 +11,8 @@ export const PARENT_READINESS_TIMEOUT_MS = 15_000;
 export const COMMAND_TERM_WAIT_MS = 5000;
 /** Hard cap for subprocess close after KILL. */
 export const COMMAND_KILL_WAIT_MS = 5000;
+/** Cadence for probing owned detached groups during bounded cleanup. */
+const COMMAND_GROUP_POLL_MS = 20;
 /** Default per-stream output limit for disposable check commands. */
 const COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
 /** Polling cadence for fixture-local signal-listener observation, in milliseconds. */
@@ -92,12 +94,39 @@ poll.unref();
 }
 
 /**
- * Terminate an owned check subprocess, bounding both TERM and KILL close waits.
+ * Observe group quiescence independently of leader exit and redirected stream closure.
+ * @param {number} pgid Owned detached process-group ID.
+ * @param {string} label Context for the bounded probe failure.
+ * @param {number} timeoutMs Maximum quiescence wait.
+ * @returns {Promise<void>} Completion only when the kernel reports ESRCH.
+ * @throws {Error} On deadline (including persistent EPERM) or an unexpected probe error.
+ */
+async function waitForCheckGroup(pgid, label, timeoutMs) {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		try {
+			process.kill(-pgid, 0);
+		} catch (error) {
+			if (error.code === "ESRCH") return;
+			// Darwin may briefly report EPERM while the final member exits. It is NOT
+			// proof of quiescence: keep probing to ESRCH, or fail at the same deadline.
+			if (error.code !== "EPERM") throw error;
+		}
+		if (Date.now() >= deadline)
+			throw new Error(
+				`Timed out waiting for ${label}: process group ${pgid} remains`,
+			);
+		await new Promise((resolve) => setTimeout(resolve, COMMAND_GROUP_POLL_MS));
+	}
+}
+
+/**
+ * Terminate an owned check subprocess, bounding TERM/KILL stream and group waits separately.
  * @param {import('node:child_process').ChildProcess} child Subprocess owned by this check.
  * @param {PromiseLike<unknown>} closed Promise subscribed before termination can begin.
  * @param {string} label Operation name included in cleanup failures.
  * @param {boolean} [group=false] Signal the detached POSIX group rather than only its leader.
- * @returns {Promise<void>} Resolves once the subprocess closes.
+ * @returns {Promise<void>} Resolves once streams close and, if requested, the group is empty.
  * @throws {AggregateError} If both bounded termination attempts fail.
  */
 export async function stopCheckChild(child, closed, label, group = false) {
@@ -113,9 +142,14 @@ export async function stopCheckChild(child, closed, label, group = false) {
 					else child.kill(signal);
 				} catch (error) {
 					if (error.code !== "ESRCH") throw error;
+					// A spawn-time deadline may precede setsid; stop the owned leader too.
+					if (group && child.exitCode === null && child.signalCode === null)
+						child.kill(signal);
 				}
 			}
 			await within(closed, `${label} to close after ${signal}`, waitMs);
+			if (group && child.pid !== undefined)
+				await waitForCheckGroup(child.pid, `${label} after ${signal}`, waitMs);
 			return;
 		} catch (error) {
 			failures.push(error);
@@ -199,7 +233,7 @@ export async function runCheckCommand(
 	} catch (error) {
 		Object.assign(error, { stdout, stderr });
 		let cleanupFailure;
-		if (child && !didClose) {
+		if (child && (!didClose || group)) {
 			try {
 				await stopCheckChild(child, closed, label, group);
 			} catch (failure) {

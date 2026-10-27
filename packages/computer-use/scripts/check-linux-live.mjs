@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { finishCheckCleanup, stopCheckChild, within } from "./check-async.mjs";
 
 if (process.env.PI_CU_LIVE !== "1") {
 	throw new Error(
@@ -16,6 +17,8 @@ if (process.env.PI_CU_LIVE !== "1") {
 if (process.platform !== "linux")
 	throw new Error("Live Linux E2E requires Linux.");
 
+// Budget the complete desktop scenario, including startup, tool calls and inner teardown.
+const LIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 const LIVE_EXPECT_TIMEOUT_MS = 5000;
 const LIVE_READINESS_TIMEOUT_MS = 15_000;
 const LIVE_POLL_INTERVAL_MS = 150;
@@ -32,18 +35,39 @@ if (!process.argv.includes("--inside-session")) {
 				PI_COMPUTER_USE_HEADLESS: "1",
 				PI_COMPUTER_USE_BROWSER_USE: "0",
 			},
+			detached: true,
 			stdio: "inherit",
 		},
 	);
-	const code = await new Promise((resolve, reject) => {
+	const closed = new Promise((resolve) => child.once("close", resolve));
+	const exited = new Promise((resolve, reject) => {
 		child.once("error", reject);
-		child.once("exit", (exitCode, signal) =>
+		child.once("exit", (code, signal) =>
 			signal
 				? reject(new Error(`Live Linux E2E session exited on ${signal}.`))
-				: resolve(exitCode ?? 1),
+				: resolve(code ?? 1),
 		);
 	});
-	process.exitCode = code;
+	let sessionFailure;
+	try {
+		process.exitCode = await within(
+			exited,
+			"live Linux E2E D-Bus session",
+			LIVE_SESSION_TIMEOUT_MS,
+		);
+	} catch (error) {
+		sessionFailure = error;
+		throw error;
+	} finally {
+		await finishCheckCleanup(
+			"live Linux E2E session",
+			[
+				() =>
+					stopCheckChild(child, closed, "live Linux E2E D-Bus session", true),
+			],
+			sessionFailure,
+		);
+	}
 } else {
 	await runInsideSession();
 }
@@ -538,7 +562,7 @@ async function runInsideSession() {
 }
 
 /**
- * Start an owned live fixture in its own process group.
+ * Start an owned live fixture in the outer D-Bus session's cleanup group.
  * @param {string} command Verified executable.
  * @param {string[]} args Executable arguments.
  * @param {NodeJS.ProcessEnv} env Isolated desktop environment.
@@ -549,7 +573,6 @@ function start(command, args, env) {
 	const child = spawn(command, args, {
 		env,
 		stdio: ["ignore", "ignore", "pipe"],
-		detached: true,
 	});
 	child.stderr.on("data", (chunk) => {
 		if (process.env.PI_CU_LIVE_DEBUG === "1") process.stderr.write(chunk);
@@ -558,7 +581,7 @@ function start(command, args, env) {
 }
 
 /**
- * Best-effort TERM of a fixture group during teardown.
+ * Best-effort TERM of a fixture; the outer session enforces group teardown.
  * @param {import('node:child_process').ChildProcess} child Owned leader.
  * @returns {void} Completion of the signal attempt.
  * @throws {never} Already-gone/unavailable groups are ignored during teardown.
@@ -566,7 +589,7 @@ function start(command, args, env) {
 function stop(child) {
 	if (child.exitCode !== null) return;
 	try {
-		process.kill(-child.pid, "SIGTERM");
+		child.kill("SIGTERM");
 	} catch {}
 }
 

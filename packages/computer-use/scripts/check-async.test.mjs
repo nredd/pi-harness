@@ -253,6 +253,63 @@ test("command deadline closes its real child and reports operation context", asy
 	);
 });
 
+test("group cleanup kills a redirected TERM-ignoring descendant after its leader closes", {
+	skip: process.platform === "win32",
+	timeout:
+		COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
+}, async () => {
+	const ready = deferred();
+	const descendantSource = `
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+process.send(process.pid, () => process.disconnect());
+`;
+	const child = spawn(
+		process.execPath,
+		[
+			"-e",
+			`
+const { spawn } = require("node:child_process");
+process.on("SIGTERM", () => process.exit(0));
+const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+descendant.on("message", pid => process.stdout.write(String(pid) + "\\n"));
+setInterval(() => {}, 1000);
+`,
+		],
+		{ detached: true, stdio: ["ignore", "pipe", "pipe"] },
+	);
+	const closed = new Promise((resolve, reject) => {
+		child.once("error", reject);
+		child.once("close", resolve);
+	});
+	child.stdout.once("data", (chunk) =>
+		ready.resolve(Number(String(chunk).trim())),
+	);
+	let reaped = false;
+	try {
+		const descendant = await within(
+			ready.promise,
+			"redirected descendant handler readiness",
+		);
+		assert.ok(Number.isInteger(descendant) && descendant > 0);
+		await stopCheckChild(child, closed, "redirected descendant control", true);
+		assert.throws(() => process.kill(-child.pid, 0), { code: "ESRCH" });
+		assert.throws(() => process.kill(descendant, 0), { code: "ESRCH" });
+		reaped = true;
+	} finally {
+		if (!reaped) {
+			try {
+				process.kill(-child.pid, "SIGKILL");
+			} catch {
+				/* Best-effort fallback must not replace the failed regression assertion. */
+			}
+		}
+		await within(closed, "redirected descendant fixture to close");
+	}
+});
+
 test("failed and missing close attempts keep cleanup bounded", {
 	timeout:
 		COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
