@@ -2885,15 +2885,30 @@ def test_shared_runner_unknown_package_exits_before_packing(
 
 
 def test_audit_files_computer_use_exact_payload() -> None:
-    """The pinned 45 paths pass; stray, missing and duplicated paths are each reported."""
+    """The pinned 56 paths pass; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 45
+    assert len(packed) == 56
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])
     assert any("src/view.ts" in problem for problem in missing)
     duplicated = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/view.ts"])
     assert any("listed 2 times" in problem for problem in duplicated)
+
+
+@pytest.mark.parametrize(
+    "stray",
+    [
+        "native/linux/bridge-rs/target/release/linux-bridge",
+        "native/linux/bridge-rs/tests/protocol_tests.rs",
+        "native/linux/bridge-rs/.gitignore",
+        "prebuilt/linux/x64/linux-bridge",
+    ],
+)
+def test_audit_files_computer_use_rejects_linux_build_output(stray: str) -> None:
+    """Only locked Linux crate source ships; build output, crate tests and prebuilts are rejected."""
+    packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
+    assert any(stray in problem for problem in pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, stray]))
 
 
 def test_scenario_computer_use_rejects_unpacked_helper_source(

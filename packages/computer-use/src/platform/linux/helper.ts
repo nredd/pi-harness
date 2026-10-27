@@ -5,11 +5,16 @@ import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertPlatformArchitecture } from "../architecture.ts";
+import type { PlatformDiagnostics } from "../types.ts";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
 const HELPER_SETUP_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 15_000;
+const HELPER_PROBE_TIMEOUT_MS = 5_000;
+const SETUP_KILL_GRACE_MS = 2_000;
+const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
 export const LINUX_HELPER_PROTOCOL_VERSION = 4;
 export const LINUX_HELPER_PATH = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH
@@ -39,11 +44,16 @@ async function runProcess(command: string, args: string[], timeoutMs: number, si
 			signal?.removeEventListener("abort", onAbort);
 			if (error) reject(error); else resolve();
 		};
-		const timer = setTimeout(() => {
+		const terminate = () => {
 			child.kill("SIGTERM");
+			// The setup script reaps its compiler on SIGTERM; SIGKILL only backstops a hung script.
+			setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }, SETUP_KILL_GRACE_MS).unref();
+		};
+		const timer = setTimeout(() => {
+			terminate();
 			finish(new Error(`Command timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`));
 		}, timeoutMs);
-		const onAbort = () => { child.kill("SIGTERM"); finish(new Error("Operation aborted.")); };
+		const onAbort = () => { terminate(); finish(new Error("Operation aborted.")); };
 		child.stdout.on("data", (chunk) => { stdout += String(chunk); });
 		child.stderr.on("data", (chunk) => { stderr += String(chunk); });
 		child.on("error", (error) => finish(error));
@@ -54,6 +64,18 @@ async function runProcess(command: string, args: string[], timeoutMs: number, si
 		});
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
+}
+
+const RESTART_HINT = "Restart Pi to use the installed helper.";
+const SESSION_CLOSED_MESSAGE = "Linux helper closed because the Pi session ended.";
+
+function reason(error: unknown): string {
+	return (error instanceof Error ? error.message : String(error)).replace(/\.$/, "");
+}
+
+/** `reason` for a probe failure: the restart hint is wrong while setup is about to replace the helper. */
+function probeReason(error: unknown): string {
+	return reason(error).replace(new RegExp(`\\.? ${RESTART_HINT.replace(/\.$/, "")}$`), "");
 }
 
 async function waitForShared<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -86,6 +108,9 @@ export class LinuxHelperClient {
 	private child?: ChildProcessWithoutNullStreams;
 	private processPromise?: Promise<ChildProcessWithoutNullStreams>;
 	private buffer = "";
+	/** Set by `dispose()`, which is terminal: nothing may probe, set up, spawn or assign `child` afterwards. */
+	private disposed = false;
+	private setupAbort?: AbortController;
 	private pending = new Map<string, Pending<unknown>>();
 	private readonly helperPath: string;
 	private readonly setupHelperScript: string;
@@ -95,8 +120,17 @@ export class LinuxHelperClient {
 		this.setupHelperScript = options.setupHelperScript ?? SETUP_HELPER_SCRIPT;
 	}
 
+	/** Terminal: in-flight work is aborted and every later `command()`/`ensureInstalled()` fails fast. */
 	dispose(): void {
-		this.rejectPending(new Error("Linux helper closed because the Pi session ended."));
+		this.disposed = true;
+		this.installPromise = undefined;
+		this.setupAbort?.abort();
+		this.discardChild(new Error(SESSION_CLOSED_MESSAGE));
+	}
+
+	/** Reject in-flight commands and kill the current child, if any, so a replaced helper cannot leak. */
+	private discardChild(error: Error): void {
+		this.rejectPending(error);
 		const child = this.child;
 		this.child = undefined;
 		if (!child) return;
@@ -116,19 +150,21 @@ export class LinuxHelperClient {
 		this.buffer = "";
 	}
 
+	/**
+	 * Make sure a compatible helper is installed. An existing executable is probed (protocol and
+	 * architecture contract) and accepted without setup; a stale or broken one is replaced via the
+	 * setup script (prebuilt, or a source build when `PI_COMPUTER_USE_ALLOW_BUILD=1`) and re-probed.
+	 * Concurrent callers share one probe/setup.
+	 */
 	async ensureInstalled(signal?: AbortSignal): Promise<void> {
-		if ((await isExecutable(this.helperPath)) && this.installChecked) return;
+		if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
+		if (this.installChecked && (await isExecutable(this.helperPath))) {
+			if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
+			return;
+		}
+		if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
 		if (!this.installPromise) {
-			const installPromise = (async () => {
-				await runProcess(process.execPath, [this.setupHelperScript, "--platform", "linux", "--runtime"], HELPER_SETUP_TIMEOUT_MS, undefined, {
-					...process.env,
-					ELECTRON_RUN_AS_NODE: "1",
-					BUN_BE_BUN: "1",
-					PI_COMPUTER_USE_LINUX_HELPER_PATH: this.helperPath,
-				});
-				if (!(await isExecutable(this.helperPath))) throw new Error(`Failed to install Linux helper at ${this.helperPath}.`);
-				this.installChecked = true;
-			})();
+			const installPromise = this.install();
 			this.installPromise = installPromise;
 			installPromise.then(
 				() => { if (this.installPromise === installPromise) this.installPromise = undefined; },
@@ -136,6 +172,72 @@ export class LinuxHelperClient {
 			);
 		}
 		await waitForShared(this.installPromise, signal);
+	}
+
+	private async install(): Promise<void> {
+		// A dispose() before or during any await below aborts the install: no classification, no setup, no new child.
+		const abortIfDisposed = () => { if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE); };
+		abortIfDisposed();
+		this.installChecked = false;
+		this.discardChild(new Error("Linux helper replaced during install."));
+		let rejected: string | undefined;
+		const present = await isExecutable(this.helperPath);
+		abortIfDisposed();
+		if (present) {
+			try {
+				await this.probe();
+				abortIfDisposed();
+				this.installChecked = true;
+				return;
+			} catch (error) {
+				abortIfDisposed();
+				rejected = `Installed Linux helper ${this.helperPath} was rejected: ${probeReason(error)}.`;
+				this.discardChild(new Error("Linux helper rejected."));
+			}
+		}
+		const setupAbort = new AbortController();
+		this.setupAbort = setupAbort;
+		try {
+			await runProcess(process.execPath, [this.setupHelperScript, "--platform", "linux", "--runtime"], HELPER_SETUP_TIMEOUT_MS, setupAbort.signal, {
+				...process.env,
+				ELECTRON_RUN_AS_NODE: "1",
+				BUN_BE_BUN: "1",
+				PI_COMPUTER_USE_LINUX_HELPER_PATH: this.helperPath,
+			});
+		} catch (error) {
+			abortIfDisposed();
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error([message, rejected, message.includes("timed out") ? MANUAL_SETUP_HINT : undefined].filter(Boolean).join("\n"));
+		} finally {
+			if (this.setupAbort === setupAbort) this.setupAbort = undefined;
+		}
+		abortIfDisposed();
+		const installed = await isExecutable(this.helperPath);
+		abortIfDisposed();
+		if (!installed) throw new Error(`Failed to install Linux helper at ${this.helperPath}.`);
+		try {
+			await this.probe();
+		} catch (error) {
+			abortIfDisposed();
+			this.discardChild(new Error("Linux helper rejected."));
+			throw new Error(`Linux helper installed at ${this.helperPath} failed validation: ${probeReason(error)}. Re-run setup or delete it.`);
+		}
+		abortIfDisposed();
+		this.installChecked = true;
+	}
+
+	/**
+	 * Start the helper and require the shared protocol/architecture contract from `diagnostics`.
+	 * The validated child stays as the live process, so a good helper starts exactly once. Bypasses
+	 * `process()` on purpose: that calls `ensureInstalled`, which is already running this probe.
+	 */
+	private async probe(): Promise<void> {
+		const child = await this.startProcess();
+		const diagnostics = await this.send<PlatformDiagnostics>(child, "diagnostics", {}, HELPER_PROBE_TIMEOUT_MS);
+		if (diagnostics?.protocolVersion !== LINUX_HELPER_PROTOCOL_VERSION) {
+			throw new Error(`protocol mismatch: expected ${LINUX_HELPER_PROTOCOL_VERSION}, got ${diagnostics?.protocolVersion ?? "unknown"}`);
+		}
+		assertPlatformArchitecture("Linux", diagnostics);
 	}
 
 	private async process(signal?: AbortSignal): Promise<ChildProcessWithoutNullStreams> {
@@ -154,6 +256,7 @@ export class LinuxHelperClient {
 	}
 
 	private async startProcess(): Promise<ChildProcessWithoutNullStreams> {
+		if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
 		const child = spawn(this.helperPath, [], { stdio: ["pipe", "pipe", "pipe"] });
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
@@ -192,7 +295,7 @@ export class LinuxHelperClient {
 			this.pending.delete(parsed.id);
 			clearTimeout(pending.timer);
 			if (parsed.protocolVersion !== LINUX_HELPER_PROTOCOL_VERSION) {
-				pending.reject(new Error(`Linux helper protocol mismatch: expected ${LINUX_HELPER_PROTOCOL_VERSION}, got ${parsed.protocolVersion ?? "unknown"}. Restart Pi to use the installed helper.`));
+				pending.reject(new Error(`Linux helper protocol mismatch: expected ${LINUX_HELPER_PROTOCOL_VERSION}, got ${parsed.protocolVersion ?? "unknown"}. ${RESTART_HINT}`));
 			} else if (parsed.ok === true) {
 				pending.resolve(parsed.result);
 			} else {
@@ -205,8 +308,11 @@ export class LinuxHelperClient {
 
 	async command<T>(cmd: string, args: Record<string, unknown> = {}, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> {
 		const child = await this.process(options?.signal);
+		return await this.send<T>(child, cmd, args, options?.timeoutMs, options?.signal);
+	}
+
+	private async send<T>(child: ChildProcessWithoutNullStreams, cmd: string, args: Record<string, unknown>, timeoutMs = COMMAND_TIMEOUT_MS, signal?: AbortSignal): Promise<T> {
 		const id = randomUUID();
-		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
 		return await new Promise<T>((resolve, reject) => {
 			const onAbort = () => {
 				this.pending.delete(id);
@@ -214,19 +320,19 @@ export class LinuxHelperClient {
 				reject(new Error("Operation aborted."));
 			};
 			const timer = setTimeout(() => {
-				options?.signal?.removeEventListener("abort", onAbort);
+				signal?.removeEventListener("abort", onAbort);
 				this.pending.delete(id);
 				reject(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`));
 			}, timeoutMs);
 			this.pending.set(id, {
-				resolve: (value) => { options?.signal?.removeEventListener("abort", onAbort); resolve(value as T); },
-				reject: (error) => { options?.signal?.removeEventListener("abort", onAbort); reject(error); },
+				resolve: (value) => { signal?.removeEventListener("abort", onAbort); resolve(value as T); },
+				reject: (error) => { signal?.removeEventListener("abort", onAbort); reject(error); },
 				timer,
 			});
-			options?.signal?.addEventListener("abort", onAbort, { once: true });
+			signal?.addEventListener("abort", onAbort, { once: true });
 			child.stdin.write(`${JSON.stringify({ protocolVersion: LINUX_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`, (error) => {
 				if (!error) return;
-				options?.signal?.removeEventListener("abort", onAbort);
+				signal?.removeEventListener("abort", onAbort);
 				this.pending.delete(id);
 				clearTimeout(timer);
 				reject(error);
@@ -235,4 +341,11 @@ export class LinuxHelperClient {
 	}
 }
 
-export const linuxHelper = new LinuxHelperClient();
+export let linuxHelper = new LinuxHelperClient();
+
+/** Session shutdown: dispose the shared client (terminal) and install a fresh one for the next session. */
+export function resetLinuxHelper(): void {
+	const old = linuxHelper;
+	linuxHelper = new LinuxHelperClient();
+	old.dispose();
+}
