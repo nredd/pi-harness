@@ -83,10 +83,10 @@ export async function writeSignalReadinessObserver(observerPath, markerPath) {
 		observerPath,
 		`import fs from "node:fs";
 const signals = ["SIGTERM", "SIGINT", "SIGHUP", "exit"];
-const baseline = new Map(signals.map(signal => [signal, process.listenerCount(signal)]));
+const baseline = new Map(signals.map(/** @returns {Array<string|number>} Records pre-entry listener counts. @throws {never} No errors for known events. */ signal => [signal, process.listenerCount(signal)]));
 const deadline = Date.now() + ${SIGNAL_READINESS_TIMEOUT_MS};
-const poll = setInterval(() => {
-  const missing = signals.filter(signal => process.listenerCount(signal) <= baseline.get(signal));
+const poll = setInterval(/** @returns {void} Publishes readiness after all handlers register. @throws {Error} On deadline or marker-write failure. */ () => {
+  const missing = signals.filter(/** @returns {boolean} Identifies handlers not yet registered. @throws {never} No errors for known events. */ signal => process.listenerCount(signal) <= baseline.get(signal));
   if (missing.length === 0) {
     fs.writeFileSync(${JSON.stringify(markerPath)}, String(process.pid));
     clearInterval(poll);

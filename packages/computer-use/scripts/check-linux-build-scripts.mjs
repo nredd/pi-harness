@@ -188,14 +188,26 @@ try {
 				);
 				setupChild = child;
 				let output = "";
-				child.stdout.on("data", (chunk) => {
-					output += chunk;
-				});
-				child.stderr.on("data", (chunk) => {
-					output += chunk;
-				});
+				child.stdout.on(
+					"data",
+					/** @returns {void} Captures initial setup stdout. @throws {never} No errors for stream buffers. */
+					(chunk) => {
+						output += chunk;
+					},
+				);
+				child.stderr.on(
+					"data",
+					/** @returns {void} Captures initial setup stderr. @throws {never} No errors for stream buffers. */
+					(chunk) => {
+						output += chunk;
+					},
+				);
 				child.once("error", reject);
-				child.once("close", (code) => resolve({ code, output }));
+				child.once(
+					"close",
+					/** @returns {void} Resolves the setup outcome. @throws {never} No errors. */
+					(code) => resolve({ code, output }),
+				);
 			},
 		),
 		"initial Linux setup CLI to close without a prebuilt",
@@ -297,11 +309,13 @@ if (process.platform !== "win32") {
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 const [role, base, behavior] = process.argv.slice(2);
-process.on("SIGTERM", role === "desc" && behavior !== "responsive" ? () => {} : () => process.exit(0));
+process.on("SIGTERM", role === "desc" && behavior !== "responsive"
+  ? /** @returns {void} Ignores TERM for escalation. @throws {never} No errors. */ () => {}
+  : /** @returns {never} Exits the responsive fixture. @throws {never} Terminates the process. */ () => process.exit(0));
 if (role === "leader" && behavior !== "reaped") spawn(process.execPath, [fileURLToPath(import.meta.url), "desc", base, behavior], { stdio: "ignore" });
 fs.writeFileSync(base + "." + role, String(process.pid));
 const deadline = Date.now() + ${FIXTURE_LIFETIME_MS};
-setInterval(() => {
+setInterval(/** @returns {void} Polls release and enforces fixture lifetime. @throws {Error} On filesystem probe failure. */ () => {
   if (role === "leader" && behavior === "exits-first" && fs.existsSync(base + ".release")) process.exit(0);
   if (Date.now() > deadline) process.exit(99);
 }, ${POLL_INTERVAL_MS});
@@ -330,7 +344,7 @@ const kill = (pid, signal) => {
 };
 const running = runCancellable(process.execPath, [fixture, "leader", base, behavior], { kill });
 // Register AFTER runCancellable's exit hook so a late exit-hook signal is captured too.
-process.on("exit", () => fs.writeFileSync(base + ".trace", JSON.stringify(trace)));
+process.on("exit", /** @returns {void} Flushes delivered signals after cleanup. @throws {Error} On trace-write failure. */ () => fs.writeFileSync(base + ".trace", JSON.stringify(trace)));
 await running;
 `,
 	);
@@ -426,7 +440,11 @@ await running;
 				/** @returns {void} Subscribes before wrapper cancellation. @throws {never} Spawn errors reject this promise. */
 				(resolve, reject) => {
 					child.once("error", reject);
-					child.once("close", (code, signal) => resolve({ code, signal }));
+					child.once(
+						"close",
+						/** @returns {void} Resolves the cancellation outcome. @throws {never} No errors. */
+						(code, signal) => resolve({ code, signal }),
+					);
 				},
 			);
 			let leader;

@@ -27,13 +27,15 @@ const COMMAND_TIMEOUT_CONTROL_MS = 25;
  */
 const HANGING_COMMAND_INTERVAL_MS = 1000;
 
-test("deferred readiness resolves through a bounded completion wait" /** @returns {Promise<void>} Verifies acknowledged readiness. @throws {Error} On timeout or assertion failure. */, async () => {
+/** @returns {Promise<void>} Verifies acknowledged readiness. @throws {Error} On timeout or assertion failure. */
+async function verifyDeferredReadiness() {
 	const gate = deferred();
 	gate.resolve("ready");
 	assert.equal(await within(gate.promise, "resolved readiness"), "ready");
-});
+}
 
-test("completion watchdog preserves rejection and reports missing readiness context" /** @returns {Promise<void>} Verifies rejection identity and timeout context. @throws {Error} On assertion failure. */, async () => {
+/** @returns {Promise<void>} Verifies rejection identity and timeout context. @throws {Error} On assertion failure. */
+async function verifyCompletionWatchdog() {
 	const failure = new Error("fixture failed");
 	await assert.rejects(
 		within(Promise.reject(failure), "failed fixture"),
@@ -51,9 +53,10 @@ test("completion watchdog preserves rejection and reports missing readiness cont
 		),
 		/Timed out waiting for deliberately missing readiness/,
 	);
-});
+}
 
-test("signal observer waits for registration in the actual wrapper process" /** @returns {Promise<void>} Verifies post-registration readiness. @throws {Error} On fixture or assertion failure. */, async () => {
+/** @returns {Promise<void>} Verifies post-registration readiness. @throws {Error} On fixture or assertion failure. */
+async function verifySignalObserverReadiness() {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-signal-observer-"));
 	const marker = path.join(dir, "wrapper.pid");
 	const observer = path.join(dir, "observer.mjs");
@@ -69,9 +72,9 @@ test("signal observer waits for registration in the actual wrapper process" /** 
 				pathToFileURL(observer).href,
 				"-e",
 				`
-process.on("message", message => {
+process.on("message", /** @returns {void} Registers handlers only on request. @throws {never} No errors for known events. */ message => {
   if (message === "register") {
-    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "exit"]) process.on(signal, () => {});
+    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "exit"]) process.on(signal, /** @returns {void} Records handler registration without effects. @throws {never} No errors. */ () => {});
   }
 });
 process.send("entered");
@@ -150,9 +153,10 @@ process.send("entered");
 		child?.kill("SIGKILL");
 		await fs.rm(dir, { recursive: true, force: true });
 	}
-});
+}
 
-test("signal observer fails contextually when wrapper handlers never register" /** @returns {Promise<void>} Verifies missing-handler deadline diagnostics. @throws {Error} On fixture or assertion failure. */, async () => {
+/** @returns {Promise<void>} Verifies missing-handler deadline diagnostics. @throws {Error} On fixture or assertion failure. */
+async function verifyMissingHandlers() {
 	const dir = await fs.mkdtemp(
 		path.join(os.tmpdir(), "pi-signal-observer-missing-"),
 	);
@@ -167,7 +171,7 @@ test("signal observer fails contextually when wrapper handlers never register" /
 				"--import",
 				pathToFileURL(observer).href,
 				"-e",
-				`setInterval(() => {}, ${SIGNAL_READINESS_POLL_MS});`,
+				`setInterval(/** @returns {void} Keeps the unregistered fixture alive until observer failure. @throws {never} No errors. */ () => {}, ${SIGNAL_READINESS_POLL_MS});`,
 			],
 			{ stdio: ["ignore", "ignore", "pipe"] },
 		);
@@ -215,9 +219,10 @@ test("signal observer fails contextually when wrapper handlers never register" /
 		child?.kill("SIGKILL");
 		await fs.rm(dir, { recursive: true, force: true });
 	}
-});
+}
 
-test("bounded check commands capture streams and contextual nonzero failures" /** @returns {Promise<void>} Verifies output, spawn and nonzero failures. @throws {Error} On command or assertion failure. */, async () => {
+/** @returns {Promise<void>} Verifies output, spawn and nonzero failures. @throws {Error} On command or assertion failure. */
+async function verifyCommandCapture() {
 	const result = await runCheckCommand(
 		process.execPath,
 		["-e", 'process.stdout.write("out"); process.stderr.write("err");'],
@@ -241,7 +246,7 @@ test("bounded check commands capture streams and contextual nonzero failures" /*
 			process.execPath,
 			[
 				"-e",
-				`process.stdout.write("oversized"); setInterval(() => {}, ${HANGING_COMMAND_INTERVAL_MS});`,
+				`process.stdout.write("oversized"); setInterval(/** @returns {void} Retains liveness until the output limit triggers cleanup. @throws {never} No errors. */ () => {}, ${HANGING_COMMAND_INTERVAL_MS});`,
 			],
 			{
 				label: "buffer control",
@@ -264,13 +269,17 @@ test("bounded check commands capture streams and contextual nonzero failures" /*
 			return true;
 		},
 	);
-});
+}
 
-test("command deadline closes its real child and reports operation context" /** @returns {Promise<void>} Verifies timed-out child cleanup. @throws {Error} On missing failure or live-child assertion. */, async () => {
+/** @returns {Promise<void>} Verifies timed-out child cleanup. @throws {Error} On missing failure or live-child assertion. */
+async function verifyCommandDeadline() {
 	await assert.rejects(
 		runCheckCommand(
 			process.execPath,
-			["-e", `setInterval(() => {}, ${HANGING_COMMAND_INTERVAL_MS});`],
+			[
+				"-e",
+				`setInterval(/** @returns {void} Retains liveness until the command deadline. @throws {never} No errors. */ () => {}, ${HANGING_COMMAND_INTERVAL_MS});`,
+			],
 			{
 				label: "hanging command control",
 				timeoutMs: COMMAND_TIMEOUT_CONTROL_MS,
@@ -297,13 +306,10 @@ test("command deadline closes its real child and reports operation context" /** 
 			return true;
 		},
 	);
-});
+}
 
-test("group cleanup kills a redirected TERM-ignoring descendant after its leader closes", {
-	skip: process.platform === "win32",
-	timeout:
-		COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
-} /** @returns {Promise<void>} Verifies group escalation after leader closure. @throws {Error} On fixture or survivor assertion failure. */, async () => {
+/** @returns {Promise<void>} Verifies group escalation after leader closure. @throws {Error} On fixture or survivor assertion failure. */
+async function verifyRedirectedDescendant() {
 	const ready = deferred();
 	const descendantSource = `
 process.on("SIGTERM", /** @returns {void} Ignores TERM. @throws {never} No errors. */ () => {});
@@ -358,7 +364,7 @@ setInterval(/** @returns {void} Retains leader liveness. @throws {never} No erro
 		);
 		reaped = true;
 	} finally {
-		if (!reaped) {
+		if (!reaped && child.exitCode === null && child.signalCode === null) {
 			try {
 				process.kill(-child.pid, "SIGKILL");
 			} catch {
@@ -367,9 +373,14 @@ setInterval(/** @returns {void} Retains leader liveness. @throws {never} No erro
 		}
 		await within(closed, "redirected descendant fixture to close");
 	}
-});
+}
 
-test("completed detached sessions only probe their former group" /** @returns {Promise<void>} Verifies probe-only cleanup despite an observable former PGID. @throws {Error} On any non-probe signal. */, async (context) => {
+/**
+ * @param {import('node:test').TestContext} context Scoped syscall mocks.
+ * @returns {Promise<void>} Verifies probe-only cleanup despite an observable former PGID.
+ * @throws {Error} On any non-probe signal.
+ */
+async function verifyCompletedGroupProbes(context) {
 	const calls = [];
 	context.mock.method(
 		process,
@@ -402,9 +413,14 @@ test("completed detached sessions only probe their former group" /** @returns {P
 		[-424242, 0],
 		[-424242, 0],
 	]);
-});
+}
 
-test("completed group cleanup bounds inherited stream lifetime" /** @returns {Promise<void>} Verifies probe-only cleanup also releases retained handles. @throws {Error} On missing deadline or handle release. */, async (context) => {
+/**
+ * @param {import('node:test').TestContext} context Scoped syscall mocks.
+ * @returns {Promise<void>} Verifies probe-only cleanup releases retained handles.
+ * @throws {Error} On missing deadline or handle release.
+ */
+async function verifyCompletedStreamLifetime(context) {
 	let destroyed = 0;
 	let unreferenced = false;
 	context.mock.method(
@@ -445,12 +461,10 @@ test("completed group cleanup bounds inherited stream lifetime" /** @returns {Pr
 	);
 	assert.equal(destroyed, 2);
 	assert.equal(unreferenced, true);
-});
+}
 
-test("failed and missing close attempts keep cleanup bounded", {
-	timeout:
-		COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
-} /** @returns {Promise<void>} Verifies failed and missing stream-close backstops. @throws {Error} On signal sequence or cleanup mismatch. */, async () => {
+/** @returns {Promise<void>} Verifies failed and missing stream-close backstops. @throws {Error} On signal sequence or cleanup mismatch. */
+async function verifyMissingStreamClosure() {
 	const signals = [];
 	let destroyed = 0;
 	let unreferenced = false;
@@ -522,9 +536,10 @@ test("failed and missing close attempts keep cleanup bounded", {
 	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 	assert.equal(destroyed, 2);
 	assert.equal(unreferenced, true);
-});
+}
 
-test("cleanup attempts every action and retains primary plus cleanup errors" /** @returns {Promise<void>} Verifies cleanup aggregation and primary-error retention. @throws {Error} On ordering or error identity mismatch. */, async () => {
+/** @returns {Promise<void>} Verifies cleanup aggregation and primary-error retention. @throws {Error} On ordering or error identity mismatch. */
+async function verifyCleanupAggregation() {
 	const primary = new Error("primary check failure");
 	const permissions = new Error("permission restore failed");
 	const removal = new Error("scratch removal failed");
@@ -575,4 +590,58 @@ test("cleanup attempts every action and retains primary plus cleanup errors" /**
 			return true;
 		},
 	);
-});
+}
+
+test(
+	"deferred readiness resolves through a bounded completion wait",
+	verifyDeferredReadiness,
+);
+test(
+	"completion watchdog preserves rejection and reports missing readiness context",
+	verifyCompletionWatchdog,
+);
+test(
+	"signal observer waits for registration in the actual wrapper process",
+	verifySignalObserverReadiness,
+);
+test(
+	"signal observer fails contextually when wrapper handlers never register",
+	verifyMissingHandlers,
+);
+test(
+	"bounded check commands capture streams and contextual nonzero failures",
+	verifyCommandCapture,
+);
+test(
+	"command deadline closes its real child and reports operation context",
+	verifyCommandDeadline,
+);
+test(
+	"group cleanup kills a redirected TERM-ignoring descendant after its leader closes",
+	{
+		skip: process.platform === "win32",
+		timeout:
+			COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
+	},
+	verifyRedirectedDescendant,
+);
+test(
+	"completed detached sessions only probe their former group",
+	verifyCompletedGroupProbes,
+);
+test(
+	"completed group cleanup bounds inherited stream lifetime",
+	verifyCompletedStreamLifetime,
+);
+test(
+	"failed and missing close attempts keep cleanup bounded",
+	{
+		timeout:
+			COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
+	},
+	verifyMissingStreamClosure,
+);
+test(
+	"cleanup attempts every action and retains primary plus cleanup errors",
+	verifyCleanupAggregation,
+);

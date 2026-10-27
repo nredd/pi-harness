@@ -196,10 +196,10 @@ for (const runner of runners) {
 			);
 			const script = `
 const { spawn } = require('node:child_process');
-const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, ${FIXTURE_LIFETIME_MS}); process.send("descendant-ready");'], { stdio: ${inheritPipes ? '["ignore", "inherit", "inherit", "ipc"]' : '["ignore", "ignore", "ignore", "ipc"]'} });
+const child = spawn(process.execPath, ['-e', 'setTimeout(/** @returns {void} Bounds descendant lifetime after failed cleanup. @throws {never} No errors. */ () => {}, ${FIXTURE_LIFETIME_MS}); process.send("descendant-ready");'], { stdio: ${inheritPipes ? '["ignore", "inherit", "inherit", "ipc"]' : '["ignore", "ignore", "ignore", "ipc"]'} });
 console.log(JSON.stringify({leader: process.pid, child: child.pid}));
-const watchdog = setTimeout(() => { console.error("Descendant did not acknowledge readiness"); process.exit(99); }, ${READINESS_WATCHDOG_MS});
-child.once("message", message => {
+const watchdog = setTimeout(/** @returns {never} Exits on missing acknowledgment. @throws {never} Terminates the process. */ () => { console.error("Descendant did not acknowledge readiness"); process.exit(99); }, ${READINESS_WATCHDOG_MS});
+child.once("message", /** @returns {void} Releases the acknowledged leader. @throws {Error} On unexpected acknowledgment or disconnect failure. */ message => {
   if (message !== "descendant-ready") throw new Error("Unexpected descendant readiness acknowledgment");
   clearTimeout(watchdog);
   console.error(message);
