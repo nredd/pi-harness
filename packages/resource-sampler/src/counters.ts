@@ -2,6 +2,17 @@ import type { CpuInfo } from "node:os";
 import { basename } from "node:path";
 import type { Metric, PsiLine } from "./types.js";
 
+/** A >60s native interval is stale/suspend/anomaly territory for ~2s dashboard polling; warm anew.
+ * Linux intervals retain their existing semantics and are not subject to this Darwin-only limit.
+ */
+export const MAX_NATIVE_INTERVAL_MS = 60_000;
+/** sysctl vm.swapusage reports binary MiB, including fractional values. */
+export const BYTES_PER_MEBIBYTE = 1024 ** 2;
+/** Three separately rounded hundredth-MiB fields can disagree; preserve the existing 0.02MiB bound. */
+export const SWAP_ROUNDING_TOLERANCE_BYTES = 0.02 * BYTES_PER_MEBIBYTE;
+/** Each required vm_stat counter must occur exactly once; duplicates are ambiguous, not additive. */
+const VM_COUNTER_OCCURRENCES = 1;
+
 /** Internal raw process counter with a per-read monotonic timestamp. */
 export interface ProcessCounter {
 	pid: number;
@@ -65,7 +76,7 @@ export function processCpu(previous: ProcessCounter | undefined, current: Proces
 	if (
 		!Number.isFinite(elapsed) ||
 		elapsed <= 0 ||
-		(current.strongIdentity && elapsed > 60_000) ||
+		(current.strongIdentity && elapsed > MAX_NATIVE_INTERVAL_MS) ||
 		!Number.isFinite(cpu) ||
 		previous.cpuMs < 0 ||
 		current.cpuMs < 0 ||
@@ -161,12 +172,14 @@ export function darwinMemory(
 	availableBytes: number;
 	basis: "app+wired+compressed";
 } | null {
-	const header = /^Mach Virtual Memory Statistics: \(page size of (\d+) bytes\)\r?$/m.exec(text);
-	const pageSize = Number(header?.[1]);
+	const [, pageSizeText] = /^Mach Virtual Memory Statistics: \(page size of (\d+) bytes\)\r?$/m.exec(text) ?? [];
+	const pageSize = Number(pageSizeText);
 	if (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(pageSize) || pageSize <= 0) return null;
+	/** Read one uniquely present unsigned page count; missing/duplicate/malformed rows return null. */
 	const read = (name: string): number | null => {
 		const rows = text.split("\n").filter((line) => line.startsWith(`${name}:`));
-		const value = rows.length === 1 ? /^.*:\s+(\d+)\.\s*$/.exec(rows[0] ?? "")?.[1] : undefined;
+		const [row] = rows;
+		const [, value] = rows.length === VM_COUNTER_OCCURRENCES ? (/^.*:\s+(\d+)\.\s*$/.exec(row ?? "") ?? []) : [];
 		const count = value === undefined ? Number.NaN : Number(value);
 		return Number.isSafeInteger(count) && count >= 0 ? count : null;
 	};
@@ -186,13 +199,14 @@ export function darwinSwap(text: string): { usedBytes: number; totalBytes: numbe
 	const match =
 		/^vm\.swapusage: total = (\d+\.\d+)M\s+used = (\d+\.\d+)M\s+free = (\d+\.\d+)M(?:\s+\(encrypted\))?\s*$/.exec(text);
 	if (!match) return null;
-	const totalBytes = Math.round(Number(match[1]) * 1024 ** 2);
-	const usedBytes = Math.round(Number(match[2]) * 1024 ** 2);
-	const freeBytes = Math.round(Number(match[3]) * 1024 ** 2);
+	const [, totalMebibytes, usedMebibytes, freeMebibytes] = match;
+	const totalBytes = Math.round(Number(totalMebibytes) * BYTES_PER_MEBIBYTE);
+	const usedBytes = Math.round(Number(usedMebibytes) * BYTES_PER_MEBIBYTE);
+	const freeBytes = Math.round(Number(freeMebibytes) * BYTES_PER_MEBIBYTE);
 	if (
 		![totalBytes, usedBytes, freeBytes].every(Number.isSafeInteger) ||
 		usedBytes > totalBytes ||
-		Math.abs(totalBytes - usedBytes - freeBytes) > 0.02 * 1024 ** 2
+		Math.abs(totalBytes - usedBytes - freeBytes) > SWAP_ROUNDING_TOLERANCE_BYTES
 	)
 		return null;
 	return { usedBytes, totalBytes };

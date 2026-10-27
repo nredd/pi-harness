@@ -40,6 +40,14 @@ Admission is checked between calls; each call is synchronous and non-preemptible
 Library handles close in `finally`. No child or persistent worker is introduced for native access.
 The existing fixed `ps`, `vm_stat` and `sysctl` helpers retain bounded capture and awaited reaping.
 
+ABI sizes, offsets, flavors and sentinels are documented once in `DARWIN_ABI`; decoder fixtures
+and native failure stubs reuse that layout. `DARWIN_NATIVE_READ_BYTES` derives the byte admission
+charge from those sizes. Named microsecond/nanosecond units, `MAX_NATIVE_INTERVAL_MS` and the
+binary-MiB swap rounding bound preserve the measured arithmetic and existing anomaly policy.
+The numeric-literal sweep covered `darwin.ts`, `counters.ts`, `collect.ts` and `index.ts`; no new
+numeric policy was introduced in the latter two files, whose pre-existing scan defaults remain
+unchanged. All new named test helpers document their fixture/layout inputs and return contracts.
+
 Sources: Apple's SDK `sys/proc_info.h`, `sys/resource.h`, `mach/mach_time.h`; the installed SDK is
 `/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`. These public fixed layouts were checked against
 real reads, not guessed from task titles or arguments.

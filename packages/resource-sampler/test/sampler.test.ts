@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { Budget, command, darwinHostMemory } from "../src/collect.js";
 import {
+	BYTES_PER_MEBIBYTE,
 	cpuSnapshot,
 	darwinMemory,
 	darwinProcess,
@@ -163,7 +164,10 @@ describe("Darwin host memory", () => {
 		expect(darwinMemory(vm, Number.NaN)).toBeNull();
 		const comparison = await readFile(new URL("./fixtures/darwin-comparison.txt", import.meta.url), "utf8");
 		const swap = comparison.split("\n").find((line) => line.startsWith("vm.swapusage:")) ?? "";
-		expect(darwinSwap(swap)).toEqual({ usedBytes: Math.round(3079.44 * 1024 ** 2), totalBytes: 4096 * 1024 ** 2 });
+		expect(darwinSwap(swap)).toEqual({
+			usedBytes: Math.round(3079.44 * BYTES_PER_MEBIBYTE),
+			totalBytes: 4096 * BYTES_PER_MEBIBYTE,
+		});
 		for (const broken of [
 			"",
 			swap.replace("3079.44", "99999.00"),
@@ -175,6 +179,11 @@ describe("Darwin host memory", () => {
 	it("parses the same-second AM-style kernel capture and measured fixed ps fallback rows", async () => {
 		const text = await readFile(new URL("./fixtures/darwin-kernel-window.txt", import.meta.url), "utf8");
 		expect(darwinMemory(text, 16 * 1024 ** 3)?.usedBytes).toBe(12061147136);
+		/**
+		 * Extract a page count from the same-second kernel capture, without a page-size assumption.
+		 * @param name Exact vm_stat field label in the captured C-locale fixture.
+		 * @returns The captured number of pages, or NaN if the fixture field is absent/malformed.
+		 */
 		const pages = (name: string): number =>
 			Number(
 				text
@@ -193,7 +202,7 @@ describe("Darwin host memory", () => {
 		expect((times[1] ?? 0) - (times[0] ?? 0)).toBe(4);
 		expect(text).toContain("System-wide memory free percentage: 47%");
 		expect(darwinSwap(text.split("\n").find((line) => line.startsWith("vm.swapusage:")) ?? "")?.usedBytes).toBe(
-			Math.round(3490.88 * 1024 ** 2),
+			Math.round(3490.88 * BYTES_PER_MEBIBYTE),
 		);
 		const ps = await readFile(new URL("./fixtures/darwin-ps.txt", import.meta.url), "utf8");
 		const rows = ps
