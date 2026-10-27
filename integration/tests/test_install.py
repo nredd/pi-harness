@@ -5271,6 +5271,10 @@ def test_test_helpers_have_typed_contracts(module: str) -> None:
             assert f"{arg.arg} ({ast.unparse(arg.annotation)}):" in doc, label
         assert node.returns is not None, label
         assert any(section in doc for section in ("Returns:", "Yields:", "Raises:")), label
+        if ast.unparse(node.returns) != "None" and any(
+            isinstance(child, ast.Return) and child.value is not None for child in ast.walk(node)
+        ):
+            assert "Returns:" in doc, label
 
 
 def test_plan_reports_state_and_permanent_parent_creates(
@@ -5470,6 +5474,9 @@ def relative_tool_install(
 
         Returns:
             dict[str, str]: discovered absolute tools with the chosen Node dispatcher.
+
+        Raises:
+            UnsupportedError: required tools or platform are unavailable.
         """
         tools = preflight(system, machine)
         if different_node:
@@ -5491,6 +5498,9 @@ def relative_tool_install(
 
         Returns:
             Path: local bundle destination.
+
+        Raises:
+            OSError: fixture write failed.
         """
         destination.write_text("{}\n")
         return destination
@@ -5514,6 +5524,11 @@ def relative_tool_install(
 
         Returns:
             Verified: inputs bound to the fixture's tarball bytes.
+
+        Raises:
+            AssertionError: selected Node reports an unexpected version.
+            UnsupportedError: selected Node cannot execute.
+            OSError | RuntimeError: fixture write or provenance check failed.
         """
         assert install.node_version(node) == (22, 19, 0)
         artifact = workdir / "core.tgz"
@@ -5535,6 +5550,10 @@ def relative_tool_install(
 
         Returns:
             Any: the real subprocess result.
+
+        Raises:
+            AssertionError: command or interpreter lookup changed.
+            OSError | subprocess.SubprocessError: child execution failed.
         """
         seen.append(str(argv[0]))
         assert_child_command(argv, kwargs, commands, assert_absolute)
@@ -5550,6 +5569,10 @@ def relative_tool_install(
 
         Returns:
             Any: the real child process handle.
+
+        Raises:
+            AssertionError: command or interpreter lookup changed.
+            OSError: child creation failed.
         """
         assert_child_command(argv, kwargs, commands, assert_absolute)
         return original_popen(argv, *args, **kwargs)
