@@ -4,7 +4,6 @@ description: Read-only architecture scout. Finds deepening opportunities (shallo
 tools: read, grep, find, ext:pi-dev-tools/git_log, ext:pi-dev-tools/git_diff, ext:pi-dev-tools/git_show, ext:pi-dev-tools/git_status
 extensions: [pi-dev-tools]
 skills: codebase-design
-thinking: high
 max_turns: 60
 prompt_mode: replace
 ---

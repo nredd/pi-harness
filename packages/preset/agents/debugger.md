@@ -6,7 +6,6 @@ extensions: true
 exclude_extensions: pi-memory
 disallowed_tools: git_commit, git_worktree_remove, git_worktree_prune
 skills: diagnosing-bugs, coding-like-redd
-thinking: high
 prompt_mode: append
 ---
 

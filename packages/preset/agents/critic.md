@@ -4,7 +4,6 @@ description: Adversarial whole-change reviewer. Hunts correctness bugs, races, b
 tools: read, grep, find, ext:pi-dev-tools/git_diff, ext:pi-dev-tools/git_show, ext:pi-dev-tools/git_log, ext:pi-dev-tools/git_status, ext:pi-dev-tools/py_test, ext:pi-dev-tools/cargo_test
 extensions: [pi-dev-tools]
 skills: false
-thinking: high
 max_turns: 60
 prompt_mode: replace
 ---
