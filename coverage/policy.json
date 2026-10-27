@@ -30,7 +30,7 @@
     { "path": "packages/computer-use/scripts/check-tool-schemas.mjs", "reason": "Tool schema assertion harness; actual shipped schemas remain in the owned source tree." },
     { "path": "packages/computer-use/scripts/check-unpaired-act.mjs", "reason": "Unpaired-action regression harness; not published runtime source." },
     { "path": "packages/computer-use/scripts/check-windows-build-scripts.mjs", "reason": "Windows native build-script verification harness; not a shipped runtime script." },
-    { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a synthetic gateway; verification infrastructure excluded from npm published files." }
+    { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a benchmark gateway; verification infrastructure excluded from npm published files." }
   ],
   "packages": {
     "dev-tools": {
@@ -159,7 +159,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "lines": 525, "functions": 72 },
+          "max_uncovered": { "lines": 494, "functions": 65 },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -171,7 +171,7 @@
             "src/custom-agents.ts", "src/default-agents.ts", "src/detached-results.ts", "src/enabled-models.ts",
             "src/enterprise-local.ts", "src/env.ts", "src/group-join.ts", "src/index.ts",
             "src/invocation-config.ts", "src/memory.ts", "src/mention-clone.ts", "src/mention.ts",
-            "src/model-call.ts", "src/model-resolver.ts", "src/model-scope.ts", "src/nested-tools.ts",
+            "src/model-call.ts", "src/model-resolver.ts", "src/model-selection.ts", "src/model-scope.ts", "src/nested-tools.ts",
             "src/output-file.ts", "src/package-resources.ts", "src/process-budget.ts", "src/prompts.ts",
             "src/quota-admission.ts", "src/schedule-store.ts", "src/schedule.ts", "src/settings.ts",
             "src/skill-loader.ts", "src/startup-error.ts", "src/status-note.ts", "src/structured-output.ts",
@@ -185,7 +185,7 @@
             "src/workflow/task.ts", "src/workflow/tool-description.ts", "src/workflow/worker-source.ts",
             "src/worktree.ts", "src/xml.ts"
           ],
-          "max_uncovered": { "lines": 7821, "functions": 515 },
+          "max_uncovered": { "lines": 7728, "functions": 512 },
           "reporters": ["text", "lcov"]
         }
       }

@@ -77,6 +77,51 @@ instrumentation includes and any actually measured compatibility subset must be 
 file was not added speculatively. It was absent at the initial fetch, then arrived on main at
 the final fetch and therefore requires merged-source producer checks and refreshed subagents LCOV.
 
-NOT RUN: package coverage reruns, new pending-surface instrumentation, clean dev-tools baseline,
-hosted coverage timing, quiet performance benchmarks or live desktop/credential checks.
+## Main merge follow-up
+
+The final fetch advanced main to `646519a5dc6a16871adc2bb1c56f3a4122462575`:
+- #147 removed thinking pins from preset agent Markdown and updated its resource test/docs.
+- #161 consolidated model selection and added `packages/subagents/src/model-selection.ts` plus
+  two test modules. No new JavaScript files arrived; the 53-file classification table is unchanged.
+
+Ran plain `git merge origin/main`. Git completed the merge without conflicts as
+`59bece1d16123b6bc9e9c0bf61442fd45ea92547`; no `git merge --continue` was needed, and no
+commit tool was invoked mid-merge. The inventory scan returned no unclassified files: the
+existing TS ownership glob picked up `model-selection.ts` automatically. The producer-include
+regression then FAILED with exactly that missing file, before the include update, and PASSED
+afterwards. This is one additional real red-before-change / green-after-change proof.
+
+Because main changed subagents production source, only that package's coverage was refreshed,
+serially with one primary worker:
+- Subagents lint/typecheck: pass.
+- Primary Istanbul: **3058 passed, 7 skipped**, 147 test files, 160.30 seconds.
+- Declared Bun compatibility suite: **22 passed, 0 failed**, 2.29 seconds. Its real LCOV includes
+  `src/model-selection.ts`, so the independent expected-file list now names it.
+- Post-merge `make check-scripts`: **799 passed** in 85.98 seconds, **8 Node tests passed**,
+  ruff format/check and ty clean.
+- Post-merge inventory audit: no unclassified files. `make check-coverage BASE=9a7b784`: exit 0.
+
+Only the measured subagents ceilings tightened; no budget increased:
+
+| Signal | Previous uncovered lines/functions | Merged-source uncovered lines/functions | Total lines/functions |
+| --- | ---: | ---: | ---: |
+| Primary | 525 / 72 | 494 / 65 | 6625 / 1308 |
+| Bun | 7821 / 515 | 7728 / 512 | 13324 / 1084 |
+
+Merged-source LCOV SHA-256:
+- Primary: `9f4d2d2c86708d66412bd4000c72d9821b1a813d46a51ab2b819fbd18e347344`
+- Bun: `881cea476702fde187f9f9c712ba3f3f788ad22f4313267ed676de5dd22caf61`
+
+Saved as `subagents-round3-main-{primary,bun}.info` under the original local `baseline-lcov/`
+receipt directory. The merged receipt replay uses these fresh subagents files and reuses all
+unchanged-package receipts. Merged-run logs: `/tmp/cov-round3-subagents-{static,primary,bun}.log`,
+`/tmp/cov-round3-merged-scripts.log`, `/tmp/cov-round3-accounting-merged.log`.
+The merged-source isolated proof rerun again passed all 35 control cases and produced the same
+38 expected failures across 11 reversions. Its accounting CLI replay passed with the fresh merged
+subagents receipts and all unchanged-package receipts. Artifacts are retained under
+`/tmp/cov-round3-proofs-merged/`. The final 108 coverage-specific tests and working-tree accounting
+also passed after tightening the policy; the latter log is `/tmp/cov-round3-accounting-merged-final.log`.
+
+NOT RUN: other package coverage reruns, new pending-surface instrumentation, clean dev-tools
+baseline, hosted coverage timing, quiet performance benchmarks or live desktop/credential checks.
 No PR merge or live activation was performed. Independent review of the new HEAD remains needed.
