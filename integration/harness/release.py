@@ -29,6 +29,7 @@ import subprocess
 import tarfile
 import tempfile
 import traceback
+import unicodedata
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -298,6 +299,9 @@ def format_exception_redacted(error: BaseException) -> str:
 
     Returns:
         str: formatted traceback without proxy URL userinfo.
+
+    Raises:
+        None.
     """
     return redact_diagnostic("".join(traceback.format_exception(error)))
 
@@ -337,6 +341,9 @@ def fetch_failure_reason(error: Exception) -> str:
 
     Returns:
         str: readable reason without URL wrapping or response-body contents.
+
+    Raises:
+        None.
     """
     # Specific subclasses precede their parents: HTTPError -> URLError, and protocol/TLS
     # failures -> HTTPException/OSError. Preserve that order when adding a transport category.
@@ -385,6 +392,9 @@ class FetchError(OSError):
 
         Returns:
             None: the public diagnostic names the requested URL once and retains the HTTP status.
+
+        Raises:
+            None.
         """
         self.status = error.code if isinstance(error, HTTPError) else None
         super().__init__(redact_diagnostic(f"Could not fetch '{url}': {fetch_failure_reason(error)}"))
@@ -509,12 +519,13 @@ def redact_diagnostic(text: str) -> str:
             for credentials in (userinfo, unquote(userinfo)):
                 tokens |= {credentials, credentials + "@"}
             decoded = unquote(password)
-            passwords |= {
-                password,
-                decoded,
-                quote(password, safe="", errors="surrogatepass"),
-                quote(decoded, safe="", errors="surrogatepass"),
-            }
+            for form in (password, decoded):
+                for canonical in (
+                    form,
+                    unicodedata.normalize("NFC", form),
+                    unicodedata.normalize("NFD", form),
+                ):
+                    passwords |= {canonical, quote(canonical, safe="", errors="surrogatepass")}
     for original in sorted(representations, key=lambda value: (-len(value), value)):
         clean = representations[original]
         text = (
@@ -535,7 +546,8 @@ def redact_diagnostic(text: str) -> str:
     mask = next((character for character in PASSWORD_MASK_CHARACTERS if character not in alphabet), "")
     if not mask:
         return ""
-    # At most four forms for each of eight keys. Each literal pass is linear, cannot grow
+    # At most twelve forms for each of eight keys (raw/decoded, original/NFC/NFD,
+    # literal/encoded). Each literal pass is linear, cannot grow
     # text, and cannot create any password across a replacement boundary.
     for password in sorted(passwords, key=lambda value: (-len(value), value)):
         if password:
@@ -644,6 +656,9 @@ def connectivity_environment(env: Mapping[str, str]) -> dict[str, str]:
 
     Returns:
         dict[str, str]: unchanged valid values, retaining both case variants for children.
+
+    Raises:
+        None.
     """
     result: dict[str, str] = {}
     for key in sorted(CONNECTIVITY_ENVIRONMENT_KEYS):
@@ -833,6 +848,9 @@ def _error_tail(error: subprocess.CalledProcessError | subprocess.TimeoutExpired
 
     Returns:
         str: decoded output tail, empty when nothing was captured.
+
+    Raises:
+        None.
     """
     output = error.output or ""
     if isinstance(output, bytes):
@@ -1334,7 +1352,15 @@ def fetch_release(
 
 
 def main() -> None:
-    """Fetch a supplied tag or Gitlink tag, or verify the root overrides before `npm ci`."""
+    """Fetch a supplied tag or Gitlink tag, or verify the root overrides before `npm ci`.
+
+    Returns:
+        None: the requested installation or verification completed.
+
+    Raises:
+        SystemExit: invalid CLI arguments or failed root override verification.
+        OSError | ValueError | RuntimeError: release resolution, verification or installation failed.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0] if __doc__ else None)
     source = parser.add_mutually_exclusive_group(required=True)

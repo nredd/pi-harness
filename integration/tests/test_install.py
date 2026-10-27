@@ -6014,6 +6014,9 @@ def test_every_child_uses_the_minimal_environment(
 
     Returns:
         None: every observed child receives safe inherited keys and owned overrides only.
+
+    Raises:
+        AssertionError: a child inherits injection variables or loses required runtime settings.
     """
     hostile = {
         "NODE_OPTIONS": f"--require {tmp_path / 'marker.js'}",

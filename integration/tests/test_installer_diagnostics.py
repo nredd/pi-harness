@@ -15,6 +15,7 @@ import logging
 import subprocess
 import sys
 import traceback
+import unicodedata
 from dataclasses import dataclass
 from functools import partial
 from operator import index
@@ -30,7 +31,8 @@ from tests.test_install import SHA, Harness, shim_core_tarball
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import Self, SupportsIndex
+    from types import ModuleType
+    from typing import Literal, Self, SupportsIndex
 
 LOGGER = logging.getLogger(__name__)
 SCANNER_WORK_PER_CHARACTER = 12
@@ -481,6 +483,44 @@ def test_new_test_classes_fixtures_and_nested_helpers_have_contracts(module: str
         assert node.returns is not None, (module, node.name)
 
 
+@pytest.mark.parametrize(
+    ("module", "names"),
+    [
+        (
+            release,
+            "proxy_open urlopen fetch_ssl_context format_exception_redacted detached_exception "
+            "fetch_failure_reason __init__ fetch_bytes redact_diagnostic normalize_percent_escape_case "
+            "redact_url_userinfo replace_diagnostic_token connectivity_environment child_environment "
+            "gitlink_tag _error_tail verify_attestation verify_public_attestation fetch_release main",
+        ),
+        (
+            install,
+            "node_version verify_snapshot verify_release install_packages stage apply post_check "
+            "checked_version run_preflighted main",
+        ),
+    ],
+)
+def test_changed_production_helpers_document_raises(module: ModuleType, names: str) -> None:
+    """Keep the complete changed production-function inventory under failure-contract checks.
+
+    Parameters:
+        module (ModuleType): installer or release module owning the changed functions.
+        names (str): explicit inventory of new/changed function names, including methods.
+
+    Returns:
+        None: every inventoried function declares its failure contract.
+
+    Raises:
+        AssertionError: an inventoried function is absent or omits its `Raises:` section.
+    """
+    source = Path(str(module.__file__)).read_text()
+    functions = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef)]
+    for name in names.split():
+        matches = [node for node in functions if node.name == name]
+        assert matches, name
+        assert all("Raises:" in (ast.get_docstring(node) or "") for node in matches), name
+
+
 def test_existing_isolation_fixture_has_complete_contract() -> None:
     """Include the touched pre-existing fixture outside the whole-new-module sweep.
 
@@ -860,3 +900,157 @@ def test_one_character_password_mask_does_not_grow_large_output(monkeypatch: pyt
     redacted = release.redact_diagnostic(original)
     assert "x" not in redacted
     assert len(redacted) <= len(original)
+
+
+@pytest.mark.parametrize("configured_form", ["NFC", "NFD"])
+@pytest.mark.parametrize("encoded_output", [False, True])
+@pytest.mark.parametrize(
+    "renderer", ["diagnostic", "post-check", "fetch-reason", "fetch-error", "traceback", "logging"]
+)
+def test_canonical_password_variants_at_public_renderers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured_form: Literal["NFC", "NFD"],
+    encoded_output: bool,
+    renderer: str,
+) -> None:
+    """Canonical-equivalent literal/encoded passwords cannot escape public diagnostic paths.
+
+    Parameters:
+        tmp_path (Path): private real-child and failure-boundary fixtures.
+        monkeypatch (pytest.MonkeyPatch): scoped encoded proxy and child environment.
+        configured_form (Literal["NFC", "NFD"]): form stored in the configured proxy password.
+        encoded_output (bool): emit percent-encoded rather than literal canonical counterpart.
+        renderer (str): raw sanitizer, child success, fetch failure or standard exception renderer.
+
+    Returns:
+        None: both canonical directions mask literal/encoded standalone and embedded output.
+
+    Raises:
+        AssertionError: any public renderer exposes the canonical counterpart of the password.
+    """
+    configured = unicodedata.normalize(configured_form, "päss")
+    counterpart = unicodedata.normalize("NFD" if configured_form == "NFC" else "NFC", configured)
+    assert configured != counterpart
+    proxy = f"http://user:{quote(configured, safe='')}@proxy.invalid"
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    emitted = quote(counterpart, safe="") if encoded_output else counterpart
+    payload = f"{emitted} prefix{emitted}suffix"
+    if renderer == "diagnostic":
+        text = release.redact_diagnostic(payload)
+    elif renderer == "post-check":
+        harness = Harness(tmp_path, monkeypatch)
+        child = tmp_path / "child"
+        child.write_text(f"#!{sys.executable}\nprint({payload!r})\n")
+        child.chmod(0o700)
+        harness.layout.link.parent.mkdir(parents=True, exist_ok=True)
+        harness.layout.link.symlink_to(child)
+        text = install.post_check(harness.layout)
+    elif renderer == "fetch-reason":
+        text = release.fetch_failure_reason(OSError(payload))
+    elif renderer == "fetch-error":
+        text = str(release.FetchError("https://public.invalid/asset", OSError(payload)))
+    else:
+        boundary = prepare_boundary("node", tmp_path, monkeypatch, OSError(payload), proxy)
+        text, error = rendered_failure(boundary, renderer)
+        assert error.__context__ is None
+    assert emitted not in text
+    assert counterpart not in text
+    assert "prefix" in text
+    assert "suffix" in text
+
+
+def test_canonical_redaction_does_not_apply_compatibility_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical normalization must not broaden the contract to compatibility equivalence.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped fullwidth proxy password.
+
+    Returns:
+        None: compatibility-only and unrelated diagnostic text remain untouched.
+
+    Raises:
+        AssertionError: NFKC/NFKD normalization or unrelated case folding is introduced.
+    """
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:\uff50äss@proxy.invalid")
+    assert release.redact_diagnostic("päss UnrelatedCase") == "päss UnrelatedCase"
+
+
+def test_canonical_password_passes_have_bounded_linear_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Count every password replacement span with all eight proxy keys at one/four MiB.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped maximal proxy set and replacement instrumentation.
+
+    Returns:
+        None: at most 96 non-growing literal passes scale linearly in diagnostic size.
+
+    Raises:
+        AssertionError: password-form expansion exceeds the bound, grows text or scales superlinearly.
+    """
+    spans: list[int] = []
+
+    class PasswordPassText(str):
+        """Retain instrumentation across every literal password replacement.
+
+        Parameters:
+            value (str): native string contents inherited by this test-only string subtype.
+
+        Returns:
+            PasswordPassText: text recording each password replacement's input length.
+
+        Raises:
+            None.
+        """
+
+        @override
+        def replace(self, old: str, new: str, /, count: SupportsIndex = -1) -> PasswordPassText:
+            """Count a full literal replacement pass and preserve tracking for the next pass.
+
+            Parameters:
+                old (str): password representation.
+                new (str): collision-free one-character mask.
+                count (SupportsIndex): maximum replacements, unlimited by default.
+
+            Returns:
+                PasswordPassText: non-growing masked text with instrumentation preserved.
+
+            Raises:
+                AssertionError: a password replacement grows the diagnostic.
+            """
+            spans.append(len(self))
+            result = super().replace(old, new, count)
+            assert len(result) <= len(self)
+            return PasswordPassText(result)
+
+    normalize = release.normalize_percent_escape_case
+
+    def counted_normalize(text: str) -> str:
+        """Instrument normalized diagnostics without modifying password normalization semantics.
+
+        Parameters:
+            text (str): diagnostic or password representation entering hex normalization.
+
+        Returns:
+            str: normalized text, instrumented for subsequent replacement spans.
+
+        Raises:
+            None.
+        """
+        return PasswordPassText(normalize(text))
+
+    for number, key in enumerate(sorted(release.PROXY_ENVIRONMENT_KEYS)):
+        secret = f"päss{number}"
+        monkeypatch.setenv(key, f"http://user:{quote(secret, safe='')}@proxy.invalid")
+    monkeypatch.setattr(release, "normalize_percent_escape_case", counted_normalize)
+    work: list[int] = []
+    for size in (1024 * 1024, 4 * 1024 * 1024):
+        spans.clear()
+        payload = "z" * size
+        assert release.redact_diagnostic(payload) == payload
+        assert 32 < len(spans) <= 96
+        assert all(span == size for span in spans)
+        work.append(sum(spans))
+    assert work[1] == 4 * work[0]

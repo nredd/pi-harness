@@ -2651,6 +2651,9 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         int: process exit status.
+
+    Raises:
+        SystemExit: CLI arguments are invalid or help was requested.
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     opts = parse(argv)
