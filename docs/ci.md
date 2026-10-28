@@ -40,8 +40,11 @@ personal stack, faux provider, `STACK-OK` output, zero exit and empty stderr as
 The normal standalone suites still run and retain their original assertions.
 
 `harness.standalone_diagnostics` stages an explicit allowlist and scans *every input*, binary
-included, for credential signatures before atomically publishing the upload directory. A scan or
-capture failure leaves no partial upload and cannot mask the original failing exit status.
+included, for credential signatures before atomically publishing the upload directory. This includes
+synthetic-tested npm (`npm_` plus 36 alphanumeric characters), GitHub, sk/pk, Slack, AWS, private-key,
+Bearer, JSON token and credential-URL signatures; the overlapping patterns align with the preset
+package privacy gate. This signature scan is conservative, not a guarantee against every secret format.
+A scan or capture failure leaves no partial upload and cannot mask the original failing exit status.
 The upload also requires the probe's `artifact_ready=true` output, emitted only after a new
 scanned publication; stale directories and early failures cannot authorize an upload.
 It never copies installed homes, `auth.json`, `.storage`, sessions, environment dumps or token stores.
@@ -60,7 +63,8 @@ Artifact files:
   `core/*.js`, `core/*-package.json`,
   `core/package-lock.json`, `harness-package-lock.json`, `stack.json`: named public package/build
   inputs only, with original bytes. No recursive package or home upload.
-- `startup.{stdout,stderr}` and `jiti/primary/*`: original failed startup streams and *only*
+- `startup.{stdout,stderr}` and `jiti/primary/*`: byte-exact original failed startup streams (including
+  CRLF and invalid UTF-8) and *only*
   Jiti 2.7 transform filenames keyed to this fixture's exact `pi-memory/index.ts` path (MD5 and
   FIPS SHA-256 naming variants). Cache absence is recorded, not replaced with another run's code.
 - `replay.{stdout,stderr}`, `replay-wrapper.ts`, `jiti/replay/*`: supplemental failure-only replay.
@@ -69,6 +73,10 @@ Artifact files:
   reduces it to a message, then **rethrows**. Original package manifest/source/cache bytes are
   captured *before* this instrumentation; the executable is never rebuilt or patched. A replay
   passing or failing differently does not replace the primary failure or prove a root cause.
+  Replay streams are also raw bytes. Decoding is separate and used only for strict startup matching,
+  never for artifact contents. Timeouts retain untouched partial streams (absent data becomes empty
+  bytes), use synthetic exit status 124 and record `startup_timed_out`/`replay_timed_out` in `build.json`;
+  no annotation is appended to stderr. A normal child exit 124 remains distinguishable from a timeout.
 
 To diagnose an already-built binary without running the whole suite:
 
