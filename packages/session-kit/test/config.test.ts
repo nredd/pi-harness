@@ -6,6 +6,7 @@ import { CHILD_ENTRY, isChildSession, isChildSessionName, registerChildIdentity 
 import {
 	DEFAULT_COLLAPSE_KEY,
 	DEFAULT_MAX_WIDGET_LINES,
+	configPath,
 	defaultConfig,
 	isValidKeySpec,
 	loadConfig,
@@ -15,6 +16,10 @@ import {
 import { fakePi } from "./goal/fake-pi.ts";
 
 describe("parseConfig", () => {
+	it("builds the config path from an injected agent directory", () => {
+		expect(configPath("/isolated/agent")).toBe("/isolated/agent/pi-session-kit.json");
+	});
+
 	it("defaults every feature on", () => {
 		expect(Object.values(defaultConfig().features).every(Boolean)).toBe(true);
 	});
