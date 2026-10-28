@@ -55,12 +55,22 @@ function select(model: string) {
 const open = async () => ({ quotaSignal: false });
 
 describe("exact model tiers", () => {
-  it("keeps Explore's bare stopgap pinned to exact authenticated Anthropic Haiku without local aliases", async () => {
+  it("binds built-in Explore to cheap and never overrides an explicit unavailable binding with the enterprise alias", () => {
+    const request = { agentType: "Explore", definitionModel: DEFAULT_AGENTS.get("Explore")?.model,
+      parentModel: registry.find("tier-test", "parent"), registry, cwd: dir };
+    expect(request.definitionModel).toBe("@cheap");
+    setModelAliases({ "claude-haiku-4-5": [ref("b")] });
+    setModelTiers({}, { onUnmapped: "error", onUnavailable: "error" });
+    expect(selectModel(request)).toMatchObject({ requested: "@cheap", tierBinding: { kind: "static", tier: "cheap", members: [ref("b")] } });
+    setModelTiers({ cheap: ["no-tier-credentials/a"] }, { onUnavailable: "error" });
+    expect(selectModel(request)).toBe("Model tier @cheap is unavailable.");
+  });
+  it("keeps a user-pinned legacy Explore definition exact without local aliases", async () => {
     registry.registerProvider("anthropic", {
       api: "anthropic-messages", baseUrl: "http://localhost:1", apiKey: "fixture-not-a-secret",
       models: ["claude-haiku-4-5", "claude-haiku-5-5"].map(id => ({ id, name: id, reasoning: false, input: ["text"], contextWindow: 1000, maxTokens: 100, cost: costs })),
     });
-    const request = { agentType: "Explore", definitionModel: DEFAULT_AGENTS.get("Explore")?.model,
+    const request = { agentType: "Explore", definitionModel: "claude-haiku-4-5",
       parentModel: registry.find("tier-test", "parent"), registry, cwd: dir };
     setModelTiers({}, { onUnavailable: "error" });
     expect(selectModel(request)).toMatchObject({ source: "definition", outcome: "resolved", model: { provider: "anthropic", id: "claude-haiku-4-5" } });
@@ -76,7 +86,7 @@ describe("exact model tiers", () => {
       api: "anthropic-messages", baseUrl: "http://localhost:1", apiKey: "fixture-not-a-secret",
       models: ["claude-haiku-5-5"].map(id => ({ id, name: id, reasoning: false, input: ["text"], contextWindow: 1000, maxTokens: 100, cost: costs })),
     });
-    const request = { agentType: "Explore", definitionModel: DEFAULT_AGENTS.get("Explore")?.model,
+    const request = { agentType: "Explore", definitionModel: "claude-haiku-4-5",
       parentModel: registry.find("tier-test", "parent"), registry, cwd: dir };
     setModelTiers({}, { onUnavailable: "inherit" });
     const inherited = selectModel(request);

@@ -16,8 +16,8 @@ export function resolveAgentDir(homeDir?: string): string {
 export function normalizeHomePath(path: string, homeDir = homedir()): string {
   // Match Pi's native normalization of Git Bash, WSL and Cygwin drive paths.
   if (process.platform === "win32" && path.startsWith("/") && !path.startsWith("//") && !path.includes("\\")) {
-    const drive = path.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i);
-    if (drive) path = `${drive[1].toUpperCase()}:\\${drive[2]?.replaceAll("/", "\\") ?? ""}`;
+    const [, letter, remainder] = path.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i) ?? [];
+    if (letter) path = `${letter.toUpperCase()}:\\${remainder?.replaceAll("/", "\\") ?? ""}`;
   }
   if (path === "~") return homeDir;
   if (path.startsWith("~/") || (process.platform === "win32" && path.startsWith("~\\"))) {
