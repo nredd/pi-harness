@@ -1,11 +1,13 @@
 /** Selection policy through Pi's real credential-aware registry, never a resolver mock. */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
+import { setScopeModelsEnabled } from "../src/model-scope.js";
 import { selectModel } from "../src/model-selection.js";
+import { setModelTiers } from "../src/model-tiers.js";
 
 let dir: string;
 let registry: ModelRegistry;
@@ -28,6 +30,9 @@ afterEach(() => {
   setAgentModels(undefined);
   setModelAliases(undefined);
   setModelScopeProvider(undefined);
+  setScopeModelsEnabled(false);
+  setModelTiers(undefined, undefined);
+  vi.unstubAllEnvs();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -37,6 +42,27 @@ function select(definitionModel?: string, paramModel?: string) {
 }
 
 describe("selectModel", () => {
+  it("checks injected-home scope while retaining trusted tier policy", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "");
+    const homeDir = join(dir, "home");
+    const agentDir = join(homeDir, ".pi", "agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: [ref("parent")] }));
+    setScopeModelsEnabled(true);
+    setModelTiers({ cheap: [ref("explicit")] }, undefined);
+    const request = { homeDir, agentType: "Scout", parentModel: registry.find("selection-test", "parent"), registry, cwd: dir };
+    // Explicit physical choices are errors, but trusted tier choices warn and run.
+    expect(selectModel({ ...request, paramModel: ref("explicit") })).toContain("Model not in scope");
+    expect(selectModel({ ...request, paramModel: "@cheap" })).toMatchObject({
+      requested: "@cheap", outcome: "resolved", model: { id: "explicit" },
+      tierBinding: { kind: "static", tier: "cheap", members: [ref("explicit")] },
+      scopeWarning: expect.stringContaining("out-of-scope"),
+    });
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: [ref("explicit")] }));
+    expect(selectModel({ ...request, paramModel: ref("explicit") })).toMatchObject({ model: { id: "explicit" } });
+    expect(selectModel({ ...request, paramModel: "@cheap" })).not.toHaveProperty("scopeWarning");
+  });
+
   it("returns the original input and winning source at every precedence level", () => {
     setAgentModels({ scout: ref("typed"), "*": ref("wildcard") });
     expect(select(ref("definition"), ref("explicit"))).toMatchObject({ requested: ref("explicit"), source: "param", model: { id: "explicit" }, outcome: "resolved" });

@@ -126,7 +126,11 @@ function formatError(e: unknown): string {
 	return e instanceof Error ? e.message : String(e);
 }
 
-export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = () => import("./todo-overlay.ts")) {
+export default function (
+	pi: ExtensionAPI,
+	importOverlay: TodoOverlayImporter = () => import("./todo-overlay.ts"),
+	options: { homeDir?: string } = {},
+) {
 	let todoOverlay: TodoOverlay | undefined;
 	const loadTodoOverlay = makeTodoOverlayLoader(importOverlay);
 	let uiCtx: ExtensionUIContext | undefined;
@@ -145,14 +149,14 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		const { TodoOverlay } = await loadTodoOverlay();
 		if (generation !== lifecycleGeneration || !uiCtx) return;
 
-		todoOverlay ??= new TodoOverlay();
+		todoOverlay ??= new TodoOverlay(options.homeDir);
 		if (collapseOnBind) todoOverlay.collapse();
 		collapseOnBind = false;
 		todoOverlay.setUICtx(uiCtx);
 		todoOverlay.update();
 	}
 
-	registerTodoTool(pi);
+	registerTodoTool(pi, options);
 	registerTodosCommand(pi);
 	const planHooks = registerPlanHooks(pi, async (sessionId) => {
 		if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
@@ -166,7 +170,7 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 	// overlay loaded after shortcut registration is picked up. No-op in headless
 	// mode, before the overlay has loaded, or when the widget isn't currently
 	// registered (auto-hidden on an empty list).
-	const collapseKey = resolveCollapseKey();
+	const collapseKey = resolveCollapseKey(options.homeDir);
 	if (collapseKey !== COLLAPSE_KEY_OFF) {
 		pi.registerShortcut(collapseKey as KeyId, {
 			description: "Collapse or expand the todo overlay",
@@ -226,7 +230,7 @@ export default function (pi: ExtensionAPI, importOverlay: TodoOverlayImporter = 
 		if (id !== getActiveRenderSession()) return;
 		const generation = ++lifecycleGeneration;
 		uiCtx = ctx.ui;
-		collapseOnBind = event.reason === "resume" && getCollapseOnResume();
+		collapseOnBind = event.reason === "resume" && getCollapseOnResume(options.homeDir);
 		try {
 			await updateTodoOverlay(generation);
 		} finally {

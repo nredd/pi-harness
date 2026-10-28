@@ -27,15 +27,15 @@
 
 import { existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseAgentFrontmatter } from "./custom-agents.js";
+import { resolveAgentDir } from "./home-paths.js";
 import type { AgentConfig } from "./types.js";
 
 export type AgentFileLocation = "project" | "workspace" | "personal";
 
 export const projectAgentsDir = (cwd: string = process.cwd()) => join(cwd, ".pi", "agents");
 export const workspaceAgentsDir = (cwd: string = process.cwd()) => join(cwd, ".agents", "agents");
-export const personalAgentsDir = () => join(getAgentDir(), "agents");
+export const personalAgentsDir = (homeDir?: string) => join(resolveAgentDir(homeDir), "agents");
 
 /**
  * Find the file path of a custom agent by name, in discovery-precedence order
@@ -46,12 +46,13 @@ export const personalAgentsDir = () => join(getAgentDir(), "agents");
 export function findAgentFile(
   name: string,
   cwd: string = process.cwd(),
+  homeDir?: string,
 ): { path: string; location: AgentFileLocation } | undefined {
   const projectPath = join(projectAgentsDir(cwd), `${name}.md`);
   if (existsSync(projectPath)) return { path: projectPath, location: "project" };
   const workspacePath = join(workspaceAgentsDir(cwd), `${name}.md`);
   if (existsSync(workspacePath)) return { path: workspacePath, location: "workspace" };
-  const personalPath = join(personalAgentsDir(), `${name}.md`);
+  const personalPath = join(personalAgentsDir(homeDir), `${name}.md`);
   if (existsSync(personalPath)) return { path: personalPath, location: "personal" };
   return undefined;
 }
@@ -83,11 +84,12 @@ export function locateAgentFile(
   sourcePath: string | undefined,
   cwd: string = process.cwd(),
   source?: AgentConfig["source"],
+  homeDir?: string,
 ): { path: string; location: AgentFileLocation } | undefined {
   if (source !== "package" && sourcePath && existsSync(sourcePath)) {
     return { path: sourcePath, location: classifyAgentDir(sourcePath, cwd) };
   }
-  return findAgentFile(name, cwd);
+  return findAgentFile(name, cwd, homeDir);
 }
 
 /**

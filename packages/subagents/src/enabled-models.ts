@@ -28,7 +28,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { resolveAgentDir } from "./home-paths.js";
 import type { ModelEntry } from "./model-resolver.js";
 
 /** Minimal registry shape — only the methods resolveEnabledModels actually calls. */
@@ -38,10 +38,10 @@ export interface ModelRegistryRef {
 }
 
 /** Paths to pi's settings.json files: [project, global] (project takes precedence). */
-function settingsPaths(cwd: string): [project: string, global: string] {
+function settingsPaths(cwd: string, homeDir?: string): [project: string, global: string] {
   return [
     join(cwd, ".pi", "settings.json"),
-    join(getAgentDir(), "settings.json"),
+    join(resolveAgentDir(homeDir), "settings.json"),
   ];
 }
 
@@ -63,8 +63,8 @@ function readField(path: string): string[] | undefined {
  * (and matches our own loadSettings precedence in src/settings.ts).
  * Returns undefined when neither file has the field.
  */
-export function readEnabledModels(cwd: string): string[] | undefined {
-  const [project, global] = settingsPaths(cwd);
+export function readEnabledModels(cwd: string, homeDir?: string): string[] | undefined {
+  const [project, global] = settingsPaths(cwd, homeDir);
   return readField(project) ?? readField(global);
 }
 
@@ -102,11 +102,12 @@ export function resolveEnabledModels(
   patterns: string[] | undefined,
   registry: ModelRegistryRef,
   cwd: string = process.cwd(),
+  homeDir?: string,
 ): Set<string> | undefined {
   // Fast path: check cache (stat both project and global settings.json files)
   const patternsKey = JSON.stringify(patterns);
-  const [project, global] = settingsPaths(cwd);
-  const fileHash = `${hashOf(project)};${hashOf(global)}`;
+  const [project, global] = settingsPaths(cwd, homeDir);
+  const fileHash = `${project}:${hashOf(project)};${global}:${hashOf(global)}`;
 
   if (fileHash === cachedHash && patternsKey === cachedPatternsKey) {
     return cachedAllowed;

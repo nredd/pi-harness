@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetState, registerTodosCommand, registerTodoTool, TOOL_NAME } from "./todo.ts";
+import { __resetState, registerTodosCommand, registerTodoTool, TOOL_NAME } from "./.test-support/home-fixtures.ts";
 
 function setup() {
 	__resetState();

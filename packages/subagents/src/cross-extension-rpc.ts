@@ -58,6 +58,7 @@ export interface SpawnCapable {
 }
 
 export interface RpcDeps {
+  homeDir?: string;
   events: EventBus;
   pi: unknown;                    // passed through to manager.spawn
   getCtx: () => unknown | undefined;  // returns current ExtensionContext
@@ -128,6 +129,7 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
           throw new Error(`Model override "${label}" provided but ctx.modelRegistry is unavailable`);
         }
         const selection = selectModel({
+          homeDir: deps.homeDir,
           agentType: type, paramModel: override, parentModel: undefined,
           registry: modelRegistry, cwd: cwd ?? process.cwd(),
         });

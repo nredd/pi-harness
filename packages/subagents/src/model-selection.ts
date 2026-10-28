@@ -55,6 +55,7 @@ export function modelRequest(type: string, definitionModel?: string, paramModel?
  * An already-open resume keeps the record and does not select again.
  */
 export function selectModel(request: {
+  homeDir?: string;
   agentType: string;
   definitionModel?: string;
   paramModel?: string | Model<Api> | null;
@@ -103,7 +104,7 @@ export function selectModel(request: {
   const scope = checkModelScope({
     model: selection.model, cwd: request.cwd, modelRegistry: request.registry,
     callerSupplied: input.source === "param" && !selection.tierBinding && !selection.tier, agentLabel: request.agentLabel ?? request.agentType,
-    modelInput: input.requested,
+    modelInput: input.requested, homeDir: request.homeDir,
   });
   if (scope.kind === "error") return scope.message;
   if (scope.kind === "warn") selection.scopeWarning = scope.message;

@@ -19,7 +19,6 @@ describe("project agent trust", () => {
   let cwd: string;
   let agentDir: string;
   let pkgDir: string;
-  let prevHome: string | undefined;
   let prevAgentDir: string | undefined;
 
   beforeEach(() => {
@@ -29,15 +28,11 @@ describe("project agent trust", () => {
     agentDir = join(root, "agent");
     pkgDir = join(root, "pkg", "agents");
     for (const dir of [cwd, join(agentDir, "agents"), pkgDir]) mkdirSync(dir, { recursive: true });
-    prevHome = process.env.HOME;
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.HOME = root;
     process.env.PI_CODING_AGENT_DIR = agentDir;
   });
 
   afterEach(() => {
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
     resetPackageState();

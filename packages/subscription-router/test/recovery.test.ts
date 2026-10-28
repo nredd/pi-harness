@@ -110,6 +110,31 @@ describe("SettleRecovery", () => {
 		expect(tracker.active()).toEqual([]);
 	});
 
+	it("finds a trailing quota error after an empty projected entry", async () => {
+		const { recovery, env } = harness({ anthropic: blocked });
+		const event = settle(quotaError(SONNET));
+		event.context.contextEntries.push({
+			sourceEntry: { id: "empty", type: "message", message: {} } as ProjectedSessionEntry["sourceEntry"],
+			messages: [],
+		});
+		expect(await recovery.handle(event, PROFILE, env, undefined)).toMatchObject({
+			kind: "continue",
+			to: "openai-codex/gpt-5.6-terra",
+		});
+	});
+
+	it("does nothing when projected context has no messages", async () => {
+		const { recovery, env } = harness({ anthropic: blocked });
+		const event = settle(quotaError(SONNET));
+		event.context.contextEntries = [
+			{
+				sourceEntry: { id: "empty", type: "message", message: {} } as ProjectedSessionEntry["sourceEntry"],
+				messages: [],
+			},
+		];
+		expect(await recovery.handle(event, PROFILE, env, undefined)).toEqual({ kind: "none" });
+	});
+
 	it("ignores successful endings, non-quota errors, and models outside the chain", async () => {
 		const { recovery, env } = harness({ anthropic: blocked });
 		const ok = entry("a1", { role: "assistant", provider: "anthropic", model: SONNET.id, stopReason: "stop" });
