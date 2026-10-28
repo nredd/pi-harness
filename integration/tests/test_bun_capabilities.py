@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,8 +52,12 @@ def test_cached_home_is_explicit(tmp_path: Path) -> None:
     result = run_engine(
         "bun",
         "-e",
-        'import {homedir} from "node:os"; const before=homedir();'
-        'process.env.HOME="/not-the-launch-home"; console.log(JSON.stringify([before,homedir()]));',
+        dedent("""\
+            import { homedir } from "node:os";
+            const before = homedir();
+            process.env.HOME = "/not-the-launch-home";
+            console.log(JSON.stringify([before, homedir()]));
+        """),
         cwd=tmp_path,
     )
     assert result.returncode == 0, result.stderr
@@ -65,16 +70,30 @@ def test_native_timers_and_module_isolation(tmp_path: Path) -> None:
     (tmp_path / "real.ts").write_text('Reflect.set(globalThis, "module-evaluated", true);\n')
     for name in ("first", "second"):
         (tmp_path / f"{name}.test.ts").write_text(
-            'import {test,expect,mock,jest} from "bun:test"; import "./real.ts";'
-            f'mock.module("./value.ts", () => ({{value:{json.dumps(name)}}}));'
-            'const {value}=await import("./value.ts");'
-            f'test("isolated {name}", () => {{ expect(value).toBe({json.dumps(name)});'
-            'expect(Reflect.get(globalThis,"module-evaluated")).toBe(true);'
-            'expect(Reflect.has(globalThis,"previous-file")).toBe(false);'
-            f'Reflect.set(globalThis,"previous-file",{json.dumps(name)}); }});'
-            'test("Date advances", () => { jest.useFakeTimers(); try {'
-            "jest.setSystemTime(new Date(1000)); jest.advanceTimersByTime(200);"
-            "expect(Date.now()).toBe(1200); } finally { jest.useRealTimers(); } });"
+            dedent(f"""\
+                import {{ test, expect, mock, jest }} from "bun:test";
+                import "./real.ts";
+                mock.module("./value.ts", () => ({{ value: {json.dumps(name)} }}));
+                const {{ value }} = await import("./value.ts");
+
+                test("isolated {name}", () => {{
+                    expect(value).toBe({json.dumps(name)});
+                    expect(Reflect.get(globalThis, "module-evaluated")).toBe(true);
+                    expect(Reflect.has(globalThis, "previous-file")).toBe(false);
+                    Reflect.set(globalThis, "previous-file", {json.dumps(name)});
+                }});
+
+                test("Date advances", () => {{
+                    jest.useFakeTimers();
+                    try {{
+                        jest.setSystemTime(new Date(1000));
+                        jest.advanceTimersByTime(200);
+                        expect(Date.now()).toBe(1200);
+                    }} finally {{
+                        jest.useRealTimers();
+                    }}
+                }});
+            """)
         )
     result = run_engine("bun", "test", "--isolate", cwd=tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -89,15 +108,27 @@ def test_native_timers_and_module_isolation(tmp_path: Path) -> None:
 def test_lcov_only_threshold_fails_closed(tmp_path: Path) -> None:
     """Keep the 1.4 threshold fix and record native coverage's incomplete-source limits."""
     (tmp_path / "bunfig.toml").write_text(
-        "[test]\ncoverageThreshold = { lines = 1.0, functions = 1.0 }\ncoverageSkipTestFiles = true\n"
+        dedent("""\
+            [test]
+            coverageThreshold = { lines = 1.0, functions = 1.0 }
+            coverageSkipTestFiles = true
+        """)
     )
     (tmp_path / "half.ts").write_text(
-        'export function used() { return 1; }\nexport function unused() { return "unused"; }\n'
+        dedent("""\
+            export function used() { return 1; }
+            export function unused() { return "unused"; }
+        """)
     )
     (tmp_path / "never.ts").write_text('export function neverImported() { return "never"; }\n')
     (tmp_path / "coverage.test.ts").write_text(
-        'import {test,expect} from "bun:test"; import {used} from "./half.ts";'
-        'test("partial", () => { expect(used()).toBe(1); });'
+        dedent("""\
+            import { test, expect } from "bun:test";
+            import { used } from "./half.ts";
+            test("partial", () => {
+                expect(used()).toBe(1);
+            });
+        """)
     )
     result = run_engine("bun", "test", "--coverage", "--coverage-reporter=lcov", cwd=tmp_path)
     assert result.returncode == 1, result.stdout + result.stderr
@@ -122,10 +153,15 @@ def test_istanbul_counters_match_both_engines(tmp_path: Path) -> None:
     locate = run_engine(
         "node",
         "-e",
-        'const locate = require("node:module").createRequire('
-        f"{json.dumps(str(ROOT / 'packages/subagents/package.json'))});"
-        'console.log(JSON.stringify({vitest:locate.resolve("vitest/package.json"),'
-        '"@vitest/coverage-istanbul":locate.resolve("@vitest/coverage-istanbul/package.json")}));',
+        dedent(f"""\
+            const locate = require("node:module").createRequire(
+                {json.dumps(str(ROOT / "packages/subagents/package.json"))}
+            );
+            console.log(JSON.stringify({{
+                vitest: locate.resolve("vitest/package.json"),
+                "@vitest/coverage-istanbul": locate.resolve("@vitest/coverage-istanbul/package.json"),
+            }}));
+        """),
         cwd=tmp_path,
     )
     assert locate.returncode == 0, locate.stdout + locate.stderr
@@ -140,23 +176,50 @@ def test_istanbul_counters_match_both_engines(tmp_path: Path) -> None:
     source = tmp_path / "src"
     source.mkdir()
     (source / "half.ts").write_text(
-        "export function used(value: number): number {\n"
-        "  if (value > 0) return 1;\n"
-        "  return 2;\n}\n"
-        'export function unused(): string {\n  return "unused";\n}\n'
+        dedent("""\
+            export function used(value: number): number {
+              if (value > 0) return 1;
+              return 2;
+            }
+            export function unused(): string {
+              return "unused";
+            }
+        """)
     )
-    (source / "never.ts").write_text('export function neverImported(): string {\n  return "never";\n}\n')
+    (source / "never.ts").write_text(
+        dedent("""\
+            export function neverImported(): string {
+              return "never";
+            }
+        """)
+    )
     (tmp_path / "counter.test.ts").write_text(
-        'import {expect,test} from "vitest"; import {writeFileSync} from "node:fs";'
-        'import {used} from "./src/half.ts";'
-        'test("partial source", () => {'
-        'writeFileSync("engine.txt", process.versions.bun ? "bun:" + process.versions.bun : '
-        '"node:" + process.versions.node);'
-        "expect(used(1)).toBe(1); });"
+        dedent("""\
+            import { expect, test } from "vitest";
+            import { writeFileSync } from "node:fs";
+            import { used } from "./src/half.ts";
+
+            test("partial source", () => {
+                writeFileSync(
+                    "engine.txt",
+                    process.versions.bun ? "bun:" + process.versions.bun : "node:" + process.versions.node,
+                );
+                expect(used(1)).toBe(1);
+            });
+        """)
     )
     (tmp_path / "vitest.config.ts").write_text(
-        'export default {test:{coverage:{provider:"istanbul",include:["src/**/*.ts"],'
-        'reporter:["text","lcov"]}}};'
+        dedent("""\
+            export default {
+                test: {
+                    coverage: {
+                        provider: "istanbul",
+                        include: ["src/**/*.ts"],
+                        reporter: ["text", "lcov"],
+                    },
+                },
+            };
+        """)
     )
     entry = Path(metadata["vitest"]).parent / "vitest.mjs"
     reports: list[str] = []

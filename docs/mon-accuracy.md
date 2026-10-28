@@ -6,7 +6,7 @@ environment, localized process titles or Activity Monitor window contents were c
 ## Native process counters
 
 `darwin.ts` lazily loads the runtime's builtin FFI (`node:ffi` on Node >=26.1, `bun:ffi` on Bun,
-including the historical 1.3.14 pin; current toolchain pin is in `.bun-version`). It calls only three fixed symbols in `/usr/lib/libproc.dylib`:
+including historical measurement version 1.3.14, not today's pin; current toolchain pin is in `.bun-version`). It calls only three fixed symbols in `/usr/lib/libproc.dylib`:
 `proc_pidinfo(PROC_PIDTBSDINFO)`, `proc_pid_rusage(RUSAGE_INFO_V0)` and `mach_timebase_info`.
 No new production binary, addon, compiler, Python runtime or package dependency is needed.
 Tests use the existing CI-pinned Bun version (fetched into npm's tool cache, not a project dependency).
@@ -97,7 +97,7 @@ By comparison, measured `top -l 1 -n 1` took 0.32s wall and `footprint --noCateg
 RSS-based. Native footprint includes compressed memory; RSS does not. Failed/unsupported PIDs
 render `--`, never zero. Process CPU can exceed 100% for multithreaded processes.
 
-Actual workspace sampler + `/mon` mapping/view, executed under pinned Bun 1.3.14, later capture
+Actual workspace sampler + `/mon` mapping/view, executed under historical measurement version Bun `1.3.14` (not today's pin), later capture
 with three controlled/reaped busy children:
 
 ```text
@@ -193,7 +193,7 @@ unavailable-loader assertion. The source was restored afterward. The fake cannot
 without the collector's admission, timebase cleanup, per-PID continuation and abort logic.
 
 Executed after restoring: complete sampler checks (Biome, tsc, build, 39 Node tests,
-39 pinned-Bun 1.3.14 Vitest tests); Darwin suite on Node 22.14.0 (13 passed, one existing
+39 Bun `1.3.14` Vitest tests, historical measurement version rather than today's pin); Darwin suite on Node 22.14.0 (13 passed, one existing
 real-FFI test skipped); session-kit Biome/tsc, 718 Node tests and 74 pinned-Bun scenarios;
 packed sampler contract (13 exact paths and real native metrics); complete
 `make check-scripts` (Ruff/ty, 693 pytest tests and import-audit helper).
