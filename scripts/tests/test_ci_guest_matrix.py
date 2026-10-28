@@ -53,7 +53,8 @@ def test_shared_guest_matrix(name: str) -> None:
         if name == "stack":
             assert record["platform"] == platform
     assert job["runs-on"] == "${{ matrix.runner }}"
-    assert "wsl2_shell.ps1" in job["defaults"]["run"]["shell"]
+    assert 'format(\'bash "{0}/scripts/wsl2_host.sh"' in job["defaults"]["run"]["shell"]
+    assert "pwsh" not in job["defaults"]["run"]["shell"]
     assert job["needs"] == "classify"
     assert job["strategy"]["fail-fast"] is False
     steps = job["steps"]
@@ -260,6 +261,43 @@ def test_capture_replaces_stale_node_snapshot(tmp_path: Path) -> None:
     assert not (host / "integration/artifacts/node.xml").exists()
     assert (host / "integration/artifacts/standalone.xml").read_text() == "Standalone report"
     assert (host / "integration/artifacts-node/node.xml").read_text() == "Node report"
+
+
+def test_host_launcher_preserves_script_arguments_and_exit_status(tmp_path: Path) -> None:
+    """Prove host forwarding with a PowerShell argv stub, not a WSL runtime claim.
+
+    Parameters:
+        tmp_path (Path): Disposable fixture directory.
+    """
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "pwsh").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGV_CAPTURE"\nexit 49\n')
+    (commands / "pwsh").chmod(0o755)
+    step = tmp_path / "step with spaces.sh"
+    original = b'printf "%s\\n" "unchanged guest script"\n'
+    step.write_bytes(original)
+    workspace = tmp_path / "host checkout"
+    arguments = tmp_path / "arguments.txt"
+    env = dict(os.environ) | {
+        "GITHUB_WORKSPACE": str(workspace),
+        "ARGV_CAPTURE": str(arguments),
+        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+    }
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/wsl2_host.sh"), str(step)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 49
+    assert arguments.read_text().splitlines() == [
+        "-NoProfile",
+        "-File",
+        str(workspace / "scripts/wsl2_shell.ps1"),
+        str(step),
+    ]
+    assert step.read_bytes() == original
 
 
 def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:

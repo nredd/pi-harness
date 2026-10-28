@@ -69,7 +69,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('pwsh -File "{0}/scripts/wsl2_shell.ps1" {{0}}', github.workspace) || 'bash' }}
+        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps:
       - id: plan
@@ -171,7 +171,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('pwsh -File "{0}/scripts/wsl2_shell.ps1" {{0}}', github.workspace) || 'bash' }}
+        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps:
       - id: plan
@@ -266,7 +266,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('pwsh -File "{0}/scripts/wsl2_shell.ps1" {{0}}', github.workspace) || 'bash' }}
+        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 40 }}
     steps:
       - id: plan
