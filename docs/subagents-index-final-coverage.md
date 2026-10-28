@@ -1,67 +1,61 @@
-# Remaining index callback coverage
+# Retained index lifecycle coverage
 
-Stack base: `afd32e60` (#198). This branch does not edit #198's worktree, its tests
-or its coverage document. Independent #193 inspector/viewer/meta coverage is not
-included; a combined report must be measured after integration, never summed.
-No production/config/provider/dependency changes, exclusions or source deletions.
+PR #198 already includes `c49b6429`'s
+`test/index-coverage-final-lifecycle.test.ts` alongside its three original index
+coverage files. This is the combined 101-case scope, not a separate-worktree
+isolation claim or an unintegrated #201 increment. Production, configuration,
+providers and dependencies are unchanged; independent #193 coverage is excluded.
 
-The baseline source is unchanged and its existing Istanbul inventory remains
-`src/**/*.ts`, 1437 lines and 251 functions for `src/index.ts`.
-
-| Checkpoint | Index lines | Index functions | Missing lines/functions |
+| Existing Node/Istanbul checkpoint | Index lines | Index functions | Missing lines/functions |
 | --- | ---: | ---: | ---: |
-| Stack base #198 | 1399/1437 | 243/251 | 38/8 |
-| Grouped reload + orphan viewer lifecycle | 1402/1437 | 246/251 | 35/5 |
+| Original 98 cases at `afd32e60` | 1399/1437 | 243/251 | 38/8 |
+| `c49b6429` adds 3 cases, combined 101 | 1402/1437 | 246/251 | 35/5 |
 
-The first three tests use the registered lifecycle, actual manager/runner/child
-sessions, a scripted provider boundary, private parent session file, and actual
-fleet/viewer input. No closure invocation, manager mock or counter hook:
+These are existing measurements of unchanged source, not a fresh coverage result
+at the documentation correction. The unchanged source inventory is 1437 lines and
+251 functions. [The combined note](subagents-index-coverage.md) owns reproduction,
+current gates, remaining named themes and broader mutation limits.
 
-- Complete two members of a real parent turn's group, hold the notice, reload,
-  and deliver both original results and identities exactly once at the next
-  boundary. The old activation never sends into a stale parent context.
-- Detach a still-running child on reload; open it from a fresh activation's
-  fleet; steer through the actual viewer composer. Assert the new instruction
-  in the original child's transcript and its redirected result.
-- Stop the detached survivor from that viewer, assert stopped state and toast,
-  then verify the running-detached roster and settled manager records are
-  released. Neither old nor replacement context receives that old run's notice.
+The three cases use registered lifecycle handlers, actual manager/runner/child
+sessions, a private parent session file and real fleet/viewer input. The child
+provider is scripted; **the test emitter auto-acks `router:rpc:admit`**, as does the
+generation/viewer fixture. Neither fixture validates production router admission.
+No direct closure invocation or counter hooks manufacture coverage.
 
-Independent mutation receipts (all restored before the next run):
+- `restores both members of a held grouped completion once after reload`: hold
+  two real group members' results, reload, then deliver both original results and
+  identities once at the next boundary. The old context receives no notice.
+- `routes steer from a fresh fleet viewer to its detached survivor`: reload while
+  a child runs, open its survivor from a fresh fleet, submit a viewer instruction,
+  then assert that instruction in the original transcript and its redirected result.
+- `routes stop from a fresh fleet viewer to its detached survivor`: stop through
+  that viewer, assert stopped state/toast, then assert detached roster and settled
+  manager-record release. Neither old nor replacement context receives the notice.
 
-- Suppress detached notice delivery: exit 1, grouped restoration assertion fails.
-- Target the survivor abort at an unknown id: exit 1, stop notification fails.
-- Target survivor steering at an unknown id: exit 1, redirected result fails.
-- Suppress settled detached-manager disposal: exit 1, retained-record assertion
-  fails for both survivor cases.
+## Existing mutation receipts
 
-Each runs `vitest run test/index-coverage-final-lifecycle.test.ts --maxWorkers=1`.
-Raw mutation output: `/tmp/index-final-lifecycle-mutations.log`. Restored focused
-run: 3 pass. Source diff versus stack base is empty.
+The existing lifecycle run used
+`vitest run test/index-coverage-final-lifecycle.test.ts --maxWorkers=1`.
+Recovered assertion outcomes are preserved [here](https://github.com/nredd/pi-harness/pull/198#issuecomment-6474084561);
+these mutations were not executed again for the documentation correction.
 
-First-theme commands from `packages/subagents`:
+| Mutation | Owning red test | Outcome |
+| --- | --- | --- |
+| Suppress detached notice delivery | `restores both members of a held grouped completion once after reload` | Exit 1, 1 failed/2 passed; expected one `sendMessage`, received zero. |
+| Route survivor abort to unknown id | `routes stop from a fresh fleet viewer to its detached survivor` | Exit 1, 1 failed/2 passed; expected stop toast, received no calls. |
+| Route survivor steer to unknown id | `routes steer from a fresh fleet viewer to its detached survivor` | Exit 1, 1 failed/2 passed; expected redirected result, received original result. |
+| Suppress settled detached-manager disposal | Both named `routes steer` and `routes stop` cases above | Exit 1, 2 failed/1 passed; expected undefined `getRecord(id)`, received retained record. |
 
-```sh
-../../node_modules/.bin/vitest run --maxWorkers=1 --coverage \
-  --coverage.provider=istanbul --coverage.reporter=lcov --coverage.reporter=text \
-  --coverage.reportOnFailure --coverage.reportsDirectory=/tmp/subagents-index-final-lifecycle
-npm run lint
-npm run typecheck
-```
+These are named assertion failures, not parser/import failures. The author's
+existing receipt records restoration between runs. #201 had no PR comments when
+these outcomes were recovered; the durable receipt is on #198. Together with
+[the original 14 and additional 17 kills/1 survivor](https://github.com/nredd/pi-harness/pull/198#issuecomment-6473821322),
+this is bounded evidence, not complete mutation proof of all 101 cases.
 
-Actual full-suite receipt:
-
-```text
-Test Files  1 failed | 159 passed (160)
-Tests       2 failed | 3548 passed | 8 skipped (3558)
-```
-
-Both failures are the unchanged baseline `process-budget.test.ts` TypeScript
-mock's missing `ModuleKind`, separately owned by the lifecycle agent. This branch
-does not incorporate their `5e8a741b` repair. Package lint and typecheck pass.
-Logs: `/tmp/subagents-index-final-lifecycle{,-lint,-types}.log`; LCOV:
-`/tmp/subagents-index-final-lifecycle/lcov.info`. Resources were sampled before
-the full run; multiple independent agents and #198's exact-HEAD reviews remain
-active. All local full runs use one worker, not nested test fanout.
-
-Work remains open. No completed gate, 100% claim or provider inconsistency claim.
+At combined code HEAD `a04a6cd1`, all four files/101 cases pass on Node and Bun;
+lint/types pass. Full Node passes 3550 cases with 8 skipped; full Bun has 3550
+passed/1 failed/7 skipped, the existing #174 authored-stack-line failure. Earlier
+two missing-`ModuleKind` failures did not reproduce in the fresh installation.
+The attempted coverage rerun could not resolve the Istanbul provider and stopped
+before tests. No full green gate, new coverage measurement, 100% completion or
+provider inconsistency is claimed.
