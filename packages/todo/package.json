@@ -27,7 +27,7 @@
 		"lint": "biome check --error-on-warnings .",
 		"typecheck": "tsc --noEmit",
 		"check": "npm run lint && npm run typecheck && npm test && npm run test:bun",
-		"test:bun": "bun test ./.test-support/settled-row.bun.test.ts"
+		"test:bun": "node ../../scripts/run-vitest.ts bun --config .vitest.config.ts"
 	},
 	"files": [
 		"config.ts",

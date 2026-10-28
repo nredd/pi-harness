@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
 import type { Task } from "../tool/types.ts";
-import { formatOverlayTaskLine } from "./format.ts";
+import { formatOverlayTaskLine, overlayStatusGlyph, STATUS_GLYPH } from "./format.ts";
 
 const recordingTheme = makeTheme({
 	fg: (color, text) => `<${color}>${text}</${color}>`,
@@ -17,6 +17,25 @@ function task(overrides: Partial<Task> = {}): Task {
 		...overrides,
 	};
 }
+
+describe("overlayStatusGlyph exported palette", () => {
+	it("preserves distinct status glyphs and the error-toned deleted contract", () => {
+		expect([
+			overlayStatusGlyph("pending", recordingTheme),
+			overlayStatusGlyph("in_progress", recordingTheme),
+			overlayStatusGlyph("completed", recordingTheme),
+			overlayStatusGlyph("deferred", recordingTheme),
+			overlayStatusGlyph("deleted", recordingTheme),
+		]).toEqual([
+			"<dim>○</dim>",
+			"<warning>◐</warning>",
+			"<success>✓</success>",
+			"<muted>⊖</muted>",
+			"<error>✗</error>",
+		]);
+		expect(STATUS_GLYPH.deleted).toBe("⊘");
+	});
+});
 
 describe("formatOverlayTaskLine — semantic color hierarchy", () => {
 	it("keeps pending subjects primary while rendering IDs quietly", () => {

@@ -5,7 +5,7 @@ import { checkModelScope } from "./model-scope.js";
 import { exactTierModel, getModelResolution, parseTierBinding, resolveTier, type TierBinding, type TierDisclosure, type TierOutcome, tierBinding, tierNote } from "./model-tiers.js";
 import { type AdmissionEvents, admissionOutcome, type QuotaBlock } from "./quota-admission.js";
 
-/** Exact compatibility pins until built-in definitions migrate to tiers. User aliases win. */
+/** Exact compatibility pins for user-defined legacy Explore definitions. User aliases win. */
 const LEGACY_MODEL_PINS = new Map([
   ["claude-haiku-4-5", "anthropic/claude-haiku-4-5"],
 ]);
@@ -55,6 +55,7 @@ export function modelRequest(type: string, definitionModel?: string, paramModel?
  * An already-open resume keeps the record and does not select again.
  */
 export function selectModel(request: {
+  homeDir?: string;
   agentType: string;
   definitionModel?: string;
   paramModel?: string | Model<Api> | null;
@@ -69,7 +70,12 @@ export function selectModel(request: {
     const requested = input.requested.trim();
     const legacy = getModelAliases().get(requested.toLowerCase());
     const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : undefined;
-    const binding = requested.startsWith("@") ? tierBinding(requested.slice(1))
+    // Preserve existing enterprise manifests during the built-in Explore migration.
+    // An explicit cheap binding always wins, even when it is unavailable.
+    const cheapCompatibility = requested === "@cheap" && request.agentType === "Explore"
+      && input.source === "definition"
+      ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : undefined;
+    const binding = requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility
       : legacyBinding ? { ...legacyBinding, tier: requested } : undefined;
     if (requested.startsWith("@") || legacy) {
       const tier = requested.startsWith("@") ? requested.slice(1) : requested;
@@ -103,7 +109,7 @@ export function selectModel(request: {
   const scope = checkModelScope({
     model: selection.model, cwd: request.cwd, modelRegistry: request.registry,
     callerSupplied: input.source === "param" && !selection.tierBinding && !selection.tier, agentLabel: request.agentLabel ?? request.agentType,
-    modelInput: input.requested,
+    modelInput: input.requested, homeDir: request.homeDir,
   });
   if (scope.kind === "error") return scope.message;
   if (scope.kind === "warn") selection.scopeWarning = scope.message;
