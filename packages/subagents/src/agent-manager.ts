@@ -891,28 +891,29 @@ export class AgentManager {
         release();
         markLeft();
       },
-      cancel: () => {},
+      // enqueueBudget only registers; grant cannot run until the next pump,
+      // after this entry has been initialized and published in the queue.
+      cancel: enqueueBudget({
+        depth: record.depth ?? 1,
+        ready: () => pool === undefined || this.poolHasRoom(pool),
+        grant: (lease) => {
+          this.queue = this.queue.filter(e => e !== entry);
+          if (this.agents.get(id) !== record || record.status !== "queued") {
+            releaseBudget(lease);
+            entry.release();
+            return;
+          }
+          record.budgetLease = lease;
+          // Detached, and never rejects: a late failure (e.g. strict worktree
+          // isolation) lands on the record inside `launch`. The release waits
+          // for that startup to SETTLE: a release at grant time would wake a
+          // blocked `spawnAndWait` while `record.promise` was still undefined,
+          // and it would read a healthy agent as one that never ran.
+          void entry.start().then(() => entry.release(), () => entry.release());
+        },
+      }),
       left,
     };
-    entry.cancel = enqueueBudget({
-      depth: record.depth ?? 1,
-      ready: () => pool === undefined || this.poolHasRoom(pool),
-      grant: (lease) => {
-        this.queue = this.queue.filter(e => e !== entry);
-        if (this.agents.get(id) !== record || record.status !== "queued") {
-          releaseBudget(lease);
-          entry.release();
-          return;
-        }
-        record.budgetLease = lease;
-        // Detached, and never rejects: a late failure (e.g. strict worktree
-        // isolation) lands on the record inside `launch`. The release waits
-        // for that startup to SETTLE: a release at grant time would wake a
-        // blocked `spawnAndWait` while `record.promise` was still undefined,
-        // and it would read a healthy agent as one that never ran.
-        void entry.start().then(() => entry.release(), () => entry.release());
-      },
-    });
     this.queue.push(entry);
   }
 

@@ -904,9 +904,8 @@ function observeRun(session: AgentSession, options: RunObserverOptions) {
     steered: false,
     aborted: false,
     finalizing: false,
-    unsubscribe: () => {},
   };
-  run.unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     if (event.type === "turn_end") {
       turnCount++;
       options.onTurnEnd?.(turnCount);
@@ -955,7 +954,8 @@ function observeRun(session: AgentSession, options: RunObserverOptions) {
       options.onCompaction?.({ reason: event.reason, tokensBefore: event.result.tokensBefore });
     }
   });
-  return run;
+  // Keep the live state object captured by the listener, adding only the real cleanup.
+  return Object.assign(run, { unsubscribe });
 }
 
 /**

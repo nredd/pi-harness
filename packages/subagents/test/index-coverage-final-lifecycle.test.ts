@@ -139,6 +139,32 @@ describe("index queued resume waiting", () => {
 });
 
 describe("index menu and branch races", () => {
+  it("rejects a removed type at the picker boundary before opening its detail menu", async () => {
+    configure({ disableDefaultAgents: true, fallbackSubagent: "none" });
+    const dir = join(env.dir, ".pi", "agents"); mkdirSync(dir);
+    const path = join(dir, "private.md"); writeFileSync(path, "---\ndescription: Private fixture\n---\nPrivate prompt.");
+    const notify = vi.fn(); let step = 0; let bound: Bound;
+    const select = vi.fn(async (_title: string, choices: string[]) => step++ === 0
+      ? choices.find(choice => choice.startsWith("Agent types (")) : undefined);
+    const custom = vi.fn(async (factory: (tui: unknown, theme: unknown, keys: undefined, done: (name: string | undefined) => void) => { handleInput(key: string): void }) => {
+      const selected = barrier<string | undefined>();
+      const component = factory({}, {}, undefined, name => selected.resolve(name));
+      rmSync(path);
+      const result = await bound.boot.tools.get("Agent").execute("reload-selected-type", {
+        subagent_type: "private", prompt: "Never run", description: "Removed type", run_in_background: true,
+      }, undefined, undefined, bound.context);
+      expect(result.content[0].text).toContain("Unknown or disabled agent type");
+      component.handleInput("\r");
+      return selected.promise;
+    });
+    bound = await bind({ notify, select, custom });
+    await bound.boot.commands.get("agents").handler("", bound.context);
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(select.mock.calls.map(([title]) => title)).toEqual(["Agents", "Agents"]);
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("Agent config not found"), "warning");
+    expect(provider.state.callCount).toBe(0);
+  });
+
   it("shows the resolved provider for an aliased agent model in the actual type picker", async () => {
     const dir = join(env.dir, ".pi", "agents"); mkdirSync(dir);
     writeFileSync(join(dir, "private.md"), "---\ndescription: Private fixture\nmodel: portable\n---\nPrivate prompt.");
@@ -234,6 +260,20 @@ describe("index menu and branch races", () => {
 });
 
 describe("index scheduler and file errors", () => {
+  it("rethrows a non-strict canonical load error instead of binding a partially loaded registry", async () => {
+    const dir = join(env.dir, ".pi", "agents"); mkdirSync(dir);
+    // Valid YAML, invalid tools shape: String(fm.tools) cannot invoke a string
+    // as toString. This fails after parsing, outside readAgentFile's warning catch.
+    writeFileSync(join(dir, "broken-tools.md"), "---\ndescription: Broken tools\ntools:\n  toString: not-callable\n---\nPrivate prompt.");
+    await expect(bind().then(() => "bound")).rejects.toThrow(TypeError);
+    expect(provider.state.callCount).toBe(0);
+    const bound = bindings[0];
+    expect(bound.boot.pi.events.emit).not.toHaveBeenCalledWith("subagents:ready", expect.anything());
+    rmSync(join(dir, "broken-tools.md"));
+    await startSession(bound.boot.lifecycle, true, bound.context);
+    expect(bound.boot.pi.events.emit).toHaveBeenCalledWith("subagents:ready", {});
+  });
+
   it("fails the canonical strict bind on malformed project frontmatter without starting a child", async () => {
     configure({ strictAgentFiles: true });
     const dir = join(env.dir, ".pi", "agents"); mkdirSync(dir);
