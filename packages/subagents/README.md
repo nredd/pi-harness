@@ -391,7 +391,7 @@ Expanded, a notice adds `↻3 · 3 tools · 12.4k token · 4.1s`, the result pre
 | Type | Tools | Model | Prompt Mode | Description |
 |------|-------|-------|-------------|-------------|
 | `general-purpose` | all 7 | inherit | `append` (parent twin) | Inherits the parent's full system prompt — same rules, CLAUDE.md, project conventions |
-| `Explore` | read, bash, grep, find, ls | haiku (falls back to inherit) | `replace` (standalone) | Fast codebase exploration (read-only) |
+| `Explore` | read, bash, grep, find, ls | `@cheap` | `replace` (standalone) | Fast codebase exploration (read-only); an unbound/unavailable tier visibly inherits the parent by default, or refuses under `modelResolution` `error` |
 | `Plan` | read, bash, grep, find, ls | inherit | `replace` (standalone) | Software architect for implementation planning (read-only) |
 
 The `general-purpose` agent is a **parent twin** — it receives the parent's entire system prompt plus a sub-agent context bridge, so it follows the same rules the parent does. Explore and Plan use standalone prompts tailored to their read-only roles.
@@ -482,7 +482,7 @@ Frontmatter is authoritative for `max_turns`, `inherit_context`, `run_in_backgro
 
 **Explicit non-tier tool inputs can use fuzzy names.** These pick the newest model; configured pins and tier/alias members remain exact. A bare family name such as `"opus"` matches several ids; exact ids and [aliases](#machine-local-model-aliases) still win first, otherwise the candidates are narrowed to pi's `enabledModels` (when any candidate is enabled), then ranked by parsed version, newest first, then by match score. Versions are read from `claude-<family>-<n>[-<n>]` (`claude-opus-4-6`, `claude-opus-5`; a trailing `-YYYYMMDD` is a date, not a minor) and `gpt-<n>[.<n>]-<variant>` (`gpt-6.1-sol`); ids with no recognised scheme rank after every versioned one. Previously the shortest id won, so `"opus"` resolved to `claude-opus-5` even with `claude-opus-4-6` enabled and `claude-opus-5` not.
 
-**Exact configuration, convenient tool inputs.** Agent definitions, `agentModels`, tier members and legacy alias candidates resolve exactly, without version ranking or provider retry. An unavailable configured pin inherits the parent with a visible note by default; `modelResolution.onUnavailable: "error"` refuses it instead. Explicit literal/fuzzy tool inputs retain fuzzy matching and unresolved names remain errors; `@tier` and legacy aliases follow `modelResolution`. The built-in Explore stopgap `claude-haiku-4-5` has one explicit compatibility binding to exact `anthropic/claude-haiku-4-5`. A user-defined legacy alias wins over that binding; without one, no newer version, dated sibling or other provider is substituted. A missing exact pin is disclosed as unavailable and follows `onUnavailable`; todo #18 moves Explore to `@cheap`, removing this bare-id pin.
+**Exact configuration, convenient tool inputs.** Agent definitions, `agentModels`, tier members and legacy alias candidates resolve exactly, without version ranking or provider retry. An unavailable configured pin inherits the parent with a visible note by default; `modelResolution.onUnavailable: "error"` refuses it instead. Explicit literal/fuzzy tool inputs retain fuzzy matching and unresolved names remain errors; `@tier` and legacy aliases follow `modelResolution`. Built-in Explore uses `@cheap`; bind it globally or in the enterprise manifest. Unbound tiers inherit with disclosure by library default; personal configurations should set both resolution policies to `error`. During enterprise migration only, built-in Explore's unbound `@cheap` can use the existing `modelAliases["claude-haiku-4-5"]` exact candidates as a static cheap tier. An explicit `cheap` binding always wins, including when unavailable; no neighbouring tier or newer model is inferred. User-pinned legacy Explore definitions retain the exact `anthropic/claude-haiku-4-5` compatibility binding. Users who pin Explore explicitly through `agentModels` (e.g. the owner's `agentModels.Explore`) are unaffected. The router's shipped `examples/subscription-router.json` supplies an opt-in ordered `cheap` profile (Haiku then Luna); no profiles are registered implicitly.
 
 ### Nested subagents
 
@@ -571,6 +571,10 @@ A few rules the examples don't make obvious:
 | a list of built-ins | no | that list, e.g. `read, grep` |
 | `none` with `isolated: true` or `extensions: false` | no | `none` |
 | `none`, or only `ext:` entries | yes | `no built-ins, extension tools only` |
+
+When the effective built-in set lacks `bash` (including `disallowed_tools: bash`), the shared suffix adds `; no built-in shell: cannot run bash commands`. This applies to every type in full, compact and custom-template type lists. It does not claim extensions cannot execute commands: an extension may supply `ssh_exec` or another command tool. Put stronger restrictions in the agent description's **first sentence** so compact mode preserves them, e.g. `no shell/ssh: cannot run commands`. Shell-less prompts should require a FIRST-turn explanation, before tool calls, when a task needs unavailable commands. This is prompt guidance, not a dispatcher classifier.
+
+`Agent` has no per-call tool-override flag. Use a shell-capable type for command work; do not ask a restricted researcher to acquire `bash`.
 
 The last two rows are separate because zero built-ins is not zero tools: `tools: none` alongside `extensions:` still surfaces every extension tool, so calling it `none` would understate what the agent can do. Without the `+ extension tools` flag an agent that can search the web through an extension (e.g. `Plan`) read as web-less.
 

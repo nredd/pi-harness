@@ -45,6 +45,16 @@ const DECIMAL_PRECISION = 9;
 /** Ample admitted time/capture space for isolated native-reader tests, not production defaults. */
 const TEST_BUDGET_MS = 1000;
 const TEST_BUDGET_BYTES = 4096;
+/** Independent SDK ABI literals for Bun forwarding assertions. */
+const PROC_PIDTBSDINFO_FLAVOR = 3;
+const RUSAGE_INFO_V0_FLAVOR = 0;
+const PROC_PIDINFO_ARGUMENT = 0n;
+const PROC_BSDINFO_BYTES = 136;
+/** One byte below `mach_timebase_info`'s independent eight-byte ABI layout. */
+const BELOW_TIMEBASE_BYTES = 7;
+/** Native counter regression fixture values, in Mach ticks. */
+const ROLLBACK_BEFORE_TICKS = 9n;
+const ROLLBACK_AFTER_TICKS = 0n;
 
 /**
  * Reconstruct zero-filled LP64 frames using only the fixture's allowlisted numeric/p_comm fields.
@@ -319,4 +329,80 @@ describe("Darwin native identity and counters", () => {
 		expect(darwinNativeProcesses([row], budget, load)[0]).toEqual(row);
 		expect(load).toHaveBeenCalledOnce();
 	});
+	it("does not load FFI when even the fixed timebase frame exceeds the byte cap", () => {
+		const load = vi.fn(() => undefined);
+		const budget = new Budget(
+			performance.now() + TEST_BUDGET_MS,
+			BELOW_TIMEBASE_BYTES,
+			1,
+			new AbortController().signal,
+		);
+		expect(darwinNativeProcesses([counter()], budget, load)).toHaveLength(1);
+		expect(load).not.toHaveBeenCalled();
+		expect([...budget.reasons]).toContain("byte-limit");
+	});
+	it("rejects a native CPU rollback after all identity fields validate", () => {
+		const b = buffers();
+		b.before.writeBigUInt64LE(ROLLBACK_BEFORE_TICKS, 16);
+		b.before.writeBigUInt64LE(ROLLBACK_BEFORE_TICKS, 24);
+		b.after.writeBigUInt64LE(ROLLBACK_AFTER_TICKS, 16);
+		b.after.writeBigUInt64LE(ROLLBACK_AFTER_TICKS, 24);
+		expect(darwinNativeCounter(captured.pid, b.before, b.bsd, b.after, BASELINE_AT_MS, 1)).toBeNull();
+	});
+	it.skipIf(process.platform !== "darwin")(
+		"adapts the production lazy loader to Bun's fixed builtin FFI surface",
+		() => {
+			const descriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+			const originalBuiltin = process.getBuiltinModule;
+			const { before, bsd, after } = buffers();
+			let usageCalls = 0;
+			const close = vi.fn();
+			const timebase = vi.fn((pointer: number) => {
+				validTimebase(pointer as unknown as Buffer);
+				return 0;
+			});
+			const bsdInfo = vi.fn((_pid: number, _flavor: number, _argument: bigint, pointer: number, _bytes: number) => {
+				bsd.copy(pointer as unknown as Buffer);
+				return PROC_BSDINFO_BYTES;
+			});
+			const usage = vi.fn((_pid: number, _flavor: number, pointer: number) => {
+				(usageCalls++ === 0 ? before : after).copy(pointer as unknown as Buffer);
+				return 0;
+			});
+			const ffi = {
+				ptr: (buffer: Buffer) => buffer as unknown as number,
+				dlopen: vi.fn(() => ({
+					symbols: { mach_timebase_info: timebase, proc_pidinfo: bsdInfo, proc_pid_rusage: usage },
+					close,
+				})),
+			};
+			Object.defineProperty(process.versions, "bun", { configurable: true, value: "fixture" });
+			process.getBuiltinModule = ((name: string) =>
+				name === "bun:ffi" ? ffi : originalBuiltin(name)) as typeof process.getBuiltinModule;
+			try {
+				const row = { ...counter(), strongIdentity: undefined, footprintBytes: undefined };
+				const result = darwinNativeProcesses(
+					[row],
+					new Budget(performance.now() + TEST_BUDGET_MS, TEST_BUDGET_BYTES, 1, new AbortController().signal),
+				);
+				expect(result[0]).toMatchObject({ strongIdentity: true, footprintBytes: CAPTURED_FOOTPRINT_BYTES });
+				expect(ffi.dlopen).toHaveBeenCalledWith("/usr/lib/libproc.dylib", expect.any(Object));
+				expect(timebase).toHaveBeenCalledExactlyOnceWith(expect.any(Buffer));
+				expect(bsdInfo).toHaveBeenCalledExactlyOnceWith(
+					captured.pid,
+					PROC_PIDTBSDINFO_FLAVOR,
+					PROC_PIDINFO_ARGUMENT,
+					expect.any(Buffer),
+					PROC_BSDINFO_BYTES,
+				);
+				expect(usage).toHaveBeenNthCalledWith(1, captured.pid, RUSAGE_INFO_V0_FLAVOR, expect.any(Buffer));
+				expect(usage).toHaveBeenNthCalledWith(2, captured.pid, RUSAGE_INFO_V0_FLAVOR, expect.any(Buffer));
+				expect(close).toHaveBeenCalledOnce();
+			} finally {
+				process.getBuiltinModule = originalBuiltin;
+				if (descriptor) Object.defineProperty(process.versions, "bun", descriptor);
+				else delete (process.versions as { bun?: string }).bun;
+			}
+		},
+	);
 });

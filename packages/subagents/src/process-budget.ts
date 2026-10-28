@@ -247,10 +247,13 @@ function admits(s: BudgetState, depth: number): boolean {
   if (level > top) return false;
   // Leases deeper than `top` cannot exist while it is on; clamp so they still count in the total.
   const atDepth = new Array<number>(top + 1).fill(0);
-  for (const lease of s.active) atDepth[Math.min(top, Math.max(1, lease.depth))]++;
+  for (const lease of s.active) {
+    const index = Math.min(top, Math.max(1, lease.depth));
+    atDepth[index] = atDepth[index]! + 1;
+  }
   let atOrAbove = 0;
   for (let j = 1; j <= top; j++) {
-    atOrAbove += atDepth[j];
+    atOrAbove += atDepth[j]!;
     if (j >= level && atOrAbove >= admissionLimit(policy, j)) return false;
   }
   return true;
@@ -322,7 +325,7 @@ export function pumpBudget(): void {
       for (;;) {
         const i = s.waiters.findIndex(w => admits(s, w.depth) && w.ready());
         if (i === -1) break;
-        const [waiter] = s.waiters.splice(i, 1);
+        const waiter = s.waiters.splice(i, 1)[0]!;
         const lease = newLease(s, waiter.depth);
         try {
           waiter.grant(lease);
