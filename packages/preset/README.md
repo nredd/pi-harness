@@ -116,6 +116,12 @@ pi-subagents strips the npm scope when it matches package names (`@nredd/pi-dev-
 splits on the first `/`, and a scoped string in `extensions:` is read as a path. Tests reject any
 scoped selector.
 
+## Agent command limits
+
+`researcher`, `architect`, `critic` and `code-reviewer` have no shell/SSH and cannot run commands. Their descriptions say so in the first sentence, which survives pi-subagents compact listings. `critic` can run existing tests via `py_test`/`cargo_test`, not arbitrary shell commands. Each prompt requires a FIRST-turn explanation before tool calls when requested commands are unavailable, then a handoff to the caller or a shell-capable agent. Use `general-purpose`/`debugger` for command investigations or `verifier` for gates. There is no per-call tool-override flag.
+
+Local overrides shadow these packaged definitions; update their managed source separately. This change does not activate a preset or alter tool grants.
+
 ## Models and roles
 
 Agents carry no `model:` field. `code-review` keeps its explicit reviewer model,
