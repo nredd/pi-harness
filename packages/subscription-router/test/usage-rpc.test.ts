@@ -27,7 +27,8 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 		return new Response(JSON.stringify(body), { status: fail ? 429 : 200 });
 	});
 	const usage = new UsageService({ fetch, now: () => now, getAccessToken: async () => "fake-token" });
-	host[SHARED_KEY] = { usage, tracker: new ExhaustionTracker() };
+	const tracker = new ExhaustionTracker();
+	host[SHARED_KEY] = { usage, tracker };
 	const events = new EventEmitter();
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
 	const pi = {
@@ -45,17 +46,36 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 	}
 	let nextId = 0;
 	const rpc = (params: Record<string, unknown> = {}) =>
-		new Promise<{ success: boolean; data: { snapshots: UsageSnapshot[]; blocks: unknown[] } }>((resolve) => {
+		new Promise<{ success: boolean; data: { snapshots: UsageSnapshot[]; blocks: unknown[] }; error?: string }>(
+			(resolve) => {
+				const requestId = String(++nextId);
+				events.once(`router:rpc:usage:reply:${requestId}`, resolve);
+				events.emit("router:rpc:usage", { ...params, requestId });
+			},
+		);
+	const admit = (params: Record<string, unknown> = {}) =>
+		new Promise<{ success: boolean; data: unknown }>((resolve) => {
 			const requestId = String(++nextId);
-			events.once(`router:rpc:usage:reply:${requestId}`, resolve);
-			events.emit("router:rpc:usage", { ...params, requestId });
+			events.once(`router:rpc:admit:reply:${requestId}`, resolve);
+			events.emit("router:rpc:admit", { ...params, requestId });
 		});
 	const status = async (ctx: ExtensionCommandContext, action = "status") => {
 		const registration = vi.mocked(pi.registerCommand).mock.calls.find(([name]) => name === "router");
 		if (!registration) throw new Error("router command not registered");
 		await registration[1].handler(action, ctx);
 	};
-	return { pi, handlers, rpc, fetch, usage, status, advance: (ms: number) => (now += ms), fail: () => (fail = true) };
+	return {
+		pi,
+		handlers,
+		rpc,
+		admit,
+		fetch,
+		usage,
+		tracker,
+		status,
+		advance: (ms: number) => (now += ms),
+		fail: () => (fail = true),
+	};
 }
 
 afterEach(() => {
@@ -318,5 +338,112 @@ describe("router usage RPC", () => {
 		const h = await harness();
 		await h.rpc({ refresh: "true" });
 		expect(h.fetch).not.toHaveBeenCalled();
+	});
+
+	it("returns RPC errors without leaving callers waiting", async () => {
+		const h = await harness();
+		vi.spyOn(h.usage, "get").mockRejectedValue(new Error("collector failed"));
+		expect(await h.rpc({ refresh: true })).toMatchObject({ success: false, error: "collector failed" });
+	});
+
+	it("notifies a terminal quota error instead of continuing", async () => {
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			chain: [{ provider: "anthropic", id: "sonnet" }],
+		};
+		const h = await harness(false, [profile]);
+		h.fetch.mockResolvedValue(
+			new Response(JSON.stringify({ five_hour: { utilization: 100, resets_at: "2030-01-01T00:00:00Z" } })),
+		);
+		const notify = vi.fn();
+		const ctx = {
+			model: { provider: "router", id: "default" },
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionContext;
+		await h.usage.get(ctx, "anthropic");
+		const onSettle = h.handlers.get("agent_before_settle");
+		if (!onSettle) throw new Error("agent_before_settle handler missing");
+		await (onSettle as (event: unknown, context: ExtensionContext) => Promise<unknown>)(
+			{
+				entries: [],
+				context: {
+					contextEntries: [
+						{
+							sourceEntry: { id: "failed", type: "message", message: {} },
+							messages: [
+								{
+									role: "assistant",
+									content: [],
+									provider: "anthropic",
+									model: "sonnet",
+									stopReason: "error",
+									errorMessage: "insufficient_quota",
+									timestamp: 1_700_000_000_000,
+								},
+							],
+						},
+					],
+				},
+			},
+			ctx,
+		);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("router/default: every model is unavailable"), "error");
+	});
+
+	it("runs the admission RPC only after session context exists", async () => {
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			chain: [{ provider: "anthropic", id: "sonnet" }],
+		};
+		const cold = await harness(false, [profile]);
+		expect((await cold.admit({ model: "anthropic/sonnet" })).data).toEqual({ ok: true });
+		const h = await harness(true, [profile]);
+		expect((await h.admit({ model: "anthropic/sonnet" })).data).toEqual({
+			ok: true,
+			resolvedModel: "anthropic/sonnet",
+		});
+	});
+
+	it("renders active blocks in the tool and executes router command actions", async () => {
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			chain: [{ provider: "anthropic", id: "sonnet" }],
+		};
+		const h = await harness(true, [profile]);
+		const ctx = {
+			scopedModels: [],
+			ui: { notify: vi.fn() },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		h.tracker.mark({ provider: "anthropic", id: "sonnet" } as never, {
+			block: true,
+			window: "five_hour",
+			scope: "provider",
+			resetAt: 1_700_000_060_000,
+		});
+		const registration = vi.mocked(h.pi.registerTool).mock.calls.find(([tool]) => tool.name === "subscription_usage");
+		if (!registration) throw new Error("subscription_usage registration missing");
+		const result = await registration[0].execute(
+			"tool-id",
+			{ provider: "anthropic" },
+			undefined,
+			() => {},
+			ctx as never,
+		);
+		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("blocked anthropic: five_hour") });
+		await h.status(ctx, "refresh");
+		expect(h.fetch).toHaveBeenCalledTimes(2);
+		await h.status(ctx, "reset");
+		expect(h.tracker.active()).toEqual([]);
+		await h.status(ctx, "invalid");
+		expect(vi.mocked(ctx.ui.notify)).toHaveBeenLastCalledWith(
+			expect.stringContaining('unknown action "invalid"'),
+			"error",
+		);
 	});
 });
