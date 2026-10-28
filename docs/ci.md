@@ -27,8 +27,22 @@ The existing per-scenario artifacts now retain `*.pane.json` captured **before**
 the native PID/dead/status/signal response (empty fields can mean unsupported tmux formats), the
 wrapper status path and its contents or absence; a vanished server is recorded as an error rather
 than replacing the original failure. Only these named artifact patterns are added to the existing
-allowlist, never arbitrary JSON, environment dumps or a recursive sandbox HOME. This supplements,
-not duplicates, the separate standalone build/startup collector proposed in PR #191.
+allowlist, never arbitrary JSON, environment dumps or a recursive sandbox HOME. Every candidate's
+complete raw bytes, including existing sessions/screens, are scanned **before publication**.
+`harness.credentials.require_safe_diagnostic` is the shared publication policy: it reuses
+`release.redact_diagnostic` for URL/known proxy credentials and centralizes the signature rules
+extracted from the unmerged #191 collector. There is no dependency on that unmerged module and no
+collector-local regex here; #191 should consume the shared helper when integrated. Signatures are
+heuristics, not proof that arbitrary secrets cannot appear in diagnostics.
+
+Candidates are staged outside the uploaded artifacts root, scanned and written from the same byte
+snapshot, then renamed into place only when the complete set is safe. Any unsafe/unreadable candidate
+or staging error refuses the whole set, removes stale publication and leaves the primary verdict
+unchanged; raw bytes are never redacted into a misleading "exact" capture. Symlinks/external paths
+are refused. Pane reports use a strict `PaneExitEvidence` Pydantic model. Missing tmux, invalid UTF-8
+markers and capture/write failures cannot prevent server teardown. RPC evidence open/write/flush
+failures disable only the disk sink: bounded pipe drainage and in-memory diagnostics continue.
+This supplements, not duplicates, the separate standalone build/startup collector proposed in #191.
 
 Observed on 2026-10-28, both in `Standalone D and E (local)`:
 
@@ -65,6 +79,22 @@ This is not a native-crash reproduction or a fix. Synthetic abort and timeout te
 original nonzero/timeout failure and raw evidence survive cleanup; no assertions, deadlines, Bun
 pins or runtime behavior are relaxed. The exact native trigger and a failing-CI pane-state capture
 remain unresolved. No capacity cancellation is classified as this failure.
+
+Blocker regression receipts:
+
+- Unsafe-byte injections cover markers, pane reports, raw stderr, screens, scripts, event logs and
+  session history for token signatures, URL credentials and known proxy passwords. No partial/stale
+  artifact tree is published; injected staging write failure preserves the primary assertion.
+- Missing-executable/server/I/O pane queries still attempt teardown. Invalid UTF-8 marker bytes
+  remain unchanged, produce an explicit model error field and retain the original decode failure.
+- RPC evidence open/write/flush failures still drain 262144 stderr bytes plus a tail diagnostic;
+  the real child exits 17 without pipe blockage and bounded in-memory diagnostics retain the tail.
+- The startup proof prints the required startup message and observes exit 17 specifically. Its
+  exit-0 control succeeds. Mutating the observed exit 17 to 0 makes that regression fail with
+  `DID NOT RAISE AssertionError`, rather than accidentally testing the missing-message assertion.
+- Mutation checks disable scanning, restore the prior pane capture, restore the prior RPC writer,
+  and change the nonzero result to zero. All four are killed by the focused regressions. Local
+  logs are `/tmp/tui-mutant-{scan,pane,writer,zero}.log`, not durable CI artifacts.
 
 ## Capacity controls
 

@@ -73,29 +73,42 @@ def test_artifact_allowlist_preserves_exit_evidence_not_home(
     assert (destination / "startup-rpc.stderr").read_bytes() == RAW_STDERR
 
 
-@pytest.mark.parametrize("timed_out", [False, True])
+@pytest.mark.parametrize(("timed_out", "exit_code"), [(False, 17), (False, 0), (True, 17)])
 def test_startup_process_preserves_raw_stderr_and_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timed_out: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timed_out: bool, exit_code: int
 ) -> None:
     """Exercise the original scenario's abnormal exit/timeout path, not a substitute runner."""
     box = build_sandbox(tmp_path / "box")
     child = tmp_path / "child.py"
     child.write_text(
         "import os,time\n"
-        f"os.write(2, {RAW_STDERR!r})\n" + ("time.sleep(60)\n" if timed_out else "raise SystemExit(17)\n")
+        f"print({startup.MESSAGE!r},flush=True)\n"
+        f"os.write(2, {RAW_STDERR!r})\n"
+        + ("time.sleep(60)\n" if timed_out else f"raise SystemExit({exit_code})\n")
     )
     monkeypatch.setattr(startup, "pi_command", lambda: [sys.executable, str(child)])
     run = subprocess.run
+    codes: list[int] = []
 
     def short_run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         """Shorten only the synthetic child's deadline, never the production scenario."""
         kwargs["timeout"] = 0.5
-        return run(args, **kwargs)
+        result = run(args, **kwargs)
+        codes.append(result.returncode)
+        return result
 
     monkeypatch.setattr(startup.subprocess, "run", short_run)
-    expected = subprocess.TimeoutExpired if timed_out else AssertionError
-    with pytest.raises(expected):
+    if timed_out:
+        with pytest.raises(subprocess.TimeoutExpired):
+            startup.test_fatal_startup_modes(box, "rpc", "session_start", False)
+    elif exit_code:
+        with pytest.raises(AssertionError, match="native panic"):
+            startup.test_fatal_startup_modes(box, "rpc", "session_start", False)
+        assert codes == [17]
+    else:
+        # Mutation control: changing only exit 17 -> 0 must remove the primary failure.
         startup.test_fatal_startup_modes(box, "rpc", "session_start", False)
+        assert codes == [0]
     assert (box.root / "startup-rpc.stderr").read_bytes() == RAW_STDERR
 
 
