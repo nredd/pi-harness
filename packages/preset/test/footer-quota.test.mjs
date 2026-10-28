@@ -748,3 +748,17 @@ test("identity: unrecognized provider windows are ignored; invalid assumed perce
 	const looser = codexOf([span("5h", 30, 1, "assumed", 1_000), span("7d", 10, 2, "assumed", 2_000)]);
 	assert.equal(looser.weekly, 70);
 });
+
+test("identity: a reported span wins over the name (reported 18000s named `7d` is not weekly)", () => {
+	const state = codexOf([span("7d", 10, 18_000_000, "reported", 9_000)]);
+	assert.equal(state.weekly, undefined);
+	assert.ok(!("weeklyUnknown" in state));
+});
+
+test("identity: reported 18000s primary plus assumed secondary shows only the unknown quota, never 5h/weekly", () => {
+	const state = codexOf([span("5h", 10, 18_000_000, "reported", 1_000), span("7d", 40, WEEK, "assumed", 2_000)]);
+	assert.deepEqual([state.weekly, state.weeklyResetAt, state.weeklyUnknown], [60, 2_000, true]);
+	const text = q.formatQuotaRow({ "openai-codex": state }, "full", plain, { now: CLOCK, timeZone: UTC });
+	assert.equal(text, "Quota left: Anthropic (stale) 5h -- weekly -- | OpenAI quota 60% (window unknown)");
+	assert.ok(!/OpenAI (5h|weekly)/.test(text));
+});
