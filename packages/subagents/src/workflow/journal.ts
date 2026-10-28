@@ -46,6 +46,7 @@
 
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
+import { isTierDisclosure, type TierDisclosure, tierDisclosure } from "../model-tiers.js";
 
 /** One settled agent call, as replayed. */
 export interface WorkflowJournalEntry {
@@ -63,6 +64,8 @@ export interface WorkflowJournalEntry {
    * journals written before it existed, which means "no note", not an error.
    */
   modelNote?: string;
+  /** The original tier outcome, retained on replay and journal-of-journal runs. */
+  modelTier?: TierDisclosure;
   /**
    * Whether the call continued an earlier child (`agent({ resume })`).
    *
@@ -150,7 +153,8 @@ export function readJournal(path: string): WorkflowJournalEntry[] {
 /** Append one settled call. Failure to write is not failure to run. */
 export function appendJournal(path: string, entry: WorkflowJournalEntry): void {
   try {
-    appendFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
+    const persisted = entry.modelTier ? { ...entry, modelTier: tierDisclosure(entry.modelTier) } : entry;
+    appendFileSync(path, `${JSON.stringify(persisted)}\n`, "utf-8");
   } catch {
     // A journal that cannot be written costs a future resume, nothing more.
   }
@@ -166,6 +170,7 @@ function isEntry(value: unknown): value is WorkflowJournalEntry {
     typeof entry.ok === "boolean" &&
     (entry.text === undefined || typeof entry.text === "string") &&
     (entry.modelNote === undefined || typeof entry.modelNote === "string") &&
+    (entry.modelTier === undefined || isTierDisclosure(entry.modelTier)) &&
     (entry.resumed === undefined || entry.resumed === true)
   );
 }

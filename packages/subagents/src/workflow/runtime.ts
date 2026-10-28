@@ -15,6 +15,7 @@
 
 import { cpus } from "node:os";
 import { Worker } from "node:worker_threads";
+import type { TierDisclosure } from "../model-tiers.js";
 import { type JournalKeyInput, journalKey, type WorkflowJournalEntry } from "./journal.js";
 import { type CompiledSchema, compileJsonSchema } from "./json-schema.js";
 import { extractMeta, type WorkflowMeta } from "./meta.js";
@@ -97,6 +98,7 @@ export interface WorkflowSpawnRequest {
     requestedThinking?: string;
     /** `Note:` line when the child ran on the parent model because its configured one did not resolve. */
     modelNote?: string;
+    modelTier?: TierDisclosure;
   }): void;
   /**
    * Compiled from the script's `agent({ schema })`.
@@ -129,6 +131,7 @@ export interface WorkflowSpawnResult {
   error?: string;
   /** `Note:` line when the child ran on a different model than configured; also leads `text`/`error` (not a schema'd payload). */
   modelNote?: string;
+  modelTier?: TierDisclosure;
   /** The user dismissed it rather than it failing; renders as skipped. */
   skipped?: boolean;
   tokens?: number;
@@ -913,6 +916,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             // 0ms agent look like one that did the work impossibly fast.
             cached: true,
             ...(replayed.modelNote !== undefined ? { modelNote: replayed.modelNote } : {}),
+            ...(replayed.modelTier ? { modelTier: replayed.modelTier } : {}),
             resultPreview: preview(replayedText),
           },
         ]);
@@ -920,7 +924,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         // Re-recorded so this run's journal is complete on its own terms: a
         // resume of a resume must not have to walk back through a chain of
         // earlier files to find the prefix.
-        recordJournal?.({ index, key: replayed.key, ok: true, text: replayedText, ...(replayed.modelNote !== undefined ? { modelNote: replayed.modelNote } : {}) });
+        recordJournal?.({ index, key: replayed.key, ok: true, text: replayedText, ...(replayed.modelNote !== undefined ? { modelNote: replayed.modelNote } : {}), ...(replayed.modelTier ? { modelTier: replayed.modelTier } : {}) });
         respond(callId, true, replayedText, undefined, undefined, replayed.modelNote);
         return;
       }
@@ -998,6 +1002,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             thinking?: string;
             requestedThinking?: string;
             modelNote?: string;
+            modelTier?: TierDisclosure;
           }) => {
             if (info.recordId !== undefined) base.recordId = info.recordId;
             if (info.modelName !== undefined) base.model = info.modelName;
@@ -1005,6 +1010,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             if (info.thinking !== undefined) base.thinking = info.thinking;
             if (info.requestedThinking !== undefined) base.requestedThinking = info.requestedThinking;
             if (info.modelNote !== undefined) base.modelNote = info.modelNote;
+            if (info.modelTier !== undefined) base.modelTier = info.modelTier;
             // `base.state` is still "start", so emitting after the row reached a
             // terminal state would revert it to running under last-write-wins.
             // Not reachable from this repo's host, which reports during startup
@@ -1099,12 +1105,13 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
             ...(result.toolCalls !== undefined ? { toolCalls: result.toolCalls } : {}),
             ...(result.modelNote !== undefined ? { modelNote: result.modelNote } : {}),
+            ...(result.modelTier ? { modelTier: result.modelTier } : {}),
           };
 
           if (result.ok) {
             const text = result.text ?? "";
             emit([{ ...common, state: "done", resultPreview: preview(text) }]);
-            recordJournal?.({ index, key, ok: true, text, ...(result.modelNote !== undefined ? { modelNote: result.modelNote } : {}), ...resumeMark });
+            recordJournal?.({ index, key, ok: true, text, ...(result.modelNote !== undefined ? { modelNote: result.modelNote } : {}), ...(result.modelTier ? { modelTier: result.modelTier } : {}), ...resumeMark });
             respond(callId, true, text, undefined, undefined, result.modelNote);
             return;
           }

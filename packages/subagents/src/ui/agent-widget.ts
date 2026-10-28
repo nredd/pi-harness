@@ -12,6 +12,7 @@ import { getConfig } from "../agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import { describeModelCall, type ModelCallState } from "../model-call.js";
 import type { ModelFallback } from "../model-resolver.js";
+import type { TierDisclosure } from "../model-tiers.js";
 import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
 import { fallbackFlag } from "./fallback-flag.js";
@@ -89,6 +90,7 @@ export interface AgentDetails {
   modelNote?: string;
   /** The structured form of {@link modelNote}, for the one-line label. */
   modelFallback?: ModelFallback;
+  modelTier?: TierDisclosure;
   /** Notable config tags (e.g. ["thinking: high", "isolated"]). */
   tags?: string[];
   /** Current turn count. */
@@ -395,7 +397,7 @@ export class AgentWidget {
   }
 
   /** Render a finished agent line. */
-  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage; modelFallback?: ModelFallback }, theme: Theme): string {
+  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage; modelFallback?: ModelFallback; modelTier?: TierDisclosure }, theme: Theme): string {
     const modeLabel = getPromptModeLabel(a.type);
     const duration = formatMs((a.completedAt ?? this.clock.now()) - a.startedAt);
 

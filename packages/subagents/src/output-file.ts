@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type ModelFallback, modelFallbackNote } from "./model-resolver.js";
+import { type TierDisclosure, tierDisclosure, tierNote } from "./model-tiers.js";
 
 /**
  * Project/global default for writing a subagent's `.output` transcript; a custom
@@ -92,6 +93,13 @@ export function appendModelFallbackEntry(path: string, agentId: string, fallback
       "utf-8",
     );
   } catch { /* ignore */ }
+}
+
+/** Append tier provenance separately from assistant messages for durable replay. */
+export function appendModelTierEntry(path: string, agentId: string, modelTier: TierDisclosure): void {
+  try {
+    appendFileSync(path, `${JSON.stringify({ isSidechain: true, agentId, type: "model-tier", modelTier: tierDisclosure(modelTier), note: tierNote(modelTier), timestamp: new Date().toISOString() })}\n`, "utf-8");
+  } catch { /* transcript writes are best effort */ }
 }
 
 /** Write the initial user prompt entry. */

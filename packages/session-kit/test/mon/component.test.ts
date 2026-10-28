@@ -6,6 +6,11 @@ import { sortProcesses, sparkline, timeHistory, timeHistoryRows } from "../../sr
 import { snapshot } from "./fixtures.ts";
 
 const theme = { fg: (_color: string, s: string) => s, bg: (_color: string, s: string) => s, bold: (s: string) => s };
+/**
+ * Build a dashboard with identity theme and spied callbacks.
+ * @param rows Available terminal height.
+ * @returns Initialized view and its injectable options.
+ */
 function view(rows = 24) {
 	const options = { theme, rows: () => rows, requestRender: vi.fn(), onClose: vi.fn() };
 	const v = new MonView(options);
@@ -51,7 +56,7 @@ describe("mon responsive dashboard", () => {
 		const selected = v.state.selected;
 		v.handleInput("?");
 		const seen: string[] = [];
-		for (let i = 0; i < 40; i++) {
+		for (let i = 0; i < 90; i++) {
 			seen.push(...v.render(40));
 			v.handleInput("j");
 		}
@@ -60,7 +65,14 @@ describe("mon responsive dashboard", () => {
 			"interval usage",
 			"exceed 100%",
 			"unavailable",
-			"minus free",
+			"total-free",
+			"compressed pages",
+			"footprint, not RSS",
+			"pi runs as node",
+			"NOT interval CPU",
+			"usec reject PID reuse",
+			"No native access/builtin FFI",
+			"app + wired + compressed",
 			"not percent",
 			"elapsed time",
 			"scheduling",
@@ -73,8 +85,51 @@ describe("mon responsive dashboard", () => {
 		expect(v.render(40).join("\n")).not.toContain("Keys");
 	});
 
+	it("labels the measurement basis and displays free and swap without calling total-free used memory", () => {
+		const { v } = view(40);
+		v.update({
+			...snapshot(),
+			memoryBasis: "app+wired+compressed",
+			memoryFreeBytes: 1024 ** 3,
+			swapUsedBytes: 3 * 1024 ** 3,
+			swapTotalBytes: 4 * 1024 ** 3,
+		});
+		expect(v.render(120).join("\n")).toContain("used (A+W+C)");
+		expect(v.render(120).join("\n")).toContain("free 1.0G swap 3.0G/4.0G");
+		v.update({ ...snapshot(), memoryBasis: "total-free" });
+		expect(v.render(120).join("\n")).toContain("total-free");
+		expect(v.render(40).join("\n")).toContain("T-F");
+		expect(v.render(120).join("\n")).not.toContain("non-free");
+	});
+
+	it.each([40, 60, 80, 120])(
+		"toggles a labelled footprint column at %i columns without replacing failed PIDs by zero",
+		(width) => {
+			const { v } = view(24);
+			v.update({
+				...snapshot(),
+				processes: snapshot()
+					.processes.slice(0, 2)
+					.map((p, i) => ({ ...p, footprintBytes: i === 0 ? 800 * 1024 ** 2 : null })),
+			});
+			v.handleInput("f");
+			const lines = v.render(width);
+			expect(lines.find((line) => line.includes("NAME"))).toContain("FOOT");
+			expect(lines.find((line) => line.includes("1000"))).toContain("800M");
+			expect(lines.find((line) => line.includes("1001"))).toContain("--");
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			v.handleInput("f");
+			expect(v.render(width).find((line) => line.includes("NAME"))).toContain("RSS");
+		},
+	);
+
 	it("fills completion-paced history contiguously, right-aligned, with only real gaps dotted", () => {
 		// Real cadence is 2000ms plus scan time; drift must not invent gaps.
+		/**
+		 * Model completion-paced scans plus one genuine pause.
+		 * @param i Zero-based sample index.
+		 * @returns Monotonic sample milliseconds, with a 15s gap from index six.
+		 */
 		const at = (i: number) => i * 2023 + (i >= 6 ? 15000 : 0);
 		const points = Array.from({ length: 10 }, (_, i) => ({ sampledAtMs: at(i), value: 50 }));
 		const line = timeHistory(points.slice(0, 6), 20);
