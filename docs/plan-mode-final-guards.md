@@ -59,7 +59,11 @@ The public parity test proves disabled admission bypasses registry reads before 
 and after exit, enabled `read` still works, and exit clears status. It does **not** claim
 to call this private helper while disabled or directly observe its unreachable `[]` return.
 
-## Five defensive lines remain open
+## Five defensive lines remained open at #200
+
+The [runtime rollback follow-up](plan-mode-last-guards.md) reaches all four policy rejection
+lines and retains the unresolved queue line. The analysis below records the #200 snapshot;
+its tentative state/pending consistency assumption does not cover that async rollback.
 
 `resolvePendingWorkflowToolPolicy` retains both rejection bodies:
 
