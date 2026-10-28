@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import subagentsExtension from "../src/index.js";
 import { setWorktreeIsolationEnabled } from "../src/worktree.js";
 import { type SessionStartHandler, startSession } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 const EXAMPLE_TEMPLATE = fileURLToPath(new URL("../examples/agent-tool-description.md", import.meta.url));
 
@@ -48,7 +48,6 @@ describe("toolDescriptionMode", () => {
   let hermeticAgentDir: string;
   let prevCwd: string;
   let prevAgentDir: string | undefined;
-  let prevHome: string | undefined;
   let shutdown: (() => Promise<void>) | undefined;
   let handlers: Map<string, SessionStartHandler>;
 
@@ -58,9 +57,7 @@ describe("toolDescriptionMode", () => {
     // subagents.json can't leak into the "default is full" assertion.
     hermeticAgentDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    prevHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = hermeticAgentDir;
-    process.env.HOME = hermeticAgentDir;
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
     if (settings) {
@@ -90,8 +87,6 @@ describe("toolDescriptionMode", () => {
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(hermeticAgentDir, { recursive: true, force: true });
   });

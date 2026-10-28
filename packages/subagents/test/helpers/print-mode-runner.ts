@@ -277,12 +277,10 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
 
   // --- isolate global discovery so the dev env can't bleed in ---
   const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const prevHome = process.env.HOME;
   let hermeticDir: string | undefined;
   if (isolateGlobals) {
     hermeticDir = mkdtempSync(join(tmpdir(), "subagents-print-home-"));
     process.env.PI_CODING_AGENT_DIR = hermeticDir;
-    process.env.HOME = hermeticDir;
   }
 
   // --- model backend ---
@@ -458,8 +456,6 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     if (isolateGlobals) {
       if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-      if (prevHome == null) delete process.env.HOME;
-      else process.env.HOME = prevHome;
       if (hermeticDir) rmSync(hermeticDir, { recursive: true, force: true });
     }
     if (ownsCwd) rmSync(cwd, { recursive: true, force: true });

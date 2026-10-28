@@ -17,8 +17,10 @@ vi.mock("../src/worktree.js", async () => {
   return { ...actual, createWorktree: vi.fn(async () => { throw new actual.WorktreeError("/x is not inside a git repository"); }) };
 });
 
-import subagentsExtension from "../src/index.js";
 import { createWorktree } from "../src/worktree.js";
+import { createSubagentsExtension } from "./helpers/home-extension.js";
+
+const subagentsExtension: ReturnType<typeof createSubagentsExtension> = pi => createSubagentsExtension({ homeDir: cwd })(pi);
 
 function boot() {
   const tools = new Map<string, any>();
@@ -41,7 +43,6 @@ function boot() {
 let cwd: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
-let originalHome: string | undefined;
 
 function ctx() {
   return {
@@ -61,9 +62,7 @@ describe("Agent startup failures fail the tool call (#179)", () => {
     cwd = mkdtempSync(join(tmpdir(), "startup-error-"));
     process.chdir(cwd);
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    originalHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-    process.env.HOME = cwd;
   });
 
   afterEach(() => {
@@ -71,8 +70,6 @@ describe("Agent startup failures fail the tool call (#179)", () => {
     process.chdir(originalCwd);
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     rmSync(cwd, { recursive: true, force: true });
   });
 

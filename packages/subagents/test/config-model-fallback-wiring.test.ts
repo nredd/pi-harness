@@ -27,10 +27,10 @@ import { AgentManager } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
-import subagentsExtension from "../src/index.js";
 import { setAgentModels } from "../src/model-resolver.js";
 import { createNestedSubagentTools } from "../src/nested-tools.js";
 import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 
 const PARENT = { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };
@@ -40,7 +40,6 @@ const NOTE = 'Note: configured model "claude-haiku-4-5" did not resolve; running
 let cwd: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
-let originalHome: string | undefined;
 
 function writeAgent(name: string, model?: string): void {
   const dir = join(cwd, ".pi", "agents");
@@ -76,9 +75,7 @@ describe("config model that does not resolve", () => {
     cwd = mkdtempSync(join(tmpdir(), "config-model-fallback-"));
     process.chdir(cwd);
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    originalHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-    process.env.HOME = cwd;
     vi.mocked(runAgent).mockReset();
     vi.mocked(resumeAgent).mockReset();
     vi.mocked(runAgent).mockImplementation(runnerResolution() as any);
@@ -91,8 +88,6 @@ describe("config model that does not resolve", () => {
     process.chdir(originalCwd);
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     registerAgents(new Map());
     rmSync(cwd, { recursive: true, force: true });
   });

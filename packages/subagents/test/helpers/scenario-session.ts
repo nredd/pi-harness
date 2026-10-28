@@ -68,7 +68,6 @@ export class ScenarioSession {
   readonly providers: FauxProviderRegistration[] = [];
   readonly admission = barrier();
   private readonly previousCwd = process.cwd();
-  private readonly previousHome = process.env.HOME;
   private readonly previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   private h?: Harness;
   host?: InteractiveHarness;
@@ -80,7 +79,6 @@ export class ScenarioSession {
     mkdirSync(this.cwd, { recursive: true });
     mkdirSync(this.agentDir, { recursive: true });
     process.chdir(this.cwd);
-    process.env.HOME = this.root;
     process.env.PI_CODING_AGENT_DIR = this.agentDir;
     this.settings(settings);
   }
@@ -164,7 +162,7 @@ export class ScenarioSession {
     const config: HarnessOptions = {
       cwd: this.cwd,
       settings: { retry: { enabled: false }, compaction: { enabled: false }, fullscreenWheelScrollLines: 3, fullscreenScrollbar: "hidden" },
-      extensionFactories: [createSubagentsExtension({ clock: this.clock }), observer, ...(options.factories ?? [])],
+      extensionFactories: [createSubagentsExtension({ clock: this.clock, homeDir: this.root }), observer, ...(options.factories ?? [])],
       ...options.harness,
     };
     if (options.terminal) {
@@ -216,7 +214,6 @@ export class ScenarioSession {
       for (const p of this.providers) p.unregister();
       Reflect.deleteProperty(globalThis, "__subagentScenarioHold");
       process.chdir(this.previousCwd);
-      if (this.previousHome === undefined) delete process.env.HOME; else process.env.HOME = this.previousHome;
       if (this.previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = this.previousAgentDir;
       rmSync(this.root, { recursive: true, force: true });
     }

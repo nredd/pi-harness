@@ -1,8 +1,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, createMockUI } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetState, registerTodoTool, setActiveRenderSession } from "./todo.ts";
-import { TodoOverlay } from "./todo-overlay.ts";
+import { __resetState, registerTodoTool, setActiveRenderSession, TodoOverlay } from "./.test-support/home-fixtures.ts";
 
 const WIDGET_KEY = "rpiv-todos";
 
