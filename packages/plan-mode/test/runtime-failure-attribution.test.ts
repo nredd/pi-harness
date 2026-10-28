@@ -81,5 +81,10 @@ test("a throwing tool registry falls back safely instead of admitting unknown to
     block?: boolean;
   };
   assert.equal(blocked.block, true);
+  const unknown = (await mock.events.get("tool_call")?.[0]?.(
+    { toolName: "unregistered_mutation", input: {} },
+    context.ctx,
+  )) as { block?: boolean };
+  assert.equal(unknown.block, true);
   assert.equal(context.statuses.get("plan-mode"), "plan active");
 });

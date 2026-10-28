@@ -79,7 +79,10 @@ test("a throwing active-tool registry fails activation closed", async () => {
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
   const context = createMockContext({ hasUI: true });
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  assert.match(context.notifications.at(-1)?.message ?? "", /helpers|unavailable/u);
+  assert.match(
+    context.notifications.at(-1)?.message ?? "",
+    /Cannot start Plan mode: plan_mode_question and plan_mode_complete are unavailable/u,
+  );
   assert.equal(context.statuses.get("plan-mode"), undefined);
 });
 
@@ -110,12 +113,14 @@ test("failed new activation restores inactive state and frees workflow ownership
 });
 
 test("a stale ready-menu context is contained when presentation settles", async () => {
+  let presentations = 0;
   const mock = createMockPi({ activeTools: ["read"] });
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "missing" as const }),
     loadInteractiveUi: async () => ({
       ...(await import("../src/interactive-ui.js")),
       showReadyPlanMenu: async () => {
+        presentations += 1;
         throw new Error("Extension context is no longer active");
       },
     }),
@@ -136,4 +141,5 @@ test("a stale ready-menu context is contained when presentation settles", async 
   const state = mock.entries.at(-1)?.data as { enabled: boolean; latestPlan?: string };
   assert.equal(state.enabled, true);
   assert.equal(state.latestPlan, "# Keep this plan");
+  assert.equal(presentations, 1, "stale presentation must run once, settle without escaping, and not repeat");
 });
