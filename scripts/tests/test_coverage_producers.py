@@ -160,6 +160,10 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     verify = owned.index("Verify reviewer read dependencies")
     assert install < verify < owned.index("Owned gates (")
     assert "apt-get install --yes ripgrep fd-find" in owned
+    mac_install = owned.index("Install reviewer read dependencies (macOS)")
+    assert mac_install < verify
+    assert "tool: ripgrep@14.1.1,fd-find@10.2.0" in owned
+    assert "taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283" in owned
     assert "rg --version" in owned
     assert "fdfind --version" in owned
     reviewer = (ROOT / "integration/inprocess/reviewer.test.ts").read_text()

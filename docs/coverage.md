@@ -325,7 +325,9 @@ both OSes. No wake path, source file or test assertion is excluded to hide the d
 The in-process `@nredd/pi-stack-tests` reviewer suite executes real Pi `grep`/`find` tools
 under both Node and Bun. Each launcher gets a fresh disposable home, so a managed binary
 fetched during the Node pass is not available to Bun. Ubuntu owned CI explicitly installs
-`ripgrep` and `fd-find` via apt before tests; both OSes verify their PATH binaries. The reviewer
+`ripgrep` and `fd-find` via apt before tests. macOS uses SHA-pinned `taiki-e/install-action`
+with exact `ripgrep@14.1.1` and `fd-find@10.2.0` versions (its cargo-binstall fallback for these
+crates). Neither OS assumes runner-image tool availability; both verify their PATH binaries. The reviewer
 suite sets `PI_OFFLINE=1` and restores it after each test: missing prerequisites fail the actual
 read assertions instead of silently depending on GitHub's live latest-release downloads.
 Run `40715505433` passed Node reviewer reads but failed Bun's grep on Ubuntu; its swallowed
