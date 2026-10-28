@@ -296,6 +296,8 @@ interface SpawnArgs {
 }
 
 interface SpawnOptions {
+  /** Home inherited by nested callers; the manager's home is the default. */
+  homeDir?: string;
   description: string;
   /**
    * Optional memorable name for this instance, becoming a second handle
@@ -605,6 +607,7 @@ export class AgentManager {
     onUsage?: OnAgentUsage,
     onSteered?: OnAgentSteered,
     private readonly clock: Clock = realClock,
+    private readonly homeDir?: string,
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
@@ -690,6 +693,7 @@ export class AgentManager {
     // can fix and retry; the RPC layer converts throws into error envelopes.
     assertValidSpawnCwd(options.cwd);
     const selection = options.modelSelection ?? selectModel({
+      homeDir: options.homeDir ?? this.homeDir,
       agentType: type,
       definitionModel: getAgentConfig(type)?.model,
       paramModel: options.model,
@@ -1114,6 +1118,7 @@ export class AgentManager {
 
     const promise = runAgent(ctx, type, prompt, {
       pi,
+      homeDir: options.homeDir ?? this.homeDir,
       agentId: id,
       model: options.modelSelection?.model,
       modelSelection: record.modelSelection!,

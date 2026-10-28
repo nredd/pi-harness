@@ -9,10 +9,23 @@ only those helpers used by this package. `rpiv-workflow` is a dev-only dependenc
 for their type imports; no workflow code is loaded by the helpers.
 
 `.vitest.config.ts` aliases the unpublished `@juicesharp/rpiv-test-utils` to this
-barrel. `setup.ts` preserves upstream's isolated HOME, dynamic state/i18n reset,
-and config cleanup, without importing unrelated monorepo extensions. No upstream
-test assertions or tests are removed. Keep support/config files in dot paths so
+barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config
+cleanup. `TEST_HOME` and `home-fixtures.ts` explicitly inject a disposable home into
+config, tool, extension and overlay callers. `XDG_CONFIG_HOME` alone is NOT enough:
+when its config is absent, the legacy fallback must use that same injected home.
+Tests never mutate `HOME` or `USERPROFILE`. `home-injection.test.ts` asserts zero
+real-home filesystem probes for both present and missing fallback configs. No
+upstream test assertions or tests are removed. Keep support/config files in dot paths so
 upstream's unchanged ship-manifest walker does not mistake them for production.
+
+Path audit: `config.ts` imports `homedir` for the call-time `loadConfig` default;
+its `XDG_CONFIG_HOME` read and `~/` expansion use the injected home. Both config
+candidates, including the always-legacy fallback, stay under that home unless an
+absolute XDG override explicitly points elsewhere. `getMaxWidgetLines`,
+`getCollapseOnResume` and `resolveCollapseKey` forward the home. This matches
+`@juicesharp/rpiv-config`'s one-way fallback: a present malformed XDG file returns
+its parse result and never falls back to legacy. The existing JSON loader remains
+upstream's `loadJsonConfig`, not a second parser.
 
 Test census:
 
@@ -20,8 +33,9 @@ Test census:
 - Stock split `7903c76b` with this support/config: 253 tests in 21 files pass.
 - Selected fork `3c62a0b` with this support/config: 377 tests in 26 files pass.
 - With the rendering regressions: 382 Vitest tests in 28 files pass.
-- Bun 1.3.14: two real interactive settled-row regressions pass. This is native
-  Bun coverage, not a claim that Bun runs the upstream Vitest/`vi.mock` suite.
+- `test:bun` retains the two real interactive settled-row regressions. The full
+  Vitest suite can also be run with `bun --bun ../../node_modules/.bin/vitest run
+  --config .vitest.config.ts`; record the engine version and results separately.
 
 `settled-row.ts` mounts the real core interactive harness and VirtualTerminal,
 registering this fork's renderers with a snapshot-less legacy result. Both update

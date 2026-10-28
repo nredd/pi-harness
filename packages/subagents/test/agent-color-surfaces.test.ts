@@ -202,6 +202,7 @@ describe("custom agent color runtime surfaces", () => {
     });
 
     try {
+      fleet.toggleCollapse();
       fleet.update();
       const output = factory?.(
         { requestRender: vi.fn(), terminal: { columns: 120, rows: 40 } },
