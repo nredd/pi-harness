@@ -47,6 +47,18 @@ describe("Coalescer", () => {
 		expect(batches).toEqual([{ items: [1, 2], dropped: 3, droppedMatched: true, droppedMatches: [4] }]);
 	});
 
+	it("keeps the first and newest dropped match, then clears that evidence for the next batch", () => {
+		const deliver = vi.fn();
+		const c = new Coalescer<number>(2000, deliver, { maxItems: 1, matched: (item) => item >= 2 });
+		for (let item = 1; item <= 5; item++) c.add(item);
+		vi.advanceTimersByTime(2000);
+		expect(deliver).toHaveBeenLastCalledWith({ items: [1], dropped: 4, droppedMatched: true, droppedMatches: [2, 5] });
+		c.add(0);
+		vi.advanceTimersByTime(2000);
+		expect(deliver).toHaveBeenLastCalledWith({ items: [0], dropped: 0, droppedMatched: false, droppedMatches: [] });
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("never holds the process open", () => {
 		const c = new Coalescer<number>(2000, () => {});
 		c.add(1);
