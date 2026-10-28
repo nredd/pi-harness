@@ -381,7 +381,7 @@ See [`compose.js`](../examples/workflows/compose.js).
 ## Troubleshooting
 
 **Finding the script line that failed.**
-Failed runs include the authored stack in their result and completion notification;
+Failed runs include the authored stack in their result, result preview and completion notification;
 compact status text still shows only the error message. `workflow.js` names the
 root script and `workflow:<meta.name>.js` names a nested script. Lines and columns
 refer to the source you wrote, including its `export const meta` declaration,
@@ -390,8 +390,8 @@ rather than relying on VM offsets, which Bun 1.3/1.4 ignore. Structured stack
 frames map first-line columns without replacing Error objects, subclasses or causes.
 Bun 1.3 parser errors expose a line but no usable column; those show the authored
 line without an invented caret. Runtime error frames retain exact columns.
-The worker transports at most 16 KiB of stack text across eight cause levels
-and 4 KiB of message text; cyclic causes stop at the repeated value. Captured
+The worker transports at most 16,384 characters of stack text across eight cause levels
+and 4,096 characters of message text; cyclic causes stop at the repeated value. Captured
 stacks and message text are not reinterpreted as source frames. Completion
 notifications retain their existing 4,000-character result limit.
 
@@ -402,7 +402,9 @@ to undo it; Bun ignored the offset and reported `workflow.js:4:23` instead of
 line 3. `compileWorkflow` now shares line-preserving compilation for root and
 nested scripts; `authoredFrame` adjusts only structured first-line frames of
 known synthetic workflow filenames. No user path is evaluated or used as a
-source filename.
+source filename. Nested parser failures now retain their original error object
+and synthetic source filename rather than adding a `workflow("<label>")` message
+wrapper; resolution failures still include that reference label.
 
 **The run failed with `… is unavailable in workflow scripts (breaks resume)`.**
 The script called `Date.now()`, `new Date()` or `Math.random()`. A script that varies run to run cannot be replayed from its journal, so these throw. Use the loop index for ids, pass timestamps in through `args`, or stamp them after the workflow returns. This most often bites pasted-in helper code, and it throws at the line that calls it — *after* you have already paid for the preceding agents.

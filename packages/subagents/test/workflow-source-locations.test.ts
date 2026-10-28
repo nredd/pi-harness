@@ -69,6 +69,12 @@ describe("authored workflow source locations", () => {
       expect(notification).not.toContain("const Date =");
       expect(notification).not.toContain("(async (agent,");
       expect(notification).toContain("SyntaxError");
+      if (process.versions.bun?.startsWith("1.3.")) {
+        const lines = result.errorStack!.split("\n");
+        expect(lines[0]).toBe(nested ? "workflow:locations.js:1" : "workflow.js:1");
+        expect(lines[1]).toBe(script.replace("export", "      "));
+        expect(lines[2]).not.toMatch(/^\s*\^/);
+      }
     });
   }
 
@@ -110,6 +116,24 @@ describe("authored workflow source locations", () => {
     const cycle = await runWorkflow({ script: cyclic, host: hostFor(cyclic) });
     expect(cycle.errorStack).toContain("Error: cycle");
     expect(cycle.errorStack).not.toContain("Caused by:");
+  });
+
+  it("settles non-Error throws and unreadable diagnostic getters", async () => {
+    const cases = [
+      ['throw "plain";', "plain"],
+      ["throw null;", "null"],
+      ['const error = new Error("stackless"); error.stack = undefined; throw error;', "stackless"],
+      ['throw { get message() { throw 1; } };', "Workflow threw an unreadable error."],
+      ['throw { message: "bad stack", get stack() { throw 1; } };', "bad stack"],
+      ['const error = new Error("bad cause"); Object.defineProperty(error, "cause", { get() { throw 1; } }); throw error;', "bad cause"],
+    ];
+    for (const [body, message] of cases) {
+      const script = `${META}\n${body}`;
+      const result = await runWorkflow({ script, host: hostFor(script) });
+      expect(result.status).toBe("failed");
+      expect(result.error).toBe(message);
+      if (message === "bad cause") expect(result.errorStack).toContain("workflow.js:2:");
+    }
   });
 
   it("delivers authored failure stacks to the completion notification", async () => {
