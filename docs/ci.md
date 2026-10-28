@@ -225,7 +225,9 @@ The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
 `integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
 No unported non-boundary Python scenarios remain. Package-native suites and `integration/inprocess/`
 own the ported assertions; the destination ledger is [here](verification-rebuild.md).
-The thirteen `DOTFILES` rows moved to dotfiles' implemented `pi-profile doctor`, not a distribution check. See
+The thirteen historical `DOTFILES` rows belong to dotfiles, not a distribution check. Eleven
+remain doctor checks; the two REA rows were retired in `nredd/dotfiles#58` and replaced with
+absence/cleanup regressions in dotfiles' `tests/rea-retirement.test.mjs`. See
 [here](../integration/README.md) for inputs, package sets and deliberate headless exclusions.
 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
@@ -251,7 +253,8 @@ Bun scope:
   to #58 are stale: no such issue exists in this repository. The timer migration removed one
   dependency, not the remaining auth transport interception requirement
 - NOT RUN: linux-arm64 (no `ubuntu-24.04-arm` job added), darwin-x64, Windows, packed contracts
-  hosted by the standalone, quiet-runner benchmarks, live credentials, REA and desktop/TCC helpers.
+  hosted by the standalone, quiet-runner benchmarks, live credentials and desktop/TCC helpers.
+  REA is retired, not an outstanding standalone acceptance requirement.
   Source-built D/E coverage is not published-binary acceptance or a completed Bun checklist
 
 Capacity: ZERO added jobs, including zero new macOS jobs. Full CI still requests four macOS jobs,
