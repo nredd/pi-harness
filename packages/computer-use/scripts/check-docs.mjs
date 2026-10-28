@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const docsRoot = resolve(root, "docs/content/docs");
 const modes = ["tutorials", "how-to-guides", "explanation", "reference"];
 const failures = [];
+
+if (
+	!readFileSync(resolve(root, "docs/README.md"), "utf8").includes("cd packages/computer-use\nnpm install --prefix docs")
+) {
+	failures.push(
+		"docs/README.md: website commands must enter packages/computer-use before using package-relative scripts",
+	);
+}
 
 for (const mode of modes) {
 	const path = resolve(docsRoot, mode);
@@ -26,8 +34,13 @@ const markdownFiles = filesBelow(docsRoot).filter((file) => [".md", ".mdx"].incl
 for (const path of markdownFiles) {
 	const content = readFileSync(path, "utf8");
 	const display = relative(root, path);
-	if (display.includes("docs/content/docs/reference/") && !content.slice(0, 700).includes("{/* This file is generated")) {
-		failures.push(`${display}: every reader-facing reference page must be generated from source ownership or repository metadata`);
+	if (
+		display.includes("docs/content/docs/reference/") &&
+		!content.slice(0, 700).includes("{/* This file is generated")
+	) {
+		failures.push(
+			`${display}: every reader-facing reference page must be generated from source ownership or repository metadata`,
+		);
 	}
 
 	for (const match of content.matchAll(/!?(?:\[[^\]]*\])\(([^)]+)\)/g)) {
@@ -35,8 +48,15 @@ for (const path of markdownFiles) {
 		if (!rawTarget || /^(?:[a-z]+:|#)/i.test(rawTarget)) continue;
 		const target = decodeURIComponent(rawTarget.split(/[?#]/, 1)[0]);
 		const resolved = target.startsWith("/") ? resolve(docsRoot, `.${target}`) : resolve(dirname(path), target);
-		const candidates = [resolved, `${resolved}.md`, `${resolved}.mdx`, resolve(resolved, "index.md"), resolve(resolved, "index.mdx")];
-		if (!candidates.some((candidate) => existsSync(candidate))) failures.push(`${display}: broken local link ${rawTarget}`);
+		const candidates = [
+			resolved,
+			`${resolved}.md`,
+			`${resolved}.mdx`,
+			resolve(resolved, "index.md"),
+			resolve(resolved, "index.mdx"),
+		];
+		if (!candidates.some((candidate) => existsSync(candidate)))
+			failures.push(`${display}: broken local link ${rawTarget}`);
 	}
 }
 
@@ -48,7 +68,9 @@ if (existsSync(macosDocPath)) {
 		"native/macos/agent_cursor.swift",
 		"src/platform/macos/helper.ts",
 		"scripts/setup-helper.mjs",
-	].map((file) => readFileSync(resolve(root, file), "utf8")).join("\n");
+	]
+		.map((file) => readFileSync(resolve(root, file), "utf8"))
+		.join("\n");
 	const coverage = [
 		"AXIsProcessTrustedWithOptions",
 		"CGPreflightScreenCaptureAccess",
@@ -65,13 +87,27 @@ if (existsSync(macosDocPath)) {
 		"ax_only",
 	];
 	for (const symbol of coverage) {
-		if (!macosSource.includes(symbol)) failures.push(`macOS reference coverage expects source symbol ${symbol}, but the implementation no longer contains it`);
-		if (!macosDoc.includes(symbol)) failures.push(`docs/content/docs/reference/platforms/macos/implementation.mdx: missing implementation coverage for ${symbol}`);
+		if (!macosSource.includes(symbol))
+			failures.push(
+				`macOS reference coverage expects source symbol ${symbol}, but the implementation no longer contains it`,
+			);
+		if (!macosDoc.includes(symbol))
+			failures.push(
+				`docs/content/docs/reference/platforms/macos/implementation.mdx: missing implementation coverage for ${symbol}`,
+			);
 	}
-	if (!macosDoc.includes("https://developer.apple.com/documentation/")) failures.push("docs/content/docs/reference/platforms/macos/implementation.mdx: platform claims need Apple documentation links");
-	if (!macosDoc.includes("https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L")) failures.push("docs/content/docs/reference/platforms/macos/implementation.mdx: implementation claims need source links");
+	if (!macosDoc.includes("https://developer.apple.com/documentation/"))
+		failures.push(
+			"docs/content/docs/reference/platforms/macos/implementation.mdx: platform claims need Apple documentation links",
+		);
+	if (!macosDoc.includes("https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L"))
+		failures.push(
+			"docs/content/docs/reference/platforms/macos/implementation.mdx: implementation claims need source links",
+		);
 } else {
-	failures.push("Missing macOS implementation reference: docs/content/docs/reference/platforms/macos/implementation.mdx");
+	failures.push(
+		"Missing macOS implementation reference: docs/content/docs/reference/platforms/macos/implementation.mdx",
+	);
 }
 
 const allDocs = [resolve(root, "README.md"), resolve(root, "CONTRIBUTING.md"), ...markdownFiles]
@@ -79,7 +115,10 @@ const allDocs = [resolve(root, "README.md"), resolve(root, "CONTRIBUTING.md"), .
 	.join("\n");
 const staleMacosClaims = [
 	[/never in the agent's own observations/i, "activity glow can appear in whole-display desktop_screenshot captures"],
-	[/ScreenCaptureKit probe\s*\(authoritative\)/i, "ScreenCaptureKit readiness query described as an authoritative permission API"],
+	[
+		/ScreenCaptureKit probe\s*\(authoritative\)/i,
+		"ScreenCaptureKit readiness query described as an authoritative permission API",
+	],
 	[/already listed in (?:both )?(?:settings )?panes/i, "version-dependent System Settings listing guarantee"],
 	[/setup-helper\.mjs --force/, "nonexistent setup-helper --force option"],
 	[/TCC keys? (?:grant|permission)/i, "undocumented TCC identity guarantee"],

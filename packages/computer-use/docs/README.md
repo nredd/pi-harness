@@ -4,13 +4,15 @@ This directory contains the Next.js and Fumadocs application used to render the 
 
 ## Run locally
 
-Install the website dependencies once:
+From the harness repository root, enter the imported package and install the website dependencies once:
 
 ```bash
+cd packages/computer-use
 npm install --prefix docs
 ```
 
-Start the preview from the repository root:
+Run all remaining commands from `packages/computer-use`, not the harness repository root.
+Start the preview:
 
 ```bash
 npm run docs:dev

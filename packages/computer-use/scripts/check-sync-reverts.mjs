@@ -14,6 +14,14 @@ const sandbox = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
 const nodeModules = path.resolve(root, "../../node_modules");
 const cases = [
 	{
+		name: "Documentation site package working directory",
+		file: "docs/README.md",
+		before: "cd packages/computer-use",
+		after: "cd .",
+		check: "check-docs.mjs",
+		failure: /website commands must enter packages\/computer-use/,
+	},
+	{
 		name: "Rust coverage actionable missing-tool error",
 		file: "scripts/rust-coverage.mjs",
 		before: "Missing cargo-llvm-cov; install pinned",
@@ -213,6 +221,7 @@ try {
 		"assets",
 		"package.json",
 		"README.md",
+		"CONTRIBUTING.md",
 		"UPSTREAM.md",
 		"LICENSE",
 	]) {
