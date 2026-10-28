@@ -43,6 +43,7 @@ the release is `requested release: injaneity/pi-computer-use#116`
 | Host-independent docs | harness sync | Generate from all declared tool definitions, not the host's 13/11 registered subset; harness-only | `docs:check` runs `check-docs-platform.mjs` under both platform fixtures |
 | Harness package | `988eb2f`, `a4fc068`, `6207189`, subsequent contract hardening | Preserve @nredd metadata, source-only Linux, macOS payloads/cursor sources, platform-aware contracts, non-macOS NOT RUN and house-style commits; harness-only | `test:package-assets`, `test:linux-scripts`, `test:commits`, package-contract tests and stock contract |
 
+| Owned install/release docs | harness follow-up | Install `@nredd/pi-computer-use`, use root `publish.yml` and opt into Linux repair builds; upstream: harness-only, not filed | `docs:check` and three `test:sync-reverts` controls reject the upstream-only instructions |
 | Site working directory | harness follow-up | Run imported website commands from `packages/computer-use`, not the harness root; upstream: harness-only, not filed | `docs:check` and `test:sync-reverts` reject the old root-relative instructions |
 | Rust coverage | harness follow-up | Report-only LCOV and per-file text/JSON from the native crates; upstream: proposed after issue-first (draft (c) in the drafts file), currently labeled draft D there, not filed | `test:rust-coverage` arguments/paths/missing tool and `test:sync-reverts` missing-tool control |
 
@@ -237,8 +238,11 @@ repair was needed after the workspace move. The new test is declared in `sync-pa
 previous 45-file upstream-comparison evidence above predates this added harness-only file.
 
 Review follow-up: corrected `docs/README.md` to enter `packages/computer-use` before the site
-commands; `docs:check` plus a drop control reject the old harness-root instructions. The site's
-Next.js build remains NOT RUN, not implied by validating command paths.
+commands; `docs:check` plus a drop control reject the old harness-root instructions. A second
+review corrected the owned tutorial package name, the root release workflow/local-signing
+boundary and the missing Linux repair build opt-in/Cargo prerequisite. Three additional drop
+controls require those old instructions to fail. The site's Next.js build remains NOT RUN,
+not implied by validating command paths.
 
 Unchanged upstream judgement finding: `session_shutdown` calls inactive glow even when never used;
 its connection path may start the helper. Retained deliberately in this source sync rather than

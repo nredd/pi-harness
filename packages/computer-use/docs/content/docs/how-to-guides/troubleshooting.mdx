@@ -15,7 +15,18 @@ Run Pi as the same user and inside the same graphical session as the target apps
 busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Bus Address
 ```
 
-If it is missing, install or enable your distribution's AT-SPI2 services and restart the graphical login session. Reinstall the helper with `node scripts/setup-helper.mjs --platform linux --runtime`; for development use `npm run build:linux` followed by `node scripts/setup-helper.mjs --platform linux`. The installer replaces the helper whenever the build output differs from the installed copy.
+If it is missing, install or enable your distribution's AT-SPI2 services and restart the graphical login session.
+This owned package ships locked Linux source, not a Linux binary. Install Cargo and a C linker
+(e.g. `build-essential`), enter the installed `@nredd/pi-computer-use` package directory, and explicitly
+opt in to its cache-targeted source build:
+
+```bash
+PI_COMPUTER_USE_ALLOW_BUILD=1 node scripts/setup-helper.mjs --platform linux --runtime
+```
+
+For source development use `npm run build:linux` followed by the same opt-in installer command.
+The installer replaces the helper whenever the build output differs from the installed copy.
+See the [Linux source-build guide](./linux.mdx) for prerequisites and the writable cache path.
 
 AT-SPI semantic presses/clicks and editable-text replacement are attempted first on Linux. X11 also supports window capture plus non-headless EWMH focus and XTEST pointer/keyboard/scroll/drag fallback. Strict headless, `ax_only`, and `background` policies block XTEST/focus. Native Wayland remains semantic-only. Diagnostics may read portal version and capability properties, but never creates or starts a portal session. Interactive portal capture and input dispatch are disabled, so installing a portal backend alone does not enable them. The [Linux support guide](./linux.mdx) lists the full capability matrix.
 

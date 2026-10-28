@@ -17,6 +17,22 @@ if (
 	);
 }
 
+for (const [file, required, message] of [
+	["tutorials/getting-started.mdx", "pi install npm:@nredd/pi-computer-use", "tutorial must install the owned package"],
+	[
+		"how-to-guides/develop-and-validate.mdx",
+		"The harness root `.github/workflows/publish.yml` owns releases",
+		"release guide must identify the harness root workflow",
+	],
+	[
+		"how-to-guides/troubleshooting.mdx",
+		"PI_COMPUTER_USE_ALLOW_BUILD=1 node scripts/setup-helper.mjs --platform linux --runtime",
+		"Linux repair must opt in to the source build",
+	],
+]) {
+	if (!readFileSync(resolve(docsRoot, file), "utf8").includes(required)) failures.push(`${file}: ${message}`);
+}
+
 for (const mode of modes) {
 	const path = resolve(docsRoot, mode);
 	if (!existsSync(path) || !statSync(path).isDirectory()) failures.push(`Missing Diátaxis section: docs/${mode}/`);

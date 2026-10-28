@@ -14,6 +14,30 @@ const sandbox = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
 const nodeModules = path.resolve(root, "../../node_modules");
 const cases = [
 	{
+		name: "Owned tutorial package identity",
+		file: "docs/content/docs/tutorials/getting-started.mdx",
+		before: "pi install npm:@nredd/pi-computer-use",
+		after: "pi install npm:@injaneity/pi-computer-use",
+		check: "check-docs.mjs",
+		failure: /tutorial must install the owned package/,
+	},
+	{
+		name: "Owned release workflow documentation",
+		file: "docs/content/docs/how-to-guides/develop-and-validate.mdx",
+		before: "The harness root `.github/workflows/publish.yml` owns releases",
+		after: "The nested `.github/workflows/publish-npm.yml` owns releases",
+		check: "check-docs.mjs",
+		failure: /release guide must identify the harness root workflow/,
+	},
+	{
+		name: "Linux repair source-build opt-in",
+		file: "docs/content/docs/how-to-guides/troubleshooting.mdx",
+		before: "PI_COMPUTER_USE_ALLOW_BUILD=1 node scripts/setup-helper.mjs --platform linux --runtime",
+		after: "node scripts/setup-helper.mjs --platform linux --runtime",
+		check: "check-docs.mjs",
+		failure: /Linux repair must opt in to the source build/,
+	},
+	{
 		name: "Documentation site package working directory",
 		file: "docs/README.md",
 		before: "cd packages/computer-use",

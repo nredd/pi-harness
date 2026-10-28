@@ -14,6 +14,23 @@
 	},
 	"patches": [
 		{
+			"id": "owned-install-release-docs",
+			"purpose": "Document owned package identity, root release ownership and Linux build opt-in",
+			"files": [
+				"docs/content/docs/tutorials/getting-started.mdx",
+				"docs/content/docs/how-to-guides/develop-and-validate.mdx",
+				"docs/content/docs/how-to-guides/troubleshooting.mdx",
+				"scripts/check-docs.mjs"
+			],
+			"check": "check-docs.mjs",
+			"dropControls": [
+				"Owned tutorial package identity",
+				"Owned release workflow documentation",
+				"Linux repair source-build opt-in"
+			],
+			"upstream": "harness-only owned release/install policy; not filed"
+		},
+		{
 			"id": "site-working-directory",
 			"purpose": "Run imported website commands from the package rather than the harness root",
 			"files": ["docs/README.md", "scripts/check-docs.mjs"],
@@ -153,6 +170,9 @@
 		"README.md",
 		"UPSTREAM.md",
 		"docs/content/docs/how-to-guides/linux.mdx",
+		"docs/content/docs/how-to-guides/develop-and-validate.mdx",
+		"docs/content/docs/how-to-guides/troubleshooting.mdx",
+		"docs/content/docs/tutorials/getting-started.mdx",
 		"docs/content/docs/reference/agent/tools.mdx",
 		"docs/content/docs/reference/codebase.mdx",
 		"docs/content/docs/reference/configuration.mdx",

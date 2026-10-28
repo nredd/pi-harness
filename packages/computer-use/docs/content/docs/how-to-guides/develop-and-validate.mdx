@@ -3,6 +3,9 @@ title: 'Develop and validate changes'
 description: 'Repository layout, validation, native helper development, and release signing.'
 ---
 
+Run package-relative commands below from `packages/computer-use`, not the harness root.
+Use `npm run check` for the complete owned package gate (`npm test` below is its upstream test portion).
+
 ## Repository layout
 
 ```text
@@ -49,7 +52,7 @@ The runtime is state-scoped and outline-first:
 
 - `observe_ui` returns a compact control list and running note; `detail: "outline"` returns the folded outline.
 - `search_ui`, `expand_ui`, and `inspect_ui` provide progressive disclosure.
-- `act_ui` is the only public desktop action entrypoint.
+- `act_ui` is the state-scoped desktop action entrypoint. The carried macOS `desktop_input` tool is a separately gated physical fallback with a shared transaction lock.
 - UI observations are immutable records; request-local hydration replaces global current state.
 - Cached queries bypass scheduling; live work is ordered per physical resource.
 - Browser pages and desktop surfaces share the `@r` root forest and `@e` outline contract.
@@ -107,6 +110,14 @@ The harness creates its own D-Bus and Xvfb session. It fails rather than silentl
 
 ## macOS release signing
 
-`.github/workflows/publish-npm.yml` is the release source of truth. It builds a universal helper on `macos-14`, assembles the app with a `14.0` minimum system version, signs it with the configured certificate and hardened runtime, and verifies the signature. When the repository variable `NOTARIZE` is `true`, it submits and staples the app before packaging ([publish-npm.yml](https://github.com/injaneity/pi-computer-use/blob/main/.github/workflows/publish-npm.yml#L39)).
+The harness root `.github/workflows/publish.yml` owns releases of `@nredd/pi-computer-use`.
+Committed per-architecture macOS helpers are built locally; setup retains local signing with the
+existing keychain identity. This sync does not switch to an upstream-signed universal bundle,
+release, promote or activate anything. See the [signing and rollback runbook](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/UPSTREAM.md#signing-decision-and-rollback)
+and the harness [release procedure](https://github.com/nredd/pi-harness/blob/main/docs/releases.md).
 
-The workflow requires `APPLICATION_CERT_BASE64`, `CERT_PASSWORD`, and `SIGN_IDENTITY`. Optional notarization additionally requires `TEAM_ID`, `APPLE_ID`, and `APP_SPECIFIC_PASSWORD`. It stages the helper in a draft GitHub Release, injects the same artifact into the npm package, publishes npm, and publishes the GitHub Release last.
+The nested `.github/workflows/publish-npm.yml` is dormant upstream reference source, not the
+harness release path. Upstream's standalone workflow builds and signs a universal helper on
+`macos-14` with a `14.0` minimum system version; its optional `NOTARIZE` path submits and staples
+the app. Those upstream certificate/notarization secrets and artifact claims do not describe our
+retained local-signing path ([upstream workflow](https://github.com/injaneity/pi-computer-use/blob/main/.github/workflows/publish-npm.yml#L39)).
