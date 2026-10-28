@@ -112,34 +112,44 @@ test("failed new activation restores inactive state and frees workflow ownership
   assert.equal(contender.busy, false);
 });
 
-test("a stale ready-menu context is contained when presentation settles", async () => {
-  let presentations = 0;
-  const mock = createMockPi({ activeTools: ["read"] });
-  planMode(mock.pi, {
-    readSettings: async () => ({ kind: "missing" as const }),
-    loadInteractiveUi: async () => ({
-      ...(await import("../src/interactive-ui.js")),
-      showReadyPlanMenu: async () => {
-        presentations += 1;
-        throw new Error("Extension context is no longer active");
-      },
-    }),
+for (const stale of [true, false]) {
+  test(`${stale ? "a stale ready-menu context is contained" : "a non-stale ready-menu error escapes"} when presentation settles`, async () => {
+    let presentations = 0;
+    const failure = new Error(stale ? "Extension context is no longer active" : "menu backend failed");
+    const mock = createMockPi({ activeTools: ["read"] });
+    planMode(mock.pi, {
+      readSettings: async () => ({ kind: "missing" as const }),
+      loadInteractiveUi: async () => ({
+        ...(await import("../src/interactive-ui.js")),
+        showReadyPlanMenu: async () => {
+          presentations += 1;
+          throw failure;
+        },
+      }),
+    });
+    const context = createMockContext({ hasUI: true, mode: "tui" });
+    await mock.commands.get("plan")?.handler("start", context.ctx);
+    const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute;
+    assert.equal(typeof complete, "function");
+    await (complete as (...args: unknown[]) => Promise<unknown>)(
+      "ready",
+      { plan: "# Keep this plan" },
+      undefined,
+      undefined,
+      context.ctx,
+    );
+    const settle = mock.events.get("agent_settled")?.[0];
+    assert.ok(settle);
+    if (stale) await assert.doesNotReject(async () => settle({}, context.ctx), "stale presentation must be contained");
+    else
+      await assert.rejects(
+        async () => settle({}, context.ctx),
+        (error: unknown) => error === failure,
+      );
+    await settle({}, context.ctx);
+    const state = mock.entries.at(-1)?.data as { enabled: boolean; latestPlan?: string };
+    assert.equal(state.enabled, true);
+    assert.equal(state.latestPlan, "# Keep this plan");
+    assert.equal(presentations, 1, "presentation must run once and not repeat");
   });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
-  await mock.commands.get("plan")?.handler("start", context.ctx);
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute;
-  assert.equal(typeof complete, "function");
-  await (complete as (...args: unknown[]) => Promise<unknown>)(
-    "ready",
-    { plan: "# Keep this plan" },
-    undefined,
-    undefined,
-    context.ctx,
-  );
-  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
-  const state = mock.entries.at(-1)?.data as { enabled: boolean; latestPlan?: string };
-  assert.equal(state.enabled, true);
-  assert.equal(state.latestPlan, "# Keep this plan");
-  assert.equal(presentations, 1, "stale presentation must run once, settle without escaping, and not repeat");
-});
+}

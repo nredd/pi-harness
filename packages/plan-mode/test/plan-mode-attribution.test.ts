@@ -17,15 +17,22 @@ test("restored thinking failure rolls back state and releases the newly acquired
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "loaded" as const, settings: { thinkingLevel: "high" as const } }),
   });
-  const state = { type: "custom", customType: "plan-mode-state", data: { enabled: true, awaitingAction: false } };
+  const state = {
+    type: "custom",
+    customType: "plan-mode-state",
+    data: { enabled: true, awaitingAction: false, appliedThinkingLevel: "high", previousThinkingLevel: "low" },
+  };
   const sessionManager = { getBranch: () => [state], getEntries: () => [state] };
   const context = createMockContext({ hasUI: false, sessionManager });
   const start = mock.events.get("session_start")?.[0];
   assert.ok(start);
   const setThinkingLevel = mock.rawPi.setThinkingLevel;
   const failure = new Error("restored thinking level rejected");
-  mock.rawPi.setThinkingLevel = () => {
-    throw failure;
+  let thinkingAttempts = 0;
+  mock.rawPi.setThinkingLevel = (level) => {
+    setThinkingLevel(level);
+    thinkingAttempts += 1;
+    if (thinkingAttempts === 1) throw failure;
   };
 
   await assert.rejects(
@@ -33,6 +40,7 @@ test("restored thinking failure rolls back state and releases the newly acquired
     (error: unknown) => error === failure,
   );
 
+  assert.equal(mock.rawPi.getThinkingLevel(), "low", "outer rollback must restore the prior thinking level");
   assert.match((await questionGate(mock, context))?.reason ?? "", /only available while Plan mode is active/u);
   const contender = { session: sessionManager, group: "agent-workflow", busy: false };
   mock.eventBus.emit("workflow:mutex:v1", contender);
