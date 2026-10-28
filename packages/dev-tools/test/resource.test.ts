@@ -18,6 +18,14 @@ import type { RunOptions, RunResult } from "../src/core/index.ts";
 import { type ResourceSnapshotOptions, registerResourceTools, resourceSnapshot } from "../src/resource/index.ts";
 import { createMockPi } from "./support.ts";
 
+it("attempts the default Linux memory read and keeps optional failures null off Linux", async () => {
+	const fake = fakeSampler(fixture("linux", []));
+	const result = await resourceSnapshot(1, { createSampler: fake.createSampler }, undefined, INTERVAL_MS);
+	if (process.platform === "linux") expect(result.memory.availableBytes).toBeGreaterThan(0);
+	else expect(result.memory.availableBytes).toBeNull();
+	expect(fake.state.disposed).toBe(1);
+});
+
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const INTERVAL_MS = 100;
