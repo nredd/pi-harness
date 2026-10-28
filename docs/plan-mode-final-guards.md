@@ -1,6 +1,6 @@
 # Final Plan-mode guards
 
-Follow-up to the [attribution diagnosis](coverage-attribution.md). Istanbul measures the
+Follow-up to the [attribution diagnosis](plan-mode-coverage-attribution.md). Istanbul measures the
 real source. No provider, inventory, exclusion, threshold or artifact-architecture change
 is needed. The ledger names symbols and predicates so source offsets cannot confuse a
 covered queue predicate with the still-open partition branch.
