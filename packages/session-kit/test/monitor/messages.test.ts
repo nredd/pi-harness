@@ -37,6 +37,20 @@ describe("formatMessage", () => {
 		expect(message.text).not.toContain("quiet");
 	});
 
+	it("formats signal, stopped and timeout lifecycle outcomes", () => {
+		for (const [status, expected] of [
+			["exited", "died from SIGTERM after 0s"],
+			["stopped", "stopped after 0s"],
+			["timeout", "timed out after 0s and was killed"],
+		] as const) {
+			const message = formatMessage(info({ status, signal: status === "exited" ? "SIGTERM" : null, endedAt: 0 }), [], {
+				final: true,
+				wake: true,
+			});
+			expect(message.text).toContain(expected);
+		}
+	});
+
 	it("keeps dropped matched-line evidence in the wake", () => {
 		const message = formatMessage(
 			info({ lines: 250 }),
