@@ -9,6 +9,7 @@ import planMode, {
 import {
   findBlockedCommandSegment,
   findBlockedPowerShellCommandSegment,
+  findBlockedSshExecCall,
   isSafeCommand as isPolicySafeCommand,
   isSafePowerShellCommand,
 } from "../src/tool-policy.js";
@@ -498,22 +499,57 @@ test("tool policy classifies built-ins and extension tools consistently", () => 
   assert.equal(classifyPlanModeTool(extensionTool("custom") as PlanTool), "user-opt-in");
 });
 
-test("public policy entry points preserve quoted input, escaped shell words, and structured read-only commands", () => {
-  const ghPolicy = { gh: ["pr view"] };
+const configuredPolicy = { git: ["cat-file"], gh: ["pr view"], ssh: ["home"] };
 
-  for (const command of ['Get-Content "README file.md"', "Get-Content 'it''s a README'"]) {
-    assert.equal(isSafePowerShellCommand(command), true, command);
+test("Bash policy validates configured Git and gh commands after prefix mismatches", () => {
+  for (const command of [
+    'git --no-pager cat-file -p "HEAD"',
+    "git --no-pager cat-file --batch",
+    "git --no-pager cat-file --batch-check",
+    "grep escaped\\ file README.md",
+    "sed -En '1,10p' README.md",
+    "gh  pr view 1 --json number",
+    "gh api repos/nredd/pi-harness --method GET",
+  ]) {
+    assert.equal(isPolicySafeCommand(command, configuredPolicy), true, command);
   }
-  for (const command of ['Get-Content "$' + '{env:HOME}"', 'Get-Content "`"README.md`""']) {
-    assert.equal(isSafePowerShellCommand(command), false, command);
+  for (const command of [
+    "git --no-pager cat-file --filters HEAD",
+    "git --no-pager cat-file --textconv HEAD",
+    "git -c core.pager=cat cat-file -p HEAD",
+    "gh  pr view 1 --web --json number",
+    "gh  pr view 1 --json=",
+    "gh  pr view 1",
+    "gh api repos/nredd/pi-harness -X POST",
+  ]) {
+    assert.equal(isPolicySafeCommand(command, configuredPolicy), false, command);
   }
+});
 
-  assert.equal(isPolicySafeCommand("grep escaped\\ file README.md"), true);
-  assert.equal(isPolicySafeCommand("sed -En '1,10p' README.md"), true);
-  assert.equal(isPolicySafeCommand("git cat-file --filters HEAD", { git: ["cat-file"] }), true);
+test("PowerShell policy validates configured Git and gh commands after prefix mismatches", () => {
+  for (const command of ['git --no-pager cat-file -p "HEAD"', "gh  pr view 'it''s' --json=number"]) {
+    assert.equal(isSafePowerShellCommand(command, configuredPolicy), true, command);
+  }
+  for (const command of [
+    "git --no-pager cat-file --filters HEAD",
+    "gh  pr view 1 --web --json number",
+    "gh api repos/nredd/pi-harness --method POST",
+  ]) {
+    assert.equal(isSafePowerShellCommand(command, configuredPolicy), false, command);
+  }
+});
 
-  assert.equal(isPolicySafeCommand("gh pr view 185 --json number,title", ghPolicy), true);
-  assert.equal(isPolicySafeCommand("gh pr --help view", ghPolicy), false);
+test("remote policy validates configured Git and gh commands after prefix mismatches", () => {
+  for (const command of ['git --no-pager cat-file -p "HEAD"', "gh  pr view 1 --json number"]) {
+    assert.equal(findBlockedSshExecCall({ host: "home", command }, configuredPolicy), undefined, command);
+  }
+  for (const command of [
+    "git --no-pager cat-file --filters HEAD",
+    "gh  pr view 1 --web --json number",
+    "gh api repos/nredd/pi-harness --method POST",
+  ]) {
+    assert.match(findBlockedSshExecCall({ host: "home", command }, configuredPolicy) ?? "", /remote command/, command);
+  }
 });
 
 type TestSafeSubcommands = Record<string, readonly string[] | undefined>;
