@@ -661,7 +661,14 @@ async function run() {
     process.exitCode = 1;
   }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) void run();
+function isEntrypoint() {
+  try {
+    return !!process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+if (isEntrypoint()) void run();
 export {
   main,
   run

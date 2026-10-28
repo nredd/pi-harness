@@ -57,4 +57,13 @@ export async function run(): Promise<void> {
 	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) void run();
+/** Importers may supply an absent or unresolvable entrypoint, which must not prevent import. */
+function isEntrypoint(): boolean {
+	try {
+		return !!process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+	} catch {
+		return false;
+	}
+}
+
+if (isEntrypoint()) void run();

@@ -34,6 +34,17 @@ function seed(agentDir: string): void {
 }
 
 describe("stats CLI", () => {
+	it("imports source silently when the importer's entrypoint cannot be resolved", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = [process.execPath, join(dir, "nonexistent-importer")];
+		vi.resetModules();
+		await expect(import("../../src/stats/cli.ts")).resolves.toHaveProperty("main");
+		expect(log).not.toHaveBeenCalled();
+		expect(error).not.toHaveBeenCalled();
+		expect(process.exitCode).toBe(exitCode);
+	});
+
 	it("exports and imports explicit fixture directories from real argv", async () => {
 		seed(source);
 		const log = vi.spyOn(console, "log").mockImplementation(() => {});

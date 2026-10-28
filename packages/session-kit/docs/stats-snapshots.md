@@ -3,7 +3,9 @@
 Build the committed `dist/pi-stats-export.mjs` with `npm ci && npm run build:stats-export`.
 The exact esbuild version and dependencies are locked; tests assert byte-identical rebuilds.
 Copy only that file. Runtime is Node 22+ with builtins only, no Pi install, extension, private
-repository, package install, auth or network access.
+repository, package install, auth or network access. Importing the artifact is silent, even when
+an importing process supplies a nonexistent entrypoint argument; direct and symlinked Node execution
+still run the CLI.
 
 ```
 node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]

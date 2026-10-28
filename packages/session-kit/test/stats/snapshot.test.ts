@@ -356,10 +356,10 @@ describe("actual portable bundled CLI", () => {
 	}
 
 	/** Import a packed standalone executable and capture any accidental CLI output. */
-	function importArtifact(artifact: string) {
+	function importArtifact(artifact: string, importerArgs: string[] = []) {
 		return spawnSync(
 			process.execPath,
-			["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(artifact).href)})`],
+			["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(artifact).href)})`, ...importerArgs],
 			{
 				cwd: dir,
 				encoding: "utf8",
@@ -387,9 +387,12 @@ describe("actual portable bundled CLI", () => {
 		const exported = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
 		expect(exported.status, exported.stderr).toBe(0);
 		expect(JSON.parse(exported.stdout).snapshotDir).toContain("machines");
-		const imported = importArtifact(artifact);
-		expect(imported.status, imported.stderr).toBe(0);
-		expect(imported.stdout).toBe("");
+		for (const importerArgs of [[], [join(dir, "nonexistent-importer")]]) {
+			const imported = importArtifact(artifact, importerArgs);
+			expect(imported.status, imported.stderr).toBe(0);
+			expect(imported.stdout).toBe("");
+			expect(imported.stderr).toBe("");
+		}
 	});
 
 	it.runIf(process.platform !== "win32")("rejects a faulty URL guard and follows symlinks on POSIX", () => {
