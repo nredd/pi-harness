@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CHILD_ENTRY, isChildSession, isChildSessionName, registerChildIdentity } from "../src/child.ts";
 import {
+	configPath,
 	DEFAULT_COLLAPSE_KEY,
 	DEFAULT_MAX_WIDGET_LINES,
-	configPath,
 	defaultConfig,
 	isValidKeySpec,
 	loadConfig,

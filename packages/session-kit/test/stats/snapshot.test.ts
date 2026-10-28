@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -86,7 +95,10 @@ it("atomically enrolls one identity under concurrent first readers, and never re
 	writeFileSync(join(a, "pi-session-kit", "machine.json"), "{broken");
 	await expect(machineIdentity(a)).rejects.toThrow();
 	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toBe("{broken");
-	writeFileSync(join(a, "pi-session-kit", "machine.json"), JSON.stringify({ machineId: "not-a-uuid", label: "fixture" }));
+	writeFileSync(
+		join(a, "pi-session-kit", "machine.json"),
+		JSON.stringify({ machineId: "not-a-uuid", label: "fixture" }),
+	);
 	await expect(machineIdentity(a)).rejects.toThrow("Invalid installation identity");
 	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toContain("not-a-uuid");
 });
@@ -235,7 +247,10 @@ it("validates schemas with strict keys, digest, counters, month, IDs and travers
 
 it("reports malformed persisted global caches without trusting them", async () => {
 	mkdirSync(join(a, "pi-session-kit"), { recursive: true });
-	writeFileSync(join(a, "pi-session-kit", "stats-global.json"), JSON.stringify({ version: 1, importedAt: 0, machines: [], problems: [] }));
+	writeFileSync(
+		join(a, "pi-session-kit", "stats-global.json"),
+		JSON.stringify({ version: 1, importedAt: 0, machines: [], problems: [] }),
+	);
 	expect((await readGlobal(a)).problems).toEqual(["Unreadable global cache"]);
 	seed(a);
 	const exported = await exportStats(a, repo);
@@ -323,8 +338,11 @@ describe("actual portable bundled CLI", () => {
 			encoding: "utf8",
 		});
 		expect(packed.status, packed.stderr).toBe(0);
-		const [{ filename }] = JSON.parse(packed.stdout) as { filename: string }[];
-		const unpacked = spawnSync("tar", ["-xzf", join(tarballs, filename), "-C", extracted], { encoding: "utf8" });
+		const [result] = JSON.parse(packed.stdout) as { filename: string }[];
+		if (!result) throw new Error("npm pack returned no tarball");
+		const unpacked = spawnSync("tar", ["-xzf", join(tarballs, result.filename), "-C", extracted], {
+			encoding: "utf8",
+		});
 		expect(unpacked.status, unpacked.stderr).toBe(0);
 		return join(extracted, "package", "dist", "pi-stats-export.mjs");
 	}
@@ -339,10 +357,14 @@ describe("actual portable bundled CLI", () => {
 
 	/** Import a packed standalone executable and capture any accidental CLI output. */
 	function importArtifact(artifact: string) {
-		return spawnSync(process.execPath, ["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(artifact).href)})`], {
-			cwd: dir,
-			encoding: "utf8",
-		});
+		return spawnSync(
+			process.execPath,
+			["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(artifact).href)})`],
+			{
+				cwd: dir,
+				encoding: "utf8",
+			},
+		);
 	}
 	it("runs from tarball-extracted bytes without kit, Pi or node_modules; stdout is one object", () => {
 		seed(a);
@@ -377,9 +399,11 @@ describe("actual portable bundled CLI", () => {
 		symlinkSync(artifact, link);
 		expect(run(link, ["export", "--agent-dir", a, "--output", repo]).status).toBe(0);
 		const faulty = join(dir, "faulty#artifact?.mjs");
+		const interpolation = String.fromCharCode(36, 123);
+		const faultyGuard = `new URL(\`file://${interpolation}process.argv[1]}\`).href`;
 		const bytes = readFileSync(artifact, "utf8").replace(
 			"pathToFileURL(realpathSync(process.argv[1])).href",
-			"new URL(`file://${process.argv[1]}`).href",
+			faultyGuard,
 		);
 		writeFileSync(faulty, bytes);
 		const result = run(faulty, ["export", "--agent-dir", a, "--output", repo]);
@@ -403,9 +427,13 @@ describe("actual portable bundled CLI", () => {
 				.flatMap((s: { file: string }) => JSON.parse(readFileSync(join(snapshot, s.file), "utf8")).events)
 				.map((e: { input: number }) => e.input),
 		).toEqual([7]);
-		const explicit = run(artifact, ["export", "--agent-dir", a, "--output", repo, "--sessions-dir", join(a, "sessions")], {
-			PI_CODING_AGENT_SESSION_DIR: join(external, "sessions"),
-		});
+		const explicit = run(
+			artifact,
+			["export", "--agent-dir", a, "--output", repo, "--sessions-dir", join(a, "sessions")],
+			{
+				PI_CODING_AGENT_SESSION_DIR: join(external, "sessions"),
+			},
+		);
 		expect(explicit.status, explicit.stderr).toBe(0);
 		snapshot = JSON.parse(explicit.stdout).snapshotDir;
 		m = JSON.parse(readFileSync(join(snapshot, "manifest.json"), "utf8"));
