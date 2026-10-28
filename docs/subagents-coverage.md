@@ -35,10 +35,6 @@ Native-loader assertions remain functional tests, not credited as instrumented e
 | Inspector + initial viewer outcomes | 6675/7161 | 1360/1423 |
 | Final three themes | 6690/7161 | 1363/1423 |
 
-| File | Baseline missing L/F | Inspector missing L/F |
-| --- | ---: | ---: |
-| `src/ui/workflow-menu.ts` | 11/4 | 0/0 |
-
 Final per-file missing lines/functions:
 
 | File | Baseline | Final |
@@ -78,10 +74,11 @@ Visible row numbers independently pin regular-overlay and fullscreen page sizes.
 An uncommitted streaming reply appears exactly once, remains literal while live,
 and switches to Markdown after commit without leaking thinking blocks.
 
-Mutation receipts: changed URL/inline-code colors, removed terminal timer
-cancellation, reduced fullscreen/regular page-down to one row, and inverted the
-streaming-message membership guard. Two mutation runs exited 1, respectively four
-and two tests failed. Source restored exactly. The remaining function is the
+Mutation batch 1: changed URL color to accent, disabled settlement timer
+cancellation, reduced fullscreen page-down to one row, and inverted the streaming
+membership guard. All four viewer tests failed. Batch 2: changed inline-code color
+to accent and reduced regular page-down to one row. The styling and regular-page
+tests failed (two failures, three passes). Each batch exited 1. Source restored exactly. The remaining function is the
 empty ScrollView content invalidator passed by the constructor; no behavior or
 source was deleted to reduce the denominator.
 
@@ -105,6 +102,16 @@ No production or inprocess harness files changed; no extra inprocess or root-wid
 suite was run. All suites were serialized, no nested test fanout. Resource
 snapshots preceded full runs; other coverage/policy/TUI work was active.
 
+Durable raw final stdout is committed in `subagents-coverage-gate-{vitest,bun,lint,types}.txt`.
+Mutation failure excerpts for all six runs are in `subagents-coverage-mutations.txt`.
+The last run rechecks only the overlay-restore mutation after replacing polling
+with an explicit await of the actual rejected viewer promise: both rejection
+cases failed, other three cases passed. Restoration then passed the full gate.
+These are historical execution artifacts, not commands to read the owner's HOME.
+The inventory text files are similarly pinned to the baseline/final source
+revision, and need regeneration when source changes; their line numbers are
+Istanbul counter locations, not stable source citations.
+
 Next independent work, ranked by missing lines/functions:
 
 - Manager lifecycle callbacks: `src/agent-manager.ts` (21/7), then runner (8/2).
@@ -113,6 +120,5 @@ Next independent work, ranked by missing lines/functions:
 - Scheduling persistence/admission failures: `src/schedule.ts` (6/3), store (5/0).
 - Widget rendering (15/0) is independent of #182 but follows the recent widget PR.
 
-Priority independent work: manager lifecycle (21/7), workflow runtime (12/1).
 `index.ts` (352/33) and PR #182's model-selection/home/default/process-budget files
 are deliberately untouched. Widget work is separate from the viewer.

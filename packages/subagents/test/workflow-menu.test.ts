@@ -66,7 +66,8 @@ describe("workflow fleet inspector", () => {
     await openWorkflowFromFleet(f.task.id, f.deps);
     f.dialog().handleInput("c");
     expect(f.hidden).toEqual([true]);
-    await vi.waitFor(() => expect(f.hidden).toEqual([true, false]));
+    await expect(f.viewAgentConversation.mock.results[0].value).rejects.toBe(error);
+    expect(f.hidden).toEqual([true, false]);
     expect(f.viewAgentConversation).toHaveBeenCalledWith(f.context, record);
     expect(f.context.ui.notify).toHaveBeenCalledWith("Could not open the conversation: viewer broke", "warning");
   });

@@ -1,0 +1,65 @@
+Log: /tmp/subagents-menu-mutant.log
+ FAIL  test/workflow-menu.test.ts > workflow fleet inspector > reports a child swept after the dialog opened without opening an empty viewer
+AssertionError: expected "vi.fn()" to be called with arguments: [ …(2) ]
+ FAIL  test/workflow-menu.test.ts > workflow fleet inspector > restores the inspector after viewer failure Error: viewer broke
+ FAIL  test/workflow-menu.test.ts > workflow fleet inspector > restores the inspector after viewer failure viewer broke
+AssertionError: expected [ true, true ] to deeply equal [ true, false ]
+ FAIL  test/workflow-menu.test.ts > workflow fleet inspector > routes skip/retry to the selected runtime index and reports stale control outcomes
+AssertionError: expected "vi.fn()" to be called with arguments: [ 7 ]
+ Test Files  1 failed (1)
+      Tests  4 failed | 1 passed (5)
+
+Log: /tmp/subagents-viewer-mutant.log
+ FAIL  test/conversation-viewer-outcomes.test.ts > embedded conversation outcomes > styles links, quotes, separators and fenced source without an initialized host theme
+AssertionError: expected '<border>╭────────────────────────────…' to contain '<muted> (https://example.com)</muted>'
+ FAIL  test/conversation-viewer-outcomes.test.ts > embedded conversation outcomes > ticks only until the observed run settles and ignores stale events after disposal
+AssertionError: expected 1 to be +0 // Object.is equality
+ FAIL  test/conversation-viewer-outcomes.test.ts > embedded conversation outcomes > moves down and pages from the first line using the fullscreen viewport height
+AssertionError: expected 'row-002' to be 'row-017' // Object.is equality
+ FAIL  test/conversation-viewer-outcomes.test.ts > embedded conversation outcomes > shows an uncommitted streaming reply once and drops non-text streaming blocks
+AssertionError: expected '<border>╭────────────────────────────…' to contain 'live **literal**'
+ Test Files  1 failed (1)
+      Tests  4 failed (4)
+
+Log: /tmp/subagents-viewer-extra-mutant.log
+ FAIL  test/conversation-viewer-outcomes.test.ts > embedded conversation outcomes > styles links, quotes, separators and fenced source without an initialized host theme
+AssertionError: expected '<border>╭────────────────────────────…' to contain '<muted>inline-code</muted>'
+ FAIL  test/conversation-viewer-outcomes.test.ts > embedded conversation outcomes > pages regular overlays by their capped viewport height and preserves pixels after invalidation
+AssertionError: expected 'row-000' to be 'row-021' // Object.is equality
+ Test Files  1 failed (1)
+      Tests  2 failed | 3 passed (5)
+
+Log: /tmp/subagents-meta-mutant.log
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > rejects malformed phases [null] with actionable field-specific guidance
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > rejects malformed phases [[]] with actionable field-specific guidance
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > rejects malformed phases [7] with actionable field-specific guidance
+AssertionError: expected [Function] to throw error including '`meta.phases[0]` must be an object wi…' but got 'incorrect phase field'
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > rejects malformed phases [{title: 'Scan', detail: 7}] with actionable field-specific guidance
+AssertionError: expected [Function] to throw error including '`meta.phases[0].detail` must be a str…' but got 'incorrect phase field'
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > rejects malformed phases [{title: 'Scan', model: false}] with actionable field-specific guidance
+AssertionError: expected [Function] to throw error including '`meta.phases[0].model` must be a stri…' but got 'incorrect phase field'
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > does not mistake regex braces or division for the end of the metadata object
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > caches both valid names and the invalid-script fallback without borrowing another script's label
+AssertionError: expected 'wrong cached name' to be 'cached-real-name' // Object.is equality
+ Test Files  1 failed (1)
+      Tests  7 failed (7)
+
+Log: /tmp/subagents-meta-label-mutant.log
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > labels a path-only or named call {"scriptPath":"/tmp/saved/review.js"} without evaluating a script
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > labels a path-only or named call {"script":"","scriptPath":"C:\\saved\\review.js","name":"ignored"} without evaluating a script
+AssertionError: expected 'wrong-path' to be 'review.js' // Object.is equality
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > labels a path-only or named call {"name":"saved-review"} without evaluating a script
+AssertionError: expected 'wrong-name' to be 'saved-review' // Object.is equality
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > labels a path-only or named call {"name":""} without evaluating a script
+ FAIL  test/workflow-meta-outcomes.test.ts > workflow metadata outcomes > labels a path-only or named call {} without evaluating a script
+AssertionError: expected 'wrong-name' to be 'workflow' // Object.is equality
+ Test Files  1 failed (1)
+      Tests  5 failed | 7 passed (12)
+
+Log: /tmp/subagents-menu-await-mutant.log
+ FAIL  test/workflow-menu.test.ts > workflow fleet inspector > restores the inspector after viewer failure Error: viewer broke
+ FAIL  test/workflow-menu.test.ts > workflow fleet inspector > restores the inspector after viewer failure viewer broke
+AssertionError: expected [ true, true ] to deeply equal [ true, false ]
+ Test Files  1 failed (1)
+      Tests  2 failed | 3 passed (5)
+
