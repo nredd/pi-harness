@@ -41,6 +41,19 @@ test("headless activation reports unavailable Plan helpers as an error", async (
   assert.equal(context.statuses.get("plan-mode"), undefined);
 });
 
+test("interactive activation keeps Plan mode off when helpers are unavailable", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  mock.rawPi.setActiveTools(["read"]);
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext({ hasUI: true, mode: "tui" });
+
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.equal(context.statuses.get("plan-mode"), undefined);
+  assert.match(context.notifications.at(-1)?.message ?? "", /Cannot start Plan mode/u);
+  assert.equal(context.notifications.at(-1)?.level, "error");
+});
+
 test("a declined plan requires renewed confirmation before a second proposal", async () => {
   const mock = createMockPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
