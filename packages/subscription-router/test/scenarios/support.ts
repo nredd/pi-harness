@@ -42,7 +42,7 @@ export class CachedUsage extends UsageService {
 	}
 
 	/** Set one source-fixture window with the same reset/duration for every provider. */
-	set(provider: string, usedPercent: number, status: UsageSnapshot["status"] = "available"): void {
+	set(provider: string, usedPercent: number, status: UsageSnapshot["status"] = "available", ageMs = 0): void {
 		this.snapshots.set(provider, {
 			provider,
 			status,
@@ -55,8 +55,8 @@ export class CachedUsage extends UsageService {
 					durationMs: 3_600_000,
 				},
 			],
-			retrievedAt: this.clock.now(),
-			expiresAt: this.clock.now() + 60_000,
+			retrievedAt: this.clock.now() - ageMs,
+			expiresAt: ageMs > 0 || status === "stale" ? this.clock.now() : this.clock.now() + 60_000,
 		});
 	}
 

@@ -7,7 +7,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 
 | Job | Normal PR | `main` push | Docs-only PR or push | Proves |
 | --- | --- | --- | --- | --- |
-| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Reports success after the classifier logs the bypass | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (preset runs all of `test/`; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN. See the computer-use note below. |
+| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Reports success after the classifier logs the bypass | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo and inprocess run FULL Vitest suites on both engines with the shared homedir guard; subagents retains native scenarios plus a guarded real-loader gate until #174, with its full Node suite guarded; the other packages retain native Bun subsets; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN. See the computer-use note below. |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract` | Same | Reports success after the classifier logs the bypass | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
 | `stack (ubuntu-24.04, macos-14; personal, local)` | Node release-bundle D/E scenarios in each cell; each personal cell also builds the core Gitlink with Bun and runs standalone D/E for both stacks | Only `stack (ubuntu-24.04, personal)` runs, including both standalone stacks; the other three required job names log the selective smoke | Every cell reports success after the classifier logs the bypass | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 | `bench (not run)` | a notice and a step summary | Same | Same | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
@@ -90,6 +90,16 @@ Root core overrides: before the WSL `npm ci`, the job installs the pinned offici
 
 The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, a mounted Windows worktree, bootstrap failure, or any scenario failure fails it. Its always-running `wsl2-diagnostics` artifact retains the JUnit result, harness-generated synthetic failure artifacts, and explicit WSL/Pi/Gitlink identities outside the disposable Linux worktree. A pre-created status file makes an early failure explicit; preservation and cleanup warn without replacing the original harness status. It uploads neither arbitrary worktree files nor command/environment logs, so no credentials or runner state are dumped. It does not test the local stack, standalone binaries, macOS, Linux ARM64, packed contracts, benchmarks, live credentials, REA, or desktop/TCC helpers. It is deliberately one serial Windows-hosted execution rather than another broad OS/stack matrix. Its stable check name is a candidate for protection only after independent review and a native WSL2 green run; this PR does not change rulesets.
 
+`.github/workflows/installer.yml`, PRs and `main` pushes that change the installer or the harness modules it reuses, plus manual dispatch with a `stack_sha`:
+
+| Job | Runs | Proves |
+| --- | --- | --- |
+| `installer (ubuntu-24.04, macos-14)` | `make -C integration installer` with `INSTALLER_SPEC` set to this exact commit (`git+https://...@<sha>#subdirectory=integration`) and `STACK_SHA` the published promotion. The installer reads no token. On `main` pushes/dispatches and owner-reviewed same-repo pull requests (`head.repo.full_name == github.repository`), `GH_TOKEN` is set for the fallback when hosted runner IPs hit GitHub's anonymous 60 requests/hour limit. Job permissions are only `contents: read` and `attestations: read` (needed to fetch attestations); no write permissions are granted. Only the separate `Authenticate gh attestation fallback` step sees `GH_TOKEN`: it pipes the token to `gh auth login --with-token --insecure-storage` with `GH_TOKEN` unset in that child and a temporary `GH_CONFIG_DIR`. `--insecure-storage` deliberately confines the ephemeral login to that private plaintext config rather than an OS keychain, so removing the directory removes the login. `make` and pytest receive only the nonsecret directory path (`INSTALLER_GH_CONFIG_DIR`), not a token. Acceptance wraps `gh` alone to set `GH_CONFIG_DIR` to that path; `uvx`, Git, package builds and other installer children receive neither variable nor token. An always-running cleanup removes the login directory. Fork PRs and non-main dispatches stay anonymous and fail if the limit refuses them (`test_installer_workflow_token_policy` pins and evaluates the expression; `test_installer_workflow_token_permissions_are_read_only` pins permissions and checkout credential stripping). Triggers cover the installer's `harness` import closure, `conftest.py`, `.node-version`, `Makefile`, `pyproject.toml` and `uv.lock` (checked by `test_installer_workflow_covers_its_inputs`). | The documented one-shot `uvx` command in throwaway HOMEs: missing prerequisites, an unpromoted SHA, real `gh` rejecting tampered bytes and a foreign signer/ref, a fresh install equal to the snapshot (order, filters, disabled computer-use, owned npm integrity), a no-op rerun, consent and preservation with an existing setup, and a SIGKILL during staging then a clean rerun. See [install](install.md). |
+
+TRUST assumption: same-repo PR branches are owner-reviewed code. Same-repo `pull_request` workflows are not fork-sandboxed: a branch author can edit the PR's workflow to request write permissions or reference secrets. The read-only block constrains this submitted workflow only; it is not a security boundary against arbitrary same-repo PR code. KNOWN RESIDUAL: same-UID package code inherits the PATH-prepended `gh` shim through `uvx`, the installer, `pi install`, npm/package scripts and Git children that preserve PATH. `make`/pytest also receive `INSTALLER_GH_CONFIG_DIR`; stripping it and the token variables from other child environments does not remove the capability. A child can invoke the shim to authenticate or read its embedded config path and plaintext `hosts.yml`. This is known credential-capability leakage, not merely a theoretical filesystem permission concern. It remains within the same-repo trust assumption: the submitted job token is read-only, but branch authors already control their workflow. No claim of package-script credential isolation is made. The sentinel subprocess test `test_acceptance_token_environment_is_clean_but_gh_capability_remains` demonstrates both clean environments and successful same-UID credential retrieval using the real CLI and a real-format `hosts.yml`.
+
+It is not a required check and has no docs-only bypass; it only starts when its paths change.
+
 `.github/workflows/forks.yml`, when the remaining `forks/pi` Gitlink, `.gitmodules` or the workflow changes, plus manual dispatch:
 
 | Job | Runs |
@@ -113,7 +123,9 @@ The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, 
   `3.x` and leaves the imported subagents package's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
   source lockfile was retired with its Gitlink; the stack workspace pins `rpiv-config` and optional peer
   `rpiv-i18n` to the imported package's `2.13.9` provenance, with the same integrity as that historical lockfile
-- `isolateStackHome()` isolates `HOME`, `PI_CODING_AGENT_DIR`, XDG config before loading entries.
+- The test launcher isolates `HOME` at process spawn on both engines. `isolateStackHome()` keeps
+  that home fixed (Bun caches `os.homedir()`), isolating `PI_CODING_AGENT_DIR` and XDG config
+  independently per fixture before loading entries.
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
   `/todos` heading counts share the evidenced-batch test; no second process
@@ -140,6 +152,28 @@ The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, 
 
 The unit gates must not read the machine: the first CI run found three `integration/tests` that only
 passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
+
+Verification engines: Vitest stays the owned TypeScript runner, with Node primary (the shipped
+runtime) and Bun the standalone target. Full Vitest runs on both engines for
+`subscription-router`, `preset`, `resource-sampler`, `todo` and `integration/inprocess`.
+`test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
+spawn-time home; `make check-ts` and both existing `owned` OS cells run it. Each invocation
+prints engine/OS/package duration and exit status and appends it to the CI step summary.
+The shared guard checks `os.homedir() === HOME` at setup, before each test and after each test,
+failing with the offending file and an instruction to inject home directories. These are
+boundary checks, not interception of transient mutations between boundaries.
+
+Phase 2 #171 resolves the todo/subagents guard deferral from
+[spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
+[#160](https://github.com/nredd/pi-harness/issues/160). Both Vitest configs now install the
+shared guard and fixtures inject their homes instead of mutating `HOME`. Todo runs its full
+390-test suite on Bun. Subagents keeps its native-scenario subset plus the guarded real-loader
+gate; full Bun activation remains blocked by the unrelated workflow-runtime stack-line
+failure [#174](https://github.com/nredd/pi-harness/issues/174). Its full Node suite is guarded.
+No guard-related skip list or informational-only guard is used. See the current matrix,
+boundary negative controls and package-addition procedure [here](verification-engines.md).
+Python stays on pytest/uv/ruff/ty; dotfiles stays on dependency-free `node --test` as the
+bootstrap exception. Istanbul consolidation is phase 3, not part of this producer change.
 
 Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-version`, uv `0.13.1`
 (Python from `.python-version` via uv). Every action is pinned to a commit SHA.

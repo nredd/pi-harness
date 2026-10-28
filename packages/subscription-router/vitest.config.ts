@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+
 export default defineConfig({
 	test: {
 		coverage: {
@@ -17,5 +18,6 @@ export default defineConfig({
 				"src/usage.ts",
 			],
 		},
+		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
 	},
 });

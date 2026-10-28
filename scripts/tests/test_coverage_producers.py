@@ -68,9 +68,21 @@ def test_declared_bun_coverage_commands_have_both_reporters() -> None:
     for manifest in manifests:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
         if command:
-            assert "--coverage-reporter=text" in command, manifest
-            assert "--coverage-reporter=lcov" in command, manifest
-            assert "--coverage-dir=coverage/bun" in command, manifest
+            if "scripts/run-vitest.ts bun" in command and not command.startswith("bun test "):
+                assert command.startswith("node ../../scripts/run-vitest.ts bun "), manifest
+                assert "--coverage.provider=istanbul" in command, manifest
+                assert "--coverage.reporter=text" in command, manifest
+                assert "--coverage.reporter=lcov" in command, manifest
+                assert "--coverage.reportsDirectory=coverage/bun" in command, manifest
+                assert not re.search(r"\S+\.test\.[cm]?[jt]s", command), manifest
+                if manifest.parent.name == "resource-sampler":
+                    assert "--maxWorkers=1" in command
+                if manifest.parent.name == "todo":
+                    assert "--config .vitest.config.ts" in command
+            else:
+                assert "--coverage-reporter=text" in command, manifest
+                assert "--coverage-reporter=lcov" in command, manifest
+                assert "--coverage-dir=coverage/bun" in command, manifest
 
 
 def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:

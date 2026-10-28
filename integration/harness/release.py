@@ -24,16 +24,37 @@ import os
 import platform
 import re
 import shutil
+import ssl
 import subprocess
 import tarfile
 import tempfile
+import traceback
+import unicodedata
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from http import HTTPStatus
+from http.client import HTTPException, HTTPMessage, HTTPResponse, IncompleteRead, RemoteDisconnected
 from pathlib import Path
+from socket import gaierror
+from ssl import SSLError
 from types import MappingProxyType
-from urllib.request import urlopen
+from typing import IO, override
+from urllib import request as urllib_request
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, unquote, urlsplit
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
 
 LOGGER = logging.getLogger(__name__)
+CHILD_PATH: ContextVar[str | None] = ContextVar("installer_child_path", default=None)
 TAG = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)-nredd\.\d+$")
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 SRI_SHA512 = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
@@ -84,9 +105,625 @@ LEGACY_CHECKSUMS = MappingProxyType(
 LEGACY_RELEASE_TAGS = frozenset(LEGACY_CHECKSUMS)
 # Every asset the harness consumes, coding-agent and tui first: they are the ones npm installs.
 RELEASE_PACKAGES = ("pi-coding-agent", "pi-tui", "pi-agent-core", "pi-ai")
-ATTESTATION_WORKFLOW = "nredd/pi/.github/workflows/fork-release.yml"
-RELEASE_URL_PREFIX = "https://github.com/nredd/pi/releases/download/"
+CORE_REPO = "nredd/pi"
+ATTESTATION_WORKFLOW = f"{CORE_REPO}/.github/workflows/fork-release.yml"
+RELEASE_URL_PREFIX = f"https://github.com/{CORE_REPO}/releases/download/"
 ROOT_OVERRIDE_SCOPE = "@earendil-works/"
+ATTESTATIONS_API = "https://api.github.com"
+RATE_LIMIT_STATUSES = frozenset({403, 429})
+# Every variable `gh` reads a GitHub token from; only `gh`'s login fallback may see them.
+# https://cli.github.com/manual/gh_help_environment
+GITHUB_TOKEN_VARIABLES = frozenset(
+    {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+)
+# Exact, case-sensitive connectivity keys, never npm configuration or runtime injection.
+PROXY_ENVIRONMENT_KEYS = frozenset(
+    {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "all_proxy",
+    }
+)
+CA_FILE_ENVIRONMENT_KEYS = frozenset(
+    {"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
+)
+CA_ENVIRONMENT_KEYS = CA_FILE_ENVIRONMENT_KEYS | {"SSL_CERT_DIR"}
+CONNECTIVITY_ENVIRONMENT_KEYS = PROXY_ENVIRONMENT_KEYS | CA_ENVIRONMENT_KEYS
+# Fixed-width percent escapes have no greedy/unanchored scheme-search behavior.
+PERCENT_ESCAPE = re.compile(r"%[0-9a-fA-F]{2}")
+URL_SCHEME_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
+URL_AUTHORITY_DELIMITERS = frozenset("/\"'<>?#")
+PASSWORD_MASK_CHARACTERS = "*#~!^|?+="
+MAX_PROXY_REDACTION_VALUE_CHARACTERS = 8192
+# Runtime/location/locale only. Tool configuration and code-injection variables are not inherited.
+CHILD_ENVIRONMENT_KEYS = frozenset(
+    {
+        "HOME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "TERM",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+        "CI",
+        "GITHUB_ACTIONS",
+    }
+)
+ProvenanceCheck = Callable[[Path, str], None]
+# Bound public assets, including responses without Content-Length, before allocating their bodies.
+MAX_FETCH_BYTES = 256 * 1024 * 1024
+CONTENT_LENGTH = re.compile(r"[0-9]+")
+# Typeshed omits this runtime helper on macOS, where proxy_bypass also reads system state.
+# Select urllib's environment-only implementation explicitly, with our validated mapping.
+PROXY_BYPASS_ENVIRONMENT: Callable[[str, dict[str, str]], bool] = vars(urllib_request)[
+    "proxy_bypass_environment"
+]
+
+
+class HTTPSRedirectHandler(HTTPRedirectHandler):
+    """Refuse every redirect that leaves HTTPS, including cross-origin downgrades."""
+
+    @override
+    def redirect_request(
+        self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
+    ) -> Request | None:
+        """Validate the next URL before urllib can open it.
+
+        Parameters:
+            req (Request): original request.
+            fp (IO[bytes]): redirect response stream.
+            code (int): HTTP status.
+            msg (str): response reason.
+            headers (HTTPMessage): response headers.
+            newurl (str): resolved redirect destination.
+
+        Returns:
+            Request | None: urllib's redirected request.
+
+        Raises:
+            ValueError: the next hop is not HTTPS.
+        """
+        if urlsplit(newurl).scheme != "https":
+            raise ValueError(f"Redirect requires HTTPS, refused '{newurl}'")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class ValidatedProxyHandler(ProxyHandler):
+    """Use only explicit proxy/bypass policy, never ambient or platform proxy settings."""
+
+    proxies: dict[str, str]
+
+    @override
+    def proxy_open(self, req: Request, proxy: str, type: str) -> None:
+        """Configure HTTPS CONNECT using the validated proxy and explicit bypass list.
+
+        Parameters:
+            req (Request): HTTPS request, including its destination port.
+            proxy (str): selected proxy URL or authority.
+            type (str): protocol selected by urllib's handler dispatch.
+
+        Returns:
+            None: urllib's HTTPS handler completes the request or direct bypass.
+
+        Raises:
+            ValueError: the proxy is not an HTTP CONNECT authority.
+        """
+        if not proxy or PROXY_BYPASS_ENVIRONMENT(req.host, self.proxies):
+            return
+        parsed = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+        # urllib tunnels HTTPS origins but cannot layer TLS to an HTTPS proxy. Refuse
+        # that scheme rather than silently sending CONNECT credentials in plaintext.
+        if parsed.scheme != "http" or not parsed.hostname:
+            raise ValueError("Installer proxy requires an HTTP CONNECT authority")
+        if parsed.username is not None:
+            credentials = f"{unquote(parsed.username)}:{unquote(parsed.password or '')}"
+            encoded = base64.b64encode(credentials.encode()).decode("ascii")
+            req.add_unredirected_header("Proxy-Authorization", f"Basic {encoded}")
+        req.set_proxy(parsed.netloc.rsplit("@", 1)[-1], parsed.scheme)
+
+
+def urlopen(request: str | Request, *, timeout: int) -> HTTPResponse:
+    """Open HTTPS with the same validated connectivity policy as installer children.
+
+    Parameters:
+        request (str | Request): public HTTPS resource.
+        timeout (int): socket timeout in seconds.
+
+    Returns:
+        HTTPResponse: urllib response, including HTTP headers and bounded-read support.
+
+    Raises:
+        OSError | ValueError: transport configuration or HTTPS connection failed.
+    """
+    env = connectivity_environment(os.environ)
+    proxies = {
+        name: env.get(name + "_proxy", env.get(name.upper() + "_PROXY", ""))
+        for name in ("http", "https", "all", "no")
+    }
+    # urllib has no ALL_PROXY fallback by itself; make the documented fallback explicit.
+    if "https_proxy" not in env and "HTTPS_PROXY" not in env:
+        proxies["https"] = proxies["all"]
+    return build_opener(
+        ValidatedProxyHandler(proxies),
+        HTTPSHandler(context=fetch_ssl_context(env)),
+        HTTPSRedirectHandler(),
+    ).open(request, timeout=timeout)
+
+
+def fetch_ssl_context(env: Mapping[str, str]) -> ssl.SSLContext:
+    """Build TLS trust from validated CA paths and explicit compiled-in defaults.
+
+    Parameters:
+        env (Mapping[str, str]): validated connectivity values, never ambient OpenSSL overrides.
+
+    Returns:
+        ssl.SSLContext: hostname-verifying context with all configured additional CA bundles.
+
+    Raises:
+        OSError | ValueError: a configured CA bundle is unreadable or invalid.
+    """
+    defaults = ssl.get_default_verify_paths()
+    cafile = env.get("SSL_CERT_FILE")
+    capath = env.get("SSL_CERT_DIR")
+    if cafile is None and Path(str(defaults.openssl_cafile)).resolve().is_file():
+        cafile = defaults.openssl_cafile
+    if capath is None and Path(str(defaults.openssl_capath)).resolve().is_dir():
+        capath = defaults.openssl_capath
+    # Passing neither argument to create_default_context would silently reread ambient
+    # SSL_CERT_FILE/SSL_CERT_DIR, including values validation rejected. Fail closed instead.
+    context = (
+        ssl.create_default_context(cafile=cafile, capath=capath)
+        if cafile or capath
+        else ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    )
+    for key in ("NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        if key in env:
+            context.load_verify_locations(cafile=env[key])
+    return context
+
+
+def format_exception_redacted(error: BaseException) -> str:
+    """Format the complete cause/context chain through the one diagnostic sanitizer.
+
+    Parameters:
+        error (BaseException): untrusted transport exception and its traceback chain.
+
+    Returns:
+        str: formatted traceback without proxy URL userinfo.
+
+    Raises:
+        None.
+    """
+    return redact_diagnostic("".join(traceback.format_exception(error)))
+
+
+def detached_exception[Error: BaseException](replacement: Error, error: BaseException) -> Error:
+    """Prepare a redacted replacement with a sanitized cause and no original exception graph.
+
+    Callers must raise the returned exception OUTSIDE their except handler so Python cannot
+    reattach the raw exception as implicit `__context__`.
+
+    Parameters:
+        replacement (Error): operation-specific exception, preserving its domain type/metadata.
+        error (BaseException): untrusted underlying error and complete cause/context chain.
+
+    Returns:
+        Error: replacement with sanitized message and formatted cause, no raw traceback/context.
+
+    Raises:
+        ValueError: the original error was supplied as its own replacement.
+    """
+    if replacement is error:
+        raise ValueError("A detached exception requires a distinct replacement")
+    replacement.args = (redact_diagnostic(str(replacement)),)
+    if isinstance(replacement, SystemExit) and isinstance(replacement.code, str):
+        replacement.code = redact_diagnostic(replacement.code)
+    replacement.__cause__ = RuntimeError(format_exception_redacted(error))
+    replacement.__context__ = None
+    replacement.__traceback__ = None
+    return replacement
+
+
+def fetch_failure_reason(error: Exception) -> str:
+    """Translate transport exceptions into stable, single-line public reasons, never urllib repr.
+
+    Parameters:
+        error (Exception): HTTP, DNS, timeout, TLS, protocol, I/O or validation failure.
+
+    Returns:
+        str: readable reason without URL wrapping or response-body contents.
+
+    Raises:
+        None.
+    """
+    # Specific subclasses precede their parents: HTTPError -> URLError, and protocol/TLS
+    # failures -> HTTPException/OSError. Preserve that order when adding a transport category.
+    if isinstance(error, HTTPError):
+        try:
+            default = HTTPStatus(error.code).phrase
+        except ValueError:
+            default = "Unknown reason"
+        reason = f"HTTP {error.code} {error.reason or default}"
+    elif isinstance(error, URLError):
+        reason = (
+            fetch_failure_reason(error.reason)
+            if isinstance(error.reason, Exception)
+            else f"Network error: {error.reason}"
+        )
+    elif isinstance(error, gaierror):
+        reason = "DNS lookup failed"
+    elif isinstance(error, TimeoutError):
+        reason = "Request timed out"
+    elif isinstance(error, IncompleteRead):
+        expected = f", expected {error.expected} more" if error.expected is not None else ""
+        reason = f"Incomplete response: received {len(error.partial)} bytes{expected}"
+    elif isinstance(error, SSLError):
+        detail = error.strerror or (error.args[0] if error.args else "connection failed")
+        reason = f"TLS error: {detail}"
+    elif isinstance(error, RemoteDisconnected):
+        reason = f"Connection closed: {error}"
+    elif isinstance(error, HTTPException):
+        reason = f"HTTP protocol error: {error}"
+    elif isinstance(error, OSError):
+        reason = f"I/O error: {error.strerror or error}"
+    else:
+        reason = str(error)
+    return redact_diagnostic(" ".join(reason.split()))
+
+
+class FetchError(OSError):
+    """A public HTTP read failed; preserve status for the anonymous rate-limit fallback."""
+
+    def __init__(self, url: str, error: Exception) -> None:
+        """Keep the URL and reason without exposing callers to protocol-specific exceptions.
+
+        Parameters:
+            url (str): public resource URL.
+            error (Exception): HTTP, I/O, TLS, timeout or response-length failure.
+
+        Returns:
+            None: the public diagnostic names the requested URL once and retains the HTTP status.
+
+        Raises:
+            None.
+        """
+        self.status = error.code if isinstance(error, HTTPError) else None
+        super().__init__(redact_diagnostic(f"Could not fetch '{url}': {fetch_failure_reason(error)}"))
+
+
+def fetch_bytes(request: str | Request) -> bytes:
+    """Read a complete public response, normalizing HTTP and I/O failures in one place.
+
+    Parameters:
+        request (str | Request): public URL, optionally with an explicit `Accept` header only.
+
+    Returns:
+        bytes: complete response body, never a partially consumed response.
+
+    Raises:
+        FetchError: HTTPException (including IncompleteRead/RemoteDisconnected), OSError
+            (including TimeoutError/SSLError), non-HTTPS URL/redirect, invalid Content-Length,
+            length mismatch, headers other than `Accept` or response exceeding `MAX_FETCH_BYTES`.
+    """
+    url = request.full_url if isinstance(request, Request) else request
+    try:
+        # urllib forwards most caller headers across origins, including Authorization and Cookie;
+        # unredirected headers are the only general exception. Public downloads need only Accept.
+        if isinstance(request, Request) and any(key.lower() != "accept" for key, _ in request.header_items()):
+            raise ValueError("Public downloads permit only the `Accept` request header")
+        if urlsplit(url).scheme != "https":
+            raise ValueError("Download requires HTTPS")
+        with urlopen(request, timeout=120) as response:
+            lengths = response.headers.get_all("Content-Length", [])
+            length = None
+            if lengths:
+                if len(lengths) != 1 or CONTENT_LENGTH.fullmatch(lengths[0].strip()) is None:
+                    raise ValueError(f"Invalid Content-Length: '{lengths}'")
+                length = int(lengths[0])
+                if length > MAX_FETCH_BYTES:
+                    raise ValueError(f"Content-Length exceeds {MAX_FETCH_BYTES} bytes")
+                # urllib requests Connection: close. Read to EOF, not its parsed length, so
+                # both undersized and oversized declarations are checked against actual bytes.
+                response.length = None
+            body = response.read(MAX_FETCH_BYTES + 1)
+            if len(body) > MAX_FETCH_BYTES:
+                raise ValueError(f"Response exceeds {MAX_FETCH_BYTES} bytes")
+            if length is not None and len(body) != length:
+                raise ValueError(f"Content-Length mismatch: expected {length} bytes, received {len(body)}")
+            return body
+    except (HTTPException, OSError, ValueError) as error:
+        failure = detached_exception(FetchError(url, error), error)
+    # Raising outside the handler prevents Python attaching the raw error as __context__.
+    raise failure from failure.__cause__
+
+
+class AttestationRateLimitedError(RuntimeError):
+    """GitHub's anonymous API rate limit refused an attestation lookup."""
+
+
+@contextmanager
+def pinned_child_path(node: str) -> Iterator[None]:
+    """Freeze child PATH at preflight, prioritizing the validated Node dispatcher.
+
+    Parameters:
+        node (str): preflight-selected Node path; links are not resolved.
+
+    Yields:
+        None: child environments use this run's absolute search path.
+
+    Raises:
+        OSError: the current directory cannot be determined.
+    """
+    path = os.pathsep.join(
+        [
+            str(Path(node).absolute().parent),
+            *(str(Path(entry).absolute()) for entry in os.environ.get("PATH", os.defpath).split(os.pathsep)),
+        ]
+    )
+    token = CHILD_PATH.set(path)
+    try:
+        yield
+    finally:
+        CHILD_PATH.reset(token)
+
+
+def redact_diagnostic(text: str) -> str:
+    """Remove URL userinfo and every occurrence of configured encoded/decoded passwords.
+
+    Known proxies come from `os.environ`. Password masking ignores length and word boundaries;
+    a one-character mask absent from all passwords prevents growth or reintroduced secrets.
+    Oversized potential userinfo values or exhausted safe mask characters elide diagnostics.
+
+    Parameters:
+        text (str): untrusted diagnostic before truncating its output tail.
+
+    Returns:
+        str: sanitized text, or an empty string when bounded safe masking is unavailable.
+
+    Raises:
+        None: valid string diagnostics do not raise.
+    """
+    representations: dict[str, str] = {}
+    tokens: set[str] = set()
+    passwords: set[str] = set()
+    for key in sorted(PROXY_ENVIRONMENT_KEYS):
+        value = os.environ.get(key, "")
+        if "@" not in value:
+            continue
+        if len(value) > MAX_PROXY_REDACTION_VALUE_CHARACTERS:
+            return ""
+        scheme, separator, rest = value.partition("://")
+        if not separator:
+            rest = value
+        authority = rest.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        if "@" not in authority:
+            continue
+        userinfo = authority.rsplit("@", 1)[0]
+        clean_rest = rest[len(userinfo) + 1 :]
+        prefix = scheme + separator if separator else ""
+        for original, clean in ((value, prefix + clean_rest), (rest, clean_rest)):
+            representations[original] = clean
+            representations[unquote(original)] = unquote(clean)
+        # Split before decoding: an encoded colon may belong to the username itself.
+        password = userinfo.partition(":")[2]
+        if password:
+            for credentials in (userinfo, unquote(userinfo)):
+                tokens |= {credentials, credentials + "@"}
+            decoded = unquote(password)
+            for form in (password, decoded):
+                for canonical in (
+                    form,
+                    unicodedata.normalize("NFC", form),
+                    unicodedata.normalize("NFD", form),
+                ):
+                    passwords |= {canonical, quote(canonical, safe="", errors="surrogatepass")}
+    for original in sorted(representations, key=lambda value: (-len(value), value)):
+        clean = representations[original]
+        text = (
+            text.replace(original, clean)
+            if "://" in original
+            else replace_diagnostic_token(text, original, clean)
+        )
+    text = redact_url_userinfo(text)
+    for token in sorted(tokens, key=lambda value: (-len(value), value)):
+        text = replace_diagnostic_token(text, token)
+    if not passwords:
+        return text
+    # Escaped hex digits are case-insensitive. Normalize only escape spelling, never
+    # ordinary letters, so mixed `%c3%A4` forms cannot bypass literal password passes.
+    text = normalize_percent_escape_case(text)
+    passwords = {normalize_percent_escape_case(password) for password in passwords}
+    alphabet = set("".join(passwords))
+    mask = next((character for character in PASSWORD_MASK_CHARACTERS if character not in alphabet), "")
+    if not mask:
+        return ""
+    # At most twelve forms for each of eight keys (raw/decoded, original/NFC/NFD,
+    # literal/encoded). Each literal pass is linear, cannot grow
+    # text, and cannot create any password across a replacement boundary.
+    for password in sorted(passwords, key=lambda value: (-len(value), value)):
+        if password:
+            text = text.replace(password, mask)
+    return text
+
+
+def normalize_percent_escape_case(text: str) -> str:
+    """Canonicalize percent-escape hex case in linear time without decoding or lowercasing text.
+
+    Parameters:
+        text (str): diagnostic or known password representation.
+
+    Returns:
+        str: text with only fixed-width percent-escape hex digits uppercased.
+
+    Raises:
+        None: valid string inputs do not raise.
+    """
+    return PERCENT_ESCAPE.sub(lambda match: match[0].upper(), text)
+
+
+def redact_url_userinfo(text: str) -> str:
+    """Scan URL authorities in linear work, removing userinfo through their final `@`.
+
+    Each delimiter search advances; scheme walks cannot cross a prior `://`, and an
+    authority scan stops at its first delimiter. A nested scheme's colon is revisited once.
+
+    Parameters:
+        text (str): untrusted diagnostic, potentially much larger than its displayed tail.
+
+    Returns:
+        str: original text except for credential-bearing URL authority prefixes.
+
+    Raises:
+        None: valid string diagnostics do not raise.
+    """
+    if not text:
+        return text
+    parts: list[str] = []
+    search = 0
+    copied = 0
+    while (delimiter := text.find("://", search)) >= 0:
+        start = delimiter
+        has_letter = False
+        while start > 0 and text[start - 1] in URL_SCHEME_CHARACTERS:
+            start -= 1
+            character = text[start]
+            has_letter |= "A" <= character <= "Z" or "a" <= character <= "z"
+        authority = delimiter + 3
+        if not has_letter:
+            search = authority
+            continue
+        end = authority
+        last_at = -1
+        while end < len(text):
+            character = text[end]
+            if character.isspace() or character in URL_AUTHORITY_DELIMITERS:
+                break
+            if character == "@":
+                last_at = end
+            end += 1
+        if last_at >= 0:
+            parts.append(text[copied:authority])
+            copied = last_at + 1
+        search = max(authority, end - 1)
+    if not parts:
+        return text
+    parts.append(text[copied:])
+    return "".join(parts)
+
+
+def replace_diagnostic_token(text: str, token: str, replacement: str = "[redacted]") -> str:
+    """Replace a known diagnostic token only at non-word boundaries, never word substrings.
+
+    Parameters:
+        text (str): diagnostic after complete URL redaction.
+        token (str): known authority or userinfo pair, encoded or decoded.
+        replacement (str): clean authority or the default `[redacted]` marker.
+
+    Returns:
+        str: diagnostic with only matching whole tokens replaced.
+
+    Raises:
+        ValueError: an empty token would make scanning ambiguous.
+    """
+    if not token:
+        raise ValueError("A redaction token must not be empty")
+    parts: list[str] = []
+    offset = 0
+    while (position := text.find(token, offset)) >= 0:
+        end = position + len(token)
+        before = text[position - 1] if position else ""
+        after = text[end] if end < len(text) else ""
+        whole = not (before.isalnum() or before == "_" or after.isalnum() or after == "_")
+        parts.extend((text[offset:position], replacement if whole else token))
+        offset = end
+    return "".join(parts) + text[offset:]
+
+
+def connectivity_environment(env: Mapping[str, str]) -> dict[str, str]:
+    """Validate the shared child/fetch connectivity allowlist without exposing values.
+
+    Parameters:
+        env (Mapping[str, str]): untrusted parent transport settings.
+
+    Returns:
+        dict[str, str]: unchanged valid values, retaining both case variants for children.
+
+    Raises:
+        None.
+    """
+    result: dict[str, str] = {}
+    for key in sorted(CONNECTIVITY_ENVIRONMENT_KEYS):
+        if key not in env:
+            continue
+        value = env[key]
+        if any(character in value for character in ("\u0000", "\n", "\r")):
+            LOGGER.warning(f"Dropping `{key}`: NUL/newline is not allowed")
+            continue
+        if key in CA_ENVIRONMENT_KEYS:
+            try:
+                path = Path(str(value)).resolve()
+                valid = (
+                    Path(str(value)).is_absolute()
+                    and path.exists()
+                    and (path.is_dir() if key == "SSL_CERT_DIR" else path.is_file())
+                )
+            except (OSError, RuntimeError):
+                valid = False
+            if not valid:
+                LOGGER.warning(f"Dropping `{key}`: expected an absolute existing CA path")
+                continue
+        result[key] = value
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        lower = key.lower()
+        if key in result and lower in result and result[key] != result[lower]:
+            LOGGER.warning(f"Conflicting `{key}` and `{lower}`: installer fetch prefers `{lower}`")
+    return result
+
+
+def child_environment(
+    env: Mapping[str, str],
+    *,
+    overrides: Mapping[str, str] | None = None,
+    github_tokens: bool = False,
+) -> dict[str, str]:
+    """Build every child environment from runtime/connectivity allowlists and owned overrides.
+
+    Connectivity values containing NUL/CR/LF and CA paths that are not absolute existing
+    files/directories are dropped with value-free warnings. Proxy userinfo is preserved
+    for the child; use `redact_diagnostic` before displaying any child output.
+
+    Parameters:
+        env (Mapping[str, str]): untrusted parent environment, filtered by explicit key.
+        overrides (Mapping[str, str] | None): installer-owned tool settings, never parent passthrough.
+        github_tokens (bool): allow GitHub tokens and `GH_CONFIG_DIR` only for gh login fallback.
+
+    Returns:
+        dict[str, str]: explicit environment with absolute PATH entries and selected Node first.
+
+    Raises:
+        OSError: an unpinned relative PATH cannot be made absolute.
+    """
+    allowed = CHILD_ENVIRONMENT_KEYS | (
+        GITHUB_TOKEN_VARIABLES | {"GH_CONFIG_DIR"} if github_tokens else set()
+    )
+    result = {key: value for key, value in env.items() if key in allowed}
+    result |= connectivity_environment(env)
+    result |= dict(overrides or {})
+    path = CHILD_PATH.get()
+    if path is None:
+        path = os.pathsep.join(
+            str(Path(entry).absolute()) for entry in result.get("PATH", os.defpath).split(os.pathsep)
+        )
+    return result | {"PATH": path}
 
 
 def gitlink_tag(directory: Path) -> str:
@@ -102,15 +739,33 @@ def gitlink_tag(directory: Path) -> str:
         RuntimeError: the Gitlink is untagged.
     """
     try:
-        return subprocess.check_output(
-            [GIT_BIN, "-C", str(directory), "describe", "--tags", "--exact-match"],
-            text=True,
-            stderr=subprocess.STDOUT,
-        ).strip()
-    except subprocess.CalledProcessError as error:
-        raise RuntimeError(
-            f"Core Gitlink at '{directory}' is untagged; release it before gating pins: {error.output}"
-        ) from error
+        # Match the sandbox's explicit-environment/isolated-HOME policy. No inherited GIT_*,
+        # askpass, credential configuration, XDG config, or token can redirect this checkout.
+        with tempfile.TemporaryDirectory(prefix="pi-gitlink-home-") as home:
+            return subprocess.check_output(
+                [GIT_BIN, "-C", str(directory), "describe", "--tags", "--exact-match"],
+                env=child_environment(
+                    os.environ,
+                    overrides={
+                        "PATH": os.defpath,
+                        "HOME": home,
+                        "XDG_CONFIG_HOME": home,
+                        "GIT_CONFIG_NOSYSTEM": "1",
+                        "GIT_TERMINAL_PROMPT": "0",
+                    },
+                ),
+                text=True,
+                stderr=subprocess.STDOUT,
+            ).strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = error.output if isinstance(error, subprocess.CalledProcessError) else str(error)
+        failure = detached_exception(
+            RuntimeError(
+                f"Core Gitlink at '{directory}' is untagged; release it before gating pins: {detail}"
+            ),
+            error,
+        )
+    raise failure from failure.__cause__
 
 
 def release_asset_url(tag: str, name: str) -> str:
@@ -162,10 +817,11 @@ def release_checksums(tag: str) -> dict[str, str]:
     if tag in LEGACY_RELEASE_TAGS:
         return {release_asset_url(tag, name): digest for name, digest in LEGACY_CHECKSUMS[tag].items()}
     try:
-        with urlopen(release_asset_url(tag, "SHA256SUMS"), timeout=120) as response:
-            contents = response.read().decode("utf-8")
-    except OSError as error:
-        raise ValueError(f"Could not download release checksums for '{tag}'") from error
+        contents = fetch_bytes(release_asset_url(tag, "SHA256SUMS")).decode("utf-8")
+    except FetchError as error:
+        raise ValueError(str(error)) from error
+    except UnicodeError as error:
+        raise ValueError(f"Could not decode release checksums for '{tag}': {error}") from error
     checksums: dict[str, str] = {}
     for line in contents.splitlines():
         fields = line.split(maxsplit=1)
@@ -192,52 +848,178 @@ def _error_tail(error: subprocess.CalledProcessError | subprocess.TimeoutExpired
 
     Returns:
         str: decoded output tail, empty when nothing was captured.
+
+    Raises:
+        None.
     """
     output = error.output or ""
     if isinstance(output, bytes):
         output = output.decode("utf-8", errors="replace")
-    return output[-6000:]
+    return redact_diagnostic(output)[-6000:]
 
 
-def verify_provenance(path: Path, tag: str) -> None:
-    """Require GitHub provenance from the dedicated core-release workflow.
+def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
+    """Download the public GitHub attestation bundles for one artifact digest, without credentials.
+
+    The attestations API answers anonymously for public repositories, so a verifier needs no
+    GitHub login and no token ever leaves the machine. The bundles are only inputs to
+    `gh attestation verify --bundle`, which checks them; they are trusted for nothing else.
 
     Parameters:
-        path (Path): downloaded release artifact.
-        tag (str): exact core tag bound to the source ref.
+        repo (str): `owner/name` that must have produced the attestation.
+        path (Path): artifact whose SHA-256 selects the attestations.
+        destination (Path): JSON Lines file to write, one Sigstore bundle per line.
+
+    Returns:
+        Path: `destination`.
+
+    Raises:
+        AttestationRateLimitedError: GitHub's anonymous rate limit refused the request.
+        RuntimeError: the API could not be read, answered malformed JSON, or lists no attestation.
+    """
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    url = f"{ATTESTATIONS_API}/repos/{repo}/attestations/sha256:{digest}"
+    request = Request(url, headers={"Accept": "application/vnd.github+json"})
+    try:
+        document = json.loads(fetch_bytes(request))
+    except FetchError as error:
+        if error.status in RATE_LIMIT_STATUSES:
+            raise AttestationRateLimitedError(f"Anonymous attestations API refused: {error}") from error
+        raise RuntimeError(f"Attestation lookup failed for '{path.name}': {error}") from error
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"Could not read attestations for '{path.name}' from '{url}': {error}") from error
+    attestations = document.get("attestations") if isinstance(document, dict) else None
+    bundles = [item.get("bundle") for item in attestations or [] if isinstance(item, dict)]
+    if not bundles or not all(isinstance(bundle, dict) for bundle in bundles):
+        raise RuntimeError(f"No attestation bundle for '{path.name}' (sha256 '{digest}') in '{repo}'")
+    destination.write_text("".join(json.dumps(bundle) + "\n" for bundle in bundles))
+    return destination
+
+
+def verify_attestation(
+    path: Path,
+    repo: str,
+    signer_workflow: str,
+    source_ref: str,
+    bundle: Path | None = None,
+    *,
+    gh_bin: str | None = None,
+) -> None:
+    """Require GitHub build provenance for one artifact from an exact repository, workflow and ref.
+
+    Parameters:
+        path (Path): artifact to verify.
+        repo (str): `owner/name` the attestation must belong to.
+        signer_workflow (str): `owner/name/.github/workflows/<file>` that must have signed it.
+        source_ref (str): exact Git ref the signing run must have built.
+        bundle (Path | None): local bundle file; absent, `gh` fetches with its own login.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
 
     Raises:
         FileNotFoundError: GitHub CLI is unavailable.
         RuntimeError: the artifact lacks the required provenance identity.
     """
-    if not Path(GH_BIN).is_file():
-        raise FileNotFoundError(f"Core release verification requires `gh` at '{GH_BIN}'")
+    gh_bin = str(Path(gh_bin or GH_BIN).absolute())
+    if not Path(gh_bin).is_file():
+        raise FileNotFoundError(f"Attestation verification requires `gh` at '{gh_bin}'")
+    # A local bundle needs no GitHub API call, so `gh` gets a token only when it must fetch.
+    env = child_environment(os.environ, github_tokens=bundle is None)
     try:
         subprocess.check_output(
             [
-                GH_BIN,
+                gh_bin,
                 "attestation",
                 "verify",
                 str(path),
+                *(["--bundle", str(bundle)] if bundle is not None else []),
                 "--repo",
-                "nredd/pi",
+                repo,
                 "--signer-workflow",
-                ATTESTATION_WORKFLOW,
+                signer_workflow,
                 "--source-ref",
-                f"refs/tags/{tag}",
+                source_ref,
                 "--deny-self-hosted-runners",
             ],
+            env=env,
             text=True,
             stderr=subprocess.STDOUT,
             timeout=120,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError(
-            f"Core release provenance verification failed for '{path}': {_error_tail(error)}"
-        ) from error
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = (
+            _error_tail(error)
+            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired))
+            else str(error)
+        )
+        failure = detached_exception(
+            RuntimeError(f"GitHub provenance verification failed for '{path}': {detail}"), error
+        )
+    else:
+        return
+    raise failure from failure.__cause__
 
 
-def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
+def verify_public_attestation(
+    path: Path, repo: str, signer_workflow: str, source_ref: str, *, gh_bin: str | None = None
+) -> None:
+    """Verify provenance from the anonymous bundle, falling back to `gh`'s own login when rate-limited.
+
+    The fallback lets `gh` fetch the attestation with whatever login it already has (`gh auth
+    login` or `GH_TOKEN`); this module never reads a credential. Without one, the rate limit
+    stays a verification failure.
+
+    Parameters:
+        path (Path): artifact to verify.
+        repo (str): `owner/name` the attestation must belong to.
+        signer_workflow (str): workflow that must have signed it.
+        source_ref (str): exact Git ref the signing run must have built.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: no bundle exists, or the artifact lacks the required provenance identity.
+    """
+    try:
+        bundle: Path | None = attestation_bundle(repo, path, path.with_name(f"{path.name}.sigstore.jsonl"))
+    except AttestationRateLimitedError as error:
+        LOGGER.warning(
+            redact_diagnostic(f"{error}; retrying with `gh attestation verify` and gh's own login")
+        )
+        bundle = None
+    verify_attestation(path, repo, signer_workflow, source_ref, bundle, gh_bin=gh_bin)
+
+
+def verify_provenance(path: Path, tag: str, bundle: Path | None = None) -> None:
+    """Require GitHub provenance from the dedicated core-release workflow.
+
+    Parameters:
+        path (Path): downloaded release artifact.
+        tag (str): exact core tag bound to the source ref.
+        bundle (Path | None): local attestation bundle; absent, `gh` fetches with its own login.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: the artifact lacks the required provenance identity.
+    """
+    verify_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}", bundle)
+
+
+def verify_provenance_anonymously(path: Path, tag: str, *, gh_bin: str | None = None) -> None:
+    """Verify core provenance from the public attestation bundle (see `verify_public_attestation`).
+
+    Parameters:
+        path (Path): downloaded release artifact.
+        tag (str): exact core tag bound to the source ref.
+        gh_bin (str | None): preflight-selected dispatcher path, default `GH_BIN`.
+
+    Raises:
+        FileNotFoundError: GitHub CLI is unavailable.
+        RuntimeError: no bundle exists or it does not prove the required identity.
+    """
+    verify_public_attestation(path, CORE_REPO, ATTESTATION_WORKFLOW, f"refs/tags/{tag}", gh_bin=gh_bin)
+
+
+def verify_asset(path: Path, url: str, checksums: Mapping[str, str]) -> None:
     """Require downloaded bytes to match a recorded release identity.
 
     Parameters:
@@ -258,14 +1040,22 @@ def verify_asset(path: Path, url: str, checksums: dict[str, str]) -> None:
     LOGGER.info(f"Release asset '{url}' sha256={actual}")
 
 
-def download_verified_asset(url: str, tag: str, checksums: dict[str, str], destination: Path) -> Path:
+def download_verified_asset(
+    url: str,
+    tag: str,
+    checksums: Mapping[str, str],
+    destination: Path,
+    provenance: ProvenanceCheck | None = None,
+) -> Path:
     """Download one release asset, then require its recorded sha256 and, for new tags, provenance.
 
     Parameters:
         url (str): canonical release URL.
         tag (str): exact core tag the URL belongs to.
-        checksums (dict[str, str]): the tag's recorded assets.
+        checksums (Mapping[str, str]): the tag's recorded assets.
         destination (Path): file to write.
+        provenance (ProvenanceCheck | None): per-asset verifier taking the asset and tag;
+            defaults to `verify_provenance` (the caller's `gh` login).
 
     Returns:
         Path: `destination`, whose bytes are verified.
@@ -274,13 +1064,13 @@ def download_verified_asset(url: str, tag: str, checksums: dict[str, str], desti
         ValueError: no recorded checksum or the bytes disagree.
         RuntimeError: a non-legacy asset lacks the required provenance.
         FileNotFoundError: a non-legacy asset needs `gh`, which is unavailable.
-        OSError: the download (including `URLError`) or the write to `destination` failed.
+        FetchError: the public download failed with a normalized URL/reason diagnostic.
+        OSError: writing the downloaded bytes to `destination` failed.
     """
-    with urlopen(url, timeout=120) as response:
-        destination.write_bytes(response.read())
+    destination.write_bytes(fetch_bytes(url))
     verify_asset(destination, url, checksums)
     if tag not in LEGACY_RELEASE_TAGS:
-        verify_provenance(destination, tag)
+        (provenance or verify_provenance)(destination, tag)
     return destination
 
 
@@ -438,7 +1228,29 @@ def prune_native(node_modules: Path, system: str, arch: str) -> None:
                 shutil.rmtree(directory)
 
 
-def fetch_release(tag: str, prefix: Path) -> Path:
+def release_tarballs(tag: str) -> list[str]:
+    """Return the release tarball filenames of `RELEASE_PACKAGES` for one core tag, in order.
+
+    Parameters:
+        tag (str): core fork release tag.
+
+    Returns:
+        list[str]: filenames; the first two are the ones `fetch_release` installs.
+
+    Raises:
+        ValueError: not a core fork release tag.
+    """
+    return [url.rsplit("/", 1)[1] for url in release_package_urls(tag).values()]
+
+
+def fetch_release(
+    tag: str,
+    prefix: Path,
+    provenance: ProvenanceCheck | None = None,
+    checksums: Mapping[str, str] | None = None,
+    *,
+    npm_bin: str | None = None,
+) -> Path:
     """Verify every consumed release asset, then install into a new private prefix, never the live one.
 
     New tags must publish all of `RELEASE_PACKAGES`. Legacy tags are verified for exactly the assets
@@ -448,6 +1260,11 @@ def fetch_release(tag: str, prefix: Path) -> Path:
     Parameters:
         tag (str): released core tag.
         prefix (Path): empty installation prefix.
+        provenance (ProvenanceCheck | None): per-asset verifier taking the asset and tag;
+            defaults to `verify_provenance` (the caller's `gh` login).
+        checksums (Mapping[str, str] | None): release URL -> SHA-256 the downloaded bytes must
+            match; defaults to `release_checksums(tag)`.
+        npm_bin (str | None): preflight-selected dispatcher path, default `NPM_BIN`.
 
     Returns:
         Path: private pi executable.
@@ -457,18 +1274,18 @@ def fetch_release(tag: str, prefix: Path) -> Path:
         RuntimeError: provenance or npm installation failed.
         FileNotFoundError: npm is unavailable.
     """
-    release_package_urls(tag)
+    urls = list(release_package_urls(tag).values())
     if prefix.exists() and any(prefix.iterdir()):
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
-    checksums = release_checksums(tag)
-    urls = list(release_package_urls(tag).values())
+    checksums = dict(release_checksums(tag) if checksums is None else checksums)
     if tag in LEGACY_RELEASE_TAGS:
         urls = [url for url in urls if url in checksums]
     for url in urls:
         if url not in checksums:
             raise ValueError(f"No recorded release checksum for '{url}'")
-    if not Path(NPM_BIN).is_file():
-        raise FileNotFoundError(f"Release installation requires `npm` at '{NPM_BIN}'")
+    npm_bin = str(Path(npm_bin or NPM_BIN).absolute())
+    if not Path(npm_bin).is_file():
+        raise FileNotFoundError(f"Release installation requires `npm` at '{npm_bin}'")
     prefix.mkdir(parents=True, exist_ok=True)
     home = prefix / "fetch-home"
     home.mkdir()
@@ -485,11 +1302,11 @@ def fetch_release(tag: str, prefix: Path) -> Path:
     assets = []
     for url in urls:
         asset = prefix / url.rsplit("/", 1)[1]
-        assets.append(download_verified_asset(url, tag, checksums, asset))
+        assets.append(download_verified_asset(url, tag, checksums, asset, provenance))
     try:
         subprocess.check_output(
             [
-                NPM_BIN,
+                npm_bin,
                 "install",
                 "--global",
                 "--prefix",
@@ -501,13 +1318,22 @@ def fetch_release(tag: str, prefix: Path) -> Path:
                 str(assets[0]),
             ],
             cwd=prefix,
-            env=env,
+            env=child_environment(os.environ, overrides=env),
             text=True,
             stderr=subprocess.STDOUT,
             timeout=600,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError(f"Core release npm installation failed: {_error_tail(error)}") from error
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = (
+            _error_tail(error)
+            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired))
+            else str(error)
+        )
+        failure = detached_exception(RuntimeError(f"Core release npm installation failed: {detail}"), error)
+    else:
+        failure = None
+    if failure is not None:
+        raise failure from failure.__cause__
     modules = prefix / "lib/node_modules/@earendil-works/pi-coding-agent/node_modules"
     destination = modules / "@earendil-works/pi-tui"
     if destination.exists():
@@ -526,7 +1352,15 @@ def fetch_release(tag: str, prefix: Path) -> Path:
 
 
 def main() -> None:
-    """Fetch a supplied tag or Gitlink tag, or verify the root overrides before `npm ci`."""
+    """Fetch a supplied tag or Gitlink tag, or verify the root overrides before `npm ci`.
+
+    Returns:
+        None: the requested installation or verification completed.
+
+    Raises:
+        SystemExit: invalid CLI arguments or failed root override verification.
+        OSError | ValueError | RuntimeError: release resolution, verification or installation failed.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0] if __doc__ else None)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -548,8 +1382,12 @@ def main() -> None:
         try:
             verify_root_overrides(args.root.resolve())
         except (ValueError, RuntimeError, OSError) as error:
-            raise SystemExit(f"Root core override verification failed: {error}") from error
-        return
+            failure = detached_exception(
+                SystemExit(f"Root core override verification failed: {error}"), error
+            )
+        else:
+            return
+        raise failure from failure.__cause__
     if args.prefix is None:
         parser.error("`--prefix` is required with `--tag` or `--gitlink`")
     tag = args.tag or gitlink_tag(args.gitlink.resolve())

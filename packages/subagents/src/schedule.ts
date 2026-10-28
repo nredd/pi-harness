@@ -22,7 +22,7 @@ import type { AgentManager } from "./agent-manager.js";
 import { normalizeMaxTurns } from "./agent-runner.js";
 import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
-import { type ModelSelection, selectModel } from "./model-selection.js";
+import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
 import type { ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
@@ -53,6 +53,7 @@ export interface NewJobInput {
 
 /** Optional in-process scheduling dependencies; omitted clock uses native time. */
 export interface SubagentSchedulerOptions {
+  homeDir?: string;
   clock?: Clock;
 }
 
@@ -65,7 +66,7 @@ export class SubagentScheduler {
   private ctx: ExtensionContext | undefined;
   private manager: AgentManager | undefined;
 
-  constructor(options: SubagentSchedulerOptions = {}) {
+  constructor(private readonly options: SubagentSchedulerOptions = {}) {
     this.clock = options.clock ?? realClock;
   }
 
@@ -251,6 +252,7 @@ export class SubagentScheduler {
     const dispatch = resolveSpawnType(job.subagent_type);
     const config = dispatch.ok ? getAgentConfig(dispatch.type) : undefined;
     const selection = dispatch.ok ? selectModel({
+      homeDir: this.options.homeDir,
       agentType: dispatch.type, definitionModel: config?.model, agentLabel: config?.displayName,
       paramModel: job.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd,
     }) : dispatch.message;
@@ -265,8 +267,12 @@ export class SubagentScheduler {
     // A quota-parked job re-asks the router before starting: the window it
     // waited for may have refilled while another is still exhausted.
     const admissionModel = selection.model;
-    if (job.quotaParked && admissionModel) {
-      void checkAdmission(pi.events, modelRef(admissionModel)).then(block => {
+    if ((job.quotaParked || selection.tierBinding) && admissionModel) {
+      const admission = selection.tierBinding
+        ? admitModelSelection(selection, ctx.modelRegistry, pi.events)
+        : checkAdmission(pi.events, modelRef(admissionModel));
+      void admission.then(block => {
+        if (this.store !== store || this.ctx !== ctx) return;
         if (!block) {
           this.spawnJob(id, selection);
         } else if (mayPark(block) && block.resetAt > this.clock.now()) {
@@ -278,6 +284,10 @@ export class SubagentScheduler {
           this.store?.update(id, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
           this.emit({ type: "error", jobId: id, error: `${describeBlock(block)} The agent was not started.` });
         }
+      }).catch(error => {
+        if (this.store !== store) return;
+        store.update(id, { lastStatus: "error" });
+        this.emit({ type: "error", jobId: id, error: error instanceof Error ? error.message : String(error) });
       });
       return;
     }
@@ -291,6 +301,7 @@ export class SubagentScheduler {
       enabled: true,
       schedule: new Date(resetAt + QUOTA_RESTART_GRACE_MS).toISOString(),
       lastStatus: undefined,
+      quotaParked: true,
     });
   }
 

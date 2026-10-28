@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Claude Code look & feel** — same tool names, calling conventions, and UI patterns (`Agent`, `get_subagent_result`, `steer_subagent`) — feels native
 - **Parallel background agents** — spawn multiple agents that run concurrently with automatic queuing (configurable concurrency limit, default 10) and completion notifications that reach the parent at its next boundary, several at once when they finish together
 - **Live widget UI** — persistent above-editor widget with animated spinners, live tool activity, token counts, and colored status icons. Configurable via `/agents → Settings → Widget`: `all` (every agent), `background` (default — hides foreground runs, which already render inline as the `Agent` tool result), or `off`
-- **FleetView** — Claude Code-style navigable list of `main` + every running subagent rendered below the editor (earliest-launched first). Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
+- **FleetView** — one-line summary below the editor by default; `ctrl+shift+a` expands the Claude Code-style navigable list of `main` + every running subagent (earliest-launched first). Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
 - **Conversation viewer** — select any agent in `/agents` to open a live-scrolling overlay of its full conversation (auto-follows new content, scroll up to pause). In pi's fullscreen mode it is a borderless, full-terminal observer with mouse support. Steer a running agent inline by pressing `Enter` to open a composer, typing, then `Enter` to send (`Esc` or an empty submit returns) — the message appears as a user message and redirects the agent after its current tool. Press `b` on a running foreground `Agent` call to hand that run to the background (see [Sending a foreground agent to the background](#sending-a-foreground-agent-to-the-background)). Stop a still-running agent by pressing `x` (then `x` again to confirm) — steer and stop both work for background agents too. Assistant text renders as Markdown; `m` cycles that between off, assistant-only and everything (see [Viewer markdown](#persistent-settings))
 - **Custom agent types** — define agents in `.pi/agents/<name>.md` or `.agents/agents/<name>.md` (project) or globally, with YAML frontmatter: custom system prompts, model selection, thinking levels, tool restrictions, and Claude Code-compatible colored name badges
 - **Package-shipped agents** — a pi package can declare its own subagents (and workflow scripts) with `"pi": { "subagents": { "agents": ["./agents"] } }` in its `package.json`, so `pi install` is the whole setup: no copying files into `.pi/agents/` on every machine or container start. Only packages pi has actually installed are read (never `node_modules`), package definitions rank below every agent you wrote, and `/agents` shows them read-only with Eject and Disable. Narrow or switch it off with `packageAgents` / `packageWorkflows`. **[Full guide](https://github.com/tintinweb/pi-subagents/blob/master/docs/packages.md)**
@@ -54,7 +54,7 @@ pi -e ./src/index.ts
 
 Requires pi **1.1.0 or newer**: pi 0.86 and 0.87 moved the system prompt and conversation history into the session transcript, and the `@handle` conversation clone and the agent transcript files are built on that model. The `peerDependencies` range declares it, so npm flags an older pi at install time.
 
-### In-process factory and clock
+### In-process factory, clock and home
 
 `src/index.ts` exports `createSubagentsExtension(options: SubagentsExtensionOptions = {}): ExtensionFactory`.
 The default export is `createSubagentsExtension()` and keeps native time and timer reference behavior.
@@ -70,8 +70,12 @@ declare const clock: Clock;
 const extension = createSubagentsExtension({ clock });
 ```
 
-`SubagentsExtensionOptions` has one optional field, `clock?: Clock`. The exported clock contract matches
-session-kit's scheduling boundary:
+`SubagentsExtensionOptions` accepts `clock?: Clock` and `homeDir?: string`. An explicit home binds
+user-scoped discovery, settings and child-session paths without mutating `HOME`; omitted homes keep
+call-time host defaults. Explicit agent/session directory overrides still win. The boundary audit and
+test seams are documented [here](docs/home-injection.md).
+
+The exported clock contract matches session-kit's scheduling boundary:
 
 ```ts
 interface TimerHandle { cancel(): void; unref?(): void }
@@ -163,7 +167,7 @@ Schedule formats:
 - **One-shot relative** — `"+10m"`, `"+2h"`, `"+1d"`. Fires once at that future time.
 - **One-shot absolute** — full ISO timestamp, e.g. `"2026-12-25T09:00:00.000Z"`.
 
-When a schedule fires, the spawn runs in background and its completion notification arrives the same way as a manually-spawned background agent's — your parent agent reasons about the result the same way. Model selection runs at fire time with the manual-dispatch precedence: stored explicit `model`, current `agentModels[type]`, `agentModels["*"]`, definition, parent. A stored explicit model that no longer resolves or is out of scope fails the job instead of being replaced. Quota-parked jobs retain the original explicit input, not a snapshot of the configured or parent model. The job stores the resolved thinking level when you create it: an explicit `Agent({ thinking })` wins over the agent definition then, while an omitted value keeps the definition's default. Editing the agent file later does not replace that stored level.
+When a schedule fires, the spawn runs in background and its completion notification arrives the same way as a manually-spawned background agent's — your parent agent reasons about the result the same way. Model selection runs at fire time with the manual-dispatch precedence: stored `model` request (including a captured configured tier), current `agentModels[type]`, `agentModels["*"]`, definition, parent. A stored explicit model that no longer resolves or is out of scope fails the job instead of being replaced. Tier jobs retain the `@tier` request, including a configured tier, and re-resolve its binding at fire time. Other quota-parked jobs retain the original explicit input, not a snapshot of the configured or parent model. The job stores the resolved thinking level when you create it: an explicit `Agent({ thinking })` wins over the agent definition then, while an omitted value keeps the definition's default. Editing the agent file later does not replace that stored level.
 
 **Session switches.** `/new`, `/resume`, `/fork` and `/reload` do not stop running background agents. They keep showing in the fleet list of the reloaded session while they run (open, stop and steer work from there), finish on their own, and the session that spawned them gets the completion notification when you return to it (immediately if it is already open). Held notices survive the switch too: unread results are transferred to the session spool and re-enter the same boundary outbox on return, without repeating their history entries. The preview is in the notification; the full output is in the transcript file it names, since `get_subagent_result` cannot reach an agent from a previous session. Quitting pi still aborts everything. A step that routes through the old session's virtual model (`router/*`) while the switch is in flight is re-prompted up to three times with backoff; if it never recovers the agent ends `error` with `interrupted by a session reload` and its last tool calls and output as the result, not `No output`. Usage and compaction observers bound to the old session are dropped rather than failing the run (any other observer error is logged once and also kept from failing it), and the structured-output retry and forced final report are not attempted on a runtime that is still stale, so `subagents:usage` and `subagents:compacted` stop for an agent detached by a switch.
 
@@ -179,13 +183,13 @@ Restrictions:
 
 ### Quota admission
 
-With a subscription router installed (e.g. [pi-subscription-router](https://github.com/nredd/pi-subscription-router)), a fresh `Agent` dispatch first asks it whether the model is out of included quota, over `pi.events`: `router:rpc:admit` `{ requestId, model: "provider/id" }`, replied on `router:rpc:admit:reply:<requestId>` as `{ success, data: { ok, resolvedModel?, resetAt?, wait? } }` (`resolvedModel` is ignored; `wait: false` is the router's exhaustion policy saying fail now, absent means wait).
+With a subscription router installed (e.g. [pi-subscription-router](https://github.com/nredd/pi-subscription-router)), a fresh `Agent` dispatch first asks it whether the model is out of included quota, over `pi.events`: `router:rpc:admit` `{ requestId, model: "provider/id" }`, replied on `router:rpc:admit:reply:<requestId>` as `{ success, data: { ok, resolvedModel?, resetAt?, wait? } }` (`resolvedModel` labels the admitted model for tiers; `wait: false` is the router's exhaustion policy saying fail now, absent means wait).
 
 - Admitted, or no router answers within 100ms: the agent starts as usual
 - Refused, background, reset known, `wait` not `false`, scheduling on: the dispatch is parked as a one-shot scheduled job a minute after the reset, persisted like any schedule. When it fires it asks again and re-parks at the new reset while still blocked; if the refusal can no longer park (`wait: false`, no reset, or a reset already past) the job is not started and ends with `lastStatus: "error"` and an error event. Only an explicit admission, or no router answering, starts it. If pi was closed through the reset, it asks again 10s after the session starts, once the router has warmed its usage cache
 - Refused otherwise (foreground, `inherit_context`, scheduling off, unknown reset, or `wait: false`): the call fails with the reset time and no agent starts
 
-Resumes, cron and interval jobs, and RPC or workflow spawns are not gated. A `router/*` virtual model still routes each request inside the child.
+Live resumes keep their existing selection. Tier requests are admitted on every fresh entry path, including RPC, mentions, nested and workflow children, and every scheduled fire. Only top-level `Agent` background calls and scheduled fires can persist a quota wait; other refused starts error. A `router/*` virtual model still routes and fails over inside the child.
 
 ## UI
 
@@ -219,10 +223,31 @@ The status, elapsed time and tokens are read from the agent record on every rend
 
 ### FleetView
 
-While subagents are running, a Claude Code-style navigable list renders **below** the editor:
+FleetView starts **collapsed**, rendering exactly one line below the editor, with no overflow rows or blank spacer. Always-collapsed is deliberate: it saves space even for one agent and avoids resizing when a fan-out crosses a threshold. `ctrl+shift+a` toggles it; the settled explicit choice is recorded as a versioned `subagents:fleet-state` custom entry, outside model context.
+
+Auto-repeat events are ignored. A 300ms quiet period coalesces rapid toggles (net-no-change bursts write nothing); shutdown flushes the final choice before the activation loses its context. This bounds writes per burst, not all-time size of the host's append-only journal. The last valid choice on the active branch survives ticks, widget resets, `/reload`, and restarting/resuming that session. A fresh session defaults to collapsed. Temporary arrow navigation writes no state entry. This uses the fleet's existing focus-aware terminal-input handler, like its arrows and the foreground `ctrl+b` handoff; there is no subagent key-rebinding setting. Todo's `ctrl+shift+t`, monitors' `ctrl+shift+m`, and pi's `ctrl+o` keep their existing roles.
+
+```text
+agents: 3 running, 2 queued, 4 done · ~$28.70 · ctrl+shift+a to expand
+[1 failed, 2 parked, 1 fallback] agents: 3 running, 1 failed, 2 parked · ctrl+shift+a to expand
+```
+
+Counts cover top-level records, including running starts and queued/waiting agents without a session, plus workflow containers (not their children). `steered` counts as done; errors and aborted runs count as failed; stopped runs stay distinct. Successful/stopped records retain the existing four-second linger.
+
+Unacknowledged errors and aborted runs do not expire from the fleet: the UI journals minimal failure identities and acknowledgements, replayed from the active session branch on reload or disk resume. Terminal callbacks and detached-result ingress record failures explicitly, including failures between render ticks. It retains at most 128 detailed alerts (id, agent type, short sanitized description, terminal state and timestamp), never complete records/results/sessions; four durable per-kind overflow counters preserve exact outstanding totals beyond that cap. Overflow contributes to both collapsed and expanded headers, but has no individual navigation rows. Specific overflow ids can still be acknowledged through result consumption. The existing session journal is the identity authority: overflow deduplication/acknowledgement scans it backwards in O(branch length) time and O(1) extra space; checkpoints restore bounded state without replaying all failures. No additional file/global registry or unbounded UI id/ack set is kept. Live record and workflow-owner observation uses weak keys, not retained records; recreated workflow display projections do not rescan acknowledged/overflow identities every tick. Each failure/ack transition writes one bounded checkpoint (up to 128 minimal details plus counters), trading journal bytes for bounded checkpoint replay; no all-time compaction is claimed. Old failures cannot leave a healthy-looking header or hide the widget.
+
+Acknowledged means the existing `resultConsumed` flag was set by inline result delivery, `get_subagent_result`, RPC consume, or successfully closing the failed agent's FleetView conversation. A session-less/restored failure is acknowledged by selecting it to read its error or minimal-metadata toast. Restored workflow failures without a live inspector use the same toast acknowledgement. Merely delivering a completion notice, ticking, or a viewer-open failure does not acknowledge it. Failed workflow containers stay until their inspector closes successfully; paused runs stay blocked until resumed/stopped.
+
+Enabled quota-parked schedules awaiting dispatch count as parked even with no agent record, and clear when dispatched, disabled or removed.
+
+Failed/parked/paused-workflow/fallback counts lead in a shared, uncut flag; at narrow widths these compact to `[E1 P2 B1 F1]` (failed, parked, blocked/paused, fallback). Compact counts above 99 read `99+`; spaces yield before alerts, so all four still fit at 20 columns (`[E99+P99+B99+F99+]`). Below 20 columns alerts yield in reverse priority (fallback, paused, parked), never ahead of the failure flag; if even its count cannot fit, the marker is `!`, never the misleading `[fb]`. Cost uses record-borne estimates only when `showCost` is on; it is the sum for the agents currently summarized, not a session ledger, and excludes workflow-container spend. Narrow lines drop trailing detail and the hint before leading alerts. An empty fleet still hides entirely; the standalone summary renderer has a one-line zero-count form.
+
+At an empty prompt, `↓` or `←` temporarily reveals the list and starts navigation. `Esc`, selecting `main`, or typing returns to the explicit disclosure choice; dialogs and conversation overlays keep their keys. `ctrl+shift+a` while navigating collapses and returns to the editor. The separate above-editor activity widget (`widgetMode`) and transcript/result/notice renderers are unchanged.
+
+Expanded, the existing navigable list renders **below** the editor:
 
 ```
-  esc to interrupt · ← for agents · ↓ to manage
+  esc to interrupt · ← for agents · ↓ to manage · ctrl+shift+a to collapse
 
   ● main
   ○ workflow         audit-src                    12/40 agents · 32s · ↓ 26.4k tokens
@@ -231,7 +256,7 @@ While subagents are running, a Claude Code-style navigable list renders **below*
                                           ↓ 3 more: 2 running, 1 failed
 ```
 
-Running [workflows](#subagentworkflow) appear as a single `workflow` row above the agents, carrying their agent counts in place of a description. `Enter` on one opens the same two-pane inspector `/agents → Workflows` does, rather than a conversation overlay. A run's own agents are *not* listed separately — they belong to the run, which reports for them, so they are filtered out of the fleet list, the above-editor widget, the `/agents` menus and `@handle` resolution exactly as nested children are. They are also outside the `maxConcurrent` pool: the run has its own concurrency cap, and routing a fan-out through the session pool as well would let one workflow starve everything else. The agents are ordered earliest-launched first, and only agents you can actually open are shown (pending/queued agents with no session yet appear once they start). At an **empty prompt**, press `↓` (or `←`) to move focus from the prompt into the list — the selected row is marked `●`, the rest `○`. The row block stays at five lines once the roster reaches five rows; overflowing lists show three rows plus `↑ N more: 2 running` / `↓ N more: 1 queued, 1 failed` indicators that count the hidden rows by state (blank at an edge), without moving the content below it. Each agent row carries its state as a glyph and a word in a fixed first column (`▶ running`, `◦ queued`, `✓ done`, `✓ limit`, `✗ failed`, `✗ aborted`, `■ stopped`), so colour is never the only cue; a spawner's `name` leads the description (`pr-1412: Spec review ...`), the configured thinking level reads `think:high` so it cannot be mistaken for the live `thinking · 4s` activity, and columns are sized from every row, not the visible window. A configured-model fallback keeps its shared leading `[fallback]` flag even with `showModel` off; column fitting reserves space for flags on hidden rows too, so scrolling cannot shift the tail. On a narrow terminal the description truncates first, then the activity, thinking and model columns drop (in that order). If a fallback row still cannot fit its stats, the shared leading flag compacts to `[fb]` or `!`, never a sliced fragment. For every row, after optional columns and any flag compaction, state words shrink to glyphs, separators and column padding collapse to spaces, and navigation padding disappear as needed. Elapsed, tokens and cost stay whole whenever they physically fit beside the marker (if present); if space is still insufficient, the state glyph and then elapsed yield before tokens or cost may clip. The selected row renders in the theme's primary text color rather than the muted/dim treatment of the others; an agent with a configured `color` shows its badge there too, bolded. `↑`/`↓` move the selection, `Enter` opens the selected agent's live conversation overlay (it auto-updates as the agent works), and `Esc` (or `↑` above `main`) returns to the prompt. Selecting `main` returns to the normal view. Inside the overlay, press `Enter` to steer the running agent — type a message and `Enter` to send it (`Esc` or an empty submit returns), and it redirects the agent the same way the `steer_subagent` tool does. On a running foreground `Agent` call, press `b` to hand that run to the background; the hint only shows where the handoff is available. A viewer stays open when its agent finishes so you can read the final output, and finished agents linger in the list for a few seconds before dropping out. Typing anything at a non-empty prompt behaves normally — the list only captures arrow keys when the prompt is empty. Disable it entirely via `/agents → Settings → Fleet view`.
+Running [workflows](#subagentworkflow) appear as a single `workflow` row above the agents, carrying their agent counts in place of a description. `Enter` on one opens the same two-pane inspector `/agents → Workflows` does, rather than a conversation overlay. A run's own agents are *not* listed separately — they belong to the run, which reports for them, so they are filtered out of the fleet list, the above-editor widget, the `/agents` menus and `@handle` resolution exactly as nested children are. They are also outside the `maxConcurrent` pool: the run has its own concurrency cap, and routing a fan-out through the session pool as well would let one workflow starve everything else. The agents are ordered earliest-launched first, and only agents you can actually open, or outstanding failures you can inspect, are shown (pending/queued agents with no session yet appear once they start). At an **empty prompt**, press `↓` (or `←`) to move focus from the prompt into the list — the selected row is marked `●`, the rest `○`. The row block stays at five lines once the roster reaches five rows; overflowing lists show three rows plus `↑ N more: 2 running` / `↓ N more: 1 queued, 1 failed` indicators that count the hidden rows by state (blank at an edge), without moving the content below it. Each agent row carries its state as a glyph and a word in a fixed first column (`▶ running`, `◦ queued`, `✓ done`, `✓ limit`, `✗ failed`, `✗ aborted`, `■ stopped`), so colour is never the only cue; a spawner's `name` leads the description (`pr-1412: Spec review ...`), the configured thinking level reads `think:high` so it cannot be mistaken for the live `thinking · 4s` activity, and columns are sized from every row, not the visible window. A configured-model fallback keeps its shared leading `[fallback]` flag even with `showModel` off; column fitting reserves space for flags on hidden rows too, so scrolling cannot shift the tail. On a narrow terminal the description truncates first, then the activity, thinking and model columns drop (in that order). If a fallback row still cannot fit its stats, the shared leading flag compacts to `[fb]` or `!`, never a sliced fragment. For every row, after optional columns and any flag compaction, state words shrink to glyphs, separators and column padding collapse to spaces, and navigation padding disappear as needed. Elapsed, tokens and cost stay whole whenever they physically fit beside the marker (if present); if space is still insufficient, the state glyph and then elapsed yield before tokens or cost may clip. The selected row renders in the theme's primary text color rather than the muted/dim treatment of the others; an agent with a configured `color` shows its badge there too, bolded. `↑`/`↓` move the selection, `Enter` opens the selected agent's live conversation overlay (it auto-updates as the agent works), and `Esc` (or `↑` above `main`) returns to the prompt. Selecting `main` returns to the normal view. Inside the overlay, press `Enter` to steer the running agent — type a message and `Enter` to send it (`Esc` or an empty submit returns), and it redirects the agent the same way the `steer_subagent` tool does. On a running foreground `Agent` call, press `b` to hand that run to the background; the hint only shows where the handoff is available. A viewer stays open when its agent finishes so you can read the final output, and finished agents linger in the list for a few seconds before dropping out. Typing anything at a non-empty prompt behaves normally — the list only captures arrow keys when the prompt is empty. Disable it entirely via `/agents → Settings → Fleet view`.
 With [`showModel`](#persistent-settings) on, each row names the model and thinking level it runs at (`▶ running · sonnet 4.6 · think:high · 11s · ↓ 13.1k tokens`; the above-editor widget spells the level `thinking: high`), and a running row says what its in-flight model call is doing (see [Live activity](#live-activity)). On a virtual model such as `router/default` the row reads `router default (routing)` until the first response, then the physical model that answered. The thinking level shown is the session's selected level; a router chain entry's own `thinking` override is not visible to it.
 
 ### Fullscreen conversation observer
@@ -399,7 +424,7 @@ An unreadable or unparseable agent file is skipped, not fatal — a warning name
 color: red
 description: Security Code Reviewer
 tools: read, grep, find, bash
-model: claude-opus-4-6
+model: anthropic/claude-opus-4-6
 thinking: high
 max_turns: 30
 ---
@@ -436,7 +461,7 @@ All fields are optional — sensible defaults for everything.
 | `memory` | — | Persistent agent memory scope: `project`, `local`, or `user`. Auto-detects read-only agents |
 | `disallowed_tools` | — | Comma-separated tools to deny even if extensions provide them |
 | `isolation` | — | Set to `worktree` to run in an isolated git worktree, or `off` to refuse one even when the caller passes `isolation: "worktree"` (frontmatter is authoritative). Workflow scripts are the exception: as in Claude Code, only their `agent()` option decides. `none`, `no`, and `false` are accepted spellings of `off` |
-| `model` | inherit parent | Default model — `provider/modelId`, [machine-local alias](#machine-local-model-aliases), or fuzzy name (`"haiku"`, `"sonnet"`). An explicit `Agent({ model })` selection overrides this default. Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
+| `model` | inherit parent | Default exact `provider/modelId`, [tier](#model-tiers) such as `@cheap`, or [legacy alias](#machine-local-model-aliases). An explicit `Agent({ model })` selection overrides this default. Configured values are never fuzzy matched |
 | `thinking` | inherit | Default thinking level: off, minimal, low, medium, high, xhigh, max — an explicit `Agent({ thinking })` overrides it for that run. Actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
 | `persist_session` | `subagents.json` `rememberAgents` (default `true`) | Persist this subagent as a normal pi session instead of keeping the session in memory only; overrides the `rememberAgents` project default in both directions. It records its spawning session as parent, so it nests under it in `/resume`. The subagent's `.output` transcript is still written either way unless `output_transcript: false` |
@@ -455,9 +480,9 @@ Frontmatter is authoritative for `max_turns`, `inherit_context`, `run_in_backgro
 - `isolation` holds on every path except workflows: as in Claude Code, only the script's `agent()` option decides there.
 - `inherit_context` applies only to `Agent` tool and nested spawns, including default-mode `@handle` mentions, which spawn through the `Agent` tool. As in Claude Code, where only a fork inherits the conversation, every other spawn starts fresh unless its caller asks: workflow children and scheduled runs never inherit, and an RPC caller opts in with `inheritContext`.
 
-**Fuzzy names pick the newest model.** A bare family name such as `"opus"` matches several ids; exact ids and [aliases](#machine-local-model-aliases) still win first, otherwise the candidates are narrowed to pi's `enabledModels` (when any candidate is enabled), then ranked by parsed version, newest first, then by match score. Versions are read from `claude-<family>-<n>[-<n>]` (`claude-opus-4-6`, `claude-opus-5`; a trailing `-YYYYMMDD` is a date, not a minor) and `gpt-<n>[.<n>]-<variant>` (`gpt-6.1-sol`); ids with no recognised scheme rank after every versioned one. Previously the shortest id won, so `"opus"` resolved to `claude-opus-5` even with `claude-opus-4-6` enabled and `claude-opus-5` not.
+**Explicit non-tier tool inputs can use fuzzy names.** These pick the newest model; configured pins and tier/alias members remain exact. A bare family name such as `"opus"` matches several ids; exact ids and [aliases](#machine-local-model-aliases) still win first, otherwise the candidates are narrowed to pi's `enabledModels` (when any candidate is enabled), then ranked by parsed version, newest first, then by match score. Versions are read from `claude-<family>-<n>[-<n>]` (`claude-opus-4-6`, `claude-opus-5`; a trailing `-YYYYMMDD` is a date, not a minor) and `gpt-<n>[.<n>]-<variant>` (`gpt-6.1-sol`); ids with no recognised scheme rank after every versioned one. Previously the shortest id won, so `"opus"` resolved to `claude-opus-5` even with `claude-opus-4-6` enabled and `claude-opus-5` not.
 
-**Forgiving `model:` resolution.** A `model:` pin is matched against pi's model registry tolerantly, so cosmetic id variations don't silently drop the agent back to the parent's model: `.` and `-` are treated as equivalent in version numbers (`claude-haiku-4.5` ≡ `claude-haiku-4-5`), a trailing `-YYYYMMDD` date stamp is optional (`anthropic/claude-haiku-4-5-20251001` matches an undated registry id and vice-versa), and a `provider/modelId` whose named provider doesn't carry that model retries the bare id against every provider. Precedence is **exact → fuzzy under the named provider → same model under any provider → unavailable**, so an exact match always wins and dated snapshots aren't conflated. If nothing resolves, the pin can't run and the agent inherits the parent model (with a visible `Note:` in the `Agent` result) — `/agents → Agent types` flags this case as `(unavailable, fallback: inherit)` and shows the resolved target `(→ provider/id)` when resolution lands on a different provider or version than configured. (This is distinct from [Model Scope](#model-scope) enforcement, which matches the `enabledModels` allowlist by *exact* entry.)
+**Exact configuration, convenient tool inputs.** Agent definitions, `agentModels`, tier members and legacy alias candidates resolve exactly, without version ranking or provider retry. An unavailable configured pin inherits the parent with a visible note by default; `modelResolution.onUnavailable: "error"` refuses it instead. Explicit literal/fuzzy tool inputs retain fuzzy matching and unresolved names remain errors; `@tier` and legacy aliases follow `modelResolution`. The built-in Explore stopgap `claude-haiku-4-5` has one explicit compatibility binding to exact `anthropic/claude-haiku-4-5`. A user-defined legacy alias wins over that binding; without one, no newer version, dated sibling or other provider is substituted. A missing exact pin is disclosed as unavailable and follows `onUnavailable`; todo #18 moves Explore to `@cheap`, removing this bare-id pin.
 
 ### Nested subagents
 
@@ -795,6 +820,48 @@ When background agents complete, they notify the main agent. As in Claude Code, 
 **Configuration:**
 - Configure join mode in `/agents` → Settings → Join mode
 
+## Model tiers
+
+Use `model: "@cheap"` in an agent, `agentModels`, `Agent({ model: "@cheap" })`, RPC or workflow `agent()` options. Explicit tool models still win. Tiers are independent of `enabledModels`, fuzzy matching, model versions and provider naming conventions.
+
+Bindings live ONLY in global `~/.pi/agent/subagents.json` or the `subagents` object of an owner-only `enterprise.local.json`. Project tier definitions and resolution policies are ignored with a warning. Keys match `^[a-z0-9][a-z0-9._-]*$` and are case sensitive. Each nonempty list contains either exactly one registered `router/<profile>`, or only exact physical `provider/id` members. No mixtures, nested tiers, fuzzy entries or implicit neighbouring tiers. Exact model IDs may contain revision markers such as `@20240620`; a bare `@other-tier` binding entry is still rejected. Invalid bindings are dropped with a warning; references to them are `unmapped`.
+
+Routed personal setup (configure the router profiles separately):
+
+```json
+{
+  "modelTiers": { "cheap": ["router/cheap"], "default": ["router/default"], "deep": ["router/deep"], "review": ["router/review"] },
+  "modelResolution": { "onUnmapped": "error", "onUnavailable": "error" },
+  "agentModels": { "*": "@default", "Explore": "@cheap", "code-reviewer": "@review" }
+}
+```
+
+A routed tier starts on its virtual model, not a physical chain member. The router owns headroom ranking, admission and mid-run failover. Exhaustion never tries `router/default` or another tier: it follows the existing quota parking/error rules. Missing router profiles are `unavailable`, not fuzzy guesses.
+
+GPT-only setup, with no Anthropic dependency or router required:
+
+```json
+{ "modelTiers": { "cheap": ["openai/gpt-6-luna"] }, "agentModels": { "Explore": "@cheap" } }
+```
+
+Enterprise manifest (machine-local, permissions `0600`):
+
+```json
+{ "version": 1, "subagents": { "modelTiers": { "cheap": ["example-provider/example-wire-model"] }, "agentModels": { "Explore": "@cheap" } } }
+```
+
+Ordered static list:
+
+```json
+{ "modelTiers": { "cheap": ["provider-a/fast-model", "provider-b/fast-model"] } }
+```
+
+Static tiers choose the first credentialed, admitted member and retain skipped members with `no-credentials` or `quota` reasons. With a router installed, each member is admitted separately. Without one, admission fails open and disclosure explicitly says `static; no quota signal`.
+
+`modelResolution.onUnmapped` and `onUnavailable` each accept `error` or `inherit`; both library defaults are `inherit`, with a visible note. Neither policy applies to quota exhaustion. Whitespace-only model inputs mean unset; `@` alone and unknown/case-mismatched tier names are visibly unmapped.
+
+Results disclose `Model: @cheap -> provider/id via router/cheap` before the first response using admission's `resolvedModel`, then follow the answering model. Mid-run changes say `switched ... within tier`. Shared leading `[@cheap]` flags identify healthy tiers neutrally; warning flags and grouped alert counts cover only actual switches, parent inheritance, unavailable or unmapped outcomes. Structured `modelTier` outcomes survive records, events, transcripts, eviction and workflow journals. Reopened evicted sessions select/admit anew and retain old outcomes separately as `previousModelTier` and `previousModelFallback`; live resumes keep the existing session's selection. Scheduled tier jobs store `@cheap`, not today's physical pick, and resolve it again when they fire.
+
 ## Machine-local model aliases
 
 `~/.pi/agent/enterprise.local.json` is an optional, owner-only (`0600`) machine-local manifest for provider configuration that must never enter a repository. Its `subagents.modelAliases` section maps a logical name to ordered canonical `provider/modelId` candidates. The extension loads it only from the user agent directory, never from a project, and only accepts manifest version `1`. The same `modelAliases` key is also accepted in the global `~/.pi/agent/subagents.json` (when both define it, the manifest's whole set replaces the global one); a project `.pi/subagents.json` value is ignored with a warning, so a cloned repo cannot redirect which provider a subagent runs on.
@@ -810,17 +877,17 @@ When background agents complete, they notify the main agent. As in Claude Code, 
 }
 ```
 
-Alias candidates are resolved in order against authenticated models. Agent records retain the requested input and selection outcome alongside the selected model; schedules retain the explicit request and resolve it again at fire time. Missing, malformed, group-readable, or unsupported manifests are ignored with a safe path-and-reason warning. Aliases may not contain `/`; candidates must be canonical IDs, so aliases cannot recurse. A request whose alias has no available candidate fails with its alias and candidate IDs, never credential data.
+Alias candidates are resolved in order against authenticated models. Agent records retain the requested input and selection outcome alongside the selected model; schedules retain the explicit request and resolve it again at fire time. Missing, malformed, group-readable, or unsupported manifests are ignored with a safe path-and-reason warning. Aliases may not contain `/`; candidates must be canonical IDs, so aliases cannot recurse. Legacy aliases are exact static tiers with admission and skip disclosure, not fuzzy shortcuts. An unavailable alias follows `modelResolution.onUnavailable`, never exposing credential data.
 
 ## Per-agent models
 
-`agentModels` in the global `~/.pi/agent/subagents.json` (or the `subagents` section of `enterprise.local.json`) maps an agent `type`, or `"*"` for every type, to a model: any form `Agent({ model })` takes (`provider/modelId`, alias, fuzzy name). Types match case-insensitively.
+`agentModels` in the global `~/.pi/agent/subagents.json` (or the `subagents` section of `enterprise.local.json`) maps an agent `type`, or `"*"` for every type, to an exact `provider/modelId`, `@tier`, or legacy alias. Agent types match case-insensitively; tier names do not.
 
 ```json
-{ "agentModels": { "Plan": "opus", "Explore": "haiku", "*": "sonnet" } }
+{ "agentModels": { "Plan": "@deep", "Explore": "@cheap", "*": "@default" } }
 ```
 
-Precedence, highest first: the `Agent` tool's `model` parameter, `agentModels[type]`, `agentModels["*"]`, the agent definition's `model:`, the parent's model. The shared `selectModel` module applies it on every fresh spawn: top-level and nested `Agent`, workflow `agent()`, scheduled jobs, RPC, direct `@mention` and reopened evicted sessions. `/agents` labels use the same configured selection. An unresolved configured value falls directly to the parent, not a lower-priority configured default, with disclosure: the spawn path records `Note: configured model "<input>" did not resolve; running on parent model <provider>/<id>.` on the agent, and every surface reads it from there: the `Agent` result text and expanded row, `get_subagent_result`, the completion notice, nested `Agent` results, workflow rows and `agent()` results (text, error and a `modelNote` field), the widget, fleet list and conversation viewer, completion events, and agents started by scheduler fire, cross-extension RPC or `@mention`. A live-session resume retains its record's selection and note, ignoring new model inputs and config. Reopening an evicted conversation selects from current config while retaining its original fallback provenance. Explicit unresolved models are hard errors on every fresh dispatch, including scheduled fires. Nonblank matching, aliases, fuzzy version ranking and provider retry are unchanged; no tiers or new configuration are introduced. A workflow `agent({ schema })` result stays pure JSON: the note is a sibling `_modelNote` on an object payload and a line in the run log. Like `modelAliases` it chooses providers, so a project `.pi/subagents.json` value is ignored with a warning.
+Precedence, highest first: the `Agent` tool's `model` parameter, `agentModels[type]`, `agentModels["*"]`, the agent definition's `model:`, the parent's model. The shared `selectModel` module applies it on every fresh spawn: top-level and nested `Agent`, workflow `agent()`, scheduled jobs, RPC, direct `@mention` and reopened evicted sessions. `/agents` labels use the same configured selection. An unresolved configured value falls directly to the parent, not a lower-priority configured default, with disclosure: the spawn path records `Note: configured model "<input>" did not resolve; running on parent model <provider>/<id>.` on the agent, and every surface reads it from there: the `Agent` result text and expanded row, `get_subagent_result`, the completion notice, nested `Agent` results, workflow rows and `agent()` results (text, error and a `modelNote` field), the widget, fleet list and conversation viewer, completion events, and agents started by scheduler fire, cross-extension RPC or `@mention`. A live-session resume retains its record's selection and note, ignoring new model inputs and config. An evicted conversation's `modelTier`, `modelFallback` and every model note describe the continuation's actual outcome; `previousModelTier` and `previousModelFallback` separately retain the prior run's outcomes, never as substitutes for a missing or changed binding. Explicit unresolved literal/fuzzy model names are hard errors on every fresh dispatch, including scheduled fires; tiers and legacy aliases follow `modelResolution`. Configured inputs and alias members are exact; only explicit non-tier tool inputs retain fuzzy ranking and provider retry. Tier failures obey `modelResolution`. A workflow `agent({ schema })` result stays pure JSON: the note is a sibling `_modelNote` on an object payload and a line in the run log. Like `modelAliases` it chooses providers, so a project `.pi/subagents.json` value is ignored with a warning.
 
 - **Intentional blank-input change:** empty and whitespace-only model strings mean unset at every precedence level and on every entry path, falling through to the next default without recording a `param` or `definition` request. Previously RPC/workflow explicit blanks and runner-based configured blanks reached fuzzy resolution (and could select an available model); Agent/nested/scheduled paths skipped `""` but resolved whitespace. Nonblank inputs retain their original spelling and matching.
 
@@ -984,6 +1051,8 @@ Agent lifecycle events are emitted via `pi.events.emit()` so other extensions ca
 | `subagents:ready` | RPC handlers registered and armed — fired on session start; not emitted in a session that excludes pi-subagents | `{}` (empty object) |
 | `subagents:settings_loaded` | Persisted settings applied at extension init | `settings` (merged global + project) |
 | `subagents:settings_changed` | `/agents` → Settings mutation was applied | `settings`, `persisted` (`boolean` — `false` on write failure) |
+
+**Tier provenance on events.** Payloads that disclose fallback provenance also carry `modelTier` and `modelNote` for tier selections. Outcomes are `routed`, `static`, `unmapped`, `unavailable` or `exhausted`; successful outcomes include the tier, bound profile/member, admitted model and latest answering model, and static outcomes list skipped members and whether a quota signal was used. `subagents:record` history entries and detached completion spools retain the same outcome. Persisted `modelTier.model` contains identity only (`provider`, `id`, `name`, `api`), never provider URLs, headers or other credential-bearing model overlays.
 
 **Model fallback on events.** When a configured model did not resolve, `modelFallback` (`{ input, used, also?, via? }`) and a ready-made `modelNote` ride on `created`, `started`, `compacted`, `usage` and `completed`/`failed` payloads. The shared spawn path records selection before emitting `started`, including RPC, `@mention` and schedules with no explicit model. All later events read the same retained provenance.
 
@@ -1199,6 +1268,7 @@ This is useful for creating agents that inherit extension tools but should not h
 docs/                 # Long-form guides (shipped to npm; README links out to them)
   workflows.md        # SubagentWorkflow: writing, editing, saving and re-running scripts
   rpc.md              # Cross-extension integration: pi.events, subagents:rpc:*, manager registry
+  home-injection.md   # Injected home boundaries, call-time defaults and filesystem canaries
 examples/
   workflows/          # Runnable examples, executed by test/workflow-examples.test.ts
   agent-tool-description.md
@@ -1235,6 +1305,7 @@ src/
   # Invocation surface
   invocation-config.ts # Shared tool-parameter schemas (isolation, join, thinking, ...)
   model-selection.ts  # Shared precedence, scope and resolution outcome; stored on the agent record
+  model-tiers.ts      # Exact static/routed tiers, admission, policy and durable disclosure
   model-resolver.ts   # Model matching: exact provider/modelId, aliases, fuzzy fallback ranked by version
   enabled-models.ts   # Read pi's enabledModels settings (project over global)
   model-scope.ts      # scopeModels allowlist policy, shared by top-level and nested tools
@@ -1247,6 +1318,8 @@ src/
   schedule-store.ts   # PID-locked, session-scoped, atomic schedule persistence
 
   # Context & environment
+  home-paths.ts       # Injected home normalization and Pi agent-directory defaults
+  resource-loader.ts  # Fresh scoped settings paths for Pi's real resource/package loader
   memory.ts           # Persistent agent memory (resolve, read, build prompt blocks)
   skill-loader.ts     # Preload skills (Pi-standard + Agent Skills spec layouts)
   output-file.ts      # Streaming output file transcripts for agent sessions
@@ -1268,7 +1341,8 @@ src/
     agent-widget.ts       # Persistent widget: spinners, activity, status icons, theming
     agent-row.ts          # The Agent tool row: live one-line summary, expanded prompt/tags/transcript
     notification-view.ts  # Completion notice renderer: one-line collapsed, stats/preview/link expanded
-    fleet-list.ts         # FleetView: navigable agent list below the editor
+    fleet-list.ts         # FleetView: one-line summary/disclosure and navigable list below the editor
+    fleet-state.ts        # Versioned journal checkpoints, bounded failure details and exact overflow counters
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
     viewer-keys.ts        # Viewer scroll keys resolved through user keybindings
     agent-mention.ts      # `@` roster (running, resumable, and startable agents) + popup rows

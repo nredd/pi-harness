@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { STALE_GRACE_MS, scoreQuota, selectCandidate } from "../src/selection.js";
 import { modelMatchesFamily, UsageService, type UsageTransport } from "../src/usage.js";
 
 const T0 = 1_700_000_000_000;
@@ -70,6 +71,56 @@ describe("UsageService", () => {
 		const snapshot = await service.get(ctx, "anthropic");
 		expect(snapshot.windows).toEqual([expect.objectContaining({ name: "five_hour", usedPercent: 100 })]);
 		expect(service.decisionFor(SONNET).block).toBe(true);
+	});
+
+	it("peek keeps retrievedAt so a recently expired read still scores as measured", async () => {
+		const { service, clock } = harness([{ body: { seven_day: { utilization: 10, resets_at: FUTURE_RESET } } }]);
+		await service.get(ctx, "anthropic");
+		clock.now = T0 + 6 * MINUTE;
+		const stale = service.peek("anthropic");
+		expect(stale).toMatchObject({ status: "stale", retrievedAt: T0 });
+		expect(scoreQuota(SONNET, stale, clock.now)).toMatchObject({ kind: "measured", stale: 6 * MINUTE });
+		clock.now = T0 + STALE_GRACE_MS + MINUTE;
+		expect(scoreQuota(SONNET, service.peek("anthropic"), clock.now).kind).toBe("fallback");
+	});
+
+	describe("ordered chain [anthropic, codex] through real peek", () => {
+		const CODEX = { provider: "openai-codex", id: "gpt-5.6-terra" };
+		const anthropicBody = { seven_day: { utilization: 80 } };
+		const codexBody = { rate_limit: { primary_window: { used_percent: 10 }, secondary_window: { used_percent: 20 } } };
+		const pick = (service: UsageService, now: number) =>
+			selectCandidate(
+				[SONNET, CODEX].map((m) => scoreQuota(m, service.peek(m.provider), now)),
+				"balanced",
+			);
+
+		it("both stale: the better-scored second entry wins, not chain[0]", async () => {
+			const { service, clock } = harness([{ body: anthropicBody }, { body: codexBody }]);
+			await service.get(ctx, "anthropic");
+			await service.get(ctx, "openai-codex");
+			clock.now = T0 + 6 * MINUTE;
+			expect(service.peek("anthropic")?.status).toBe("stale");
+			expect(service.peek("openai-codex")?.status).toBe("stale");
+			expect(pick(service, clock.now)).toBe(1);
+		});
+
+		it("fresh first entry, only the second stale: the higher graced score wins", async () => {
+			const { service, clock } = harness([{ body: codexBody }, { body: anthropicBody }]);
+			await service.get(ctx, "openai-codex");
+			clock.now = T0 + 6 * MINUTE;
+			await service.get(ctx, "anthropic");
+			expect(service.peek("anthropic")?.status).toBe("available");
+			expect(service.peek("openai-codex")?.status).toBe("stale");
+			expect(pick(service, clock.now)).toBe(1);
+		});
+
+		it("a stale entry past the grace window loses to the fresh one", async () => {
+			const { service, clock } = harness([{ body: codexBody }, { body: anthropicBody }]);
+			await service.get(ctx, "openai-codex");
+			clock.now = T0 + STALE_GRACE_MS + MINUTE;
+			await service.get(ctx, "anthropic");
+			expect(pick(service, clock.now)).toBe(0);
+		});
 	});
 
 	it("keeps blocking on stale data while a known reset is still ahead", async () => {
@@ -309,6 +360,10 @@ describe("UsageService", () => {
 		const opaque = harness([{ body }], "opaque-token");
 		await opaque.service.get(ctx, "openai-codex");
 		expect(opaque.requests[0]?.headers).not.toHaveProperty("ChatGPT-Account-Id");
+
+		const malformed = harness([{ body }], "header.not-json.signature");
+		await malformed.service.get(ctx, "openai-codex");
+		expect(malformed.requests[0]?.headers).not.toHaveProperty("ChatGPT-Account-Id");
 	});
 
 	it("does not treat a paid Codex credit balance as included capacity", async () => {
@@ -411,6 +466,38 @@ describe("UsageService", () => {
 		const snapshot = await service.get(ctx, "anthropic");
 		expect(snapshot.status).toBe("error");
 		expect(snapshot.message).toBe("OAuth credential lookup failed.");
+	});
+
+	it("uses the host defaults for the collector and credential lookup", async () => {
+		const fetch = vi.fn(async () => new Response(JSON.stringify({ five_hour: { utilization: 42 } })));
+		vi.stubGlobal("fetch", fetch);
+		try {
+			const getApiKeyForProvider = vi.fn(async () => "host-token");
+			const service = new UsageService();
+			const snapshot = await service.get({ modelRegistry: { getApiKeyForProvider } } as never, "anthropic");
+			expect(snapshot).toMatchObject({ status: "available", windows: [{ usedPercent: 42 }] });
+			expect(getApiKeyForProvider).toHaveBeenCalledWith("anthropic");
+			expect(fetch).toHaveBeenCalledWith(
+				"https://api.anthropic.com/api/oauth/usage",
+				expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer host-token" }) }),
+			);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("converts unexpected fetch failures into a safe error snapshot", async () => {
+		const service = new UsageService({
+			fetch: async () => {
+				throw new Error("transport detail");
+			},
+			now: () => T0,
+			getAccessToken: async () => "token",
+		});
+		expect(await service.get(ctx, "anthropic")).toMatchObject({
+			status: "error",
+			message: "Usage request failed.",
+		});
 	});
 
 	it("bounds a stalled credential owner without implementing OAuth refresh itself", async () => {

@@ -9,7 +9,7 @@ export default defineConfig({
 	},
 	test: {
 		coverage: {
-			provider: "v8",
+			provider: "istanbul",
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
@@ -35,7 +35,7 @@ export default defineConfig({
 			],
 		},
 		include: ["*.test.ts", "state/**/*.test.ts", "tool/**/*.test.ts", "view/**/*.test.ts"],
-		setupFiles: ["./.test-support/setup.ts"],
+		setupFiles: ["./.test-support/setup.ts", "../../integration/inprocess/verification/home-setup.ts"],
 		pool: "forks",
 		maxWorkers: 2,
 		hookTimeout: 30_000,

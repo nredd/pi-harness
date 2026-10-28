@@ -274,7 +274,8 @@ def test_shipped_computer_javascript_is_pending_production_not_verification() ->
     assert "scripts/build-native.mjs" in shipped
     assert "src/platform/macos/helper-path.mjs" in shipped
     assert package.status == "pending"
-    assert "no standard coverage runner" in package.note
+    assert package.goal == "excluded"
+    assert "Owner explicitly excludes computer-use" in package.goal_reason
     assert shipped.issubset(owned)
     assert not {(Path(package.root) / path).as_posix() for path in shipped} & helpers
 

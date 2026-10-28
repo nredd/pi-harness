@@ -121,7 +121,7 @@ jobs:
         run: |
           rustup target add aarch64-unknown-linux-gnu
           echo "PI_CU_LINUX_ARM64_CHECK=1" >>"$GITHUB_ENV"
-      - name: Owned gates (biome, tsc, vitest, bun test, scripts, integration units)
+      - name: Owned gates (biome, tsc, Vitest on Node and Bun, scripts, integration units)
         if: steps.plan.outputs.run == 'true'
         run: make check-ts check-scripts check-integration
       - name: Coverage accounting (existing reports, including test failures)
@@ -146,7 +146,7 @@ jobs:
         run: |
           # shellcheck disable=SC2016 # the single-quoted program is JavaScript, its ${} is a JS template
           for manifest in packages/*/package.json; do
-            node -e 'const m = require(process.argv[1]); if (!m.scripts["test:bun"]) console.log(`::notice title=bun test not run::${m.name} has no test/scenarios suite under bun yet`)' "./$manifest"
+            node -e 'const m = require(process.argv[1]); if (!m.scripts["test:bun"]) console.log(`::notice title=bun test not run::${m.name} has no declared Bun suite yet`)' "./$manifest"
           done
       - name: Benchmark unit gate
         if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'

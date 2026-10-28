@@ -53,6 +53,8 @@ export function windowFor(total: number, budget: number, offset: number): TodoWi
 }
 
 export class TodoOverlay {
+	constructor(private readonly homeDir?: string) {}
+
 	private uiCtx: ExtensionUIContext | undefined;
 	private widgetRegistered = false;
 	private tui: TUI | undefined;
@@ -131,7 +133,7 @@ export class TodoOverlay {
 
 	/** Rows the list may show: everything under tool-output expansion, else the configured budget. */
 	private bodyBudget(total: number): number {
-		return this.uiCtx?.getToolsExpanded?.() === true ? total : getMaxWidgetLines() - 1;
+		return this.uiCtx?.getToolsExpanded?.() === true ? total : getMaxWidgetLines(this.homeDir) - 1;
 	}
 
 	/**
@@ -180,7 +182,7 @@ export class TodoOverlay {
 		// after the shortcut was bound and the overlay collapsed) — render a static
 		// collapsed label instead of splicing the sentinel into the placeholder.
 		if (this.collapsed) {
-			const key = resolveCollapseKey();
+			const key = resolveCollapseKey(this.homeDir);
 			const hint =
 				key === COLLAPSE_KEY_OFF
 					? t("overlay.collapsed", OVERLAY_COLLAPSED)

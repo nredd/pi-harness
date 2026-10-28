@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		coverage: {
-			provider: "v8",
+			provider: "istanbul",
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
@@ -13,5 +13,6 @@ export default defineConfig({
 		pool: "forks",
 		maxWorkers: 2,
 		testTimeout: 20_000,
+		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
 	},
 });

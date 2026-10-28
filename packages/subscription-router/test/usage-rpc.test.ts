@@ -14,11 +14,13 @@ vi.mock("../src/config.js", async (original) => ({
 const SHARED_KEY = Symbol.for("pi-subscription-router.shared");
 const host = globalThis as typeof globalThis & { [SHARED_KEY]?: unknown };
 const MINUTE = 60_000;
+const T0 = 1_700_000_000_000;
+const EXHAUSTED_RESET = T0 + MINUTE;
 
 /** Exercise the registered event-bus RPC with the real cache and injected transport. */
 async function harness(startSession = true, profiles: Profile[] = []) {
 	vi.mocked(loadConfig).mockResolvedValue({ ok: true, profiles });
-	let now = 1_700_000_000_000;
+	let now = T0;
 	let fail = false;
 	const fetch = vi.fn(async (url: string) => {
 		const body = url.includes("anthropic")
@@ -27,7 +29,8 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 		return new Response(JSON.stringify(body), { status: fail ? 429 : 200 });
 	});
 	const usage = new UsageService({ fetch, now: () => now, getAccessToken: async () => "fake-token" });
-	host[SHARED_KEY] = { usage, tracker: new ExhaustionTracker() };
+	const tracker = new ExhaustionTracker();
+	host[SHARED_KEY] = { usage, tracker };
 	const events = new EventEmitter();
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
 	const pi = {
@@ -36,6 +39,7 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 		registerTool: vi.fn(),
 		registerCommand: vi.fn(),
 		registerVirtualModel: vi.fn(),
+		appendEntry: vi.fn(),
 	} as unknown as ExtensionAPI;
 	await subscriptionRouter(pi);
 	if (startSession) {
@@ -44,24 +48,210 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 	}
 	let nextId = 0;
 	const rpc = (params: Record<string, unknown> = {}) =>
-		new Promise<{ success: boolean; data: { snapshots: UsageSnapshot[]; blocks: unknown[] } }>((resolve) => {
+		new Promise<{ success: boolean; data: { snapshots: UsageSnapshot[]; blocks: unknown[] }; error?: string }>(
+			(resolve) => {
+				const requestId = String(++nextId);
+				events.once(`router:rpc:usage:reply:${requestId}`, resolve);
+				events.emit("router:rpc:usage", { ...params, requestId });
+			},
+		);
+	/** Send an admission request and resolve only the matching `router:rpc:admit` envelope. */
+	const admit = (params: Record<string, unknown> = {}) =>
+		new Promise<{ success: boolean; data: unknown }>((resolve) => {
 			const requestId = String(++nextId);
-			events.once(`router:rpc:usage:reply:${requestId}`, resolve);
-			events.emit("router:rpc:usage", { ...params, requestId });
+			events.once(`router:rpc:admit:reply:${requestId}`, resolve);
+			events.emit("router:rpc:admit", { ...params, requestId });
 		});
 	const status = async (ctx: ExtensionCommandContext, action = "status") => {
 		const registration = vi.mocked(pi.registerCommand).mock.calls.find(([name]) => name === "router");
 		if (!registration) throw new Error("router command not registered");
 		await registration[1].handler(action, ctx);
 	};
-	return { rpc, fetch, usage, status, advance: (ms: number) => (now += ms), fail: () => (fail = true) };
+	return {
+		pi,
+		handlers,
+		rpc,
+		admit,
+		fetch,
+		usage,
+		tracker,
+		status,
+		advance: (ms: number) => (now += ms),
+		fail: () => (fail = true),
+	};
 }
 
 afterEach(() => {
+	vi.useRealTimers();
 	delete host[SHARED_KEY];
 });
 
 describe("router usage RPC", () => {
+	it("records the historical decision in full, and status renders it apart from the forecast", async () => {
+		vi.useFakeTimers({ now: 1_700_000_000_000 });
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			strategy: "balanced",
+			chain: [
+				{ provider: "anthropic", id: "sonnet" },
+				{ provider: "openai-codex", id: "terra" },
+			],
+		};
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		await h.status(ctx);
+		expect(notify.mock.calls[0]?.[0]).not.toContain("last decisions");
+		await h.usage.get(ctx, "anthropic");
+		await h.usage.get(ctx, "openai-codex");
+		// Both snapshots are 6 minutes old (past the 5 minute TTL) when the route happens.
+		h.advance(6 * MINUTE);
+		vi.setSystemTime(Date.now() + 6 * MINUTE);
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const route = await registration?.route({ reason: "user", thinkingLevel: "off" } as never, ctx);
+		expect(route?.model).toMatchObject({ provider: "openai-codex", id: "terra" });
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		const [type, entry] = vi.mocked(h.pi.appendEntry).mock.calls[0] ?? [];
+		expect(type).toBe("router:decision");
+		expect(entry).toMatchObject({
+			at: 1_700_000_000_000 + 6 * MINUTE,
+			profile: "default",
+			strategy: "balanced",
+			reason: "user",
+			chosen: "openai-codex/terra",
+			candidates: [
+				{
+					model: "anthropic/sonnet",
+					ageMs: 6 * MINUTE,
+					quota: { kind: "measured", score: expect.closeTo(0.58), window: "seven_day", stale: 6 * MINUTE },
+				},
+				{
+					model: "openai-codex/terra",
+					ageMs: 6 * MINUTE,
+					quota: { kind: "measured", score: expect.closeTo(0.63), window: "7d", stale: 6 * MINUTE },
+				},
+			],
+			blocked: [],
+		});
+
+		// Move well past the grace window: the forecast now says fallback, history must not change.
+		h.advance(30 * MINUTE);
+		vi.setSystemTime(Date.now() + 30 * MINUTE);
+		await h.status(ctx);
+		const text: string = notify.mock.calls[1]?.[0];
+		const [forecast, history] = text.split("last decisions (newest last):");
+		expect(forecast).toContain("anthropic/sonnet: fallback: usage stale");
+		expect(forecast).not.toContain("score 0.");
+		expect(history).toContain("router/default user -> openai-codex/terra (balanced)");
+		expect(history).toContain("anthropic/sonnet: score 0.580, limiting seven_day, stale 6m, data 6m old");
+		expect(history).toContain("openai-codex/terra: score 0.630, limiting 7d, stale 6m, data 6m old");
+		expect(history).not.toContain("fallback");
+	});
+
+	/** Two-provider balanced profile with both usage snapshots cached, plus a `route()` and `status()` driver. */
+	async function routed() {
+		vi.useFakeTimers({ now: 1_700_000_000_000 });
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			strategy: "balanced",
+			chain: [
+				{ provider: "anthropic", id: "sonnet" },
+				{ provider: "openai-codex", id: "terra" },
+			],
+		};
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		await h.usage.get(ctx, "anthropic");
+		await h.usage.get(ctx, "openai-codex");
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const tick = (ms: number) => {
+			h.advance(ms);
+			vi.setSystemTime(Date.now() + ms);
+		};
+		const route = async () => {
+			const result = await registration?.route({ reason: "user", thinkingLevel: "off" } as never, ctx);
+			return `${result?.model.provider}/${result?.model.id}`;
+		};
+		return { h, ctx, notify, tick, route };
+	}
+
+	it("status keeps only the last five decisions", async () => {
+		const { h, ctx, notify, tick, route } = await routed();
+		for (let i = 0; i < 7; i++) {
+			tick(MINUTE);
+			await route();
+		}
+		await h.status(ctx);
+		const history: string = notify.mock.calls[0]?.[0].split("last decisions (newest last):")[1];
+		const headers = history.split("\n").filter((line) => line.includes("router/default user ->"));
+		expect(headers).toHaveLength(5);
+		// Routes 3..7 happened at T0 + 3..7 minutes; routes 1 and 2 were evicted.
+		expect(headers[0]).toContain("2023-11-14T22:16:20Z");
+		expect(history).not.toContain("2023-11-14T22:14:20Z");
+		expect(history).not.toContain("2023-11-14T22:15:20Z");
+	});
+
+	it("persists a profile's first decision and each change of chosen model, not every route", async () => {
+		const { h, ctx, tick, route } = await routed();
+		for (let i = 0; i < 3; i++) {
+			tick(MINUTE);
+			expect(await route()).toBe("openai-codex/terra");
+		}
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		// Anthropic reports a nearly idle account on a forced refresh, so the pick flips.
+		tick(2 * MINUTE);
+		h.fetch.mockImplementation(
+			async () => new Response(JSON.stringify({ five_hour: { utilization: 1 }, seven_day: { utilization: 1 } })),
+		);
+		await h.usage.get(ctx, "anthropic", { force: true });
+		expect(await route()).toBe("anthropic/sonnet");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(2);
+		expect(await route()).toBe("anthropic/sonnet");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(2);
+		expect(vi.mocked(h.pi.appendEntry).mock.calls.map(([, entry]) => (entry as { chosen: string }).chosen)).toEqual([
+			"openai-codex/terra",
+			"anthropic/sonnet",
+		]);
+	});
+
+	it("a new session persists its first decision even when it picks the previous session's model", async () => {
+		const { h, ctx, tick, route } = await routed();
+		tick(MINUTE);
+		expect(await route()).toBe("openai-codex/terra");
+		expect(await route()).toBe("openai-codex/terra");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		// Session switch (new/resume): same extension instance, same chosen model.
+		h.handlers.get("session_start")?.({}, ctx as unknown as ExtensionContext);
+		tick(MINUTE);
+		expect(await route()).toBe("openai-codex/terra");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(2);
+		expect(await route()).toBe("openai-codex/terra");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(2);
+	});
+
+	it("a throwing appendEntry neither fails the route nor drops the in-memory decision", async () => {
+		const { h, ctx, notify, tick, route } = await routed();
+		vi.mocked(h.pi.appendEntry).mockImplementation(() => {
+			throw new Error("session write failed");
+		});
+		tick(MINUTE);
+		await expect(route()).resolves.toBe("openai-codex/terra");
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		await h.status(ctx);
+		expect(notify.mock.calls[0]?.[0]).toContain("router/default user -> openai-codex/terra");
+	});
+
 	it("forecasts status from cached-only shared selection and shows scores/fallbacks", async () => {
 		vi.useFakeTimers({ now: 1_700_000_000_000 });
 		try {
@@ -151,5 +341,115 @@ describe("router usage RPC", () => {
 		const h = await harness();
 		await h.rpc({ refresh: "true" });
 		expect(h.fetch).not.toHaveBeenCalled();
+	});
+
+	it("returns RPC errors without leaving callers waiting", async () => {
+		const h = await harness();
+		vi.spyOn(h.usage, "get").mockRejectedValue(new Error("collector failed"));
+		expect(await h.rpc({ refresh: true })).toMatchObject({ success: false, error: "collector failed" });
+	});
+
+	it("notifies a terminal quota error instead of continuing", async () => {
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			chain: [{ provider: "anthropic", id: "sonnet" }],
+		};
+		const h = await harness(false, [profile]);
+		h.fetch.mockResolvedValue(
+			new Response(
+				JSON.stringify({ five_hour: { utilization: 100, resets_at: new Date(EXHAUSTED_RESET).toISOString() } }),
+			),
+		);
+		const notify = vi.fn();
+		const ctx = {
+			model: { provider: "router", id: "default" },
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionContext;
+		await h.usage.get(ctx, "anthropic");
+		const onSettle = h.handlers.get("agent_before_settle");
+		if (!onSettle) throw new Error("agent_before_settle handler missing");
+		const outcome = await (onSettle as (event: unknown, context: ExtensionContext) => Promise<unknown>)(
+			{
+				entries: [],
+				context: {
+					contextEntries: [
+						{
+							sourceEntry: { id: "failed", type: "message", message: {} },
+							messages: [
+								{
+									role: "assistant",
+									content: [],
+									provider: "anthropic",
+									model: "sonnet",
+									stopReason: "error",
+									errorMessage: "insufficient_quota",
+									timestamp: T0,
+								},
+							],
+						},
+					],
+				},
+			},
+			ctx,
+		);
+		expect(outcome).toBeUndefined();
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("router/default: every model is unavailable"), "error");
+	});
+
+	it("runs the admission RPC only after session context exists", async () => {
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			chain: [{ provider: "anthropic", id: "sonnet" }],
+		};
+		const cold = await harness(false, [profile]);
+		expect((await cold.admit({ model: "anthropic/sonnet" })).data).toEqual({ ok: true });
+		const h = await harness(true, [profile]);
+		expect((await h.admit({ model: "anthropic/sonnet" })).data).toEqual({
+			ok: true,
+			resolvedModel: "anthropic/sonnet",
+		});
+	});
+
+	it("renders active blocks in the tool and executes router command actions", async () => {
+		const profile: Profile = {
+			id: "default",
+			name: "Default",
+			chain: [{ provider: "anthropic", id: "sonnet" }],
+		};
+		const h = await harness(true, [profile]);
+		const ctx = {
+			scopedModels: [],
+			ui: { notify: vi.fn() },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		h.tracker.mark({ provider: "anthropic", id: "sonnet" } as never, {
+			block: true,
+			window: "five_hour",
+			scope: "provider",
+			resetAt: EXHAUSTED_RESET,
+		});
+		const registration = vi.mocked(h.pi.registerTool).mock.calls.find(([tool]) => tool.name === "subscription_usage");
+		if (!registration) throw new Error("subscription_usage registration missing");
+		const result = await registration[0].execute(
+			"tool-id",
+			{ provider: "anthropic" },
+			undefined,
+			() => {},
+			ctx as never,
+		);
+		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("blocked anthropic: five_hour") });
+		await h.status(ctx, "refresh");
+		expect(h.fetch).toHaveBeenCalledTimes(2);
+		await h.status(ctx, "reset");
+		expect(h.tracker.active()).toEqual([]);
+		await h.status(ctx, "invalid");
+		expect(vi.mocked(ctx.ui.notify)).toHaveBeenLastCalledWith(
+			expect.stringContaining('unknown action "invalid"'),
+			"error",
+		);
 	});
 });

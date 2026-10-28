@@ -28,6 +28,7 @@ from harness.stack import (
     canonical_stack_bytes,
     derive_local_stack,
     find_package,
+    installed_identities,
     load_stack,
     localize_source,
     package_directory,
@@ -533,7 +534,8 @@ def test_installer_preserves_object_filters_and_omissions(
                 "npm/node_modules/@scope/pkg" if source.startswith("npm:") else "git/github.com/x/y"
             )
             directory.mkdir(parents=True)
-            (directory / "package.json").write_text('{"name":"fixture","version":"1.2.3"}')
+            name = "@scope/pkg" if source.startswith("npm:") else "fixture"
+            (directory / "package.json").write_text(json.dumps({"name": name, "version": "1.2.3"}))
         (agent / "settings.json").write_text('{"packages":["installer-written-string"]}')
         return "installed"
 
@@ -557,6 +559,71 @@ def test_installer_preserves_object_filters_and_omissions(
     assert isinstance(load_stack(stack_path).sources[0], PackageSource)
     copied = sandbox.build_sandbox(tmp_path / "copy", box.home)
     assert copied.settings()["packages"] == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "name", "accepted"),
+    [
+        pytest.param("npm:@scope/pkg@1.2.3", "@scope/pkg", True, id="scoped-match"),
+        pytest.param("npm:@scope/pkg@1.2.3", "fixture", False, id="scoped-wrong-name"),
+        pytest.param("npm:pkg@1.2.3", "pkg", True, id="unscoped-match"),
+        pytest.param("npm:pkg@1.2.3", "fixture", False, id="unscoped-wrong-name"),
+        pytest.param("git:github.com/x/repo@v1.2.3", "@different/package", True, id="git-not-name"),
+        pytest.param("./local", "@different/package", True, id="local-not-name"),
+    ],
+)
+def test_installed_manifest_name_follows_source_kind(
+    tmp_path: Path, source: str, name: str, accepted: bool
+) -> None:
+    """Registry pins require their name; Git repository/local path names are not package names.
+
+    Parameters:
+        tmp_path (Path): private installed package tree.
+        source (str): schema-valid pinned registry, Git or local source.
+        name (str): installed manifest identity, independent of its directory.
+        accepted (bool): whether the source actually pins this manifest name.
+    """
+    stack = Stack.model_validate(stack_document(sources=[source]))
+    if source.startswith("npm:"):
+        directory = tmp_path / "agent/npm/node_modules" / source[4:].rsplit("@", 1)[0]
+    elif source.startswith("git:"):
+        directory = tmp_path / "agent/git/github.com/x/repo"
+    else:
+        directory = tmp_path / "local"
+    directory.mkdir(parents=True)
+    (directory / "package.json").write_text(json.dumps({"name": name, "version": "1.2.3"}))
+    resolved = stack.resolved_sources(tmp_path / "stack.json")
+    if not accepted:
+        with pytest.raises(ValueError, match="Installed npm `name` differs"):
+            installed_identities(stack, resolved, tmp_path / "agent")
+        return
+    assert installed_identities(stack, resolved, tmp_path / "agent") == [
+        {"name": name, "version": "1.2.3", "source": resolved[0]}
+    ]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("npm:alias@npm:real@1.2.3", id="pi-prefixed-alias"),
+        pytest.param("alias@npm:real@1.2.3", id="npm-alias"),
+        pytest.param("npm:alias@npm:@scope/real@1.2.3", id="scoped-alias"),
+        pytest.param("git+https://github.com/x/repo.git#v1.2.3", id="npm-git-url"),
+        pytest.param("file:./local", id="npm-file"),
+        pytest.param("npm:pkg@file:./local", id="npm-named-file"),
+        pytest.param("https://example.com/pkg-1.2.3.tgz", id="tarball-url"),
+        pytest.param("npm:pkg@https://example.com/pkg-1.2.3.tgz", id="npm-named-tarball"),
+    ],
+)
+def test_non_stack_npm_specs_are_refused_before_manifest_name_comparison(source: str) -> None:
+    """Other npm spec kinds are unsupported, not registry names to compare with manifests.
+
+    npm aliases retain the real package's manifest name, not the install alias. Supporting them
+    would require resolving that target separately; the stack intentionally admits neither aliases
+    nor npm file/Git/tarball specs. Use tagged `git:` sources or explicit local directories instead.
+    """
+    with pytest.raises(ValidationError, match="Source must be pinned or an explicit local path"):
+        Stack.model_validate(stack_document(sources=[source]))
 
 
 def test_package_lookup_does_not_guess_an_owner_checkout(tmp_path: Path) -> None:

@@ -5,6 +5,11 @@
   "reclassifications": [],
   "enforcement_changes": [],
   "verification_helpers": [
+    { "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Non-shipped readiness and bounded subprocess helpers used only by verification check harnesses." },
+    { "path": "packages/computer-use/scripts/check-async.test.mjs", "reason": "Non-shipped assertions for verification subprocess readiness, deadlines and process cleanup; not runtime source." },
+    { "path": "scripts/run-vitest.ts", "reason": "Verification-only launcher creates disposable test homes and forwards runner arguments; never shipped as a product entrypoint." },
+    { "path": "integration/inprocess/verification/home-guard.ts", "reason": "Verification-only assertion checks worker home boundaries; imported only by test setup and guard regressions, never shipped." },
+    { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest-only lifecycle setup installs home-boundary assertions; never shipped or invoked by production." },
     { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
     { "path": "integration/probes/anthropic-block-types.mjs", "reason": "Offline assertion probe for synthetic Anthropic block classification; no production entrypoint or real credentials." },
     { "path": "integration/providers/auth_guard.mjs", "reason": "Auth-scenario fixture verifies mock transport readiness and refused egress before synthetic credentials can dispatch; never shipped." },
@@ -90,10 +95,10 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": ["extensions/expanded-footer.ts", "lib/footer-cache.ts", "lib/footer-quota.ts"],
+
           "max_uncovered": { "darwin": { "lines": 244, "functions": 15 }, "linux": { "lines": 244, "functions": 15 } },
           "enforcement": "report-only",
-          "reason": "Current Bun producer is not yet verified as a full source-complete port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
+          "reason": "Full Vitest/Istanbul suite with complete primary instrumentation inventory; awaiting current clean macOS/Linux full-suite and inventory receipts: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -112,10 +117,10 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": ["src/collect.ts", "src/counters.ts", "src/index.ts"],
+
           "max_uncovered": { "darwin": { "lines": 163, "functions": 14 }, "linux": { "lines": 46, "functions": 8 } },
           "enforcement": "report-only",
-          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
+          "reason": "Full Vitest/Istanbul suite with complete primary instrumentation inventory; awaiting current clean macOS/Linux full-suite and inventory receipts: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -178,14 +183,14 @@
             "src/agent-runner.ts", "src/agent-source-badge.ts", "src/agent-types.ts", "src/child-context.ts",
             "src/clock.ts", "src/completion-outbox.ts", "src/context.ts", "src/cross-extension-rpc.ts",
             "src/custom-agents.ts", "src/default-agents.ts", "src/detached-results.ts", "src/enabled-models.ts",
-            "src/enterprise-local.ts", "src/env.ts", "src/group-join.ts", "src/index.ts",
+            "src/enterprise-local.ts", "src/env.ts", "src/group-join.ts", "src/home-paths.ts", "src/index.ts",
             "src/invocation-config.ts", "src/memory.ts", "src/mention-clone.ts", "src/mention.ts",
-            "src/model-call.ts", "src/model-resolver.ts", "src/model-selection.ts", "src/model-scope.ts", "src/nested-tools.ts",
+            "src/model-call.ts", "src/model-resolver.ts", "src/model-selection.ts", "src/model-scope.ts", "src/model-tiers.ts", "src/nested-tools.ts",
             "src/output-file.ts", "src/package-resources.ts", "src/process-budget.ts", "src/prompts.ts",
-            "src/quota-admission.ts", "src/schedule-store.ts", "src/schedule.ts", "src/settings.ts",
+            "src/quota-admission.ts", "src/resource-loader.ts", "src/schedule-store.ts", "src/schedule.ts", "src/settings.ts",
             "src/skill-loader.ts", "src/stale-ctx.ts", "src/startup-error.ts", "src/status-note.ts", "src/structured-output.ts",
             "src/ui/agent-mention.ts", "src/ui/agent-row.ts", "src/ui/agent-widget.ts",
-            "src/ui/conversation-viewer.ts", "src/ui/fallback-flag.ts", "src/ui/fleet-list.ts", "src/ui/notification-view.ts",
+            "src/ui/conversation-viewer.ts", "src/ui/fallback-flag.ts", "src/ui/fleet-list.ts", "src/ui/fleet-state.ts", "src/ui/notification-view.ts",
             "src/ui/schedule-menu.ts", "src/ui/select-item.ts", "src/ui/viewer-keys.ts",
             "src/ui/workflow-card.ts", "src/ui/workflow-dialog.ts", "src/ui/workflow-menu.ts", "src/usage.ts",
             "src/workflow/collisions.ts", "src/workflow/entry.ts", "src/workflow/host.ts",
@@ -215,10 +220,10 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": ["src/config.ts", "src/exhaustion.ts", "src/index.ts", "src/model-ref.ts", "src/recovery.ts", "src/router.ts", "src/selection.ts", "src/usage.ts"],
+
           "max_uncovered": { "darwin": { "lines": 226, "functions": 31 }, "linux": { "lines": 226, "functions": 31 } },
           "enforcement": "report-only",
-          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
+          "reason": "Full Vitest/Istanbul suite with complete primary instrumentation inventory; awaiting current clean macOS/Linux full-suite and inventory receipts: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -237,10 +242,10 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": ["config.ts", "state/i18n-bridge.ts", "state/invariants.ts", "state/plan.ts", "state/replay.ts", "state/selectors.ts", "state/state-reducer.ts", "state/state.ts", "state/store.ts", "state/task-graph.ts", "todo.ts", "tool/response-envelope.ts", "tool/sanitize.ts", "tool/types.ts", "view/format.ts"],
+
           "max_uncovered": { "darwin": { "lines": 936, "functions": 71 }, "linux": { "lines": 936, "functions": 71 } },
           "enforcement": "report-only",
-          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
+          "reason": "Full Vitest/Istanbul suite with complete primary instrumentation inventory; awaiting current clean macOS/Linux full-suite and inventory receipts: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -250,7 +255,9 @@
       "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "native/macos/bridge.swift", "native/macos/agent_cursor.swift", "native/macos/agent_cursor_motion.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs"],
       "exclusions": [],
       "status": "pending",
-      "note": "Not measured, tracked: computer-use has no standard coverage runner. Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript are owned production source, never verification helpers. Global target fails closed until instrumentation is designed.",
+      "goal": "excluded",
+      "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
+      "note": "Not measured, tracked: no maintained coverage producer. Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
       "signals": {}
     },
     "runtime-build-tooling": {
@@ -274,7 +281,9 @@
       "owned": ["*.py"],
       "exclusions": [],
       "status": "pending",
-      "note": "Existing Python gates are not coverage accounting. Follow up with pytest-cov for scripts/ and validated LCOV line/function accounting; no failed or uninstrumented run is a baseline.",
+      "goal": "excluded",
+      "goal_reason": "Owner retains existing Python automation tests; Python is outside the eight-package 100-percent goal.",
+      "note": "Existing formatter, linter, type checker and pytest gates remain required. No LCOV coverage claim.",
       "signals": {}
     },
     "python-harness": {
@@ -285,7 +294,9 @@
         { "path": "conftest.py", "kind": "test-helper", "reason": "Pytest fixture configuration for integration scenarios, not production implementation." }
       ],
       "status": "pending",
-      "note": "Existing Python gates are not coverage accounting. Follow up with pytest-cov for integration/harness and validated LCOV line/function accounting.",
+      "goal": "excluded",
+      "goal_reason": "Owner retains existing Python automation tests; Python is outside the eight-package 100-percent goal.",
+      "note": "Existing formatter, linter, type checker and pytest gates remain required. No LCOV coverage claim.",
       "signals": {}
     },
     "python-benchmarks": {
@@ -293,7 +304,9 @@
       "owned": ["src/pi_harness_benchmark/*.py"],
       "exclusions": [],
       "status": "pending",
-      "note": "benchmarks/comparison already has pytest-cov at 90 percent combined line/branch coverage. Retain that gate; LCOV line/function accounting and a clean ratchet baseline are a follow-up.",
+      "goal": "excluded",
+      "goal_reason": "Historical Python benchmark keeps its existing 90-percent combined coverage gate, outside the owned TypeScript package goal.",
+      "note": "Existing pytest-cov gate remains unchanged; no independent LCOV claim.",
       "signals": {}
     },
     "probe-boundaries": {
@@ -301,7 +314,9 @@
       "owned": ["latency.ts", "render.ts", "session-kit-child-scope.ts", "transcript-types.ts"],
       "exclusions": [],
       "status": "pending",
-      "note": "Executable boundary probes are inventoried but their scenario/Node gates are not complete coverage accounting. Follow up with source-complete instrumentation and clean LCOV receipts.",
+      "goal": "report-only",
+      "goal_reason": "Owner classifies verification probes as report-only, outside the production-package goal.",
+      "note": "Executable boundary probes remain inventoried; scenario/Node gates do not establish source-complete coverage.",
       "signals": {}
     },
     "providers": {
@@ -309,7 +324,9 @@
       "owned": ["*.ts"],
       "exclusions": [{ "path": "extension_inventory.ts", "kind": "test-helper", "reason": "Test-only extension registry observer injected by integration fixtures; no production provider behavior." }],
       "status": "pending",
-      "note": "faux.ts and usage_fixture.ts execute provider behavior in stack scenarios. Existing scenario gates are not coverage accounting; establish instrumented source-complete receipts in a follow-up.",
+      "goal": "report-only",
+      "goal_reason": "Synthetic verification providers are test infrastructure, outside the production-package goal.",
+      "note": "faux.ts and usage_fixture.ts remain inventoried. Existing scenario gates are not coverage measurements.",
       "signals": {}
     },
     "coverage-configurations": {
@@ -317,7 +334,9 @@
       "owned": ["packages/*/vitest.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts"],
       "exclusions": [],
       "status": "pending",
-      "note": "Executable test-producer configuration is explicitly inventoried. Existing format/type/producer contract checks are not coverage accounting; loader instrumentation is a follow-up.",
+      "goal": "report-only",
+      "goal_reason": "Verification producer configuration is test infrastructure, outside the production-package goal.",
+      "note": "All executable producer configurations remain inventoried and contract checked; no coverage claim.",
       "signals": {}
     },
     "import-audit": {
@@ -325,10 +344,14 @@
       "owned": ["import_audit.ts"],
       "exclusions": [],
       "status": "measured",
+      "goal": "report-only",
+      "goal_reason": "Owner classifies import-audit verification infrastructure as report-only, outside the production-package goal.",
       "note": "Node verification utility; Python tooling retains its existing gates.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
+          "enforcement": "report-only",
+          "reason": "Verification utility retained for diagnostics, not a production-package 100-percent target.",
           "max_uncovered": { "darwin": { "lines": 9, "functions": 0 }, "linux": { "lines": 9, "functions": 0 } },
           "reporters": ["text", "lcov"]
         }
@@ -339,10 +362,14 @@
       "owned": ["stack-resources.ts"],
       "exclusions": [],
       "status": "measured",
+      "goal": "report-only",
+      "goal_reason": "Owner classifies verification probes as report-only, outside the production-package goal.",
       "note": "Node verification utility. Never imported by the existing node suites: c8 --all reports an empty-report counter, not a passing coverage claim.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
+          "enforcement": "report-only",
+          "reason": "Verification probe retained for diagnostics, not a production-package 100-percent target.",
           "max_uncovered": { "darwin": { "lines": 45, "functions": 1 }, "linux": { "lines": 45, "functions": 1 } },
           "reporters": ["text", "lcov"]
         }
@@ -356,16 +383,20 @@
         { "path": "todo-support.ts", "kind": "test-helper", "reason": "In-process todo test host fixture and assertion helpers, not production behavior." }
       ],
       "status": "measured",
-      "note": "Verification infrastructure, measured in addition to owned production packages.",
+      "goal": "report-only",
+      "goal_reason": "Owner classifies the in-process verification host as report-only, outside the production-package goal.",
+      "note": "Verification infrastructure, measured separately from production packages.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
+          "enforcement": "report-only",
+          "reason": "Verification host retained for diagnostics, not a production-package 100-percent target.",
           "max_uncovered": { "darwin": { "lines": 15, "functions": 4 }, "linux": { "lines": 25, "functions": 8 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": ["support.ts", "goal-support.ts", "native-timers.ts"],
+
           "max_uncovered": { "darwin": { "lines": 22, "functions": 4 }, "linux": { "lines": 37, "functions": 5 } },
           "enforcement": "report-only",
           "reason": "Current Bun producer is not yet verified as a full source-complete port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",

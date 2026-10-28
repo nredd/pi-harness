@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+
 export default defineConfig({
 	test: {
 		coverage: {
@@ -6,7 +7,8 @@ export default defineConfig({
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: ["src/collect.ts", "src/counters.ts", "src/index.ts"],
+			include: ["src/collect.ts", "src/counters.ts", "src/darwin.ts", "src/index.ts"],
 		},
+		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
 	},
 });

@@ -1,5 +1,18 @@
 # Coverage
 
+Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`,
+`session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`.
+`goal: "100-percent"` is the default and cannot be downgraded relative to an established
+base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
+`goal: "report-only"` identifies verification infrastructure (helpers, probes, import-audit,
+inprocess and producer configurations). `goal: "excluded"` records the owner's computer-use
+coverage-maintenance exclusion and Python's existing-test-only scope. Both require a nonblank
+`goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
+goal must be report-only and still require complete, valid reports and per-OS references.
+
+Current integration checkpoint and unrefreshed hosted measurements are recorded
+[here](../coverage/receipts/main-integration.md). `enforce_target` remains false. No 100% claim.
+
 The target is **100% of owned executable source lines AND functions**, measured by each
 package's primary runner. Branches are reported, not gated. This is source coverage, not
 proof that every behavior is asserted. Every subsequently closed gap needs a test that fails
@@ -13,9 +26,9 @@ percentages or platform averages. Windows and WSL coverage are **not measured**;
 job is not an owned-source coverage measurement. Unsupported OSes and missing selected-OS floors
 fail closed, including when the global target is enabled. `enforce_target: false` is intentional; the final PR flips that field to
 `true`, without changing the accounting implementation. That flip applies to primary signals;
-independent runtime signals retain their declared enforcement modes. Primary signals always remain
+independent runtime signals retain their declared enforcement modes. Primary signals of eligible packages always remain
 `enforced`; the 100% goal is measured by PRIMARY signals, not the Bun compatibility subset.
-Pending packages then fail, too.
+Eligible pending packages then fail, too; owner-excluded/report-only domains do not.
 
 ## Independent signals
 
@@ -24,19 +37,27 @@ recorded [here](../coverage/receipts/phase0-macos.md). These local receipts are 
 not hosted floors or a hosted-CI timing claim. Hosted artifact measurements and their independent
 run comparison are recorded [here](../coverage/receipts/hosted-platforms.md).
 
-The accounting script consumes LCOV, not runner APIs. Primary reports currently come from
-Vitest/V8, except `subagents` uses Istanbul: real Pi reloads produce demonstrably wrong V8
-merges there. The `node --test` import-audit and probe helpers use c8. Those verification
-utilities and the in-process host are tracked alongside the production packages.
+The accounting script consumes LCOV, not runner APIs. Primary reports use Istanbul for `subagents`, `plan-mode`, `todo` and `preset`.
+Real Pi/Jiti reloads collide with Vitest-generated scripts at identical source URLs and corrupt
+V8 attribution. The preset and todo diagnoses demonstrate false misses and false hits; preserve
+real-loader tests rather than deleting assertions to repair counters. Istanbul credits instrumented
+Vitest transforms, not independent Jiti-only execution. Other primary producers retain V8 pending
+the broader provider migration. The `node --test` import-audit and probe helpers retain c8 as
+report-only verification signals.
 
-Every declared `test:bun` command also emits an independent `bun` LCOV signal. All eight current
+Every declared `test:bun` command also emits an independent `bun` LCOV signal. All eight currently measured
 Bun signals explicitly declare `enforcement: "report-only"`, with a mandatory nonblank `reason`
 and a link to [#160](https://github.com/nredd/pi-harness/issues/160). Their stored `max_uncovered`
 values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
-rely on that default. These are compatibility-suite measurements, NOT the owned-source denominator:
-Bun 1.3.14 omits
-never-imported files. The policy explicitly lists the files currently measured by each signal;
+rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
+Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
+Istanbul for router, preset, sampler, todo and inprocess through `scripts/run-vitest.ts bun`.
+They inherit the full explicit primary instrumentation inventory (no `files` subset); `text` and
+`lcov` use Vitest's dotted options and write `coverage/bun/lcov.info`. The sampler retains one
+worker. These signals remain report-only until clean full/inventory receipts exist on both OSes.
+Subagents retains its native subset plus main's guarded real-loader gate (#174); coverage is
+disabled for that extra canary so it cannot overwrite Node's primary report. The policy explicitly lists the files currently measured by each signal;
 missing expected files fail. Files outside that Bun subset remain mandatory in primary
 coverage. Imported sibling production source and dedicated test/helper directories are outside
 that package's signal. Unknown production report paths fail. Never merge JSC, V8 and Istanbul
@@ -114,8 +135,8 @@ The generated stats CLI bundle has a reasoned generated-artifact exclusion; its 
 
 `computer-use` is explicitly **not measured, tracked**. Its custom platform/native scripts
 continue running, but no invented instrumentation or 100% claim is made. Its TS entries and
-native sources stay in inventory. A separate runner/instrumentation change is required before
-the global flip. `dev-tools` is pending a clean cargo-suite baseline after #155; failed-run
+native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
+the global flip. Existing native/platform checks remain unchanged. `dev-tools` is pending a clean cargo-suite baseline after #155; failed-run
 reports are diagnostic artifacts only and never establish budgets.
 
 Python `scripts/*.py` and `integration/harness/*.py`, boundary probes, executable providers and
@@ -129,8 +150,9 @@ Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same G
 reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
 explicit owned/pending declaration or reasoned verification classification. Existing producer
-configurations remain pending in the policy. All pending inventories are expanded and validated,
-and block the final target flip.
+configurations remain pending/report-only in the policy. All inventories are expanded and
+validated; only eligible pending inventories block the final target flip. Python keeps its
+existing tests and benchmark gate, outside this eight-package goal.
 
 ## Add a source file
 
@@ -179,8 +201,9 @@ base-relative `enforcement_changes` entry, separate from its standing signal rea
 
 Missing, blank, duplicate, unrelated or recycled historical entries fail. The initial addition of
 this policy on main has no base policy and requires no fictitious downgrade history. New signals
-also have no previous enforcement to downgrade. Primary signals cannot become report-only even
-with an entry. A declaration is review evidence, not permission to hide missing reports or source.
+also have no previous enforcement to downgrade. Eligible package primary signals cannot become report-only even
+with an entry. Owner-approved verification domains are explicitly report-only from initial
+policy establishment; this does not authorize later removal of an eligible domain. A declaration is review evidence, not permission to hide missing reports or source.
 
 The second ratchet compares **expanded source membership**, not just budgets. It applies equally
 to enforced and report-only signals. The base policy

@@ -39,7 +39,7 @@ check-probes:  ## Probes (process-lifecycle, stack-resources) Biome + strict tsc
 	cd integration/probes && ../../node_modules/.bin/c8 --all --include=stack-resources.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test transcript-types.test.ts process-lifecycle.test.ts
 
 check-import-audit:  ## Import-audit helper Biome + strict tsc, then node --test against the real TypeScript parser
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs scripts/run-vitest.ts
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
 	cd scripts && ../node_modules/.bin/c8 --all --include=import_audit.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test import_audit.test.ts

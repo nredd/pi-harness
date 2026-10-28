@@ -17,8 +17,7 @@ import {
 } from "./agent-types.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
-import { modelFallbackNote } from "./model-resolver.js";
-import { type ModelSelection, selectModel } from "./model-selection.js";
+import { type ModelSelection, modelSelectionNote, selectModel } from "./model-selection.js";
 import {
   createOutputFilePath,
   getOutputTranscriptDefault,
@@ -75,6 +74,7 @@ export const NESTED_WORKFLOW_NO_AGENT_ERROR =
   + "Do the work directly.";
 
 interface NestedSpawnOptions {
+  homeDir?: string;
   description: string;
   model?: Model<any>;
   modelSelection?: ModelSelection;
@@ -121,6 +121,8 @@ export interface NestedAgentManager {
 }
 
 export interface NestedToolContext {
+  /** Home shared by this branch's user-resource discovery. */
+  homeDir?: string;
   manager: NestedAgentManager;
   pi: ExtensionAPI;
   parentAgentId: string;
@@ -163,7 +165,7 @@ type ResultPosition = "inline" | "fetched";
 function formatRecord(record: AgentRecord, position: ResultPosition): string {
   // Read off the record, so a fetched or resumed child reports what ran, not
   // what the current call would have configured.
-  const note = modelFallbackNote(record.modelFallback);
+  const note = modelSelectionNote(record);
   return note ? `${note}\n\n${formatOutcome(record, position)}` : formatOutcome(record, position);
 }
 
@@ -189,7 +191,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
   // Agents resolve from a registry built for THIS branch's config root (under
   // worktree isolation, the copy). Never via registerAgents — that is
   // process-global state shared with the main session and every other agent.
-  const loadRegistry = () => buildAgentRegistry(loadCustomAgents(context.configCwd, false, { projectTrusted: context.projectTrusted }));
+  const loadRegistry = () => buildAgentRegistry(loadCustomAgents(context.configCwd, false, { projectTrusted: context.projectTrusted, homeDir: context.homeDir }));
   const allowedTypesIn = (registry: Map<string, AgentConfig>): Set<string> | undefined =>
     context.allowedSubagents === "all"
       ? undefined
@@ -209,7 +211,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       prompt: Type.String({ description: "Self-contained task for the nested agent." }),
       description: Type.String({ description: "Short 3-5 word task description." }),
       subagent_type: Type.String({ description: `Allowed nested agent type. Available: ${availableIn(loadRegistry()).join(", ") || "none"}.` }),
-      model: Type.Optional(Type.String({ description: "Optional provider/model override." })),
+      model: Type.Optional(Type.String({ description: "Optional configured @tier or provider/model override; explicit values win over agentModels and the definition." })),
       thinking: Type.Optional(Type.String({ description: "Optional thinking level." })),
       max_turns: Type.Optional(Type.Number({ minimum: 1 })),
       run_in_background: Type.Optional(
@@ -285,6 +287,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         defaultRunInBackground: false,
       });
       const selection = selectModel({
+        homeDir: context.homeDir,
         agentType: resolvedType, definitionModel: config?.model, paramModel: params.model,
         parentModel: ctx.model, registry: ctx.modelRegistry, cwd: context.configCwd, agentLabel: config?.displayName,
       });
@@ -296,6 +299,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       const rootSessionId = context.manager.getRecord(context.parentAgentId)?.rootSessionId;
       const childDepth = context.depth + 1;
       const options: NestedSpawnOptions = {
+        homeDir: context.homeDir,
         description: params.description,
         model,
         modelSelection: selection,

@@ -131,6 +131,10 @@ class Package(StrictModel):
     )
     status: Literal["measured", "pending"] = Field(description="Whether clean-run coverage is accounted for.")
     note: str = Field(description="Measurement limitations and concrete pending follow-up.")
+    goal: Literal["100-percent", "report-only", "excluded"] = Field(
+        default="100-percent", description="Owner-approved scope of the global line/function goal."
+    )
+    goal_reason: str = Field(default="", description="Required reason for domains outside the global goal.")
     signals: dict[str, Signal] = Field(description="Independent primary and compatibility coverage signals.")
 
     @model_validator(mode="after")
@@ -148,8 +152,18 @@ class Package(StrictModel):
             raise ValueError("Pending package requires a note and no invented measurements")
         if self.status == "measured" and "primary" not in self.signals:
             raise ValueError("Measured package requires a primary signal")
-        if "primary" in self.signals and self.signals["primary"].enforcement != "enforced":
+        if self.goal != "100-percent" and not self.goal_reason.strip():
+            raise ValueError("Domains outside the global goal require a nonblank `goal_reason`")
+        if (
+            self.goal == "100-percent"
+            and "primary" in self.signals
+            and self.signals["primary"].enforcement != "enforced"
+        ):
             raise ValueError("Primary signals must remain enforced")
+        if self.goal != "100-percent" and any(
+            signal.enforcement != "report-only" for signal in self.signals.values()
+        ):
+            raise ValueError("Signals outside the global goal must remain report-only")
         return self
 
 
@@ -673,6 +687,8 @@ def check_ratchet(current: Policy, base: Policy) -> None:
         if name not in current.packages:
             raise ValueError(f"Removed package: '{name}'")
         package = current.packages[name]
+        if previous.goal == "100-percent" and package.goal != previous.goal:
+            raise ValueError(f"Cannot remove package from global goal: '{name}'")
         for signal_name, old in previous.signals.items():
             if signal_name not in package.signals:
                 raise ValueError(f"Removed signal: '{name}/{signal_name}'")
@@ -800,7 +816,7 @@ def account(
         owned = inventory(root, package)
         if package.status == "pending":
             LOGGER.warning(f"NOT MEASURED, TRACKED: '{name}': {package.note}")
-            if policy.enforce_target:
+            if policy.enforce_target and package.goal == "100-percent":
                 errors.append(f"Unmeasured package: '{name}'")
             continue
         for signal_name, signal in package.signals.items():
@@ -834,7 +850,7 @@ def account(
                     continue
                 budget = (
                     policy.target
-                    if policy.enforce_target and signal_name == "primary"
+                    if policy.enforce_target and package.goal == "100-percent" and signal_name == "primary"
                     else signal.max_uncovered[runner_os]
                 )
                 if signal.enforcement == "enforced" and (

@@ -1,4 +1,4 @@
-.PHONY: help install format lint type test stack bench live baselines clean
+.PHONY: help install format lint type test stack installer bench live baselines clean
 
 PYTEST := uv run --locked pytest
 STACK_ARGS = --stack "$(STACK)"
@@ -26,6 +26,10 @@ test:  ## Infrastructure units only, no Pi or tmux
 stack:  ## Real D/E boundaries; explicit PI_BIN and STACK, CI/runner only
 	@test -n "$(STACK)" || (printf 'Set STACK=stacks/personal.json or stacks/local.json\n'; exit 2)
 	$(PYTEST) $(STACK_FILES) $(STACK_ARGS) -m stack -n 2 --dist loadfile --log-cli-level=INFO
+
+installer:  ## Real one-shot installer in throwaway HOMEs; explicit INSTALLER_SPEC and STACK_SHA, network
+	@test -n "$(INSTALLER_SPEC)" -a -n "$(STACK_SHA)" || (printf 'Set INSTALLER_SPEC=git+https://github.com/nredd/pi-harness@<sha>#subdirectory=integration STACK_SHA=<promoted sha>\n'; exit 2)
+	INSTALLER_SPEC="$(INSTALLER_SPEC)" STACK_SHA="$(STACK_SHA)" $(PYTEST) scenarios/installer -m installer -n 3 --log-cli-level=INFO
 
 bench:  ## Serial quiet-runner F only, explicit PI_BIN and STACK
 	@test -n "$(STACK)"

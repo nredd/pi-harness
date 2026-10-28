@@ -131,6 +131,15 @@ def test_only_declared_shared_library_is_an_allowed_sibling_import() -> None:
     declared = ["@nredd/pi-resource-sampler"]
 
     def problems(spec: str, dependencies: list[str]) -> list[str]:
+        """Classify one synthetic import against independent sibling declarations.
+
+        Parameters:
+            spec (str): Module specifier to classify.
+            dependencies (list[str]): Explicitly allowed shared-library names.
+
+        Returns:
+            list[str]: Boundary violations, empty for a permitted import.
+        """
         found = pc.FileImports(specifiers=[spec], diagnostics=[])
         return pc.classify_imports("src/a.ts", found, files, dependencies)
 
@@ -296,6 +305,15 @@ def test_probe_interrupt_kills_its_whole_process_group(
     with FifoWitness(tmp_path) as witness:
 
         def interrupted(*_args: object, **_kwargs: object) -> None:
+            """Interrupt communication only after the real child opens its witness.
+
+            Parameters:
+                *_args (object): Unused Popen communication positional arguments.
+                **_kwargs (object): Unused Popen communication keyword arguments.
+
+            Raises:
+                KeyboardInterrupt: Once the real grandchild is known to be running.
+            """
             assert witness.started(), "child never wrote to the FIFO"
             raise KeyboardInterrupt
 
@@ -316,6 +334,16 @@ def test_reaped_leader_group_is_never_signalled(tmp_path: Path, monkeypatch: pyt
     signalled: list[int] = []
 
     def reaped_then_interrupted(self: subprocess.Popen[str], *_args: object, **_kwargs: object) -> None:
+        """Reap the leader before simulating a communication interrupt.
+
+        Parameters:
+            self (subprocess.Popen[str]): Probe leader whose exit status must be collected first.
+            *_args (object): Unused communication positional arguments.
+            **_kwargs (object): Unused communication keyword arguments.
+
+        Raises:
+            KeyboardInterrupt: After reaping, so no potentially reused process group is signalled.
+        """
         self.wait()
         raise KeyboardInterrupt
 
@@ -356,6 +384,53 @@ def test_probe_reports_cleanup_failure_with_the_primary_error(tmp_path: Path) ->
     assert "AggregateError" in result.stderr
     assert f"{NEGATIVE_CONTROL}; cleanup also failed: injected cleanup failure" in result.stderr
     assert "hostile child reaped: SIGTERM\n" in result.stderr
+
+
+@pytest.mark.parametrize("missing", ["usage", "swap"])
+def test_library_probe_rejects_missing_native_memory(tmp_path: Path, missing: str) -> None:
+    """Exercise the real probe assertions with an older or broken producer, not just their text.
+
+    Parameters:
+        tmp_path (Path): Isolated probe working directory.
+        missing (str): Native metric removed from the synthetic producer.
+    """
+    probe = pc.resource_sampler_probe()
+    anchor = "const { createResourceSampler } = await import('@nredd/pi-resource-sampler');"
+    producer = """
+    const createResourceSampler = () => {
+        let n = 0;
+        return {
+            async sample() {
+                const memory = {
+                    totalBytes: 16, freeBytes: 1,
+                    usage: { state: 'available', value: {
+                        usedBytes: 12, availableBytes: 4, basis: 'app+wired+compressed' } },
+                    swap: { state: 'available', value: { usedBytes: 3, totalBytes: 4 } }
+                };
+                delete memory.MISSING;
+                return { cpu: n++ ? { state: 'available', value: 10 } : { state: 'warming' },
+                    memory, processes: [] };
+            },
+            async dispose() {}
+        };
+    };
+    """
+    assert probe.count(anchor) == 1
+    probe = probe.replace(anchor, producer.replace("MISSING", missing)).replace(
+        "if (process.platform === 'darwin') {", "if (true) {"
+    )
+    result = subprocess.run(
+        [str(pc.locate_tools().node), "--input-type=module", "-e", probe],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode != 0
+    message = "native memory usage missing" if missing == "usage" else "native swap missing"
+    assert message in result.stderr
+    assert "hostile child reaped:" in result.stderr
 
 
 def test_library_probe_rejects_non_positive_readiness() -> None:

@@ -20,6 +20,7 @@
  * unit-testable without a terminal.
  */
 
+import type { TierDisclosure } from "../model-tiers.js";
 import type { WorkflowMeta, WorkflowPhaseMeta } from "./meta.js";
 
 /** Raw entry lifecycle, as written by the runtime. */
@@ -95,6 +96,7 @@ export interface WorkflowAgentEntry {
   requestedThinking?: string;
   /** `Note:` line set when the child ran on the parent model because its configured one did not resolve. */
   modelNote?: string;
+  modelTier?: TierDisclosure;
   fallbackModel?: string;
   isolation?: "worktree";
   error?: string;

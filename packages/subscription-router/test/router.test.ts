@@ -3,14 +3,17 @@ import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { ChainEntry, Profile } from "../src/config.js";
 import { ExhaustionTracker } from "../src/exhaustion.js";
+import { refKey } from "../src/model-ref.js";
 import {
 	ChainExhaustedError,
 	isoSeconds,
 	isQuotaError,
+	type RouteDecision,
 	type RouteEnv,
 	Router,
 	type UsageDecider,
 } from "../src/router.js";
+import { STALE_GRACE_MS } from "../src/selection.js";
 import { modelMatchesFamily, type UsageDecision, type UsageSnapshot } from "../src/usage.js";
 
 const T0 = 1_700_000_000_000;
@@ -249,6 +252,42 @@ describe("balanced routing", () => {
 		};
 		return { ...h, router, snapshots, set };
 	}
+	it("records why each pick happened, including freshness, and skips sticky continuations", async () => {
+		const { tracker, env, snapshots, set } = balanced();
+		const decisions: RouteDecision[] = [];
+		const usage: UsageDecider = { decisionFor: () => ({ block: false }), peek: (provider) => snapshots[provider] };
+		const router = new Router(
+			usage,
+			tracker,
+			() => T0,
+			(decision) => decisions.push(decision),
+		);
+		set(SONNET_55, 0.2);
+		set(TERRA, 0.8);
+		const old = snapshots[SONNET_55.provider];
+		if (old) Object.assign(old, { status: "stale", retrievedAt: T0 - 6 * MINUTE, expiresAt: T0 });
+		const route = await router.route(profile, request(), env);
+		expect(route.model.id).toBe(TERRA.id);
+		expect(decisions).toHaveLength(1);
+		expect(decisions[0]).toMatchObject({
+			at: T0,
+			profile: "default",
+			strategy: "balanced",
+			reason: "user",
+			chosen: refKey(TERRA),
+			candidates: [
+				{
+					model: refKey(SONNET_55),
+					ageMs: 6 * MINUTE,
+					quota: { kind: "measured", window: "weekly", stale: 6 * MINUTE },
+				},
+				{ model: refKey(TERRA), ageMs: 0, quota: { kind: "measured", window: "weekly" } },
+				{ model: refKey(third), quota: { kind: "fallback", reason: "usage missing" } },
+			],
+		});
+		await router.route(profile, request({ reason: "continuation", previous: { model: model(TERRA) } }), env);
+		expect(decisions).toHaveLength(1);
+	});
 	it("shares pure >=3-provider selection with admission and diagnostic pick", async () => {
 		const { router, env, set, refreshed, tracker } = balanced();
 		set(SONNET_55, 0.2);
@@ -297,6 +336,7 @@ describe("balanced routing", () => {
 		const stale = snapshots[third.provider];
 		if (!stale) throw new Error("missing fixture snapshot");
 		stale.status = "stale";
+		stale.retrievedAt = T0 - STALE_GRACE_MS - 1;
 		expect((await router.route(profile, request(), env)).model.id).toBe(TERRA.id);
 		tracker.mark(model(third), { block: true, window: "weekly", resetAt: T0 + MINUTE });
 		expect((await router.route(profile, request({ reason: "continuation", previous }), env)).model.id).toBe(TERRA.id);

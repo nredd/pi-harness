@@ -455,7 +455,7 @@ def test_reviewed_missing_source_is_explicitly_pending(file: str) -> None:
     assert owners, file
     assert all(package.status == "pending" and package.note.strip() for package in owners)
     if file.endswith(".py"):
-        assert all("pytest-cov" in package.note for package in owners)
+        assert all(package.goal == "excluded" and package.goal_reason.strip() for package in owners)
 
 
 @pytest.mark.parametrize(

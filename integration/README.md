@@ -55,6 +55,7 @@ Excluded scenario files (paths below are relative to `scenarios/`; the seven `st
 | --- | --- |
 | `bench/test_compaction.py`, `bench/test_fanout.py`, `bench/test_multisession.py`, `bench/test_render.py`, `bench/test_startup.py`, `bench/test_typed_vs_bash.py` | `F` measurements/instrumentation require a quiet runner and explicit baseline; hosted CI reports bench as not run. `test_multisession.py` carries the merged latency-probe calibration and readiness assertions, unexecuted |
 | `live/test_live.py` | `G` requires explicit credentials and opt-in; never CI |
+| `installer/test_installer.py` | Real one-shot installer against a published `stack/<sha>` (network, real `gh`/npm, throwaway HOMEs); runs in `.github/workflows/installer.yml` and `make installer`, never in `stack` |
 
 The last two non-boundary Python functions are removed: `test_gate_error_forbids_plain_text_and_points_to_finalize` merges into `packages/plan-mode/test/decline-session.test.ts` / `ready-plan reply blocks completion with actionable headless guidance` at `v0.59.3-nredd.1`, which asserts the blocked second completion and all five exact strings; the fleet/Plan round-trip runs in `inprocess/fleet-plan.test.ts` on real factories, raw input, VirtualTerminal and one injected clock. The ledger now includes the previously omitted gate-guidance function.
 

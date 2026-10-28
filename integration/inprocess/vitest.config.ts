@@ -13,5 +13,6 @@ export default defineConfig({
 		pool: "forks",
 		maxWorkers: 2,
 		testTimeout: 20_000,
+		setupFiles: ["./verification/home-setup.ts"],
 	},
 });

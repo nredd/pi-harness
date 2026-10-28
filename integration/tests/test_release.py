@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import io
 import json
@@ -17,25 +18,46 @@ import shutil
 import subprocess
 import sys
 import tarfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from email.message import Message
+from functools import partial
+from http.client import HTTPConnection, IncompleteRead
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socket import gaierror
+from threading import Thread
 from types import MappingProxyType
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 import pytest
 
-from harness import release
+from harness import install, promotion, release
 from harness.release import (
     ATTESTATION_WORKFLOW,
+    GITHUB_TOKEN_VARIABLES,
     RELEASE_PACKAGES,
+    AttestationRateLimitedError,
+    attestation_bundle,
     fetch_release,
     gitlink_tag,
     prune_native,
     release_checksums,
+    release_tarballs,
     verify_asset,
     verify_provenance,
+    verify_public_attestation,
     verify_root_overrides,
 )
+
+
+class HTTPBody(io.BytesIO):
+    """Minimal HTTP response with real header lookup for offline downloader units."""
+
+    headers = Message()
+
 
 # sha256 (frozen in `LEGACY_CHECKSUMS`) -> npm SRI sha512 of the same downloaded legacy tarball.
 # Re-derive both from one download: `gh release download <tag> --repo nredd/pi -p <asset>`, then
@@ -79,6 +101,12 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
     Parameters:
         monkeypatch (pytest.MonkeyPatch): substitute successful and failing git output.
         tmp_path (Path): explicit Gitlink directory.
+
+    Returns:
+        None: exact lookup succeeds and failures retain sanitized diagnostic causes.
+
+    Raises:
+        AssertionError: the command, operation message or detached cause contract changes.
     """
     calls = []
 
@@ -91,6 +119,9 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
 
         Returns:
             str: simulated tagged git output.
+
+        Raises:
+            AssertionError: subprocess capture options differ from the contract.
         """
         calls.append(argv)
         assert kwargs["text"]
@@ -108,6 +139,9 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
             *args (Any): subprocess positional arguments.
             **kwargs (Any): subprocess capture options.
 
+        Returns:
+            str: never returned by this failure fixture.
+
         Raises:
             subprocess.CalledProcessError: exact tag lookup failed with captured output.
         """
@@ -116,7 +150,82 @@ def test_exact_gitlink_tag_or_clear_failure(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setattr(subprocess, "check_output", untagged)
     with pytest.raises(RuntimeError, match=r"untagged; release it.*fatal: no tag exactly matches") as caught:
         gitlink_tag(tmp_path)
-    assert isinstance(caught.value.__cause__, subprocess.CalledProcessError)
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert "CalledProcessError" in str(caught.value.__cause__)
+    assert caught.value.__context__ is None
+
+
+def test_gitlink_tag_scrubs_hostile_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An independent literal denylist catches Git redirects, askpass and credentials in the child."""
+    hostile = (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+    )
+    binary = tmp_path / "git"
+    binary.write_text(
+        f"#!{sys.executable}\nimport os,pathlib\n"
+        f"assert not set(os.environ).intersection({hostile!r})\n"
+        f"assert os.environ['HOME'] != {str(tmp_path)!r}\n"
+        "assert list(pathlib.Path(os.environ['HOME']).iterdir()) == []\n"
+        "assert os.environ['XDG_CONFIG_HOME'] == os.environ['HOME']\n"
+        "assert os.environ['GIT_CONFIG_NOSYSTEM'] == '1'\n"
+        "assert os.environ['GIT_TERMINAL_PROMPT'] == '0'\n"
+        "print('v1.3.0-nredd.7')\n"
+    )
+    binary.chmod(0o700)
+    monkeypatch.setattr(release, "GIT_BIN", str(binary))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in hostile:
+        monkeypatch.setenv(name, "sentinel-not-a-real-token")
+    assert gitlink_tag(tmp_path) == "v1.3.0-nredd.7"
+
+
+@pytest.mark.parametrize("poison_home", [False, True])
+def test_gitlink_tag_ignores_decoy_git_dir_and_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, poison_home: bool
+) -> None:
+    """Real git must describe the requested core, never GIT_DIR's differently tagged decoy or HOME config."""
+    home, core, decoy = (tmp_path / name for name in ("home", "core", "decoy"))
+    home.mkdir()
+    env = {"PATH": os.defpath, "HOME": str(home), "XDG_CONFIG_HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+    for repo, tag in ((core, "v1.3.0-nredd.7"), (decoy, "v9.9.9-nredd.99")):
+        repo.mkdir()
+        for args in (
+            ["init", "-q"],
+            [
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ],
+            ["-c", "tag.gpgsign=false", "tag", tag],
+        ):
+            subprocess.check_output(
+                [release.GIT_BIN, "-C", str(repo), *args], env=env, text=True, stderr=subprocess.STDOUT
+            )
+    if poison_home:
+        (home / ".gitconfig").write_text("[invalid config\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+    assert gitlink_tag(core) == "v1.3.0-nredd.7"
 
 
 def test_verify_asset_fails_closed(tmp_path: Path) -> None:
@@ -185,10 +294,10 @@ def test_release_checksums_require_release_file_except_named_legacy(
     monkeypatch.setattr(
         release,
         "urlopen",
-        lambda url, **kwargs: io.BytesIO(f"{'a' * 64}  earendil-works-pi-coding-agent-1.3.0.tgz\n".encode()),
+        lambda url, **kwargs: HTTPBody(f"{'a' * 64}  earendil-works-pi-coding-agent-1.3.0.tgz\n".encode()),
     )
     assert release_checksums(tag) == {base + "earendil-works-pi-coding-agent-1.3.0.tgz": "a" * 64}
-    monkeypatch.setattr(release, "urlopen", lambda url, **kwargs: io.BytesIO(b"not a checksum\n"))
+    monkeypatch.setattr(release, "urlopen", lambda url, **kwargs: HTTPBody(b"not a checksum\n"))
     with pytest.raises(ValueError, match="Invalid"):
         release_checksums(tag)
 
@@ -261,7 +370,7 @@ def test_fetch_aborts_when_provenance_cannot_verify(
     npm_calls: list[list[str]] = []
     monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
     monkeypatch.setattr(release, "release_checksums", lambda *_: checksums)
-    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(contents))
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(contents))
     if missing_gh:
         monkeypatch.setattr(release, "GH_BIN", str(tmp_path / "missing-gh"))
         error = FileNotFoundError
@@ -304,7 +413,7 @@ def test_legacy_fetch_enforces_checksum_without_provenance(
         tmp_path (Path): isolated release prefix.
     """
     provenance: list[tuple[Path, str]] = []
-    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"wrong bytes"))
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(b"wrong bytes"))
     monkeypatch.setattr(release, "verify_provenance", lambda path, tag: provenance.append((path, tag)))
     with pytest.raises(ValueError, match="checksum mismatch"):
         fetch_release("v1.3.0-nredd.7", tmp_path / "prefix")
@@ -357,7 +466,7 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
         """
         urls.append(url)
         assert kwargs["timeout"] == 120
-        return io.BytesIO(tarball)
+        return HTTPBody(tarball)
 
     prefix = tmp_path / "prefix"
     destination = (
@@ -427,12 +536,18 @@ def test_fetch_refuses_bad_tag_or_reused_prefix_before_network(tmp_path: Path) -
 def test_subprocess_timeouts_become_chained_runtime_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stage: str
 ) -> None:
-    """Turn a hung `gh` or `npm` into a `RuntimeError` chained from `TimeoutExpired`.
+    """Turn hung `gh`/`npm` into a `RuntimeError` with a detached sanitized timeout cause.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): make the chosen subprocess time out.
         tmp_path (Path): isolated prefix and fake binaries.
         stage (str): which subprocess hangs.
+
+    Returns:
+        None: partial output is retained without chaining the original timeout object.
+
+    Raises:
+        AssertionError: the error text, sanitized cause or context contract changes.
     """
     gh_bin = tmp_path / "gh"
     gh_bin.touch()
@@ -462,10 +577,12 @@ def test_subprocess_timeouts_become_chained_runtime_errors(
     tag = "v1.3.0-nredd.8"
     contents = b"core"
     monkeypatch.setattr(release, "release_checksums", lambda *_: checksums_for(tag, contents))
-    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: io.BytesIO(contents))
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(contents))
     with pytest.raises(RuntimeError, match=r"partial .* output") as caught:
         fetch_release(tag, tmp_path / "prefix")
-    assert isinstance(caught.value.__cause__, subprocess.TimeoutExpired)
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert "TimeoutExpired" in str(caught.value.__cause__)
+    assert caught.value.__context__ is None
     if stage == "provenance":
         assert "provenance" in str(caught.value)
     else:
@@ -522,7 +639,7 @@ def test_legacy_fetch_verifies_exactly_the_recorded_assets(
             io.BytesIO: the asset's bytes.
         """
         seen.append(url)
-        return io.BytesIO(payloads[url])
+        return HTTPBody(payloads[url])
 
     def install(*_args: Any, **_kwargs: Any) -> None:
         """Stop after verification; installation is covered elsewhere.
@@ -575,7 +692,7 @@ def test_legacy_fetch_rejects_a_wrong_asset(
         Returns:
             io.BytesIO: the asset's bytes, or wrong bytes for the last asset.
         """
-        return io.BytesIO(b"wrong" if url == recorded[-1] else payloads[url])
+        return HTTPBody(b"wrong" if url == recorded[-1] else payloads[url])
 
     def install(*_args: Any, **_kwargs: Any) -> None:
         """Fail the test if installation is reached.
@@ -583,6 +700,12 @@ def test_legacy_fetch_rejects_a_wrong_asset(
         Parameters:
             *_args (Any): ignored.
             **_kwargs (Any): ignored.
+
+        Returns:
+            None: never returned.
+
+        Raises:
+            pytest.fail.Exception: npm installation was unexpectedly reached.
         """
         pytest.fail("npm install reached despite a checksum mismatch")
 
@@ -627,6 +750,141 @@ def test_root_overrides_stay_tied_to_verified_legacy_releases() -> None:
         entry = lock[f"node_modules/{name}"]
         assert entry["resolved"] == url
         assert entry["integrity"] == LOCK_INTEGRITY[sha256]
+
+
+def serve_attestations(monkeypatch: pytest.MonkeyPatch, outcome: bytes | int) -> list[str]:
+    """Answer the attestations API with a body or an HTTP status, recording requests.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): module patcher.
+        outcome (bytes | int): response body, or an HTTP error status.
+
+    Returns:
+        list[str]: requested URLs; each request is also checked to carry no credentials.
+    """
+    requests: list[str] = []
+
+    def fake_urlopen(request: Any, timeout: int) -> io.BytesIO:
+        """Serve the configured outcome.
+
+        Parameters:
+            request (Any): `urllib.request.Request`.
+            timeout (int): seconds.
+
+        Returns:
+            io.BytesIO: the body.
+
+        Raises:
+            HTTPError: the configured status.
+        """
+        requests.append(request.full_url)
+        assert not request.has_header("Authorization")
+        if isinstance(outcome, int):
+            raise HTTPError(request.full_url, outcome, "refused", Message(), None)
+        return HTTPBody(outcome)
+
+    monkeypatch.setattr(release, "urlopen", fake_urlopen)
+    return requests
+
+
+def test_attestation_bundle_writes_every_bundle_anonymously(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bundles are looked up by the artifact digest, without credentials, one JSON line each."""
+    artifact = tmp_path / "a.json"
+    artifact.write_bytes(b"snapshot")
+    body = json.dumps({"attestations": [{"bundle": {"n": 1}}, {"bundle": {"n": 2}}]}).encode()
+    requests = serve_attestations(monkeypatch, body)
+    bundle = attestation_bundle("o/r", artifact, tmp_path / "b.jsonl")
+    digest = hashlib.sha256(b"snapshot").hexdigest()
+    assert requests == [f"https://api.github.com/repos/o/r/attestations/sha256:{digest}"]
+    assert [json.loads(line) for line in bundle.read_text().splitlines()] == [{"n": 1}, {"n": 2}]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "error"),
+    [
+        (403, AttestationRateLimitedError),
+        (429, AttestationRateLimitedError),
+        (404, RuntimeError),
+        (b'{"attestations": []}', RuntimeError),
+        (b"not json", RuntimeError),
+    ],
+)
+def test_attestation_bundle_failures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: bytes | int, error: type[Exception]
+) -> None:
+    """Rate limits are distinguishable; every other failure is a plain verification error."""
+    artifact = tmp_path / "a.json"
+    artifact.write_bytes(b"snapshot")
+    serve_attestations(monkeypatch, outcome)
+    with pytest.raises(error) as caught:
+        attestation_bundle("o/r", artifact, tmp_path / "b.jsonl")
+    assert (type(caught.value) is AttestationRateLimitedError) == (error is AttestationRateLimitedError)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "with_bundle"), [(b'{"attestations":[{"bundle":{}}]}', True), (403, False)]
+)
+def test_public_attestation_falls_back_to_gh_login_only_when_rate_limited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: bytes | int, with_bundle: bool
+) -> None:
+    """The anonymous bundle is preferred; only a rate limit hands the lookup to `gh` itself."""
+    artifact = tmp_path / "a.json"
+    artifact.write_bytes(b"snapshot")
+    serve_attestations(monkeypatch, outcome)
+    calls: list[tuple[list[str], dict[str, str] | None]] = []
+    gh_bin = tmp_path / "gh"
+    gh_bin.touch()
+    monkeypatch.setattr(release, "GH_BIN", str(gh_bin))
+    monkeypatch.setenv("GH_TOKEN", "ghp_sentinel-not-a-real-token")
+    monkeypatch.setattr(
+        subprocess, "check_output", lambda argv, **kwargs: calls.append((argv, kwargs["env"])) or ""
+    )
+    verify_public_attestation(artifact, "o/r", "o/r/.github/workflows/w.yml", "refs/heads/main")
+    ((argv, env),) = calls
+    assert ("--bundle" in argv) == with_bundle
+    # The bundle path needs no API call, so `gh` only inherits a token for the login fallback.
+    if with_bundle:
+        assert env is not None
+        assert not GITHUB_TOKEN_VARIABLES & set(env)
+        assert "ghp_sentinel-not-a-real-token" not in env.values()
+    else:
+        assert env is not None
+        assert env["GH_TOKEN"] == "ghp_sentinel-not-a-real-token"
+        assert all(Path(entry).is_absolute() for entry in env["PATH"].split(os.pathsep))
+    assert argv[argv.index("--signer-workflow") + 1] == "o/r/.github/workflows/w.yml"
+    assert argv[argv.index("--source-ref") + 1] == "refs/heads/main"
+    assert "--deny-self-hosted-runners" in argv
+
+
+def test_fetch_release_binds_bytes_to_explicit_checksums(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Explicit digests (the installer's snapshot) win over a re-read `SHA256SUMS`, before npm runs."""
+    tag = "v1.3.0-nredd.8"
+    served = b"republished bytes"
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(served))
+    monkeypatch.setattr(release, "release_checksums", lambda *_: checksums_for(tag, served))
+    monkeypatch.setattr(release, "verify_provenance", lambda path, release_tag: None)
+    npm_bin = tmp_path / "npm"
+    npm_bin.touch()
+    monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
+    npm_calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "check_output", lambda argv, **kwargs: npm_calls.append(argv) or "")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        fetch_release(tag, tmp_path / "prefix", checksums=checksums_for(tag, b"snapshot bytes"))
+    assert npm_calls == []
+
+
+def test_release_tarballs_names_installed_assets_first() -> None:
+    """The first two names are the coding-agent and tui tarballs `fetch_release` installs."""
+    assert release_tarballs("v1.3.0-nredd.8")[:2] == [
+        "earendil-works-pi-coding-agent-1.3.0.tgz",
+        "earendil-works-pi-tui-1.3.0.tgz",
+    ]
+    with pytest.raises(ValueError, match="Not a core fork release tag"):
+        release_tarballs("main")
 
 
 NEW_TAG = "v1.3.0-nredd.8"
@@ -684,6 +942,12 @@ def merge_at(*path: str, values: dict[str, Any]) -> Edit:
 
         Parameters:
             document (dict[str, Any]): parsed fixture to mutate.
+
+        Returns:
+            None: selected entries are merged in place.
+
+        Raises:
+            KeyError: the fixture lacks the selected path.
         """
         target = document
         for key in path:
@@ -699,6 +963,13 @@ def rewrite(path: Path, edit: Edit) -> None:
     Parameters:
         path (Path): JSON file.
         edit (Edit): callable mutating the parsed document.
+
+    Returns:
+        None: the edited fixture is written in place.
+
+    Raises:
+        OSError: fixture read or write failed.
+        ValueError: fixture is not JSON.
     """
     document = json.loads(path.read_text())
     edit(document)
@@ -724,7 +995,7 @@ def new_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, 
     gh_calls: list[list[str]] = []
     monkeypatch.setattr(release, "GH_BIN", str(gh_bin))
     monkeypatch.setattr(release, "release_checksums", lambda tag: checksums_for(tag, NEW_BYTES))
-    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(NEW_BYTES))
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: HTTPBody(NEW_BYTES))
     monkeypatch.setattr(subprocess, "check_output", lambda argv, **_k: gh_calls.append(argv) or "ok")
     return root, gh_calls
 
@@ -812,7 +1083,7 @@ def test_root_override_gate_rejects_altered_tarball_bytes(
 ) -> None:
     """Served bytes that differ from the recorded sha256 fail before provenance."""
     root, gh_calls = new_release
-    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(NEW_BYTES + b"tampered"))
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: HTTPBody(NEW_BYTES + b"tampered"))
     with pytest.raises(ValueError, match="Release checksum mismatch"):
         verify_root_overrides(root)
     assert gh_calls == []
@@ -823,7 +1094,7 @@ def test_root_override_gate_rejects_altered_legacy_bytes(
 ) -> None:
     """Frozen legacy sha256 values still bind the bytes; nothing is skipped for legacy tags."""
     write_root(tmp_path, "v1.3.0-nredd.6")
-    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: io.BytesIO(b"altered"))
+    monkeypatch.setattr(release, "urlopen", lambda *_a, **_k: HTTPBody(b"altered"))
     monkeypatch.setattr(release, "verify_provenance", lambda *_a: pytest.fail("legacy has no provenance"))
     with pytest.raises(ValueError, match="Release checksum mismatch"):
         verify_root_overrides(tmp_path)
@@ -972,3 +1243,461 @@ def test_cli_verify_flag_reports_failure_and_rejects_prefix(
     with pytest.raises(SystemExit) as caught:
         release.main()
     assert caught.value.code == 2
+
+
+@pytest.mark.parametrize("caller", ["fetch", "snapshot", "checksums", "asset", "promotion", "attestation"])
+@pytest.mark.parametrize(
+    ("failure", "reason", "status"),
+    [
+        (HTTPError("https://error.invalid/", 404, "Not Found", Message(), None), "HTTP 404 Not Found", 404),
+        (HTTPError("https://error.invalid/", 403, "Forbidden", Message(), None), "HTTP 403 Forbidden", 403),
+        (
+            HTTPError("https://error.invalid/", 500, "Internal Server Error", Message(), None),
+            "HTTP 500 Internal Server Error",
+            500,
+        ),
+        (
+            HTTPError("https://error.invalid/", 429, "Too Many Requests", Message(), None),
+            "HTTP 429 Too Many Requests",
+            429,
+        ),
+        (HTTPError("https://error.invalid/", 404, "", Message(), None), "HTTP 404 Not Found", 404),
+        (HTTPError("https://error.invalid/", 599, "", Message(), None), "HTTP 599 Unknown reason", 599),
+        (URLError(gaierror(-2, "platform-specific DNS detail")), "DNS lookup failed", None),
+        (TimeoutError("platform-specific timeout detail"), "Request timed out", None),
+        (URLError(TimeoutError("wrapped timeout detail")), "Request timed out", None),
+        (IncompleteRead(b"abc", 7), "Incomplete response: received 3 bytes, expected 7 more", None),
+        (IncompleteRead(b"abc"), "Incomplete response: received 3 bytes", None),
+    ],
+)
+def test_shared_fetch_diagnostics_are_stable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    caller: str,
+    failure: Exception,
+    reason: str,
+    status: int | None,
+) -> None:
+    """Preserve one clean URL/reason across every shared download boundary and rate-limit fallback.
+
+    Parameters:
+        tmp_path (Path): isolated artifact and output paths.
+        monkeypatch (pytest.MonkeyPatch): deterministic failed network boundary.
+        caller (str): shared-fetch consumer under test.
+        failure (Exception): concrete urllib/protocol failure.
+        reason (str): literal public diagnostic contract, independent of exception repr.
+        status (int | None): HTTP status retained for rate-limit decisions.
+
+    Returns:
+        None: exact text, URL cardinality, status and exception chaining match the contract.
+
+    Raises:
+        AssertionError: a consumer changes the normalized text, status or sanitized exception graph.
+    """
+    artifact = tmp_path / "snapshot.json"
+    artifact.write_bytes(b"snapshot")
+    destination = tmp_path / "download"
+    url = "https://downloads.example.invalid/core.tgz"
+    if caller == "checksums":
+        url = f"https://github.com/nredd/pi/releases/download/{NEW_TAG}/SHA256SUMS"
+    elif caller == "attestation":
+        url = (
+            "https://api.github.com/repos/o/r/attestations/sha256:" + hashlib.sha256(b"snapshot").hexdigest()
+        )
+    requests: list[str] = []
+
+    def failed(request: Any, **kwargs: Any) -> Any:
+        """Raise the selected real exception before a response can be consumed.
+
+        Parameters:
+            request (Any): public URL or request.
+            **kwargs (Any): ignored transport options.
+
+        Returns:
+            Any: never returned.
+
+        Raises:
+            Exception: selected HTTP, DNS, timeout or incomplete-read fixture.
+        """
+        requests.append(request.full_url if isinstance(request, Request) else request)
+        raise failure
+
+    monkeypatch.setattr(release, "urlopen", failed)
+    calls = {
+        "fetch": partial(release.fetch_bytes, url),
+        "snapshot": partial(install.download, url, destination),
+        "checksums": partial(release.release_checksums, NEW_TAG),
+        "asset": partial(release.download_verified_asset, url, NEW_TAG, {}, destination),
+        "promotion": partial(promotion._fetch_asset, url, destination),
+        "attestation": partial(release.attestation_bundle, "o/r", artifact, destination),
+    }
+    expected_types = {
+        "fetch": release.FetchError,
+        "snapshot": install.VerificationError,
+        "checksums": ValueError,
+        "asset": release.FetchError,
+        "promotion": promotion.EvidenceError,
+        "attestation": AttestationRateLimitedError if status in {403, 429} else RuntimeError,
+    }
+    expected = f"Could not fetch '{url}': {reason}"
+    if caller == "attestation":
+        expected = (
+            "Anonymous attestations API refused: "
+            if status in {403, 429}
+            else "Attestation lookup failed for 'snapshot.json': "
+        ) + expected
+    with pytest.raises(expected_types[caller]) as caught:
+        calls[caller]()
+    assert str(caught.value) == expected
+    assert str(caught.value).count(url) == 1
+    assert requests == [url]
+    error = caught.value if isinstance(caught.value, release.FetchError) else caught.value.__cause__
+    assert isinstance(error, release.FetchError)
+    assert error.status == status
+    assert isinstance(error.__cause__, RuntimeError)
+    assert error.__cause__ is not failure
+    assert error.__context__ is None
+    assert error.__cause__.__context__ is None
+    assert type(failure).__name__ in str(error.__cause__)
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("caller", ["snapshot", "promotion"])
+def test_local_write_diagnostics_stay_separate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caller: str,
+) -> None:
+    """A successful fetch followed by denied output must remain a local-I/O domain failure.
+
+    Parameters:
+        tmp_path (Path): output destination.
+        monkeypatch (pytest.MonkeyPatch): successful network and failed write boundaries.
+        caller (str): snapshot or promotion consumer.
+
+    Returns:
+        None: output failure retains its own operation and original non-FetchError cause.
+    """
+    url = "https://downloads.example.invalid/core.tgz"
+    failure = PermissionError(errno.EACCES, "output denied")
+
+    def denied(path: Path, data: bytes) -> int:
+        """Refuse the local output write after the response body has been read.
+
+        Parameters:
+            path (Path): output destination.
+            data (bytes): successfully downloaded bytes.
+
+        Returns:
+            int: never returned.
+
+        Raises:
+            PermissionError: fixture output permission was denied.
+            AssertionError: fetched bytes differ from the fixture body.
+        """
+        assert data == b"downloaded"
+        raise failure
+
+    monkeypatch.setattr(release, "urlopen", lambda *args, **kwargs: HTTPBody(b"downloaded"))
+    monkeypatch.setattr(Path, "write_bytes", denied)
+    error_type = install.VerificationError if caller == "snapshot" else promotion.EvidenceError
+    download = install.download if caller == "snapshot" else promotion._fetch_asset
+    with pytest.raises(error_type) as caught:
+        download(url, tmp_path / "output")
+    assert str(caught.value) == f"Could not download '{url}': [Errno {errno.EACCES}] output denied"
+    assert caught.value.__cause__ is failure
+    assert not isinstance(caught.value.__cause__, release.FetchError)
+
+
+class LocalHTTPTransport(HTTPSHandler):
+    """Replace only TLS transport, keeping real HTTP parsing and redirect policy in tests."""
+
+    def https_open(self, req: Request) -> Any:
+        """Connect to the loopback HTTP server for a logical HTTPS request.
+
+        Parameters:
+            req (Request): logical HTTPS URL with the fixture's host and port.
+
+        Returns:
+            Any: real urllib HTTP response, not an injected stream or exception.
+        """
+        return self.do_open(HTTPConnection, req)
+
+
+HTTPReply = Callable[[str], tuple[dict[str, str], bytes]]
+
+
+@contextmanager
+def http_responses(
+    reply: HTTPReply, *, received: list[dict[str, str]] | None = None
+) -> Iterator[tuple[str, Callable[..., Any], list[str]]]:
+    """Serve controlled wire responses with the production HTTPS redirect handler.
+
+    Parameters:
+        reply (HTTPReply): response headers and wire body selected by path.
+        received (list[dict[str, str]] | None): optional captured request headers.
+
+    Yields:
+        tuple[str, Callable[..., Any], list[str]]: logical base URL, opener and requested paths.
+    """
+    requests: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        """Serve exact malformed headers/bodies and silence request logs."""
+
+        def do_GET(self) -> None:
+            """Write one controlled response and close it, as urllib requests.
+
+            Returns:
+                None: response headers and body were written.
+
+            Raises:
+                OSError: response socket write failed.
+            """
+            requests.append(self.path)
+            if received is not None:
+                received.append(dict(self.headers.items()))
+            headers, body = reply(self.path)
+            self.send_response(302 if "Location" in headers else 200)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+        def log_message(self, format: str, *args: Any) -> None:
+            """Suppress the fixture's HTTP access log.
+
+            Parameters:
+                format (str): ignored log format.
+                *args (Any): ignored log values.
+
+            Returns:
+                None: no log output is emitted.
+            """
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    opener = build_opener(ProxyHandler({}), LocalHTTPTransport(), release.HTTPSRedirectHandler())
+    try:
+        yield f"https://127.0.0.1:{server.server_port}", opener.open, requests
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    "header", ["Authorization", "Cookie", "Proxy-Authorization", "X-Api-Key", "X-Auth-Token", "Accept"]
+)
+@pytest.mark.parametrize("unredirected", [False, True])
+def test_public_fetch_redirect_header_contract(
+    monkeypatch: pytest.MonkeyPatch, header: str, unredirected: bool
+) -> None:
+    """Real different-port origins may receive Accept, never arbitrary caller credential headers."""
+    received: list[dict[str, str]] = []
+    with (
+        http_responses(lambda path: ({"Content-Length": "2"}, b"ok"), received=received) as (
+            target,
+            _,
+            target_paths,
+        ),
+        http_responses(lambda path: ({"Location": target + "/asset"}, b"")) as (
+            origin,
+            opener,
+            origin_paths,
+        ),
+    ):
+        monkeypatch.setattr(release, "urlopen", opener)
+        request = Request(origin + "/redirect")
+        if unredirected:
+            request.add_unredirected_header(header, "sentinel")
+        else:
+            request.add_header(header, "sentinel")
+        if header == "Accept":
+            assert release.fetch_bytes(request) == b"ok"
+            assert origin_paths == ["/redirect"]
+            assert target_paths == ["/asset"]
+            assert received[0].get("Accept") == (None if unredirected else "sentinel")
+        else:
+            with pytest.raises(release.FetchError, match="only the `Accept`"):
+                release.fetch_bytes(request)
+            assert origin_paths == target_paths == []
+            assert received == []
+
+
+def test_nonlegacy_core_truncation_is_exit_three(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The real non-legacy checksum/asset verification path normalizes a broken chunked transfer."""
+    snapshot = promotion.load_promoted_snapshot(
+        (Path(__file__).parent / "fixtures" / "stack-snapshot-24889f7.json").read_bytes(),
+        "24889f7896be7157bf9077a41465a3b29620879f",
+    )
+    core = snapshot.stack.core.model_copy(update={"tag": NEW_TAG})
+    snapshot = snapshot.model_copy(update={"stack": snapshot.stack.model_copy(update={"core": core})})
+    sums = "".join(f"{digest}  {name}\n" for name, digest in core.integrity.items()).encode()
+
+    def reply(path: str) -> tuple[dict[str, str], bytes]:
+        """Serve valid checksums, then a genuinely truncated chunked asset.
+
+        Parameters:
+            path (str): requested URL path.
+
+        Returns:
+            tuple[dict[str, str], bytes]: framing headers and controlled wire body.
+        """
+        if path.endswith("SHA256SUMS"):
+            return {"Content-Length": str(len(sums))}, sums
+        return {"Transfer-Encoding": "chunked"}, b"10\r\npartial"
+
+    with http_responses(reply) as (base, opener, requests):
+        monkeypatch.setattr(release, "RELEASE_URL_PREFIX", base + "/")
+        monkeypatch.setattr(release, "urlopen", opener)
+        # Keep the old downloader local too when this test is run with finding 1 reverted.
+        monkeypatch.setattr(promotion, "urlopen", opener, raising=False)
+        monkeypatch.setattr(install, "preflight", lambda *args: {"node": "node"})
+        monkeypatch.setattr(install, "verify_snapshot", lambda *args, **kwargs: snapshot)
+        monkeypatch.setattr(
+            install, "verify_provenance_anonymously", lambda *args: pytest.fail("attested partial bytes")
+        )
+        monkeypatch.setattr(install.Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(install, "is_wsl", lambda: False)
+        for key in ("XDG_DATA_HOME", "PI_CODING_AGENT_DIR"):
+            monkeypatch.delenv(key, raising=False)
+        assert install.main([snapshot.source_sha, "--plan"]) == install.ExitCode.VERIFICATION
+        assert len(requests) == 2
+        assert requests[0].endswith("SHA256SUMS")
+        assert requests[1].endswith(".tgz")
+    url = f"{base}/{NEW_TAG}/earendil-works-pi-coding-agent-1.3.0.tgz"
+    assert caplog.messages == [
+        f"VERIFICATION FAILED, nothing changed: Core release '{NEW_TAG}' rejected: "
+        f"Could not fetch '{url}': Incomplete response: received 0 bytes"
+    ]
+    assert not (tmp_path / ".local").exists()
+
+
+@pytest.mark.parametrize(
+    ("length", "body", "reason"),
+    [
+        ("bad", b"abcdef", "Invalid Content-Length: '['bad']'"),
+        ("-1", b"abcdef", "Invalid Content-Length: '['-1']'"),
+        ("1", b"abcdef", "Content-Length mismatch: expected 1 bytes, received 6"),
+        ("10", b"abcdef", "Content-Length mismatch: expected 10 bytes, received 6"),
+        ("33", b"x" * 33, "Content-Length exceeds 32 bytes"),
+        (None, b"x" * 33, "Response exceeds 32 bytes"),
+    ],
+    ids=["bad", "negative", "short", "truncated", "oversized-header", "oversized-body"],
+)
+def test_wire_content_length_failure_is_exit_three(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    *,
+    length: str | None,
+    body: bytes,
+    reason: str,
+) -> None:
+    """Real HTTP framing failures must retain exact bounded-read diagnostics.
+
+    Parameters:
+        tmp_path (Path): output fixture.
+        monkeypatch (pytest.MonkeyPatch): real wire transport and CLI download seam.
+        caplog (pytest.LogCaptureFixture): actual CLI diagnostic.
+        length (str | None): wire length header.
+        body (bytes): response body.
+        reason (str): literal expected framing/size reason.
+
+    Returns:
+        None: exact diagnostics and non-mutation hold for malformed, mismatched and oversized bodies.
+    """
+    headers = {"Content-Length": length} if length is not None else {}
+    destination = tmp_path / "asset"
+    monkeypatch.setattr(release, "MAX_FETCH_BYTES", 32)
+    with http_responses(lambda path: (headers, body)) as (base, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+
+        def run(*args: Any) -> install.ExitCode:
+            """Run the real download and CLI error boundary without other verification setup.
+
+            Parameters:
+                *args (Any): ignored installer invocation arguments.
+
+            Returns:
+                install.ExitCode: successful download status.
+
+            Raises:
+                install.VerificationError: invalid wire response.
+            """
+            install.download(base + "/asset", destination)
+            return install.ExitCode.OK
+
+        monkeypatch.setattr(install, "run", run)
+        assert install.main(["a" * 40]) == install.ExitCode.VERIFICATION
+        assert requests == ["/asset"]
+    assert caplog.messages == [
+        f"VERIFICATION FAILED, nothing changed: Could not fetch '{base}/asset': {reason}"
+    ]
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("redirect", [False, True], ids=["plain-http", "redirect-downgrade"])
+def test_insecure_download_is_exit_three(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, redirect: bool
+) -> None:
+    """Reject a plain URL and a real cross-origin HTTPS-to-HTTP redirect before opening its target."""
+    target = ""
+
+    def reply(path: str) -> tuple[dict[str, str], bytes]:
+        """Make the insecure target reachable so an unsafe follow would actually succeed.
+
+        Parameters:
+            path (str): requested URL path.
+
+        Returns:
+            tuple[dict[str, str], bytes]: redirect or successful target response.
+        """
+        if path == "/redirect":
+            return {"Location": target}, b""
+        return {"Content-Length": "2"}, b"ok"
+
+    with http_responses(reply) as (base, opener, requests):
+        target = base.replace("https://127.0.0.1", "http://localhost") + "/forbidden"
+        monkeypatch.setattr(release, "urlopen", opener)
+        url = base + "/redirect" if redirect else base.replace("https:", "http:") + "/plain"
+
+        def run(*args: Any) -> install.ExitCode:
+            """Exercise download's normal exit-3 mapping.
+
+            Parameters:
+                *args (Any): ignored installer invocation arguments.
+
+            Returns:
+                install.ExitCode: successful download status.
+
+            Raises:
+                install.VerificationError: insecure URL or redirect.
+            """
+            install.download(url, tmp_path / "asset")
+            return install.ExitCode.OK
+
+        monkeypatch.setattr(install, "run", run)
+        assert install.main(["a" * 40]) == install.ExitCode.VERIFICATION
+        assert requests == (["/redirect"] if redirect else [])
+    reason = f"Redirect requires HTTPS, refused '{target}'" if redirect else "Download requires HTTPS"
+    assert caplog.messages == [f"VERIFICATION FAILED, nothing changed: Could not fetch '{url}': {reason}"]
+    assert caplog.messages[0].count(url) == 1
+    assert not (tmp_path / "asset").exists()
+
+
+@pytest.mark.parametrize("length", [None, "6"], ids=["eof-framed", "length-framed"])
+def test_valid_wire_body_is_complete(monkeypatch: pytest.MonkeyPatch, length: str | None) -> None:
+    """Guard the actual successful HTTP parser path with and without a length header."""
+    headers = {"Content-Length": length} if length is not None else {}
+    with http_responses(lambda path: (headers, b"abcdef")) as (base, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+        assert release.fetch_bytes(base + "/asset") == b"abcdef"
+        assert requests == ["/asset"]

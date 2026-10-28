@@ -5,8 +5,8 @@
 	"scripts": {
 		"lint": "biome check --error-on-warnings .",
 		"typecheck": "tsc --noEmit",
-		"test": "vitest run --coverage",
-		"test:bun": "bun test . --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun",
+		"test": "node ../../scripts/run-vitest.ts node --coverage",
+		"test:bun": "node ../../scripts/run-vitest.ts bun --coverage --coverage.provider=istanbul --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/bun",
 		"check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
 	},
 	"devDependencies": {
@@ -18,6 +18,7 @@
 		"@narumitw/pi-tui-kit": "0.65.5",
 		"@quintinshaw/pi-dynamic-workflows": "3.14.0",
 		"@types/node": "26.6.5",
+		"@vitest/coverage-istanbul": "5.0.3",
 		"@xterm/headless": "5.5.0",
 		"croner": "10.0.1",
 		"nanoid": "5.1.16",
