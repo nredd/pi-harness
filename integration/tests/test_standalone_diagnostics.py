@@ -289,9 +289,14 @@ def test_credential_scan_refuses_entire_publication(
 
         Returns:
             None: never returned because the real scanner must refuse publication.
+
+        Raises:
+            ValueError: the verified credential refusal, passed through to the collector.
         """
         publications.append(destination)
-        publish(files | {name: content}, destination)
+        with pytest.raises(ValueError, match="credential") as refused:
+            publish(files | {name: content}, destination)
+        raise refused.value
 
     box = build_sandbox(tmp_path / "sandbox")
     monkeypatch.setattr(diag, "execute", lambda *_, **__: diag.StartupResult(37, b"", b"failed"))
