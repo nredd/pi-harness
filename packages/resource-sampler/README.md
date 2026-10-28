@@ -133,8 +133,10 @@ scans (2.6ms/sample, excludes helper CPU); a separate fixed `ps` invocation meas
 real-input gate and reports its snapshot duration/coverage.
 
 Development: `npm run check --workspace @nredd/pi-resource-sampler` (single-worker tests, including
-actual host samples and child cleanup). `test/runtime.test.ts` runs under both Vitest (Node) and
-`bun test`: it starts a child whose argv[0], argv, environment, process title and (Linux) comm hold a
+actual host samples and child cleanup). The full suite runs through Vitest on Node and pinned Bun.
+Native failure tests inject fixed bindings through the same lazy loader seam used by production,
+not a Node-shaped global builtin mock; they do not require the runtime's real FFI to exist.
+`test/runtime.test.ts` runs under both engines: it starts a child whose argv[0], argv, environment, process title and (Linux) comm hold a
 random secret, proves the 0.1.0 source exposes it, then requires the child in the snapshot and no
 12-character fragment of the secret, plus three real CPU samples. Everything after spawn, readiness
 included, is followed by SIGTERM, then SIGKILL, with a bounded wait for the runtime's exit status

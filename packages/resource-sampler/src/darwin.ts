@@ -67,7 +67,8 @@ export const NANOSECONDS_PER_MILLISECOND = 1_000_000;
 /** The pbi_start_tvusec field must be strictly smaller than one second of microseconds. */
 export const MICROSECONDS_PER_SECOND = 1_000_000n;
 
-interface NativeCalls {
+/** Runtime-independent fixed native bindings; the loader owns the returned library handle. */
+export interface NativeCalls {
 	bsd(pid: number, buffer: Buffer): number;
 	usage(pid: number, buffer: Buffer): number;
 	timebase(buffer: Buffer): number;
@@ -140,11 +141,12 @@ function nativeCalls(): NativeCalls | undefined {
 
 /**
  * Initialize the Mach timebase; close the owned library on failure, including runtime throws.
+ * @param load Lazy runtime binding loader, shared by production and deterministic failure tests.
  * @returns Owned bindings with nanoseconds per tick, or undefined when unavailable/invalid.
  * @throws If opening or initializing FFI throws (the caller retains fallback rows).
  */
-function nativeLibrary(): NativeLibrary | undefined {
-	const lib = nativeCalls();
+function nativeLibrary(load: () => NativeCalls | undefined): NativeLibrary | undefined {
+	const lib = load();
 	if (!lib) return undefined;
 	let initialized = false;
 	try {
@@ -245,10 +247,15 @@ export function darwinNativeCounter(
  * Synchronous syscalls, like os.cpus(), cannot be preempted; check admission before each PID.
  * @param rows Bounded ps fallback rows, enriched in place only on successful native reads.
  * @param budget Shared byte/deadline/abort admission state, charged even for failed syscalls.
+ * @param load Lazy native binding dependency; defaults to the platform's builtin FFI adapter.
  * @returns The same array, retaining original rows for inaccessible or rejected PIDs.
  * @throws If the shared abort signal is observed between native calls.
  */
-export function darwinNativeProcesses(rows: ProcessCounter[], budget: Budget): ProcessCounter[] {
+export function darwinNativeProcesses(
+	rows: ProcessCounter[],
+	budget: Budget,
+	load: () => NativeCalls | undefined = nativeCalls,
+): ProcessCounter[] {
 	if (!budget.ready()) return rows;
 	if (budget.maxBytes - budget.bytesRead < DARWIN_ABI.timebase.bytes) {
 		budget.bytesRead = budget.maxBytes;
@@ -258,7 +265,7 @@ export function darwinNativeProcesses(rows: ProcessCounter[], budget: Budget): P
 	budget.bytesRead += DARWIN_ABI.timebase.bytes;
 	let lib: NativeLibrary | undefined;
 	try {
-		lib = nativeLibrary();
+		lib = nativeLibrary(load);
 	} catch {
 		return rows;
 	}

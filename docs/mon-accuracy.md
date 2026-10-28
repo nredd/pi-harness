@@ -170,6 +170,34 @@ continues to use published `0.1.1` until the owner's later release/pin work. The
 ready once implementation, measurements, tests and this checklist are complete; publication is
 intentionally not a prerequisite for this source PR.
 
+## Hosted Bun failure diagnosis
+
+Run `40633011370`, job `122633576920` (`owned (macos-14)`), passed all 14 Darwin
+unit tests on Node 26.12.0, then failed four in the full Vitest suite on Bun 1.3.14.
+The Node version matched the owner's Mac; this was not missing Node FFI. The global
+`getBuiltinModule` fake returned Node's `lib.functions`/`lib.lib.close` shape, but Bun's
+adapter requires `ptr`, `lib.symbols` and `lib.close`. Initialization threw, then the
+collector correctly fell back before reaching the intended budget/PID/abort paths.
+The exact four failures reproduced locally with pinned Bun before the fix.
+
+`darwinNativeProcesses` now accepts a lazy fixed-binding loader, defaulting to the
+unchanged production adapter. Tests inject `NativeCalls` at that same seam, retaining
+strict assertions and existing platform skips without depending on either runtime's
+builtin FFI shape. An undefined loader result simulates unavailable FFI explicitly;
+Node 22.14.0 also exercises these injected failure paths without real builtin FFI.
+The default loader remains lazy and unsupported/denied native access still falls back.
+
+Mutation proof: bypassing the injected loader and using the real adapter makes five
+of 14 tests fail on pinned Bun, including all four originally failing cases and the
+unavailable-loader assertion. The source was restored afterward. The fake cannot pass
+without the collector's admission, timebase cleanup, per-PID continuation and abort logic.
+
+Executed after restoring: complete sampler checks (Biome, tsc, build, 39 Node tests,
+39 pinned-Bun 1.3.14 Vitest tests); Darwin suite on Node 22.14.0 (13 passed, one existing
+real-FFI test skipped); session-kit Biome/tsc, 718 Node tests and 74 pinned-Bun scenarios;
+packed sampler contract (13 exact paths and real native metrics); complete
+`make check-scripts` (Ruff/ty, 693 pytest tests and import-audit helper).
+
 ## Regression evidence
 
 - `darwin.test.ts` reconstructs only allowlisted numeric/p_comm fields from this Mac. It rejects
