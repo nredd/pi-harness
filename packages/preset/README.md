@@ -57,7 +57,7 @@ local themes, skills, agents and their configuration. Restart sessions after act
   compact markers shorten these words. Cache diagnostics never perform I/O or warm a cache.
 - Optional router quota row: provider-scoped remaining quotas, floored/clamped to 0..100, `--`
   for unknown values, warning at <=20%, error at <=5%. Anthropic shows 5h and weekly; OpenAI
-  shows weekly only (it has no 5h quota, so a reported `5h` window is ignored; a Codex primary window the router could not size by `limit_window_seconds` is named `5h` there and is ignored too). Each window is
+  shows weekly only (it has no 5h quota, so a window with a reported 18000s span is ignored; a window whose span the router only assumed is shown as an unidentified quota, see below). Each window is
   followed by its reset, taken from the router's `windows[].resetAt` (epoch ms), never computed
   or guessed: `Quota left: Anthropic 5h 66% (resets 14:30) weekly 35% (resets Nov 2 09:00) | OpenAI weekly 76% (resets Nov 3 11:05)`.
   Compact: `Left: Anth 5h 66% @14:30 7d 35% @Nov 2 09:00 | OAI 7d 76% @Nov 3 11:05`. Times are 24h
