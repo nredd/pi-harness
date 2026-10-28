@@ -1,4 +1,4 @@
-/** Retained notices and orphan viewer actions through registered session lifecycle callbacks. */
+/** Public index menu, workflow and lifecycle callbacks with real child sessions and private files. */
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -246,8 +246,12 @@ describe("index scheduler and file errors", () => {
     configure({ maxConcurrent: 1, worktreeIsolation: true });
     const hold = heldResponse("blocking private child"); provider.setResponses([hold.response]);
     const bound = await bind();
+    const gitConfig = join(env.dir, "gitconfig"); writeFileSync(gitConfig, "");
     bound.boot.pi.exec = vi.fn(async (command: string, args: string[], options: { cwd?: string; timeout?: number } = {}) => {
-      const child = spawnSync(command, args, { cwd: options.cwd, timeout: options.timeout, encoding: "utf8" });
+      const child = spawnSync(command, args, { cwd: options.cwd, timeout: options.timeout, encoding: "utf8",
+        env: { PATH: process.env.PATH, HOME: env.dir, USERPROFILE: env.dir,
+          GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+      });
       return { stdout: child.stdout ?? "", stderr: child.stderr ?? "", code: child.status ?? 1, killed: child.signal !== null };
     });
     await spawn(bound, "pool blocker"); await hold.entered;
@@ -316,7 +320,7 @@ describe("index scheduler and file errors", () => {
     }, undefined, undefined, bound.context);
     const invalid = await schedule("not a schedule");
     expect(invalid.content[0].text).not.toContain('Scheduled "');
-    expect(invalid.content[0].text).toMatch(/schedule|cron|invalid/i);
+    expect(invalid.content[0].text).toContain('Invalid schedule "not a schedule". Use 6-field cron');
     const result = await schedule("+1h");
     expect(result.content[0].text).toContain('Scheduled "private schedule"');
     const path = resolveStorePath(env.dir, "index-final-parent");
