@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from harness.paths import TMUX_BIN
 
 if TYPE_CHECKING:
@@ -91,6 +93,16 @@ class TmuxTimeoutError(AssertionError):
         """
         super().__init__(f"{message}\n--- last capture ---\n{capture}")
         self.capture = capture
+
+
+class PaneExitEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    exit_status_path: str = Field(description="Wrapper exit-marker path in the synthetic sandbox")
+    tmux: str | None = Field(default=None, description="Raw native pane PID/dead/status/signal response")
+    tmux_error: str | None = Field(default=None, description="Native pane query failure, if unavailable")
+    exit_status: str | None = Field(default=None, description="Unmodified decoded marker contents, or absent")
+    exit_status_error: str | None = Field(default=None, description="Marker read/decode failure")
 
 
 @dataclass
@@ -313,13 +325,66 @@ class TmuxPane:
             return False
         return dead == "0"
 
-    def kill(self) -> None:
-        """Tear down the private tmux server and its socket dir; safe to call twice."""
+    def save_screen_evidence(self, destination: Path, prefix: str) -> None:
+        """Capture teardown screens without allowing diagnostic I/O to mask a failure.
+
+        Parameters:
+            destination (Path): private sandbox directory, scanned later before publication.
+            prefix (str): existing screenshot filename prefix.
+        """
+        for suffix, styled in (("txt", False), ("ansi", True)):
+            try:
+                (destination / f"{prefix}.{suffix}").write_text(self.capture(styled=styled))
+            except Exception:
+                LOGGER.warning(f"Could not save '{suffix}' screen evidence for '{self.name}'")
+
+    def save_exit_evidence(self) -> None:
+        """Save native pane state and wrapper status before teardown destroys the evidence.
+
+        Unsupported tmux format fields remain empty in the raw response. Capture failures
+        are recorded/logged, never substituted for the original scenario failure.
+        """
+        if self.exit_status_path is None:
+            return
+        report = PaneExitEvidence(exit_status_path=str(self.exit_status_path))
         try:
-            self._tmux("kill-server")
-        except RuntimeError:
-            LOGGER.debug(f"tmux server for '{self.name}' was already gone")
-        shutil.rmtree(self.socket.parent, ignore_errors=True)
+            report.tmux = self._tmux(
+                "display-message",
+                "-p",
+                "-t",
+                self.name,
+                "pid=#{pane_pid} dead=#{pane_dead} status=#{pane_dead_status} signal=#{pane_dead_signal}",
+            )
+        except (RuntimeError, OSError, UnicodeError) as error:
+            report.tmux_error = str(error)
+        try:
+            report.exit_status = (
+                self.exit_status_path.read_text() if self.exit_status_path.is_file() else None
+            )
+        except (OSError, UnicodeError) as error:
+            report.exit_status_error = str(error)
+        self.exit_status_path.with_suffix(".pane.json").write_text(report.model_dump_json(indent=2))
+
+    def kill(self) -> None:
+        """Save evidence, then tear down the private server and socket dir; safe twice."""
+        try:
+            # Preserve the first pre-cleanup snapshot when callers defensively kill twice.
+            if (
+                self.exit_status_path is not None
+                and not self.exit_status_path.with_suffix(".pane.json").exists()
+            ):
+                self.save_exit_evidence()
+        except Exception:
+            # Evidence is best effort. Even unexpected capture failures cannot skip
+            # server cleanup or replace the scenario's original verdict.
+            LOGGER.warning(f"Could not save exit evidence for '{self.name}'")
+        finally:
+            try:
+                self._tmux("kill-server")
+            except (RuntimeError, OSError, UnicodeError):
+                LOGGER.debug(f"tmux server for '{self.name}' was already gone")
+            finally:
+                shutil.rmtree(self.socket.parent, ignore_errors=True)
 
 
 def reap_stale_servers(socket_root: Path, max_age_s: float) -> list[Path]:
