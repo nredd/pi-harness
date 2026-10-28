@@ -32,14 +32,26 @@ complete raw bytes, including existing sessions/screens, are scanned **before pu
 `harness.credentials.require_safe_diagnostic` is the shared publication policy: it reuses
 `release.redact_diagnostic` for URL/known proxy credentials and centralizes the signature rules
 extracted from the unmerged #191 collector. There is no dependency on that unmerged module and no
-collector-local regex here; #191 should consume the shared helper when integrated. Signatures are
-heuristics, not proof that arbitrary secrets cannot appear in diagnostics.
+collector-local regex here; #191/#178 must consume this same helper when integrated, not copy or
+maintain another policy. Long token/key signatures remain checked. Explicit canonical JSON string
+fields `access_token`, `refresh_token` and `api_key` are refused for **any nonempty string value**;
+case-insensitive `Bearer` followed by any nonempty whitespace-delimited value is refused regardless
+of length. Empty/null credential slots and metadata keys such as `api_key_available`,
+`access_token_count`, `auth_type: "Bearer"` and `token_count` are not auth dumps by themselves.
+The Bearer rule deliberately may reject prose describing a token. Signatures are heuristics, not
+proof against arbitrary secrets, unknown/escaped credential keys or encoded values.
 
 Candidates are staged outside the uploaded artifacts root, scanned and written from the same byte
 snapshot, then renamed into place only when the complete set is safe. Any unsafe/unreadable candidate
 or staging error refuses the whole set, removes stale publication and leaves the primary verdict
-unchanged; raw bytes are never redacted into a misleading "exact" capture. Symlinks/external paths
-are refused. Pane reports use a strict `PaneExitEvidence` Pydantic model. Missing tmux, invalid UTF-8
+unchanged; raw bytes are never redacted into a misleading "exact" capture. Every ancestor from the
+sandbox root itself through the candidate's parent must be an actual directory, including internal
+parent links that happen to resolve inside the sandbox. Candidate reads reuse the `harness.files`
+regular-file pattern: reject known nonregular entries before opening, then use `O_NOFOLLOW`,
+`O_NONBLOCK`, `O_NOCTTY` and descriptor `fstat` before reading. Final symlink/FIFO replacements cannot
+turn cleanup into a blocking FIFO read. Ancestry checks are observations, not a descriptor-anchored
+sandbox against concurrent malicious same-UID parent replacement. No broader filesystem-security
+claim is made. Pane reports use a strict `PaneExitEvidence` Pydantic model. Missing tmux, invalid UTF-8
 markers and capture/write failures cannot prevent server teardown. RPC evidence open/write/flush
 failures disable only the disk sink: bounded pipe drainage and in-memory diagnostics continue.
 This supplements, not duplicates, the separate standalone build/startup collector proposed in #191.
@@ -79,6 +91,15 @@ This is not a native-crash reproduction or a fix. Synthetic abort and timeout te
 original nonzero/timeout failure and raw evidence survive cleanup; no assertions, deadlines, Bun
 pins or runtime behavior are relaxed. The exact native trigger and a failing-CI pane-state capture
 remain unresolved. No capacity cancellation is classified as this failure.
+
+Final privacy/cleanup proofs additionally reject internal parent/root links and a root `pi.stderr`
+FIFO without ever opening it for reading. Stale regular-file prechecks with a FIFO or final symlink
+replacement are refused through the descriptor checks; removing `O_NONBLOCK` fails a pre-open test
+assertion, so the mutant cannot hang the test. Short synthetic fields/Bearer values are injected
+across all seven artifact categories while the primary exception remains unchanged and no artifact
+set is published. Public metadata negative controls still pass. Removing ancestor checks, restoring
+plain `Path.read_bytes`, reverting the short-credential rule, or removing `O_NONBLOCK` each fails a
+focused mutant (workstation logs `/tmp/tui-finalprivacy-mutant-{ancestry,regular,short,nonblock}.log`).
 
 Blocker regression receipts:
 

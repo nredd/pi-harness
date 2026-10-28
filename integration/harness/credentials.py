@@ -17,8 +17,8 @@ CREDENTIAL = re.compile(
     rb"(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|"
     rb"sk-(?:ant-)?[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|"
     rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
-    rb"Bearer [A-Za-z0-9._~-]{24,}|"
-    rb'"(?:access_token|refresh_token|api_key)"\s*:\s*"[A-Za-z0-9._~-]{24,}")'
+    rb"\b(?i:Bearer)[ \t]+[^\s\"']+|"
+    rb'"(?:access_token|refresh_token|api_key)"\s*:\s*"[^"]+")'
 )
 
 

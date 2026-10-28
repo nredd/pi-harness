@@ -51,7 +51,7 @@ def fail_with_cleanup(cleanup: Callable[[], None]) -> None:
         "sessions/history.jsonl",
     ],
 )
-@pytest.mark.parametrize("kind", ["signature", "url", "proxy"])
+@pytest.mark.parametrize("kind", ["signature", "url", "proxy", "short-field", "short-bearer"])
 def test_every_candidate_is_scanned_before_atomic_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, kind: str
 ) -> None:
@@ -74,12 +74,15 @@ def test_every_candidate_is_scanned_before_atomic_publication(
         "signature": b"sk-" + b"S" * 40,
         "url": b"https://user:password@example.invalid/path",
         "proxy": b"known-password-ONLY",
+        "short-field": b'{"api_key":"secret"}',
+        "short-bearer": b"Authorization: Bearer x",
     }
     monkeypatch.setenv("HTTPS_PROXY", "http://user:known-password-ONLY@example.invalid")
     source = (box.agent_dir if name.startswith("sessions/") else box.root) / name
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(payloads[kind])
-    conftest.save_sandbox_artifacts(box, "case")
+    with pytest.raises(AssertionError, match="PRIMARY"):
+        fail_with_cleanup(lambda: conftest.save_sandbox_artifacts(box, "case"))
     assert not destination.exists()
     assert not list(tmp_path.glob("evidence-*"))
 

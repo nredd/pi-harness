@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness.credentials import require_safe_diagnostic
+from harness.files import entry_kind, read_regular_bytes
 from harness.interactive import FIRST_FRAME_PATTERN, SOCKET_ROOT, launch_tui
 from harness.isolation import check_tier
 from harness.paths import ARTIFACTS_DIR, pi_command
@@ -246,6 +247,32 @@ def artifact_dir(nodeid: str) -> Path:
     return ARTIFACTS_DIR / UNSAFE_NAME.sub("_", nodeid).strip("_")
 
 
+def read_artifact_bytes(source: Path, root: Path) -> bytes:
+    """Check every in-sandbox ancestor before a no-follow, nonblocking regular-file read.
+
+    Parameters:
+        source (Path): lexically in-sandbox candidate.
+        root (Path): sandbox root, itself required to be a real directory.
+
+    Returns:
+        bytes: exact candidate bytes, safe to scan before publication.
+
+    Raises:
+        ValueError: a candidate escapes the root or a parent is not a real directory.
+        OSError: metadata lookup or the regular-file read fails.
+    """
+    if source == root or not source.is_relative_to(root):
+        raise ValueError("Artifact candidate is outside the sandbox")
+    parent = source.parent
+    while True:
+        if entry_kind(parent) != "directory":
+            raise ValueError("Artifact candidate ancestry is not a real directory")
+        if parent == root:
+            break
+        parent = parent.parent
+    return read_regular_bytes(source)
+
+
 def save_sandbox_artifacts(box: Sandbox, nodeid: str) -> None:
     """Copy session logs and scripts out of a failed sandbox.
 
@@ -291,9 +318,7 @@ def save_sandbox_artifacts(box: Sandbox, nodeid: str) -> None:
             staged = Path(temporary) / "payload"
             staged.mkdir()
             for name, source in sorted(candidates.items()):
-                if source.is_symlink() or not source.resolve().is_relative_to(box.root.resolve()):
-                    raise ValueError("Artifact symlinks or external paths are not publishable")
-                data = source.read_bytes()
+                data = read_artifact_bytes(source, box.root)
                 require_safe_diagnostic(data)
                 target = staged / name
                 target.parent.mkdir(parents=True, exist_ok=True)
