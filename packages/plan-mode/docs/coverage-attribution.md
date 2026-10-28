@@ -130,7 +130,7 @@ Temporary mutations were applied only in the new worktree and restored:
 
 No source mutation is part of the proposed diff.
 
-## Validation and remaining decision
+## Initial validation and remaining gaps
 
 Resource snapshots preceded package validation and full coverage runs. The last snapshot
 before the package gate showed 10 CPUs, 42.6% interval utilization, 2.3 GiB free and 56%
@@ -182,10 +182,89 @@ The filesystem error callback and queued-input predicate need separate behaviora
 Other remaining lines are not claimed closed by this scoped diagnosis.
 
 This is not a 100% result or approval for sub-100 enforcement. The causal premise for
-A/B/C was false: existing source measurement is truthful for this block. Owner approval
-is still required on remaining coverage/reachability work; no option is selected here.
+A/B/C was false: existing source measurement is truthful for this block. The owner
+subsequently authorized continuing behavioral coverage work without a measurement choice.
 
-Publication is intentionally left to the orchestrator: this child is forbidden to commit
-or push. No branch push, PR, merge, rebase, force operation, release, or live activation
-was performed. The orchestrator must commit/push these tests and this diagnosis and open
-a stacked PR against `redd/cov-close-plan-mode-main` if it accepts the result.
+The diagnosis and four tests were published in signed commit `3038808`, stacked PR
+[#199](https://github.com/nredd/pi-harness/pull/199) against `redd/cov-close-plan-mode-main`
+(PR #187). No merge, rebase, force operation, release, or live activation was performed.
+
+## Behavioral follow-up
+
+The follow-up adds 14 tests across three files, without changing runtime source:
+
+- `settings-watch-lifecycle.test.ts` installs an explicit watcher boundary before delivering
+  events, then advances fake timers over the real debounce callbacks. A burst must cancel
+  the old deadline, a watcher error must close the watch and cancel its pending timer, and
+  shutdown must not close it twice. No native readiness timeout was enlarged. Existing
+  native filesystem watcher tests remain unchanged and run in the full suite.
+- `runtime-failure-attribution.test.ts` verifies six restored-runtime failure classes:
+  lookup throws, missing model, negative authentication result, authentication throws,
+  model application throws, and thinking application throws. Each checks its warning,
+  effective thinking/model outcome, persisted consumption, and absence of a retry. It also
+  verifies a failed tool registry does not admit unrecognized tools.
+- `plan-mode-lifecycle-gaps.test.ts` verifies renewed decline permission, legacy completion
+  rejection, manual thinking restoration, active-tool registry failure, new-activation
+  rollback/ownership release, stale ready-menu containment, and failed Normal-contract
+  publication preserving the active Plan state and ownership.
+
+Three temporary mutations were killed and restored before the final gate:
+
+| Mutation | Result |
+| --- | --- |
+| Remove watcher error cleanup | Watch lifecycle test fails: watch not closed |
+| Bypass legacy completion decline gate | Legacy test fails: unauthorized plan replaces existing plan |
+| Preserve the consumed runtime intent | All six runtime failure tests fail: pending intent remains |
+
+Resource awareness before the final sequential gate: 10 CPUs, 23.3% sampled utilization,
+1.3 GiB free, `memory_pressure` 60% free. The owner reported other coverage, policy, Bun,
+and crash-diagnostic agents active; no process-to-agent inference was used. This worker
+used one Vitest worker and did not edit any sibling worktree.
+
+Executed locally on 2026-10-28:
+
+- `VITEST_MAX_WORKERS=1 npm run check`: passed, dist contract 8 tests, build, Biome,
+  strict types, Node Vitest 52 files / 567 tests, native Bun 8 tests / 255 assertions.
+- `node ../../scripts/run-vitest.ts bun --maxWorkers=1`: passed, 52 files / 567 tests.
+- Full Node Istanbul run, unchanged `src/plan-mode.ts` include: 52 files / 567 tests passed.
+  JSON and LCOV are at `/tmp/pm-takeover-final/{coverage-final.json,lcov.info}`.
+  Logs: `/tmp/pm-final-{check,bun,coverage}.log`. These local files are not durable PR assets.
+
+| File | Initial diagnosis | Follow-up | Denominator |
+| --- | ---: | ---: | ---: |
+| `src/plan-mode.ts` lines | 919 | 940 | 952 |
+| Functions | 152 | 153 | 155 |
+| Statements | 1012 | 1033 | 1077 |
+| Branches | 712 | 727 | 803 |
+
+The exact follow-up report still has 12 uncovered lines and 2 functions:
+
+```text
+Lines: 1210,1211,1396,1397,1483,1511,1512,1517,1518,1609,1650,1659
+Functions: computePlanModePolicyToolNames @1608; anonymous_121 @1650
+```
+
+This is still NOT 100%, and no denominator, provider, source inventory, exclusion,
+threshold, or artifact architecture changed. The report includes every statement in the
+measured source file, not selected executing fragments. No package-wide coverage claim
+is made. Runtime source and distributed output remain unchanged.
+
+Remaining investigation is explicit, not an exclusion recommendation:
+
+- `1396-1397`: the only caller enters `showActivePlanMenu` under `ctx.hasUI`; its own
+  no-UI fallback cannot run with a stable context capability.
+- `1483/1609`: tool admission returns before consulting policy while disabled; status
+  formatting invokes its policy summary only while enabled. The disabled fallback
+  remains unexercised. Do not force a private closure call to raise its count.
+- `1511-1512/1517-1518`: stale or inconsistent pending-policy guards remain unexercised.
+  Workflow generation transitions synchronously reset the pending policy; further work
+  must demonstrate a real lifecycle that leaves one of these guards reachable.
+- `1650/1659`: queued-input predicate and cross-session queue partition need a supported
+  lifecycle reproduction. Same-session queues normally coexist with the active application
+  or pending admission, which short-circuit the predicate; session replacement clears queues.
+- `1210-1211`: direct implement commands reject missing plans before entering
+  `startImplementation`; menu callbacks are another caller and need further behavioral
+  investigation. No synthetic private entry point or runtime-source change was added.
+
+The full monorepo gate and hosted CI have not been run by this worker. Review evidence
+belongs in a PR comment on the exact final HEAD, not in a committed self-approval.
