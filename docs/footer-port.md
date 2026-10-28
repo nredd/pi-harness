@@ -93,7 +93,7 @@ stack tests). No scenario pytest, Pi binary or tmux was invoked locally; the CI 
 ## Local gate evidence
 
 - `npm run check -w @nredd/pi-preset` with the pinned Bun 1.3.14 (`.bun-version`) on PATH: Biome/strict tsc clean,
-  126 Vitest tests and 126 Bun tests passed (HISTORICAL count at the original port; the current suite is 156 on each runtime after the quota reset change). This includes all then-preserved helper assertions,
+  126 Vitest tests and 126 Bun tests passed (HISTORICAL count at the original port; the current suite is 158 on each runtime after the quota reset change). This includes all then-preserved helper assertions,
   real-host footer scenarios, the new renderer contracts and resource-filter discovery.
 - `make check-ts`: passed across every workspace, including 62 Vitest and 62 Bun in-process
   stack tests. The first attempt failed because the fresh worktree had no fork files; initializing
