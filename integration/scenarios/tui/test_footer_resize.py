@@ -67,6 +67,10 @@ def assert_footer(pane: TmuxPane, width: int) -> None:
         if len(stats) == len(quota) == len(status) == 1 and len(wrapped) <= 1:
             # Quota rows: the lead row, plus one provider row directly below it when wrapped.
             quota_rows = 1 + len(wrapped)
+            # Only the 60-column tier is too narrow for one quota row (reset suffixes make it ~72 wide).
+            if quota_rows != (2 if width == 60 else 1):
+                time.sleep(0.05)
+                continue
             adjacent = not wrapped or wrapped[0] == quota[0] + 1
             if adjacent and quota[0] == stats[0] + 1 and status[0] == stats[0] + 1 + quota_rows:
                 footer = rows[stats[0] - 1 : status[0] + 1]
