@@ -36,8 +36,7 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../agent-manager.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
-import { modelFallbackNote } from "../model-resolver.js";
-import { selectModel } from "../model-selection.js";
+import { modelSelectionNote, selectModel } from "../model-selection.js";
 import type { AgentRecord, ThinkingLevel } from "../types.js";
 import { getLifetimeTotal } from "../usage.js";
 import type { WorkflowGateResult, WorkflowHost, WorkflowSpawnResult } from "./runtime.js";
@@ -114,7 +113,8 @@ function resolvedInfo(record: AgentRecord | undefined) {
     thinking: invocation.thinking,
     requestedThinking: invocation.requestedThinking,
     // From the record, so a resumed child reports the model it actually ran on.
-    ...(record?.modelFallback ? { modelNote: modelFallbackNote(record.modelFallback) } : {}),
+    ...(modelSelectionNote(record) ? { modelNote: modelSelectionNote(record) } : {}),
+    ...(record?.modelTier ? { modelTier: record.modelTier } : {}),
   };
 }
 
@@ -135,9 +135,9 @@ function toSpawnResult(record: AgentRecord, opts: { resumed?: boolean } = {}): W
 
   // Disclosed in the text/error the script reads AND as a field. A schema'd
   // payload is JSON the script parses, so the note is only a field there.
-  const note = modelFallbackNote(record.modelFallback);
+  const note = modelSelectionNote(record);
   const lead = note ? `${note}\n\n` : "";
-  const modelNote = note ? { modelNote: note } : {};
+  const modelNote = { ...(note ? { modelNote: note } : {}), ...(record.modelTier ? { modelTier: record.modelTier } : {}) };
 
   if (succeeded(record)) {
     return {
@@ -328,6 +328,10 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
             reportResolved();
           },
         );
+        if (record.modelTier) {
+          const finalInfo = resolvedInfo(record);
+          if (finalInfo) request.onResolved?.(finalInfo);
+        }
         return { ...toSpawnResult(record), ...(gate !== undefined ? { gate } : {}) };
       } catch (error) {
         // Strict worktree isolation rejects out of `awaitStartup` — the child
@@ -352,8 +356,8 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       // The provenance is already on the record, so the running row shows it
       // now rather than only once the resume has finished.
       const existing = manager.getRecord(id);
-      if (existing?.modelFallback) {
-        onResolved?.({ recordId: id, modelNote: modelFallbackNote(existing.modelFallback) });
+      if (modelSelectionNote(existing)) {
+        onResolved?.({ recordId: id, modelNote: modelSelectionNote(existing), modelTier: existing?.modelTier });
       }
       const record = await manager.resume(id, prompt, deps.signal);
       if (record === undefined) {

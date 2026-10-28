@@ -239,12 +239,14 @@ Spawns one subagent and resolves to its final text — or, with `schema`, to a v
 | `label` | string | Display name in the progress tree. Also the handle `resume` addresses |
 | `phase` | string | Put this agent in a named group, overriding the ambient `phase()`. **Use it inside `pipeline`/`parallel` stages**, where the ambient phase races |
 | `agentType` | string | Which agent definition to use. Defaults to `general-purpose`; built-ins are `general-purpose`, `Explore`, `Plan`, plus your custom agents |
-| `model` | string | `provider/modelId`, or fuzzy like `haiku` |
+| `model` | string | `@tier`, exact `provider/modelId`, legacy alias, or explicit fuzzy input like `haiku` |
 | `effort` | string | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Overrides the agent definition's `thinking` for this child; omitted, the definition decides, then the parent's |
 | `isolation` | `"worktree"` | Run in a throwaway git worktree. Only when agents write files in parallel and would collide — it costs setup time and disk per agent. Only this option decides, as in Claude Code — an agent file's `isolation:` does not apply to workflow children |
 | `gate` | string | A shell command run after the agent finishes; a non-zero exit fails the agent and its output becomes the error |
 | `resume` | string | Continue the child that ran under that label instead of starting fresh |
 | `schema` | object | A JSON Schema with an object root. Resolves to the validated object instead of text |
+
+**Model tiers.** `agent(prompt, { model: '@cheap' })` resolves the user's trusted global/enterprise binding, independently of `enabledModels`. Routed tiers keep router failover; static tiers list credential/quota skips and disclose when no quota signal was used. Missing bindings/routers follow `modelResolution`; exhausted workflow children fail rather than changing tiers. Live resumes retain the original selection. Progress entries, host results and replay journals retain `modelTier` alongside the `modelNote`; replay and re-journaling preserve both without re-resolving historical work. Text results lead with `Model: @cheap -> provider/id via router/cheap`; structured results use the existing `_modelNote`/run-log rules below. See [configuration examples](../README.md#model-tiers).
 
 **Model fallback disclosure.** When a child's configured model (`agentModels` or the agent file's `model:`) did not resolve and it ran on another model, the script is told, never silently:
 
