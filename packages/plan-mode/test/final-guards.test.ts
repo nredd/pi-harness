@@ -227,7 +227,7 @@ test("replacement recovers outgoing input once before the fresh runner admits it
   const leading = outgoing.input({ text: "implement outgoing", source: "rpc" }, outgoing.context.ctx);
   await outgoing.started.promise;
   const follower = outgoing.input({ text: "outgoing follower", images: [image], source: "rpc" }, outgoing.context.ctx);
-  const shutdown = outgoing.shutdown({ reason: "resume" }, outgoing.context.ctx);
+  const shutdown = outgoing.shutdown({ reason: "new" }, outgoing.context.ctx);
   assert.deepEqual(outgoing.mock.sentMessages, [
     {
       message: {
