@@ -65,9 +65,7 @@ export function isStaleOverlayModuleError(e: unknown): boolean {
  * The export guard turns jiti's poisoned-namespace failure into a useful restart
  * error instead of a bare "TodoOverlay is not a constructor" TypeError.
  */
-export function makeTodoOverlayLoader(
-	importOverlay: TodoOverlayImporter = () => import("./todo-overlay.ts"),
-): TodoOverlayImporter {
+export function makeTodoOverlayLoader(importOverlay: TodoOverlayImporter): TodoOverlayImporter {
 	let memo: Promise<TodoOverlayModule> | undefined;
 
 	return async (): Promise<TodoOverlayModule> => {
