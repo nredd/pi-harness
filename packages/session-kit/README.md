@@ -77,7 +77,9 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
 - `monitor_stop({id})`, `/monitor list`, `/monitor stop <id|all>`: stop and inspect owned monitors.
 - Output batches every two seconds into the bounded ring buffer (with dropped-line reporting). Passive batches neither start turns nor create transcript/model-context entries; call `monitor_read` to fetch them. A regex match, natural exit, timeout or `wake: true` emits one compact visible wake with a cursor after the output the model last saw through a wake or read, not a replay of buffered output. A bounded batch preserves its first and latest dropped matching lines as wake evidence even if later output evicts them from the ring.
 - Children run in process groups: SIGTERM, then SIGKILL. Exit cleanup and pidfiles cover orderly quit
-  and later recovery after SIGKILL. Files live at
+  and later recovery after SIGKILL. Sweeps reauthenticate the leader after enumerating members;
+  uncertain identities or guards never authorize signaling. Reap checks are bounded to 20 polls
+  after escalation; a timeout keeps authenticated recovery on disk rather than claiming cleanup. Files live at
   `$TMPDIR/pi-monitors-<uid>/<sessionId>.<ownerPid>/<monitorId>.json`. Startup checks dead-owner
   records, including a resumed session, and validates process identity before signalling. It never
   sweeps a live owner's monitors. Two panes resuming the same session have separate directories.
