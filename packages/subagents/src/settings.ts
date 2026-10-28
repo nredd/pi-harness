@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
 import { readEnterpriseLocalManifest } from "./enterprise-local.js";
+import { type ModelResolution, parseTierBinding, setModelTiers } from "./model-tiers.js";
 import { type BudgetPolicy, DEFAULT_BUDGET_POLICY } from "./process-budget.js";
 import type { AgentMentionMode, JoinMode, ViewerMarkdownMode, WidgetMode } from "./types.js";
 
@@ -268,6 +269,10 @@ export interface SubagentsSettings {
   fallbackSubagent?: string;
   /** Trusted-global logical name -> ordered canonical provider/model candidates. */
   modelAliases?: Record<string, string[]>;
+  /** Trusted global/enterprise exact model bindings; never read from a project. */
+  modelTiers?: Record<string, string[]>;
+  /** Missing/unavailable tier policy. Both default to inherit with disclosure. */
+  modelResolution?: ModelResolution;
   /**
    * Trusted-global map of agent `type` (or `"*"` for every type) -> model, in
    * any form `Agent({ model })` accepts. Precedence, highest first: the Agent
@@ -576,6 +581,24 @@ function sanitize(raw: unknown): SubagentsSettings {
   } else if (typeof r.fallbackSubagent === "string" && r.fallbackSubagent.trim()) {
     out.fallbackSubagent = r.fallbackSubagent.trim();
   }
+  if (r.modelTiers !== undefined) {
+    out.modelTiers = {};
+    if (r.modelTiers && typeof r.modelTiers === "object" && !Array.isArray(r.modelTiers)) {
+      for (const [tier, members] of Object.entries(r.modelTiers)) {
+        const binding = parseTierBinding(tier, members);
+        if (binding) out.modelTiers[tier] = binding.kind === "routed" ? [binding.profile] : binding.members;
+        else console.warn(`[pi-subagents] Ignoring invalid modelTiers entry "${tier}".`);
+      }
+    } else console.warn("[pi-subagents] Ignoring modelTiers: expected an object of tier -> model list.");
+  }
+  if (r.modelResolution && typeof r.modelResolution === "object" && !Array.isArray(r.modelResolution)) {
+    out.modelResolution = {};
+    for (const key of ["onUnmapped", "onUnavailable"] as const) {
+      const mode = (r.modelResolution as Record<string, unknown>)[key];
+      if (mode === "error" || mode === "inherit") out.modelResolution[key] = mode;
+      else if (mode !== undefined) console.warn(`[pi-subagents] Ignoring invalid modelResolution.${key}.`);
+    }
+  }
   if (r.modelAliases !== undefined) {
     const aliases = sanitizeModelAliases(r.modelAliases);
     if (aliases) out.modelAliases = aliases;
@@ -660,11 +683,16 @@ export function loadSettings(cwd: string = process.cwd()): SubagentsSettings {
   // configuration: a cloned repo's project file must not redirect them.
   const {
     modelAliases: projectModelAliases,
+    modelTiers: projectModelTiers,
+    modelResolution: projectModelResolution,
     agentModels: projectAgentModels,
     maxActiveSubagents: projectMaxActive,
     nestedSubagentReserve: projectReserve,
     ...project
   } = readSettingsFile(projectPath(cwd));
+  if (projectModelTiers !== undefined || projectModelResolution !== undefined) {
+    console.warn("[pi-subagents] Ignoring modelTiers/modelResolution in project .pi/subagents.json: model policy is read from trusted global configuration only.");
+  }
   if (projectModelAliases !== undefined) {
     console.warn("[pi-subagents] Ignoring modelAliases in project .pi/subagents.json: aliases are read from trusted global configuration only.");
   }
@@ -728,6 +756,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.maxSubagentDepth === "number") appliers.setMaxSubagentDepth(s.maxSubagentDepth);
   if (typeof s.fallbackSubagent === "string") appliers.setFallbackSubagent(s.fallbackSubagent);
   // Module state: reset when a session omits it, or the previous activation's aliases leak.
+  setModelTiers(s.modelTiers, s.modelResolution);
   appliers.setModelAliases(s.modelAliases);
   appliers.setAgentModels(s.agentModels);
   if (s.defaultJoinMode) appliers.setDefaultJoinMode(s.defaultJoinMode);

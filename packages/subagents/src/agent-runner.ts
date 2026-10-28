@@ -31,7 +31,7 @@ import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import type { ModelCallEvent } from "./model-call.js";
 import type { ModelFallback } from "./model-resolver.js";
-import { type ModelSelection, selectModel } from "./model-selection.js";
+import type { ModelSelection } from "./model-selection.js";
 import {
   createNestedSubagentTools,
   getMaxSubagentDepth,
@@ -498,8 +498,8 @@ export interface RunOptions {
   /** Manager-assigned id; suffixes session name to disambiguate parallel spawns (e.g. `Explore#a1b2c3d4`). */
   agentId?: string;
   model?: Model<any>;
-  /** Shared spawn's outcome; direct runner callers use the same selector. */
-  modelSelection?: ModelSelection;
+  /** Required admitted spawn outcome. The runner never resolves or admits models. */
+  modelSelection: ModelSelection;
   maxTurns?: number;
   signal?: AbortSignal;
   /** Applies only when the agent file leaves `isolated:` unset — frontmatter is authoritative. */
@@ -1254,13 +1254,8 @@ export async function runAgent(
     }
   }
 
-  const selection = options.modelSelection ?? selectModel({
-    agentType: type, definitionModel: agentConfig?.model, paramModel: options.model,
-    parentModel: ctx.model, registry: ctx.modelRegistry, cwd: configCwd, agentLabel: agentConfig?.displayName,
-  });
-  if (typeof selection === "string") throw new Error(selection);
-  const model = selection.model;
-  if (selection.fallback) options.onModelFallback?.(selection.fallback);
+  const model = options.modelSelection.model;
+  if (options.modelSelection.fallback) options.onModelFallback?.(options.modelSelection.fallback);
 
   // Resolve thinking level: explicit option > agent config > undefined (inherit)
   const thinkingLevel = options.thinkingLevel ?? agentConfig?.thinking;
