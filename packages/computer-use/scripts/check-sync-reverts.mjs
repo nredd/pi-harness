@@ -14,6 +14,14 @@ const sandbox = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
 const nodeModules = path.resolve(root, "../../node_modules");
 const cases = [
 	{
+		name: "Structured upstream disposition reference validation",
+		file: "scripts/check-sync-ledger.mjs",
+		before: "validateUpstream(patch.upstream, patch.id);",
+		after: "/* carried upstream validation dropped */",
+		check: "check-sync-ledger.test.mjs",
+		failure: /Missing expected exception/,
+	},
+	{
 		name: "Owned tutorial package identity",
 		file: "docs/content/docs/tutorials/getting-started.mdx",
 		before: "pi install npm:@nredd/pi-computer-use",
@@ -247,6 +255,7 @@ try {
 		"README.md",
 		"CONTRIBUTING.md",
 		"UPSTREAM.md",
+		"sync-patches.json",
 		"LICENSE",
 	]) {
 		cpSync(path.join(root, entry), path.join(sandbox, entry), {

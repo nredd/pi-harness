@@ -13,8 +13,19 @@ before any upstream PR. This change never pushes to upstream or edits the drafts
 
 Rows group overlapping commits by behavior, not commit boundary. `sync-patches.json` is the
 machine-checkable ledger: each carried patch has a purpose, files, check, executable drop controls
-and an `upstream` status. `check-sync-reverts.mjs` validates it before running the controls;
-`check-sync-ledger.test.mjs` removes every patch's status/drop controls and requires rejection.
+and an `upstream` object with required `status` and `reference` fields, plus optional explanatory
+`detail`. Text-only dispositions and missing/blank/malformed statuses or references are rejected.
+Allowed local statuses are `drafted`, `harness-only`, `local-only`, `candidate` and
+`proposed-after-issue-first`; their reference must name an existing package-relative file (no
+absolute/traversal paths), or the explicit `~/code/review-notes/upstream-issues-drafts.md` path.
+That workstation-only draft is recorded, never read or required to exist in hosted CI.
+`merged-upstream` requires an HTTPS `https://github.com/injaneity/pi-computer-use/pull/<number>`
+reference; `release-requested` requires the corresponding `/issues/<number>` URL. The same rules
+validate absorbed #95 and release request #116, not just carried patches. URL shape is validated;
+this offline check does not claim network verification or upstream acceptance.
+`check-sync-reverts.mjs` validates the ledger before running the controls;
+`check-sync-ledger.test.mjs` removes every patch's status/reference/drop controls and requires
+rejection. A separate drop control disables carried disposition validation and must fail those tests.
 Remove a row only after its check passes without the patch.
 
 Status source: `~/code/review-notes/upstream-issues-drafts.md` is a local draft file,
@@ -43,6 +54,7 @@ the release is `requested release: injaneity/pi-computer-use#116`
 | Host-independent docs | harness sync | Generate from all declared tool definitions, not the host's 13/11 registered subset; harness-only | `docs:check` runs `check-docs-platform.mjs` under both platform fixtures |
 | Harness package | `988eb2f`, `a4fc068`, `6207189`, subsequent contract hardening | Preserve @nredd metadata, source-only Linux, macOS payloads/cursor sources, platform-aware contracts, non-macOS NOT RUN and house-style commits; harness-only | `test:package-assets`, `test:linux-scripts`, `test:commits`, package-contract tests and stock contract |
 
+| Upstream disposition validation | harness follow-up | Require structured status plus valid local/URL reference, including #95/#116; upstream: harness-only, not filed | `test:sync-reverts` disables carried disposition validation and requires `check-sync-ledger.test.mjs` to fail |
 | Owned install/release docs | harness follow-up | Install `@nredd/pi-computer-use`, use root `publish.yml` and opt into Linux repair builds; upstream: harness-only, not filed | `docs:check` and three `test:sync-reverts` controls reject the upstream-only instructions |
 | Site working directory | harness follow-up | Run imported website commands from `packages/computer-use`, not the harness root; upstream: harness-only, not filed | `docs:check` and `test:sync-reverts` reject the old root-relative instructions |
 | Rust coverage | harness follow-up | Report-only LCOV and per-file text/JSON from the native crates; upstream: proposed after issue-first (draft (c) in the drafts file), currently labeled draft D there, not filed | `test:rust-coverage` arguments/paths/missing tool and `test:sync-reverts` missing-tool control |
