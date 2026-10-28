@@ -268,5 +268,59 @@ A new merge/edit HEAD requires its own status: queued macOS checks are not green
 no CI rerun is dispatched just to fish for green. Review references supplied by the owner are
 `cb9158e5` (Standards) and `fb7013d0` (Spec); the requested reconciliation is a plain merge,
 never rebasing a published branch. Durable final-head gate/status receipts belong in the PR.
-No activation, release, publication or PR merge. Native hosted-macOS crash reproduction remains
-unresolved; the upgrade is not a proven crash fix.
+No activation, release, publication or PR merge. The checkpoint's unresolved hosted result is
+superseded by the evidence below; the upgrade is still not a proven elimination of the native crash.
+
+## Hosted failure classification and reconciliation (2026-10-28)
+
+Plain-merge `origin/main` at `ed1bce1f229546a30bb893617c0e3ff331b5e735` into the
+published `c6c0849` branch, never rebase/force. The sole conflict was session-kit's README:
+retain main's lifecycle/coverage documentation and the candidate's Bun 1.4.4 command pin.
+Root/todo `.bun-version`, todo's `@types/bun`, and locked `@types/bun`/`bun-types` stay 1.4.4.
+No source fix, timeout increase, skip, or workflow change is justified by these logs.
+
+`gh run view 40726446616 --log-failed` classifies the failed
+[macOS/local job](https://github.com/nredd/pi-harness/actions/runs/40726446616/job/123028908386)
+as a **registry availability failure**, not runner capacity or a Bun startup failure. It acquired
+macOS 14.8.9 and ran, then failed at 18:50:24Z in `harness.release.fetch_release` installing the
+Node release with npm 11.20.0. The exact cause is `E404`, HTTP 404 fetching
+`https://registry.npmjs.org/@aws-sdk/core/-/core-3.978.7.tgz`. This instance is not ETARGET;
+it belongs to the reported AWS registry incident class. Bun setup/build and scenarios were never
+reached in that cell. Its long queue delay is separate from its actual exit 1.
+A subsequent direct fetch of that exact tarball returned HTTP 200, and
+`npm view @aws-sdk/core@3.978.7 version` returned `3.978.7`, supporting a transient outage.
+Do not change dependency pins or add retries to conceal it.
+
+The same run's successful
+[macOS/personal job](https://github.com/nredd/pi-harness/actions/runs/40726446616/job/123028910461)
+actually built Bun `1.4.4+38afee6c8` on the frozen core Gitlink and ran BOTH standalone stacks.
+Binary SHA-256: `2e2e731b5228c4542d5c1d3b2677a23594f741d28043cdf24b40a9853730cfd4`.
+Personal: **32 passed / 7 existing skips**, 249.28s. Local: **32 passed / 7 existing skips**,
+196.17s. The exact ordinary-session_start RPC/TUI rows pass in both: personal at
+18:01:00/18:01:12Z, local at 18:04:35/18:04:45Z. Thus **1.4.4 passes the previously failing
+macOS standalone startup cases on the hosted macOS 14 runner**. This is stronger than the
+small exit fixture or a macOS 27 local pass, but a single hosted run cannot prove that an
+intermittent globalExit segfault is eliminated. These receipts belong to `c6c0849`'s CI merge
+checkout `0b7257f`, not the newly reconciled HEAD; fresh CI remains required.
+
+Post-reconciliation local checks, serialized with `VITEST_MAX_WORKERS=1` / pytest `-n 1`:
+
+- Locked `npm ci --ignore-scripts`: pass. `make check-scripts`: **696 pytest + 8 Node pass**;
+  `make check-integration`: **1328 pytest + 15 Node pass**, format/lint/types clean.
+- `make check-benchmark`: initial **90 pass / 1 fail**, missing `codex` prerequisite. Re-run
+  with CI's exact `@openai/codex@0.154.0` in an ignored tool prefix and disposable Codex home/cache:
+  **91 pass**, unchanged **92.98%** coverage against the 90% floor.
+- `make check-ts`: **RED**, exactly the three already-recorded dev-tools cargo/nextest assertions
+  (**380 pass / 3 fail**). Their source/tests are identical to main. Other workspace checks ran:
+  session-kit **804 Node + 86 Bun pass**, sampler **54 each engine**, todo **408 each engine**,
+  inprocess **99 each engine**, subagents **3449 pass / 8 existing skips** plus **31 Bun pass**.
+  All workspace format/lint/type phases pass. A separate root `npm run lint` is not a valid
+  aggregate gate because computer-use/plan-mode have no `lint` script; root typecheck passes.
+- Fresh local standalone D/E on merged workspace sources: **32 pass / 7 existing skips**, 175.14s,
+  including the ordinary TUI/RPC rows. Reuse unchanged frozen-core 1.4.4 executable
+  `2228d24c2431d298a3765ba618b73e82657bf905304d7fe88097d8c36243c9af` as documented above.
+  This Mac is macOS 27.2, not hosted macOS 14. No new old/new native-crash experiment is claimed.
+
+Local receipts: `/tmp/bun197-{python-gates,ts-gates,benchmark,local}.log` and
+`/tmp/bun197-local.xml`. Full owned gate remains red on the known local cargo assertions;
+no all-green claim, no activation, and no PR merge.
