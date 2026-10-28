@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { applyPlanApproval } from "../state/plan.ts";
 import type { TaskState } from "../state/state.ts";
 import type { Op } from "../state/state-reducer.ts";
+import { applyTaskMutation } from "../state/state-reducer.ts";
 import { buildToolResult, formatContent } from "./response-envelope.ts";
 import type { Task } from "./types.ts";
 
@@ -9,6 +11,26 @@ const stateWith = (...tasks: Task[]): TaskState => ({ tasks, nextId: Math.max(0,
 const t = (over: Partial<Task> & { id: number; subject: string }): Task => ({ status: "pending", ...over });
 
 describe("formatContent", () => {
+	it("indents and sanitizes verbatim plan detail only while the item is open", () => {
+		const approved = applyPlanApproval(
+			stateWith(),
+			"p",
+			"# Release\n## Migration\nMove traffic.\nKeep \u001b[31mrollback\u001b[0m ready.\n",
+		).state;
+		expect(approved.tasks[0].planText).toBe("Move traffic.\nKeep \u001b[31mrollback\u001b[0m ready.");
+		expect(formatContent({ kind: "list", includeDeleted: false }, approved)).toBe(
+			"Plan: Release -- 1/1 plan items open\n[pending] #1 Migration [plan: Migration]\n    Move traffic.\n    Keep rollback ready.",
+		);
+		const completed = applyTaskMutation(approved, "update", {
+			id: 1,
+			status: "completed",
+			evidence: "canary passed",
+		}).state;
+		expect(formatContent({ kind: "list", includeDeleted: false }, completed)).toBe(
+			"Plan: Release -- 0/1 plan items open\n[completed] #1 Migration [plan: Migration]\n    evidence: canary passed",
+		);
+	});
+
 	it("create — 'Created #id: subject (pending)'", () => {
 		const state = stateWith(t({ id: 1, subject: "alpha" }));
 		expect(formatContent({ kind: "create", taskId: 1 }, state)).toBe("Created #1: alpha (pending)");
