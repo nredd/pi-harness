@@ -14,11 +14,13 @@ vi.mock("../src/config.js", async (original) => ({
 const SHARED_KEY = Symbol.for("pi-subscription-router.shared");
 const host = globalThis as typeof globalThis & { [SHARED_KEY]?: unknown };
 const MINUTE = 60_000;
+const T0 = 1_700_000_000_000;
+const EXHAUSTED_RESET = T0 + MINUTE;
 
 /** Exercise the registered event-bus RPC with the real cache and injected transport. */
 async function harness(startSession = true, profiles: Profile[] = []) {
 	vi.mocked(loadConfig).mockResolvedValue({ ok: true, profiles });
-	let now = 1_700_000_000_000;
+	let now = T0;
 	let fail = false;
 	const fetch = vi.fn(async (url: string) => {
 		const body = url.includes("anthropic")
@@ -53,6 +55,7 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 				events.emit("router:rpc:usage", { ...params, requestId });
 			},
 		);
+	/** Send an admission request and resolve only the matching `router:rpc:admit` envelope. */
 	const admit = (params: Record<string, unknown> = {}) =>
 		new Promise<{ success: boolean; data: unknown }>((resolve) => {
 			const requestId = String(++nextId);
@@ -354,7 +357,9 @@ describe("router usage RPC", () => {
 		};
 		const h = await harness(false, [profile]);
 		h.fetch.mockResolvedValue(
-			new Response(JSON.stringify({ five_hour: { utilization: 100, resets_at: "2030-01-01T00:00:00Z" } })),
+			new Response(
+				JSON.stringify({ five_hour: { utilization: 100, resets_at: new Date(EXHAUSTED_RESET).toISOString() } }),
+			),
 		);
 		const notify = vi.fn();
 		const ctx = {
@@ -366,7 +371,7 @@ describe("router usage RPC", () => {
 		await h.usage.get(ctx, "anthropic");
 		const onSettle = h.handlers.get("agent_before_settle");
 		if (!onSettle) throw new Error("agent_before_settle handler missing");
-		await (onSettle as (event: unknown, context: ExtensionContext) => Promise<unknown>)(
+		const outcome = await (onSettle as (event: unknown, context: ExtensionContext) => Promise<unknown>)(
 			{
 				entries: [],
 				context: {
@@ -381,7 +386,7 @@ describe("router usage RPC", () => {
 									model: "sonnet",
 									stopReason: "error",
 									errorMessage: "insufficient_quota",
-									timestamp: 1_700_000_000_000,
+									timestamp: T0,
 								},
 							],
 						},
@@ -390,6 +395,7 @@ describe("router usage RPC", () => {
 			},
 			ctx,
 		);
+		expect(outcome).toBeUndefined();
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("router/default: every model is unavailable"), "error");
 	});
 
@@ -424,7 +430,7 @@ describe("router usage RPC", () => {
 			block: true,
 			window: "five_hour",
 			scope: "provider",
-			resetAt: 1_700_000_060_000,
+			resetAt: EXHAUSTED_RESET,
 		});
 		const registration = vi.mocked(h.pi.registerTool).mock.calls.find(([tool]) => tool.name === "subscription_usage");
 		if (!registration) throw new Error("subscription_usage registration missing");
