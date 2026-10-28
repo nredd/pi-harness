@@ -62,7 +62,11 @@ def test_shared_guest_matrix(name: str) -> None:
     assert selection["if"] == "matrix.os == 'wsl2'"
     assert selection["shell"] == "pwsh"
     assert "'Git\\bin'" in selection["run"]
-    assert "Get-Command bash -CommandType Application" in selection["run"]
+    assert (
+        "Get-Command bash.exe -All -CommandType Application | Select-Object -First 1).Source"
+        in selection["run"]
+    )
+    assert 'Write-Output "Resolved Git Bash: $resolved; expected: $bash"' in selection["run"]
     assert "$gitBin >> $env:GITHUB_PATH" in selection["run"]
     assert "--version" in selection["run"]
     assert "GITHUB_STEP_SUMMARY" in selection["run"]
@@ -81,6 +85,17 @@ def test_shared_guest_matrix(name: str) -> None:
     ]
     assert len(diagnostics) == 1
     assert "always()" in diagnostics[0]["if"]
+
+
+def test_git_bash_selection_is_one_ordered_candidate_in_every_job() -> None:
+    """Avoid treating Get-Command's application collection as one resolved path."""
+    cfg = jobs()
+    selections = {cfg[name]["steps"][0]["run"] for name in ("owned", "contracts", "stack")}
+    assert len(selections) == 1
+    selection = selections.pop()
+    assert "Get-Command bash.exe -All -CommandType Application | Select-Object -First 1).Source" in selection
+    assert "if ($resolved -ne $bash)" in selection
+    assert "(Get-Command bash -CommandType Application).Source -ne $bash" not in selection
 
 
 def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> None:

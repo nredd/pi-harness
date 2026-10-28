@@ -80,12 +80,14 @@ jobs:
           $bash = Join-Path $gitBin 'bash.exe'
           if (!(Test-Path $bash)) { throw "Missing Git Bash: $bash" }
           $env:PATH = "$gitBin;$env:PATH"
-          if ((Get-Command bash -CommandType Application).Source -ne $bash) { throw 'Ambiguous Bash resolution' }
+          $resolved = (Get-Command bash.exe -All -CommandType Application | Select-Object -First 1).Source
+          Write-Output "Resolved Git Bash: $resolved; expected: $bash"
+          if ($resolved -ne $bash) { throw "Ambiguous Bash resolution: $resolved" }
           & $bash --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $gitBin >> $env:GITHUB_PATH
           "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
-          "Git Bash executable: $bash" >> $env:GITHUB_STEP_SUMMARY
+          "Git Bash executable: $resolved" >> $env:GITHUB_STEP_SUMMARY
       - id: plan
         name: Report execution plan
         shell: bash -e {0}
@@ -196,12 +198,14 @@ jobs:
           $bash = Join-Path $gitBin 'bash.exe'
           if (!(Test-Path $bash)) { throw "Missing Git Bash: $bash" }
           $env:PATH = "$gitBin;$env:PATH"
-          if ((Get-Command bash -CommandType Application).Source -ne $bash) { throw 'Ambiguous Bash resolution' }
+          $resolved = (Get-Command bash.exe -All -CommandType Application | Select-Object -First 1).Source
+          Write-Output "Resolved Git Bash: $resolved; expected: $bash"
+          if ($resolved -ne $bash) { throw "Ambiguous Bash resolution: $resolved" }
           & $bash --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $gitBin >> $env:GITHUB_PATH
           "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
-          "Git Bash executable: $bash" >> $env:GITHUB_STEP_SUMMARY
+          "Git Bash executable: $resolved" >> $env:GITHUB_STEP_SUMMARY
       - id: plan
         name: Report execution plan
         shell: bash -e {0}
@@ -305,12 +309,14 @@ jobs:
           $bash = Join-Path $gitBin 'bash.exe'
           if (!(Test-Path $bash)) { throw "Missing Git Bash: $bash" }
           $env:PATH = "$gitBin;$env:PATH"
-          if ((Get-Command bash -CommandType Application).Source -ne $bash) { throw 'Ambiguous Bash resolution' }
+          $resolved = (Get-Command bash.exe -All -CommandType Application | Select-Object -First 1).Source
+          Write-Output "Resolved Git Bash: $resolved; expected: $bash"
+          if ($resolved -ne $bash) { throw "Ambiguous Bash resolution: $resolved" }
           & $bash --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $gitBin >> $env:GITHUB_PATH
           "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
-          "Git Bash executable: $bash" >> $env:GITHUB_STEP_SUMMARY
+          "Git Bash executable: $resolved" >> $env:GITHUB_STEP_SUMMARY
       - id: plan
         name: Report execution plan
         shell: bash -e {0}
