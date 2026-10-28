@@ -87,7 +87,8 @@ schedule leaving an inconsistent pending record has been demonstrated. Normal as
 session replacement alone cannot interleave inside the synchronous resolver. Neither
 stale/security rejection is deleted merely because the ordinary paths avoid it.
 
-`takeQueuedRuntimeAdmissionInputs` retains `else remaining.push(queued)` (one line).
+At #200, `takeQueuedRuntimeAdmissionInputs` retained `else remaining.push(queued)` (one line).
+The following historical analysis is superseded by the closure proof below.
 The only queue push is `input`, stamped with its context's session identity while runtime
 application/admission is pending, before awaiting completion. Stale continuation removes
 its exact object; blocked continuation keeps it. Session start/tree/shutdown clear queues
@@ -125,6 +126,11 @@ not the workstation install:
   resolves `sessionManager` from its runner, with an active-runner guard. Disposal
   [invalidates that runner](https://github.com/nredd/pi/blob/2bfb8e7c61d35167b09f8ce70693df39660fc197/packages/coding-agent/src/core/agent-session.ts#L1513-L1520).
   Holding an old context cannot turn it into the new session's context.
+- [`reload`](https://github.com/nredd/pi/blob/2bfb8e7c61d35167b09f8ce70693df39660fc197/packages/coding-agent/src/core/agent-session.ts#L4199-L4238)
+  keeps the `AgentSession` and its core queues, but awaits outgoing shutdown, invalidates
+  the old runner, reloads resources/factories, rebuilds the runner and only then emits
+  `session_start`. Surviving core queues still cannot become mixed-manager entries in
+  the extension-local queue; outgoing recovery and reset finish first.
 - [`navigateTree`](https://github.com/nredd/pi/blob/2bfb8e7c61d35167b09f8ce70693df39660fc197/packages/coding-agent/src/core/agent-session.ts#L4653-L4700)
   branches the existing manager and emits `session_tree` through the same runner. It
   does not change manager identity. Core queues can survive tree navigation, but they

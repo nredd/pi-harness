@@ -1645,7 +1645,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   function takeQueuedRuntimeAdmissionInputs() {
     // Core shuts down the outgoing runner before creating its replacement; tree changes
-    // keep the same session manager. This extension-local queue cannot contain another session.
+    // keep the same manager. Proof: docs/plan-mode-final-guards.md, cross-session closure.
     const queuedInputs = queuedRuntimeAdmissionInputs;
     queuedRuntimeAdmissionInputs = [];
     return queuedInputs;
