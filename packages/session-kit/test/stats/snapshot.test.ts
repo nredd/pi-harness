@@ -220,11 +220,18 @@ it("validates schemas with strict keys, digest, counters, month, IDs and travers
 		{ ...shard, events: [{ ...event, cost: Infinity }] },
 		{ ...shard, events: [{ ...event, args: "secret" }] },
 		{ ...shard, events: [event, event] },
+		{ ...shard, sessions: [{ ...shard.sessions[0], endMs: 1 }] },
 	])
 		expect(() => validateShard(malformed, manifest, ref.month)).toThrow();
 	writeFileSync(join(exported.snapshotDir, ref.file), JSON.stringify({ ...shard, events: [] }));
 	expect((await importStats(b, repo)).problems).toHaveLength(1);
 	expect(Object.keys((await readGlobal(b)).machines)).toHaveLength(0);
+});
+
+it("reports a malformed persisted global cache without trusting it", async () => {
+	mkdirSync(join(a, "pi-session-kit"), { recursive: true });
+	writeFileSync(join(a, "pi-session-kit", "stats-global.json"), JSON.stringify({ version: 1, importedAt: 0, machines: [], problems: [] }));
+	expect((await readGlobal(a)).problems).toEqual(["Unreadable global cache"]);
 });
 
 it("rejects incomplete local scans, invalid machine directories, and older exports", async () => {
