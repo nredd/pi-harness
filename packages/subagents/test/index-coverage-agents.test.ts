@@ -265,5 +265,16 @@ describe("manual creation through /agents", () => {
     expect(existsSync(path("created"))).toBe(false);
     expect(getAgentConfig("created")).toBeUndefined();
     expect(notify).not.toHaveBeenCalled();
+    const stages = ["location", "method", "name", "description", "tools", "custom tools", "model", "thinking", "editor"];
+    const reached = stages.indexOf(stage);
+    expect(context.ui.input.mock.calls.map(([title]: [string]) => title)).toEqual([
+      ...(reached >= 2 ? ["Agent name (filename, no spaces)"] : []),
+      ...(reached >= 3 ? ["Description (one line)"] : []),
+      ...(stage === "custom tools" ? ["Tools (comma-separated)"] : []),
+    ]);
+    for (const [title, threshold] of [["Creation method", 1], ["Tools", 4], ["Model", 6], ["Thinking level", 7]] as const) {
+      expect(context.ui.select.mock.calls.filter(([label]: [string]) => label === title)).toHaveLength(reached >= threshold ? 1 : 0);
+    }
+    expect(context.ui.editor).toHaveBeenCalledTimes(stage === "editor" ? 1 : 0);
   });
 });
