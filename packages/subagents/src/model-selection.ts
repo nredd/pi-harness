@@ -5,7 +5,7 @@ import { checkModelScope } from "./model-scope.js";
 import { exactTierModel, getModelResolution, parseTierBinding, resolveTier, type TierBinding, type TierDisclosure, type TierOutcome, tierBinding, tierNote } from "./model-tiers.js";
 import { type AdmissionEvents, admissionOutcome, type QuotaBlock } from "./quota-admission.js";
 
-/** Exact compatibility pins until built-in definitions migrate to tiers. User aliases win. */
+/** Exact compatibility pins for user-defined legacy Explore definitions. User aliases win. */
 const LEGACY_MODEL_PINS = new Map([
   ["claude-haiku-4-5", "anthropic/claude-haiku-4-5"],
 ]);
@@ -70,7 +70,12 @@ export function selectModel(request: {
     const requested = input.requested.trim();
     const legacy = getModelAliases().get(requested.toLowerCase());
     const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : undefined;
-    const binding = requested.startsWith("@") ? tierBinding(requested.slice(1))
+    // Preserve existing enterprise manifests during the built-in Explore migration.
+    // An explicit cheap binding always wins, even when it is unavailable.
+    const cheapCompatibility = requested === "@cheap" && request.agentType === "Explore"
+      && input.source === "definition"
+      ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : undefined;
+    const binding = requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility
       : legacyBinding ? { ...legacyBinding, tier: requested } : undefined;
     if (requested.startsWith("@") || legacy) {
       const tier = requested.startsWith("@") ? requested.slice(1) : requested;
