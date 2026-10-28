@@ -22,7 +22,7 @@ Initial providers agree exactly on lines/functions:
 
 Final primary Node result: **1502/1502 lines (100%), 260/260 functions (100%)**,
 1771/1859 statements (95.26%), 1319/1557 branches (84.71%). All 22 executable modules
-have zero missing lines/functions. Node and Bun Vitest each pass 408 tests in 29 files;
+have zero missing lines/functions. Node and Bun Vitest each pass 411 tests in 29 files;
 Bun's native scenario gate passes four tests. Biome and TypeScript checks pass.
 
 The line/function denominator decreases by one only because the unreachable mutex initializer
@@ -84,6 +84,31 @@ Running `vitest run --maxWorkers=1 test/cargo/wrapper.test.ts test/py/wrapper.te
 both mutations produced exactly two failed and ten passed tests. These checks test outcomes,
 not incidental execution of lines.
 
+Accepted review-gap regressions:
+
+- `test/git/wrapper-failures.test.ts` clears every inherited `GIT_*` variable before fixture
+  initialization and wrapper calls, then sets isolated config/template defaults. This includes
+  repository-routing variables and indexed/parameter config injection. `vi.unstubAllEnvs()`
+  restores the inherited environment in teardown. Three hostile-environment cases use only
+  disposable target/decoy repos and hooks. Before the fix, all three fail because the external
+  fixture hook runs. After the fix, commits land in the target repo, the decoy's HEAD/index/config
+  and worktree file stay unchanged, the hook never runs, and hostile variables are absent.
+- `test/core/failure-paths.test.ts` requires at least one SIGKILL and checks every SIGKILL target
+  is exactly the owned negative group PID, not just that one such call exists. Temporarily adding
+  an extra positive-PID SIGKILL to `killTree` is rejected (`123456789` vs `-123456789`); the process
+  kill is mocked, so no real PID is signalled. The mutation is restored before full gates.
+
+Commands for those fail-before/mutation checks:
+
+```sh
+../../node_modules/.bin/vitest run --maxWorkers=1 test/git/wrapper-failures.test.ts
+# Before sanitizing: 3 failed, 2 passed; after sanitizing: 5 passed.
+../../node_modules/.bin/vitest run --maxWorkers=1 test/core/failure-paths.test.ts -t 'settles even'
+# With extra positive-PID SIGKILL: 1 failed (4 unselected); restored in the full 411-test gates.
+```
+
+This follow-up changes tests and this evidence only, not production behavior or coverage policy.
+
 Full Bun execution exposed two existing fixture portability assumptions: Bun's `ChildProcess`
 stdio accessors are read-only, and its missing-executable message differs from Node's ENOENT.
 Define synthetic child properties explicitly and assert the precise runtime-specific error while
@@ -129,6 +154,6 @@ env -u CARGO_TARGET_DIR GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TE
   npm run test:bun
 ```
 
-Use `coverage-istanbul-after` for the final primary run, preserving both original provider
+Use `coverage-istanbul-reviewfix` for the final primary run, preserving both original provider
 reports. Reports are local generated artifacts, not committed. No network host mutations,
 merge/rebase/force, release, install activation, or other worktree changes are part of this work.

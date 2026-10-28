@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FileLockFailedError, LockAbortedError, withFileLock } from "../../src/core/index.ts";
@@ -16,13 +16,19 @@ vi.mock("../../src/core/index.ts", async (original) => {
 	const actual = await original<typeof import("../../src/core/index.ts")>();
 	return { ...actual, withFileLock: vi.fn(actual.withFileLock) };
 });
-beforeEach(async () => {
+/** Apply to both fixture setup and wrapper children; teardown restores the inherited environment. */
+function isolateGitEnvironment() {
+	// Git has routing/config variables beyond the familiar GIT_DIR pair, including indexed config keys.
+	for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) vi.stubEnv(key, undefined);
 	for (const [key, value] of Object.entries({
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_CONFIG_GLOBAL: "/dev/null",
 		GIT_TEMPLATE_DIR: "",
 	}))
 		vi.stubEnv(key, value);
+}
+beforeEach(async () => {
+	isolateGitEnvironment();
 	const actual = await vi.importActual<typeof import("../../src/git/run.ts")>("../../src/git/run.ts");
 	vi.mocked(git).mockImplementation(actual.git);
 });
@@ -31,6 +37,87 @@ afterEach(() => {
 	vi.clearAllMocks();
 	vi.unstubAllEnvs();
 });
+
+it.each(["routing", "config-count", "config-parameters"])(
+	"confines fixture and wrapper writes despite hostile inherited %s variables",
+	async (kind) => {
+		const f = wrapperFixture("Cargo.toml");
+		try {
+			const decoy = join(f.root, "decoy");
+			const target = join(f.root, "target");
+			const hooks = join(f.root, "external-hooks");
+			mkdirSync(hooks);
+			const hook = join(hooks, "pre-commit");
+			writeFileSync(hook, '#!/bin/sh\nprintf invoked > "$0.ran"\nexit 1\n', { mode: 0o700 });
+			const cleanEnv = { ...process.env };
+			const cleanGit = (cwd: string, args: string[]) =>
+				execFileSync("git", args, { cwd, env: cleanEnv, encoding: "utf8" }).trim();
+			cleanGit(f.root, ["init", "-q", "-b", "main", decoy]);
+			writeFileSync(join(decoy, "a"), "decoy\n");
+			cleanGit(decoy, ["add", "a"]);
+			cleanGit(decoy, [
+				"-c",
+				"user.name=fixture",
+				"-c",
+				"user.email=fixture@example.invalid",
+				"commit",
+				"-qm",
+				"Decoy initial",
+			]);
+			cleanGit(decoy, ["config", "core.hooksPath", hooks]);
+			const head = cleanGit(decoy, ["rev-parse", "HEAD"]);
+			const index = readFileSync(join(decoy, ".git", "index"));
+			const config = readFileSync(join(decoy, ".git", "config"));
+			const hostile =
+				kind === "routing"
+					? {
+							GIT_DIR: join(decoy, ".git"),
+							GIT_WORK_TREE: decoy,
+							GIT_COMMON_DIR: join(decoy, ".git"),
+							GIT_INDEX_FILE: join(decoy, ".git", "index"),
+							GIT_OBJECT_DIRECTORY: join(decoy, ".git", "objects"),
+							GIT_ALTERNATE_OBJECT_DIRECTORIES: join(decoy, ".git", "objects"),
+							GIT_CONFIG: join(decoy, ".git", "config"),
+							GIT_NAMESPACE: "hostile",
+						}
+					: kind === "config-count"
+						? {
+								GIT_CONFIG_COUNT: "1",
+								GIT_CONFIG_KEY_0: "core.hooksPath",
+								GIT_CONFIG_VALUE_0: hooks,
+								GIT_CONFIG_KEY_17: "orphaned.key",
+								GIT_CONFIG_VALUE_17: "orphaned value",
+							}
+						: { GIT_CONFIG_PARAMETERS: `'core.hooksPath'='${hooks}'` };
+			for (const [key, value] of Object.entries(hostile)) vi.stubEnv(key, value);
+			isolateGitEnvironment();
+			// Neither init/config nor the wrapper gets an explicit env override: both must inherit the sanitized env.
+			execFileSync("git", ["init", "-q", "-b", "main", target]);
+			execFileSync("git", ["-C", target, "config", "user.name", "fixture"]);
+			execFileSync("git", ["-C", target, "config", "user.email", "fixture@example.invalid"]);
+			writeFileSync(join(target, "a"), "target\n");
+			const mock = createMockPi();
+			registerGitTools(mock.pi);
+			const result = await mock.call(
+				"git_commit",
+				{ subject: "Commit isolated fixture", paths: ["a"], push: false },
+				target,
+			);
+			expect(existsSync(`${hook}.ran`)).toBe(false);
+			expect(result.structuredContent, mock.text(result)).toMatchObject({ stage: "done", pushed: false });
+			expect(existsSync(join(target, ".git", "objects"))).toBe(true);
+			expect(cleanGit(target, ["log", "-1", "--format=%s"])).toBe("Commit isolated fixture");
+			expect(cleanGit(target, ["show", "HEAD:a"])).toBe("target");
+			expect(cleanGit(decoy, ["rev-parse", "HEAD"])).toBe(head);
+			expect(readFileSync(join(decoy, ".git", "index"))).toEqual(index);
+			expect(readFileSync(join(decoy, ".git", "config"))).toEqual(config);
+			expect(readFileSync(join(decoy, "a"), "utf8")).toBe("decoy\n");
+			for (const key of Object.keys(hostile)) expect(process.env[key], key).toBeUndefined();
+		} finally {
+			f.cleanup();
+		}
+	},
+);
 
 it("returns body-validation and unreadable-HEAD errors without claiming a push", async () => {
 	const f = wrapperFixture("Cargo.toml");
