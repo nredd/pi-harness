@@ -54,7 +54,7 @@ pi -e ./src/index.ts
 
 Requires pi **1.1.0 or newer**: pi 0.86 and 0.87 moved the system prompt and conversation history into the session transcript, and the `@handle` conversation clone and the agent transcript files are built on that model. The `peerDependencies` range declares it, so npm flags an older pi at install time.
 
-### In-process factory and clock
+### In-process factory, clock and home
 
 `src/index.ts` exports `createSubagentsExtension(options: SubagentsExtensionOptions = {}): ExtensionFactory`.
 The default export is `createSubagentsExtension()` and keeps native time and timer reference behavior.
@@ -70,8 +70,12 @@ declare const clock: Clock;
 const extension = createSubagentsExtension({ clock });
 ```
 
-`SubagentsExtensionOptions` has one optional field, `clock?: Clock`. The exported clock contract matches
-session-kit's scheduling boundary:
+`SubagentsExtensionOptions` accepts `clock?: Clock` and `homeDir?: string`. An explicit home binds
+user-scoped discovery, settings and child-session paths without mutating `HOME`; omitted homes keep
+call-time host defaults. Explicit agent/session directory overrides still win. The boundary audit and
+test seams are documented [here](docs/home-injection.md).
+
+The exported clock contract matches session-kit's scheduling boundary:
 
 ```ts
 interface TimerHandle { cancel(): void; unref?(): void }
@@ -1264,6 +1268,7 @@ This is useful for creating agents that inherit extension tools but should not h
 docs/                 # Long-form guides (shipped to npm; README links out to them)
   workflows.md        # SubagentWorkflow: writing, editing, saving and re-running scripts
   rpc.md              # Cross-extension integration: pi.events, subagents:rpc:*, manager registry
+  home-injection.md   # Injected home boundaries, call-time defaults and filesystem canaries
 examples/
   workflows/          # Runnable examples, executed by test/workflow-examples.test.ts
   agent-tool-description.md
@@ -1313,6 +1318,8 @@ src/
   schedule-store.ts   # PID-locked, session-scoped, atomic schedule persistence
 
   # Context & environment
+  home-paths.ts       # Injected home normalization and Pi agent-directory defaults
+  resource-loader.ts  # Fresh scoped settings paths for Pi's real resource/package loader
   memory.ts           # Persistent agent memory (resolve, read, build prompt blocks)
   skill-loader.ts     # Preload skills (Pi-standard + Agent Skills spec layouts)
   output-file.ts      # Streaming output file transcripts for agent sessions

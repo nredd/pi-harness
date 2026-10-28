@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetState, registerTodoTool, setActiveRenderSession, TOOL_NAME } from "./todo.ts";
+import { __resetState, registerTodoTool, setActiveRenderSession, TOOL_NAME } from "./.test-support/home-fixtures.ts";
 
 const theme = makeTheme() as unknown as Theme;
 const SESSION_ID = "foreground";
