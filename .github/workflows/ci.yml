@@ -105,6 +105,15 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         with:
           tool: cargo-nextest
+      # Real reviewer reads need system binaries, not Pi's live latest-release download fallback.
+      - name: Install reviewer read dependencies (Ubuntu)
+        if: steps.plan.outputs.run == 'true' && runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep fd-find
+      - name: Verify reviewer read dependencies
+        if: steps.plan.outputs.run == 'true'
+        run: |
+          rg --version
+          if command -v fd >/dev/null; then fd --version; else fdfind --version; fi
       - name: Initialize the core fork at its Gitlink
         if: steps.plan.outputs.run == 'true'
         run: git submodule update --init forks/pi

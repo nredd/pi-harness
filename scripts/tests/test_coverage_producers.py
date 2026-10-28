@@ -144,6 +144,29 @@ def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
     assert "lcov.info" in artifacts
 
 
+def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
+    """Require offline reviewer reads and explicit Ubuntu binary provisioning.
+
+    Parameters:
+        None.
+    Returns:
+        None: CI provisions and verifies both read dependencies before tests.
+    Raises:
+        AssertionError: Reviewer tests can fall back to network downloads.
+    """
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    owned = workflow.split("  owned:", 1)[1].split("  contracts:", 1)[0]
+    install = owned.index("Install reviewer read dependencies (Ubuntu)")
+    verify = owned.index("Verify reviewer read dependencies")
+    assert install < verify < owned.index("Owned gates (")
+    assert "apt-get install --yes ripgrep fd-find" in owned
+    assert "rg --version" in owned
+    assert "fdfind --version" in owned
+    reviewer = (ROOT / "integration/inprocess/reviewer.test.ts").read_text()
+    assert 'vi.stubEnv("PI_OFFLINE", "1")' in reviewer
+    assert "vi.unstubAllEnvs()" in reviewer
+
+
 def test_pinned_bun_lcov_only_threshold_bypass(tmp_path: Path) -> None:
     """Reproduce the pinned LCOV-only threshold bypass with the real runtime.
 

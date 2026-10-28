@@ -322,6 +322,18 @@ The `support.test.ts` sleep-assertion test explicitly skips outside Darwin: prim
 these real in-process sessions use the installed core harness and the remaining suites run on
 both OSes. No wake path, source file or test assertion is excluded to hide the difference.
 
+The in-process `@nredd/pi-stack-tests` reviewer suite executes real Pi `grep`/`find` tools
+under both Node and Bun. Each launcher gets a fresh disposable home, so a managed binary
+fetched during the Node pass is not available to Bun. Ubuntu owned CI explicitly installs
+`ripgrep` and `fd-find` via apt before tests; both OSes verify their PATH binaries. The reviewer
+suite sets `PI_OFFLINE=1` and restores it after each test: missing prerequisites fail the actual
+read assertions instead of silently depending on GitHub's live latest-release downloads.
+Run `40715505433` passed Node reviewer reads but failed Bun's grep on Ubuntu; its swallowed
+fetch error does not establish a particular HTTP/TLS cause. macOS passed both read suites.
+This is a latent test dependency exposed by the fresh-home Bun path, not proof of a
+coverage-instrumentation defect. Later import-audit/probe reports cannot exist if the preceding
+owned workspace command fails; only successful full producers establish floors.
+
 Existing `owned` CI jobs run accounting after tests even on failure, then upload independent
 LCOV and JSON summary artifacts even if accounting fails. No required job names or protection
 settings change. A failed earlier test may prevent later packages from running; their missing
