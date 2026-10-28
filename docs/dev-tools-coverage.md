@@ -154,6 +154,37 @@ env -u CARGO_TARGET_DIR GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TE
   npm run test:bun
 ```
 
-Use `coverage-istanbul-reviewfix` for the final primary run, preserving both original provider
+## macOS queued-uv regression
+
+Run `40711708082` failed the queued-uv test on `macos-14`: waiting updates were `[]`.
+This was a fixture identity mismatch, not a slow-runner race. `wrapperFixture` retains
+`tmpdir()`'s spelling, while `findProjectRoot` resolves symlinks before choosing the uv
+mutex key. A root under `/var/tmp` therefore held `uv:/var/tmp/...` in the test while the
+wrapper acquired the distinct `uv:/private/var/tmp/...` lock. The immediate abort still
+returned an error without starting the executable, concealing the lack of contention.
+
+Reproduced locally on macOS with `TMPDIR=/var/tmp`: the unchanged test failed with the
+exact CI assertion. Under two concurrent `yes > /dev/null` CPU burners, temporary
+`it.each` expansion produced **200/200 failures**. Changing only the held lock key to
+`findProjectRoot(f.root)` yielded **200/200 passes** under the same conditions, isolating
+path identity from abort timing. The stress expansion was removed afterward.
+
+The final test holds `uv:${realpathSync(f.root)}`, exercises both ordinary and explicit
+symlinked cwd paths, and cancels from the waiting-feedback callback, not immediately after
+calling `execute`. The outer lock stays held until the cancelled call settles; assertions
+still require waiting feedback, an error result, and no executable-start marker. No product
+code, sleeps, retries, timeouts, thresholds, or exclusions changed.
+
+Final stress: temporarily expand the two cwd cases to 400 alternating rows, then run under
+the same two CPU burners and `TMPDIR=/var/tmp`: **400/400 passed** (200 per cwd case).
+The checked-in parameterization remains only `[false, true]`. Full final gates with
+`TMPDIR=/var/tmp`, isolated Git config and no ambient `CARGO_TARGET_DIR`:
+
+- Biome and TypeScript: clean.
+- Node Vitest + Istanbul: **412 passed**, 29 files; **1502/1502 lines, 260/260 functions**,
+  1772/1859 statements (95.32%), 1320/1557 branches (84.77%); all 22 executable modules included.
+- Bun Vitest: **412 passed**, 29 files; Bun native scenarios: **4 passed**.
+
+Use `coverage-istanbul-macosfix` for this final primary run, preserving both original provider
 reports. Reports are local generated artifacts, not committed. No network host mutations,
 merge/rebase/force, release, install activation, or other worktree changes are part of this work.
