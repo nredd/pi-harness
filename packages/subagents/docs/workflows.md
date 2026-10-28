@@ -396,8 +396,11 @@ The worker transports at most 16,384 characters of stack text across eight cause
 and 4,096 characters of message text; cyclic causes stop at the repeated value. Captured
 stacks and message text are not reinterpreted as source frames. The LLM-facing
 result retains the concise message before the bounded stack unless the stack's
-first line already includes it. Completion notifications retain their existing
-4,000-character result limit. Trusted-workflow diagnostics can include host file
+first line is exactly the message or ends with `: <message>` (an error heading).
+A mere substring in captured context does not suppress the concise message.
+The combined worker diagnostic result is at most 20,481 characters: 4,096 for
+the message, one newline and 16,384 for the stack. Completion notifications
+retain their existing 4,000-character result limit. Trusted-workflow diagnostics can include host file
 paths and user-controlled captured stacks; these bounds are not sanitization or
 credential isolation. Host frames are retained for error and cause context.
 
