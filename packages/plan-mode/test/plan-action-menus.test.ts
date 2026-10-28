@@ -221,9 +221,10 @@ test("Ready-plan chooser renders at narrow widths and routes explicit choices", 
       custom: async (factory: unknown) => {
         const harness = createCustomSelectorHarness(factory, 80);
         for (const width of [20, 40, 80]) {
-          assert.ok(harness.render(width).length > 0);
+          const rendered = harness.render(width).join("\n");
+          assert.match(rendered, /Proposed plan ready/u);
+          assert.match(rendered.replace(/\s+/gu, " "), /Show latest proposed plan.*Discard plan and exit/u);
         }
-        assert.match(harness.render(80).join("\n"), /Show latest proposed plan[\s\S]*Discard plan and exit/u);
         for (let move = 0; move < moves; move += 1) harness.handleInput("tui.select.down");
         harness.handleInput("tui.select.confirm");
         return harness.resultPromise;
