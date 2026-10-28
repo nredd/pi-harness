@@ -62,6 +62,9 @@ Other guidelines:
 - Keep PRs focused — one logical change per PR. Unrelated refactors make review
   harder and are likely to be split out or declined.
 - Add or update tests for behavior you change.
+- Use `hermeticDir` from `test/helpers/boot-extension.ts` for extension wiring
+  fixtures. Its roots are canonical paths, matching `process.cwd()` and project
+  discovery even when the OS temp directory contains symlinks (macOS `/var`).
 - Match the surrounding code style (enforced by biome).
 - Do not edit `CHANGELOG.md`. Changelog entries are added by the maintainer.
 - Update the README when you add or change user-facing behavior.
