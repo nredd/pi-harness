@@ -54,6 +54,7 @@ describe("matchesRule", () => {
 		expect(matchesRule(rule("src/**/*.ts"), "lib/a.ts")).toBe(false);
 		expect(matchesRule(rule("*.ts"), "src/a.ts")).toBe(false);
 		expect(matchesRule(rule("nope", "{src,lib}/*.ts"), "lib/a.ts")).toBe(true);
+		expect(matchesRule(rule("["), "src/a.ts")).toBe(false);
 	});
 });
 
