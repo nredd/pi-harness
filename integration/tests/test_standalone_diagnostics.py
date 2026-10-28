@@ -188,17 +188,50 @@ def test_unknown_artifact_paths_are_denied(name: str) -> None:
     assert not diag.allowed_artifact_path(Path(name))
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
+def test_fixed_artifact_inventory_is_explicit() -> None:
+    """Require deliberate matrix review whenever a fixed artifact path changes.
+
+    Returns:
+        None: independent inventory equality assertion completes.
+    """
+    expected_paths = {
         "pi",
+        "SHA256SUMS",
+        "build.json",
         "build.log",
+        "compile-command.json",
+        "module-graph.json",
         "startup.stdout",
         "startup.stderr",
         "replay.stdout",
         "replay.stderr",
+        "replay-wrapper.ts",
+        "stack.json",
         "packages/pi-memory/index.ts",
-        "jiti/primary/pi-memory-index.01234567.mjs",
+        "packages/pi-memory/package.json",
+        "packages/pi-memory/npm-lock.json",
+        "core/loader.js",
+        "core/virtual-modules.js",
+        "core/typebox-helpers.js",
+        "core/jiti-package.json",
+        "core/typebox-package.json",
+        "core/package-lock.json",
+        "harness-package-lock.json",
+    }
+    assert expected_paths == diag.FIXED_PATHS
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        *sorted(diag.FIXED_PATHS),
+        *[
+            f"jiti/{phase}/pi-memory-index{maps}{interop}.01234567.{extension}"
+            for phase in ("primary", "replay")
+            for maps in ("", "+map")
+            for interop in ("", ".i")
+            for extension in ("cjs", "mjs")
+        ],
     ],
 )
 @pytest.mark.parametrize(
@@ -219,20 +252,54 @@ def test_unknown_artifact_paths_are_denied(name: str) -> None:
         b"https://user:password@example.invalid/",
     ],
 )
-def test_credential_scan_refuses_entire_publication(tmp_path: Path, name: str, token: bytes) -> None:
-    """Reject token-like contents even in an allowlisted binary or source file.
+def test_credential_scan_refuses_entire_publication(
+    tmp_path: Path,
+    inputs: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    token: bytes,
+) -> None:
+    """Reject every synthetic token/path pair without replacing the primary failure.
 
     Parameters:
         tmp_path (Path): private publication directory.
-        name (str): allowlisted file to contaminate.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): deterministic primary/replay and publication injection.
+        name (str): fixed or representative correlated-cache artifact path to contaminate.
         token (bytes): generated synthetic credential signature, never a real credential.
 
     Returns:
-        None: assertions complete.
+        None: scanner refusal, absent publication and primary-status assertions complete.
     """
     output = tmp_path / "artifacts"
+    content = b"\xffprefix " + token + b" suffix\r\n"
+    publish = diag.publish
+    assert diag.allowed_artifact_path(Path(name))
     with pytest.raises(ValueError, match="credential"):
-        diag.publish({name: b"\xffprefix " + token + b" suffix\r\n"}, output)
+        publish({name: content}, output)
+    assert not output.exists()
+    publications: list[Path] = []
+
+    def contaminated_publish(files: dict[str, bytes], destination: Path) -> None:
+        """Inject at the final boundary, including generated metadata and stream files.
+
+        Parameters:
+            files (dict[str, bytes]): actual collector publication candidates.
+            destination (Path): fresh publication directory.
+
+        Returns:
+            None: never returned because the real scanner must refuse publication.
+        """
+        publications.append(destination)
+        publish(files | {name: content}, destination)
+
+    box = build_sandbox(tmp_path / "sandbox")
+    monkeypatch.setattr(diag, "execute", lambda *_, **__: diag.StartupResult(37, b"", b"failed"))
+    monkeypatch.setattr(diag, "replay_memory", lambda *_: diag.StartupResult(0, b"STACK-OK\n", b""))
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
+    monkeypatch.setattr(diag, "publish", contaminated_publish)
+    assert diag.diagnose(box, *inputs, output) == 37
+    assert publications == [output]
     assert not output.exists()
 
 
