@@ -223,6 +223,7 @@ test("Ready-plan chooser renders at narrow widths and routes explicit choices", 
         for (const width of [20, 40, 80]) {
           assert.ok(harness.render(width).length > 0);
         }
+        assert.match(harness.render(80).join("\n"), /Show latest proposed plan[\s\S]*Discard plan and exit/u);
         for (let move = 0; move < moves; move += 1) harness.handleInput("tui.select.down");
         harness.handleInput("tui.select.confirm");
         return harness.resultPromise;
@@ -244,19 +245,38 @@ test("Ready-plan chooser renders at narrow widths and routes explicit choices", 
   }
 });
 
-test("Ready-plan chooser Ctrl-C closes without an outcome", async () => {
-  const actions: string[] = [];
-  const context = createMockContext({
-    mode: "tui",
-    hasUI: true,
-    custom: async (factory: unknown) => {
-      const harness = createCustomSelectorHarness(factory);
-      harness.handleInput("\u0003");
-      return harness.resultPromise;
-    },
-  });
+test("Ready-plan chooser distinguishes Escape from Ctrl-C cancellation", async () => {
+  for (const [input, expected] of [
+    ["tui.select.cancel", ["stay"]],
+    ["\u0003", []],
+  ] as const) {
+    const actions: string[] = [];
+    const context = createMockContext({
+      mode: "tui",
+      hasUI: true,
+      custom: async (factory: unknown) => {
+        const harness = createCustomSelectorHarness(factory);
+        harness.handleInput(input);
+        return harness.resultPromise;
+      },
+    });
 
-  await showReadyPlanMenu(context.ctx, menuOptions({ stay: () => actions.push("stay") }));
+    await showReadyPlanMenu(
+      context.ctx,
+      menuOptions({
+        show: () => actions.push("show"),
+        implementHere: () => actions.push("implementHere"),
+        implementFresh: () => actions.push("implementFresh"),
+        exportPlan: async () => {
+          actions.push("exportPlan");
+          return true;
+        },
+        save: () => actions.push("save"),
+        stay: () => actions.push("stay"),
+        exit: () => actions.push("exit"),
+      }),
+    );
 
-  assert.deepEqual(actions, []);
+    assert.deepEqual(actions, expected);
+  }
 });
