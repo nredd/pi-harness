@@ -63,10 +63,8 @@ local themes, skills, agents and their configuration. Restart sessions after act
   Compact: `Left: Anth 5h 66% @14:30 7d 35% @Nov 2 09:00 | OAI 7d 76% @Nov 3 11:05`. Times are 24h
   in the process-local timezone (the zone the router's own `/router` output uses; DST and
   calendar days follow it). 5h resets show `HH:MM`, or `Mon D HH:MM` when past local midnight;
-  weekly resets always show the date. An unknown reset is omitted and the percent stays. A
-  reset already in the past hides the cached percent (`--`), since it describes the old window.
-  A stale retained percent keeps its own reset. A reset time already in the past is simply
-  not shown; it never changes the percent, its color or its staleness.
+  weekly resets always show the date. An unknown reset is omitted and the percent stays. A stale
+  retained percent keeps its own reset. A reset time already in the past is simply not shown; it never changes the percent, its color or its staleness.
   OpenAI window identity comes from the router's optional `windows[].spanSource`
   (`reported` | `assumed`, provenance only; names, `durationMs`, scoring and admission are unchanged):
   weekly is the window with a reported 604800000 ms duration (or the legacy `7d` name on snapshots with no

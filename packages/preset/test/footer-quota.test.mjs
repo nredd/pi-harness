@@ -611,7 +611,7 @@ test("identity: weekly is chosen by reported duration, not by name", () => {
 
 test("identity: reported 18000s window is hidden; with no weekly the provider shows `weekly --`", () => {
 	const state = codexOf([span("5h", 10, 18_000_000, "reported", 7_000)]);
-	assert.ok(!("weekly" in state) || state.weekly === undefined);
+	assert.equal(state.weekly, undefined);
 	assert.ok(!("fiveHour" in state));
 	assert.ok(!("weeklyUnknown" in state));
 	assert.equal(
