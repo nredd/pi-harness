@@ -334,48 +334,51 @@ describe("Darwin native identity and counters", () => {
 		b.after.writeBigUInt64LE(0n, 24);
 		expect(darwinNativeCounter(captured.pid, b.before, b.bsd, b.after, BASELINE_AT_MS, 1)).toBeNull();
 	});
-	it("adapts the production lazy loader to Bun's fixed builtin FFI surface", () => {
-		const descriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
-		const originalBuiltin = process.getBuiltinModule;
-		const { before, bsd, after } = buffers();
-		let usageCalls = 0;
-		const close = vi.fn();
-		const ffi = {
-			ptr: (buffer: Buffer) => buffer as unknown as number,
-			dlopen: vi.fn(() => ({
-				symbols: {
-					mach_timebase_info: (pointer: number) => {
-						validTimebase(pointer as unknown as Buffer);
-						return 0;
+	it.skipIf(process.platform !== "darwin")(
+		"adapts the production lazy loader to Bun's fixed builtin FFI surface",
+		() => {
+			const descriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+			const originalBuiltin = process.getBuiltinModule;
+			const { before, bsd, after } = buffers();
+			let usageCalls = 0;
+			const close = vi.fn();
+			const ffi = {
+				ptr: (buffer: Buffer) => buffer as unknown as number,
+				dlopen: vi.fn(() => ({
+					symbols: {
+						mach_timebase_info: (pointer: number) => {
+							validTimebase(pointer as unknown as Buffer);
+							return 0;
+						},
+						proc_pidinfo: (_pid: number, _flavor: number, _argument: bigint, pointer: number) => {
+							bsd.copy(pointer as unknown as Buffer);
+							return 136;
+						},
+						proc_pid_rusage: (_pid: number, _flavor: number, pointer: number) => {
+							(usageCalls++ === 0 ? before : after).copy(pointer as unknown as Buffer);
+							return 0;
+						},
 					},
-					proc_pidinfo: (_pid: number, _flavor: number, _argument: bigint, pointer: number) => {
-						bsd.copy(pointer as unknown as Buffer);
-						return 136;
-					},
-					proc_pid_rusage: (_pid: number, _flavor: number, pointer: number) => {
-						(usageCalls++ === 0 ? before : after).copy(pointer as unknown as Buffer);
-						return 0;
-					},
-				},
-				close,
-			})),
-		};
-		Object.defineProperty(process.versions, "bun", { configurable: true, value: "fixture" });
-		process.getBuiltinModule = ((name: string) =>
-			name === "bun:ffi" ? ffi : originalBuiltin(name)) as typeof process.getBuiltinModule;
-		try {
-			const row = { ...counter(), strongIdentity: undefined, footprintBytes: undefined };
-			const result = darwinNativeProcesses(
-				[row],
-				new Budget(performance.now() + TEST_BUDGET_MS, TEST_BUDGET_BYTES, 1, new AbortController().signal),
-			);
-			expect(result[0]).toMatchObject({ strongIdentity: true, footprintBytes: CAPTURED_FOOTPRINT_BYTES });
-			expect(ffi.dlopen).toHaveBeenCalledWith("/usr/lib/libproc.dylib", expect.any(Object));
-			expect(close).toHaveBeenCalledOnce();
-		} finally {
-			process.getBuiltinModule = originalBuiltin;
-			if (descriptor) Object.defineProperty(process.versions, "bun", descriptor);
-			else delete (process.versions as { bun?: string }).bun;
-		}
-	});
+					close,
+				})),
+			};
+			Object.defineProperty(process.versions, "bun", { configurable: true, value: "fixture" });
+			process.getBuiltinModule = ((name: string) =>
+				name === "bun:ffi" ? ffi : originalBuiltin(name)) as typeof process.getBuiltinModule;
+			try {
+				const row = { ...counter(), strongIdentity: undefined, footprintBytes: undefined };
+				const result = darwinNativeProcesses(
+					[row],
+					new Budget(performance.now() + TEST_BUDGET_MS, TEST_BUDGET_BYTES, 1, new AbortController().signal),
+				);
+				expect(result[0]).toMatchObject({ strongIdentity: true, footprintBytes: CAPTURED_FOOTPRINT_BYTES });
+				expect(ffi.dlopen).toHaveBeenCalledWith("/usr/lib/libproc.dylib", expect.any(Object));
+				expect(close).toHaveBeenCalledOnce();
+			} finally {
+				process.getBuiltinModule = originalBuiltin;
+				if (descriptor) Object.defineProperty(process.versions, "bun", descriptor);
+				else delete (process.versions as { bun?: string }).bun;
+			}
+		},
+	);
 });

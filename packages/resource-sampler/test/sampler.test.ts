@@ -450,7 +450,7 @@ describe("platform dispatch", () => {
 		vi.doUnmock("node:os");
 		vi.resetModules();
 	});
-	it("collects the Linux-only /proc path with the runtime's real counters", async () => {
+	it("reports Linux PSI and collection availability without treating this Darwin host as Linux evidence", async () => {
 		const sampler = await samplerFor("linux");
 		try {
 			const snapshot = await sampler.sample();
