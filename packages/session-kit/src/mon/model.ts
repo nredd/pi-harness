@@ -9,6 +9,8 @@ export interface MonProcess {
 	nameState?: "unknown" | "truncated";
 	cpuPercent: number | null;
 	rssBytes: number | null;
+	/** Native macOS physical footprint, including compression; undefined/null is not zero. */
+	footprintBytes?: number | null;
 }
 
 /** No process arguments, environment, working directories or host identifiers enter the view. */
@@ -17,6 +19,11 @@ export interface MonSnapshot {
 	logicalCpus: number;
 	memoryUsedBytes: number | null;
 	memoryTotalBytes: number | null;
+	/** Explicit measurement basis; older fixtures/producers default to total-free. */
+	memoryBasis?: "total-free" | "app+wired+compressed";
+	memoryFreeBytes?: number | null;
+	swapUsedBytes?: number | null;
+	swapTotalBytes?: number | null;
 	load: readonly number[];
 	processes: readonly MonProcess[];
 	/** Wall-clock capture time, for display only (it can jump). Never persisted. */
@@ -40,7 +47,12 @@ export interface MonSnapshot {
 export type MonSort = "cpu" | "rss" | "pid";
 export const SORTS: readonly MonSort[] = ["cpu", "rss", "pid"];
 
-/** Unknown/non-finite measurements sort last; ties are deterministic across refreshes. */
+/**
+ * Sort unknown/nonfinite measurements last, with deterministic ties.
+ * @param processes Readonly input rows.
+ * @param sort Requested CPU/RSS/PID ordering.
+ * @returns Sorted copy, leaving input untouched.
+ */
 export function sortProcesses(processes: readonly MonProcess[], sort: MonSort): MonProcess[] {
 	return [...processes].sort((a, b) => {
 		const av = sort === "cpu" ? a.cpuPercent : sort === "rss" ? a.rssBytes : a.pid;
@@ -53,16 +65,31 @@ export function sortProcesses(processes: readonly MonProcess[], sort: MonSort): 
 	});
 }
 
+/**
+ * Format a percentage without inventing zero for unknown input.
+ * @param value Percentage or null.
+ * @returns One decimal plus percent sign, or --.
+ */
 export function percent(value: number | null): string {
 	return value === null || !Number.isFinite(value) ? "--" : `${value.toFixed(1)}%`;
 }
 
-/** Process share of total RAM, from the same sample's RSS and total. */
+/**
+ * Format process RSS share of the same sample's total RAM.
+ * @param part Resident bytes or null.
+ * @param total Physical RAM bytes or null.
+ * @returns One decimal percentage without its sign, or --.
+ */
 export function share(part: number | null, total: number | null): string {
 	if (part === null || total === null || !Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return "--";
 	return `${((part / total) * 100).toFixed(1)}`;
 }
 
+/**
+ * Format binary byte quantities for bounded dashboard cells.
+ * @param value Bytes or null.
+ * @returns GiB/MiB quantity with compact G/M suffix, or --.
+ */
 export function bytes(value: number | null): string {
 	if (value === null || !Number.isFinite(value)) return "--";
 	return value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)}G` : `${(value / 1024 ** 2).toFixed(0)}M`;
@@ -80,6 +107,9 @@ export interface MonHistoryPoint {
  * after the first capture without a CPU value are real gaps (`null`), never interpolated CPU; the
  * leading `blank` columns precede the first capture because no history exists yet. The latest sample
  * in a bucket wins.
+ * @param history Monotonic ordered CPU observations.
+ * @param width Available chart columns.
+ * @returns Leading blank count and measured/gap buckets.
  */
 function historyBuckets(
 	history: readonly MonHistoryPoint[],
@@ -108,7 +138,12 @@ function historyBuckets(
 	return { blank: oldest, buckets: buckets.slice(oldest) };
 }
 
-/** One-row history: blank before data, `·` for gaps. */
+/**
+ * Render one-row history: blank before data, dots for gaps.
+ * @param history Monotonic ordered CPU observations.
+ * @param width Available chart columns.
+ * @returns Time-proportional CPU sparkline.
+ */
 export function timeHistory(history: readonly MonHistoryPoint[], width: number): string {
 	if (!history.length || width < 1) return "";
 	const { blank, buckets } = historyBuckets(history, width);
@@ -118,6 +153,10 @@ export function timeHistory(history: readonly MonHistoryPoint[], width: number):
 /**
  * Multi-row history (top row first), `rows * 8` levels on the same fixed 0..100 scale. A gap is `·`
  * on the bottom row only; zero keeps a `▁` baseline so a quiet host never looks like missing data.
+ * @param history Monotonic ordered CPU observations.
+ * @param width Available chart columns.
+ * @param rows Chart height.
+ * @returns Top-first rendered chart rows.
  */
 export function timeHistoryRows(history: readonly MonHistoryPoint[], width: number, rows: number): string[] {
 	if (rows <= 1) return [timeHistory(history, width)];
@@ -143,7 +182,12 @@ export function timeHistoryRows(history: readonly MonHistoryPoint[], width: numb
 	return lines;
 }
 
-/** Fixed 0..100 host CPU scale: a quiet history must not look saturated. */
+/**
+ * Render a fixed 0..100 CPU scale so quiet history does not look saturated.
+ * @param history CPU percentages or unknown samples.
+ * @param width Maximum newest samples to show.
+ * @returns Sparkline with dots for unknown/nonfinite samples.
+ */
 export function sparkline(history: readonly (number | null)[], width: number): string {
 	const ticks = "▁▂▃▄▅▆▇█";
 	const values = history.slice(-Math.max(0, width));

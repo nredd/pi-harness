@@ -1,0 +1,35 @@
+Captured 2026-10-27 17:39:37.819-17:39:39.149 UTC, owner arm64 Mac.
+Three controlled /usr/bin/yes children, all exited and reaped after sampling.
+No argv or environment collected. Names are p_comm only.
+Sampler timestamps: 17:39:37.819 -> 17:39:38.950 UTC (per-PID monotonic timestamps internally).
+
+Sampler second interval:
+PID    CPU%    RSS bytes  FOOT bytes NAME
+83734  99.722  966656     1032408    yes
+83735  99.691  966656     1032408    yes
+83737  99.766  966656     1032408    yes
+
+ps first:
+83734 83729 Tue Oct 27 10:39:37 2026       0:00.30    944 yes               66.5
+83735 83729 Tue Oct 27 10:39:37 2026       0:00.30    944 yes               66.3
+83737 83729 Tue Oct 27 10:39:37 2026       0:00.30    944 yes               66.3
+ps second:
+83734 83729 Tue Oct 27 10:39:37 2026       0:01.48    944 yes               99.0
+83735 83729 Tue Oct 27 10:39:37 2026       0:01.48    944 yes               99.3
+83737 83729 Tue Oct 27 10:39:37 2026       0:01.48    944 yes               99.7
+
+top -l 2 -s 1 -n 10 -stats pid,cpu,mem,cmprs,command (three -pid filters):
+2026/10/27 10:39:38
+PID    %CPU MEM   CMPRS COMMAND
+83737  0.0  1008K 0B    yes
+83735  0.0  1008K 0B    yes
+83734  0.0  1008K 0B    yes
+2026/10/27 10:39:39
+PID    %CPU MEM   CMPRS COMMAND
+83737  84.7 1008K 0B    yes
+83735  84.6 1008K 0B    yes
+83734  84.6 1008K 0B    yes
+
+These are concurrent overlapping windows, not identical per-PID boundaries. top completed after
+sampler second observation; its first sample is a baseline, not 0% measured CPU. Do not claim exact
+agreement. ps %cpu is a decaying value; ps cumulative time independently advanced 1.18s per child.

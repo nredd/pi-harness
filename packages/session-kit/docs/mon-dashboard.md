@@ -33,9 +33,12 @@ sample, including its `ps` child on macOS. Mapping rules:
   `(unknown)` (Linux hides other users' `/proc/PID/exe` without ptrace access). macOS `p_comm` keeps
   16 bytes, so a macOS name of 16+ UTF-8 bytes ends in a dim `…` (`Google Chrome He…`): possibly cut,
   never claimed complete. Names stay untrusted text: sanitized, never interpreted.
-- macOS process interval CPU is always unavailable (the sampler's `ps` start time has one-second
-  precision, so PID reuse cannot be excluded). The view says so, explains it in help, and orders by
-  RSS until the user picks a sort. Linux first samples are warming, so CPU order stays stable.
+- Upcoming sampler source supplies macOS native interval CPU and footprint via builtin FFI and
+  libproc, with process-start absolute ticks plus microsecond identity. Inaccessible PIDs and
+  unsupported runtimes have unknown metrics. The existing published `0.1.1` remains entirely
+  unavailable for process CPU; `ps` whole-second start times alone never authenticate CPU. The
+  view orders by RSS only when every process CPU is unavailable, until the user picks a sort.
+  Linux first samples are warming, so CPU order stays stable.
 - History spacing uses the sampler's monotonic `monotonicTimeMs`, so wall-clock steps (NTP, manual
   changes) cannot invent or hide gaps; the wall `wallTimeMs` is only displayed (header clock and
   last-success UTC).
@@ -53,7 +56,9 @@ sample, including its `ps` child on macOS. Mapping rules:
   The last row reserves close/help. Below 60 columns the header
   keeps the update clock over the tagline.
 - Columns: `PID`, `CPU%` (100 = one core), `RSS`, `MEM%` (RSS over total RAM, 60+ columns),
-  `NAME` last so long names never push numbers off screen. `--` is dimmed. A `▸` marks the
+  `NAME` last so long names never push numbers off screen. `f` toggles the byte column between
+  `RSS` and `FOOT` (native physical footprint, including compressed memory); unavailable/failed
+  PIDs show `--`, never zero. `MEM%` and `m` sorting remain RSS-based in either view. `--` is dimmed. A `▸` marks the
   selection; a theme scrollbar appears only when the list overflows. The memory card adds 1-minute
   load per logical CPU.
 - Host CPU severity colors the value (success under 50%, warning under 85%, error above) next to
@@ -67,13 +72,25 @@ sample, including its `ps` child on macOS. Mapping rules:
   columns before it are blank, including the warming baseline. Stale snapshots add no point. The caption states the actual span. The latest sample in a bucket wins.
   Stale views show the last successful capture's UTC timestamp (or `none`). Waiting/live/stale and
   CPU warming/unavailable use semantic theme colors and text, so meaning does not depend on color.
-- Memory is total minus free, explicitly **non-free**, not available memory or a pressure score
-  (on macOS free pages are small by design). Load averages are not percentages. Process CPU is
-  interval CPU, where 100% is one logical CPU and multithreaded processes can exceed 100%.
+- Memory labels its actual basis. Older samplers report **total-free** (`T-F` in the compact
+  summary), which includes cached files and is NOT Activity Monitor's Memory Used. Additive v1
+  `memory.usage` metrics instead render **used (A+W+C)** (`A+W+C` compact), an estimate of resident
+  App + Wired + Compressed physical RAM. A failed native metric stays `--`, never total-free under
+  a used label. Cards also show free pages and swap used/allocated; missing swap stays `--/--`.
+  `?` explains each basis, RSS excluding compressed pages versus Activity Monitor's footprint,
+  executable names (`pi` runs as `node`), and decaying `ps %cpu` versus interval CPU.
+  Load averages are not percentages. Process CPU is interval CPU, where 100% is one logical CPU and
+  multithreaded processes can exceed 100%.
+- Release sequencing: the registry dependency remains `0.1.1`, which lacks native host-memory
+  metrics. This adapter accepts the new optional memory/footprint fields and tests them, but production
+  remains honestly labelled total-free with unavailable process CPU/footprint until a new sampler
+  is published, its common dependency pin
+  and nested registry lock entries are updated, and both consumer registry tests pass. Do NOT claim
+  the new native used/swap line is active with the old registry pin.
 - The process viewport preserves selection by sampler identity, not PID or sorted row.
   Exited identities choose a bounded neighboring row; PID reuse cannot inherit selection.
   Unknown/non-finite measurements sort last with deterministic PID/identity tie breaks.
-- `j/k` and arrows select; PageUp/PageDown page; `g/G` jump first/last; `c/m/p` sort
+- `j/k` and arrows select; PageUp/PageDown page; `g/G` jump first/last; `f` toggles RSS/FOOT; `c/m/p` sort
   CPU/RSS/PID; `s` cycles sort; `?` toggles help; `q`/Escape close. CPU/RSS descend,
   PID ascends. Help has a bounded, wrapped viewport with a visible range and scroll hint;
   `j/k`, arrows, PageUp/PageDown and `g/G` scroll help without moving the process selection.

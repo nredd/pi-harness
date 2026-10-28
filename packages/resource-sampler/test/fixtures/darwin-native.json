@@ -1,0 +1,15 @@
+{
+	"capturedAt": "2026-10-27T17:39:39.149Z",
+	"pid": 83734,
+	"parentPid": 83729,
+	"nameHex": "796573",
+	"seconds": "1793122777",
+	"micros": "489806",
+	"start": "1848321580718",
+	"beforeCpuTicks": "39523924",
+	"afterCpuTicks": "39524007",
+	"rssBytes": "966656",
+	"footprintBytes": "1032408",
+	"timebaseNumerator": 125,
+	"timebaseDenominator": 3
+}

@@ -1,6 +1,7 @@
 /** Production /mon source: a thin mapping over the published shared sampler. No collector lives here. */
 import {
 	createResourceSampler,
+	type Metric,
 	type ResourceSampler,
 	type ResourceSnapshot,
 	type SamplerOptions,
@@ -20,28 +21,57 @@ const REASONS: Readonly<Record<string, string>> = {
 	"byte-limit": "read budget",
 	"file-byte-limit": "read budget",
 	[ROUTINE_SKIP]: "unreadable or exited",
-	"command-unavailable": "ps unavailable",
-	"command-failed": "ps failed",
+	"command-unavailable": "OS reader unavailable",
+	"command-failed": "OS reader failed",
 	"malformed-process-row": "unparsed rows",
 	"process-collection-unavailable": "process list unavailable",
 };
 const utf8 = new TextEncoder();
 
+/** Additive v1 fields for registry 0.1.1 compatibility; remove this shim at the owner-gated 0.2.0 pin. */
+type MemorySnapshot = Omit<ResourceSnapshot, "memory" | "processes"> & {
+	processes: (ResourceSnapshot["processes"][number] & { footprint?: Metric<number> })[];
+	memory: ResourceSnapshot["memory"] & {
+		usage?: Metric<{ usedBytes: number; availableBytes: number; basis: "app+wired+compressed" }>;
+		swap?: Metric<{ usedBytes: number; totalBytes: number }>;
+	};
+};
+
+/**
+ * Convert nonfinite producer values to the view's unknown sentinel.
+ * @param value Producer number.
+ * @returns Finite value or null.
+ */
 function finite(value: number): number | null {
 	return Number.isFinite(value) ? value : null;
 }
 
-/** Every observed process lacks interval CPU by platform design, not because it is warming. */
+/**
+ * Distinguish unavailable process CPU from initial warming.
+ * @param snapshot Producer snapshot.
+ * @returns Whether a nonempty process list has no supported interval CPU metrics.
+ */
 function processCpuUnavailable(snapshot: ResourceSnapshot): boolean {
 	return snapshot.processes.length > 0 && snapshot.processes.every((p) => p.cpu.state === "unavailable");
 }
 
+/**
+ * Annotate unknown or potentially truncated executable names.
+ * @param snapshot Snapshot supplying platform semantics.
+ * @param name Producer's sanitized executable basename.
+ * @returns Unknown/truncated marker, or undefined for a complete known name.
+ */
 function nameState(snapshot: ResourceSnapshot, name: string): "unknown" | "truncated" | undefined {
 	if (name === "") return "unknown";
 	return snapshot.platform === "darwin" && utf8.encode(name).length >= DARWIN_NAME_BYTES ? "truncated" : undefined;
 }
 
-/** Limits that hide data the user would expect: budget caps, collector failures, unavailable host CPU. */
+/**
+ * Explain budget caps, collector failures and unavailable host CPU.
+ * @param snapshot Producer snapshot and coverage.
+ * @param baseline Whether this is the first observation.
+ * @returns User-facing limit notice, or undefined when unnecessary.
+ */
 function notice(snapshot: ResourceSnapshot, baseline: boolean): string | undefined {
 	const parts: string[] = [];
 	const { coverage } = snapshot;
@@ -57,7 +87,11 @@ function notice(snapshot: ResourceSnapshot, baseline: boolean): string | undefin
 	return parts.length ? parts.join(" · ") : undefined;
 }
 
-/** Expected platform limits, stated once so `--` and `(unknown)` are never mistaken for zero or a bug. */
+/**
+ * Explain expected platform limits so unknown metrics are not mistaken for zero.
+ * @param snapshot Producer snapshot and availability states.
+ * @returns User-facing platform hint, or undefined when unnecessary.
+ */
 function hint(snapshot: ResourceSnapshot): string | undefined {
 	const parts: string[] = [];
 	const { coverage } = snapshot;
@@ -73,17 +107,38 @@ function hint(snapshot: ResourceSnapshot): string | undefined {
 /**
  * Map one typed sampler snapshot without inventing zeros for warming/unavailable values.
  * `baseline` marks a source's first observation, whose warming CPU needs no explanation.
+ * @param snapshot Typed producer snapshot including optional native metrics.
+ * @param baseline Whether this is the source's first observation.
+ * @returns View snapshot preserving unknown/failed metrics and measurement basis.
  */
-export function toMonSnapshot(snapshot: ResourceSnapshot, baseline = true): MonSnapshot {
+export function toMonSnapshot(snapshot: MemorySnapshot, baseline = true): MonSnapshot {
 	const total = finite(snapshot.memory.totalBytes);
 	const free = finite(snapshot.memory.freeBytes);
+	const usage = snapshot.memory.usage;
+	const swap = snapshot.memory.swap;
+	const measuredUsed = usage?.state === "available" ? finite(usage.value.usedBytes) : null;
+	const nativeUsed =
+		measuredUsed !== null && measuredUsed >= 0 && total !== null && total > 0 && measuredUsed <= total
+			? measuredUsed
+			: null;
+	const swapUsed = swap?.state === "available" ? finite(swap.value.usedBytes) : null;
+	const swapTotal = swap?.state === "available" ? finite(swap.value.totalBytes) : null;
+	const validSwap = swapUsed !== null && swapTotal !== null && swapUsed >= 0 && swapTotal >= swapUsed;
 	const text = notice(snapshot, baseline);
 	const note = hint(snapshot);
 	return {
 		cpuPercent: snapshot.cpu.state === "available" ? finite(snapshot.cpu.value) : null,
 		logicalCpus: snapshot.logicalCpus,
-		memoryUsedBytes: total !== null && total > 0 && free !== null ? Math.max(0, total - free) : null,
+		memoryUsedBytes: usage
+			? nativeUsed
+			: total !== null && total > 0 && free !== null && free >= 0 && free <= total
+				? total - free
+				: null,
 		memoryTotalBytes: total !== null && total > 0 ? total : null,
+		memoryBasis: usage ? "app+wired+compressed" : "total-free",
+		memoryFreeBytes: free !== null && free >= 0 ? free : null,
+		swapUsedBytes: validSwap ? swapUsed : null,
+		swapTotalBytes: validSwap ? swapTotal : null,
 		load: snapshot.loadAverage,
 		processes: snapshot.processes.map((p) => {
 			const state = nameState(snapshot, p.name);
@@ -94,6 +149,7 @@ export function toMonSnapshot(snapshot: ResourceSnapshot, baseline = true): MonS
 				...(state ? { nameState: state } : {}),
 				cpuPercent: p.cpu.state === "available" ? finite(p.cpu.value) : null,
 				rssBytes: finite(p.rssBytes),
+				footprintBytes: p.footprint?.state === "available" && p.footprint.value >= 0 ? finite(p.footprint.value) : null,
 			};
 		}),
 		capturedAt: snapshot.wallTimeMs,
@@ -108,7 +164,11 @@ export function toMonSnapshot(snapshot: ResourceSnapshot, baseline = true): MonS
 	};
 }
 
-/** One sampler per open interaction; its baseline and child cleanup end with the view. */
+/**
+ * Own one sampler per open interaction; its baseline/cleanup end with the view.
+ * @param create Sampler factory, injectable for lifecycle tests.
+ * @returns Disposable view source with first-observation baseline tracking.
+ */
 export function createSamplerSource(
 	create: (options?: SamplerOptions) => ResourceSampler = createResourceSampler,
 ): MonSource {

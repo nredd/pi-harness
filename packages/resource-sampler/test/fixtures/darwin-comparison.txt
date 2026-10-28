@@ -1,0 +1,23 @@
+Captured 2026-10-27 17:15:55-57 UTC, macOS arm64, 16 GiB, 10 logical CPUs.
+Names only: no argv or environment collected.
+
+sysctl:
+hw.memsize: 17179869184
+vm.swapusage: total = 4096.00M  used = 3079.44M  free = 1016.56M  (encrypted)
+
+memory_pressure -Q:
+The system has 17179869184 (1048576 pages with a page size of 16384).
+System-wide memory free percentage: 43%
+
+ps -A -o pid=,rss=,ucomm=,%cpu= (selected rows, two observations):
+37650 682032 node              17.5
+11353 230736 node               1.6
+10535  37984 node               0.0
+37650 686576 node              15.6
+11353 230736 node               0.0
+10535  37984 node               0.0
+
+top -l 2 -n 20 -stats pid,cpu,mem,rprvt,purg,cmprs,command (second observation, selected rows):
+PID    %CPU MEM    RPRVT PURG  CMPRS  COMMAND
+37650  37.0 671M-  N/A   0B    104M-  node
+11353  2.0  357M   N/A   0B    125M-  node

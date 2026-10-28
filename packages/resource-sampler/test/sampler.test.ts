@@ -1,13 +1,15 @@
-import { mkdtemp, readlink, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, readlink, rm, symlink } from "node:fs/promises";
 import { type CpuInfo, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { Budget, command } from "../src/collect.js";
+import { Budget, command, darwinHostMemory } from "../src/collect.js";
 import {
 	cpuSnapshot,
+	darwinMemory,
 	darwinProcess,
+	darwinSwap,
 	executableName,
 	hostCpu,
 	linuxRss,
@@ -19,11 +21,24 @@ import {
 } from "../src/counters.js";
 import { createResourceSampler } from "../src/index.js";
 
+/**
+ * Build one synthetic logical core with all non-user/idle counters zero.
+ * @param user Cumulative user CPU milliseconds.
+ * @param idle Cumulative idle milliseconds.
+ * @returns An independent CpuInfo fixture, not a host reading.
+ */
 const core = (user: number, idle: number): CpuInfo => ({
 	model: "fixture",
 	speed: 1000,
 	times: { user, idle, sys: 0, nice: 0, irq: 0 },
 });
+/**
+ * Build one stable synthetic process baseline.
+ * @param cpuMs Cumulative process CPU milliseconds.
+ * @param at Monotonic observation milliseconds.
+ * @param identity PID/start identity used to test reuse.
+ * @returns A process counter with fixed parent/name/RSS.
+ */
 const proc = (cpuMs: number, at: number, identity = "12:50"): ProcessCounter => ({
 	pid: 12,
 	parentPid: 1,
@@ -53,12 +68,15 @@ describe("honest counters", () => {
 	it("snapshots Bun-style lazy os.cpus() placeholders when called, not when first read", () => {
 		let now = 0;
 		// Mirrors Bun's lazyCpus wrapper: the first property access on any element reads native counters.
+		/** @returns Bun-like lazy cores that resolve counters at first property access. */
 		const lazy = (): CpuInfo[] => {
 			const array: CpuInfo[] = [];
+			/** @returns Nothing; replace placeholders with current synthetic counters. */
 			const populate = () => {
 				for (let i = 0; i < 2; i++) array[i] = core(now, now);
 			};
 			for (let i = 0; i < 2; i++) {
+				/** @returns Current core, forcing population on the first placeholder read. */
 				const read = (): CpuInfo => {
 					if (array[i] === instance) populate();
 					return array[i] as CpuInfo;
@@ -136,6 +154,92 @@ describe("privacy-safe native parsers", () => {
 		).toEqual({ avg10: 1.25, avg60: 0, avg300: 0.05, total: 42 });
 		expect(psi("some avg10=101 avg60=0 avg300=0 total=2")).toBeNull();
 		expect(psi("unknown")).toBeNull();
+	});
+});
+
+describe("Darwin host memory", () => {
+	it("parses captured Apple Silicon pages, not free-only RAM or uncompressed page equivalents", async () => {
+		const vm = await readFile(new URL("./fixtures/darwin-vm-stat.txt", import.meta.url), "utf8");
+		// Captured pages: anonymous 241117 - purgeable 2046 + wired 180763 + compressor 393195.
+		// The fixture header independently reports 16384 bytes/page, not a production page-size default.
+		const usedBytes = (241117 - 2046 + 180763 + 393195) * 16384;
+		expect(darwinMemory(vm, 16 * 1024 ** 3)).toEqual({
+			usedBytes,
+			availableBytes: 16 * 1024 ** 3 - usedBytes,
+			basis: "app+wired+compressed",
+		});
+		for (const broken of [
+			vm.replace("16384", "0"),
+			vm.replace("241117", "-1"),
+			vm.replace("2046", "999999"),
+			`${vm}Anonymous pages: 1.\n`,
+			vm.replace("Pages occupied by compressor:", "missing:"),
+		]) {
+			expect(darwinMemory(broken, 16 * 1024 ** 3)).toBeNull();
+		}
+		expect(darwinMemory(vm, 1)).toBeNull();
+		expect(darwinMemory(vm, Number.NaN)).toBeNull();
+		const comparison = await readFile(new URL("./fixtures/darwin-comparison.txt", import.meta.url), "utf8");
+		const swap = comparison.split("\n").find((line) => line.startsWith("vm.swapusage:")) ?? "";
+		expect(darwinSwap(swap)).toEqual({
+			usedBytes: Math.round(3079.44 * 1024 ** 2),
+			totalBytes: 4096 * 1024 ** 2,
+		});
+		for (const broken of [
+			"",
+			swap.replace("3079.44", "99999.00"),
+			swap.replace("1016.56", "0.00"),
+			swap.replace("4096.00", "Infinity"),
+		])
+			expect(darwinSwap(broken)).toBeNull();
+	});
+	it("parses the same-second AM-style kernel capture and measured fixed ps fallback rows", async () => {
+		const text = await readFile(new URL("./fixtures/darwin-kernel-window.txt", import.meta.url), "utf8");
+		// (203941 anonymous - 2859 purgeable + 171285 wired + 363787 compressor) * 16384 bytes/page.
+		expect(darwinMemory(text, 16 * 1024 ** 3)?.usedBytes).toBe(12061147136);
+		/**
+		 * Extract a page count from the same-second kernel capture, without a page-size assumption.
+		 * @param name Exact vm_stat field label in the captured C-locale fixture.
+		 * @returns The captured number of pages, or NaN if the fixture field is absent/malformed.
+		 */
+		const pages = (name: string): number =>
+			Number(
+				text
+					.split("\n")
+					.find((line) => line.startsWith(`${name}:`))
+					?.match(/:\s+(\d+)\./)?.[1],
+			);
+		expect({
+			app: (pages("Anonymous pages") - pages("Pages purgeable")) * 16384,
+			wired: pages("Pages wired down") * 16384,
+			compressed: pages("Pages occupied by compressor") * 16384,
+			cached: (pages("File-backed pages") + pages("Pages purgeable")) * 16384,
+		}).toEqual({ app: 3294527488, wired: 2806333440, compressed: 5960286208, cached: 3607904256 });
+		const times = (text.split("\n")[0] ?? "").split(" ").map((value) => Date.parse(value));
+		expect(Math.floor((times[0] ?? 0) / 1000)).toBe(Math.floor((times[1] ?? 0) / 1000));
+		expect((times[1] ?? 0) - (times[0] ?? 0)).toBe(4);
+		expect(text).toContain("System-wide memory free percentage: 47%");
+		expect(darwinSwap(text.split("\n").find((line) => line.startsWith("vm.swapusage:")) ?? "")?.usedBytes).toBe(
+			Math.round(3490.88 * 1024 ** 2),
+		);
+		const ps = await readFile(new URL("./fixtures/darwin-ps.txt", import.meta.url), "utf8");
+		const rows = ps
+			.trim()
+			.split("\n")
+			.map((line) => darwinProcess(line, 1));
+		expect(rows.map((row) => row?.name)).toEqual(["node", "node", "node"]);
+		expect(rows.map((row) => row?.strongIdentity)).toEqual([undefined, undefined, undefined]);
+	});
+	it("does not spawn native readers after byte or deadline admission fails; absence is never zero", async () => {
+		for (const budget of [
+			new Budget(performance.now() - 1, 4096, 1, new AbortController().signal),
+			new Budget(performance.now() + 1000, 0, 1, new AbortController().signal),
+		]) {
+			const memory = await darwinHostMemory(budget, 16 * 1024 ** 3);
+			expect(memory.usage?.state).toBe("unavailable");
+			expect(memory.swap?.state).toBe("unavailable");
+			expect(budget.bytesRead).toBe(0);
+		}
 	});
 });
 
@@ -227,8 +331,19 @@ describe("real local sampler", () => {
 			}
 			expect(second.processes.some((entry) => entry.pid === process.pid)).toBe(true);
 			const own = second.processes.find((entry) => entry.pid === process.pid);
-			expect(own?.cpu.state).toBe(process.platform === "linux" ? "available" : "unavailable");
+			const native =
+				process.platform === "darwin" &&
+				(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) >= 26);
+			expect(own?.cpu.state).toBe(process.platform === "linux" || native ? "available" : "unavailable");
+			if (native) expect(own?.footprint?.state).toBe("available");
 			expect(second.coverage.bytesRead).toBeLessThanOrEqual(2_097_152);
+			if (process.platform === "darwin") {
+				expect(second.memory.usage?.state).toBe("available");
+				expect(second.memory.swap?.state).toBe("available");
+			} else {
+				expect(second.memory.usage).toBeUndefined();
+				expect(second.memory.swap).toBeUndefined();
+			}
 			console.info(
 				JSON.stringify({
 					platform: second.platform,

@@ -1,7 +1,17 @@
 import { spawn } from "node:child_process";
 import { open, opendir, readlink } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import { darwinProcess, executableName, linuxRss, linuxStat, type ProcessCounter, psi } from "./counters.js";
+import {
+	darwinMemory,
+	darwinProcess,
+	darwinSwap,
+	executableName,
+	linuxRss,
+	linuxStat,
+	type ProcessCounter,
+	psi,
+} from "./counters.js";
+import { darwinNativeProcesses } from "./darwin.js";
 import type { ResourceSnapshot } from "./types.js";
 
 /** Linux PATH_MAX: Node (libuv `pathconf`) and Bun (`PathBuffer`) readlink buffer size on Linux. */
@@ -13,22 +23,35 @@ export class Budget {
 	enumerated = 0;
 	skipped = 0;
 	readonly reasons = new Set<string>();
+	/**
+	 * Initialize one scan's limits.
+	 * @param deadline Absolute monotonic deadline in milliseconds.
+	 * @param maxBytes Maximum captured/charged bytes.
+	 * @param maxPids Maximum enumerated PIDs.
+	 * @param signal Caller-owned cancellation signal.
+	 */
 	constructor(
 		readonly deadline: number,
 		readonly maxBytes: number,
 		readonly maxPids: number,
 		readonly signal: AbortSignal,
 	) {}
+	/** @returns Remaining admission milliseconds; throws when cancelled. */
 	remaining(): number {
 		this.signal.throwIfAborted();
 		return Math.max(0, this.deadline - performance.now());
 	}
+	/** @returns Whether time/bytes remain, recording exhausted limits; throws when cancelled. */
 	ready(): boolean {
 		if (this.remaining() <= 0) this.reasons.add("deadline");
 		if (this.bytesRead >= this.maxBytes) this.reasons.add("byte-limit");
 		return this.remaining() > 0 && this.bytesRead < this.maxBytes;
 	}
-	/** Fixed-size proc read: no unbounded readFile allocation, and always await handle closure. */
+	/**
+	 * Read a fixed-size proc file and always await handle closure.
+	 * @param path Fixed proc file path for an admitted PID or pressure source.
+	 * @returns Complete UTF-8 contents; rejects on exhaustion/truncation/read failure/abort.
+	 */
 	async read(path: string): Promise<string> {
 		if (!this.ready()) throw new Error("budget exhausted");
 		const capacity = Math.min(8192, this.maxBytes - this.bytesRead);
@@ -54,6 +77,8 @@ export class Budget {
 	 * outward. Node and Bun cannot cap readlink below their fixed PATH_MAX buffer, so the length is only
 	 * known after the syscall: a target beyond the remaining budget is charged the remainder and dropped,
 	 * keeping `bytesRead <= maxBytes`. Node returns a full buffer silently truncated, so that is dropped too.
+	 * @param path Admitted PID's /proc/PID/exe link path.
+	 * @returns Safe basename, or empty string when unavailable; aborts propagate.
 	 */
 	async executable(path: string): Promise<string> {
 		if (!this.ready()) return "";
@@ -80,7 +105,14 @@ export class Budget {
 	}
 }
 
-/** Fixed executable/argv only. Bound capture, kill on cancellation/deadline, await close/reaping. */
+/**
+ * Run a fixed helper with bounded capture, kill on cancellation/deadline and await close/reaping.
+ * @param executable Fixed absolute OS helper path.
+ * @param args Fixed helper arguments, never target process arguments.
+ * @param budget Shared admission and capture accounting.
+ * @param maxLines Maximum complete stdout rows to admit.
+ * @returns Captured text and whether the command completed without truncation/failure.
+ */
 export async function command(
 	executable: string,
 	args: string[],
@@ -96,11 +128,17 @@ export async function command(
 		const buffers: Buffer[] = [];
 		let complete = true;
 		let lines = 0;
+		/**
+		 * Terminate the helper and mark capture incomplete.
+		 * @param reason Coverage reason to record.
+		 * @returns Nothing; completion still waits for close.
+		 */
 		const stop = (reason: string) => {
 			complete = false;
 			budget.reasons.add(reason);
 			child.kill("SIGKILL");
 		};
+		/** @returns Nothing; terminate the helper after shared cancellation. */
 		const abort = () => stop("cancelled");
 		const timer = setTimeout(() => stop("deadline"), budget.remaining());
 		budget.signal.addEventListener("abort", abort, { once: true });
@@ -145,7 +183,12 @@ export async function command(
 	});
 }
 
-/** Linux scan is sequential and closes the directory even on cancellation. */
+/**
+ * Scan Linux sequentially and close the directory even on cancellation.
+ * @param budget Shared scan limits and cancellation.
+ * @param hz Host CLK_TCK rate in ticks per second.
+ * @returns Validated identity-bracketed process counters; aborts propagate.
+ */
 export async function linuxProcesses(budget: Budget, hz: number): Promise<ProcessCounter[]> {
 	const result: ProcessCounter[] = [];
 	const directory = await opendir("/proc");
@@ -180,6 +223,8 @@ export async function linuxProcesses(budget: Budget, hz: number): Promise<Proces
 /**
  * Fixed metadata-only ps format. `ucomm` prints kinfo `p_comm`, never `comm`: `ps -c -o comm` shows the
  * basename of argv[0], which any launcher picks and Node's `process.title` rewrites in place.
+ * @param budget Shared helper/native scan limits and cancellation.
+ * @returns Bounded fallback rows enriched with accessible native metrics; aborts propagate.
  */
 export async function darwinProcesses(budget: Budget): Promise<ProcessCounter[]> {
 	const { text } = await command(
@@ -203,10 +248,39 @@ export async function darwinProcesses(budget: Budget): Promise<ProcessCounter[]>
 			budget.reasons.add("malformed-process-row");
 		}
 	}
-	return result;
+	return darwinNativeProcesses(result, budget);
 }
 
-/** PSI is optional and platform-specific; absence is not zero pressure. */
+/**
+ * Run fixed metadata-only helpers sharing the process deadline, cap and awaited reaping.
+ * @param budget Shared helper capture budget and cancellation.
+ * @param total Host physical RAM in bytes.
+ * @returns Explicit available/unavailable host usage and swap metrics.
+ */
+export async function darwinHostMemory(
+	budget: Budget,
+	total: number,
+): Promise<Pick<ResourceSnapshot["memory"], "usage" | "swap">> {
+	const vm = await command("/usr/bin/vm_stat", [], budget);
+	const usage = vm.complete ? darwinMemory(vm.text, total) : null;
+	const swap = await command("/usr/sbin/sysctl", ["vm.swapusage"], budget);
+	const parsedSwap = swap.complete ? darwinSwap(swap.text) : null;
+	return {
+		usage: usage
+			? { state: "available", value: usage }
+			: { state: "unavailable", reason: "vm_stat invalid, unavailable or over budget" },
+		swap: parsedSwap
+			? { state: "available", value: parsedSwap }
+			: { state: "unavailable", reason: "swapusage invalid, unavailable or over budget" },
+	};
+}
+
+/**
+ * Collect optional platform-specific PSI; absence is not zero pressure.
+ * @param budget Shared file-read budget and cancellation.
+ * @param platform Host platform identifier.
+ * @returns Linux PSI availability or explicit unsupported state; aborts propagate.
+ */
 export async function pressure(budget: Budget, platform: string): Promise<ResourceSnapshot["pressure"]> {
 	if (platform !== "linux")
 		return { source: "unsupported", reason: "no comparable native PSI metric on this platform" };
