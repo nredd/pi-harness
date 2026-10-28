@@ -360,6 +360,10 @@ describe("UsageService", () => {
 		const opaque = harness([{ body }], "opaque-token");
 		await opaque.service.get(ctx, "openai-codex");
 		expect(opaque.requests[0]?.headers).not.toHaveProperty("ChatGPT-Account-Id");
+
+		const malformed = harness([{ body }], "header.not-json.signature");
+		await malformed.service.get(ctx, "openai-codex");
+		expect(malformed.requests[0]?.headers).not.toHaveProperty("ChatGPT-Account-Id");
 	});
 
 	it("does not treat a paid Codex credit balance as included capacity", async () => {
@@ -462,6 +466,38 @@ describe("UsageService", () => {
 		const snapshot = await service.get(ctx, "anthropic");
 		expect(snapshot.status).toBe("error");
 		expect(snapshot.message).toBe("OAuth credential lookup failed.");
+	});
+
+	it("uses the host defaults for the collector and credential lookup", async () => {
+		const fetch = vi.fn(async () => new Response(JSON.stringify({ five_hour: { utilization: 42 } })));
+		vi.stubGlobal("fetch", fetch);
+		try {
+			const getApiKeyForProvider = vi.fn(async () => "host-token");
+			const service = new UsageService();
+			const snapshot = await service.get({ modelRegistry: { getApiKeyForProvider } } as never, "anthropic");
+			expect(snapshot).toMatchObject({ status: "available", windows: [{ usedPercent: 42 }] });
+			expect(getApiKeyForProvider).toHaveBeenCalledWith("anthropic");
+			expect(fetch).toHaveBeenCalledWith(
+				"https://api.anthropic.com/api/oauth/usage",
+				expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer host-token" }) }),
+			);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("converts unexpected fetch failures into a safe error snapshot", async () => {
+		const service = new UsageService({
+			fetch: async () => {
+				throw new Error("transport detail");
+			},
+			now: () => T0,
+			getAccessToken: async () => "token",
+		});
+		expect(await service.get(ctx, "anthropic")).toMatchObject({
+			status: "error",
+			message: "Usage request failed.",
+		});
 	});
 
 	it("bounds a stalled credential owner without implementing OAuth refresh itself", async () => {
