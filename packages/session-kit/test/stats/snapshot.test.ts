@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cachePath, dedupCalls, flatten, loadUsage, opaqueId, parseSession } from "../../src/stats/load.ts";
 import {
+	atomicJson,
 	coverageLabel,
 	exportStats,
 	importStats,
@@ -83,7 +84,16 @@ it("atomically enrolls one identity under concurrent first readers, and never re
 	expect(readdirSync(join(a, "pi-session-kit"))).toEqual(["machine.json"]);
 	writeFileSync(join(a, "pi-session-kit", "machine.json"), "{broken");
 	await expect(machineIdentity(a)).rejects.toThrow();
-	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toBe("{broken");
+	writeFileSync(join(a, "pi-session-kit", "machine.json"), JSON.stringify({ machineId: "not-a-uuid", label: "fixture" }));
+	await expect(machineIdentity(a)).rejects.toThrow("Invalid installation identity");
+	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toContain("not-a-uuid");
+});
+
+it("cleans temporary output when atomic publication cannot replace a directory", async () => {
+	const target = join(dir, "publication");
+	mkdirSync(target);
+	await expect(atomicJson(target, { value: true })).rejects.toThrow();
+	expect(readdirSync(dir)).toEqual(["publication"]);
 });
 
 it("exports only allowlisted metadata in monthly shards and persistent agent-local UUID", async () => {
@@ -215,6 +225,26 @@ it("validates schemas with strict keys, digest, counters, month, IDs and travers
 	writeFileSync(join(exported.snapshotDir, ref.file), JSON.stringify({ ...shard, events: [] }));
 	expect((await importStats(b, repo)).problems).toHaveLength(1);
 	expect(Object.keys((await readGlobal(b)).machines)).toHaveLength(0);
+});
+
+it("rejects incomplete local scans, invalid machine directories, and older exports", async () => {
+	const malformed = join(a, "sessions", "bad.jsonl");
+	mkdirSync(join(a, "sessions"), { recursive: true });
+	writeFileSync(malformed, "{broken");
+	await expect(exportStats(a, repo)).rejects.toThrow("Incomplete local scan");
+	rmSync(malformed);
+	rmSync(cachePath(a));
+	const exported = await exportStats(a, repo);
+	const viewer = join(dir, "viewer");
+	await importStats(viewer, repo);
+	mkdirSync(join(repo, "machines", "not-a-machine"));
+	const invalid = await importStats(viewer, repo);
+	expect(invalid.problems).toContain("Invalid machine directory");
+	rmSync(join(repo, "machines", "not-a-machine"), { recursive: true });
+	const manifestPath = join(exported.snapshotDir, "manifest.json");
+	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+	writeFileSync(manifestPath, JSON.stringify({ ...manifest, exportedAt: 1 }));
+	expect((await importStats(viewer, repo)).problems).toContain(`Incomplete snapshot ${exported.machineId}`);
 });
 
 it("rejects unsupported snapshots and symlinks while retaining last-good", async () => {
