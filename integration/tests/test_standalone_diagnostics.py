@@ -20,7 +20,14 @@ from harness.sandbox import build_sandbox
 
 @pytest.fixture
 def inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """Create only public build inputs, including deliberately forbidden sibling files."""
+    """Create public build inputs with deliberately forbidden sibling files.
+
+    Parameters:
+        tmp_path (Path): private test directory.
+
+    Returns:
+        tuple[Path, Path, Path]: executable, core checkout and build evidence roots.
+    """
     binary = tmp_path / "build/linux-x64/pi"
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b"exact compiled executable")
@@ -40,11 +47,29 @@ def inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
 def test_success_captures_nothing(
     tmp_path: Path, inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A successful startup creates no artifact, replay or binary copy."""
+    """Require successful startup to create no artifact, replay or binary copy.
+
+    Parameters:
+        tmp_path (Path): private test directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): deterministic command replacement.
+
+    Returns:
+        None: assertions complete.
+    """
     box = build_sandbox(tmp_path / "sandbox")
     calls: list[list[str]] = []
 
     def execute(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Return one recorded successful startup.
+
+        Parameters:
+            argv (list[str]): requested subprocess arguments.
+            kwargs (object): unused synthetic environment options.
+
+        Returns:
+            subprocess.CompletedProcess[str]: strict successful startup output.
+        """
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, "STACK-OK\n", "")
 
@@ -58,7 +83,16 @@ def test_success_captures_nothing(
 def test_failure_preserves_original_status_and_allowlist(
     tmp_path: Path, inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Capture exact bytes and correlated code, never installed homes or arbitrary caches."""
+    """Capture exact bytes and correlated code, never homes or arbitrary caches.
+
+    Parameters:
+        tmp_path (Path): private test directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): deterministic command/identity replacement.
+
+    Returns:
+        None: assertions complete.
+    """
     binary, core, evidence = inputs
     box = build_sandbox(tmp_path / "sandbox")
     memory = box.agent_dir / "npm/node_modules/pi-memory"
@@ -87,6 +121,15 @@ def test_failure_preserves_original_status_and_allowlist(
     calls: list[list[str]] = []
 
     def execute(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Return a failed primary run followed by a deliberately passing replay.
+
+        Parameters:
+            argv (list[str]): requested subprocess arguments.
+            kwargs (object): unused synthetic environment options.
+
+        Returns:
+            subprocess.CompletedProcess[str]: primary failure or supplemental raw stack.
+        """
         calls.append(argv)
         if len(calls) == 1:
             return subprocess.CompletedProcess(argv, 23, "", "ORIGINAL Type3 is not defined\n")
@@ -95,7 +138,7 @@ def test_failure_preserves_original_status_and_allowlist(
         )
 
     monkeypatch.setattr(diag, "execute", execute)
-    monkeypatch.setattr(diag, "build_metadata", lambda *_: {"core_sha": "f" * 40})
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata(core_sha="f" * 40))
     output = tmp_path / "artifacts"
     assert diag.diagnose(box, binary, core, evidence, output) == 23
     assert len(calls) == 2  # The diagnostic replay cannot turn the first failure green.
@@ -133,7 +176,14 @@ def test_failure_preserves_original_status_and_allowlist(
     ],
 )
 def test_unknown_artifact_paths_are_denied(name: str) -> None:
-    """The artifact is a closed allowlist, not a recursive home upload."""
+    """Require a closed artifact allowlist, not recursive home upload.
+
+    Parameters:
+        name (str): forbidden candidate path.
+
+    Returns:
+        None: assertion completes.
+    """
     assert not diag.allowed_artifact_path(Path(name))
 
 
@@ -142,7 +192,15 @@ def test_unknown_artifact_paths_are_denied(name: str) -> None:
     ["pi", "startup.stderr", "packages/pi-memory/index.ts", "jiti/primary/pi-memory-index.01234567.mjs"],
 )
 def test_credential_scan_refuses_entire_publication(tmp_path: Path, name: str) -> None:
-    """Even an allowlisted file cannot publish token-like contents, including binary bytes."""
+    """Reject token-like contents even in an allowlisted binary or source file.
+
+    Parameters:
+        tmp_path (Path): private publication directory.
+        name (str): allowlisted file to contaminate.
+
+    Returns:
+        None: assertions complete.
+    """
     output = tmp_path / "artifacts"
     with pytest.raises(ValueError, match="credential"):
         diag.publish({name: b"prefix ghp_" + b"a" * 36 + b" suffix"}, output)
@@ -150,7 +208,14 @@ def test_credential_scan_refuses_entire_publication(tmp_path: Path, name: str) -
 
 
 def test_symlink_cache_is_not_read(tmp_path: Path) -> None:
-    """An exact cache filename must not escape to an unrelated token store through a symlink."""
+    """Reject a cache symlink pointing into an unrelated token store.
+
+    Parameters:
+        tmp_path (Path): private cache and forbidden sibling directory.
+
+    Returns:
+        None: assertion completes.
+    """
     root = tmp_path / "root"
     root.mkdir()
     (tmp_path / "auth.json").write_text("secret")
@@ -160,7 +225,14 @@ def test_symlink_cache_is_not_read(tmp_path: Path) -> None:
 
 
 def test_prepare_build_wrapper_forwards_without_env_dump(tmp_path: Path) -> None:
-    """The wrapper adds only a metafile flag to compile calls and records the exact argv."""
+    """Forward ordinary commands and add only the compile metafile flag.
+
+    Parameters:
+        tmp_path (Path): private executable/metadata directory.
+
+    Returns:
+        None: executable-seam assertions complete.
+    """
     bun = tmp_path / "bun-real"
     bun.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
     bun.chmod(0o755)
@@ -186,24 +258,42 @@ def test_prepare_build_wrapper_forwards_without_env_dump(tmp_path: Path) -> None
 def test_strict_startup_output_is_a_failure(
     tmp_path: Path, inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Zero exit with warnings or the wrong assistant output is not a successful startup."""
+    """Refuse zero exit with warnings or incorrect assistant output.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): deterministic incorrect command result.
+
+    Returns:
+        None: assertion completes.
+    """
     box = build_sandbox(tmp_path / "sandbox")
     monkeypatch.setattr(
         diag, "execute", lambda argv, **_: subprocess.CompletedProcess(argv, 0, "wrong", "warning")
     )
-    monkeypatch.setattr(diag, "build_metadata", lambda *_: {})
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
     assert diag.diagnose(box, *inputs, tmp_path / "artifacts") != 0
 
 
 def test_capture_failure_never_masks_original_status(
     tmp_path: Path, inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A scanner refusal must not publish partial bytes or replace the failed child's status."""
+    """Preserve the child's status when a scanner refuses artifact publication.
+
+    Parameters:
+        tmp_path (Path): private fixture/publication directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): deterministic failed command result.
+
+    Returns:
+        None: assertions complete.
+    """
     box = build_sandbox(tmp_path / "sandbox")
     monkeypatch.setattr(
         diag, "execute", lambda argv, **_: subprocess.CompletedProcess(argv, 37, "", "failed")
     )
-    monkeypatch.setattr(diag, "build_metadata", lambda *_: {})
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
     inputs[0].write_bytes(b"ghp_" + b"x" * 36)
     output = tmp_path / "artifacts"
     assert diag.diagnose(box, *inputs, output) == 37
@@ -213,7 +303,16 @@ def test_capture_failure_never_masks_original_status(
 def test_stale_output_is_refused_before_startup(
     tmp_path: Path, inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Stale evidence cannot accidentally be uploaded after a successful later invocation."""
+    """Refuse stale evidence before invoking another startup.
+
+    Parameters:
+        tmp_path (Path): private fixture/publication directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): fail if any command is executed.
+
+    Returns:
+        None: assertion completes.
+    """
     box = build_sandbox(tmp_path / "sandbox")
     output = tmp_path / "artifacts"
     output.mkdir()
@@ -225,11 +324,31 @@ def test_stale_output_is_refused_before_startup(
 def test_timeout_remains_failure_under_scrubbed_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A timeout preserves both partial streams and never receives ambient auth variables."""
+    """Preserve timeout streams without passing ambient credentials.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        monkeypatch (pytest.MonkeyPatch): synthetic credential and timeout result.
+
+    Returns:
+        None: assertions complete.
+    """
     box = build_sandbox(tmp_path / "sandbox")
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-not-for-diagnostics")
 
     def timeout(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Check the scrubbed environment and raise a timeout with partial streams.
+
+        Parameters:
+            argv (list[str]): requested subprocess arguments.
+            kwargs (object): subprocess options including the scrubbed environment.
+
+        Returns:
+            subprocess.CompletedProcess[str]: never returned.
+
+        Raises:
+            subprocess.TimeoutExpired: deterministic timeout carrying partial output.
+        """
         env = kwargs["env"]
         assert isinstance(env, dict)
         assert "OPENAI_API_KEY" not in env
@@ -244,7 +363,11 @@ def test_timeout_remains_failure_under_scrubbed_environment(
 
 
 def test_workflow_captures_only_failed_linux_startup() -> None:
-    """The build graph is observed once; upload is failure-only and cannot include fixture homes."""
+    """Require failure-only upload with a scanned-artifact readiness receipt.
+
+    Returns:
+        None: workflow contract assertions complete.
+    """
     workflow = yaml.safe_load((Path(__file__).parents[2] / ".github/workflows/ci.yml").read_text())
     steps = workflow["jobs"]["stack"]["steps"]
     probe = next(step for step in steps if step.get("id") == "startup")
@@ -277,7 +400,19 @@ def test_cli_announces_only_scanned_failed_artifacts(
     credential: bool,
     ready: bool,
 ) -> None:
-    """The workflow readiness output is absent on success and credential-scan refusal."""
+    """Announce readiness only after a scanned failed artifact is published.
+
+    Parameters:
+        tmp_path (Path): private fixture/publication directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): synthetic installer, subprocess and CLI inputs.
+        status (int): original startup exit code.
+        credential (bool): contaminate the binary to trigger scan refusal.
+        ready (bool): expected upload readiness publication.
+
+    Returns:
+        None: CLI contract assertions complete.
+    """
     binary, core, evidence = inputs
     box = build_sandbox(tmp_path / "sandbox")
     monkeypatch.setattr(diag, "install_stack", lambda *_: box)
@@ -286,7 +421,7 @@ def test_cli_announces_only_scanned_failed_artifacts(
         "execute",
         lambda argv, **_: subprocess.CompletedProcess(argv, status, "STACK-OK\n" if status == 0 else "", ""),
     )
-    monkeypatch.setattr(diag, "build_metadata", lambda *_: {})
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
     if credential:
         binary.write_bytes(b"ghp_" + b"x" * 36)
     github_output = tmp_path / "github-output"
@@ -312,3 +447,54 @@ def test_cli_announces_only_scanned_failed_artifacts(
     assert github_output.exists() is ready
     if ready:
         assert github_output.read_text() == "artifact_ready=true\n"
+
+
+def test_cli_rejects_stale_destination_before_install(
+    tmp_path: Path, inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refuse an invalid destination before any package installer runs.
+
+    Parameters:
+        tmp_path (Path): private publication directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): fail if installation is attempted.
+
+    Returns:
+        None: early-validation assertion completes.
+    """
+    binary, core, evidence = inputs
+    output = tmp_path / "stale"
+    output.mkdir()
+    monkeypatch.setattr(diag, "install_stack", lambda *_: pytest.fail("must not install"))
+    monkeypatch.setattr(
+        diag.sys,
+        "argv",
+        [
+            "diagnostic",
+            "startup",
+            "--binary",
+            str(binary),
+            "--core",
+            str(core),
+            "--build-evidence",
+            str(evidence),
+            "--output",
+            str(output),
+        ],
+    )
+    with pytest.raises(FileExistsError, match="before installation"):
+        diag.main()
+
+
+@pytest.mark.parametrize("data", [{"core_sha": 3}, {"unknown": "field"}])
+def test_metadata_refuses_wrong_types_and_unknown_fields(data: dict[str, object]) -> None:
+    """Validate the serialized identity shape without coercion or silent extra fields.
+
+    Parameters:
+        data (dict[str, object]): deliberately malformed build identity.
+
+    Returns:
+        None: schema-refusal assertion completes.
+    """
+    with pytest.raises(ValueError, match="validation error for BuildMetadata"):
+        diag.BuildMetadata.model_validate(data)

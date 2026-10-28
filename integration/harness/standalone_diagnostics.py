@@ -18,8 +18,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
-from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from harness.paths import FAUX_EXTENSION, GIT_BIN, NODE_BIN, REPO_ROOT
 from harness.sandbox import Sandbox, install_stack
@@ -74,6 +76,36 @@ export default async function (pi) {
     }
 }
 """
+
+
+class BuildMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    core_sha: str = Field(default="unavailable", description="Exact core Gitlink checkout revision")
+    harness_sha: str = Field(default="unavailable", description="Diagnostic harness checkout revision")
+    node_version: str = Field(default="unavailable", description="Build host Node version")
+    bun_version: str = Field(default="unavailable", description="Pinned build host Bun version")
+    pi_version: str = Field(default="unavailable", description="Observed compiled executable version")
+    diagnostic_scope: str = Field(
+        default="synthetic startup only; no environment/auth/home capture", description="Collection boundary"
+    )
+    build_command_note: str = Field(
+        default="CI driver template; actual observed compile argv is compile-command.json",
+        description="Distinguish the driver template from directly observed compile arguments",
+    )
+    build_command: list[str] = Field(default_factory=list, description="Frozen CI build driver template")
+
+
+class DiagnosticReport(BuildMetadata):
+    startup_returncode: int = Field(description="Original unmodified startup subprocess status")
+    startup_argv: list[str] = Field(description="Original strict startup arguments")
+    replay_returncode: int | None = Field(description="Supplemental wrapper replay status, if attempted")
+    replay_note: str = Field(
+        default="supplemental wrapper import/factory; original failure/status preserved",
+        description="Replay is evidence only and cannot replace the primary verdict",
+    )
+    primary_jiti_files: list[str] = Field(description="Correlated original transformed-code artifact paths")
+    module_graph: str = Field(description="Module graph artifact path, or explicit unavailable status")
 
 
 def allowed_artifact_path(path: Path) -> bool:
@@ -227,7 +259,7 @@ def execute(argv: list[str], *, box: Sandbox, extra: dict[str, str]) -> subproce
         )
 
 
-def build_metadata(box: Sandbox, binary: Path, core: Path) -> dict[str, Any]:
+def build_metadata(box: Sandbox, binary: Path, core: Path) -> BuildMetadata:
     """Query explicit identities under synthetic HOME; never serialize the process environment.
 
     Parameters:
@@ -236,7 +268,7 @@ def build_metadata(box: Sandbox, binary: Path, core: Path) -> dict[str, Any]:
         core (Path): Gitlinked source root.
 
     Returns:
-        dict[str, Any]: revisions, versions and source-input digests; unavailable queries are explicit.
+        BuildMetadata: validated revisions, versions and build command; unavailable queries are explicit.
     """
     commands = {
         "core_sha": [GIT_BIN, "-C", str(core), "rev-parse", "HEAD"],
@@ -245,7 +277,7 @@ def build_metadata(box: Sandbox, binary: Path, core: Path) -> dict[str, Any]:
         "bun_version": [shutil.which("bun") or "/nonexistent/bun", "--version"],
         "pi_version": [str(binary), "--version"],
     }
-    result: dict[str, Any] = {}
+    result: dict[str, str] = {}
     for name, argv in commands.items():
         try:
             result[name] = subprocess.check_output(
@@ -253,18 +285,18 @@ def build_metadata(box: Sandbox, binary: Path, core: Path) -> dict[str, Any]:
             ).strip()
         except (OSError, subprocess.SubprocessError) as error:
             result[name] = f"unavailable ({type(error).__name__})"
-    result["diagnostic_scope"] = "synthetic startup only; no environment/auth/home capture"
-    result["build_command_note"] = "CI driver template; actual observed compile argv is compile-command.json"
-    result["build_command"] = [
-        "./scripts/build-binaries.sh",
-        "--skip-install",
-        "--offline-model-data",
-        "--platform",
-        binary.parent.name,
-        "--out",
-        str(binary.parent.parent),
-    ]
-    return result
+    return BuildMetadata(
+        **result,
+        build_command=[
+            "./scripts/build-binaries.sh",
+            "--skip-install",
+            "--offline-model-data",
+            "--platform",
+            binary.parent.name,
+            "--out",
+            str(binary.parent.parent),
+        ],
+    )
 
 
 def capture_inputs(box: Sandbox, binary: Path, core: Path, evidence: Path) -> dict[str, bytes]:
@@ -381,15 +413,15 @@ def diagnose(box: Sandbox, binary: Path, core: Path, evidence: Path, output: Pat
                 "replay-wrapper.ts": WRAPPER.encode(),
             }
             files |= capture_cache(box, core, source, "replay")
-        metadata = build_metadata(box, binary, core) | {
-            "startup_returncode": primary.returncode,
-            "startup_argv": argv,
-            "replay_returncode": replay.returncode if replay is not None else None,
-            "replay_note": "supplemental wrapper import/factory; original failure/status preserved",
-            "primary_jiti_files": [name for name in files if name.startswith("jiti/primary/")],
-            "module_graph": "module-graph.json" if "module-graph.json" in files else "unavailable",
-        }
-        files["build.json"] = json.dumps(metadata, indent=2).encode()
+        metadata = DiagnosticReport(
+            **build_metadata(box, binary, core).model_dump(),
+            startup_returncode=primary.returncode,
+            startup_argv=argv,
+            replay_returncode=replay.returncode if replay is not None else None,
+            primary_jiti_files=[name for name in files if name.startswith("jiti/primary/")],
+            module_graph="module-graph.json" if "module-graph.json" in files else "unavailable",
+        )
+        files["build.json"] = metadata.model_dump_json(indent=2).encode()
         files["stack.json"] = (REPO_ROOT / "stacks/personal.json").read_bytes()
         publish(files, output)
         LOGGER.error(f"Strict standalone startup failed (status {status}); scanned evidence: '{output}'")
@@ -413,19 +445,20 @@ def prepare_build(directory: Path, bun: Path) -> None:
     """
     launcher = directory / "bin/bun"
     launcher.parent.mkdir(parents=True, exist_ok=True)
-    code = f"""#!{sys.executable}
-import json
-import os
-import sys
-from pathlib import Path
+    code = textwrap.dedent(f"""\
+        #!{sys.executable}
+        import json
+        import os
+        import sys
+        from pathlib import Path
 
-args = sys.argv[1:]
-bun = {str(bun)!r}
-if args[:1] == ["build"] and "--compile" in args:
-    args.append({f"--metafile={directory / 'module-graph.json'}"!r})
-    Path({str(directory / "compile-command.json")!r}).write_text(json.dumps([bun, *args]))
-os.execv(bun, [bun, *args])
-"""
+        args = sys.argv[1:]
+        bun = {str(bun)!r}
+        if args[:1] == ["build"] and "--compile" in args:
+            args.append({f"--metafile={directory / 'module-graph.json'}"!r})
+            Path({str(directory / "compile-command.json")!r}).write_text(json.dumps([bun, *args]))
+        os.execv(bun, [bun, *args])
+        """)
     with launcher.open("x") as stream:
         stream.write(code)
     launcher.chmod(0o700)
@@ -458,10 +491,12 @@ def main() -> int:
         prepare_build(opts.directory.resolve(), Path(bun).resolve())
         return 0
     binary = opts.binary.resolve(strict=True)
+    if opts.output.exists() or opts.output.is_symlink():
+        raise FileExistsError("Refusing stale diagnostic output before installation")
+    output = opts.output.resolve()
     os.environ["PI_BIN"] = str(binary)
     with tempfile.TemporaryDirectory(prefix="standalone-startup-") as temporary:
         box = install_stack(Path(temporary) / "fixture", REPO_ROOT / "stacks/personal.json")
-        output = opts.output.resolve()
         status = diagnose(box, binary, opts.core.resolve(), opts.build_evidence.resolve(), output)
         if status != 0 and output.is_dir() and opts.github_output is not None:
             try:
