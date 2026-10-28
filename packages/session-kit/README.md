@@ -231,6 +231,6 @@ tabs and exact provider totals remain covered at every width. Each stats-view bo
 and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
-`npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
+`npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.4.4).
 Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
 `docs/verification-rebuild.md` at the monorepo root tracks their destinations.

@@ -6,7 +6,7 @@ environment, localized process titles or Activity Monitor window contents were c
 ## Native process counters
 
 `darwin.ts` lazily loads the runtime's builtin FFI (`node:ffi` on Node >=26.1, `bun:ffi` on Bun,
-including the pinned 1.3.14). It calls only three fixed symbols in `/usr/lib/libproc.dylib`:
+including the historical 1.3.14 pin; current toolchain pin is in `.bun-version`). It calls only three fixed symbols in `/usr/lib/libproc.dylib`:
 `proc_pidinfo(PROC_PIDTBSDINFO)`, `proc_pid_rusage(RUSAGE_INFO_V0)` and `mach_timebase_info`.
 No new production binary, addon, compiler, Python runtime or package dependency is needed.
 Tests use the existing CI-pinned Bun version (fetched into npm's tool cache, not a project dependency).

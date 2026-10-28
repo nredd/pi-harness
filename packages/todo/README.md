@@ -54,7 +54,7 @@ The workspace gate (from the repository root, or standalone in this directory):
 
 ```sh
 npm ci --ignore-scripts
-# Put Bun 1.3.14 (see .bun-version) on PATH.
+# Put Bun 1.4.4 (see .bun-version) on PATH.
 npm run check
 ```
 

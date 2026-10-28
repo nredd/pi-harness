@@ -175,7 +175,7 @@ native sandbox regression. This is not evidence for the candidate/full-stack rel
 
 Versions validated for owned-code development (not imported from the sources; no dependency
 versions or historical CLI constants changed): Node `26.12.0` (`.node-version`), Python `3.13.15`
-(`.python-version`), Bun `1.3.14` (`.bun-version`), npm `11.20.0` (root `packageManager`), uv
+(`.python-version`), Bun `1.4.4` (`.bun-version`), npm `11.20.0` (root `packageManager`), uv
 `0.13.1`. Fork build toolchains are separate and documented in [forks.md](forks.md).
 
 ## Audit evidence
