@@ -49,36 +49,42 @@ for (const snapshotEnabled of [false, true]) {
     const transform = mock.events.get("context")?.[0];
     const call = mock.events.get("tool_call")?.[0];
     assert.ok(input && command && transform && call);
-    const leading = Promise.resolve(input({ text: "implement", source: "rpc" }, context.ctx));
-    if (snapshotEnabled) {
-      // No await: both public handlers run before runtime application's first microtask.
-      const activation = command.handler("start", context.ctx);
-      const resolution = transform({ messages: [] }, context.ctx);
-      await Promise.all([activation, resolution]);
-    }
-    await started;
-    if (snapshotEnabled) await command.handler("off", context.ctx);
-    await command.handler("start", context.ctx);
-    mock.rawPi.setActiveTools(["read", "find", "plan_mode_question", "plan_mode_complete"]);
     const appendEntry = mock.rawPi.appendEntry;
-    mock.rawPi.appendEntry = () => {
-      throw new Error("disk full during runtime intent consumption");
-    };
-    releaseModel();
-    assert.deepEqual(await leading, { action: "handled" });
-    mock.rawPi.appendEntry = appendEntry;
-    assert.match(context.notifications.at(-1)?.message ?? "", /one-shot state could not be consumed/u);
-    const before = mock.entries.length;
-    await transform({ messages: [] }, context.ctx);
-    await transform({ messages: [] }, context.ctx);
-    const admission = await call({ toolName: "find", input: {} }, context.ctx);
-    if (snapshotEnabled) {
-      assert.equal((admission as { block?: boolean })?.block, true, "rollback must not broaden frozen tools");
-      assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
-    } else {
-      assert.equal(admission, undefined, "disabled rollback must leave normal tool admission intact");
+    const leading = Promise.resolve(input({ text: "implement", source: "rpc" }, context.ctx));
+    try {
+      if (snapshotEnabled) {
+        // No await: both public handlers run before runtime application's first microtask.
+        const activation = command.handler("start", context.ctx);
+        const resolution = transform({ messages: [] }, context.ctx);
+        await Promise.all([activation, resolution]);
+      }
+      await started;
+      if (snapshotEnabled) await command.handler("off", context.ctx);
+      await command.handler("start", context.ctx);
+      mock.rawPi.setActiveTools(["read", "find", "plan_mode_question", "plan_mode_complete"]);
+      mock.rawPi.appendEntry = () => {
+        throw new Error("disk full during runtime intent consumption");
+      };
+      releaseModel();
+      assert.deepEqual(await leading, { action: "handled" });
+      mock.rawPi.appendEntry = appendEntry;
+      assert.match(context.notifications.at(-1)?.message ?? "", /one-shot state could not be consumed/u);
+      const before = mock.entries.length;
+      await transform({ messages: [] }, context.ctx);
+      await transform({ messages: [] }, context.ctx);
+      const admission = await call({ toolName: "find", input: {} }, context.ctx);
+      if (snapshotEnabled) {
+        assert.equal((admission as { block?: boolean })?.block, true, "rollback must not broaden frozen tools");
+        assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
+      } else {
+        assert.equal(admission, undefined, "disabled rollback must leave normal tool admission intact");
+      }
+      assert.equal(mock.entries.length, before, "rejected pending policy must not persist a new freeze");
+    } finally {
+      releaseModel();
+      await Promise.allSettled([leading]);
+      mock.rawPi.appendEntry = appendEntry;
+      await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
     }
-    assert.equal(mock.entries.length, before, "rejected pending policy must not persist a new freeze");
-    await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
   });
 }
