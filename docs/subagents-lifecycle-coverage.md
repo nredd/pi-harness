@@ -64,6 +64,17 @@ validation and toplevel lookup. Mutating exclusive lock creation to overwrite
 and accepting invalid manifests produces five failures. Wrong toplevel wording
 fails the real-git race assertion. No owned source is deleted or weakened.
 
+Runner/scheduler/nested theme: a real private ModelRuntime and real child sessions
+use a scripted faux provider. Assertions inspect actual inherited provider input,
+clamped thinking, tool registry and extension-startup diagnostics. A real nested
+JSONL transcript records prompt and answer and unsubscribes on flush. Scheduler
+admission uses a real credential-aware registry and persists a mid-admission
+failure. Owned clocks are injected; existing non-injectable Croner/nested polling
+boundaries use virtual timers, never sleeps. Mutated admission status, failed
+inspection acknowledgement and thinking assignment fail three owning tests.
+Mutated nested transcript wiring/steer diagnostics, git wording and RPC fatal bit
+fail their corresponding tests. Every temporary production mutation is restored.
+
 Gate at the first theme: full single-worker Istanbul suite, pinned Bun 1.3.14
 native session/compatibility suites, lint and typecheck pass. Additional UI cases
 pass focused tests, lint and typecheck. Full final evidence follows with later
