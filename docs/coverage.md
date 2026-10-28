@@ -10,8 +10,9 @@ coverage-maintenance exclusion and Python's existing-test-only scope. Both requi
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
 goal must be report-only and still require complete, valid reports and per-OS references.
 
-Current integration checkpoint and unrefreshed hosted measurements are recorded
-[here](../coverage/receipts/main-integration.md). `enforce_target` remains false. No 100% claim.
+The initial integration checkpoint is recorded [here](../coverage/receipts/main-integration.md).
+Facade validation and the actual hosted producer failure diagnosis are recorded
+[here](../coverage/receipts/facade-followup.md). `enforce_target` remains false. No 100% claim.
 
 The target is **100% of owned executable source lines AND functions**, measured by each
 package's primary runner. Branches are reported, not gated. This is source coverage, not
@@ -111,11 +112,25 @@ coverage exclusions. Non-directory test fixture/assertion helpers use explicit `
 exclusions with reasons. The legacy `test_helpers` field remains readable for old base policies,
 but the current policy uses reasoned exclusions. Do not place production code in test directories.
 
-Production exclusions are limited to generated artifacts and genuine type-only declarations.
-Every exclusion has a path (a glob is permitted for generated hashed artifacts), a `generated`,
-`type-only` or genuine `test-helper` kind and a substantive reason. No UI, platform, error-path,
+Production exclusions are limited to generated artifacts, genuine type-only declarations and
+validated non-executable ESM facades. Every exclusion has a path (a glob is permitted for generated
+hashed artifacts), a `generated`, `type-only`, `non-executable-facade` or genuine `test-helper` kind
+and a substantive reason. No UI, platform, error-path,
 CLI or "hard to test" exemptions. Runtime enums/constants are executable source.
-Review exclusions as carefully as code; the script cannot prove a human's justification.
+Review exclusions as carefully as code; the script cannot prove every human justification.
+
+`non-executable-facade` requires an exact package-relative `.ts` path already matched by `owned`.
+Accounting reads the file on every inventory expansion and accepts only a deliberately narrow
+whole-file grammar: one or more static named `export { bindings } from "./local.js";`
+declarations (including `default`/aliases), plus whitespace. Comments, imports, export assignments,
+initializers, functions, attributes and all other syntax fail closed. Adding executable code requires
+removing the classification and restoring instrumentation, not widening the facade grammar.
+Plan-mode's `src/index.ts` and `src/interactive-ui.ts` qualify: esbuild's emitted ESM and the actual
+Vitest Istanbul instrumenter both have zero statement/function/branch maps for these files. They
+link bindings; their target modules remain fully owned and instrumented. No LF/FNF records are
+invented, no imported dependency execution is attributed to a facade, and membership reclassification
+still requires the base-relative ledger once a base policy exists. Real compilation/instrumentation
+and executable-addition rejection are pinned by `scripts/tests/test_coverage_facades.py`.
 
 Verification-only harnesses outside conventional test directories are classified under
 `verification_helpers`, with an exact repository-relative `path` and a separate `reason` for

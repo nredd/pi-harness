@@ -200,7 +200,9 @@ def assert_documented_functions(path: Path) -> None:
         assert node.returns is not None, node.name
 
 
-@pytest.mark.parametrize("change", ["owned", "exclusion", "root", "rename", "delete", "runtime", "test-path"])
+@pytest.mark.parametrize(
+    "change", ["owned", "exclusion", "facade", "root", "rename", "delete", "runtime", "test-path"]
+)
 def test_tree_ratchet_rejects_undeclared_membership_loss(tmp_path: Path, change: str) -> None:
     """Reject source-denominator changes even when budgets stay unchanged.
 
@@ -233,6 +235,11 @@ def test_tree_ratchet_rejects_undeclared_membership_loss(tmp_path: Path, change:
         package.owned = ["src/kept.ts"]
     elif change == "exclusion":
         package.exclusions.append(Exclusion(path="src/index.ts", kind="generated", reason="Generated claim."))
+    elif change == "facade":
+        source.write_text('export { answer } from "./kept.js";\n')
+        package.exclusions.append(
+            Exclusion(path="src/index.ts", kind="non-executable-facade", reason="Re-export only facade.")
+        )
     elif change == "root":
         shutil.copytree(tmp_path / package.root, tmp_path / "packages/replacement")
         package.root = "packages/replacement"
@@ -248,7 +255,7 @@ def test_tree_ratchet_rejects_undeclared_membership_loss(tmp_path: Path, change:
         check_inventory_ratchet(tmp_path, current, base, "HEAD")
 
 
-@pytest.mark.parametrize("operation", ["rename", "delete", "exclusion"])
+@pytest.mark.parametrize("operation", ["rename", "delete", "exclusion", "facade"])
 def test_explicit_reasoned_reclassification_allows_legitimate_change(tmp_path: Path, operation: str) -> None:
     """Allow deliberate reviewed removals, moves and source-to-helper changes.
 
@@ -269,6 +276,11 @@ def test_explicit_reasoned_reclassification_allows_legitimate_change(tmp_path: P
         (tmp_path / path).rename(tmp_path / replacement)
     elif operation == "delete":
         (tmp_path / path).unlink()
+    elif operation == "facade":
+        (tmp_path / path).write_text('export { answer } from "./kept.js";\n')
+        current.packages["example"].exclusions.append(
+            Exclusion(path="src/index.ts", kind="non-executable-facade", reason="Re-export only facade.")
+        )
     else:
         current.packages["example"].exclusions.append(
             Exclusion(path="src/index.ts", kind="test-helper", reason="Retained only as a fixture helper.")

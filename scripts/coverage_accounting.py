@@ -11,6 +11,7 @@ import argparse
 import difflib
 import json
 import logging
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -21,6 +22,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 LOGGER = logging.getLogger(__name__)
 GIT = Path("/usr/bin/git")
+# Intentionally narrow ESM grammar: no comments, imports, expressions, attributes or declarations.
+# These static local named re-exports only link bindings; their targets remain executable inventory.
+FACADE_EXPORT = re.compile(
+    r"(?:\s*export\s*\{\s*[A-Za-z_$][A-Za-z0-9_$]*"
+    r"(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?"
+    r"(?:\s*,\s*[A-Za-z_$][A-Za-z0-9_$]*(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?)*"
+    r"\s*\}\s+from\s+(?:\"\./[A-Za-z0-9_./-]+\.js\"|'\./[A-Za-z0-9_./-]+\.js')\s*;\s*)+"
+)
 
 
 class StrictModel(BaseModel):
@@ -34,7 +43,9 @@ class Counts(StrictModel):
 
 class Exclusion(StrictModel):
     path: str = Field(min_length=1, description="Package-relative excluded path or generated-file glob.")
-    kind: Literal["generated", "type-only", "test-helper"] = Field(description="Reviewed exclusion category.")
+    kind: Literal["generated", "type-only", "test-helper", "non-executable-facade"] = Field(
+        description="Reviewed exclusion category; facades must pass a strict static re-export grammar."
+    )
     reason: str = Field(min_length=1, description="Why this path is not executable production source.")
 
     @model_validator(mode="after")
@@ -50,6 +61,13 @@ class Exclusion(StrictModel):
         """
         if not self.reason.strip():
             raise ValueError("An exclusion requires a reason")
+        if self.kind == "non-executable-facade" and (
+            Path(self.path).is_absolute()
+            or ".." in Path(self.path).parts
+            or any(character in self.path for character in "*?[")
+            or Path(self.path).suffix != ".ts"
+        ):
+            raise ValueError("A non-executable facade requires an exact package-relative TypeScript path")
         return self
 
 
@@ -465,14 +483,14 @@ def expand_inventory(package: Package, files: set[str]) -> set[str]:
     if any(Path(file).full_match(pattern) for file in owned for pattern in package.test_helpers):
         raise ValueError("Test helper paths overlap the declared production inventory")
     for exclusion in package.exclusions:
-        if exclusion.kind == "type-only" and exclusion.path not in owned:
+        if exclusion.kind in {"type-only", "non-executable-facade"} and exclusion.path not in owned:
             raise ValueError(f"Exclusion is not in owned inventory: '{exclusion.path}'")
         owned = {file for file in owned if not Path(file).full_match(exclusion.path)}
     return owned
 
 
 def inventory(root: Path, package: Package) -> set[str]:
-    """Expand the current working-tree production inventory.
+    """Validate facade source shapes and expand the current executable production inventory.
 
     Parameters:
         root (Path): Absolute repository root.
@@ -480,7 +498,8 @@ def inventory(root: Path, package: Package) -> set[str]:
     Returns:
         set[str]: Package-relative executable source membership.
     Raises:
-        ValueError: Source ownership or exclusions are invalid.
+        ValueError: Source ownership, exclusions or non-executable facade shapes are invalid.
+        OSError: A classified facade cannot be read.
     """
     files = {
         file.relative_to(root).as_posix()
@@ -488,6 +507,13 @@ def inventory(root: Path, package: Package) -> set[str]:
         for file in (root / package.root).glob(pattern)
         if file.is_file()
     }
+    for exclusion in package.exclusions:
+        if exclusion.kind == "non-executable-facade":
+            source = (root / package.root / exclusion.path).read_text()
+            if FACADE_EXPORT.fullmatch(source) is None:
+                raise ValueError(
+                    f"Non-executable facade contains more than static re-exports: '{exclusion.path}'"
+                )
     return expand_inventory(package, files)
 
 

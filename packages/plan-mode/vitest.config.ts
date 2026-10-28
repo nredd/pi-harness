@@ -18,8 +18,6 @@ export default defineConfig({
         "src/headless-turn.ts",
         "src/implementation-models.ts",
         "src/implementation-retention.ts",
-        "src/index.ts",
-        "src/interactive-ui.ts",
         "src/message-transform.ts",
         "src/mode-contract.ts",
         "src/plan-action-controller.ts",

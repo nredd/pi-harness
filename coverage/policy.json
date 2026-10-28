@@ -50,7 +50,11 @@
     "plan-mode": {
       "root": "packages/plan-mode",
       "owned": ["src/**/*.ts"],
-      "exclusions": [{ "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; assembled Bun hosts load these generated files." }],
+      "exclusions": [
+        { "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; assembled Bun hosts load these generated files." },
+        { "path": "src/index.ts", "kind": "non-executable-facade", "reason": "Only a static ESM re-export of plan-mode's default binding. Istanbul source/emitted-ESM maps contain zero statements/functions; all implementation remains owned in src/plan-mode.ts. Strict source-shape validation rejects executable additions." },
+        { "path": "src/interactive-ui.ts", "kind": "non-executable-facade", "reason": "Only static ESM re-exports of UI menu bindings; Istanbul source/emitted-ESM maps contain zero statements/functions. Target implementations remain owned. Strict source-shape validation rejects executable additions." }
+      ],
       "status": "measured",
       "note": "Per-OS floors measured from hosted run 40441614924. Local receipts remain advisory; no source paths or assertions were excluded.",
       "signals": {
@@ -65,7 +69,7 @@
             "src/active-implementation-menu.ts", "src/command.ts", "src/completion-tool.ts",
             "src/decline-contract.ts", "src/extension-runtime.ts", "src/finalization-request.ts",
             "src/fresh-implementation.ts", "src/headless-turn.ts", "src/implementation-models.ts",
-            "src/implementation-retention.ts", "src/interactive-ui.ts", "src/message-transform.ts",
+            "src/implementation-retention.ts", "src/message-transform.ts",
             "src/mode-contract.ts", "src/plan-action-controller.ts", "src/plan-action-menus.ts",
             "src/plan-approval.ts", "src/plan-export-controller.ts", "src/plan-export-screen.ts",
             "src/plan-export.ts", "src/plan-launch-menu.ts", "src/plan-mode.ts", "src/presentation.ts",
@@ -98,7 +102,7 @@
 
           "max_uncovered": { "darwin": { "lines": 244, "functions": 15 }, "linux": { "lines": 244, "functions": 15 } },
           "enforcement": "report-only",
-          "reason": "Full Vitest/Istanbul suite with complete primary instrumentation inventory; awaiting current clean macOS/Linux full-suite and inventory receipts: https://github.com/nredd/pi-harness/issues/160.",
+          "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -120,7 +124,7 @@
 
           "max_uncovered": { "darwin": { "lines": 163, "functions": 14 }, "linux": { "lines": 46, "functions": 8 } },
           "enforcement": "report-only",
-          "reason": "Full Vitest/Istanbul suite with complete primary instrumentation inventory; awaiting current clean macOS/Linux full-suite and inventory receipts: https://github.com/nredd/pi-harness/issues/160.",
+          "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -223,7 +227,7 @@
 
           "max_uncovered": { "darwin": { "lines": 226, "functions": 31 }, "linux": { "lines": 226, "functions": 31 } },
           "enforcement": "report-only",
-          "reason": "Full Vitest/Istanbul suite with complete primary instrumentation inventory; awaiting current clean macOS/Linux full-suite and inventory receipts: https://github.com/nredd/pi-harness/issues/160.",
+          "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
@@ -245,7 +249,7 @@
 
           "max_uncovered": { "darwin": { "lines": 936, "functions": 71 }, "linux": { "lines": 936, "functions": 71 } },
           "enforcement": "report-only",
-          "reason": "Full Vitest/Istanbul suite with complete primary instrumentation inventory; awaiting current clean macOS/Linux full-suite and inventory receipts: https://github.com/nredd/pi-harness/issues/160.",
+          "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
       }
