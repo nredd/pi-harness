@@ -78,7 +78,9 @@ async function stopWake(wake: ChildProcess): Promise<void> {
 }
 
 /**
- * Isolate Pi and peers before imports. macOS holds the same process-scoped wake
+ * Isolate Pi and peers before imports. HOME stays in the launcher's sandbox because
+ * Bun caches homedir(); per-fixture Pi and XDG directories remain independent.
+ * macOS holds the same process-scoped wake
  * assertions as harness/power.py: idle-only `-i` cannot prevent maintenance sleep.
  * `-w` releases assertions if the runner is killed before cleanup.
  */
@@ -98,7 +100,6 @@ export async function isolateStackHome(): Promise<{ root: string; cleanup(): Pro
 	}
 	const previous = new Map<string, string | undefined>();
 	for (const [key, value] of Object.entries({
-		HOME: root,
 		PI_CODING_AGENT_DIR: join(root, "agent"),
 		XDG_CONFIG_HOME: join(root, ".config"),
 	})) {

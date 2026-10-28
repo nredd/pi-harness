@@ -1,6 +1,7 @@
 /**
- * Model resolution: exact match ("provider/modelId") with fuzzy fallback.
+ * Model resolution: exact match ("provider/modelId") with fuzzy fallback for tool inputs.
  */
+import { exactTierModel } from "./model-tiers.js";
 
 export interface ModelEntry {
   id: string;
@@ -189,8 +190,8 @@ export function resolveModel(
   const aliasCandidates = modelAliases.get(input.trim().toLowerCase());
   if (aliasCandidates) {
     for (const candidate of aliasCandidates) {
-      const resolved = resolveCanonicalModel(candidate, registry);
-      if (typeof resolved !== "string") return resolved;
+      const resolved = exactTierModel(candidate, registry);
+      if (resolved) return resolved;
     }
     return `Model alias "${input}" has no available candidate.\n\nCandidates:\n${aliasCandidates.map(candidate => `  ${candidate}`).join("\n")}`;
   }

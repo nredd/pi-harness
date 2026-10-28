@@ -14,6 +14,7 @@ import { pathToFileURL } from "node:url";
 import { type Component, hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import { formatClock } from "../model-call.js";
+import { modelSelectionNote } from "../model-selection.js";
 import type { AgentRecord } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import {
@@ -26,7 +27,7 @@ import {
   SPINNER,
   type Theme,
 } from "./agent-widget.js";
-import { fallbackFlag } from "./fallback-flag.js";
+import { fallbackFlag, withLeadingFlag } from "./fallback-flag.js";
 
 /** Lines of the result shown when expanded; the rest is one `get_subagent_result` away. */
 const EXPANDED_RESULT_LINES = 50;
@@ -90,6 +91,7 @@ export function agentRowSummary(
   live: AgentRowLive,
   theme: Theme,
   now: number = Date.now(),
+  width?: number,
 ): string {
   const record = details.agentId ? live.getRecord(details.agentId) : undefined;
   const activity = details.agentId ? live.getActivity(details.agentId) : undefined;
@@ -108,8 +110,9 @@ export function agentRowSummary(
   if (cost) parts.push(cost);
   if (!finished && details.backgroundHint && elapsed >= 2000) parts.push("(ctrl+b to run in background)");
   // Leading, ahead of the status text, which may carry a 300-char error.
-  const flag = fallbackFlag(theme, record?.modelFallback ? record : details);
-  return `${icon} ${flag ? `${flag} ` : ""}${parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(` ${theme.fg("dim", "·")} `)}`;
+  const flag = fallbackFlag(theme, record?.modelFallback || record?.modelTier ? record : details);
+  const body = parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(` ${theme.fg("dim", "·")} `);
+  return width === undefined ? `${icon} ${flag ? `${flag} ` : ""}${body}` : withLeadingFlag(`${icon} `, flag, body, width);
 }
 
 /**
@@ -194,13 +197,14 @@ export class AgentResultView implements Component {
   ) {}
 
   render(width: number): string[] {
-    const lines = [truncateToWidth(agentRowSummary(this.details, this.live, this.theme, this.clock.now()), width)];
+    const lines = [agentRowSummary(this.details, this.live, this.theme, this.clock.now(), width)];
     if (!this.expanded) return lines;
 
     const record = this.details.agentId ? this.live.getRecord(this.details.agentId) : undefined;
     const tags = tagsLine(this.details, this.theme);
     if (tags) lines.push(truncateToWidth(tags, width));
-    if (this.details.modelNote) lines.push(...wrapTextWithAnsi(this.theme.fg("warning", this.details.modelNote), width));
+    const note = modelSelectionNote(record) || this.details.modelNote;
+    if (note) lines.push(...wrapTextWithAnsi(this.theme.fg("warning", note), width));
     const transcript = record?.outputFile ?? this.details.outputFile;
     if (transcript) lines.push(truncateToWidth(transcriptLink(transcript, this.theme), width));
 

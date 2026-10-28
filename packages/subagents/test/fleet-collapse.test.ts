@@ -117,6 +117,35 @@ describe("collapsed fleet", () => {
     expect(renderFleetSummary([agents[0]], [], 0, true, 250, theme)).not.toContain("~$");
   });
 
+  it("counts only the switched tier and failed agent in a mixed collapsed fleet at 20, 40 and 80 columns", () => {
+    const healthy = record(1);
+    healthy.modelTier = {
+      kind: "routed", tier: "cheap", profile: "router/cheap",
+      model: { provider: "router", id: "cheap", name: "Cheap", api: "pi-virtual" },
+      answered: "fixture/fast",
+    };
+    // No admission baseline or resolved-model label: an answer alone is not a switch.
+    const switched = record(2);
+    switched.modelTier = { ...healthy.modelTier, admitted: "fixture/fast", answered: "fixture/safer" };
+    const h = setup([healthy, switched, record(3, "error")]);
+    try {
+      for (const width of [20, 40, 80]) {
+        const lines = h.render(width);
+        expect(lines).toHaveLength(1);
+        const text = stripTerminalSequences(lines[0]);
+        expect(text.match(/^\[[^\]]+\]/)?.[0]).toBe(width === 20 ? "[E1 F1]" : "[1 failed, 1 fallback]");
+        expect(text).not.toContain("[fb]");
+        expect(visibleWidth(lines[0])).toBeLessThanOrEqual(width);
+      }
+      // Removing the actual alerts leaves the routed tier neutral, not a fallback.
+      const neutral = stripTerminalSequences(renderFleetSummary([healthy], [], 0, false, 80, theme));
+      expect(neutral).toMatch(/^agents: 1 running/);
+      expect(neutral).not.toMatch(/fallback|\[fb\]|\[F/);
+    } finally {
+      h.fleet.dispose();
+    }
+  });
+
   it("keeps failure/parked/blocked/fallback counts ahead of truncation at every width 20..80", () => {
     const agents = [record(1, "error"), record(2)];
     agents[1].modelFallback = { input: "missing", used: "test/child" };

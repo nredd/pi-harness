@@ -4,8 +4,8 @@
  * would fail the same way and mask the real outcome.
  */
 import { afterEach, expect, it } from "vitest";
-import { runAgent } from "../src/agent-runner.js";
 import { compileJsonSchema } from "../src/workflow/json-schema.js";
+import { runAgent } from "./helpers/run-selected-agent.js";
 import { answer, ScenarioSession } from "./helpers/scenario-session.js";
 
 const STALE = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.reload().";
