@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -100,6 +100,14 @@ describe("loadConfig", () => {
 		dir = await mkdtemp(join(tmpdir(), "router-config-"));
 		expect(await loadConfig(dir)).toEqual({ ok: true, profiles: [] });
 		await writeFile(join(dir, CONFIG_FILE), "{ nope");
+		const result = await loadConfig(dir);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain(join(dir, CONFIG_FILE));
+	});
+
+	it("reports filesystem errors other than a missing config", async () => {
+		dir = await mkdtemp(join(tmpdir(), "router-config-"));
+		await mkdir(join(dir, CONFIG_FILE));
 		const result = await loadConfig(dir);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toContain(join(dir, CONFIG_FILE));

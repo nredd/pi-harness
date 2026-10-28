@@ -170,7 +170,7 @@ RESOURCE_SAMPLER_FILES = (
     "package.json",
     *(
         f"dist/{module}.{suffix}"
-        for module in ("index", "types", "counters", "collect")
+        for module in ("index", "types", "counters", "collect", "darwin")
         for suffix in ("js", "d.ts")
     ),
 )
@@ -190,8 +190,17 @@ import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 const STOP_MS = 2000;
+/**
+ * @param {import('node:child_process').ChildProcess} child Owned child handle.
+ * @returns {boolean} Whether this exact child's wait status is known.
+ */
 const exited = child => child.exitCode !== null || child.signalCode !== null;
-// Wait for this exact ChildProcess's reaped exit status, never a PID probe that reuse could fool.
+/**
+ * Wait for this exact child's exit status, never a reusable PID probe.
+ * @param {import('node:child_process').ChildProcess} child Owned child handle.
+ * @param {number} ms Maximum wait in milliseconds.
+ * @returns {Promise<boolean>} Whether the runtime reaped the child within the bound.
+ */
 async function exitedWithin(child, ms) {
     if (exited(child)) return true;
     const timer = new AbortController();
@@ -200,7 +209,11 @@ async function exitedWithin(child, ms) {
         return await Promise.race([exit, delay(ms, false, {signal: timer.signal})]);
     } finally { timer.abort(); }
 }
-// SIGTERM, bounded wait, then SIGKILL and one more bounded wait, like integration/inprocess/support.ts.
+/**
+ * Terminate/reap with SIGTERM then SIGKILL, like integration/inprocess/support.ts.
+ * @param {import('node:child_process').ChildProcess} child Owned child handle.
+ * @returns {Promise<void>} Cleanup completion; rejects if the child survives SIGKILL.
+ */
 async function stop(child) {
     if (child.pid === undefined || exited(child)) return;
     child.kill('SIGTERM');
@@ -208,9 +221,18 @@ async function stop(child) {
     child.kill('SIGKILL');
     if (!(await exitedWithin(child, STOP_MS))) throw new Error(`hostile child ${child.pid} survived SIGKILL`);
 }
+/**
+ * @param {import('node:child_process').ChildProcess} child Child with piped stdout.
+ * @param {number} ms Readiness bound in milliseconds.
+ * @returns {Promise<void>} Ready-line completion; rejects on exit/error/timeout.
+ */
 function ready(child, ms) {
     return new Promise((resolve, reject) => {
         let output = '';
+        /**
+         * @param {Error | undefined} error Optional readiness failure.
+         * @returns {void} Settle readiness and detach listeners/timer.
+         */
         const finish = error => {
             clearTimeout(timer);
             child.stdout.off('data', data);
@@ -218,7 +240,12 @@ function ready(child, ms) {
             child.off('error', finish);
             if (error) reject(error); else resolve();
         };
+        /**
+         * @param {Buffer} chunk Stdout readiness bytes.
+         * @returns {void} Accumulate output and settle on the ready line.
+         */
         const data = chunk => { output += chunk; if (output.includes('ready\\n')) finish(); };
+        /** @returns {void} Reject readiness after early child exit. */
         const exit = () => finish(new Error('hostile child exited before readiness'));
         const timer = setTimeout(() => finish(new Error(`hostile child not ready within ${ms} ms`)), ms);
         child.stdout.on('data', data);
@@ -226,8 +253,17 @@ function ready(child, ms) {
         child.once('error', finish);
     });
 }
+/**
+ * @param {unknown} error Caught failure value.
+ * @returns {string} Readable failure description.
+ */
 const message = error => (error instanceof Error ? error.message : String(error));
-// Run `body`, then always reap the child; a cleanup failure is reported with, never instead of, `body`'s.
+/**
+ * Run the check then always reap; preserve both primary and cleanup failures.
+ * @param {import('node:child_process').ChildProcess} child Owned child handle.
+ * @param {() => Promise<void>} body Check to run after spawn.
+ * @returns {Promise<void>} Check/cleanup completion, rejecting with preserved errors.
+ */
 async function supervise(child, body) {
     let failure;
     try { await body(); } catch (error) { failure = {error}; }
@@ -264,7 +300,33 @@ await supervise(hostile, async () => {
         const second = await sampler.sample();
         assert.equal(second.cpu.state, 'available');
         assert.ok(second.cpu.value >= 0 && second.cpu.value <= 100);
+        if (process.platform === 'darwin') {
+            assert.equal(second.memory.usage?.state, 'available', 'native memory usage missing');
+            assert.equal(second.memory.usage.value.basis, 'app+wired+compressed');
+            const { usedBytes, availableBytes } = second.memory.usage.value;
+            assert.ok(usedBytes >= 0 && usedBytes <= second.memory.totalBytes);
+            assert.equal(usedBytes + availableBytes, second.memory.totalBytes);
+            assert.equal(second.memory.swap?.state, 'available', 'native swap missing');
+            assert.ok(second.memory.swap.value.usedBytes <= second.memory.swap.value.totalBytes);
+            const own = second.processes.find(p => p.pid === process.pid);
+            const [major, minor] = process.versions.node.split('.').map(Number);
+            if (major > 26 || (major === 26 && minor >= 1)) {
+                assert.equal(own?.cpu.state, 'available', 'native interval CPU missing');
+                assert.ok(own.cpu.value >= 0);
+                assert.equal(own.footprint?.state, 'available', 'native footprint missing');
+                assert.ok(own.footprint.value > 0);
+            } else {
+                assert.equal(own?.cpu.state, 'unavailable');
+            }
+        } else if (process.platform === 'linux') {
+            assert.equal(second.memory.usage, undefined);
+            assert.equal(second.memory.swap, undefined);
+        }
         const coverage = JSON.stringify(second.coverage);
+        /**
+         * @param {number} pid Expected process identifier.
+         * @returns {boolean} Whether the bounded sample contains the required process.
+         */
         const seen = pid => second.processes.some(p => p.pid === pid);
         assert.ok(seen(process.pid), `probe not observed within bounds: ${coverage}`);
         assert.ok(seen(hostile.pid), `hostile child not observed within bounds: ${coverage}`);
@@ -2141,7 +2203,19 @@ class InstalledPackage:
 
 
 def is_npm_metadata(path: Path, name: str, prefix: str) -> bool:
-    """Validate an npm-created metadata entry and report whether it needs no further auditing."""
+    """Validate an npm-created metadata entry and report whether it needs no further auditing.
+
+    Parameters:
+        path (Path): Installed entry to inspect.
+        name (str): Entry basename.
+        prefix (str): Lockfile-style parent directory.
+
+    Returns:
+        bool: Whether this is a validated metadata entry exempt from package auditing.
+
+    Raises:
+        ContractError: If a recognized metadata entry has an unsafe shape.
+    """
     if name not in NPM_MODULE_METADATA:
         return False
     if name == ".package-lock.json":
@@ -2158,7 +2232,18 @@ def is_npm_metadata(path: Path, name: str, prefix: str) -> bool:
 
 
 def nested_installed_entries(directory: Path, path: str) -> list[tuple[Path, str, bool]]:
-    """Walk a package's nested `node_modules`, rejecting a symlinked directory."""
+    """Walk a package's nested `node_modules`, rejecting a symlinked directory.
+
+    Parameters:
+        directory (Path): Installed package directory.
+        path (str): Lockfile-style package path.
+
+    Returns:
+        list[tuple[Path, str, bool]]: Nested entries with paths and scope-directory markers.
+
+    Raises:
+        ContractError: If the nested node_modules directory is symlinked.
+    """
     nested = directory / "node_modules"
     if nested.is_symlink():
         raise ContractError(f"Symlinked `node_modules` entry is not allowed: '{path}/node_modules'")
@@ -3443,6 +3528,13 @@ HELPER_SOURCE_LITERAL = re.compile(
 
 def parse_helper_source_list(script: str, source: str) -> list[str]:
     """Parse one packed script's complete literal Swift-source declaration.
+
+    Parameters:
+        script (str): Known packed build-script name selecting the declaration to inspect.
+        source (str): Complete packed script text.
+
+    Returns:
+        list[str]: Declared literal Swift-source names, in declaration order.
 
     Raises:
         ContractError: If the expected declaration is absent or contains a non-literal token.
