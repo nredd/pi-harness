@@ -6,30 +6,58 @@ harness import: `41382ad` / `988eb2f`. Prepared package version: `0.6.0`; not re
 
 Owner decisions (2026-10-27): keep every tool and clipboard action, keep Linux and its locked
 source-build path, sync before release, keep computer-use outside the coverage gate. Usage counts
-are representative, not permission to delete unused tools. Upstream filing and Rust-coverage work
-are independent; this change neither edits their branches nor pushes to upstream.
+are representative, not permission to delete unused tools. Upstream filing remains independent: this package carries the proposed Rust coverage tooling
+before any upstream PR. This change never pushes to upstream or edits the drafts file.
 
 ## Carried patches
 
-Rows group the overlapping original commits by behavior, not by commit boundary. Each row is one
-purpose. Replace each `upstreamed in <PR>` placeholder when the separate filing agent supplies it;
-none is a claim of acceptance. Remove a row only after its check passes without the patch.
+Rows group overlapping commits by behavior, not commit boundary. `sync-patches.json` is the
+machine-checkable ledger: each carried patch has a purpose, files, check, executable drop controls
+and an `upstream` status. `check-sync-reverts.mjs` validates it before running the controls;
+`check-sync-ledger.test.mjs` removes every patch's status/drop controls and requires rejection.
+Remove a row only after its check passes without the patch.
+
+Status source: `~/code/review-notes/upstream-issues-drafts.md` is a local draft file,
+not a public upstream issue. Draft A covers desktop,
+policy, scoped lock and activation; B covers helper replacement/age; C covers ref lifecycle.
+These three issues are `issue-first drafted (~/code/review-notes/upstream-issues-drafts.md), not yet
+filed`. Clipboard is retained locally, explicitly excluded from draft A. Canonical root deltas and
+stale/replacement outcomes remain the later separate U3 candidate, not a drafted/filed issue.
+The root-targeting fix is `merged upstream as #95` ([link](https://github.com/injaneity/pi-computer-use/pull/95));
+the release is `requested release: injaneity/pi-computer-use#116`
+([link](https://github.com/injaneity/pi-computer-use/issues/116)). No other issue or PR is filed.
 
 | Patch | Original commits | Purpose / upstream status | Drop check |
 | --- | --- | --- | --- |
-| Helper replacement | `1eabebd` | Stop an old daemon before replacing either bundle form; upstreamed in <PR> | `test:signing` replacement wiring assertions |
-| Daemon age | `1eabebd`, `50cbfe2` | Compare process start against binary ctime, not preserved mtime; upstreamed in <PR> | `test:macos-target` age predicate cases |
-| Whole desktop | `b009179` | Keep display capture, cursor inclusion, global mapping and physical input; upstreamed in <PR> | `test:desktop` native dispatch + mocked capture/wire results |
-| Cursor/drag | `e33ab31` | Read back top-left global cursor position and interpolate drags; upstreamed in <PR> | `test:desktop` native wiring; `test:macos-native` interpolation cases |
-| Policy | `c6a27ca` | Gate desktop tools on macOS, desktop_control and non-headless mode; upstreamed in <PR> | `test:desktop`, packed contract's 13/11-tool split |
-| Physical transaction lease | `c6a27ca`, `50cbfe2`, `400f784`, `3fd2fe3` | Lock lazily on first physical step and release after the entire act transaction; upstreamed in <PR> | `test:unpaired` background independence and no interleaving |
-| Ref lifecycle | `400f784`, `50cbfe2`, `3fd2fe3` | Epoch refs, bounded unowned refs, look-owned eviction and incremental transfer; upstreamed in <PR> | `test:macos-native` real Swift store/transfer/epoch cases |
-| Root result identity | `50cbfe2`, `4d596ca` | Map deltas once to canonical @r refs, require live same-process replacement roots and coded stale errors; upstreamed in <PR> | `test:unpaired`, `test:act-outcomes` |
-| App activation | `400f784`, `3fd2fe3` | Rank bundle/name/executable, reject ambiguity, launch with killable open and verify frontmost; upstreamed in <PR> | `test:desktop` native wiring and mocked output/errors |
-| Clipboard | `400f784`, `3fd2fe3` | Retain plain-text clipboard actions and fence untrusted reads; upstreamed in <PR> | `test:desktop` native wiring, validation, fencing and truncation |
-| Harness Linux | `c59eb11` | Probe existing helper; opt-in locked build into writable cache and reap compiler groups; upstreamed in <PR> | `test:linux`, `test:linux-scripts`, `test:linux-native` on Linux |
+| Helper replacement | `1eabebd` | Stop an old daemon before replacing either bundle form; draft B, not filed | `test:signing` replacement wiring assertions |
+| Daemon age | `1eabebd`, `50cbfe2` | Compare process start against binary ctime, not preserved mtime; draft B, not filed | `test:macos-target` age predicate cases |
+| Whole desktop | `b009179` | Keep display capture, cursor inclusion, global mapping and physical input; draft A, not filed | `test:desktop` native dispatch + mocked capture/wire results |
+| Cursor/drag | `e33ab31` | Read back top-left global cursor position and interpolate drags; draft A, not filed | `test:desktop` native wiring; `test:macos-native` interpolation cases |
+| Policy | `c6a27ca` | Gate desktop tools on macOS, desktop_control and non-headless mode; draft A, not filed | `test:desktop`, packed contract's 13/11-tool split |
+| Physical transaction lease | `c6a27ca`, `50cbfe2`, `400f784`, `3fd2fe3` | Lock lazily on first physical step and release after the entire act transaction; draft A, not filed | `test:unpaired` background independence and no interleaving |
+| Ref lifecycle | `400f784`, `50cbfe2`, `3fd2fe3` | Epoch refs, bounded unowned refs, look-owned eviction and incremental transfer; draft C, not filed | `test:macos-native` real Swift store/transfer/epoch cases |
+| Root result identity | `50cbfe2`, `4d596ca` | Map deltas once to canonical @r refs, require live same-process replacement roots and coded stale errors; U3 later candidate, not filed | `test:unpaired`, `test:act-outcomes` |
+| App activation | `400f784`, `3fd2fe3` | Rank bundle/name/executable, reject ambiguity, launch with killable open and verify frontmost; draft A, not filed | `test:desktop` native wiring and mocked output/errors |
+| Clipboard | `400f784`, `3fd2fe3` | Retain plain-text clipboard actions and fence untrusted reads; carried locally, not proposed/filed | `test:desktop` native wiring, validation, fencing and truncation |
+| Harness Linux | `c59eb11` | Probe existing helper; opt-in locked build into writable cache and reap compiler groups; harness-only, not filed | `test:linux`, `test:linux-scripts`, `test:linux-native` on Linux |
 | Host-independent docs | harness sync | Generate from all declared tool definitions, not the host's 13/11 registered subset; harness-only | `docs:check` runs `check-docs-platform.mjs` under both platform fixtures |
 | Harness package | `988eb2f`, `a4fc068`, `6207189`, subsequent contract hardening | Preserve @nredd metadata, source-only Linux, macOS payloads/cursor sources, platform-aware contracts, non-macOS NOT RUN and house-style commits; harness-only | `test:package-assets`, `test:linux-scripts`, `test:commits`, package-contract tests and stock contract |
+
+| Rust coverage | harness follow-up | Report-only LCOV and per-file text/JSON from the native crates; upstream: proposed after issue-first (draft (c) in the drafts file), currently labeled draft D there, not filed | `test:rust-coverage` arguments/paths/missing tool and `test:sync-reverts` missing-tool control |
+
+See `sync-patches.json` for each row's exact file paths and `upstream` status, including harness-only
+patches. [Rust coverage](docs/rust-coverage.md) records pinned tools, real per-file numbers,
+execution and platform limits. Linux-crate coverage on macOS measured 1163/2609 lines (44.58%),
+125/295 functions (42.37%), 1681/4315 regions (38.96%); 33 tests passed, 1 ignored, 32.007s
+including build and reports. Windows remains NOT RUN. Coverage collection is not in `check`.
+
+The follow-up ledger also declares the five test/lifecycle files changed on main by #165/#177;
+these are deliberate harness drift, not new upstream imports. Full package checks after the
+merge use `COMMIT_RANGE=origin/main..HEAD`, matching PR CI's base/head selection. Local
+`HEAD~1..HEAD` after a merge includes already-merged main subjects over 72 characters, so its
+commit-message subcheck correctly rejects those; no history is rewritten or policy relaxed.
+The old hosted macOS `owned` failure was `leader-exits-first: wrapper returned after 0ms`,
+fixed by the main-branch event-driven compiler lifecycle checks retained in the merge.
 
 `2c3dd8b` root targeting is absorbed by upstream PR #95 (`2aebb01`): no duplicate implementation
 is carried. The existing range-checked window-id helpers and tests remain; upstream's salvaged port

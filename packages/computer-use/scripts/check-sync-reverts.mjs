@@ -7,11 +7,20 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync }
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateLedger } from "./check-sync-ledger.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sandbox = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
 const nodeModules = path.resolve(root, "../../node_modules");
 const cases = [
+	{
+		name: "Rust coverage actionable missing-tool error",
+		file: "scripts/rust-coverage.mjs",
+		before: "Missing cargo-llvm-cov; install pinned",
+		after: "Tool unavailable; install pinned",
+		check: "rust-coverage.test.mjs",
+		failure: /Missing cargo-llvm-cov/,
+	},
 	{
 		name: "helper replacement restart (1eabebd)",
 		file: "scripts/setup-helper.mjs",
@@ -191,6 +200,7 @@ const cases = [
 ];
 
 try {
+	validateLedger(JSON.parse(readFileSync(path.join(root, "sync-patches.json"), "utf8")), cases);
 	// Test sources/fixtures are intentionally NOT the npm payload: package.json `files` excludes
 	// them. Keep this self-contained package-root fixture list aligned with the checks selected above.
 	for (const entry of [

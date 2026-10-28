@@ -1,5 +1,145 @@
 {
 	"upstream": "67e9e2f77643f84605b738a3198048a88e92190e",
+	"absorbed": [
+		{
+			"id": "root-targeting",
+			"purpose": "Target unpaired/nonmodal roots without windowId 0",
+			"upstream": "merged upstream as #95: https://github.com/injaneity/pi-computer-use/pull/95",
+			"files": ["native/macos/bridge.swift", "src/platform/macos/backend.ts"],
+			"check": "test:macos-target; test:unpaired"
+		}
+	],
+	"release": {
+		"upstream": "requested release: injaneity/pi-computer-use#116 https://github.com/injaneity/pi-computer-use/issues/116"
+	},
+	"patches": [
+		{
+			"id": "helper-replacement",
+			"purpose": "Stop the managed daemon before replacing the helper bundle",
+			"files": ["scripts/setup-helper.mjs"],
+			"check": "check-local-signing.mjs",
+			"dropControls": ["helper replacement restart (1eabebd)"],
+			"upstream": "issue-first drafted (~/code/review-notes/upstream-issues-drafts.md), not yet filed; draft B"
+		},
+		{
+			"id": "daemon-age",
+			"purpose": "Detect same-protocol replacement using ctime rather than preserved mtime",
+			"files": ["src/platform/macos/helper.ts"],
+			"check": "check-macos-observe-target.mjs",
+			"dropControls": [
+				"daemon age guard (1eabebd/50cbfe2)",
+				"ctime freshness after preserved-mtime replacement (50cbfe2)"
+			],
+			"upstream": "issue-first drafted (~/code/review-notes/upstream-issues-drafts.md), not yet filed; draft B"
+		},
+		{
+			"id": "whole-desktop",
+			"purpose": "Capture whole displays and retain global cursor mapping and physical input dispatch",
+			"files": ["native/macos/bridge.swift", "src/desktop.ts", "extensions/computer-use.ts"],
+			"check": "check-desktop-tools.mjs",
+			"dropControls": [
+				"whole-desktop native dispatch (b009179)",
+				"cursor readback and interpolated dragging (e33ab31)"
+			],
+			"upstream": "issue-first drafted (~/code/review-notes/upstream-issues-drafts.md), not yet filed; draft A"
+		},
+		{
+			"id": "desktop-policy",
+			"purpose": "Gate physical tools on macOS, desktop_control and non-headless mode",
+			"files": ["src/desktop.ts", "src/config.ts", "extensions/computer-use.ts"],
+			"check": "check-desktop-tools.mjs",
+			"dropControls": ["desktop headless policy (c6a27ca)", "desktop_control opt-out (c6a27ca)"],
+			"upstream": "issue-first drafted (~/code/review-notes/upstream-issues-drafts.md), not yet filed; draft A"
+		},
+		{
+			"id": "desktop-lease",
+			"purpose": "Hold a lazy physical desktop lease through the whole act transaction",
+			"files": ["src/desktop.ts", "src/bridge.ts"],
+			"check": "check-unpaired-act.mjs",
+			"dropControls": ["transaction-scoped desktop lease (c6a27ca/50cbfe2/400f784/3fd2fe3)"],
+			"upstream": "issue-first drafted (~/code/review-notes/upstream-issues-drafts.md), not yet filed; draft A"
+		},
+		{
+			"id": "ref-lifecycle",
+			"purpose": "Bound unowned refs, evict look-owned refs, preserve successor ownership and epoch identities",
+			"files": ["native/macos/bridge.swift"],
+			"check": "check-macos-native-pure.mjs",
+			"dropControls": [
+				"look ownership transfer and eviction (400f784/50cbfe2/3fd2fe3)",
+				"per-process ref epoch (50cbfe2/3fd2fe3)",
+				"bounded unowned ref FIFO (400f784/3fd2fe3)",
+				"look-owned ref eviction (400f784/50cbfe2)"
+			],
+			"upstream": "issue-first drafted (~/code/review-notes/upstream-issues-drafts.md), not yet filed; draft C"
+		},
+		{
+			"id": "canonical-root-deltas",
+			"purpose": "Map helper-native root deltas once to canonical public refs",
+			"files": ["src/bridge.ts"],
+			"check": "check-unpaired-act.mjs",
+			"dropControls": ["single root delta mapping (50cbfe2/4d596ca)"],
+			"upstream": "later separate candidate U3; not drafted or filed (~/code/review-notes/upstream-issues-drafts.md)"
+		},
+		{
+			"id": "root-outcomes",
+			"purpose": "Report coded stale roots and only live same-process replacement roots",
+			"files": ["src/bridge.ts"],
+			"check": "check-act-outcomes.mjs",
+			"dropControls": ["coded stale root outcome (50cbfe2)", "replacement root kind filtering (50cbfe2)"],
+			"upstream": "later separate candidate U3; not drafted or filed (~/code/review-notes/upstream-issues-drafts.md)"
+		},
+		{
+			"id": "app-activation",
+			"purpose": "Rank app identities, reject ambiguity and verify frontmost activation",
+			"files": ["native/macos/bridge.swift", "src/desktop.ts"],
+			"check": "check-desktop-tools.mjs",
+			"dropControls": ["ranked app activation (400f784/3fd2fe3)"],
+			"upstream": "issue-first drafted (~/code/review-notes/upstream-issues-drafts.md), not yet filed; draft A activation slice"
+		},
+		{
+			"id": "clipboard",
+			"purpose": "Retain plain-text clipboard actions and fence untrusted reads",
+			"files": ["src/desktop.ts", "native/macos/bridge.swift"],
+			"check": "check-desktop-tools.mjs",
+			"dropControls": ["untrusted clipboard fence (400f784/3fd2fe3)"],
+			"upstream": "carried locally by owner request; not proposed in draft A (~/code/review-notes/upstream-issues-drafts.md); not filed"
+		},
+		{
+			"id": "harness-linux",
+			"purpose": "Build locked Linux source in a writable cache and reap compiler groups",
+			"files": ["scripts/setup-helper.mjs", "src/platform/linux/helper.ts"],
+			"check": "check-linux-build-scripts.mjs",
+			"dropControls": [
+				"Linux writable cache target (harness c59eb11)",
+				"Linux compiler group escalation (harness c59eb11)"
+			],
+			"upstream": "harness-only packaging policy; not filed"
+		},
+		{
+			"id": "host-independent-docs",
+			"purpose": "Generate all declared tools rather than host-dependent registrations",
+			"files": ["scripts/docs-generators/generate-tool-reference.mjs", "scripts/check-docs-platform.mjs"],
+			"check": "check-docs-platform.mjs",
+			"dropControls": ["host-independent documentation inventory (harness sync)"],
+			"upstream": "harness-only; not filed"
+		},
+		{
+			"id": "harness-package",
+			"purpose": "Preserve scoped metadata, source-only Linux and exact macOS source payload",
+			"files": ["package.json", "scripts/check-package-assets.mjs"],
+			"check": "check-package-assets.mjs",
+			"dropControls": ["cursor source packaging (harness 6207189)"],
+			"upstream": "harness-only; not filed"
+		},
+		{
+			"id": "rust-coverage",
+			"purpose": "Report native Rust LCOV and per-file line/function/region summaries without thresholds",
+			"files": ["scripts/rust-coverage.mjs", "scripts/rust-coverage.test.mjs", "docs/rust-coverage.md"],
+			"check": "rust-coverage.test.mjs",
+			"dropControls": ["Rust coverage actionable missing-tool error"],
+			"upstream": "proposed after issue-first (draft (c) in the drafts file): ~/code/review-notes/upstream-issues-drafts.md; coverage is currently labeled draft D there; not filed"
+		}
+	],
 	"files": [
 		"CHANGELOG.md",
 		"README.md",
@@ -17,6 +157,11 @@
 		"prebuilt/macos/arm64/bridge",
 		"prebuilt/macos/x64/bridge",
 		"scripts/check-act-outcomes.mjs",
+		"scripts/check-async.mjs",
+		"scripts/check-async.test.mjs",
+		"scripts/check-linux-live.mjs",
+		"scripts/check-runtime-concurrency.mjs",
+		"scripts/check-session-lifecycle.mjs",
 		"scripts/check-commit-messages.mjs",
 		"scripts/check-commit-messages.test.mjs",
 		"scripts/check-desktop-tools.mjs",
@@ -31,7 +176,12 @@
 		"scripts/check-macos-observe-target.mjs",
 		"scripts/check-package-assets.mjs",
 		"scripts/check-platform-linux.mjs",
+		"scripts/check-sync-ledger.mjs",
+		"scripts/check-sync-ledger.test.mjs",
 		"scripts/check-sync-reverts.mjs",
+		"scripts/rust-coverage.mjs",
+		"scripts/rust-coverage.test.mjs",
+		"docs/rust-coverage.md",
 		"scripts/check-tool-schemas.mjs",
 		"scripts/check-unpaired-act.mjs",
 		"scripts/check-upstream-sync.mjs",
