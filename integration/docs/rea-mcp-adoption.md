@@ -4,19 +4,28 @@ Historical evidence only, not an installation or release requirement. The manage
 integration was retired in `nredd/dotfiles#58` (`52913a1`). Current harness installers,
 package/stack profiles, sandbox configuration, native hooks and tests do not bundle or
 start REA. Generic native MCP support and unrelated reverse-engineering research remain.
-Audit of the 1,266 paths in `git ls-files` at `166e801a`, including filename inventory and
-tracked-file content searches for the REA name, `rea-agents`, `mcp__rea`, the skill and warm
-hook names, found no owned REA binary/download-cache asset or active installer/package wiring.
-Remaining matches are this historical record, superseded requirements marked retired in
-`docs/`, integration exclusions, and process-title fixtures/provenance in
-`packages/dev-tools/{README.md,test/resource.test.ts}` and
-`scripts/tests/test_package_contracts.py`. Those fixtures never launch a REA server.
+The source audit covers this repository's tracked files, not the Gitlinked `forks/pi` tree.
+Reproducible search commands and their redacted results are recorded in the PR receipt, not
+an unsupported path-count claim. No active installer/package/stack/catalog entry or owned
+REA binary/download-cache asset was found. There is no harness-owned REA launch catalog to
+exercise: dotfiles owns the registration and absence/cleanup regressions. This change is
+therefore documentation-only, not a claim of runtime MCP integration coverage.
+
+Remaining REA references are the historical adoption research, inline-retired requirements,
+and `packages/dev-tools/README.md` recording the old process-title sampler bug. The literal
+`rea` strings in `packages/dev-tools/test/resource.test.ts` and
+`scripts/tests/test_package_contracts.py` are unrelated partial `ready` markers, not REA
+provenance or server commands. The Gitlinked core autocomplete `@REA` fixture is also
+unrelated and explicitly excluded from the integration audit.
 
 Installed configuration predating retirement can still register REA until an authorized chezmoi
 apply/update writes `~/.pi/agent/mcp.json` and removes
 `~/.agents/skills/reverse-engineer-anything`. The dotfiles source owns both retirement
-paths and disposable-home regression tests. Its targeted MCP modifier preserves unrelated
-servers/settings. Existing Pi sessions retain their MCP children after source/config edits:
+paths and disposable-home regression tests. Initial source retirement is `nredd/dotfiles#58`;
+`nredd/dotfiles#64` adds the targeted modifier and byte-preservation/strict-decoding tests.
+Exact reviewed commit links belong in the PR receipts, not a coupled product version pin.
+The command-sentinel tests are config fixtures, not actual Pi startup/MCP runtime coverage.
+Existing Pi sessions retain their session-owned MCP children after source/config edits:
 restart all such sessions after activation. Do not treat them as orphans or broadly kill
 processes. Source preparation does not authorize activation, deployment or release.
 
