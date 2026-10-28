@@ -110,7 +110,7 @@ is claimed. Separate mandatory reviewer reports and CI remain the owner's pre-me
 - Quota rows: OpenAI weekly only, reset date/time from router `windows[].resetAt` in the process-local
   timezone (tests inject `timeZone`/clock), and router `spanSource` (`reported` | `assumed`) decides OpenAI
   window identity (a reported span wins over the window name; a reported 18000s window named `7d` is not weekly; a reported 18000s primary plus an assumed secondary renders only the unknown quota, never 5h or weekly). An assumed-only OpenAI window renders as `quota ... (window unknown)` (compact `quota?`), never 5h or weekly.
-- Current counts (this change): preset 156 Vitest + 156 Bun; router 209 Vitest + 209 Bun. The 126 above is historical.
+- Current counts (this change): preset 158 Vitest + 158 Bun (re-run after two identity cases); router 209 Vitest + 209 Bun (unchanged, from the earlier PR-receipt run, not re-run). The 126 above is historical.
 - NOT run: real Pi binary, tmux scenarios (`integration/scenarios/tui/test_footer_resize.py`), live provider
   payloads. No captured real Codex payload exists in-repo; weekly-only support rests on the documented
   `limit_window_seconds` contract and router fixtures, not a live capture.
