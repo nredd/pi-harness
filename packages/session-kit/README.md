@@ -245,7 +245,10 @@ and disposes it in `finally`, so runner timeout teardown cannot race a still-run
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
 The native diff descendant timeout fixture gates its fake deadline on real stdout readiness, so
-slow process startup cannot race a fixed wall-clock deadline.
+slow process startup cannot race a fixed wall-clock deadline. Adapter fault tests cover monitor
+startup/sweep/widget failures, post-spawn errors, worker startup timeout, rejected sampler cleanup,
+first/latest dropped-match evidence, title-stream failure and real rule reinjection after tree
+navigation. Synthetic PIDs are never passed to real signal capabilities.
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
 Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
 `docs/verification-rebuild.md` at the monorepo root tracks their destinations.
