@@ -9,12 +9,14 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentManager } from "../src/agent-manager.js";
 import { detachedDir, listRunningDetached } from "../src/detached-results.js";
 import { createSubagentsExtension, WORKFLOW_FILE_FLAG } from "../src/index.js";
 import { sessionTaskDir } from "../src/output-file.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import type { AgentRecord } from "../src/types.js";
 import { WorkflowDialog } from "../src/ui/workflow-dialog.js";
+import * as usage from "../src/usage.js";
 import { type BootedPi, ctx, flush, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 import { answer, barrier, calls } from "./helpers/scenario-session.js";
@@ -459,6 +461,95 @@ describe("index workflow entry callbacks", () => {
       await hold.entered; hold.release(); await bound.registry.waitForAll();
       expect(readFileSync(dir, "utf8")).toBe("private blocker");
     } finally { warn.mockRestore(); rmSync(dir, { force: true }); mkdirSync(dir, { recursive: true }); }
+  });
+});
+
+describe("index retained defensive guards", () => {
+  it("reports priced usage supplied by its collaborator when steering a live continuation", async () => {
+    configure({ showCost: true });
+    const hold = heldResponse("continuation result");
+    provider.setResponses([answer("priced result"), hold.response, answer("steered result")]);
+    const bound = await bind(); const id = await spawn(bound, "priced child"); await bound.registry.waitForAll();
+    await bound.boot.tools.get("Agent").execute("continue-priced", {
+      resume: id, prompt: "continue", description: "priced continuation", subagent_type: "general-purpose", run_in_background: true,
+    }, undefined, undefined, bound.context);
+    await hold.entered;
+    const cost = vi.spyOn(usage, "getLifetimeCost").mockReturnValue(0.0123);
+    try {
+      const result = await bound.boot.tools.get("steer_subagent").execute("steer-priced", { agent_id: id, message: "Prioritize cost" }, undefined, undefined, bound.context);
+      expect(cost).toHaveBeenCalledWith(bound.registry.getRecord(id)?.lifetimeUsage);
+      expect(result.content[0].text).toMatch(/Current state: .+ token/);
+      expect(result.content[0].text).toContain(" · ~$0.0123 · ");
+    } finally { cost.mockRestore(); }
+    hold.release(); await bound.registry.waitForAll();
+  });
+  it.each([true, false])("reports a collaborator's refused resume (background=%s) without starting work", async background => {
+    provider.setResponses([answer("original private result")]);
+    const bound = await bind(); const id = await spawn(bound, "resumable child");
+    await bound.registry.waitForAll();
+    const before = bound.registry.getRecord(id)?.result;
+    const resume = vi.spyOn(AgentManager.prototype, "resume").mockResolvedValueOnce(undefined);
+    try {
+      const result = await bound.boot.tools.get("Agent").execute("refused-resume", {
+        resume: id, prompt: "again", description: "refused resume", subagent_type: "general-purpose", run_in_background: background,
+      }, undefined, undefined, bound.context);
+      expect(result.content[0].text).toBe(`Failed to resume agent "${id}".`);
+      expect(bound.registry.getRecord(id)?.result).toBe(before);
+      expect(provider.state.callCount).toBe(1);
+      expect(bound.boot.pi.events.emit.mock.calls.filter(([event]: [string]) => event === "subagents:created")).toHaveLength(1);
+    } finally { resume.mockRestore(); }
+  });
+
+  it("contains a store failure during scheduler startup and keeps the Agent tool usable", async () => {
+    configure({ schedulingEnabled: true });
+    const error = new Error("store listing unavailable");
+    const list = vi.spyOn(ScheduleStore.prototype, "list").mockImplementationOnce(() => { throw error; });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const bound = await bind();
+      expect(warn).toHaveBeenCalledWith("[pi-subagents] Failed to start scheduler:", error);
+      expect(bound.boot.pi.events.emit).toHaveBeenCalledWith("subagents:ready", {});
+      expect(bound.boot.pi.events.emit).not.toHaveBeenCalledWith("subagents:scheduler_ready", expect.anything());
+      provider.setResponses([answer("still usable")]);
+      const id = await spawn(bound, "after scheduler failure"); await bound.registry.waitForAll();
+      expect(bound.registry.getRecord(id)?.result).toBe("still usable");
+    } finally { list.mockRestore(); warn.mockRestore(); }
+  });
+
+  it("skips only the unformattable group member and delivers its healthy sibling", async () => {
+    provider.setResponses([answer("bad member result"), answer("healthy member result")]);
+    const bound = await bind();
+    const bad = await spawn(bound, "bad member"); const good = await spawn(bound, "good member");
+    await bound.registry.waitForAll();
+    const badSession = bound.registry.getRecord(bad)?.session;
+    const real = usage.getSessionContextPercent;
+    const format = vi.spyOn(usage, "getSessionContextPercent").mockImplementation(session => {
+      if (session === badSession) throw new Error("formatter unavailable");
+      return real(session);
+    });
+    try { await turnEnd(bound); } finally { format.mockRestore(); }
+    expect(bound.boot.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const [message] = bound.boot.pi.sendMessage.mock.calls[0];
+    expect(message.content).toContain("healthy member result");
+    expect(message.content).not.toContain("bad member result");
+    expect(message.details.id).toBe(good);
+    expect(bound.registry.getRecord(bad)?.result).toBe("bad member result");
+  });
+
+  it("consumes a rejected detached wait without disposing a still-running survivor", async () => {
+    const hold = heldResponse("survivor result"); provider.setResponses([hold.response]);
+    const bound = await bind(); const id = await spawn(bound, "survivor"); await hold.entered;
+    const wait = vi.spyOn(AgentManager.prototype, "waitForAll").mockRejectedValueOnce(new Error("budget observer failed"));
+    const dispose = vi.spyOn(AgentManager.prototype, "dispose");
+    try {
+      await shutdown(bound, "reload"); await flush();
+      expect(wait).toHaveBeenCalledOnce(); expect(dispose).not.toHaveBeenCalled();
+      expect(listRunningDetached(sessionFile).map(entry => entry.record.id)).toContain(id);
+    } finally { wait.mockRestore(); dispose.mockRestore(); }
+    hold.release(); await bound.registry.waitForAll();
+    expect(bound.registry.getRecord(id)?.result).toBe("survivor result");
+    // A rejected wait deliberately did not dispose; explicitly close the fixture's manager.
+    await shutdown(bound, "quit");
   });
 });
 
