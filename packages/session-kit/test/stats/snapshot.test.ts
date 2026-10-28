@@ -84,6 +84,7 @@ it("atomically enrolls one identity under concurrent first readers, and never re
 	expect(readdirSync(join(a, "pi-session-kit"))).toEqual(["machine.json"]);
 	writeFileSync(join(a, "pi-session-kit", "machine.json"), "{broken");
 	await expect(machineIdentity(a)).rejects.toThrow();
+	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toBe("{broken");
 	writeFileSync(join(a, "pi-session-kit", "machine.json"), JSON.stringify({ machineId: "not-a-uuid", label: "fixture" }));
 	await expect(machineIdentity(a)).rejects.toThrow("Invalid installation identity");
 	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toContain("not-a-uuid");
