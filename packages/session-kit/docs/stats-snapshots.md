@@ -44,7 +44,10 @@ Installation state, never synced:
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
-  time; a partial import records valid updates and marks coverage incomplete.
+  time; a partial import records valid updates and marks coverage incomplete. The assembled cache
+  accepts up to 128 MiB; exceeding that limit fails before replacement and retains its last-good
+  bytes. Tests inject final-document byte accounting at the exact limit and one byte over, while
+  retaining real import validation and atomic publication.
 
 Snapshot version 1:
 
