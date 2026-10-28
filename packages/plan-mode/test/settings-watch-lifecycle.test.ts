@@ -8,6 +8,9 @@ import planMode from "../src/plan-mode.js";
 import * as settings from "../src/settings.js";
 import { createMockContext, createMockPi } from "./support.js";
 
+/** Public debounce expectation, deliberately independent of the implementation constant. */
+const expectedDebounceWindowMs = 75;
+
 const watchFixture = vi.hoisted(() => ({
   callback: undefined as undefined | ((event: string, name: string) => void),
   watcher: undefined as undefined | (EventEmitter & { close: () => void }),
@@ -50,7 +53,7 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
     watchFixture.callback("change", "settings.json");
     await vi.advanceTimersByTimeAsync(50);
     watchFixture.callback("rename", "settings.json");
-    await vi.advanceTimersByTimeAsync(74);
+    await vi.advanceTimersByTimeAsync(expectedDebounceWindowMs - 1);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(mock.thinkingLevel, "low", "the superseded deadline must not reload settings");
     await mock.commands.get("plan")?.handler("off", context.ctx);
@@ -65,7 +68,7 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
     watchFixture.callback("change", "settings.json");
     watcher.emit("error", new Error("watch backend closed"));
     assert.equal(closed, 1);
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(expectedDebounceWindowMs + 25);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(mock.thinkingLevel, "high", "an errored watch must cancel its pending reload");
     assert.equal(reads.length, 2, "cancelled reload must not start another filesystem read");
