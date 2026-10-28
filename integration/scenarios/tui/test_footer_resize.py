@@ -38,11 +38,15 @@ COMPACT_STATS = re.compile(
     r"CH(?P<rate>\d+\.\d)%(?P<marker> [wc])(?P<cause> \S+)?\s+\$\S+\s+\S+/\S+ \(auto\)"
 )
 QUOTA = re.compile(r"^\s*(?:Quota left:|Left:)")
+# Narrow widths wrap the quota by provider: the lead row is followed by one `OAI ...` row.
+QUOTA_WRAPPED = re.compile(r"^\s*(?:OpenAI|OAI) ")
 STATUS = "STATUS-LINE-OK"
 
 
 def assert_footer(pane: TmuxPane, width: int) -> None:
-    """Wait for exactly one consecutive four-row footer in the new tier, with no stale rows.
+    """Wait for exactly one consecutive footer in the new tier, with no stale rows.
+
+    The footer is four rows, or five when the quota wraps by provider at narrow widths.
 
     Parameters:
         pane (TmuxPane): actual terminal process.
@@ -59,15 +63,20 @@ def assert_footer(pane: TmuxPane, width: int) -> None:
         stats = [index for index, row in enumerate(rows) if STATS.search(row)]
         quota = [index for index, row in enumerate(rows) if QUOTA.search(row)]
         status = [index for index, row in enumerate(rows) if STATUS in row]
-        if (
-            len(stats) == len(quota) == len(status) == 1
-            and quota[0] == stats[0] + 1
-            and status[0] == stats[0] + 2
-        ):
-            footer = rows[stats[0] - 1 : status[0] + 1]
-            pattern = COMPACT_STATS if width == 60 else FULL_STATS
-            if len(footer) == 4 and pattern.match(rows[stats[0]]) and all(len(row) <= width for row in rows):
-                return
+        wrapped = [index for index, row in enumerate(rows) if QUOTA_WRAPPED.search(row)]
+        if len(stats) == len(quota) == len(status) == 1 and len(wrapped) <= 1:
+            # Quota rows: the lead row, plus one provider row directly below it when wrapped.
+            quota_rows = 1 + len(wrapped)
+            adjacent = not wrapped or wrapped[0] == quota[0] + 1
+            if adjacent and quota[0] == stats[0] + 1 and status[0] == stats[0] + 1 + quota_rows:
+                footer = rows[stats[0] - 1 : status[0] + 1]
+                pattern = COMPACT_STATS if width == 60 else FULL_STATS
+                if (
+                    len(footer) == 3 + quota_rows
+                    and pattern.match(rows[stats[0]])
+                    and all(len(row) <= width for row in rows)
+                ):
+                    return
         time.sleep(0.05)
     raise AssertionError(f"Footer did not repaint cleanly at {width}:\n{screen}")
 
