@@ -44,11 +44,12 @@ import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
-import { describeModel, describeVirtualModel, isVirtualModel, type ModelFallback, type ModelRegistry, modelFallbackNote, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
+import { type ModelFallback, type ModelRegistry, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
-import { modelRequest, selectModel } from "./model-selection.js";
+import { admitModelSelection, describeSelection, modelRequest, modelSelectionNote, selectModel } from "./model-selection.js";
+import { tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
-import { appendModelFallbackEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
@@ -206,7 +207,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
     record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
     `<status>${escapeXml(status)}</status>`,
     `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}</summary>`,
-    record.modelFallback ? `<model-note>${escapeXml(modelFallbackNote(record.modelFallback))}</model-note>` : null,
+    modelSelectionNote(record) ? `<model-note>${escapeXml(modelSelectionNote(record))}</model-note>` : null,
     `<result>${escapeXml(resultPreview)}</result>`,
     `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}${costXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
@@ -215,7 +216,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
 
 /** Build AgentDetails from a base + record-specific fields. */
 function buildDetails(
-  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "modelNote" | "modelFallback" | "tags">,
+  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "modelNote" | "modelFallback" | "modelTier" | "tags">,
   record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; outputFile?: string; lifetimeUsage: LifetimeUsage },
   activity?: AgentActivity,
   overrides?: Partial<AgentDetails>,
@@ -258,7 +259,8 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
     outputFile: record.outputFile,
     error: record.error,
-    modelNote: record.modelFallback ? modelFallbackNote(record.modelFallback) : undefined,
+    modelNote: modelSelectionNote(record) || undefined,
+    modelTier: record.modelTier,
     resultPreview: record.result
       ? record.result.length > resultMaxLen
         ? record.result.slice(0, resultMaxLen) + "…"
@@ -582,9 +584,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       tokens,
       usage,
       // Present only on a fallback, so the payload keeps its shape otherwise.
-      ...(record.modelFallback
-        ? { modelFallback: record.modelFallback, modelNote: modelFallbackNote(record.modelFallback) }
-        : {}),
+      ...fallbackFields(record),
     };
   }
 
@@ -596,9 +596,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   /** `modelFallback` + `modelNote` event fields, or nothing. Only what is KNOWN when the event fires. */
   function fallbackFields(record: AgentRecord | undefined): Record<string, unknown> {
-    return record?.modelFallback
-      ? { modelFallback: record.modelFallback, modelNote: modelFallbackNote(record.modelFallback) }
-      : {};
+    return {
+      ...(record?.modelTier ? { modelTier: record.modelTier } : {}),
+      ...(record?.modelFallback ? { modelFallback: record.modelFallback } : {}),
+      ...(modelSelectionNote(record) ? { modelNote: modelSelectionNote(record) } : {}),
+    };
   }
 
   /** The `subagents:record` history entry; the ONE builder, shared by live completion and the detached spool. */
@@ -608,6 +610,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       status: record.status, result: record.result, error: record.error,
       startedAt: record.startedAt, completedAt: record.completedAt,
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
+      ...(record.modelTier ? { modelTier: record.modelTier } : {}),
     };
   }
 
@@ -844,6 +847,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // fallback or invent one. The runner reports the real outcome itself.
     delete safeOptions.modelFallback;
     delete safeOptions.modelSelection;
+    delete safeOptions.modelTier;
+    delete safeOptions.previousModelTier;
+    delete safeOptions.previousModelFallback;
     return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
   };
 
@@ -1147,8 +1153,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           description: entry.description,
           reclaim: { handle: entry.handle, alias: entry.alias },
           resumeSessionFile: entry.sessionFile,
-          // The original failure, not whatever the CURRENT config would say.
-          ...(entry.modelFallback ? { modelFallback: entry.modelFallback } : {}),
+          // Historical disclosures never replace the continuation's current selection.
+          ...(entry.modelFallback ? { previousModelFallback: entry.modelFallback } : {}),
+          ...(entry.modelTier ? { previousModelTier: entry.modelTier } : {}),
           isBackground: true,
         });
         // The agent may still be starting — wait, so a startup failure lands in
@@ -1228,7 +1235,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     }
 
     try {
-      // Nothing else to pass: runAgent resolves model, thinking, max turns and
+      // Nothing else to pass: the manager resolves model; runAgent resolves thinking, max turns and
       // `isolated` from the agent's own config when the spawn omits them, and the
       // manager's onStart/onComplete callbacks own the widget, the fleet list
       // and the completion notification — the same contract the scheduler and
@@ -1620,6 +1627,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       ensureOutputFile(existing.outputFile);
       // A fresh transcript for a later resume must still say what the agent ran on.
       if (existing.modelFallback) appendModelFallbackEntry(existing.outputFile, id, existing.modelFallback);
+      if (existing.modelTier) appendModelTierEntry(existing.outputFile, id, existing.modelTier);
     }
     // Anchor streaming past the turns already on disk, captured BEFORE the
     // run starts. The resumed prompt lands as an ordinary user message at
@@ -1861,7 +1869,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - Use steer_subagent to send mid-run messages to a running background agent.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
-- Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
+- Use model to select a configured tier (e.g. "@cheap"), an exact "provider/modelId", or a fuzzy tool-call input (e.g. "haiku").
 - Use thinking to control extended thinking level.
 - Use inherit_context if the agent needs the parent conversation history.${isolationGuideline}${scheduleGuideline}
 
@@ -1963,7 +1971,7 @@ Terse command-style prompts produce shallow, generic work.
       model: Type.Optional(
         Type.String({
           description:
-            'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Omit to use the agent type\'s default.',
+            'Optional model override. Accepts a configured tier (e.g. "@cheap"), "provider/modelId", or fuzzy name (e.g. "haiku"). Explicit values win over agentModels and the agent definition.',
         }),
       ),
       thinking: Type.Optional(
@@ -2100,6 +2108,7 @@ Terse command-style prompts produce shallow, generic work.
         parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: customConfig?.displayName,
       });
       if (typeof selection === "string") return textResult(selection);
+      const tierBlock = selection?.tierBinding && !params.schedule ? await admitModelSelection(selection, ctx.modelRegistry, pi.events) : undefined;
       const model = selection?.model;
       const modelFallback = selection?.fallback;
 
@@ -2130,9 +2139,7 @@ Terse command-style prompts produce shallow, generic work.
       // parent's model used to show the level with nothing to attach it to.
       // This is the pre-session snapshot — agent-manager overwrites it with the
       // effective values the moment a session reports them.
-      const { modelName, modelId } = model
-        ? isVirtualModel(model) ? describeVirtualModel(model) : describeModel(model)
-        : { modelName: undefined, modelId: undefined };
+      const { modelName, modelId } = describeSelection(selection, ctx.modelRegistry);
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
       const agentInvocation: AgentInvocation = {
         modelName,
@@ -2157,7 +2164,7 @@ Terse command-style prompts produce shallow, generic work.
        * one there is. Never recomputed for a resume, which runs on its old session.
        */
       const modelNoteOf = (rec: AgentRecord | undefined): string | undefined =>
-        modelFallbackNote(rec ? rec.modelFallback : modelFallback) || undefined;
+        modelSelectionNote(rec ?? { modelFallback, modelTier: selection?.tier }) || undefined;
       const modelFallbackOf = (rec: AgentRecord | undefined): ModelFallback | undefined =>
         rec ? rec.modelFallback : modelFallback;
       /** A resume's lead-in: the record's note only (the type note describes a spawn, not a resume). */
@@ -2176,6 +2183,7 @@ Terse command-style prompts produce shallow, generic work.
         modelName,
         modelNote: modelNoteOf(undefined),
         modelFallback: modelFallbackOf(undefined),
+        modelTier: selection?.tier ? tierDisclosure(selection.tier) : undefined,
         tags: agentTags.length > 0 ? agentTags : undefined,
       };
 
@@ -2196,7 +2204,7 @@ Terse command-style prompts produce shallow, generic work.
         // A record's disclosure outranks this call's, even before its session
         // reports an invocation: resume reuses the old session, so this call's
         // config says nothing about what ran.
-        if (!rec?.invocation) return rec ? { ...detailBase, modelNote: modelNoteOf(rec), modelFallback: modelFallbackOf(rec) } : detailBase;
+        if (!rec?.invocation) return rec ? { ...detailBase, modelNote: modelNoteOf(rec), modelFallback: modelFallbackOf(rec), modelTier: rec.modelTier } : detailBase;
         const type = rec.type;
         const { modelName: recModelName, tags } = buildInvocationTags(rec.invocation);
         const recModeLabel = getPromptModeLabel(type);
@@ -2208,6 +2216,7 @@ Terse command-style prompts produce shallow, generic work.
           modelName: recModelName,
           modelNote: modelNoteOf(rec),
           modelFallback: modelFallbackOf(rec),
+          modelTier: rec.modelTier,
           tags: recTags.length > 0 ? recTags : undefined,
         };
       };
@@ -2241,7 +2250,7 @@ Terse command-style prompts produce shallow, generic work.
             // at fire time, and the original is what a user edits.
             subagent_type: requestedType,
             prompt: params.prompt as string,
-            model: params.model as string | undefined,
+            model: selection?.requested?.startsWith("@") ? selection.requested : params.model as string | undefined,
             thinking: thinking,
             max_turns: effectiveMaxTurns,
             isolated: isolated,
@@ -2377,13 +2386,14 @@ Terse command-style prompts produce shallow, generic work.
       // exhaustion policy says fail now (`wait: false`). Anything else fails
       // now, with the reset, rather than starting on an exhausted provider.
       const dispatchModel = model ?? ctx.model;
-      const quotaBlock = dispatchModel ? await checkAdmission(pi.events, modelRef(dispatchModel), undefined, clock) : undefined;
+      const quotaBlock = selection?.tierBinding ? tierBlock
+        : dispatchModel ? await checkAdmission(pi.events, modelRef(dispatchModel), undefined, clock) : undefined;
       if (quotaBlock) {
         // A parked job is a scheduled job, which has no `cwd` to carry.
         const canPark = runInBackground && !inheritContext && cwd === undefined && mayPark(quotaBlock)
           && isSchedulingEnabled() && scheduler.isActive();
         if (!canPark || !mayPark(quotaBlock)) {
-          throw new Error(`${describeBlock(quotaBlock)} The agent was not started.`);
+          throw new Error(`${selection?.tier ? `${modelNoteOf(undefined)}\n` : ""}${describeBlock(quotaBlock)} The agent was not started.`);
         }
         const job = scheduler.addJob({
           name: `${params.description} (quota ${nanoid(4)})`,
@@ -2393,7 +2403,7 @@ Terse command-style prompts produce shallow, generic work.
           prompt: params.prompt as string,
           // Keep the request, not today's configured/parent pick. Fire-time
           // selection must still apply agentModels and aliases.
-          model: params.model,
+          model: selection?.requested?.startsWith("@") ? selection.requested : params.model,
           thinking,
           max_turns: effectiveMaxTurns,
           isolated,
@@ -3208,7 +3218,7 @@ Terse command-style prompts produce shallow, generic work.
         `Agent: ${record.id}\n` +
         `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
         `Description: ${record.description}\n` +
-        (record.modelFallback ? `${modelFallbackNote(record.modelFallback)}\n` : "") +
+        (modelSelectionNote(record) ? `${modelSelectionNote(record)}\n` : "") +
         `\n`;
 
       if (record.status === "running") {
@@ -3923,6 +3933,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
       maxActiveSubagents: undefined,
       nestedSubagentReserve: undefined,
       modelAliases: undefined,
+      modelTiers: undefined,
+      modelResolution: undefined,
       agentModels: undefined,
       reportUsage: isReportUsageEnabled(),
       showCost: isShowCostEnabled(),

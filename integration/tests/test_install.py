@@ -79,7 +79,33 @@ ATOMIC_SUFFIX = re.compile(r"[0-9a-f]{32}\.(tmp|replacement)")
 CHILD_ENV_PROBE_KEYS = (
     "NODE_OPTIONS",
     "NODE_PATH",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
     "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "BASH_ENV",
+    "ENV",
+    "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES",
+    "PYTHONPATH",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_SSH_COMMAND",
+    "GIT_ASKPASS",
+    "Http_Proxy",
+    "NPM_CONFIG_REGISTRY",
+    "npm_config_registry",
     "NPM_CONFIG_PREFIX",
     "npm_config_prefix",
     "PI_FOO",
@@ -98,6 +124,40 @@ CHILD_ENV_PROBE_KEYS = (
     "CI",
     "GITHUB_ACTIONS",
 )
+CONNECTIVITY_PROBE_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_connectivity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never dump workstation proxy credentials or CA paths through recording test shims.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped parent environment isolation.
+
+    Returns:
+        None: only explicitly set synthetic connectivity values can reach the shims.
+
+    Raises:
+        OSError: the process environment cannot be modified.
+    """
+    for key in CONNECTIVITY_PROBE_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
 FAKE_PI = """\
 #!{python}
 # Fake `pi`: `install npm:<name>@<version>` writes the package and its lockfile entry.
@@ -5954,11 +6014,27 @@ def test_every_child_uses_the_minimal_environment(
 
     Returns:
         None: every observed child receives safe inherited keys and owned overrides only.
+
+    Raises:
+        AssertionError: a child inherits injection variables or loses required runtime settings.
     """
     hostile = {
         "NODE_OPTIONS": f"--require {tmp_path / 'marker.js'}",
         "NODE_PATH": "parent-node-module-injection",
-        "NODE_EXTRA_CA_CERTS": "parent-extra-ca",
+        "BASH_ENV": "parent-shell-injection",
+        "ENV": "parent-shell-injection",
+        "LD_PRELOAD": "parent-loader-injection",
+        "DYLD_INSERT_LIBRARIES": "parent-loader-injection",
+        "PYTHONPATH": "parent-python-injection",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.sshCommand",
+        "GIT_CONFIG_VALUE_0": "parent-git-injection",
+        "GIT_CONFIG_GLOBAL": "parent-git-config",
+        "GIT_SSH_COMMAND": "parent-git-command",
+        "GIT_ASKPASS": "parent-git-askpass",
+        "Http_Proxy": "wrong-case-proxy",
+        "NPM_CONFIG_REGISTRY": "https://mirror.invalid",
+        "npm_config_registry": "https://mirror.invalid",
         "NPM_CONFIG_PREFIX": "parent-uppercase-prefix",
         "npm_config_prefix": "parent-lowercase-prefix",
         "PI_FOO": "parent-pi-injection",
@@ -6038,3 +6114,293 @@ def test_node_version_does_not_execute_parent_preloads(
 def test_install_never_spawns_relative_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every run/Popen executable in a full installer flow must be absolute."""
     relative_tool_install(tmp_path, monkeypatch, assert_absolute=True)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "all_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NODE_EXTRA_CA_CERTS",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+    ],
+)
+def test_connectivity_reaches_every_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    """Each exact connectivity key reaches real npm/gh/node/pi shims unchanged.
+
+    Parameters:
+        tmp_path (Path): isolated CA files, shims and install roots.
+        monkeypatch (pytest.MonkeyPatch): scoped synthetic environment and network seams.
+        key (str): exact allowlisted connectivity name.
+
+    Returns:
+        None: every child's environment preserves the synthetic value.
+
+    Raises:
+        AssertionError: any child drops or rewrites the value.
+    """
+    ca = tmp_path / "enterprise-ca.pem"
+    ca.write_text("synthetic CA fixture")
+    value = (
+        str(tmp_path)
+        if key == "SSL_CERT_DIR"
+        else str(ca)
+        if key in {"SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
+        else "internal.invalid,localhost"
+        if key.lower() == "no_proxy"
+        else "http://synthetic-user:synthetic-password@proxy.invalid:8080"
+    )
+    monkeypatch.setenv(key, value)
+    relative_tool_install(tmp_path, monkeypatch, assert_absolute=True)
+    for log in (tmp_path / "tools.env.jsonl", tmp_path / "pi-calls.env.jsonl"):
+        environments = [json.loads(line) for line in log.read_text().splitlines()]
+        assert environments
+        assert all(env.get(key) == value for env in environments)
+
+
+@pytest.mark.parametrize(
+    "key", ["SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"]
+)
+@pytest.mark.parametrize("kind", ["relative", "missing", "wrong-kind"])
+def test_invalid_ca_dropped_with_value_free_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, key: str, kind: str
+) -> None:
+    """Relative, missing and wrong-kind CA paths never reach children or warning text.
+
+    Parameters:
+        tmp_path (Path): isolated path fixture.
+        caplog (pytest.LogCaptureFixture): captured value-free warnings.
+        key (str): CA file/directory variable.
+        kind (str): relative, missing or wrong-kind path.
+
+    Returns:
+        None: invalid paths are dropped with the exact warning.
+
+    Raises:
+        AssertionError: an invalid path passes or its value is logged.
+    """
+    path = tmp_path / "private-ca-path"
+    if kind == "wrong-kind":
+        if key == "SSL_CERT_DIR":
+            path.touch()
+        else:
+            path.mkdir()
+    value = "private-relative-ca" if kind == "relative" else str(path)
+    assert key not in release.child_environment({key: value})
+    assert caplog.messages == [f"Dropping `{key}`: expected an absolute existing CA path"]
+    assert value not in caplog.text
+
+
+@pytest.mark.parametrize("key", CONNECTIVITY_PROBE_KEYS)
+@pytest.mark.parametrize("character", ["\u0000", "\n", "\r"])
+def test_connectivity_rejects_control_characters(
+    caplog: pytest.LogCaptureFixture, key: str, character: str
+) -> None:
+    """Invalid environment values are dropped before spawn with a value-free warning.
+
+    Parameters:
+        caplog (pytest.LogCaptureFixture): captured warning text.
+        key (str): exact connectivity variable.
+        character (str): NUL, CR or LF injected into the value.
+
+    Returns:
+        None: no invalid value reaches a child.
+
+    Raises:
+        AssertionError: the value passes or its diagnostic exposes it.
+    """
+    assert key not in release.child_environment({key: f"private{character}value"})
+    assert caplog.messages == [f"Dropping `{key}`: NUL/newline is not allowed"]
+
+
+@pytest.mark.parametrize(
+    "proxy",
+    [
+        "http://user:password@host:8080",
+        "user:password@host:8080",
+        "socks5://user:p%40ss@host:1080",
+        "http://user@host:8080",
+    ],
+)
+def test_proxy_redaction_before_tail_truncation(monkeypatch: pytest.MonkeyPatch, proxy: str) -> None:
+    """Echoed environments and byte/string failure tails strip credentials before slicing.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped synthetic proxy setting.
+        proxy (str): credential-bearing URL or authority.
+
+    Returns:
+        None: independent expected strings match all sanitized tails.
+
+    Raises:
+        AssertionError: userinfo survives or truncation precedes redaction.
+    """
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    expected = proxy.replace(proxy.rsplit("://", maxsplit=1)[-1].split("@", maxsplit=1)[0] + "@", "")
+    message = json.dumps({"HTTPS_PROXY": proxy}) + " " + proxy
+    assert release.redact_diagnostic(message) == json.dumps({"HTTPS_PROXY": expected}) + " " + expected
+    clean_message = json.dumps({"HTTPS_PROXY": expected}) + " " + expected
+    for output in (message, message.encode()):
+        error = subprocess.CalledProcessError(1, ["npm"], output=output)
+        assert release._error_tail(error) == clean_message
+    # If slicing came first, credentials straddling the boundary would remain visible.
+    output = proxy + "x" * 5995
+    error = subprocess.CalledProcessError(1, ["gh"], output=output)
+    assert release._error_tail(error) == (expected + "x" * 5995)[-6000:]
+
+
+@pytest.mark.parametrize("tool", ["node", "pi", "pi-install", "npm", "gh"])
+def test_child_diagnostics_redact_proxy_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """Real child errors and successful version text redact URL userinfo.
+
+    Parameters:
+        tmp_path (Path): isolated executable shims and staging.
+        monkeypatch (pytest.MonkeyPatch): scoped environment and download seams.
+        tool (str): installer subprocess boundary to exercise.
+
+    Returns:
+        None: public text retains host/source identities without credentials.
+
+    Raises:
+        AssertionError: credentials survive or useful identities disappear.
+    """
+    proxy = "http://echo-user:echo-password@proxy.invalid:8080"
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    child = tmp_path / tool
+    child.write_text(f"#!{sys.executable}\nimport os\nprint(os.environ['HTTPS_PROXY'])\n")
+    child.chmod(0o700)
+    if tool == "node":
+        with pytest.raises(UnsupportedError) as caught:
+            install.node_version(str(child))
+        text = str(caught.value)
+    elif tool == "pi":
+        harness = Harness(tmp_path, monkeypatch)
+        harness.layout.link.parent.mkdir(parents=True, exist_ok=True)
+        harness.layout.link.symlink_to(child)
+        text = install.post_check(harness.layout)
+    else:
+        child.write_text(child.read_text() + "raise SystemExit(1)\n")
+        if tool == "pi-install":
+            harness = Harness(tmp_path, monkeypatch)
+            with pytest.raises(InstallError) as caught:
+                install.install_packages(harness.verified, child, tmp_path / "staging")
+        elif tool == "gh":
+            with pytest.raises(RuntimeError) as caught:
+                release.verify_attestation(
+                    tmp_path / "asset", "nredd/pi", "workflow", "ref", gh_bin=str(child)
+                )
+        else:
+            tarball = shim_core_tarball()
+            monkeypatch.setattr(release, "fetch_bytes", lambda request: tarball)
+            checksums = {
+                url: hashlib.sha256(tarball).hexdigest()
+                for url in release.release_package_urls("v1.3.0-nredd.7").values()
+            }
+            with pytest.raises(RuntimeError) as caught:
+                release.fetch_release(
+                    "v1.3.0-nredd.7", tmp_path / "prefix", checksums=checksums, npm_bin=str(child)
+                )
+        text = str(caught.value)
+    assert "echo-user" not in text
+    assert "echo-password" not in text
+    assert "http://proxy.invalid:8080" in text
+    if tool == "pi-install":
+        assert harness.verified.sources[0] in text
+
+
+@pytest.mark.parametrize("proxy", ["http://@host", "http://a@host"])
+@pytest.mark.parametrize(
+    "text", ["npm:@nredd/pkg@1.0", "git@github.com:repo", "email@example.com", "name@host"]
+)
+def test_proxy_redaction_preserves_nonproxy_identifiers(
+    monkeypatch: pytest.MonkeyPatch, proxy: str, text: str
+) -> None:
+    """Empty/short userinfo must not damage scoped package, SSH or email identifiers.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): scoped proxy environment.
+        proxy (str): empty or short proxy userinfo.
+        text (str): unrelated identifier that must remain intact.
+
+    Returns:
+        None: only the proxy userinfo is removed.
+
+    Raises:
+        AssertionError: unrelated text changes or userinfo survives.
+    """
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    assert release.redact_diagnostic(f"{text} {proxy}") == f"{text} http://host"
+
+
+@pytest.mark.parametrize("boundary", ["installer", "fallback-warning", "release-cli"])
+def test_proxy_redaction_at_public_diagnostic_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, boundary: str
+) -> None:
+    """Public logs and CLI exits redact even when a lower layer returns a raw error.
+
+    Parameters:
+        tmp_path (Path): isolated artifact path.
+        monkeypatch (pytest.MonkeyPatch): scoped failure injection and proxy environment.
+        caplog (pytest.LogCaptureFixture): public logger output.
+        boundary (str): installer error, fallback warning or release CLI.
+
+    Returns:
+        None: public text contains only the proxy host.
+
+    Raises:
+        AssertionError: a boundary exposes credentials or drops the host.
+    """
+    proxy = "http://log-user:log-password@host:8080"
+    monkeypatch.setenv("HTTP_PROXY", proxy)
+    error = (
+        InstallError(proxy)
+        if boundary == "installer"
+        else release.AttestationRateLimitedError(proxy)
+        if boundary == "fallback-warning"
+        else RuntimeError(proxy)
+    )
+
+    def fail(*args: object, **kwargs: object) -> None:
+        """Inject a raw transport diagnostic at the public boundary.
+
+        Parameters:
+            *args (object): unused operation inputs.
+            **kwargs (object): unused operation options.
+
+        Returns:
+            None: never returned.
+
+        Raises:
+            RuntimeError: the raw diagnostic for this boundary.
+        """
+        raise error
+
+    if boundary == "installer":
+        monkeypatch.setattr(install, "run", fail)
+        assert install.main([SHA]) == ExitCode.FAILED
+        text = caplog.text
+    elif boundary == "fallback-warning":
+        monkeypatch.setattr(release, "attestation_bundle", fail)
+        monkeypatch.setattr(release, "verify_attestation", lambda *args, **kwargs: None)
+        release.verify_public_attestation(tmp_path / "asset", "repo", "workflow", "ref")
+        text = caplog.text
+    else:
+        monkeypatch.setattr(release, "verify_root_overrides", fail)
+        monkeypatch.setattr(sys, "argv", ["release", "--verify-root-overrides"])
+        with pytest.raises(SystemExit) as caught:
+            release.main()
+        text = str(caught.value)
+    assert "log-user" not in text
+    assert "log-password" not in text
+    assert "http://host:8080" in text

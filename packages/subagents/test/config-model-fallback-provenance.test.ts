@@ -76,7 +76,7 @@ async function boot() {
 }
 
 describe("eviction, tombstone and @handle reopen", () => {
-  it("an evicted id still discloses, and a reopened @handle keeps the ORIGINAL failure", async () => {
+  it("an evicted id discloses its failure while a reopened @handle uses current selection", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "Date"] });
     const { tools, lifecycle } = await boot();
     vi.mocked(runAgent).mockImplementation(runnerResolution() as any);
@@ -99,8 +99,8 @@ describe("eviction, tombstone and @handle reopen", () => {
     const gone = await tools.get("get_subagent_result").execute("tc2", { agent_id: id }, undefined, undefined, ctx());
     expect(textOf(gone)).toContain(NOTE);
 
-    // 2. reopen: the CURRENT config now resolves (the definition's model is gone),
-    // and the reopened run selects nothing itself, so only the carried value can say it.
+    // 2. reopen: the CURRENT config now inherits the parent (the definition's
+    // model is gone), so its disclosure must not repeat the old failure.
     writeFileSync(join(cwd, ".pi", "agents", "scout.md"), "---\ndescription: scout\ntools: read\n---\nscout.\n");
     vi.mocked(runAgent).mockImplementation((async (_c: any, _t: string, _p: string, o: any) => {
       o.onSessionCreated?.({ dispose: vi.fn(), messages: [], model: PARENT });
@@ -111,7 +111,7 @@ describe("eviction, tombstone and @handle reopen", () => {
 
     expect(handled).toEqual({ action: "handled" });
     const reopened = await tools.get("get_subagent_result").execute("tc3", { agent_id: "scout" }, undefined, undefined, ctx());
-    expect(textOf(reopened)).toContain(NOTE);
+    expect(textOf(reopened)).not.toContain(NOTE);
     vi.useRealTimers();
   });
 });

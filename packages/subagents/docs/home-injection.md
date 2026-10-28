@@ -124,6 +124,15 @@ not silently redefine these existing frontmatter callers.
 
 Tests:
 
+- Both todo and subagents Vitest configs install the shared HOME/homedir guard.
+  Todo runs its full Bun suite through the spawn-time-home launcher; subagents
+  keeps native scenarios plus the real-loader gate until workflow stack-line
+  issue #174 is fixed. See `docs/verification-engines.md` at the repository root.
+- `model-selection.test.ts` combines injected-home scope settings with tier
+  selection: explicit physical choices are refused out of scope, trusted tiers
+  warn instead, and changing the injected allowlist permits both. The runner
+  consumes the manager's original admitted selection without resolving again;
+  continuation history stays in `previousModelTier`/`previousModelFallback`.
 - `home-injection.test.ts` uses real disposable files and filesystem probes. It
   asserts zero probes resolve under `os.homedir()`, including missing resources
   and legacy fallback paths. It covers memory, skills, custom agents, settings,

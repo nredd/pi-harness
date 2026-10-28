@@ -145,13 +145,25 @@ import {
   parseExtSelectors,
   resolveEffectiveMaxTurns,
   resumeAgent,
-  runAgent,
   SUBAGENT_TOOL_NAMES,
   setDefaultMaxTurns,
   setGraceTurns,
   setRememberAgents,
 } from "../src/agent-runner.js";
+import { selectModel } from "../src/model-selection.js";
 import { compileJsonSchema } from "../src/workflow/json-schema.js";
+import { runAgent as runSelectedAgent } from "./helpers/run-selected-agent.js";
+
+/** Preserve one-shot config fixtures while supplying the manager-owned selection explicitly. */
+async function runAgent(...[context, type, prompt, options]: Parameters<typeof runSelectedAgent>) {
+  const config = getAgentConfig(type);
+  vi.mocked(getAgentConfig).mockReturnValueOnce(config);
+  const selection = options.modelSelection ?? selectModel({ agentType: type, definitionModel: config?.model,
+    paramModel: options.model, parentModel: context.model, registry: context.modelRegistry,
+    cwd: options.configCwd ?? options.cwd ?? context.cwd });
+  if (typeof selection === "string") throw new Error(selection);
+  return runSelectedAgent(context, type, prompt, { ...options, modelSelection: selection });
+}
 
 /** The most recent session built by `createSession` — read by `lastToolsPassed()`. */
 let lastSession: ReturnType<typeof createSession>["session"] | undefined;

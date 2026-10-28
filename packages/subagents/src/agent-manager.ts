@@ -30,9 +30,10 @@ import { getAgentConfig } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { ModelCallEvent } from "./model-call.js";
-import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback, modelFallbackNote } from "./model-resolver.js";
-import { type ModelSelection, selectModel } from "./model-selection.js";
-import { appendModelFallbackEntry } from "./output-file.js";
+import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback } from "./model-resolver.js";
+import { admitModelSelection, describeSelection, type ModelSelection, modelSelectionNote, selectModel } from "./model-selection.js";
+import { type TierDisclosure, tierDisclosure } from "./model-tiers.js";
+import { appendModelFallbackEntry, appendModelTierEntry } from "./output-file.js";
 import {
   assertWithinBudgetDepth,
   BUDGET_QUEUE_FULL_ERROR,
@@ -43,6 +44,7 @@ import {
   releaseBudget,
   tryAcquireBudget,
 } from "./process-budget.js";
+import { describeBlock } from "./quota-admission.js";
 import { isStaleCtxError } from "./stale-ctx.js";
 import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, Pool, SubagentType, ThinkingLevel } from "./types.js";
 import { addUsage, type LifetimeUsage } from "./usage.js";
@@ -62,6 +64,10 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
   if (!physical) return;
   record.invocation ??= {};
   Object.assign(record.invocation, physical);
+  if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {
+    record.modelTier = { ...record.modelTier, answered: physical.modelId };
+    if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
+  }
 }
 
 export type OnAgentComplete = (record: AgentRecord) => void;
@@ -168,12 +174,14 @@ export interface EvictedNote {
   transcript?: string;
   /** The run's model fallback, so even an evicted agent's id still discloses it. */
   modelFallback?: ModelFallback;
+  modelTier?: TierDisclosure;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
 export function describeEvicted(note: EvictedNote): string {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
-  const fallback = note.modelFallback ? `\n${modelFallbackNote(note.modelFallback)}` : "";
+  const disclosure = modelSelectionNote(note);
+  const fallback = disclosure ? `\n${disclosure}` : "";
   return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
 }
 
@@ -319,8 +327,11 @@ interface SpawnOptions {
   model?: Model<any> | string;
   /** Internal preflight outcome, stored on the record without resolving again. */
   modelSelection?: ModelSelection;
-  /** Original provenance retained when reopening an evicted conversation. Internal only. */
-  modelFallback?: ModelFallback;
+  /** Historical outcome only, never used to label the continuation. */
+  previousModelTier?: TierDisclosure;
+  /** Historical fallback only, never used to label the continuation. */
+  previousModelFallback?: ModelFallback;
+
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
@@ -733,8 +744,11 @@ export class AgentManager {
       // `options` has stopped being the interesting object.
       blocking: options.blocking,
       invocation: options.invocation,
-      modelFallback: options.modelFallback ?? selection.fallback,
+      modelFallback: selection.fallback,
       modelSelection: selection,
+      modelTier: selection.tier ? tierDisclosure(selection.tier) : undefined,
+      previousModelTier: options.previousModelTier,
+      previousModelFallback: options.previousModelFallback,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,
@@ -1005,6 +1019,24 @@ export class AgentManager {
     record.startGate = undefined;
     this.chargePool(record.chargedPool, 1);
 
+    // Hold the pool slot BEFORE awaiting admission, just as for worktree creation.
+    try {
+      if (options.modelSelection?.tierBinding && !options.modelSelection.tierAdmitted) {
+        const block = await admitModelSelection(options.modelSelection, ctx.modelRegistry, pi.events);
+        record.modelTier = options.modelSelection.tier ? tierDisclosure(options.modelSelection.tier) : undefined;
+        record.modelFallback = options.modelSelection.fallback;
+        if (block) throw new Error(`${modelSelectionNote(record)} ${describeBlock(block)} The agent was not started.`);
+        if (record.abortController?.signal.aborted || options.signal?.aborted) throw new Error("Agent aborted during model admission.");
+      }
+      if (record.modelTier) {
+        record.invocation ??= {};
+        Object.assign(record.invocation, describeSelection(options.modelSelection, ctx.modelRegistry));
+      }
+    } catch (error) {
+      this.chargePool(record.chargedPool, -1);
+      throw error;
+    }
+
     // Worktree isolation: try to create a temporary git worktree. Strict —
     // fail loud if not possible (no silent fallback to main tree). Done BEFORE
     // the run is kicked off so a failure doesn't leave a half-running agent.
@@ -1089,7 +1121,7 @@ export class AgentManager {
       homeDir: options.homeDir ?? this.homeDir,
       agentId: id,
       model: options.modelSelection?.model,
-      modelSelection: options.modelSelection,
+      modelSelection: record.modelSelection!,
       maxTurns: options.maxTurns,
       isolated: options.isolated,
       inheritContext: options.inheritContext,
@@ -1157,7 +1189,9 @@ export class AgentManager {
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
           Object.assign(
             record.invocation,
-            isVirtualModel(session.model) ? describeVirtualModel(session.model) : describeModel(session.model),
+            record.modelTier?.kind === "routed" && record.modelTier.admitted
+              ? describeSelection(options.modelSelection, ctx.modelRegistry)
+              : isVirtualModel(session.model) ? describeVirtualModel(session.model) : describeModel(session.model),
           );
           // Guarded for the reason above: a session that reports no level keeps
           // the request rather than losing it. Overwriting unconditionally would
@@ -1172,6 +1206,7 @@ export class AgentManager {
         }
         // The transcript says it too: it is what someone opens to find out what ran.
         if (record.modelFallback && record.outputFile) appendModelFallbackEntry(record.outputFile, record.id, record.modelFallback);
+        if (record.modelTier && record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
         // Flush any steers that arrived before the session was ready
         if (record.pendingSteers?.length) {
           for (const msg of record.pendingSteers) {
@@ -1917,6 +1952,7 @@ export class AgentManager {
       description: record.description,
       sessionFile: record.sessionFile,
       completedAt: record.completedAt ?? this.clock.now(),
+      ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
     // Bound the memory a long session can accumulate. Oldest first, since the
@@ -1938,6 +1974,7 @@ export class AgentManager {
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - completedAt) / 60_000)),
       transcript: record.outputFile ?? record.sessionFile,
+      ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
     while (this.evictedNotes.size > MAX_EVICTED_NOTES) {
