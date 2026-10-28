@@ -2,7 +2,9 @@
 
 Scope: tests for the measured line/function gaps after home injection (#171),
 base `26144ab4`. No coverage policy, config, dependency, exclusion or HOME changes.
-Node v26.12.0, Bun 1.4.4, Vitest 5.0.3 on local macOS arm64. Hosted CI and the
+Node v26.12.0 and Bun 1.4.4 on local macOS arm64. `npm test` resolves the package's
+Vitest 4.1.12; `test:bun`, in-process tests and the explicit coverage command resolve
+root Vitest 5.0.3. Both Node Vitest versions pass the full suite. Hosted CI and the
 repo-pinned Bun 1.3.14 were not run locally. No merge, publication or activation.
 
 Istanbul measures the real Vitest-imported graph here. V8/Jiti mixed-loader
@@ -55,8 +57,9 @@ The exported deleted-status overlay glyph and defensive i18n fallback are kept.
 ## Reproduce
 
 Install worktree dependencies with `npm ci --ignore-scripts`. The root lock
-resolves Vitest 5.0.3 even though the package manifest says 4.1.12. Install the
-matching provider outside the repository; link only into ignored `node_modules`:
+contains root Vitest 5.0.3 and package-local Vitest 4.1.12. Coverage explicitly uses
+the root binary, matching the measured spec. Install its matching provider outside
+the repository; link only into ignored `node_modules`:
 
 ```sh
 npm install --prefix /tmp/cov-todo-provider --ignore-scripts --no-audit --no-fund \

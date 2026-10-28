@@ -59,10 +59,15 @@ describe("applyTaskMutation — create", () => {
 
 describe("applyTaskMutation — update", () => {
 	it.each([
-		{ status: "completed" as const, evidence: "tests passed", reason: "not deferred" },
-		{ subject: "rename", reason: "" },
-	])("rejects reason outside deferred, including an empty reason: %j", (params) => {
-		const state = stateWith(task({ id: 1, subject: "original", status: "in_progress" }));
+		{
+			currentStatus: "in_progress" as const,
+			status: "completed" as const,
+			evidence: "tests passed",
+			reason: "not deferred",
+		},
+		{ currentStatus: "pending" as const, subject: "rename", reason: "" },
+	])("rejects reason outside deferred, including an empty reason: %j", ({ currentStatus, ...params }) => {
+		const state = stateWith(task({ id: 1, subject: "original", status: currentStatus }));
 		const result = applyTaskMutation(state, "update", { id: 1, ...params });
 		expect(result.op).toEqual({
 			kind: "error",
@@ -85,6 +90,7 @@ describe("applyTaskMutation — update", () => {
 		});
 		expect(result.state).toBe(state);
 	});
+
 	it("rejects id-only update", () => {
 		const state = stateWith(task({ id: 1, subject: "x" }));
 		const result = applyTaskMutation(state, "update", { id: 1 });

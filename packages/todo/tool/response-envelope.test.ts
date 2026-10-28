@@ -30,6 +30,7 @@ describe("formatContent", () => {
 			"Plan: Release -- 0/1 plan items open\n[completed] #1 Migration [plan: Migration]\n    evidence: canary passed",
 		);
 	});
+
 	it("create — 'Created #id: subject (pending)'", () => {
 		const state = stateWith(t({ id: 1, subject: "alpha" }));
 		expect(formatContent({ kind: "create", taskId: 1 }, state)).toBe("Created #1: alpha (pending)");
