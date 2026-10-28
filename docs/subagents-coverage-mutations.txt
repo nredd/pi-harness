@@ -63,3 +63,47 @@ AssertionError: expected [ true, true ] to deeply equal [ true, false ]
  Test Files  1 failed (1)
       Tests  2 failed | 3 passed (5)
 
+PR #193 correction on parent 510270cf8412c0fce4d8159aeaee19ce1942d4b1
+Command for EACH isolated mutation, from packages/subagents:
+../../node_modules/.bin/vitest run test/conversation-viewer-outcomes.test.ts --maxWorkers=1
+All six runs: exit 1; Test Files 1 failed (1); Tests 1 failed | 4 passed (5).
+Restore each change before applying the next; final production diff is empty.
+
+Log: /tmp/pr193-mutant-hr.log
+Mutation: fallbackMarkdownTheme hr: text => th.fg("dim", text) -> text => text
+ FAIL styles links, quotes, separators and fenced source without an initialized host theme
+AssertionError: expected '<border>╭────────────────────────────…' to contain '<dim>────────────────────────────────…'
+Failing assertion: complete <dim>-wrapped 80-character Markdown rule.
+
+Log: /tmp/pr193-mutant-code-color.log
+Mutation: fallbackMarkdownTheme codeBlock: text => th.fg("muted", text) -> text => text
+ FAIL styles links, quotes, separators and fenced source without an initialized host theme
+AssertionError: expected '<border>╭────────────────────────────…' to contain '  <muted>const answer = 42;</muted>'
+
+Log: /tmp/pr193-mutant-code-border.log
+Mutation: fallbackMarkdownTheme codeBlockBorder: text => th.fg("dim", text) -> text => text
+ FAIL styles links, quotes, separators and fenced source without an initialized host theme
+AssertionError: expected '<border>╭────────────────────────────…' to contain '<dim>```js</dim>'
+
+Log: /tmp/pr193-mutant-unsubscribe.log
+Mutation: remove this.unsubscribe() call from dispose(), retaining reset to undefined.
+ FAIL ticks only until the observed run settles and ignores stale events after disposal
+AssertionError: expected "vi.fn()" to be called once, but got 0 times
+Failing assertion: unsubscribe count immediately after first disposal.
+
+Log: /tmp/pr193-mutant-idempotence.log
+Mutation: remove this.unsubscribe = undefined from dispose(), retaining unsubscribe call.
+ FAIL ticks only until the observed run settles and ignores stale events after disposal
+AssertionError: expected "vi.fn()" to be called once, but got 2 times
+Failing assertion: unsubscribe count immediately after second disposal.
+
+Log: /tmp/pr193-mutant-stale-event.log
+Mutation: remove if (this.closed) return ONLY from session.subscribe callback.
+ FAIL ticks only until the observed run settles and ignores stale events after disposal
+AssertionError: expected "vi.fn()" to be called 2 times, but got 3 times
+Failing assertion: requestRender count immediately after retained callback emits agent_end.
+Fixture deliberately keeps callback callable after unsubscribe, modeling an in-flight event.
+
+Restored focused command: exit 0, 1 file passed, 5 tests passed.
+Log: /tmp/pr193-focused-restored.log
+

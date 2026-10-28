@@ -32,8 +32,12 @@ describe("embedded conversation outcomes", () => {
       expect(rendered).toContain("<muted> (https://example.com)</muted>");
       expect(rendered).toContain("<muted>quoted</muted>");
       expect(rendered).toContain("<dim>│ </dim>");
-      expect(rendered).toContain("<dim>───");
-      expect(rendered).toContain("const answer = 42;");
+      // Markdown caps HRs at 80 columns; the viewer chrome uses other widths.
+      expect(rendered).toContain(`<dim>${"─".repeat(80)}</dim>`);
+      // Match both fence borders and the styled source, not just its text.
+      expect(rendered).toContain("<dim>```js</dim>");
+      expect(rendered).toContain("  <muted>const answer = 42;</muted>");
+      expect(rendered).toContain("<dim>```</dim>");
       expect(rendered).toContain("<accent>- </accent>");
       expect(rendered).toContain("<muted>inline-code</muted>");
     } finally { f.viewer.dispose(); setCapabilities(capabilities); }
@@ -53,11 +57,16 @@ describe("embedded conversation outcomes", () => {
     expect(f.requestRender).toHaveBeenCalledTimes(2);
     expect(f.render()).toContain("1.0s");
     f.viewer.dispose();
-    f.viewer.dispose();
-    f.emit({ type: "agent_end", messages: [] });
-    f.clock.advance(10000);
-    expect(f.requestRender).toHaveBeenCalledTimes(2);
     expect(f.unsubscribe).toHaveBeenCalledOnce();
+    f.viewer.dispose();
+    expect(f.unsubscribe).toHaveBeenCalledOnce();
+    // Deliberately retain the subscribed callback, modeling delivery already in flight.
+    // Unsubscription must not be what prevents this stale callback repainting the UI.
+    f.emit({ type: "agent_end", messages: [] });
+    expect(f.requestRender).toHaveBeenCalledTimes(2);
+    f.clock.advance(10000);
+    expect(f.clock.pending).toBe(0);
+    expect(f.requestRender).toHaveBeenCalledTimes(2);
   });
 
   it("moves down and pages from the first line using the fullscreen viewport height", () => {

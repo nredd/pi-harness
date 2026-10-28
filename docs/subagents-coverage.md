@@ -112,6 +112,44 @@ The inventory text files are similarly pinned to the baseline/final source
 revision, and need regeneration when source changes; their line numbers are
 Istanbul counter locations, not stable source citations.
 
+PR #193 review correction, executed on parent `510270cf8412c0fce4d8159aeaee19ce1942d4b1`:
+
+- Test blob `10a3e8dc8c88868b3d183e617787583b18ca5d04` now matches the complete
+  `<dim>`-wrapped 80-character Markdown HR, not the shared three-character
+  separator or viewport-width chrome. The real Markdown renderer caps HRs at 80.
+- Match both complete `<dim>```js</dim>` / `<dim>```</dim>` fence borders and
+  the indented `<muted>const answer = 42;</muted>` source. Plain source text
+  alone no longer passes. No private theme access or renderer mocks.
+- Assert unsubscribe immediately after each of two disposals, then invoke the
+  retained subscription callback to model a delivery already in flight. Assert
+  no repaint immediately after that stale event, separately from advancing time.
+  Keep settlement cancellation, zero pending timers and elapsed-time assertions.
+- Six isolated mutations each exit 1, with exactly one intended test failing
+  and four passing; precise changes and assertion outputs are appended to
+  `subagents-coverage-mutations.txt`. All production bytes restored: source diff
+  empty; viewer source blob remains `fce1c903f09fdf9d63f17f745c970b2b40c991ed`.
+- Node 26.12.0: focused restored test 5/5; full Vitest 159 files, 3470 pass,
+  8 skip (`--maxWorkers=1`, 180.72s). Biome checks 253 files, no fixes;
+  `npm run typecheck` exits 0. Logs: `/tmp/pr193-{focused-restored,node,lint,types}.log`.
+- Declared pinned Bun 1.3.14 package gate passes: native session tests 31/31,
+  home-loader compatibility 10/10 (`npm exec --yes --package=bun@1.3.14 -- npm run test:bun`).
+  Log: `/tmp/pr193-bun.log`.
+- Additional full Bun Vitest, beyond the declared package gate:
+  `npm exec --yes --package=bun@1.3.14 -- node ../../scripts/run-vitest.ts bun --maxWorkers=1`
+  exits 1: 158 files pass, 1 fails; 3470 tests pass, 7 skip, 1 fails (131.56s).
+  Unchanged `workflow-runtime.test.ts` expects `workflow.js:3:` but Bun reports
+  `workflow.js:4:23`. Reproduces alone with the same runner and
+  `test/workflow-runtime.test.ts --maxWorkers=1`; neither that test nor production
+  changed. Logs: `/tmp/pr193-bun-{full,runtime-isolated}.log`. Not claimed green;
+  no out-of-scope stack-line or runtime fix.
+- Runs serialized with one Vitest worker for full suites. Resource snapshots
+  preceded heavy gates (10 logical CPUs, 42-59% interval CPU); orchestrator confirms
+  no competing worktree writer, original author moved lifecycle work elsewhere.
+  No child agents launched. OS process names were not used as agent identities.
+- No new instrumentation run: production, coverage inventory and denominators are
+  unchanged. Earlier coverage counters/raw gate files above remain historical
+  receipts, not newly generated coverage evidence for this correction.
+
 Next independent work, ranked by missing lines/functions:
 
 - Manager lifecycle callbacks: `src/agent-manager.ts` (21/7), then runner (8/2).
