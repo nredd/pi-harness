@@ -20,6 +20,61 @@ runs an isolated Node consumer in each `contracts` OS cell. This library has no 
 Darwin process CPU is explicitly unavailable because `ps` start identity has one-second precision.
 No consumer migration, publication, extra CI job or runner is added.
 
+## Standalone startup failure evidence
+
+The Linux personal cell runs one extra **strict** text startup before D/E: the same explicit
+personal stack, faux provider, `STACK-OK` output, zero exit and empty stderr as
+`test_extensions_load_without_warnings[text]`. No retry can turn a failure green. On failure only,
+`standalone-startup-linux-x64` retains the exact executable and `SHA256SUMS` for seven days.
+The normal standalone suites still run and retain their original assertions.
+
+`harness.standalone_diagnostics` stages an explicit allowlist and scans *every input*, binary
+included, for credential signatures before atomically publishing the upload directory. A scan or
+capture failure leaves no partial upload and cannot mask the original failing exit status.
+The upload also requires the probe's `artifact_ready=true` output, emitted only after a new
+scanned publication; stale directories and early failures cannot authorize an upload.
+It never copies installed homes, `auth.json`, `.storage`, sessions, environment dumps or token stores.
+All subprocesses use a new harness fixture HOME, empty synthetic auth and the existing command shims.
+This is diagnostic hygiene, not isolation from malicious same-UID package code.
+
+Artifact files:
+
+- `pi`, `SHA256SUMS`, `build.json`: exact executable, per-file SHA-256, Gitlink/harness SHAs,
+  tool versions, build/startup commands and separate primary/replay verdicts.
+- `compile-command.json`, `module-graph.json`, `build.log`: the actual compile argv, Bun's
+  module graph and the frozen-data build log. A transparent build-only Bun wrapper adds
+  `--metafile`; it changes neither core sources nor production pins. Missing optional metadata
+  is explicit; a graph cannot establish the undefined symbol's cause by itself.
+- `packages/pi-memory/{index.ts,package.json,npm-lock.json}` (the lock's memory entry only),
+  `core/*.js`, `core/*-package.json`,
+  `core/package-lock.json`, `harness-package-lock.json`, `stack.json`: named public package/build
+  inputs only, with original bytes. No recursive package or home upload.
+- `startup.{stdout,stderr}` and `jiti/primary/*`: original failed startup streams and *only*
+  Jiti 2.7 transform filenames keyed to this fixture's exact `pi-memory/index.ts` path (MD5 and
+  FIPS SHA-256 naming variants). Cache absence is recorded, not replaced with another run's code.
+- `replay.{stdout,stderr}`, `replay-wrapper.ts`, `jiti/replay/*`: supplemental failure-only replay.
+  In the disposable fixture, memory's resource declaration/filter selects a wrapper at the same
+  package-order slot. It imports the untouched original entry, prints `error.stack` before Pi
+  reduces it to a message, then **rethrows**. Original package manifest/source/cache bytes are
+  captured *before* this instrumentation; the executable is never rebuilt or patched. A replay
+  passing or failing differently does not replace the primary failure or prove a root cause.
+
+To diagnose an already-built binary without running the whole suite:
+
+```sh
+cd integration
+uv run --locked python -m harness.standalone_diagnostics startup \
+  --binary /absolute/path/to/linux-x64/pi --core ../forks/pi \
+  --build-evidence /absolute/path/to/pi-build-evidence \
+  --output /absolute/path/to/new-failure-evidence
+```
+
+For PR #178's exact graph, cherry-pick the diagnostic harness commit onto that branch and run its
+normal CI. The workflow observes that branch's existing frozen-core build; do not copy a binary
+from this diagnostic PR or change package/core/Bun pins. Do not reuse an installed live HOME.
+Local successful startup creates no artifact. A deliberate synthetic throwing memory factory can
+verify the raw-stack/capture path, but is not a reproduction of the unexplained CI `Type3` failure.
+
 ## Capacity controls
 
 `classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all eight required matrix jobs and `wsl2 (windows-2022)` start and report a terminal status. A docs-only change skips their expensive steps, and every skipped job writes a notice plus a step summary containing the changed-file list. Each job's `plan` step emits `run=true` or `run=false`, logs the changed files when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates.
