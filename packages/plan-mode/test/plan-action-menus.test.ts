@@ -3,6 +3,11 @@ import { test } from "vitest";
 import { showPlanModeMenu, showReadyPlanMenu } from "../src/plan-action-menus.js";
 import { createCustomSelectorHarness, createMockContext } from "./support.js";
 
+/**
+ * Build a complete menu callback contract, overriding only the outcome under test.
+ *
+ * This keeps each test at the public menu boundary while making omitted outcomes inert.
+ */
 function menuOptions(overrides: Record<string, unknown> = {}) {
   return {
     signal: new AbortController().signal,
@@ -24,6 +29,11 @@ function menuOptions(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * Drive Kit's RPC adapter with an ordered menu-selection script and one text submission.
+ *
+ * Each selection is an independent user-visible label, not a menu implementation detail.
+ */
 function rpcContext(choices: readonly string[], input = "review.md") {
   let choice = 0;
   return createMockContext({
@@ -123,6 +133,74 @@ test("Plan menu carries selected models and submitted export paths to their outc
     menuOptions({ implementFresh: (selection: unknown) => thinkingRuntime.push(selection) }),
   );
   assert.deepEqual(thinkingRuntime, [{ thinkingLevel: "max" }]);
+});
+
+test("Plan menu awaits deferred implementation outcomes", async () => {
+  let startImplementation!: () => void;
+  const started = new Promise<void>((resolve) => {
+    startImplementation = resolve;
+  });
+  let finishImplementation!: () => void;
+  const completion = new Promise<void>((resolve) => {
+    finishImplementation = resolve;
+  });
+  let settled = false;
+  let menuReturned = false;
+  const context = rpcContext(["Implement here"]);
+  const running = showPlanModeMenu(
+    context.ctx,
+    menuOptions({
+      implementHere: async () => {
+        startImplementation();
+        await completion;
+        settled = true;
+      },
+    }),
+  );
+
+  void running.then(() => {
+    menuReturned = true;
+  });
+  await started;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.equal(menuReturned, false);
+  finishImplementation();
+  await running;
+  assert.equal(settled, true);
+  assert.equal(menuReturned, true);
+});
+
+test("Plan menu keeps a rejected export input open for cancellation", async () => {
+  let inputs = 0;
+  let exports = 0;
+  let selections = 0;
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    select: async () => {
+      selections += 1;
+      return selections === 1 ? "Export plan…" : undefined;
+    },
+    input: async () => {
+      inputs += 1;
+      return inputs === 1 ? "rejected.md" : undefined;
+    },
+  });
+
+  await showPlanModeMenu(
+    context.ctx,
+    menuOptions({
+      exportPlan: async (path: string) => {
+        exports += 1;
+        assert.equal(path, "rejected.md");
+        return false;
+      },
+    }),
+  );
+
+  assert.equal(exports, 1);
+  assert.equal(inputs, 2);
 });
 
 test("Ready-plan full menu choices invoke their corresponding lifecycle outcomes", async () => {
