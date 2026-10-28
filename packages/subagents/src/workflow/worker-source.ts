@@ -797,8 +797,10 @@ function compileWorkflow(body, filename) {
         // excerpt/column. It still supplies the authored line; don't invent
         // a caret for a column the engine did not report.
         const line = error.line;
-        const sourceLine = body.split(/\\r\\n|[\\n\\r\\u2028\\u2029]/)[line - 1];
-        error.stack = filename + ":" + line + "\\n" + sourceLine + "\\n" + error.stack.slice(error.stack.indexOf("\\n") + 1);
+        const sourceLines = body.split(/\\r\\n|[\\n\\r\\u2028\\u2029]/);
+        if (Number.isInteger(line) && line > 0 && line <= sourceLines.length) {
+          error.stack = filename + ":" + line + "\\n" + sourceLines[line - 1] + "\\n" + error.stack.slice(error.stack.indexOf("\\n") + 1);
+        }
       }
     }
     throw error;
