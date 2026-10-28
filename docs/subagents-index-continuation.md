@@ -128,6 +128,15 @@ receipt is independently preserved in PR #201 comment `6473939959`.
 
 Exact gate receipts:
 
+These runs use the existing coverage tooling via an untracked `node_modules`
+symlink to `~/code/cov-subagents-pr/node_modules` (Vitest/Istanbul 5.0.3). The link
+is never staged. This is NOT #198's doc fixer's fresh committed-lockfile install,
+where the two `ModuleKind` failures did not reproduce and the Istanbul provider
+was unavailable. Here those failures reproduce in both latest-main inventory and
+final branch under the same tooling tree. Treat them as environment-scoped
+baseline failures, not a claim that every fresh installation fails. No shared
+installation, dependency manifest or lockfile was changed.
+
 ```text
 Latest-main inventory: 156 files
 Test Files  1 failed | 155 passed (156)
@@ -150,7 +159,8 @@ Package typecheck: tsc --noEmit, exit 0
 Node and Bun both retain the two baseline `process-budget.test.ts` missing
 `ModuleKind` failures. Bun also retains #174's workflow stack-location assertion.
 The lifecycle author's `5e8a741b` fix is not included; this branch never edits
-that test. Different runtime skip counts are reported as executed, not normalized.
+that test. The differing fresh-install receipt in #198 remains valid for its
+separately recorded dependency tree. Different runtime skip counts are reported as executed, not normalized.
 Package typecheck is the existing production-source typecheck, not a claim that
 its tsconfig includes all test stubs. No root-wide gate or live install was run.
 
