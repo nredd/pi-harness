@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -26,6 +27,7 @@ def test_exit_event_and_status(engine: str, mode: str) -> None:
         engine (str): Required development engine from PATH.
         mode (str): Explicit process.exit, natural drain, stdin EOF or exit-listener status override.
     """
+    # PATH deliberately selects the isolated engine; execute its resolved absolute path.
     executable = shutil.which(engine)
     assert executable is not None, f"Required engine '{engine}' is absent"
     endings = {
@@ -39,8 +41,14 @@ def test_exit_event_and_status(engine: str, mode: str) -> None:
         'process.stdout.write("ready\\n");' + endings[mode]
     )
     result = subprocess.run(
-        [executable, "-e", script], input="", capture_output=True, text=True, timeout=10, check=False
+        [str(Path(executable).resolve()), "-e", script],
+        input="",
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
     )
     assert result.returncode == (9 if mode == "listener" else 7), result
+    # The event receives initial code 7 even when its listener overrides the final status to 9.
     assert result.stdout == "ready\nexit:7\n", result
     assert result.stderr == "", result

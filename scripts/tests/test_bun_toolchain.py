@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_bun_pins_match() -> None:
-    """Require one exact supported Bun patch in the runtime pins and API declarations."""
+    """Pin the approved patch explicitly; a future upgrade must deliberately revise this contract."""
     version = (ROOT / ".bun-version").read_text().strip()
     assert version == "1.4.4"
     assert (ROOT / "packages/todo/.bun-version").read_text().strip() == version
@@ -28,7 +28,7 @@ def test_bun_pins_match() -> None:
 
 
 def test_ci_uses_version_file() -> None:
-    """Every Bun setup action must consume the root pin rather than a drifting literal."""
+    """Keep CI setup actions and their live WSL documentation tied to the root pin."""
     workflows = ROOT / ".github/workflows"
     setups = 0
     for path in sorted(workflows.glob("*.yml")):
@@ -39,3 +39,5 @@ def test_ci_uses_version_file() -> None:
             assert "bun-version:" not in block, path
             setups += 1
     assert setups > 0
+    version = (ROOT / ".bun-version").read_text().strip()
+    assert f"repository's pinned `{version}`" in (ROOT / "docs/ci.md").read_text()

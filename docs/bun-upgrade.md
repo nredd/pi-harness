@@ -172,8 +172,11 @@ one date-axis test and three SSH-host tests. Remaining failures are not hidden: 
 retains the authored stack-line assertion failure on both Buns (#174). These are unresolved
 phase-2/full-suite acceptance blockers, not permission to mark every package green.
 
-A separate two-file Istanbul fixture includes an unimported function. Node / old Bun / candidate
-all emit byte-identical LCOV: `LF=4 LH=1 FNF=3 FNH=1 BRF=2 BRH=1`, with `never.ts` present and
+A separate two-file Istanbul fixture includes an unimported function. The committed
+`test_istanbul_counters_match_both_engines` unit now reuses the locked subagents Vitest/provider
+pair without installing dependencies, verifies the actual worker engine/version through a file marker,
+and enforces the inventory, exact counters and identical Node/Bun LCOV. Node / old Bun / candidate
+also emit byte-identical LCOV in the three-engine experiment: `LF=4 LH=1 FNF=3 FNH=1 BRF=2 BRH=1`, with `never.ts` present and
 zero hits. The native threshold fixture still omits that file and branch records. Package hit
 counts differ on engine-specific paths (for example plan-mode lines 2803/2994 on Node,
 2799/2994 on old Bun, 2801/2994 on candidate); stable denominators do not imply equal execution
@@ -185,11 +188,11 @@ Recorded gates:
 - `make check`: RED, three pre-existing dev-tools Node cargo/nextest assertions (380 pass).
   npm continued the other workspace checks. Do not describe the whole repository gate as green.
 - `make check-scripts`: Ruff/ty/Biome/tsc clean, 695 pytest + 8 Node import-audit tests pass.
-- `make check-integration`: Ruff/ty/Biome/tsc clean, 1327 pytest + 15 Node probe tests pass;
-  rerun after strengthening the isolation negative control.
+- `make check-integration`: Ruff/ty/Biome/tsc clean, 1327 pytest + 15 Node probe tests passed before review; the new counter unit adds one case.
+  Final exact-HEAD receipt is recorded in the PR after rerunning the complete gate.
 - `make check-benchmark`: pass, 91 units, 92.98% against unchanged 90% floor, pinned Codex
   0.154.0 with disposable Codex home/cache. This is the unit gate, not timing benchmark F.
-- New focused regression/config tests: 13 pass on candidate. Old Bun: 8 pass / 3 fail for
+- New focused regression/config tests: 14 pass on candidate. Old Bun: 9 pass / 3 fail for
   runtime/capability tests (listener status, Date advancement, LCOV-only enforcement).
 - Official compiled codemode smoke: `PI_CODEMODE_BINARY_SMOKE_OK` on both compilers.
 - Hosted Linux/macOS jobs, packed contracts, WSL2, live providers, REA and desktop helpers:
