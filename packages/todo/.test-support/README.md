@@ -33,9 +33,12 @@ Test census:
 - Stock split `7903c76b` with this support/config: 253 tests in 21 files pass.
 - Selected fork `3c62a0b` with this support/config: 377 tests in 26 files pass.
 - With the rendering regressions: 382 Vitest tests in 28 files pass.
-- `test:bun` retains the two real interactive settled-row regressions. The full
-  Vitest suite can also be run with `bun --bun ../../node_modules/.bin/vitest run
-  --config .vitest.config.ts`; record the engine version and results separately.
+- After home injection (#171): 390 Vitest tests in 29 files pass.
+- After measured coverage closure: 408 Vitest tests in 29 files pass on Node and Bun.
+  `test:bun` runs the full suite through `scripts/run-vitest.ts bun`, including both
+  real interactive settled-row regressions, not a separate two-test native suite.
+  Engine versions, coverage measurements and mutation receipts are documented
+  [here](../docs/coverage-closure.md).
 
 `settled-row.ts` mounts the real core interactive harness and VirtualTerminal,
 registering this fork's renderers with a snapshot-less legacy result. Both update
