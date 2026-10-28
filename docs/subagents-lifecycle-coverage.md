@@ -16,6 +16,7 @@ package provider dependency is nested at 4.x). No manifests or lockfiles change.
 | --- | ---: | ---: |
 | Current main | 6658/7164 | 1351/1423 |
 | Initial UI theme measurement | 6672/7164 | 1352/1423 |
+| Wave 3 (before final protocol/transcript cases) | 6761/7164 | 1375/1423 |
 
 Initial UI theme per-file missing lines/functions:
 - `src/ui/agent-widget.ts`: 15/0 -> 2/0.
@@ -25,6 +26,13 @@ Initial UI theme per-file missing lines/functions:
 Additional UI assertions after that measurement cover clearing a stale active
 status, queued wording, expanded output capped at 50 lines with a full-output
 hint, and static call invalidation. The next full measurement includes them.
+
+UI completion adds failed-overlay non-acknowledgement, viewer disposal, missing
+workflow inspection, manager stop/steer routing, theme invalidation, queued rows,
+bounded expanded results and multi-model notices. A mutated fleet rejection path
+that acknowledges failure makes the failed-record assertion fail. UI widget,
+row, journal, notification, card and dialog functions now have full lines/functions;
+the fleet's filtered-out no-session wording is retained.
 
 The public widget factory renders terminal verdicts, retained turn stats and
 session duration. Replacement disposal cannot unregister the new component.
@@ -40,5 +48,6 @@ before source restoration. No production edit remains.
 Gate at the first theme: full single-worker Istanbul suite, pinned Bun 1.3.14
 native session/compatibility suites, lint and typecheck pass. Additional UI cases
 pass focused tests, lint and typecheck. Full final evidence follows with later
-coherent module closures. No root-wide suite duplicated; resource snapshots
+coherent module closures. The genuine full Bun compatibility run is NOT green:
+its remaining #174 source-location failure is recorded in `subagents-budget-mock.md`. No root-wide suite duplicated; resource snapshots
 precede full runs and tests are serialized alongside other active coverage agents.

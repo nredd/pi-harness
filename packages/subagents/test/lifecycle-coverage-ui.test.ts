@@ -1,10 +1,16 @@
 /** Public lifecycle outcomes for the fleet widget, tool row and alert journal. */
+
+import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
-import type { AgentRecord } from "../src/types.js";
+import { modelFallbackNote } from "../src/model-resolver.js";
+import type { AgentRecord, NotificationDetails } from "../src/types.js";
 import { AgentCallView, AgentResultView, agentRowSummary, keepRowTicking } from "../src/ui/agent-row.js";
 import { type AgentActivity, type AgentDetails, AgentWidget, describeActivity, type Theme, type UICtx } from "../src/ui/agent-widget.js";
 import { FLEET_STATE_ENTRY, FleetJournal, type FleetJournalEntry, MAX_FLEET_ALERT_DETAILS } from "../src/ui/fleet-state.js";
+import { renderNotification } from "../src/ui/notification-view.js";
+import { formatCompactTokens } from "../src/ui/workflow-card.js";
+import { handleWorkflowDialogKey, initialWorkflowDialogState, resolveWorkflowDialog, WorkflowDialog, type WorkflowDialogState } from "../src/ui/workflow-dialog.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 
 const theme: Theme = { fg: (_color, text) => text, bold: text => text };
@@ -30,6 +36,28 @@ function record(status: AgentRecord["status"], error?: string): AgentRecord {
 }
 
 const details: AgentDetails = { displayName: "Agent", description: "observed", subagentType: "general-purpose", toolUses: 0, tokens: "", durationMs: 2000, status: "running", agentId: "run" };
+
+describe("static fleet display contracts", () => {
+  it("keeps notification/dialog pixels stable on host invalidation and returns left from agent detail", () => {
+    const details = { description: "finished", status: "completed", toolUses: 0, totalTokens: 0, durationMs: 0, turnCount: 0, resultPreview: "answer" } as NotificationDetails;
+    const notice = renderNotification(details, true, theme, false);
+    const before = notice.render(120);
+    notice.invalidate();
+    expect(notice.render(120)).toEqual(before);
+    expect(before.join("\n")).toContain("answer");
+    const source = { progress: [], task: { status: "completed" as const, startTime: 1000, endTime: 2000 } };
+    const dialog = new WorkflowDialog({ requestRender: vi.fn() } as unknown as TUI, () => source, theme, vi.fn());
+    try {
+      const before = dialog.render(120);
+      dialog.invalidate();
+      expect(dialog.render(120)).toEqual(before);
+      const state: WorkflowDialogState = { ...initialWorkflowDialogState(), level: "agent", promptExpanded: true };
+      expect(handleWorkflowDialogKey("\x1b[D", state, resolveWorkflowDialog({ ...source, state }))).toEqual({ state: { ...state, level: "phases", promptExpanded: false } });
+    } finally { dialog.dispose(); }
+    expect(formatCompactTokens(99)).toBe("99");
+    expect(modelFallbackNote({ input: "missing-a", also: ["missing-b"], used: "p/parent" })).toBe('Note: configured models "missing-a", "missing-b" did not resolve; running on parent model p/parent.');
+  });
+});
 
 describe("widget lifecycle", () => {
   it.each([
