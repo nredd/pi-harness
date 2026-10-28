@@ -2096,7 +2096,7 @@ Terse command-style prompts produce shallow, generic work.
         agentType: subagentType, definitionModel: customConfig?.model, paramModel: params.model,
         parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: customConfig?.displayName,
       });
-      if (typeof selection === "string") return textResult(selection);
+      if (typeof selection === "string") return { ...textResult(selection), isError: true };
       const tierBlock = selection?.tierBinding && !params.schedule ? await admitModelSelection(selection, ctx.modelRegistry, pi.events) : undefined;
       const model = selection?.model;
       const modelFallback = selection?.fallback;

@@ -366,10 +366,17 @@ CONTRACTS = (
     PackageContract(
         name="@nredd/pi-subscription-router",
         directory="subscription-router",
-        required=("LICENSE", "README.md", "package.json", "src/index.ts"),
+        required=(
+            "LICENSE",
+            "README.md",
+            "package.json",
+            "src/index.ts",
+            "examples/subscription-router.json",
+        ),
         allowed=(
             re.compile(r"^(LICENSE|README\.md|CHANGELOG\.md|package\.json)$"),
             re.compile(r"^src/.+\.ts$"),
+            re.compile(r"^examples/subscription-router\.json$"),
         ),
         exposes_tools=frozenset({"subscription_usage"}),
     ),
