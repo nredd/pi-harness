@@ -400,9 +400,10 @@ first line is exactly the message or ends with `: <message>` (an error heading).
 A mere substring in captured context does not suppress the concise message.
 The combined worker diagnostic result is at most 20,481 characters: 4,096 for
 the message, one newline and 16,384 for the stack. Completion notifications
-retain their existing 4,000-character result limit. Trusted-workflow diagnostics can include host file
-paths and user-controlled captured stacks; these bounds are not sanitization or
-credential isolation. Host frames are retained for error and cause context.
+retain their existing 4,000-character result limit. Trusted-workflow diagnostics
+can include host file paths and user-controlled captured stacks; these bounds are
+not sanitization or credential isolation. Host frames are retained for error and
+cause context.
 
 To reproduce the offset bug, run `test/workflow-runtime.test.ts`'s
 `reports line numbers that match the script the author wrote` case under Node

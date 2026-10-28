@@ -243,6 +243,20 @@ describe("authored workflow source locations", () => {
     }
   });
 
+  it("keeps a nonempty stack unchanged for an empty concise error", () => {
+    const task = createWorkflowTask({ id: "wf_empty_message", script: META });
+    task.error = "";
+    task.errorStack = "Error\n    at helper (unrelated.js:1:9000)";
+    expect(workflowResultText(task)).toBe("Error\n    at helper (unrelated.js:1:9000)");
+  });
+
+  it("keeps an exact message-prefixed captured stack unchanged", () => {
+    const task = createWorkflowTask({ id: "wf_prefixed_message", script: META });
+    task.error = "x";
+    task.errorStack = "x\nCaptured x context\n at helper(unrelated.js:1:9000)";
+    expect(workflowResultText(task)).toBe("x\nCaptured x context\n at helper(unrelated.js:1:9000)");
+  });
+
   it("bounds the combined worker message and captured stack result at 20481 characters", async () => {
     const script = `${META}\nconst error = new Error("m".repeat(20000)); error.stack = "s".repeat(20000); throw error;`;
     const result = await runWorkflow({ script, host: hostFor(script) });
