@@ -18,7 +18,7 @@ import { resourceFixture } from "./resource-fixture.ts";
 
 const theme = { fg: (_color: string, s: string) => s, bg: (_color: string, s: string) => s, bold: (s: string) => s };
 
-/** Direct children of this worker, excluding the `ps` used to ask. */
+/** @returns Direct child PIDs of this worker, excluding the ps helper used to ask. */
 function children(): number[] {
 	const ps = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" });
 	return ps.stdout
@@ -28,10 +28,16 @@ function children(): number[] {
 		.map(([pid]) => pid as number);
 }
 
+/** @returns Number of currently active timeout resources in this test worker. */
 function timers(): number {
 	return process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length;
 }
 
+/**
+ * Build a typed independent sampler fixture.
+ * @param overrides Fields replacing the stable baseline fixture.
+ * @returns Synthetic producer snapshot.
+ */
 function raw(overrides: Partial<ResourceSnapshot> = {}): ResourceSnapshot {
 	return { ...resourceFixture(), ...overrides } as ResourceSnapshot;
 }
@@ -171,6 +177,65 @@ describe("sampler snapshot mapping", () => {
 		expect(linux.processes.at(-1)?.cpuPercent).toBeNull();
 		expect(linux.processCpu).toBeUndefined();
 		expect(linux.notice).toBeUndefined();
+	});
+
+	it("prefers additive native memory and never falls back to total-free when that reader fails", () => {
+		const input = {
+			...raw({ platform: "darwin" }),
+			memory: {
+				totalBytes: 16 * 1024 ** 3,
+				freeBytes: 1024 ** 3,
+				usage: {
+					state: "available" as const,
+					value: { usedBytes: 12 * 1024 ** 3, availableBytes: 4 * 1024 ** 3, basis: "app+wired+compressed" as const },
+				},
+				swap: { state: "available" as const, value: { usedBytes: 3 * 1024 ** 3, totalBytes: 4 * 1024 ** 3 } },
+			},
+		};
+		const mapped = toMonSnapshot(input);
+		expect(mapped.memoryUsedBytes).toBe(12 * 1024 ** 3);
+		expect(mapped.memoryBasis).toBe("app+wired+compressed");
+		expect(mapped.swapUsedBytes).toBe(3 * 1024 ** 3);
+		expect(mapped.memoryFreeBytes).toBe(1024 ** 3);
+		const failed = toMonSnapshot({
+			...input,
+			memory: {
+				...input.memory,
+				usage: { state: "unavailable", reason: "budget" },
+				swap: { state: "unavailable", reason: "budget" },
+			},
+		});
+		expect(failed.memoryUsedBytes).toBeNull();
+		expect(failed.swapUsedBytes).toBeNull();
+		const legacy = toMonSnapshot(
+			raw({ platform: "darwin", memory: { totalBytes: 16 * 1024 ** 3, freeBytes: 1024 ** 3 } }),
+		);
+		expect(legacy.memoryUsedBytes).toBe(15 * 1024 ** 3);
+		expect(legacy.memoryBasis).toBe("total-free");
+	});
+
+	it("maps native interval CPU and footprint independently, preserving failed PID metrics as unknown", () => {
+		const base = raw({ platform: "darwin" });
+		const processes = base.processes.slice(0, 3).map((p, i) => ({
+			...p,
+			cpu: { state: "available" as const, value: 99.7 },
+			footprint:
+				i === 0
+					? { state: "available" as const, value: 12345678 }
+					: { state: "unavailable" as const, reason: "no access" },
+		}));
+		const mapped = toMonSnapshot({ ...base, processes });
+		expect(mapped.processCpu).toBeUndefined();
+		expect(mapped.processes[0]?.cpuPercent).toBe(99.7);
+		expect(mapped.processes.map((p) => p.footprintBytes)).toEqual([12345678, null, null]);
+		for (const value of [
+			{ usedBytes: -1, totalBytes: 4 },
+			{ usedBytes: 5, totalBytes: 4 },
+		]) {
+			const result = toMonSnapshot({ ...base, memory: { ...base.memory, swap: { state: "available", value } } });
+			expect(result.swapUsedBytes).toBeNull();
+			expect(result.swapTotalBytes).toBeNull();
+		}
 	});
 
 	it("treats missing memory or non-finite values as unknown", () => {
