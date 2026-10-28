@@ -35,6 +35,10 @@ Boundary and isolation:
 - Reuse `hermeticDir`, `makePi`, `ctx`, `startSession`, `FakeClock`, provider
   answers and promise barriers. Clear the public manager registry symbol before
   each case and after cleanup, rather than inheriting another activation.
+- Reset max concurrency, fallback and description mode explicitly to their
+  existing effective defaults, so cases cannot inherit another case's module
+  state. This strengthens isolation of the original three cases without
+  intentionally changing their policy.
 - Inject the private fixture home explicitly; actual child resource loading must
   not discover the workstation's global skills/extensions.
 - Script provider answers and UI selections/keystrokes. The fixture event bus
@@ -44,8 +48,9 @@ Boundary and isolation:
 - Return registered tools from the fixture host's tool registry. A competing
   workflow registration exercises actual collision withdrawal and CLI refusal.
 - The failed-worktree case executes actual `git` processes in a non-repository
-  fixture through the host's `exec` boundary. No runner/manager stub manufactures
-  a sessionless record.
+  fixture through the host's `exec` boundary, with a private empty Git config,
+  no system config and an allowlisted environment that omits ambient `GIT_*`
+  overrides. No runner/manager stub manufactures a sessionless record.
 
 Cases now total 22 in this file, not three. The historical receipt is specifically
 98 original #198 cases + c49's three = 101. This continuation adds 19 cases and
@@ -106,7 +111,7 @@ Before and after the following independent runs, the restored focused suite is
 | Empty custom description | Suppress empty-file warning | 1 / 21 |
 | Unreadable custom description | Suppress read-error warning | 1 / 21 |
 | Inactive scheduler refusal | Claim scheduling succeeded | 1 / 21 |
-| Schedule persistence failure | Claim success after write exception | 1 / 21 |
+| Schedule persistence failure | Claim success after write exception | 2 / 20 |
 | Scheduler menu routing | Skip `showSchedulesMenu` | 1 / 21 |
 | Collision tool withdrawal | Keep our tool active | 1 / 21 |
 | Headless CLI diagnostic | Suppress CLI report | 1 / 21 |
@@ -121,7 +126,7 @@ Before and after the following independent runs, the restored focused suite is
 | Retained survivor disposal | Do not dispose the settled detached manager | 2 / 20 |
 
 All 25 exit 1; source restored after each. Raw verified output:
-`/tmp/index-continuation-verified-mutations.log`. Earlier exploratory mutation
+`/tmp/index-continuation-final-mutations.log`. Earlier exploratory mutation
 runs are NOT this receipt: a title-sensitive menu fixture was corrected, then
 all 25 were rerun from a passing 22-case baseline. c49's historical four-mutation
 receipt is independently preserved in PR #201 comment `6473939959`.
