@@ -19,6 +19,8 @@ from harness import rpc
 from harness.credentials import require_safe_diagnostic
 from harness.sandbox import build_sandbox
 from harness.tmux import PaneExitEvidence, TmuxPane
+from scenarios import test_stack as stack
+from scenarios import test_startup as startup
 from scenarios.test_stack import wait_dead
 
 if TYPE_CHECKING:
@@ -159,11 +161,13 @@ def test_rpc_evidence_writer_failure_keeps_draining_and_child_exit(
         """Inject only evidence writer failures, not the child's stderr pipe."""
 
         def write(self, data: Any) -> int:
+            """Reject an injected disk write, otherwise retain the original bytes."""
             if operation == "write":
                 raise OSError("disk full")
             return super().write(data)
 
         def flush(self) -> None:
+            """Reject only the injected flush operation."""
             if operation == "flush":
                 raise OSError("disk full")
             super().flush()
@@ -190,3 +194,98 @@ def test_rpc_evidence_writer_failure_keeps_draining_and_child_exit(
     finally:
         process.process.kill()
         process.__exit__(AssertionError, AssertionError("PRIMARY"), None)
+
+
+@pytest.mark.parametrize("operation", ["missing-tmux", "decode", "write"])
+def test_fixture_teardown_capture_failure_kills_every_pane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    """Exercise the real fixture teardown generator, including subsequent owned panes."""
+    box = build_sandbox(tmp_path / "box")
+    panes = [
+        TmuxPane(
+            tmp_path / f"socket-{index}/pi.sock", f"pi{index}", exit_status_path=box.root / f"pi{index}.exit"
+        )
+        for index in range(2)
+    ]
+    queries: list[MagicMock] = []
+    for pane in panes:
+        pane.socket.parent.mkdir()
+        query = MagicMock(return_value="dead=0")
+        queries.append(query)
+        pane._tmux = query
+        pane.capture = MagicMock(
+            return_value="screen",
+            side_effect=(
+                FileNotFoundError("tmux")
+                if operation == "missing-tmux"
+                else UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+                if operation == "decode"
+                else None
+            ),
+        )
+    if operation == "write":
+        monkeypatch.setattr(Path, "write_text", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(conftest, "launch_tui", MagicMock(side_effect=panes))
+    request = MagicMock(spec=pytest.FixtureRequest)
+    request.node.rep_call.failed = True
+    request.node.nodeid = "synthetic-capture-failure"
+    fixture = conftest.tui._get_wrapped_function()(box, request, None)
+    launcher = next(fixture)
+    launcher({})
+    launcher({})
+    with pytest.raises(StopIteration):
+        next(fixture)
+    for pane, query in zip(panes, queries, strict=True):
+        assert query.call_args_list[-1].args == ("kill-server",)
+        assert not pane.socket.parent.exists()
+
+
+@pytest.mark.parametrize("operation", ["missing-tmux", "decode", "write"])
+def test_startup_teardown_capture_preserves_primary_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    """The direct startup owner also captures under the existing primary exception."""
+    box = build_sandbox(tmp_path / "box")
+    pane = TmuxPane(tmp_path / "socket/pi.sock", "pi", exit_status_path=box.root / "pi.exit")
+    pane.socket.parent.mkdir()
+    pane._tmux = MagicMock(return_value="dead=0")
+    pane.capture = MagicMock(
+        return_value="screen",
+        side_effect=(
+            FileNotFoundError("tmux")
+            if operation == "missing-tmux"
+            else UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+            if operation == "decode"
+            else None
+        ),
+    )
+    pane.wait_for = MagicMock(return_value="STARTUP-OK")
+    pane.send_keys = MagicMock()
+    monkeypatch.setattr(startup, "launch_tui", MagicMock(return_value=pane))
+    monkeypatch.setattr(startup, "wait_dead", MagicMock(side_effect=AssertionError("PRIMARY")))
+    if operation == "write":
+        original = Path.write_text
+
+        def fail_screen(path: Path, data: str, *args: Any, **kwargs: Any) -> int:
+            """Leave scenario setup real; fail only diagnostic screenshot writes."""
+            if path.suffix in {".txt", ".ansi"}:
+                raise OSError("disk full")
+            return original(path, data, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", fail_screen)
+    with pytest.raises(AssertionError, match="PRIMARY"):
+        startup.test_fatal_startup_modes(box, "tui", "session_start", False)
+    assert pane._tmux.call_args_list[-1].args == ("kill-server",)
+    assert not pane.socket.parent.exists()
+
+
+def test_wait_dead_capture_failure_keeps_exit_status_assertion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed final screenshot must not replace the original status timeout assertion."""
+    pane = TmuxPane(tmp_path / "pi.sock", "pi", exit_status_path=tmp_path / "absent.exit")
+    pane.capture = MagicMock(side_effect=FileNotFoundError("tmux"))
+    monkeypatch.setattr(stack.time, "monotonic", MagicMock(side_effect=[0, 31]))
+    with pytest.raises(AssertionError, match="TUI never reported its exit status: Pane capture unavailable"):
+        wait_dead(pane)

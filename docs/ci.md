@@ -87,6 +87,9 @@ Blocker regression receipts:
   artifact tree is published; injected staging write failure preserves the primary assertion.
 - Missing-executable/server/I/O pane queries still attempt teardown. Invalid UTF-8 marker bytes
   remain unchanged, produce an explicit model error field and retain the original decode failure.
+  Real fixture-generator and direct-startup-owner tests inject missing tmux, screen decode and
+  screenshot write errors: every owned pane is killed and the primary failure is retained.
+  An unavailable final screenshot cannot replace `wait_dead`'s exit-status assertion.
 - RPC evidence open/write/flush failures still drain 262144 stderr bytes plus a tail diagnostic;
   the real child exits 17 without pipe blockage and bounded in-memory diagnostics retain the tail.
 - The startup proof prints the required startup message and observes exit 17 specifically. Its
@@ -94,7 +97,9 @@ Blocker regression receipts:
   `DID NOT RAISE AssertionError`, rather than accidentally testing the missing-message assertion.
 - Mutation checks disable scanning, restore the prior pane capture, restore the prior RPC writer,
   and change the nonzero result to zero. All four are killed by the focused regressions. Local
-  logs are `/tmp/tui-mutant-{scan,pane,writer,zero}.log`, not durable CI artifacts.
+  logs are `/tmp/tui-mutant-{scan,pane,writer,zero}.log`, not durable CI artifacts. Restoring the
+  old fixture teardown or final timeout screenshot separately also fails the caller regressions
+  (`/tmp/tui-mutant-teardown.log`, `/tmp/tui-mutant-wait-capture.log`).
 
 ## Capacity controls
 

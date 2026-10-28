@@ -213,14 +213,11 @@ def tui(
     yield launch
     failed = test_failed(request)
     for pane in panes:
-        if failed:
-            destination = sandbox.root
-            try:
-                (destination / f"{pane.name}.txt").write_text(pane.capture())
-                (destination / f"{pane.name}.ansi").write_text(pane.capture(styled=True))
-            except RuntimeError:
-                LOGGER.warning(f"Pane '{pane.name}' was gone before capture")
-        pane.kill()
+        try:
+            if failed:
+                pane.save_screen_evidence(sandbox.root, pane.name)
+        finally:
+            pane.kill()
 
 
 def test_failed(request: pytest.FixtureRequest) -> bool:

@@ -325,6 +325,19 @@ class TmuxPane:
             return False
         return dead == "0"
 
+    def save_screen_evidence(self, destination: Path, prefix: str) -> None:
+        """Capture teardown screens without allowing diagnostic I/O to mask a failure.
+
+        Parameters:
+            destination (Path): private sandbox directory, scanned later before publication.
+            prefix (str): existing screenshot filename prefix.
+        """
+        for suffix, styled in (("txt", False), ("ansi", True)):
+            try:
+                (destination / f"{prefix}.{suffix}").write_text(self.capture(styled=styled))
+            except Exception:
+                LOGGER.warning(f"Could not save '{suffix}' screen evidence for '{self.name}'")
+
     def save_exit_evidence(self) -> None:
         """Save native pane state and wrapper status before teardown destroys the evidence.
 
