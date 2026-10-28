@@ -6,6 +6,7 @@ References:
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import time
@@ -188,14 +189,19 @@ class RpcProcess:
     def _stderr(self) -> None:
         """Drain diagnostics so a failed loader cannot block startup."""
         stderr = self.process.stderr
-        assert stderr is not None
+        assert isinstance(stderr, io.TextIOWrapper)
         size = 0
-        for chunk in iter(lambda: stderr.read(4096), ""):
-            size += len(chunk.encode())
-            if size > MAX_OUTPUT:
-                self.process.kill()
-                break
-            self.stderr.append(chunk)
+        # Popen's text wrapper normalizes newlines and rejects invalid UTF-8. Keep
+        # bounded original bytes on disk; decode only the assertion-message view.
+        with self.stderr_path.open("wb") as evidence:
+            for chunk in iter(lambda: stderr.buffer.read1(4096), b""):
+                size += len(chunk)
+                if size > MAX_OUTPUT:
+                    self.process.kill()
+                    break
+                evidence.write(chunk)
+                evidence.flush()
+                self.stderr.append(chunk.decode(errors="replace"))
 
     def send(self, command: dict[str, Any]) -> None:
         """Send one RPC JSON record.
@@ -281,4 +287,3 @@ class RpcProcess:
             self.process.stdout.close()
             self.process.stderr.close()
             self.log_path.write_text("".join(json.dumps(event) + "\n" for event in self.events))
-            self.stderr_path.write_text("".join(self.stderr))

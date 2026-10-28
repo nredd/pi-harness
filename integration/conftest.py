@@ -262,7 +262,7 @@ def save_sandbox_artifacts(box: Sandbox, nodeid: str) -> None:
         shutil.copytree(sessions, destination / "sessions", dirs_exist_ok=True)
     leftovers = [
         path
-        for pattern in ("script-*.json", "*.stderr", "*.jsonl", "*.txt", "*.ansi")
+        for pattern in ("script-*.json", "*.stderr", "*.jsonl", "*.txt", "*.ansi", "*.exit", "*.pane.json")
         for path in box.root.glob(pattern)
     ]
     for leftover in leftovers:

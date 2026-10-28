@@ -10,6 +10,7 @@ References:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -313,8 +314,38 @@ class TmuxPane:
             return False
         return dead == "0"
 
+    def save_exit_evidence(self) -> None:
+        """Save native pane state and wrapper status before teardown destroys the evidence.
+
+        Unsupported tmux format fields remain empty in the raw response. Capture failures
+        are recorded/logged, never substituted for the original scenario failure.
+        """
+        if self.exit_status_path is None:
+            return
+        report: dict[str, str | None] = {"exit_status_path": str(self.exit_status_path)}
+        try:
+            report["tmux"] = self._tmux(
+                "display-message",
+                "-p",
+                "-t",
+                self.name,
+                "pid=#{pane_pid} dead=#{pane_dead} status=#{pane_dead_status} signal=#{pane_dead_signal}",
+            )
+        except RuntimeError as error:
+            report["tmux_error"] = str(error)
+        try:
+            report["exit_status"] = (
+                self.exit_status_path.read_text() if self.exit_status_path.is_file() else None
+            )
+            self.exit_status_path.with_suffix(".pane.json").write_text(json.dumps(report, indent=2))
+        except OSError as error:
+            LOGGER.warning(f"Could not save exit evidence for '{self.name}': {error}")
+
     def kill(self) -> None:
-        """Tear down the private tmux server and its socket dir; safe to call twice."""
+        """Save evidence, then tear down the private server and socket dir; safe twice."""
+        # Preserve the first pre-cleanup snapshot when callers defensively kill twice.
+        if self.exit_status_path is not None and not self.exit_status_path.with_suffix(".pane.json").exists():
+            self.save_exit_evidence()
         try:
             self._tmux("kill-server")
         except RuntimeError:

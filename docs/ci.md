@@ -20,6 +20,44 @@ runs an isolated Node consumer in each `contracts` OS cell. This library has no 
 Darwin process CPU is explicitly unavailable because `ps` start identity has one-second precision.
 No consumer migration, publication, extra CI job or runner is added.
 
+## Startup exit failure evidence
+
+The existing per-scenario artifacts now retain `*.pane.json` captured **before** tmux teardown,
+`*.exit` wrapper status files when present, and raw startup/RPC `*.stderr`. The pane report keeps
+the native PID/dead/status/signal response (empty fields can mean unsupported tmux formats), the
+wrapper status path and its contents or absence; a vanished server is recorded as an error rather
+than replacing the original failure. Only these named artifact patterns are added to the existing
+allowlist, never arbitrary JSON, environment dumps or a recursive sandbox HOME. This supplements,
+not duplicates, the separate standalone build/startup collector proposed in PR #191.
+
+Observed on 2026-10-28, both in `Standalone D and E (local)`:
+
+- PR #155, run `40666549747`, job `122742471639`: `ordinary-session_start-tui` fails with
+  `TUI never reported its exit status`. Its saved screen contains `STARTUP-OK` and the resume hint.
+  Original `pi.stderr` reports `Bun v1.3.14 (0d9b296a) macOS Silicon`, macOS `14.8.9`,
+  `Elapsed: 8573ms`, feature `exited`, and `Segmentation fault at address 0xC`.
+  The [here](https://bun.report/1.3.14/M_10d9b296mggQugggC______mk04Yuw4uhBu7l7H_2lkjlDurh5kD27p5tC+xt2yC+1+3H_2lkjlDurh5kDunr21Cusw11CA2AY)
+  trace resolves through `jsc.VirtualMachine.globalExit`, `Bun__Process__exit` and
+  `Bun::Process_functionReallyExit` / `Process_functionExit`.
+- PR #178, run `40667021371`, job `122744482131`: the failure is instead
+  `ordinary-session_start-rpc`, `subprocess.TimeoutExpired` after 60 seconds. Its TUI case passes.
+  The traceback's truncated `stderr_seq` contains the Bun `1.3.14` crash banner; the original full
+  timeout stderr was not archived. The `-9` return code is observed after Python's timeout kill,
+  not a successful runtime shutdown.
+
+Both include a curl-shim `Bad file descriptor` error. Bun's macOS crash reporter invokes curl
+([here](https://github.com/oven-sh/bun/blob/0d9b296af33f2b851fcbf4df3e9ec89751734ba4/src/crash_handler/crash_handler.zig));
+that downstream error is not evidence that an extension's curl caused the crash. The historical
+artifacts lack pre-cleanup pane state and `*.exit`; they cannot distinguish a live crashed process
+from a dead wrapper or missing status file. RPC does not use that wrapper at all.
+
+A local rebuild of Gitlink `2bfb8e7c61d35167b09f8ce70693df39660fc197` with Bun `1.3.14` and frozen
+release model data passed 29 original TUI and 29 RPC startup calls, including two concurrent drivers.
+This is not a native-crash reproduction or a fix. Synthetic abort and timeout tests prove the
+original nonzero/timeout failure and raw evidence survive cleanup; no assertions, deadlines, Bun
+pins or runtime behavior are relaxed. The exact native trigger and a failing-CI pane-state capture
+remain unresolved. No capacity cancellation is classified as this failure.
+
 ## Capacity controls
 
 `classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all eight required matrix jobs and `wsl2 (windows-2022)` start and report a terminal status. A docs-only change skips their expensive steps, and every skipped job writes a notice plus a step summary containing the changed-file list. Each job's `plan` step emits `run=true` or `run=false`, logs the changed files when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates.
