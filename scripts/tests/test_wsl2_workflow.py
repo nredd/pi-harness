@@ -214,10 +214,12 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     assert "python3" in action.split("additional-packages:")[1].splitlines()[0]
     assert "unset GH_TOKEN" in setup
     assert 'bash scripts/install_gh_linux.sh "$tool_dir/gh"' in setup
-    assert "env -u GH_TOKEN npm ci --ignore-scripts" in workflow
-    assert "env -u GH_TOKEN uv sync --locked --python" in workflow
+    makefile = (ROOT / "Makefile").read_text()
+    assert "env -u GH_TOKEN npm ci --ignore-scripts" in makefile
+    assert "env -u GH_TOKEN uv sync --locked" in makefile
+    assert "cd integration && uv sync --locked --python" in workflow
     verify = workflow.index("python3 -m harness.release --verify-root-overrides --root .")
-    npm_ci = workflow.index("env -u GH_TOKEN npm ci --ignore-scripts")
+    npm_ci = workflow.index("npm ci --ignore-scripts")
     assert verify < npm_ci
     assert "echo $GH_TOKEN" not in workflow
 

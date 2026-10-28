@@ -69,12 +69,26 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash' }}
+        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps:
+      - name: Select and verify Git Bash on the Windows host
+        if: matrix.os == 'wsl2'
+        shell: pwsh
+        run: |
+          $gitBin = Join-Path $env:ProgramFiles 'Git\bin'
+          $bash = Join-Path $gitBin 'bash.exe'
+          if (!(Test-Path $bash)) { throw "Missing Git Bash: $bash" }
+          $env:PATH = "$gitBin;$env:PATH"
+          if ((Get-Command bash -CommandType Application).Source -ne $bash) { throw 'Ambiguous Bash resolution' }
+          & $bash --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $gitBin >> $env:GITHUB_PATH
+          "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
+          "Git Bash executable: $bash" >> $env:GITHUB_STEP_SUMMARY
       - id: plan
         name: Report execution plan
-        shell: bash
+        shell: bash -e {0}
         env:
           DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
           CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
@@ -171,12 +185,26 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash' }}
+        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps:
+      - name: Select and verify Git Bash on the Windows host
+        if: matrix.os == 'wsl2'
+        shell: pwsh
+        run: |
+          $gitBin = Join-Path $env:ProgramFiles 'Git\bin'
+          $bash = Join-Path $gitBin 'bash.exe'
+          if (!(Test-Path $bash)) { throw "Missing Git Bash: $bash" }
+          $env:PATH = "$gitBin;$env:PATH"
+          if ((Get-Command bash -CommandType Application).Source -ne $bash) { throw 'Ambiguous Bash resolution' }
+          & $bash --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $gitBin >> $env:GITHUB_PATH
+          "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
+          "Git Bash executable: $bash" >> $env:GITHUB_STEP_SUMMARY
       - id: plan
         name: Report execution plan
-        shell: bash
+        shell: bash -e {0}
         env:
           DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
           CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
@@ -266,12 +294,26 @@ jobs:
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash' }}
+        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 40 }}
     steps:
+      - name: Select and verify Git Bash on the Windows host
+        if: matrix.os == 'wsl2'
+        shell: pwsh
+        run: |
+          $gitBin = Join-Path $env:ProgramFiles 'Git\bin'
+          $bash = Join-Path $gitBin 'bash.exe'
+          if (!(Test-Path $bash)) { throw "Missing Git Bash: $bash" }
+          $env:PATH = "$gitBin;$env:PATH"
+          if ((Get-Command bash -CommandType Application).Source -ne $bash) { throw 'Ambiguous Bash resolution' }
+          & $bash --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $gitBin >> $env:GITHUB_PATH
+          "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
+          "Git Bash executable: $bash" >> $env:GITHUB_STEP_SUMMARY
       - id: plan
         name: Report execution plan
-        shell: bash
+        shell: bash -e {0}
         env:
           DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
           CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
@@ -322,8 +364,8 @@ jobs:
         id: workspace
         if: steps.plan.outputs.run == 'true'
         run: |
-          env -u GH_TOKEN npm ci --ignore-scripts
-          cd integration && env -u GH_TOKEN uv sync --locked --python "$(tr -d '\n' < ../.python-version)"
+          npm ci --ignore-scripts
+          cd integration && uv sync --locked --python "$(tr -d '\n' < ../.python-version)"
       - name: Fetch exact Gitlinked core release, formula-equivalent install
         if: steps.plan.outputs.run == 'true'
         working-directory: integration
@@ -425,11 +467,11 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ always() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' }}
         with:
-          name: standalone-${{ matrix.os }}-${{ matrix.platform }}
+          name: ${{ matrix.os == 'wsl2' && 'standalone-wsl2' || 'standalone' }}-${{ matrix.platform }}
           path: |
             integration/artifacts/
             integration/artifacts-personal/
-            integration/artifacts-node/
+            ${{ matrix.os == 'wsl2' && 'integration/artifacts-node/' || '' }}
           if-no-files-found: ignore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && matrix.os == 'wsl2'

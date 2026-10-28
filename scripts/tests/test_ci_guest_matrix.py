@@ -58,13 +58,23 @@ def test_shared_guest_matrix(name: str) -> None:
     assert job["needs"] == "classify"
     assert job["strategy"]["fail-fast"] is False
     steps = job["steps"]
-    assert steps[0]["id"] == "plan"
-    assert steps[0]["shell"] == "bash"  # Guest is not initialized before checkout.
+    selection = steps[0]
+    assert selection["if"] == "matrix.os == 'wsl2'"
+    assert selection["shell"] == "pwsh"
+    assert "'Git\\bin'" in selection["run"]
+    assert "Get-Command bash -CommandType Application" in selection["run"]
+    assert "$gitBin >> $env:GITHUB_PATH" in selection["run"]
+    assert "--version" in selection["run"]
+    assert "GITHUB_STEP_SUMMARY" in selection["run"]
+    plan = steps[1]
+    assert plan["id"] == "plan"
+    assert plan["shell"] == "bash -e {0}"
+    assert job["defaults"]["run"]["shell"].endswith("|| 'bash -e {0}' }}")
     setup = next(i for i, step in enumerate(steps) if step.get("id") == "tools")
     assert steps[setup]["uses"] == "./.github/actions/setup-ci-tools"
     assert steps[setup]["with"]["guest"] == "${{ matrix.guest }}"
     assert all("shell" not in step for step in steps[setup + 1 :] if "run" in step)
-    assert "!= wsl2" in steps[0]["run"]  # Retain old always-run WSL acceptance.
+    assert "!= wsl2" in plan["run"]  # Retain old always-run WSL acceptance.
     assert any(step.get("with", {}).get("cleanup") == "cleanup" for step in steps)
     diagnostics = [
         step for step in steps if step.get("with", {}).get("path", "").endswith("/wsl2-diagnostics/")
@@ -103,8 +113,12 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     assert "stacks/local.json --runtime bun-standalone" in scenarios[2]["run"]
     uploads = [step for step in stack["steps"] if "upload-artifact@" in step.get("uses", "")]
     assert all("always()" in step["if"] for step in uploads)
-    standalone = next(step for step in uploads if step["with"]["name"].startswith("standalone-"))
-    assert "${{ matrix.os }}" in standalone["with"]["name"]
+    standalone = next(step for step in uploads if "standalone-wsl2" in step["with"]["name"])
+    assert (
+        standalone["with"]["name"]
+        == "${{ matrix.os == 'wsl2' && 'standalone-wsl2' || 'standalone' }}-${{ matrix.platform }}"
+    )
+    assert "${{ matrix.os == 'wsl2' && 'integration/artifacts-node/' || '' }}" in standalone["with"]["path"]
     assert "integration/artifacts-node/" in standalone["with"]["path"]
     assert "integration/artifacts-personal/" in standalone["with"]["path"]
     assert not (WORKFLOW.parent / "wsl2.yml").exists()
@@ -263,16 +277,29 @@ def test_capture_replaces_stale_node_snapshot(tmp_path: Path) -> None:
     assert (host / "integration/artifacts-node/node.xml").read_text() == "Node report"
 
 
-def test_host_launcher_preserves_script_arguments_and_exit_status(tmp_path: Path) -> None:
+@pytest.mark.parametrize("ambiguous_path", [False, True])
+def test_host_launcher_preserves_script_arguments_and_exit_status(
+    tmp_path: Path, ambiguous_path: bool
+) -> None:
     """Prove host forwarding with a PowerShell argv stub, not a WSL runtime claim.
 
     Parameters:
         tmp_path (Path): Disposable fixture directory.
+        ambiguous_path (bool): Resolve a shadowing legacy Windows Bash first.
     """
     commands = tmp_path / "commands"
     commands.mkdir()
-    (commands / "pwsh").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGV_CAPTURE"\nexit 49\n')
-    (commands / "pwsh").chmod(0o755)
+    (commands / "pwsh").write_text(
+        '#!/bin/sh\ncase ";${MSYS2_ENV_CONV_EXCL:-};" in *";PI_BIN;"*) ;; *) exit 93 ;; esac\n'
+        'test "$PI_BIN" = /root/pi-harness-ci/pi-release/bin/pi || exit 94\n'
+        'printf "%s\\n" "$@" > "$ARGV_CAPTURE"\nexit 49\n'
+    )
+    (commands / "cygpath").write_text(
+        '#!/bin/sh\ncase "$2" in */ambiguous/bash) printf "%s" "$LEGACY_BASH" ;; '
+        '*) printf "%s" "$PI_CI_GIT_BASH" ;; esac\n'
+    )
+    for command in commands.iterdir():
+        command.chmod(0o755)
     step = tmp_path / "step with spaces.sh"
     original = b'printf "%s\\n" "unchanged guest script"\n'
     step.write_bytes(original)
@@ -282,7 +309,16 @@ def test_host_launcher_preserves_script_arguments_and_exit_status(tmp_path: Path
         "GITHUB_WORKSPACE": str(workspace),
         "ARGV_CAPTURE": str(arguments),
         "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+        "PI_CI_GIT_BASH": r"C:\Program Files\Git\bin\bash.exe",
+        "LEGACY_BASH": r"C:\Windows\System32\bash.exe",
+        "PI_BIN": "/root/pi-harness-ci/pi-release/bin/pi",
     }
+    if ambiguous_path:
+        ambiguous = tmp_path / "ambiguous"
+        ambiguous.mkdir()
+        (ambiguous / "bash").write_text("#!/bin/sh\nexit 97\n")
+        (ambiguous / "bash").chmod(0o755)
+        env["PATH"] = f"{ambiguous}{os.pathsep}{env['PATH']}"
     result = subprocess.run(
         ["/bin/bash", str(ROOT / "scripts/wsl2_host.sh"), str(step)],
         env=env,
@@ -290,6 +326,11 @@ def test_host_launcher_preserves_script_arguments_and_exit_status(tmp_path: Path
         text=True,
         check=False,
     )
+    if ambiguous_path:
+        assert result.returncode == 1
+        assert "Refusing ambiguous Bash" in result.stderr
+        assert not arguments.exists()
+        return
     assert result.returncode == 49
     assert arguments.read_text().splitlines() == [
         "-NoProfile",

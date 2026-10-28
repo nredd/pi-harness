@@ -33,9 +33,9 @@ case "$(uv --version)" in "uv $uv_version"*) ;; *) exit 1 ;; esac
 bash scripts/install_gh_linux.sh "$tool_dir/gh"
 # Owned Linux gates use real cargo/nextest, not native Windows tools or skipped suites.
 if [ "${WSL_OWNED:-false}" = true ]; then
-  curl --fail --location --retry 3 https://sh.rustup.rs | sh -s -- -y --profile minimal
-  export PATH="$HOME/.cargo/bin:$PATH"
-  cargo install cargo-nextest --locked
+  bash scripts/install_wsl_owned_tools.sh "$tool_dir"
+  PATH=$(< "$tool_dir/owned-tool-path")
+  export PATH
 fi
 export PATH="$tool_dir/gh/bin:$PATH"
 mkdir -p "$worktree/.ci-temp"
