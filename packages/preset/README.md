@@ -174,8 +174,12 @@ From the repository root:
 
 ```sh
 npm ci --ignore-scripts
-npm run check -w @nredd/pi-preset   # biome, strict tsc, Vitest, bun test (Bun 1.3.14)
+npm run check -w @nredd/pi-preset   # biome, strict tsc, Vitest on Node and Bun
 ```
+
+Istanbul measurement commands, per-file before/after counts, default-timer/failure/replay
+contracts and mutation evidence are recorded [here](../../docs/preset-istanbul-coverage.md).
+The provider used for that receipt is ephemeral; it does not change coverage policy or config.
 
 - `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
 - `createExpandedFooter({ clock })` optionally injects one clock for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.

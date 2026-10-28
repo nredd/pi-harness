@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import * as q from "../lib/footer-quota.ts";
 
 const NOW = 1_000_000;
@@ -391,6 +391,92 @@ test("poller: late replies are ignored after dispose, timeout and supersession",
 	tick();
 	assert.equal(env.emitted.length, 2);
 	assert.equal(env.handlers.size, 0);
+});
+
+test("poller: default timers retry, expire readings and cancel pending work", () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(NOW);
+	const env = fakeEnv();
+	const poller = q.createQuotaPoller({ events: env.deps.events, onChange: env.deps.onChange });
+	try {
+		poller.start();
+		assert.equal(env.emitted.length, 1);
+		const firstId = env.emitted[0].data.requestId;
+		assert.match(firstId, /^[\da-f-]{36}$/);
+		env.handlers.get(`${q.USAGE_CHANNEL}:reply:${firstId}`)(reply([ok({ expiresAt: NOW + 5_000 })]));
+		assert.equal(poller.getState().anthropic.fiveHour, 76);
+		assert.equal(poller.getState().anthropic.stale, false);
+		vi.advanceTimersByTime(5_000);
+		assert.equal(poller.getState().anthropic.stale, true);
+		assert.equal(env.changes(), 2);
+		vi.advanceTimersByTime(55_000);
+		assert.equal(env.emitted.length, 2);
+		assert.notEqual(env.emitted[1].data.requestId, firstId);
+		assert.equal(env.handlers.size, 1);
+		poller.dispose();
+		assert.equal(env.handlers.size, 0);
+		assert.equal(vi.getTimerCount(), 0);
+		vi.advanceTimersByTime(120_000);
+		assert.equal(env.emitted.length, 2);
+		assert.equal(env.changes(), 2);
+	} finally {
+		poller.dispose();
+		vi.useRealTimers();
+	}
+});
+
+test("poller: synchronous emit failure cleans up and retries without losing figures", () => {
+	const env = fakeEnv();
+	let tick;
+	env.deps.setInterval = (fn) => {
+		tick = fn;
+		return 1;
+	};
+	const poller = q.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.get(`${q.USAGE_CHANNEL}:reply:id1`)(both());
+	const emit = env.deps.events.emit;
+	env.deps.events.emit = () => {
+		throw new Error("router unavailable");
+	};
+	assert.doesNotThrow(() => tick());
+	assert.equal(env.handlers.size, 0);
+	assert.equal(env.live(q.REPLY_TIMEOUT_MS).length, 0);
+	assert.equal(poller.getState().anthropic.fiveHour, 76);
+	assert.equal(poller.getState().anthropic.stale, true);
+	assert.equal(env.changes(), 2);
+	env.deps.events.emit = emit;
+	tick();
+	assert.equal(env.handlers.size, 1);
+	env.handlers.get(`${q.USAGE_CHANNEL}:reply:id3`)(both());
+	assert.equal(poller.getState().anthropic.stale, false);
+	assert.equal(env.changes(), 3);
+	poller.dispose();
+});
+
+test("poller: a bus that replays during subscription settles once before its unsubscribe exists", () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(NOW);
+	const env = fakeEnv();
+	let offCalls = 0;
+	env.deps.events.on = (_channel, handler) => {
+		handler(both());
+		return () => offCalls++;
+	};
+	const poller = q.createQuotaPoller({ events: env.deps.events, onChange: env.deps.onChange });
+	try {
+		poller.start();
+		assert.equal(poller.getState().anthropic.fiveHour, 76);
+		assert.equal(env.changes(), 1);
+		// The already-settled token's later deadline cannot overwrite a valid reply.
+		vi.advanceTimersByTime(q.REPLY_TIMEOUT_MS);
+		assert.equal(poller.getState().anthropic.stale, false);
+		assert.equal(env.changes(), 1);
+		assert.equal(offCalls, 0);
+	} finally {
+		poller.dispose();
+		vi.useRealTimers();
+	}
 });
 
 test("poller: interval cleared on dispose", () => {
