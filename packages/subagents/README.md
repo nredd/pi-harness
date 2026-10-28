@@ -572,6 +572,10 @@ A few rules the examples don't make obvious:
 | `none` with `isolated: true` or `extensions: false` | no | `none` |
 | `none`, or only `ext:` entries | yes | `no built-ins, extension tools only` |
 
+When the effective built-in set lacks `bash` (including `disallowed_tools: bash`), the shared suffix adds `; no built-in shell: cannot run bash commands`. This applies to every type in full, compact and custom-template type lists. It does not claim extensions cannot execute commands: an extension may supply `ssh_exec` or another command tool. Put stronger restrictions in the agent description's **first sentence** so compact mode preserves them, e.g. `no shell/ssh: cannot run commands`. Shell-less prompts should require a FIRST-turn explanation, before tool calls, when a task needs unavailable commands. This is prompt guidance, not a dispatcher classifier.
+
+`Agent` has no per-call tool-override flag. Use a shell-capable type for command work; do not ask a restricted researcher to acquire `bash`.
+
 The last two rows are separate because zero built-ins is not zero tools: `tools: none` alongside `extensions:` still surfaces every extension tool, so calling it `none` would understate what the agent can do. Without the `+ extension tools` flag an agent that can search the web through an extension (e.g. `Plan`) read as web-less.
 
 ### Shipping agents in a pi package
