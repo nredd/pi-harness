@@ -225,6 +225,10 @@ the kit does not append a second reminder or request another continuation.
 `test/scenarios/` drives the real kit through core's in-process session harness under Vitest and Bun,
 covering goals, file-backed restore, child rename/reload, read-rule injection, titles,
 monitor output/wakes/cursors/caps/timeouts and loop scheduling with same-cwd session isolation.
+Command completion scenarios resolve public runner suggestions and execute the selected `/goal`,
+`/loop` and `/monitor` commands, checking persisted state, timer removal and the selected child.
+Pidfile age-boundary fixtures pin file/directory mtimes to the injected sweep clock and check the
+24-hour threshold under both past and future wall clocks.
 The interactive host/VirtualTerminal covers `/diff`, `/stats` and real `/name`, including width/resize
 matrices, chart glyph ports/colours and file-backed titles. Stats histories use a fixed clock;
 `createSessionKit({ agentDir, clock })` scopes both offline loading and displayed time ranges.

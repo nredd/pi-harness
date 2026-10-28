@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	statSync,
 	unlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -71,6 +72,7 @@ beforeEach(() => {
 		name: "fixture",
 	};
 	path = writePidfile(dir, "m1", record);
+	setFixtureAge(0);
 });
 afterEach(() => {
 	vi.useRealTimers();
@@ -116,13 +118,33 @@ describe("pidfile recovery failure boundaries", () => {
 	});
 
 	it("retains malformed member identities while fresh", async () => {
-		const record = JSON.parse(readFileSync(path, "utf8"));
-		writeFileSync(path, JSON.stringify({ ...record, members: [{ ...MEMBER, pgid: 999 }] }));
+		malformedRecord(0);
 		const original = readFileSync(path, "utf8");
 		const deps = sweepDeps();
 		expect((await sweepOrphans(tmp.dir, "me", deps)).removed).toEqual([]);
 		expectRetained(original, deps);
 	});
+
+	it.each([Date.UTC(1980, 0, 1), Date.UTC(2100, 0, 1)])(
+		"uses fixture age, not wall clock %i, at the stale threshold",
+		async (wallTime) => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(wallTime);
+			const day = 86_400_000;
+			malformedRecord(day);
+			expect(Date.now()).toBe(wallTime);
+			expect(statSync(path).mtimeMs).toBe(NOW - day);
+			const deps = sweepDeps();
+			const original = readFileSync(path, "utf8");
+			expect((await sweepOrphans(tmp.dir, "me", deps)).removed).toEqual([]);
+			expectRetained(original, deps);
+			setFixtureAge(day + 1);
+			expect((await sweepOrphans(tmp.dir, "me", deps)).removed).toEqual([path]);
+			expect(existsSync(path)).toBe(false);
+			expect(deps.killGroup).not.toHaveBeenCalled();
+			expect(deps.signal).not.toHaveBeenCalled();
+		},
+	);
 
 	it("refuses an unreadable guard rather than breaking another cleaner's lock", async () => {
 		mkdirSync(`${path}.sweep`);
@@ -212,6 +234,20 @@ describe("pidfile recovery failure boundaries", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 });
+
+/** Pin every age-bearing fixture to the injected sweep clock, never the host's filesystem clock. */
+function setFixtureAge(ageMs: number): void {
+	const instant = new Date(NOW - ageMs);
+	utimesSync(path, instant, instant);
+	utimesSync(dir, instant, instant);
+}
+
+/** Rewriting changes filesystem mtime, so restore deterministic age after each malformed write. */
+function malformedRecord(ageMs: number): void {
+	const record = JSON.parse(readFileSync(path, "utf8"));
+	writeFileSync(path, JSON.stringify({ ...record, members: [{ ...MEMBER, pgid: 999 }] }));
+	setFixtureAge(ageMs);
+}
 
 /** Leave a real empty directory for the age-check failure path. */
 function rmRecord(): void {
