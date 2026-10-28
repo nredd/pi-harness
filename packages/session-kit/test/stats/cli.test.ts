@@ -25,6 +25,7 @@ afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
 
+/** Seed one counted assistant call under an injected agent directory. */
 function seed(agentDir: string): void {
 	sessionFile(join(agentDir, "sessions", "project", "session.jsonl"), {
 		startMs: at("2026-10-01"),

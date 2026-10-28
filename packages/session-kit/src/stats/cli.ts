@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { agentDir } from "./load.ts";
 import { exportStats, importStats } from "./snapshot.ts";
 
+/** Parse the portable CLI argv, run its selected operation, and report JSON to stdout. */
 export async function main(): Promise<void> {
 	const [command, ...args] = process.argv.slice(2);
 	const options = new Map<string, string>();
@@ -46,6 +47,7 @@ export async function main(): Promise<void> {
 			"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] | import --agent-dir DIR --input REPO",
 		);
 }
+/** Run `main`, converting failures to one diagnostic and a nonzero process exit code. */
 export async function run(): Promise<void> {
 	try {
 		await main();

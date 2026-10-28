@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cachePath, dedupCalls, flatten, loadUsage, opaqueId, parseSession } from "../../src/stats/load.ts";
 import {
@@ -311,42 +312,87 @@ it("pure allowlist projection hashes fixture paths and keeps raw attribution", (
 });
 
 describe("actual portable bundled CLI", () => {
-	function run(args: string[], env: NodeJS.ProcessEnv = {}, artifactDir = dir) {
-		const artifact = join(artifactDir, "portable.mjs");
-		copyFileSync(resolve("dist/pi-stats-export.mjs"), artifact);
+	/** Pack the workspace artifact, then return the tarball-extracted executable path. */
+	function packedArtifact(artifactDir: string): string {
+		const tarballs = join(artifactDir, "tarballs");
+		const extracted = join(artifactDir, "extracted");
+		mkdirSync(tarballs, { recursive: true });
+		mkdirSync(extracted, { recursive: true });
+		const packed = spawnSync("npm", ["pack", "--json", "--pack-destination", tarballs], {
+			cwd: resolve("."),
+			encoding: "utf8",
+		});
+		expect(packed.status, packed.stderr).toBe(0);
+		const [{ filename }] = JSON.parse(packed.stdout) as { filename: string }[];
+		const unpacked = spawnSync("tar", ["-xzf", join(tarballs, filename), "-C", extracted], { encoding: "utf8" });
+		expect(unpacked.status, unpacked.stderr).toBe(0);
+		return join(extracted, "package", "dist", "pi-stats-export.mjs");
+	}
+
+	/** Run a packed standalone executable with a credential-free environment. */
+	function run(artifact: string, args: string[], env: NodeJS.ProcessEnv = {}) {
 		const clean = { ...process.env };
 		delete clean.PI_CODING_AGENT_DIR;
 		delete clean.PI_CODING_AGENT_SESSION_DIR;
 		return spawnSync(process.execPath, [artifact, ...args], { cwd: dir, env: { ...clean, ...env }, encoding: "utf8" });
 	}
-	it("runs from a standalone artifact without kit, Pi or node_modules; stdout is one object", () => {
+
+	/** Import a packed standalone executable and capture any accidental CLI output. */
+	function importArtifact(artifact: string) {
+		return spawnSync(process.execPath, ["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(artifact).href)})`], {
+			cwd: dir,
+			encoding: "utf8",
+		});
+	}
+	it("runs from tarball-extracted bytes without kit, Pi or node_modules; stdout is one object", () => {
 		seed(a);
-		const exported = run(["export", "--agent-dir", a, "--output", repo]);
+		const artifact = packedArtifact(join(dir, "packed artifact é"));
+		const exported = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
 		expect(exported.status, exported.stderr).toBe(0);
 		expect(exported.stderr).toBe("");
 		expect(exported.stdout.trim().split("\n")).toHaveLength(1);
 		const value = JSON.parse(exported.stdout);
 		expect(value.machineId).toMatch(/^[a-f0-9-]{36}$/);
 		expect(value.snapshotDir).toBe(join(repo, "machines", value.machineId));
-		const imported = run(["import", "--agent-dir", b, "--input", repo]);
+		const imported = run(artifact, ["import", "--agent-dir", b, "--input", repo]);
 		expect(imported.status, imported.stderr).toBe(0);
 		expect(JSON.parse(imported.stdout).imported).toBe(1);
 		expect(readFileSync(join(b, "pi-session-kit", "stats-global.json"), "utf8")).toContain("wire-model");
 	});
-	it("runs from a path with URL-significant characters", () => {
+	it("runs directly but not on import from a packed path with portable characters", () => {
 		seed(a);
-		const artifactDir = join(dir, "bundle#query?");
-		mkdirSync(artifactDir);
-		const exported = run(["export", "--agent-dir", a, "--output", repo], {}, artifactDir);
+		const artifact = packedArtifact(join(dir, "packed artifact é"));
+		const exported = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
 		expect(exported.status, exported.stderr).toBe(0);
 		expect(JSON.parse(exported.stdout).snapshotDir).toContain("machines");
+		const imported = importArtifact(artifact);
+		expect(imported.status, imported.stderr).toBe(0);
+		expect(imported.stdout).toBe("");
+	});
+
+	it.runIf(process.platform !== "win32")("rejects a faulty URL guard and follows symlinks on POSIX", () => {
+		seed(a);
+		const artifact = packedArtifact(join(dir, "packed#artifact?"));
+		const link = join(dir, "stats link.mjs");
+		symlinkSync(artifact, link);
+		expect(run(link, ["export", "--agent-dir", a, "--output", repo]).status).toBe(0);
+		const faulty = join(dir, "faulty#artifact?.mjs");
+		const bytes = readFileSync(artifact, "utf8").replace(
+			"pathToFileURL(realpathSync(process.argv[1])).href",
+			"new URL(`file://${process.argv[1]}`).href",
+		);
+		writeFileSync(faulty, bytes);
+		const result = run(faulty, ["export", "--agent-dir", a, "--output", repo]);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe("");
 	});
 
 	it("respects the sessions environment override and explicit option precedence", () => {
 		seed(a, [usage("excluded", at("2026-10-01"), 99)]);
+		const artifact = packedArtifact(join(dir, "packed"));
 		const external = join(dir, "external");
 		seed(external, [usage("included", at("2026-10-01"), 7)]);
-		const result = run(["export", "--agent-dir", a, "--output", repo], {
+		const result = run(artifact, ["export", "--agent-dir", a, "--output", repo], {
 			PI_CODING_AGENT_SESSION_DIR: join(external, "sessions"),
 		});
 		expect(result.status, result.stderr).toBe(0);
@@ -357,7 +403,7 @@ describe("actual portable bundled CLI", () => {
 				.flatMap((s: { file: string }) => JSON.parse(readFileSync(join(snapshot, s.file), "utf8")).events)
 				.map((e: { input: number }) => e.input),
 		).toEqual([7]);
-		const explicit = run(["export", "--agent-dir", a, "--output", repo, "--sessions-dir", join(a, "sessions")], {
+		const explicit = run(artifact, ["export", "--agent-dir", a, "--output", repo, "--sessions-dir", join(a, "sessions")], {
 			PI_CODING_AGENT_SESSION_DIR: join(external, "sessions"),
 		});
 		expect(explicit.status, explicit.stderr).toBe(0);
@@ -371,10 +417,11 @@ describe("actual portable bundled CLI", () => {
 	});
 	it("returns nonzero on partial import, preserving valid old data with JSON stdout", () => {
 		seed(a);
-		const exportResult = JSON.parse(run(["export", "--agent-dir", a, "--output", repo]).stdout);
-		expect(run(["import", "--agent-dir", b, "--input", repo]).status).toBe(0);
+		const artifact = packedArtifact(join(dir, "packed"));
+		const exportResult = JSON.parse(run(artifact, ["export", "--agent-dir", a, "--output", repo]).stdout);
+		expect(run(artifact, ["import", "--agent-dir", b, "--input", repo]).status).toBe(0);
 		writeFileSync(join(exportResult.snapshotDir, "manifest.json"), "{}");
-		const failed = run(["import", "--agent-dir", b, "--input", repo]);
+		const failed = run(artifact, ["import", "--agent-dir", b, "--input", repo]);
 		expect(failed.status).toBe(1);
 		expect(JSON.parse(failed.stdout).retained).toBe(1);
 		expect(failed.stderr).toContain("Incomplete snapshot");
@@ -383,12 +430,13 @@ describe("actual portable bundled CLI", () => {
 	});
 	it("fails malformed scans and arguments without publishing a manifest", () => {
 		seed(a, ["{broken"]);
-		const failed = run(["export", "--agent-dir", a, "--output", repo]);
+		const artifact = packedArtifact(join(dir, "packed"));
+		const failed = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
 		expect(failed.status).toBe(1);
 		expect(failed.stdout).toBe("");
 		expect(failed.stderr).toContain("Incomplete local scan");
-		expect(run(["export", "--output", repo, "--output", repo]).status).toBe(1);
-		expect(run(["unknown"]).status).toBe(1);
+		expect(run(artifact, ["export", "--output", repo, "--output", repo]).status).toBe(1);
+		expect(run(artifact, ["unknown"]).status).toBe(1);
 	});
 	it("build is byte reproducible and contains only Node builtin imports", () => {
 		const before = readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8");

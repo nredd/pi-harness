@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { spawnMonitor } from "../../src/monitor/process.ts";
 
+/** Keep the fixture child alive until `killNow()` terminates its process group. */
+const KEEP_ALIVE_INTERVAL_MS = 1_000;
+
 describe("spawnMonitor", () => {
 	it("rejects an empty command before spawning", async () => {
 		await expect(
@@ -22,7 +25,7 @@ describe("spawnMonitor", () => {
 	});
 
 	it("kills a running process group immediately", async () => {
-		const monitor = await spawnMonitor([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+		const monitor = await spawnMonitor([process.execPath, "-e", `setInterval(() => {}, ${KEEP_ALIVE_INTERVAL_MS})`], {
 			cwd: process.cwd(),
 			onStdout: () => {},
 			onStderr: () => {},
