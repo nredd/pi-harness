@@ -1,0 +1,83 @@
+# Complete source accounting
+
+Actual Istanbul LCOV: `6d7b13cb` (#193 report) versus `b51e1774` (main including #182), then fresh merged lifecycle test contents. All 75 source files are present in both reports; current source bytes match `b51e1774` for every row. Ownership is not an exclusion. LF/FNF are instrumented denominators, not physical lines.
+
+| Source | Owner | 6d7b13cb LF/FNF | b51e1774 LF/FNF | Main missing L/F | Final missing L/F |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `src/abortable.ts` | Lifecycle | 20/6 | 20/6 | 0/0 | 0/0 |
+| `src/agent-color.ts` | Lifecycle | 39/14 | 39/14 | 0/0 | 0/0 |
+| `src/agent-file-toggle.ts` | Lifecycle | 75/16 | 75/16 | 1/0 | 0/0 |
+| `src/agent-manager.ts` | Lifecycle | 596/115 | 596/115 | 21/7 | 6/1 |
+| `src/agent-runner.ts` | Lifecycle | 447/84 | 447/84 | 8/2 | 0/1 |
+| `src/agent-source-badge.ts` | Lifecycle | 14/7 | 14/7 | 0/0 | 0/0 |
+| `src/agent-types.ts` | Lifecycle | 82/38 | 82/38 | 0/0 | 0/0 |
+| `src/child-context.ts` | Lifecycle | 3/2 | 3/2 | 0/0 | 0/0 |
+| `src/clock.ts` | Lifecycle | 6/6 | 6/6 | 0/0 | 0/0 |
+| `src/completion-outbox.ts` | Lifecycle | 31/16 | 31/16 | 0/0 | 0/0 |
+| `src/context.ts` | Lifecycle | 20/4 | 20/4 | 0/0 | 0/0 |
+| `src/cross-extension-rpc.ts` | Lifecycle | 41/9 | 41/9 | 0/0 | 0/0 |
+| `src/custom-agents.ts` | Lifecycle | 91/25 | 91/25 | 2/0 | 0/0 |
+| `src/default-agents.ts` | Lifecycle | 2/0 | 2/0 | 0/0 | 0/0 |
+| `src/detached-results.ts` | Lifecycle | 45/11 | 45/11 | 0/0 | 0/0 |
+| `src/enabled-models.ts` | Lifecycle | 45/9 | 45/9 | 0/0 | 0/0 |
+| `src/enterprise-local.ts` | Lifecycle | 27/2 | 27/2 | 3/0 | 0/0 |
+| `src/env.ts` | Lifecycle | 11/1 | 11/1 | 1/0 | 0/0 |
+| `src/group-join.ts` | Lifecycle | 52/10 | 52/10 | 0/0 | 0/0 |
+| `src/home-paths.ts` | Lifecycle | 11/2 | 11/2 | 0/0 | 0/0 |
+| `src/index.ts` | Separate | 1437/251 | 1437/251 | 352/33 | 352/33 |
+| `src/invocation-config.ts` | Lifecycle | 12/4 | 12/4 | 0/0 | 0/0 |
+| `src/memory.ts` | Lifecycle | 46/8 | 46/8 | 1/0 | 0/0 |
+| `src/mention-clone.ts` | Lifecycle | 23/6 | 23/6 | 0/0 | 0/0 |
+| `src/mention.ts` | Lifecycle | 25/9 | 25/9 | 0/0 | 0/0 |
+| `src/model-call.ts` | Lifecycle | 20/3 | 20/3 | 0/0 | 0/0 |
+| `src/model-resolver.ts` | Lifecycle | 82/29 | 82/29 | 0/1 | 0/0 |
+| `src/model-scope.ts` | Lifecycle | 12/4 | 12/4 | 0/0 | 0/0 |
+| `src/model-selection.ts` | Lifecycle | 67/7 | 68/7 | 0/0 | 0/0 |
+| `src/model-tiers.ts` | Lifecycle | 74/18 | 74/18 | 2/3 | 0/0 |
+| `src/nested-tools.ts` | Lifecycle | 96/19 | 96/19 | 6/0 | 0/0 |
+| `src/output-file.ts` | Lifecycle | 44/15 | 44/15 | 1/0 | 0/0 |
+| `src/package-resources.ts` | Lifecycle | 140/36 | 140/36 | 2/0 | 0/0 |
+| `src/process-budget.ts` | Lifecycle | 94/22 | 96/22 | 1/0 | 0/0 |
+| `src/prompts.ts` | Lifecycle | 20/1 | 20/1 | 0/0 | 0/0 |
+| `src/quota-admission.ts` | Lifecycle | 27/9 | 27/9 | 0/0 | 0/0 |
+| `src/resource-loader.ts` | Lifecycle | 25/8 | 25/8 | 0/0 | 0/0 |
+| `src/schedule-store.ts` | Lifecycle | 60/19 | 60/19 | 5/0 | 0/0 |
+| `src/schedule.ts` | Lifecycle | 174/32 | 174/32 | 6/3 | 0/0 |
+| `src/settings.ts` | Lifecycle | 193/20 | 193/20 | 5/0 | 0/0 |
+| `src/skill-loader.ts` | Lifecycle | 49/8 | 49/8 | 2/0 | 0/0 |
+| `src/stale-ctx.ts` | Lifecycle | 3/1 | 3/1 | 0/0 | 0/0 |
+| `src/startup-error.ts` | Lifecycle | 3/2 | 3/2 | 0/0 | 0/0 |
+| `src/status-note.ts` | Lifecycle | 12/3 | 12/3 | 0/0 | 0/0 |
+| `src/structured-output.ts` | Lifecycle | 17/5 | 17/5 | 0/0 | 0/0 |
+| `src/types.ts` | Lifecycle | 1/0 | 1/0 | 1/0 | 0/0 |
+| `src/ui/agent-mention.ts` | Lifecycle | 56/12 | 56/12 | 0/0 | 0/0 |
+| `src/ui/agent-row.ts` | Lifecycle | 83/17 | 83/17 | 2/2 | 0/0 |
+| `src/ui/agent-widget.ts` | Lifecycle | 260/42 | 260/42 | 15/0 | 0/0 |
+| `src/ui/conversation-viewer.ts` | Separate | 407/56 | 407/56 | 15/8 | 15/8 |
+| `src/ui/fallback-flag.ts` | Lifecycle | 26/6 | 26/6 | 0/0 | 0/0 |
+| `src/ui/fleet-list.ts` | Lifecycle | 390/105 | 390/105 | 7/3 | 2/0 |
+| `src/ui/fleet-state.ts` | Lifecycle | 80/18 | 80/18 | 1/0 | 0/0 |
+| `src/ui/notification-view.ts` | Lifecycle | 57/17 | 57/17 | 0/1 | 0/0 |
+| `src/ui/schedule-menu.ts` | Lifecycle | 35/6 | 35/6 | 0/0 | 0/0 |
+| `src/ui/select-item.ts` | Lifecycle | 5/4 | 5/4 | 0/0 | 0/0 |
+| `src/ui/viewer-keys.ts` | Lifecycle | 7/6 | 7/6 | 0/0 | 0/0 |
+| `src/ui/workflow-card.ts` | Lifecycle | 88/22 | 88/22 | 1/0 | 0/0 |
+| `src/ui/workflow-dialog.ts` | Lifecycle | 284/40 | 284/40 | 1/1 | 0/0 |
+| `src/ui/workflow-menu.ts` | Separate | 39/16 | 39/16 | 11/4 | 11/4 |
+| `src/usage.ts` | Lifecycle | 27/8 | 27/8 | 0/0 | 0/0 |
+| `src/workflow/collisions.ts` | Lifecycle | 10/2 | 10/2 | 0/0 | 0/0 |
+| `src/workflow/entry.ts` | Lifecycle | 2/1 | 2/1 | 0/0 | 0/0 |
+| `src/workflow/host.ts` | Lifecycle | 79/16 | 79/16 | 2/1 | 0/0 |
+| `src/workflow/journal.ts` | Lifecycle | 20/5 | 20/5 | 0/0 | 0/0 |
+| `src/workflow/json-schema.ts` | Lifecycle | 28/3 | 28/3 | 3/0 | 0/0 |
+| `src/workflow/meta.ts` | Separate | 119/8 | 119/8 | 11/1 | 11/1 |
+| `src/workflow/progress.ts` | Lifecycle | 135/24 | 135/24 | 0/0 | 0/0 |
+| `src/workflow/runtime.ts` | Lifecycle | 319/44 | 319/44 | 12/1 | 1/0 |
+| `src/workflow/saved.ts` | Lifecycle | 67/6 | 67/6 | 2/0 | 0/0 |
+| `src/workflow/task.ts` | Lifecycle | 65/10 | 65/10 | 2/0 | 0/0 |
+| `src/workflow/tool-description.ts` | Lifecycle | 1/0 | 1/0 | 0/0 | 0/0 |
+| `src/workflow/worker-source.ts` | Lifecycle | 2/0 | 2/0 | 0/0 | 0/0 |
+| `src/worktree.ts` | Lifecycle | 55/12 | 55/12 | 1/1 | 0/0 |
+| `src/xml.ts` | Lifecycle | 1/1 | 1/1 | 0/0 | 0/0 |
+
+Total denominator: `7161/1423 -> 7164/1423`. Actual per-file deltas: `model-selection.ts +1L/0F`; `process-budget.ts +2L/0F`; the other 73 files `0L/0F`. The first adds the Explore `cheapCompatibility` initialization; the second expands the active-lease loop into an `index` declaration and assignment. These are measured per-file differences, not inferred from the physical diff. No denominator was lowered.
