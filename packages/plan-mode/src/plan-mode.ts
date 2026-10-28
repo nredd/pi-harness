@@ -1475,6 +1475,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function planModePolicyToolNames() {
+    // Only enabled tool admission and status branches call this, synchronously.
     return workflowAllowedToolNames ?? [];
   }
 
