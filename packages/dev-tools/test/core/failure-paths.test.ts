@@ -46,7 +46,9 @@ describe("bounded failure recovery", () => {
 		const pending = run({ cmd: "fixture", args: [], timeoutMs: 10 });
 		await vi.runAllTimersAsync();
 		expect(await pending).toMatchObject({ timedOut: true, exitCode: null });
-		expect(kill.mock.calls).toContainEqual([-123456789, "SIGKILL"]);
+		const sigkills = kill.mock.calls.filter(([, signal]) => signal === "SIGKILL");
+		expect(sigkills.length).toBeGreaterThan(0);
+		for (const [target] of sigkills) expect(target).toBe(-123456789);
 	});
 
 	it("propagates acquisition errors without running the critical section", async () => {
