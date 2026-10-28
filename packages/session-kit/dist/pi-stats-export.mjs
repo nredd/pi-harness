@@ -1,5 +1,7 @@
 // src/stats/cli.ts
+import { realpathSync } from "node:fs";
 import { resolve as resolve2 } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // src/stats/load.ts
 import { createHash, randomUUID } from "node:crypto";
@@ -659,7 +661,7 @@ async function run() {
     process.exitCode = 1;
   }
 }
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) void run();
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) void run();
 export {
   main,
   run

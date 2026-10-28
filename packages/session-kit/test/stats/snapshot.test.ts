@@ -310,8 +310,8 @@ it("pure allowlist projection hashes fixture paths and keeps raw attribution", (
 });
 
 describe("actual portable bundled CLI", () => {
-	function run(args: string[], env: NodeJS.ProcessEnv = {}) {
-		const artifact = join(dir, "portable.mjs");
+	function run(args: string[], env: NodeJS.ProcessEnv = {}, artifactDir = dir) {
+		const artifact = join(artifactDir, "portable.mjs");
 		copyFileSync(resolve("dist/pi-stats-export.mjs"), artifact);
 		const clean = { ...process.env };
 		delete clean.PI_CODING_AGENT_DIR;
@@ -332,6 +332,15 @@ describe("actual portable bundled CLI", () => {
 		expect(JSON.parse(imported.stdout).imported).toBe(1);
 		expect(readFileSync(join(b, "pi-session-kit", "stats-global.json"), "utf8")).toContain("wire-model");
 	});
+	it("runs from a path with URL-significant characters", () => {
+		seed(a);
+		const artifactDir = join(dir, "bundle#query?");
+		mkdirSync(artifactDir);
+		const exported = run(["export", "--agent-dir", a, "--output", repo], {}, artifactDir);
+		expect(exported.status, exported.stderr).toBe(0);
+		expect(JSON.parse(exported.stdout).snapshotDir).toContain("machines");
+	});
+
 	it("respects the sessions environment override and explicit option precedence", () => {
 		seed(a, [usage("excluded", at("2026-10-01"), 99)]);
 		const external = join(dir, "external");

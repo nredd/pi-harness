@@ -1,5 +1,7 @@
 /** Standalone data-only CLI. Bundles the parser; never imports Pi or the private extension entrypoint. */
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { agentDir } from "./load.ts";
 import { exportStats, importStats } from "./snapshot.ts";
 
@@ -53,4 +55,4 @@ export async function run(): Promise<void> {
 	}
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) void run();
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) void run();
