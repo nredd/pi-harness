@@ -34,13 +34,18 @@ FAST_TIMERS = {POLL_MS: FAST_POLL_MS, REQUEST_TIMEOUT_MS: FAST_TIMEOUT_MS}
 # `expiresAt` offset of a fresh snapshot; long, so the footer's wall-clock expiry never fires mid-test.
 FRESH_FOR_MS = 3_600_000
 ROUTER_PACKAGE = "pi-subscription-router"
-# Rows: `Quota left: Anthropic 5h 80% weekly 60% | OpenAI ...`, compact `Left: Anth 5h 80% 7d 60% | OAI ...`.
+# Rows: `Quota left: Anthropic 5h 80% weekly 60% | OpenAI weekly ...`,
+# compact `Left: Anth 5h 80% 7d 60% | OAI 7d ...`; reset suffixes (`(resets ..)` / `@..`)
+# may follow each value, and narrow widths wrap one row per provider (only the first
+# row carries the lead, so this parser sees just that row; the preset scenarios cover wrapping).
 ROW_PATTERN = re.compile(r"^\s*(?P<prefix>Quota left:|Left:)\s*(?P<body>.*?)\s*$", re.MULTILINE)
 PAIR_PATTERN = re.compile(r"(?P<label>[A-Za-z0-9]+)\s+(?P<value>\d+%|--)")
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 ROW_PREFIX_PATTERN = re.compile(r"^\s*(?:Quota left:|Left:)")
 TOKEN_PATTERN = re.compile(r"(?P<sgr>\x1b\[[0-9;]*m)|(?P<pct>\d+)%")
 PROVIDERS = {"Anthropic": "anthropic", "Anth": "anthropic", "OpenAI": "openai-codex", "OAI": "openai-codex"}
+# Span of the 5h and weekly windows, as the router reports them.
+SPANS_MS = (18_000_000, 604_800_000)
 # Provider-native window names the router reports, keyed by provider.
 WINDOWS = {"anthropic": ("five_hour", "seven_day"), "openai-codex": ("5h", "7d")}
 
@@ -70,9 +75,18 @@ def snapshot(
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     if provider not in WINDOWS:
         raise ValueError(f"Unknown provider: '{provider}'")
+    # Real router contract: every window carries a reset time, a duration and its provenance
+    # (`usage.ts` sets `spanSource: "reported"` for Anthropic and for Codex `limit_window_seconds`).
     windows = [
-        {"name": name, "usedPercent": value, "scope": "provider", "resetAt": now_ms + 3_600_000}
-        for name, value in zip(WINDOWS[provider], used or (), strict=False)
+        {
+            "name": name,
+            "usedPercent": value,
+            "scope": "provider",
+            "resetAt": now_ms + 3_600_000,
+            "durationMs": duration,
+            "spanSource": "reported",
+        }
+        for name, value, duration in zip(WINDOWS[provider], used or (), SPANS_MS, strict=False)
     ]
     return {
         "provider": provider,
