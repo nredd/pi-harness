@@ -1,0 +1,83 @@
+import assert from "node:assert/strict";
+import { test } from "vitest";
+import { DECLINE_GATE_ERROR } from "../src/decline-contract.js";
+import { FINALIZE_PLAN_PROMPT } from "../src/finalization-request.js";
+import planMode from "../src/plan-mode.js";
+import { createMockContext, createMockPi } from "./support.js";
+
+function toolExecute(mock: ReturnType<typeof createMockPi>, name: string) {
+  const execute = mock.tools.find((tool) => tool.name === name)?.execute;
+  assert.equal(typeof execute, "function", `${name} must be registered`);
+  return execute as (...args: unknown[]) => Promise<unknown>;
+}
+
+test("question tool returns distinct inactive and invalid-input outcomes", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext();
+  const question = toolExecute(mock, "plan_mode_question");
+
+  const inactive = (await question("inactive", {}, undefined, undefined, context.ctx)) as { details?: unknown };
+  assert.deepEqual(inactive.details, { cancelled: true, reason: "plan_mode_inactive", questions: [] });
+
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  const invalid = (await question("invalid", { questions: [] }, undefined, undefined, context.ctx)) as {
+    details?: { reason?: string };
+  };
+  assert.equal(invalid.details?.reason, "invalid_input");
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+});
+
+test("headless activation reports unavailable Plan helpers as an error", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  mock.rawPi.setActiveTools(["read"]);
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext({ hasUI: false, mode: "print" });
+
+  await assert.rejects(
+    async () => mock.commands.get("plan")?.handler("start", context.ctx),
+    /Cannot start Plan mode: plan_mode_question and plan_mode_complete are unavailable/u,
+  );
+  assert.equal(context.statuses.get("plan-mode"), undefined);
+});
+
+test("a declined plan requires renewed confirmation before a second proposal", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext();
+  const complete = toolExecute(mock, "plan_mode_complete");
+
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  await complete("complete", { plan: "# First" }, undefined, undefined, context.ctx);
+  await mock.events.get("input")?.[0]?.({ text: "revise", source: "user" }, context.ctx);
+  await mock.events.get("input")?.[0]?.({ text: "revise again", source: "user" }, context.ctx);
+
+  await assert.rejects(
+    async () => complete("second", { plan: "# Second" }, undefined, undefined, context.ctx),
+    (error: unknown) => error instanceof Error && error.message === DECLINE_GATE_ERROR,
+  );
+  assert.equal((mock.entries.at(-1)?.data as { declinedPlans?: number } | undefined)?.declinedPlans, 1);
+});
+
+test("failed finalization retry resets the request instead of retrying forever", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext();
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  await mock.commands.get("plan")?.handler("finalize", context.ctx);
+  const agentEnd = mock.events.get("agent_end")?.[0];
+  const settled = mock.events.get("agent_settled")?.[0];
+  assert.ok(agentEnd);
+  assert.ok(settled);
+  await agentEnd({ messages: [{ role: "assistant", content: "No result.", stopReason: "stop" }] }, context.ctx);
+  mock.rawPi.sendUserMessage = () => {
+    throw new Error("delivery failed");
+  };
+
+  await settled({}, context.ctx);
+  await settled({}, context.ctx);
+
+  assert.equal(mock.sentUserMessages.length, 1);
+  assert.equal(mock.sentUserMessages[0]?.text, FINALIZE_PLAN_PROMPT);
+  assert.match(context.notifications.at(-1)?.message ?? "", /delivery failed/u);
+});
