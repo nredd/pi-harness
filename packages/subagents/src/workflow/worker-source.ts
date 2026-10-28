@@ -26,10 +26,11 @@
  *
  * That said: our injected globals are themselves host closures, so
  * `agent.constructor` is still the host `Function`. The hygiene shrinks the
- * surface; it does not close the hole. **`codeGeneration: { strings: false }` is
- * the load-bearing defense** — it makes `Function("…")` and `eval("…")` throw
- * `EvalError`, so a captured host `Function` cannot compile anything. Treat this
- * as a determinism boundary, not a security boundary against a hostile script.
+ * surface; it does not close the hole. `codeGeneration: { strings: false }`
+ * makes realm-local `Function` and `eval` throw `EvalError`, but does not stop a
+ * captured host `Function`. The stack formatter stays realm-native rather than
+ * adding another host callback. Treat this as a determinism boundary, not a
+ * security boundary against a hostile script.
  *
  * ## Why determinism is a prelude and not a stub
  *
@@ -759,26 +760,37 @@ function makeBudget() {
 // authored lines intact and map only the prefix on line 1. Both entry points
 // compile the same function; calling it outside the VM adds no synthetic frame.
 const WORKFLOW_PREFIX = "(async (agent, phase, log, workflow, console, args) => {" + PRELUDE;
-const workflowFiles = new Set();
+let registerWorkflowFile = null;
 
-function authoredFrame(frame) {
-  const text = String(frame);
-  const file = frame.getFileName();
-  if (!workflowFiles.has(file) || frame.getLineNumber() !== 1) return text;
-  const location = file + ":1:";
-  const at = text.lastIndexOf(location);
-  if (at === -1) return text;
-  const start = at + location.length;
-  // Use the formatted column: Bun 1.3's getColumnNumber() is zero-based but
-  // its CallSite.toString() is one-based (as are V8 and newer Bun).
-  const column = Number.parseInt(text.slice(start), 10);
-  if (column <= WORKFLOW_PREFIX.length) return text;
-  const digits = String(column).length;
-  return text.slice(0, start) + (column - WORKFLOW_PREFIX.length) + text.slice(start + digits);
+// Compiled from source in the realm, not installed as a host callback. Only
+// primitive prefix length and filenames cross into its private realm-native Set.
+function installAuthoredStacks(prefixLength) {
+  const workflowFiles = new Set();
+  function authoredFrame(frame) {
+    const text = String(frame);
+    const file = frame.getFileName();
+    if (!workflowFiles.has(file) || frame.getLineNumber() !== 1) return text;
+    const location = file + ":1:";
+    const at = text.lastIndexOf(location);
+    if (at === -1) return text;
+    const start = at + location.length;
+    // Bun 1.3's getColumnNumber() is zero-based, but CallSite.toString()
+    // is one-based on all supported engines.
+    const column = Number.parseInt(text.slice(start), 10);
+    if (column <= prefixLength) return text;
+    const digits = String(column).length;
+    return text.slice(0, start) + (column - prefixLength) + text.slice(start + digits);
+  }
+  Error.prepareStackTrace = function (error, frames) {
+    return Error.prototype.toString.call(error) + frames.map(function (frame) {
+      return "\\n    at " + authoredFrame(frame);
+    }).join("");
+  };
+  return function (filename) { workflowFiles.add(filename); };
 }
 
 function compileWorkflow(body, filename) {
-  workflowFiles.add(filename);
+  registerWorkflowFile(filename);
   try {
     return new vm.Script(WORKFLOW_PREFIX + body + "\\n})", { filename: filename }).runInContext(realmContext);
   } catch (error) {
@@ -787,9 +799,9 @@ function compileWorkflow(body, filename) {
     if (error && typeof error.stack === "string") {
       if (error.stack.startsWith(filename + ":1\\n")) {
         const lines = error.stack.split("\\n");
-        if (lines[1].startsWith(WORKFLOW_PREFIX)) {
+        if (lines[1]?.startsWith(WORKFLOW_PREFIX)) {
           lines[1] = lines[1].slice(WORKFLOW_PREFIX.length);
-          lines[2] = lines[2].slice(WORKFLOW_PREFIX.length);
+          if (lines[2] !== undefined) lines[2] = lines[2].slice(WORKFLOW_PREFIX.length);
           error.stack = lines.join("\\n");
         }
       } else if (error.sourceURL === filename && error.stack.startsWith("[native code]:0\\n")) {
@@ -842,11 +854,11 @@ async function main() {
 
   // Structured CallSites retain constructor-expression columns on both V8 and
   // JSC. Formatting changes no Error constructor, prototype, identity or cause.
-  vm.runInContext("Error", context).prepareStackTrace = function (error, frames) {
-    return Error.prototype.toString.call(error) + frames.map(function (frame) {
-      return "\\n    at " + authoredFrame(frame);
-    }).join("");
-  };
+  registerWorkflowFile = vm.runInContext(
+    "(" + installAuthoredStacks.toString() + ")(" + WORKFLOW_PREFIX.length + ")",
+    context,
+    { filename: "workflow-stack.js" }
+  );
   const run = compileWorkflow(workerData.body, "workflow.js");
   const value = await run(rootScope.agent, rootScope.phase, rootScope.log, rootScope.workflow, rootScope.console, sandbox.args);
   checkBoundary(value, "the workflow result");

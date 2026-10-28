@@ -178,6 +178,27 @@ versions or historical CLI constants changed): Node `26.12.0` (`.node-version`),
 (`.python-version`), Bun `1.3.14` (`.bun-version`), npm `11.20.0` (root `packageManager`), uv
 `0.13.1`. Fork build toolchains are separate and documented in [forks.md](forks.md).
 
+## Harness-owned workflow diagnostic patch
+
+The imported `packages/subagents` worker/runtime/task now carry the harness-owned
+[#174](https://github.com/nredd/pi-harness/issues/174) fix in
+[#204](https://github.com/nredd/pi-harness/pull/204), not an upstream source snapshot
+or copied diagnostic log. `compileWorkflow` preserves authored lines on Node and
+Bun; `installAuthoredStacks` compiles its formatter and private filename Set in the
+VM realm, passing only primitive metadata. `workflowResultText` retains the concise
+failure message alongside bounded original stack/cause text. Worker and parser
+regressions use synthetic workflow and unrelated filenames, with no workstation
+paths, transcript imports or credential-bearing fixtures.
+
+This changes diagnostic display, not the trust boundary. Trusted workflow errors
+can carry raw host frames and user-controlled captured stacks; output bounds are
+not path sanitization or credential isolation. Existing host-closure globals remain
+an escape surface. The formatter adds no host callback, and its per-run filename Set
+is bounded by the existing nested-call limit. See the package's
+[workflow guide](../packages/subagents/docs/workflows.md#troubleshooting) and
+[changelog](../packages/subagents/CHANGELOG.md) for behavior. Gate and mutation
+receipts belong on the PR, not in this source-attribution record.
+
 ## Audit evidence
 
 Scans of the imported tracked tree, after sanitization:
