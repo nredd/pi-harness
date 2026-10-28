@@ -272,6 +272,15 @@ export function formatQuotaRow(state: QuotaState, tier: Tier, colorize: Colorize
 	return providerRows(state, { tier, resets: true, split: false }, colorize, opts).join("\n");
 }
 
+const NARROWEST: Layout = { tier: "compact", resets: false, split: true };
+/** Widest first; `NARROWEST` is the last resort callers may still clip. */
+const LAYOUTS: readonly Layout[] = [
+	{ tier: "full", resets: true, split: false },
+	{ tier: "compact", resets: true, split: false },
+	{ tier: "compact", resets: true, split: true },
+	NARROWEST,
+];
+
 /**
  * Rows for a terminal `width`, widest layout that fits untruncated: full single row, compact
  * single row, one compact row per provider, then the same without reset times. Narrow widths
@@ -281,15 +290,9 @@ export function formatQuotaRow(state: QuotaState, tier: Tier, colorize: Colorize
 export function fitQuotaRows(state: QuotaState, width: number, colorize: Colorize, opts: FormatOptions = {}): string[] {
 	const plain: Colorize = (_color, text) => text;
 	const resolved = { ...opts, now: opts.now ?? Date.now() };
-	const layouts: Layout[] = [
-		{ tier: "full", resets: true, split: false },
-		{ tier: "compact", resets: true, split: false },
-		{ tier: "compact", resets: true, split: true },
-		{ tier: "compact", resets: false, split: true },
-	];
+	// Rows are ASCII (en-US month names, digits, `%`), so `.length` equals the visible width here.
 	const fits = (layout: Layout) => providerRows(state, layout, plain, resolved).every((row) => row.length <= width);
-	const chosen = layouts.find(fits) ?? layouts[layouts.length - 1];
-	return providerRows(state, chosen as Layout, colorize, resolved);
+	return providerRows(state, LAYOUTS.find(fits) ?? NARROWEST, colorize, resolved);
 }
 
 /** Minimal event bus (matches `pi.events`). */

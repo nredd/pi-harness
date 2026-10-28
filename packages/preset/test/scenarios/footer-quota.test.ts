@@ -232,6 +232,12 @@ it("25-column quota wraps by provider; every value keeps its provider label", as
 	expect(quotaRow(host)).toBe("Left: Anth 5h 80% 7d 60%");
 	expect(quotaRows(host)).toEqual(["Left: Anth 5h 80% 7d 60%", "OAI 7d 50%"]);
 	expect(values(host, "openai-codex")).toEqual(["50%"]);
+	// Whole-token matches: the cwd row is a random mkdtemp path (`pi-footer-XXXXXX`), and a bare
+	// substring check failed whenever that suffix contained e.g. "7d" (`m7d58N`, `Rj7dVK`).
+	// No quota fragment may leak outside the provider-led quota rows.
+	for (const fragment of [/\bOAI\b/, /\b7d\b/, /\bAnth\b/]) {
+		for (const row of rows.filter((line) => fragment.test(line))) expect(quotaRows(host)).toContain(row);
+	}
 	host.resize(120, 40);
 	await host.settle();
 	expect(quotaRow(host)).toMatch(/^Quota left:/);

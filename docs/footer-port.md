@@ -20,7 +20,7 @@ Paths below are relative to those directories unless otherwise stated.
 | Token/cost/subscription | `formatTokens`, `buildParts`, `:143-150`; OAuth or kimi-coding | same `formatTokens`, `buildParts`, subscription detection | None |
 | Model/provider/thinking | `:193-239`, minimum two cells padding; provider only when it fits | same `rightSideBase`/`buildLine` | None |
 | Full/compact tier and clipping | `:178-244`, word labels only if untruncated with model | same `buildParts`/`buildLine`/`fitsUntruncated` | None |
-| Quota protocol, parsing, rendering | `lib/footer-quota.ts`, all exports | same exports plus `formatResetAt`/`fitQuotaRows`; changed: OpenAI 5h hidden, reset times, provider-wrapped narrow rows (task #38) | None: provider/window names, floors, clamps, freshness/merge, 20/5 colors, error/timeout retained values, expiry, 60s/12s, unique channels, single flight |
+| Quota protocol, parsing, rendering | `lib/footer-quota.ts`, all exports | same exports plus `formatResetAt`/`fitQuotaRows`; changed: OpenAI 5h hidden, reset times, provider-wrapped narrow rows | None: provider/window names, floors, clamps, freshness/merge, 20/5 colors, error/timeout retained values, expiry, 60s/12s, unique channels, single flight |
 | Deferred startup | `:82-91`, zero-delay startup timer, cancelled on dispose | same `:125-139` using injected clock | Same behavior, clock seam only |
 | Quota timers | helper default Node timers remain referenced | footer passes clock timers, default clock unrefs all handles | Preset timers do not keep Node alive; no visual/poll cadence change |
 | Statuses | `:252-262`, sorted keys, whitespace normalized, clipped row after quota | same `getExtensionStatuses` block | None |
