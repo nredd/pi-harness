@@ -1,5 +1,12 @@
 # Plan-mode coverage attribution
 
+This page preserves the #199 diagnosis and its historical counts. The subsequent
+[final-guard ledger](final-guards.md) traces all 12 remaining lines at #199 HEAD,
+covers three reachable lines and the queued predicate function, and documents the
+removal of four proven-dead uncovered lines. Its final count is **942/947 lines,
+154/154 functions**, with five defensive lines still open. No provider or inventory
+change is involved; the reduced denominator is itemized in that ledger.
+
 Diagnosis against PR #187, base `e564bd5961f27f6d27e76dcefeb163f91a99e002`.
 Worktree: `~/code/cov-pm-attribution`, branch `redd/cov-pm-attribution`.
 
