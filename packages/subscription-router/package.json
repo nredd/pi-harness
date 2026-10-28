@@ -23,7 +23,7 @@
     "format": "biome check --write src/ test/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:bun": "bun test test/scenarios",
+    "test:bun": "node ../../scripts/run-vitest.ts bun",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
