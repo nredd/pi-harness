@@ -7,7 +7,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 
 | Job | Normal PR | `main` push | Docs-only PR or push | Proves |
 | --- | --- | --- | --- | --- |
-| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Reports success after the classifier logs the bypass | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (preset runs all of `test/`; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN. See the computer-use note below. |
+| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Reports success after the classifier logs the bypass | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler and inprocess run FULL Vitest suites on both engines with the shared homedir guard; the other packages retain native Bun subsets; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN. See the computer-use note below. |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract` | Same | Reports success after the classifier logs the bypass | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
 | `stack (ubuntu-24.04, macos-14; personal, local)` | Node release-bundle D/E scenarios in each cell; each personal cell also builds the core Gitlink with Bun and runs standalone D/E for both stacks | Only `stack (ubuntu-24.04, personal)` runs, including both standalone stacks; the other three required job names log the selective smoke | Every cell reports success after the classifier logs the bypass | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 | `bench (not run)` | a notice and a step summary | Same | Same | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
@@ -75,7 +75,9 @@ It is not a required check and has no docs-only bypass; it only starts when its 
   `3.x` and leaves the imported subagents package's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
   source lockfile was retired with its Gitlink; the stack workspace pins `rpiv-config` and optional peer
   `rpiv-i18n` to the imported package's `2.13.9` provenance, with the same integrity as that historical lockfile
-- `isolateStackHome()` isolates `HOME`, `PI_CODING_AGENT_DIR`, XDG config before loading entries.
+- The test launcher isolates `HOME` at process spawn on both engines. `isolateStackHome()` keeps
+  that home fixed (Bun caches `os.homedir()`), isolating `PI_CODING_AGENT_DIR` and XDG config
+  independently per fixture before loading entries.
   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
   `/todos` heading counts share the evidenced-batch test; no second process
@@ -102,6 +104,29 @@ It is not a required check and has no docs-only bypass; it only starts when its 
 
 The unit gates must not read the machine: the first CI run found three `integration/tests` that only
 passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
+
+Verification engines: Vitest stays the owned TypeScript runner, with Node primary (the shipped
+runtime) and Bun the standalone target. Phase 1 replaces native Bun subsets with full Vitest
+for `subscription-router`, `preset`, `resource-sampler` and `integration/inprocess` only.
+`test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
+spawn-time home; `make check-ts` and both existing `owned` OS cells run it. Each invocation
+prints engine/OS/package duration and exit status and appends it to the CI step summary.
+The shared guard checks `os.homedir() === HOME` at setup, before each test and after each test,
+failing with the offending file and an instruction to inject home directories. These are
+boundary checks, not interception of transient mutations between boundaries.
+
+Full Bun activation **and guard wiring** for `todo`/`subagents` are deferred to phase 2
+([spec PR #170](https://github.com/nredd/pi-harness/pull/170), phase 1 owner-approved scope
+correction; tracking [#160](https://github.com/nredd/pi-harness/issues/160)). No quarantine list:
+the spec's 26 assertion failures are not an exhaustive hazard inventory. With pinned Bun
+1.3.14, a guard probe fails **387/387 todo tests** because `.test-support/setup.ts` mutates
+`HOME` for every test, versus **387/387 passing on Node**. Removing the spec's 15 failing
+assertions would leave **372 guard failures**. Their current native Bun subsets remain
+unchanged, not a claim of full dual-engine verification. Owner: nredd; expiry: phase 2's
+home-injection PR, before either full suite is enabled. See the engine matrix, boundary
+limitations, negative control and package-addition procedure [here](verification-engines.md).
+Python stays on pytest/uv/ruff/ty; dotfiles stays on dependency-free `node --test` as the
+bootstrap exception. Istanbul consolidation is phase 3, not part of this producer change.
 
 Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-version`, uv `0.13.1`
 (Python from `.python-version` via uv). Every action is pinned to a commit SHA.
