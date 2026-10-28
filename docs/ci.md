@@ -36,8 +36,8 @@ Observed on 2026-10-28, both in `Standalone D and E (local)`:
   `TUI never reported its exit status`. Its saved screen contains `STARTUP-OK` and the resume hint.
   Original `pi.stderr` reports `Bun v1.3.14 (0d9b296a) macOS Silicon`, macOS `14.8.9`,
   `Elapsed: 8573ms`, feature `exited`, and `Segmentation fault at address 0xC`.
-  The [here](https://bun.report/1.3.14/M_10d9b296mggQugggC______mk04Yuw4uhBu7l7H_2lkjlDurh5kD27p5tC+xt2yC+1+3H_2lkjlDurh5kDunr21Cusw11CA2AY)
-  trace resolves through `jsc.VirtualMachine.globalExit`, `Bun__Process__exit` and
+  The decoded trace [here](https://bun.report/1.3.14/M_10d9b296mggQugggC______mk04Yuw4uhBu7l7H_2lkjlDurh5kD27p5tC+xt2yC+1+3H_2lkjlDurh5kDunr21Cusw11CA2AY)
+  resolves through `jsc.VirtualMachine.globalExit`, `Bun__Process__exit` and
   `Bun::Process_functionReallyExit` / `Process_functionExit`.
 - PR #178, run `40667021371`, job `122744482131`: the failure is instead
   `ordinary-session_start-rpc`, `subprocess.TimeoutExpired` after 60 seconds. Its TUI case passes.
@@ -53,6 +53,14 @@ from a dead wrapper or missing status file. RPC does not use that wrapper at all
 
 A local rebuild of Gitlink `2bfb8e7c61d35167b09f8ce70693df39660fc197` with Bun `1.3.14` and frozen
 release model data passed 29 original TUI and 29 RPC startup calls, including two concurrent drivers.
+The initial two-case command was `PI_BIN=<rebuilt-pi> uv run --locked pytest
+'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-tui]'
+'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-rpc]'
+--stack stacks/local.json --runtime bun-standalone -q`: 2 passed. A diagnostic driver then invoked
+that unchanged scenario function on copied explicit fixtures: 12 serial pairs, then two concurrent
+drivers of 8 pairs each (qmd failure shim for the concurrent run), all passed. Recorded local logs:
+`/tmp/fix-tui-repro.log`, `/tmp/fix-tui-repeat.log`, `/tmp/fix-tui-stress-a.log` and
+`/tmp/fix-tui-stress-b.log`; these workstation logs are not durable CI artifacts.
 This is not a native-crash reproduction or a fix. Synthetic abort and timeout tests prove the
 original nonzero/timeout failure and raw evidence survive cleanup; no assertions, deadlines, Bun
 pins or runtime behavior are relaxed. The exact native trigger and a failing-CI pane-state capture
