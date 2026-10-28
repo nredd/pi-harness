@@ -330,6 +330,18 @@ it("OpenAI with an assumed span is labeled unknown, never 5h or weekly, and keep
 	expect(rows[0]).not.toMatch(/OpenAI (weekly|5h)/);
 });
 
+it("a legacy snapshot without spanSource never shows OpenAI 5h, only the named 7d window", async () => {
+	const legacy = (name: string, usedPercent: number, resetAt?: number) => ({
+		name,
+		scope: "provider",
+		usedPercent,
+		resetAt,
+	});
+	const rows = await wideCodexRow([legacy("5h", 30, RESETS.codex[0]), legacy("7d", 50, RESETS.codex[1])]);
+	expect(rows[0]).toMatch(/\| OpenAI weekly 50% \(resets Oct 24 11:05\)$/);
+	expect(rows[0]).not.toMatch(/OpenAI 5h|OAI 5h|13:00/);
+});
+
 it("a reported 18000s OpenAI window is not shown", async () => {
 	const rows = await wideCodexRow([codexWindow(38, 18_000_000, "reported", RESETS.codex[0])]);
 	expect(rows[0]).toMatch(/\| OpenAI weekly --$/);
