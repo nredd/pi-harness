@@ -34,7 +34,8 @@ FAST_TIMERS = {POLL_MS: FAST_POLL_MS, REQUEST_TIMEOUT_MS: FAST_TIMEOUT_MS}
 # `expiresAt` offset of a fresh snapshot; long, so the footer's wall-clock expiry never fires mid-test.
 FRESH_FOR_MS = 3_600_000
 ROUTER_PACKAGE = "pi-subscription-router"
-# Rows: `Quota left: Anthropic 5h 80% weekly 60% | OpenAI ...`, compact `Left: Anth 5h 80% 7d 60% | OAI ...`.
+# Rows: `Quota left: Anthropic 5h 80% weekly 60% | OpenAI weekly ...`, compact `Left: Anth 5h 80% 7d 60% | OAI 7d ...`;
+# reset suffixes (`(resets ..)` / `@..`) may follow each value, and narrow widths wrap one row per provider.
 ROW_PATTERN = re.compile(r"^\s*(?P<prefix>Quota left:|Left:)\s*(?P<body>.*?)\s*$", re.MULTILINE)
 PAIR_PATTERN = re.compile(r"(?P<label>[A-Za-z0-9]+)\s+(?P<value>\d+%|--)")
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")

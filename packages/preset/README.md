@@ -55,8 +55,19 @@ local themes, skills, agents and their configuration. Restart sessions after act
   300. One timer repaints at expiry plus 50ms. A low hit rate below 50% after a drop of at least
   10 points gets `idle>ttl`, `model-switch`, `compaction`, or `prefix-changed`, in that priority;
   compact markers shorten these words. Cache diagnostics never perform I/O or warm a cache.
-- Optional router quota row: provider-scoped Anthropic/OpenAI 5h and weekly remaining quotas,
-  floored/clamped to 0..100, `--` for unknown values, warning at <=20%, error at <=5%. Deferred
+- Optional router quota row: provider-scoped remaining quotas, floored/clamped to 0..100, `--`
+  for unknown values, warning at <=20%, error at <=5%. Anthropic shows 5h and weekly; OpenAI
+  shows weekly only (it has no 5h quota, so a reported `5h` window is ignored). Each window is
+  followed by its reset, taken from the router's `windows[].resetAt` (epoch ms), never computed
+  or guessed: `Quota left: Anthropic 5h 66% (resets 14:30) weekly 35% (resets Nov 2 09:00) | OpenAI weekly 76% (resets Nov 3 11:05)`.
+  Compact: `Left: Anth 5h 66% @14:30 7d 35% @Nov 2 09:00 | OAI 7d 76% @Nov 3 11:05`. Times are 24h
+  in the process-local timezone (the zone the router's own `/router` output uses; DST and
+  calendar days follow it). 5h resets show `HH:MM`, or `Mon D HH:MM` when past local midnight;
+  weekly resets always show the date. An unknown reset is omitted and the percent stays. A
+  reset already in the past hides the cached percent (`--`), since it describes the old window.
+  A stale retained percent keeps its own reset. Layout is the widest of: full row, compact row,
+  one compact row per provider, one per provider without resets; narrow terminals wrap by
+  provider so a value never loses its provider label (only the last layout can still be clipped). Deferred
   startup, 60s polling, one outstanding request, unique reply channel, 12s timeout, expiry repaint,
   stale retained readings and recovery. Without a valid reply the row stays hidden. Disposal
   cancels listeners and timers; unreferenced default timers do not keep the process alive.
@@ -178,9 +189,9 @@ npm run check -w @nredd/pi-preset   # biome, strict tsc, Vitest, bun test (Bun 1
 ```
 
 - `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
-- `createExpandedFooter({ clock })` optionally injects one clock for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
+- `createExpandedFooter({ clock, timeZone })` optionally injects one clock (and an IANA zone pinning reset labels; default process-local) for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
 - `test/*.test.ts` and support code are checked by strict TypeScript; preserved `test/footer-*.test.mjs` helper assertions stay JavaScript. Everything under `extensions/`, `lib/` and `test/` is Biome-formatted.
-- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam. `lib/footer-quota.ts` differs only by formatting; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
+- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam. `lib/footer-quota.ts` additionally drops OpenAI 5h and adds reset times and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
 - All live dotfiles helper assertions already exist here. `test/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Once `0.2.0` is published and promoted, the dotfiles `remove-footer` change drops its own copy and only installs/configures this footer.
 
 Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_*`,

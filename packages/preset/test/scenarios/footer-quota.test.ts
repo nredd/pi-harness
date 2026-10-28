@@ -1,7 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
 import { parseUsageReply } from "../../lib/footer-quota.ts";
-import { FooterFixture, providerSegment, quotaRow, STATUS, snapshot, values } from "./support.ts";
+import { FooterFixture, providerSegment, quotaRow, quotaRows, STATUS, snapshot, values } from "./support.ts";
 
 let fixture: FooterFixture;
 afterEach(async () => fixture?.dispose());
@@ -56,7 +56,7 @@ it.each([
 	expect(fixture.usage.requests).toHaveLength(0);
 	await fixture.advance(0);
 	expect(values(host, "anthropic")).toEqual(["80%", "60%"]);
-	expect(values(host, "openai-codex")).toEqual(["69%", "0%"]);
+	expect(values(host, "openai-codex")).toEqual(["0%"]);
 	expect(quotaRow(host)).toContain("Anthropic");
 	expect(quotaRow(host)).toContain("OpenAI");
 	expect(host.harness.session.model).toMatchObject({ provider, id });
@@ -69,7 +69,7 @@ it("missing provider paints dashes", async () => {
 	fixture.usage.codex = undefined;
 	const host = await fixture.start();
 	expect(values(host, "anthropic")).toEqual(["90%", "90%"]);
-	expect(values(host, "openai-codex")).toEqual(["--", "--"]);
+	expect(values(host, "openai-codex")).toEqual(["--"]);
 });
 
 it("quota thresholds paint distinct ANSI styles", async () => {
@@ -101,10 +101,11 @@ it("quota thresholds paint distinct ANSI styles", async () => {
 		fixture.usage.codex = [round.used[2], round.used[3]];
 		await fixture.advance(i === 0 ? 0 : 60_000);
 		expect(values(host, "anthropic")).toEqual(round.expected.slice(0, 2).map(([left]) => `${left}%`));
-		expect(values(host, "openai-codex")).toEqual(round.expected.slice(2).map(([left]) => `${left}%`));
+		expect(values(host, "openai-codex")).toEqual(round.expected.slice(3).map(([left]) => `${left}%`));
 		const row = quotaRow(host);
 		const cells = host.terminal.getStyledLine(host.viewport().indexOf(row));
-		for (const [left, level] of round.expected) {
+		// OpenAI has no 5h quota, so its first fixture window (index 2) is never rendered.
+		for (const [left, level] of round.expected.filter((_, i) => i !== 2)) {
 			const cell = cells[row.indexOf(`${left}%`)];
 			if (!cell) throw new Error(`No styled cell for ${left}%`);
 			const found = styles.get(level) ?? new Set<string>();
@@ -120,13 +121,13 @@ it("quota tier follows injected terminal resize", async () => {
 	fixture = new FooterFixture();
 	const host = await fixture.start();
 	expect(quotaRow(host)).toMatch(/^Quota left:/);
-	host.resize(60, 30);
+	host.resize(50, 30);
 	await host.settle();
 	expect(quotaRow(host)).toMatch(/^Left:/);
 	expect(quotaRow(host)).toContain("Anth");
 	expect(quotaRow(host)).toContain("OAI");
 	expect(values(host, "anthropic")).toEqual(["80%", "60%"]);
-	for (const row of host.viewport()) expect(visibleWidth(row)).toBeLessThanOrEqual(60);
+	for (const row of host.viewport()) expect(visibleWidth(row)).toBeLessThanOrEqual(50);
 	host.resize(120, 40);
 	await host.settle();
 	expect(quotaRow(host)).toMatch(/^Quota left:/);
@@ -177,14 +178,14 @@ it.each(["hang", "error"] as const)("hung and errored polls retain then recover:
 		expect(providerSegment(host, provider)).toContain("stale");
 	await fixture.advance(132_000);
 	for (const provider of ["anthropic", "openai-codex"] as const) {
-		expect(values(host, provider)).toEqual(["90%", "90%"]);
+		expect(values(host, provider)).toEqual(provider === "anthropic" ? ["90%", "90%"] : ["90%"]);
 		expect(providerSegment(host, provider)).toContain("stale");
 	}
 	expect(host.viewport().join("\n")).toContain(STATUS);
 	fixture.usage.mode = "ok";
 	await fixture.advance(60_000);
 	for (const provider of ["anthropic", "openai-codex"] as const) {
-		expect(values(host, provider)).toEqual(["50%", "50%"]);
+		expect(values(host, provider)).toEqual(provider === "anthropic" ? ["50%", "50%"] : ["50%"]);
 		expect(providerSegment(host, provider)).not.toContain("stale");
 	}
 });
@@ -220,25 +221,74 @@ it.each(["/reload", "/new"])("reload and new leave one quota poller: %s", async 
 	expect(fixture.clock.pending).toBe(0);
 });
 
-it("25-column quota stays one row", async () => {
+it("25-column quota wraps by provider; every value keeps its provider label", async () => {
 	fixture = new FooterFixture();
 	const host = await fixture.start();
 	expect(values(host, "anthropic")).toEqual(["80%", "60%"]);
 	host.resize(25, 30);
 	await fixture.advance(120_000);
 	const rows = host.viewport();
-	const quota = quotaRow(host);
-	expect(quota).toMatch(/^Left:/);
 	for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(25);
-	// Whole-token matches: the cwd row is a random mkdtemp path (`pi-footer-XXXXXX`), and a bare
-	// substring check failed whenever that suffix contained e.g. "7d" (`m7d58N`, `Rj7dVK`).
-	for (const fragment of [/\bOAI\b/, /\b7d\b/, /\bAnth\b/]) {
-		for (const row of rows.filter((line) => fragment.test(line))) expect(row).toBe(quota);
-	}
+	expect(quotaRow(host)).toBe("Left: Anth 5h 80% 7d 60%");
+	expect(quotaRows(host)).toEqual(["Left: Anth 5h 80% 7d 60%", "OAI 7d 50%"]);
+	expect(values(host, "openai-codex")).toEqual(["50%"]);
 	host.resize(120, 40);
 	await host.settle();
 	expect(quotaRow(host)).toMatch(/^Quota left:/);
-	expect(values(host, "openai-codex")).toEqual(["70%", "50%"]);
+	expect(values(host, "openai-codex")).toEqual(["50%"]);
+});
+
+const RESETS = {
+	anthropic: [Date.parse("2026-10-19T14:30:00Z"), Date.parse("2026-10-22T09:00:00Z")],
+	codex: [Date.parse("2026-10-19T13:00:00Z"), Date.parse("2026-10-24T11:05:00Z")],
+};
+
+it("wide footer shows Anthropic 5h reset time, weekly reset dates, and no OpenAI 5h", async () => {
+	fixture = new FooterFixture();
+	fixture.usage.anthropicResets = RESETS.anthropic;
+	// The router reports a 5h-named OpenAI window too; the footer must not surface it.
+	fixture.usage.codexResets = RESETS.codex;
+	const host = await fixture.start();
+	host.resize(200, 40);
+	await host.settle();
+	expect(quotaRows(host)).toEqual([
+		"Quota left: Anthropic 5h 80% (resets 14:30) weekly 60% (resets Oct 22 09:00) | OpenAI weekly 50% (resets Oct 24 11:05)",
+	]);
+	expect(host.viewport().join("\n")).not.toMatch(/OpenAI 5h|OAI 5h|13:00/);
+	host.resize(110, 40);
+	await host.settle();
+	expect(quotaRows(host)).toEqual(["Left: Anth 5h 80% @14:30 7d 60% @Oct 22 09:00 | OAI 7d 50% @Oct 24 11:05"]);
+});
+
+it("narrow footer wraps by provider keeping resets, then drops them before clipping", async () => {
+	fixture = new FooterFixture();
+	fixture.usage.anthropicResets = RESETS.anthropic;
+	fixture.usage.codexResets = RESETS.codex;
+	const host = await fixture.start();
+	host.resize(60, 40);
+	await host.settle();
+	expect(quotaRows(host)).toEqual(["Left: Anth 5h 80% @14:30 7d 60% @Oct 22 09:00", "OAI 7d 50% @Oct 24 11:05"]);
+	host.resize(30, 40);
+	await host.settle();
+	expect(quotaRows(host)).toEqual(["Left: Anth 5h 80% 7d 60%", "OAI 7d 50%"]);
+	for (const row of host.viewport()) expect(visibleWidth(row)).toBeLessThanOrEqual(30);
+});
+
+it("unknown, past and stale resets: omitted, unknown percent, retained", async () => {
+	fixture = new FooterFixture();
+	// Anthropic: no 5h reset reported; weekly reset already passed. OpenAI: weekly reset known.
+	fixture.usage.anthropicResets = [undefined, Date.parse("2026-10-19T11:59:00Z")];
+	fixture.usage.codexResets = [undefined, RESETS.codex[1]];
+	const host = await fixture.start();
+	host.resize(200, 40);
+	await host.settle();
+	expect(quotaRows(host)).toEqual(["Quota left: Anthropic 5h 80% weekly -- | OpenAI weekly 50% (resets Oct 24 11:05)"]);
+	// A failed poll keeps the last reading and its reset, marked stale.
+	fixture.usage.mode = "error";
+	await fixture.advance(60_000);
+	expect(quotaRows(host)).toEqual([
+		"Quota left: Anthropic (stale) 5h 80% weekly -- | OpenAI (stale) weekly 50% (resets Oct 24 11:05)",
+	]);
 });
 
 it("absent usage listener leaves quota hidden", async () => {

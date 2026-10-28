@@ -16,7 +16,10 @@ export const REPLY_TIMEOUT_MS = 12_000;
 export const WARNING_AT = 20;
 export const ERROR_AT = 5;
 
-/** Providers shown, in order, with their router ids and window names. */
+/**
+ * Providers shown, in order, with their router ids and window names. A provider
+ * without a `fiveHour` window name has no 5h quota (OpenAI Codex), so none is shown.
+ */
 export const QUOTA_PROVIDERS = [
 	{
 		id: "anthropic",
@@ -29,10 +32,17 @@ export const QUOTA_PROVIDERS = [
 		id: "openai-codex",
 		full: "OpenAI",
 		compact: "OAI",
-		fiveHour: "5h",
 		weekly: "7d",
 	},
-] as const;
+] as const satisfies readonly QuotaProviderSpec[];
+
+interface QuotaProviderSpec {
+	id: string;
+	full: string;
+	compact: string;
+	fiveHour?: string;
+	weekly: string;
+}
 
 /**
  * Last known remaining percentages (0-100) for one provider; `undefined` renders `--`.
@@ -41,7 +51,11 @@ export const QUOTA_PROVIDERS = [
  */
 export interface ProviderQuota {
 	fiveHour?: number;
+	/** Epoch ms the 5h window resets, as reported by the router; absent when unknown. */
+	fiveHourResetAt?: number;
 	weekly?: number;
+	/** Epoch ms the weekly window resets, as reported by the router; absent when unknown. */
+	weeklyResetAt?: number;
 	stale: boolean;
 	/** Epoch ms after which a fresh reading is stale. Absent: never fresh. */
 	expiresAt?: number;
@@ -59,17 +73,36 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-/** Remaining percents of the provider-scoped 5h and weekly windows. */
-function readWindows(
-	windows: unknown[],
-	spec: (typeof QUOTA_PROVIDERS)[number],
-): Pick<ProviderQuota, "fiveHour" | "weekly"> {
-	const out: Pick<ProviderQuota, "fiveHour" | "weekly"> = {};
+type WindowReading = Pick<ProviderQuota, "fiveHour" | "fiveHourResetAt" | "weekly" | "weeklyResetAt">;
+
+/** Epoch ms from a router `resetAt`; non-finite or non-positive -> `undefined`. */
+function resetAtOf(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** Remaining percents and reset times of the provider-scoped 5h and weekly windows. Reset keys exist only when known. */
+function readWindows(windows: unknown[], spec: QuotaProviderSpec): WindowReading {
+	const out: WindowReading = {};
 	for (const rawWindow of windows) {
 		const window = asRecord(rawWindow);
 		if (window?.scope !== "provider") continue;
-		if (window.name === spec.fiveHour) out.fiveHour = remainingPercent(window.usedPercent);
-		else if (window.name === spec.weekly) out.weekly = remainingPercent(window.usedPercent);
+		const key = window.name === spec.fiveHour ? "fiveHour" : window.name === spec.weekly ? "weekly" : undefined;
+		if (!key) continue;
+		out[key] = remainingPercent(window.usedPercent);
+		const resetAt = resetAtOf(window.resetAt);
+		if (resetAt !== undefined) out[`${key}ResetAt`] = resetAt;
+	}
+	return out;
+}
+
+/** Per window: a valid new percent brings its own reset time; otherwise the prior pair is retained. */
+function mergeReadings(seen: WindowReading, prior: ProviderQuota | undefined): WindowReading {
+	const out: WindowReading = {};
+	for (const key of ["fiveHour", "weekly"] as const) {
+		const source = seen[key] !== undefined ? seen : prior;
+		out[key] = source?.[key];
+		const resetAt = source?.[`${key}ResetAt`];
+		if (resetAt !== undefined) out[`${key}ResetAt`] = resetAt;
 	}
 	return out;
 }
@@ -82,7 +115,7 @@ function readWindows(
  * `expiresAt` is finite and in the future. A fresh snapshot replaces the provider
  * wholesale (a missing or invalid window shows `--`). Anything else, including a
  * provider absent from the reply, is stale: values merge per field over `previous`
- * (valid snapshot values win, the rest are retained).
+ * (valid snapshot values win, the rest are retained; a retained percent keeps its reset time).
  */
 export function parseUsageReply(reply: unknown, now: number, previous?: QuotaState): QuotaState | undefined {
 	const envelope = asRecord(reply);
@@ -115,8 +148,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		}
 		const seen = windows ? readWindows(windows, spec) : {};
 		state[spec.id] = {
-			fiveHour: seen.fiveHour ?? prior?.fiveHour,
-			weekly: seen.weekly ?? prior?.weekly,
+			...mergeReadings(seen, prior),
 			stale: true,
 			expiresAt: prior?.expiresAt,
 		};
@@ -153,21 +185,111 @@ function formatValue(remaining: number | undefined, colorize: Colorize): string 
 	return text;
 }
 
+/** Clock and zone for reset labels; both injectable so tests need no real time or TZ. */
+export interface FormatOptions {
+	/** Epoch ms treated as the present. Default `Date.now()`. */
+	now?: number;
+	/** IANA zone for reset labels. Default: the process-local zone, like the router's own `toLocaleTimeString()`. */
+	timeZone?: string;
+}
+
+function zoneParts(epoch: number, timeZone: string | undefined): Record<string, string> {
+	const parts = new Intl.DateTimeFormat("en-US", {
+		timeZone,
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+		hourCycle: "h23",
+	}).formatToParts(epoch);
+	return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
 /**
- * Row text for one tier; always lists both providers. Labels are dimmed and low
- * values colored individually, so a value color never bleeds into the rest.
+ * Local 24h reset label: `HH:MM` when the reset is on the same calendar day as `now`
+ * (and `alwaysDate` is false), else `Mon D HH:MM`. Calendar days and DST follow `timeZone`.
  */
-export function formatQuotaRow(state: QuotaState, tier: Tier, colorize: Colorize): string {
-	const full = tier === "full";
+export function formatResetAt(resetAt: number, now: number, timeZone?: string, alwaysDate = false): string {
+	const at = zoneParts(resetAt, timeZone);
+	const time = `${at.hour}:${at.minute}`;
+	const today = zoneParts(now, timeZone);
+	const sameDay = at.year === today.year && at.month === today.month && at.day === today.day;
+	return sameDay && !alwaysDate ? time : `${at.month} ${at.day} ${time}`;
+}
+
+/** Row layout: label tier, whether reset times are shown, and one row per provider instead of one row. */
+interface Layout {
+	tier: Tier;
+	resets: boolean;
+	split: boolean;
+}
+
+function windowText(
+	label: string,
+	remaining: number | undefined,
+	resetAt: number | undefined,
+	weekly: boolean,
+	layout: Layout,
+	colorize: Colorize,
+	opts: Required<Pick<FormatOptions, "now">> & FormatOptions,
+): string {
 	const dim = (text: string) => colorize("dim", text);
-	const providers = QUOTA_PROVIDERS.map((spec) => {
+	// A reset already in the past means the cached percent describes the old window: show unknown.
+	const elapsed = resetAt !== undefined && resetAt <= opts.now;
+	const value = formatValue(elapsed ? undefined : remaining, colorize);
+	if (!layout.resets || resetAt === undefined || elapsed) return `${dim(`${label} `)}${value}`;
+	const when = formatResetAt(resetAt, opts.now, opts.timeZone, weekly);
+	return `${dim(`${label} `)}${value}${dim(layout.tier === "full" ? ` (resets ${when})` : ` @${when}`)}`;
+}
+
+function providerRows(state: QuotaState, layout: Layout, colorize: Colorize, opts: FormatOptions): string[] {
+	const full = layout.tier === "full";
+	const dim = (text: string) => colorize("dim", text);
+	const resolved = { ...opts, now: opts.now ?? Date.now() };
+	const segments = (QUOTA_PROVIDERS as readonly QuotaProviderSpec[]).map((spec) => {
 		const quota = state[spec.id] ?? { stale: true };
 		const label = `${full ? spec.full : spec.compact}${quota.stale ? " (stale)" : ""}`;
-		const fiveHour = formatValue(quota.fiveHour, colorize);
-		const weekly = formatValue(quota.weekly, colorize);
-		return `${dim(`${label} 5h `)}${fiveHour}${dim(full ? " weekly " : " 7d ")}${weekly}`;
+		const windows: string[] = [];
+		if (spec.fiveHour !== undefined)
+			windows.push(windowText("5h", quota.fiveHour, quota.fiveHourResetAt, false, layout, colorize, resolved));
+		windows.push(
+			windowText(full ? "weekly" : "7d", quota.weekly, quota.weeklyResetAt, true, layout, colorize, resolved),
+		);
+		return `${dim(`${label} `)}${windows.join(" ")}`;
 	});
-	return `${dim(full ? "Quota left: " : "Left: ")}${providers.join(dim(" | "))}`;
+	const lead = dim(full ? "Quota left: " : "Left: ");
+	if (layout.split) return segments.map((segment, i) => (i === 0 ? lead + segment : segment));
+	return [lead + segments.join(dim(" | "))];
+}
+
+/**
+ * Single row text for one tier, with reset times; always lists both providers. Labels are
+ * dimmed and low values colored individually, so a value color never bleeds into the rest.
+ * Windows with an unknown reset omit it; OpenAI shows only its weekly window.
+ */
+export function formatQuotaRow(state: QuotaState, tier: Tier, colorize: Colorize, opts: FormatOptions = {}): string {
+	return providerRows(state, { tier, resets: true, split: false }, colorize, opts).join("\n");
+}
+
+/**
+ * Rows for a terminal `width`, widest layout that fits untruncated: full single row, compact
+ * single row, one compact row per provider, then the same without reset times. Narrow widths
+ * wrap by provider rather than clip, so every value stays next to its provider label. Only the
+ * narrowest layout can still exceed `width`; callers clip that last resort.
+ */
+export function fitQuotaRows(state: QuotaState, width: number, colorize: Colorize, opts: FormatOptions = {}): string[] {
+	const plain: Colorize = (_color, text) => text;
+	const resolved = { ...opts, now: opts.now ?? Date.now() };
+	const layouts: Layout[] = [
+		{ tier: "full", resets: true, split: false },
+		{ tier: "compact", resets: true, split: false },
+		{ tier: "compact", resets: true, split: true },
+		{ tier: "compact", resets: false, split: true },
+	];
+	const fits = (layout: Layout) => providerRows(state, layout, plain, resolved).every((row) => row.length <= width);
+	const chosen = layouts.find(fits) ?? layouts[layouts.length - 1];
+	return providerRows(state, chosen as Layout, colorize, resolved);
 }
 
 /** Minimal event bus (matches `pi.events`). */

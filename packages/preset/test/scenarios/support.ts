@@ -71,6 +71,7 @@ export function snapshot(
 	used: readonly [number, number] | undefined,
 	now: number,
 	status = "available",
+	resetAts: readonly (number | undefined)[] = [],
 ) {
 	const names =
 		provider === "anthropic" ? ["five_hour", "seven_day"] : provider === "openai-codex" ? ["5h", "7d"] : undefined;
@@ -79,7 +80,9 @@ export function snapshot(
 		provider,
 		status,
 		expiresAt: now + 3_600_000,
-		windows: used ? names.map((name, i) => ({ name, scope: "provider", usedPercent: used[i] })) : [],
+		windows: used
+			? names.map((name, i) => ({ name, scope: "provider", usedPercent: used[i], resetAt: resetAts[i] }))
+			: [],
 	};
 }
 
@@ -88,6 +91,9 @@ export class UsageBus {
 	anthropic: readonly [number, number] | undefined = [20, 40];
 	codex: readonly [number, number] | undefined = [30, 50];
 	statuses: [string, string] = ["available", "available"];
+	/** Router `resetAt` epoch ms per window ([5h-or-first, weekly]); unset means the router reported none. */
+	anthropicResets: readonly (number | undefined)[] = [];
+	codexResets: readonly (number | undefined)[] = [];
 	mode: "ok" | "hang" | "error" = "ok";
 	ready = false;
 	requests: { at: number; ready: boolean; refresh: unknown; reply: (body?: unknown) => void }[] = [];
@@ -103,8 +109,12 @@ export class UsageBus {
 			success: true,
 			data: {
 				snapshots: [
-					...(this.anthropic ? [snapshot("anthropic", this.anthropic, this.clock.now(), this.statuses[0])] : []),
-					...(this.codex ? [snapshot("openai-codex", this.codex, this.clock.now(), this.statuses[1])] : []),
+					...(this.anthropic
+						? [snapshot("anthropic", this.anthropic, this.clock.now(), this.statuses[0], this.anthropicResets)]
+						: []),
+					...(this.codex
+						? [snapshot("openai-codex", this.codex, this.clock.now(), this.statuses[1], this.codexResets)]
+						: []),
 				],
 				blocks: [],
 			},
@@ -227,7 +237,7 @@ export class FooterFixture {
 			sessionManager: file && turns.length ? SessionManager.open(file) : manager,
 			...hostOptions,
 			extensionFactories: [
-				createExpandedFooter({ clock: this.clock }),
+				createExpandedFooter({ clock: this.clock, timeZone: "UTC" }),
 				...(absent ? [] : [this.usage.extension]),
 				...(hostOptions.extensionFactories ?? []),
 			],
@@ -262,19 +272,27 @@ export class FooterFixture {
 	}
 }
 
-/** One on-screen quota row; duplicates fail instead of hiding leaked/wrapped output. */
+/** First quota row (the one carrying the `Quota left:`/`Left:` lead); duplicates fail instead of hiding leaked output. */
 export function quotaRow(host: InteractiveHarness): string {
 	const rows = host.viewport().filter((row) => /^\s*(Quota left:|Left:)/.test(row));
 	if (rows.length !== 1) throw new Error(`Expected one quota row: ${host.viewport().join("\n")}`);
 	return rows[0] ?? "";
 }
 
-/** Provider segment from either rendered tier. */
+/** Every on-screen quota row (one when it fits, one per provider when wrapped), each provider-led. */
+export function quotaRows(host: InteractiveHarness): string[] {
+	return host.viewport().filter((row) => /^\s*(?:Quota left: |Left: )?(?:Anthropic|Anth|OpenAI|OAI) /.test(row));
+}
+
+/** Provider segment from any rendered tier or wrapped layout. */
 export function providerSegment(host: InteractiveHarness, provider: "anthropic" | "openai-codex"): string {
-	const row = quotaRow(host);
-	const match = row.match(provider === "anthropic" ? /(?:Anthropic|Anth) (.*?)(?:\s*\||$)/ : /(?:OpenAI|OAI) (.*)$/);
-	if (!match) throw new Error(`Missing ${provider}: ${row}`);
-	return match[1] ?? "";
+	const rows = quotaRows(host);
+	const pattern = provider === "anthropic" ? /(?:Anthropic|Anth) (.*?)(?:\s*\||$)/ : /(?:OpenAI|OAI) (.*)$/;
+	for (const row of rows) {
+		const match = row.match(pattern);
+		if (match) return match[1] ?? "";
+	}
+	throw new Error(`Missing ${provider}: ${rows.join("\n")}`);
 }
 
 /** Displayed window values, not poller internals. */

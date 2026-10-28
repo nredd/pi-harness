@@ -130,8 +130,9 @@ third-party skills, global `AGENTS.md`, `mcp.json`, router/subagents/enterprise 
 
 Byte-identical to the source (`cmp`): 6 of 7 agents (all but `architect`) and `coding-like-redd`.
 
-Also byte-identical: `lib/footer-cache.ts`. `lib/footer-quota.ts` differs only by Biome formatting
-(tabs, 120 columns, wrapping, trailing commas). The initial import of `extensions/expanded-footer.ts`
+Also byte-identical: `lib/footer-cache.ts`. `lib/footer-quota.ts` differed only by Biome formatting
+(tabs, 120 columns, wrapping, trailing commas) at import; it has since gained reset times, no OpenAI 5h
+and provider-wrapped narrow rows (see the preset README). The initial import of `extensions/expanded-footer.ts`
 and the two migrated helper tests was likewise formatting-only plus sibling import paths, with no
 assertion changes. The native footer port adds the optional `createExpandedFooter({ clock })` seam,
 retaining real defaults, and switches both helper tests to static sibling imports and Vitest. Their
