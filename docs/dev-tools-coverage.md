@@ -10,7 +10,7 @@ Cover the TypeScript wrappers, not cargo, git, ssh, scp, uv, Python, Rust, or th
 resource sampler implementation. Both Node runs use Vitest 5.0.3, one fork worker, an explicit
 `src/**/*.ts` coverage include, and separate report directories. The JSON inventories contain
 all 22 executable source modules; `src/core/index.ts` is a re-export-only barrel. Neither the
-Vitest configuration nor imports introduce a Pi/Jiti source alias. Zero-statement modules
+Vitest configuration nor imports introduce a Pi/Jiti source alias. Fully covered modules
 (e.g. the default entrypoint) remain in the JSON even when omitted from the text table.
 
 Initial providers agree exactly on lines/functions:
