@@ -40,6 +40,16 @@ The alert journal uses 129 real alert transitions to exercise an unread overflow
 attempt changing kind, then restores and acknowledges it, independently checking
 all four exact persisted counters. Tool-row ticking uses an injected FakeClock.
 
+Manager/workflow theme: real control promises drive detached resume telemetry,
+parent abort, throwing startup/completion observers, output-cleanup failures,
+queued detach and 502 evictions with exact newest/oldest assertions. Real workers
+exercise queued skip/cancel, spawn/load failures, hostile diagnostic getters and
+an unknown RPC envelope injected at Node's public worker event boundary. Host
+resume after actual manager eviction fails honestly; explicit nested script files
+load from private roots. Mutation batches change compaction count, eviction bound
+and detached verdict (three failures), and queued skip/host error/worker error
+(four failures). The protocol fatal-bit mutation also fails its envelope assertion.
+
 Mutation batch: replace every non-success finished wording, wrong turn count,
 incorrect repeated-search plural, invert replacement-dispose identity guard,
 and fail to decrement the previous overflow kind. Dedicated UI suite exits 1
