@@ -1457,7 +1457,7 @@ function planMode(pi, dependencies = {}) {
   pi.on("session_shutdown", async (_event, ctx) => {
     const shutdownSession = ctx.sessionManager;
     const runtimeApplication = activeImplementationRuntimeApplication?.sessionManager === shutdownSession && activeImplementationRuntimeApplication.drainOnShutdown ? activeImplementationRuntimeApplication : void 0;
-    const queuedInputs = takeQueuedRuntimeAdmissionInputs(shutdownSession);
+    const queuedInputs = takeQueuedRuntimeAdmissionInputs();
     for (const queued of queuedInputs) {
       pi.sendMessage(
         {
@@ -1641,7 +1641,7 @@ Blocked command: ${blocked}`
     if (pendingRuntimeAdmissionSession === ctx.sessionManager) {
       pendingRuntimeAdmissionSession = void 0;
     }
-    const queuedInputs = takeQueuedRuntimeAdmissionInputs(ctx.sessionManager);
+    const queuedInputs = takeQueuedRuntimeAdmissionInputs();
     for (const queued of queuedInputs) {
       pi.sendUserMessage(runtimeAdmissionInputContent(queued), {
         deliverAs: "followUp",
@@ -2314,15 +2314,10 @@ Blocked command: ${blocked}`
   function runtimeAdmissionIsPending(sessionManager) {
     return activeImplementationRuntimeApplication?.sessionManager === sessionManager || pendingRuntimeAdmissionSession === sessionManager || queuedRuntimeAdmissionInputs.some((queued) => queued.sessionManager === sessionManager);
   }
-  function takeQueuedRuntimeAdmissionInputs(sessionManager) {
-    const matching = [];
-    const remaining = [];
-    for (const queued of queuedRuntimeAdmissionInputs) {
-      if (queued.sessionManager === sessionManager) matching.push(queued);
-      else remaining.push(queued);
-    }
-    queuedRuntimeAdmissionInputs = remaining;
-    return matching;
+  function takeQueuedRuntimeAdmissionInputs() {
+    const queuedInputs = queuedRuntimeAdmissionInputs;
+    queuedRuntimeAdmissionInputs = [];
+    return queuedInputs;
   }
   function removeQueuedRuntimeAdmissionInput(queuedInput) {
     const index = queuedRuntimeAdmissionInputs.indexOf(queuedInput);

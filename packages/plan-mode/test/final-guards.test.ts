@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
+import { deferred } from "./session-support.js";
 import { createMockContext, createMockPi } from "./support.js";
 
 test("active implementation menus require UI at the public command boundary", async () => {
@@ -180,4 +181,83 @@ test("failed runtime persistence keeps queued prompts protected after the applic
   assert.equal(recovered.length, 1);
   assert.equal((recovered[0]?.message as { content?: string } | undefined)?.content, "preserve this queued prompt");
   assert.deepEqual(mock.sentUserMessages, []);
+});
+
+/** Mirror core teardownCurrent -> dispose -> createRuntime, with input suspended in setModel. */
+test("replacement recovers outgoing input once before the fresh runner admits its own queue", async () => {
+  const createDestination = () => {
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const mock = createMockPi();
+    const setModel = mock.rawPi.setModel;
+    mock.rawPi.setModel = async (model) => {
+      started.resolve();
+      await release.promise;
+      return setModel(model);
+    };
+    planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+    const branch = [
+      {
+        type: "custom",
+        customType: "plan-mode-state",
+        data: {
+          enabled: false,
+          awaitingAction: false,
+          pendingImplementationRuntime: { version: 1, model: { provider: "fixture", modelId: "target" } },
+        },
+      },
+    ];
+    const context = createMockContext({
+      sessionManager: { getBranch: () => branch, getEntries: () => branch },
+      modelRegistry: {
+        find: () => ({ provider: "fixture", id: "target" }),
+        getApiKeyAndHeaders: async () => ({ ok: true as const }),
+      },
+    });
+    const input = mock.events.get("input")?.[0];
+    const start = mock.events.get("session_start")?.[0];
+    const shutdown = mock.events.get("session_shutdown")?.[0];
+    const agentStart = mock.events.get("agent_start")?.[0];
+    assert.ok(input && start && shutdown && agentStart);
+    return { mock, context, started, release, input, start, shutdown, agentStart };
+  };
+  const outgoing = createDestination();
+  const image = { type: "image" as const, data: "outgoing-image", mimeType: "image/png" };
+  await outgoing.start({ reason: "new" }, outgoing.context.ctx);
+  const leading = outgoing.input({ text: "implement outgoing", source: "rpc" }, outgoing.context.ctx);
+  await outgoing.started.promise;
+  const follower = outgoing.input({ text: "outgoing follower", images: [image], source: "rpc" }, outgoing.context.ctx);
+  const shutdown = outgoing.shutdown({ reason: "resume" }, outgoing.context.ctx);
+  assert.deepEqual(outgoing.mock.sentMessages, [
+    {
+      message: {
+        customType: "plan-mode-recovered-input",
+        content: [{ type: "text", text: "outgoing follower" }, image],
+        display: true,
+        details: { source: "rpc" },
+      },
+      options: { triggerTurn: false },
+    },
+  ]);
+  outgoing.release.resolve();
+  assert.deepEqual(await Promise.all([leading, follower]), [{ action: "handled" }, { action: "handled" }]);
+  await shutdown;
+  assert.deepEqual(outgoing.mock.sentUserMessages, []);
+
+  // Core creates a fresh extension instance only after outgoing shutdown settles.
+  const incoming = createDestination();
+  await incoming.start({ reason: "new" }, incoming.context.ctx);
+  const incomingLeading = incoming.input({ text: "implement incoming", source: "rpc" }, incoming.context.ctx);
+  await incoming.started.promise;
+  const incomingFollower = incoming.input({ text: "incoming follower", source: "rpc" }, incoming.context.ctx);
+  incoming.release.resolve();
+  assert.deepEqual(await Promise.all([incomingLeading, incomingFollower]), [undefined, { action: "handled" }]);
+  await incoming.agentStart({}, incoming.context.ctx);
+  await incoming.agentStart({}, incoming.context.ctx);
+  await incoming.shutdown({ reason: "quit" }, incoming.context.ctx);
+  assert.deepEqual(incoming.mock.sentUserMessages, [
+    { text: "incoming follower", options: { deliverAs: "followUp", expandPromptTemplates: true } },
+  ]);
+  assert.deepEqual(incoming.mock.sentMessages, []);
+  assert.equal(outgoing.mock.sentMessages.length, 1);
 });
