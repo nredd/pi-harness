@@ -220,7 +220,39 @@ describe("authored workflow source locations", () => {
     expect(workflowResultText(task)).toHaveLength(16384);
     expect(workflowResultText(task).startsWith("Error: outer\n")).toBe(true);
     task.errorStack = "Captured outer context\n    at helper (unrelated.js:1:9000)";
-    expect(workflowResultText(task)).toBe(task.errorStack);
+    expect(workflowResultText(task)).toBe(`outer\n${task.errorStack}`);
+    for (const heading of ["outer", "Error: outer", "TypeError: outer", "CustomError: outer"]) {
+      task.errorStack = `${heading}\n    at helper (unrelated.js:1:9000)`;
+      expect(workflowResultText(task)).toBe(task.errorStack);
+    }
+  });
+
+  it("retains a distinct concise error when captured context merely contains a short message", async () => {
+    for (const message of ["x", "outer"]) {
+      const captured = `Captured ${message} context\n    at helper (unrelated.js:1:9000)`;
+      const script = `${META}\nconst error = new Error(${JSON.stringify(message)}); error.stack = ${JSON.stringify(captured)}; throw error;`;
+      const result = await runWorkflow({ script, host: hostFor(script) });
+      expect(result.status).toBe("failed");
+      expect(result.error).toBe(message);
+      expect(result.errorStack).toBe(captured);
+      const task = createWorkflowTask({ id: "wf_short_message", script });
+      completeWorkflowTask(task, result);
+      expect(workflowResultText(task)).toBe(`${message}\n${captured}`);
+      expect(workflowResultText(task).split("\n")[0]).toBe(message);
+      expect(task.errorStack).toBe(captured);
+    }
+  });
+
+  it("bounds the combined worker message and captured stack result at 20481 characters", async () => {
+    const script = `${META}\nconst error = new Error("m".repeat(20000)); error.stack = "s".repeat(20000); throw error;`;
+    const result = await runWorkflow({ script, host: hostFor(script) });
+    expect(result.status).toBe("failed");
+    expect(result.error).toHaveLength(4096);
+    expect(result.errorStack).toHaveLength(16384);
+    const task = createWorkflowTask({ id: "wf_max_message", script });
+    completeWorkflowTask(task, result);
+    expect(workflowResultText(task)).toBe(`${"m".repeat(4096)}\n${"s".repeat(16384)}`);
+    expect(workflowResultText(task)).toHaveLength(20481);
   });
 
   it("delivers authored failure stacks to the completion notification", async () => {
