@@ -50,8 +50,8 @@ This is diagnostic hygiene, not isolation from malicious same-UID package code.
 
 Artifact files:
 
-- `pi`, `SHA256SUMS`, `build.json`: exact executable, per-file SHA-256, Gitlink/harness SHAs,
-  tool versions, build/startup commands and separate primary/replay verdicts.
+- `pi`, `SHA256SUMS`, `build.json`: exact executable, per-file SHA-256, schema-validated
+  Gitlink/harness SHAs, tool versions, build/startup commands and separate primary/replay verdicts.
 - `compile-command.json`, `module-graph.json`, `build.log`: the actual compile argv, Bun's
   module graph and the frozen-data build log. A transparent build-only Bun wrapper adds
   `--metafile`; it changes neither core sources nor production pins. Missing optional metadata
