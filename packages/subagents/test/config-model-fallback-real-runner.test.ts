@@ -14,18 +14,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.js";
 import { registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
-import subagentsExtension from "../src/index.js";
 import { modelFallbackNote, setAgentModels } from "../src/model-resolver.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
 import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 import { registerFauxProvider } from "./helpers/pi-ai.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
 let cwd: string;
 let faux: ReturnType<typeof registerFauxProvider>;
-let saved: { cwd: string; agentDir?: string; home?: string };
+let saved: { cwd: string; agentDir?: string };
 
 /** A registry like the e2e one: only the faux model exists, so any other input is unavailable. */
 function ctxFor(model: any, extra: Record<string, unknown> = {}) {
@@ -64,11 +64,10 @@ function writeScout(model: string): void {
 }
 
 beforeEach(() => {
-  saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, home: process.env.HOME };
+  saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
   cwd = mkdtempSync(join(tmpdir(), "config-model-real-"));
   process.chdir(cwd);
   process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-  process.env.HOME = cwd;
   faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
 });
 
@@ -79,8 +78,6 @@ afterEach(() => {
   process.chdir(saved.cwd);
   if (saved.agentDir == null) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
-  if (saved.home == null) delete process.env.HOME;
-  else process.env.HOME = saved.home;
   registerAgents(new Map());
   rmSync(cwd, { recursive: true, force: true });
 });
