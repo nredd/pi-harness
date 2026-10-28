@@ -1,6 +1,8 @@
+import * as vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { runWorkflow, type WorkflowHost } from "../src/workflow/runtime.js";
-import { completeWorkflowTask, createWorkflowTask, formatWorkflowNotification } from "../src/workflow/task.js";
+import { completeWorkflowTask, createWorkflowTask, formatWorkflowNotification, workflowResultText } from "../src/workflow/task.js";
+import { WORKER_SOURCE } from "../src/workflow/worker-source.js";
 
 const META = 'export const meta = { name: "locations", description: "stack regression" };';
 
@@ -18,6 +20,26 @@ function location(script: string, filename: string): string {
   const before = script.slice(0, script.indexOf("new TypeError"));
   const lines = before.split(/\r\n|[\n\r\u2028\u2029]/);
   return `${filename}:${lines.length}:${lines.at(-1)!.length + 1}`;
+}
+
+/** Run the actual worker source with a local VM constructor, never a shared module mock. */
+function workerWithScript(Script: typeof vm.Script, body: string): Promise<{
+  type: string; message?: string; stack?: string; resultJson?: string;
+}> {
+  return new Promise(resolve => {
+    vm.runInNewContext(WORKER_SOURCE, {
+      require(id: string) {
+        if (id === "node:vm") return { ...vm, Script };
+        if (id === "node:worker_threads") return {
+          parentPort: { on() {}, postMessage: resolve },
+          workerData: { body, metaJson: "{}", itemCap: 4096, nestedCap: 256 },
+        };
+        throw new Error(`Unexpected worker import: ${id}`);
+      },
+      setTimeout,
+      clearTimeout,
+    });
+  });
 }
 
 const sources = [
@@ -69,11 +91,14 @@ describe("authored workflow source locations", () => {
       expect(notification).not.toContain("const Date =");
       expect(notification).not.toContain("(async (agent,");
       expect(notification).toContain("SyntaxError");
+      const lines = result.errorStack!.split("\n");
+      expect(lines[0]).toBe(nested ? "workflow:locations.js:1" : "workflow.js:1");
+      expect(lines[1]).toBe(script.replace("export", "      "));
       if (process.versions.bun?.startsWith("1.3.")) {
-        const lines = result.errorStack!.split("\n");
-        expect(lines[0]).toBe(nested ? "workflow:locations.js:1" : "workflow.js:1");
-        expect(lines[1]).toBe(script.replace("export", "      "));
         expect(lines[2]).not.toMatch(/^\s*\^/);
+      } else {
+        // Node and Bun 1.4 supply the semicolon's exact authored caret column.
+        expect(lines[2]).toBe(`${" ".repeat(script.lastIndexOf(";"))}^`);
       }
     });
   }
@@ -85,8 +110,8 @@ describe("authored workflow source locations", () => {
     expect(result.status).toBe("completed");
     expect(result.value).toMatchObject({ same: true, typed: true, cause: "cause" });
     const value = result.value as { stack: string; causeStack: string };
-    expect(value.stack.split("\n")[1]).toContain("workflow:locations.js:3:15");
-    expect(value.causeStack.split("\n")[1]).toContain("workflow:locations.js:2:15");
+    expect(value.stack.split("\n")[1].trim()).toMatch(/^at .*\bworkflow:locations\.js:3:15\)?$/);
+    expect(value.causeStack.split("\n")[1].trim()).toMatch(/^at .*\bworkflow:locations\.js:2:15\)?$/);
   });
 
   it("leaves message text and explicitly captured unrelated stacks untouched", async () => {
@@ -101,9 +126,14 @@ describe("authored workflow source locations", () => {
     const script = `${META}\nconst cause = new RangeError("inner");\nthrow new TypeError("outer", { cause });`;
     const result = await runWorkflow({ script, host: hostFor(script) });
     expect(result.error).toBe("outer");
-    expect(result.errorStack).toContain("workflow.js:3:7");
-    expect(result.errorStack).toContain("Caused by: RangeError: inner");
-    expect(result.errorStack).toContain("workflow.js:2:15");
+    const lines = result.errorStack!.split("\n");
+    expect(lines[1].trim()).toMatch(/^at .*\bworkflow\.js:3:7\)?$/);
+    const causeAt = lines.indexOf("Caused by: RangeError: inner");
+    expect(causeAt).toBeGreaterThan(1);
+    expect(lines[causeAt + 1].trim()).toMatch(/^at .*\bworkflow\.js:2:15\)?$/);
+    const task = createWorkflowTask({ id: "wf_cause", script });
+    completeWorkflowTask(task, result);
+    expect(workflowResultText(task)).toBe(result.errorStack);
   });
 
   it("bounds oversized diagnostics and terminates cyclic causes", async () => {
@@ -134,6 +164,63 @@ describe("authored workflow source locations", () => {
       expect(result.error).toBe(message);
       if (message === "bad cause") expect(result.errorStack).toContain("workflow.js:2:");
     }
+  });
+
+  it("keeps the formatter and its constructor in the script realm", async () => {
+    const script = `${META}\nconst formatter = Error.prepareStackTrace;\nlet refused = false;\ntry { formatter.constructor("return 1")(); } catch (error) { refused = error instanceof EvalError; }\nreturn { native: formatter instanceof Function, refused };`;
+    const result = await runWorkflow({ script, host: hostFor(script) });
+    expect(result.status).toBe("completed");
+    expect(result.value).toEqual({ native: true, refused: true });
+  });
+
+  it("does not map a real structured frame from an unrelated first-line file", async () => {
+    const external = `globalThis.external = function external() { ${" ".repeat(9000)}return new TypeError("external"); };`;
+    class ExternalScript extends vm.Script {
+      override runInContext(context: vm.Context, options?: vm.RunningScriptOptions): unknown {
+        new vm.Script(external, { filename: "unrelated.js" }).runInContext(context);
+        return super.runInContext(context, options);
+      }
+    }
+    const result = await workerWithScript(ExternalScript, "return external().stack;");
+    expect(result.type).toBe("complete");
+    const firstFrame = (JSON.parse(result.resultJson!) as string).split("\n")[1];
+    const expected = `unrelated.js:1:${external.indexOf("new TypeError") + 1}`;
+    expect(firstFrame.replace(/\)$/, "").slice(-expected.length)).toBe(expected);
+  });
+
+  it("retains SyntaxError diagnostics when the parser stack omits excerpt or caret lines", async () => {
+    for (const excerpt of [false, true]) {
+      class ShortStackScript extends vm.Script {
+        constructor(code: string, options?: vm.ScriptOptions) {
+          super("", options);
+          const error = new SyntaxError("original parser failure");
+          const prefix = code.slice(0, code.indexOf("return 1;"));
+          error.stack = `workflow.js:1\n${excerpt ? prefix + "return 1;" : ""}`;
+          throw error;
+        }
+      }
+      const result = await workerWithScript(ShortStackScript, "return 1;");
+      expect(result.type).toBe("error");
+      expect(result.message).toBe("original parser failure");
+      expect(result.stack).toBe(`workflow.js:1\n${excerpt ? "return 1;" : ""}`);
+    }
+  });
+
+  it("retains the concise message before a custom captured stack and its cause in the LLM result", async () => {
+    const captured = "captured elsewhere\n    at helper (unrelated.js:1:9000)";
+    const script = `${META}\nconst cause = new Error("inner"); cause.stack = "Error: inner\\n    at cause (unrelated.js:1:8000)";\nconst error = new Error("outer", { cause }); error.stack = ${JSON.stringify(captured)}; throw error;`;
+    const result = await runWorkflow({ script, host: hostFor(script) });
+    expect(result.status).toBe("failed");
+    const task = createWorkflowTask({ id: "wf_custom", script });
+    completeWorkflowTask(task, result);
+    const text = `outer\n${captured}\nCaused by: Error: inner\n    at cause (unrelated.js:1:8000)`;
+    expect(workflowResultText(task)).toBe(text);
+    expect(formatWorkflowNotification(task)).toContain(`<result>${text}</result>`);
+    task.errorStack = `Error: outer\n${"x".repeat(20000)}`;
+    expect(workflowResultText(task)).toHaveLength(16384);
+    expect(workflowResultText(task).startsWith("Error: outer\n")).toBe(true);
+    task.errorStack = "Captured outer context\n    at helper (unrelated.js:1:9000)";
+    expect(workflowResultText(task)).toBe(task.errorStack);
   });
 
   it("delivers authored failure stacks to the completion notification", async () => {
