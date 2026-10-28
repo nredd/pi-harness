@@ -18,7 +18,10 @@ cd packages/subagents
 ```
 
 The wildcard above is the equivalent compact invocation for the verified identical
-inventory. Full expanded executed command and LCOV are retained in
+inventory. The final full expanded executed command is committed beside this note
+in `subagents-coverage-command.txt`; the baseline and final differ only in their
+report directory (`/tmp/subagents-before` and `/tmp/subagents-final`). LCOV is
+retained in those directories. First-theme command and LCOV remain in
 `/tmp/subagents-theme1-command.txt` and `/tmp/subagents-theme1/lcov.info`.
 The root Vitest resolves Istanbul 5.0.3 from an ignored tooling link to
 `/tmp/preset-diag-tools/node_modules/@vitest/coverage-istanbul`; no dependency files
@@ -29,10 +32,25 @@ Native-loader assertions remain functional tests, not credited as instrumented e
 | --- | ---: | ---: |
 | Main baseline | 6654/7161 | 1351/1423 |
 | Workflow inspector outcomes | 6665/7161 | 1355/1423 |
+| Inspector + initial viewer outcomes | 6675/7161 | 1360/1423 |
+| Final three themes | 6690/7161 | 1363/1423 |
 
 | File | Baseline missing L/F | Inspector missing L/F |
 | --- | ---: | ---: |
 | `src/ui/workflow-menu.ts` | 11/4 | 0/0 |
+
+Final per-file missing lines/functions:
+
+| File | Baseline | Final |
+| --- | ---: | ---: |
+| `src/ui/workflow-menu.ts` | 11/4 | 0/0 |
+| `src/ui/conversation-viewer.ts` | 15/8 | 0/1 |
+| `src/workflow/meta.ts` | 11/1 | 1/0 |
+
+Full baseline/remaining file inventories, exact uncovered line numbers and
+Istanbul function labels are in `subagents-coverage-before.txt` and
+`subagents-coverage-remaining.txt` beside this note. All other file counters are
+unchanged. The 7161-line/1423-function denominator is unchanged.
 
 Inspector tests use the real dialog, stable runtime index 7 (not row index 0),
 and externally visible outcomes: stale-child notification, viewer identity,
@@ -67,7 +85,34 @@ and two tests failed. Source restored exactly. The remaining function is the
 empty ScrollView content invalidator passed by the constructor; no behavior or
 source was deleted to reduce the denominator.
 
-Priority independent work: manager lifecycle (21/7), workflow runtime (12/1),
-metadata validation/scanner (11/1 at baseline).
+Metadata theme: field-specific errors for null/array/scalar phases and invalid
+phase detail/model, regex braces and escaped slashes versus division, cached
+valid/invalid names, and path-only/named call labels (POSIX and Windows).
+The regex fixture's trailing description and exact export replacement are
+independent scanner boundaries, and its throwing body must not execute.
+
+Mutation receipts: wrong phase diagnostics, disabled regex recognition and a
+wrong cached name made all seven initial metadata tests fail; wrong path/name
+fallbacks made all five label cases fail. Restored source exactly. The remaining
+line is the post-evaluation object-shape safety guard: scanning/evaluating a
+balanced object fragment already yields an object. Kept it intact, no exclusion
+or test-only VM mock to manufacture execution.
+
+Final gate on the exact final test contents: package lint and typecheck pass;
+159 Vitest files pass, 3470 tests pass and 8 skip, one worker, Istanbul;
+Bun 1.3.14 native session tests 31 pass, home-loader compatibility tests 10 pass.
+No production or inprocess harness files changed; no extra inprocess or root-wide
+suite was run. All suites were serialized, no nested test fanout. Resource
+snapshots preceded full runs; other coverage/policy/TUI work was active.
+
+Next independent work, ranked by missing lines/functions:
+
+- Manager lifecycle callbacks: `src/agent-manager.ts` (21/7), then runner (8/2).
+- Workflow runtime failure/cleanup: `src/workflow/runtime.ts` (12/1).
+- Fleet interaction lifecycle: `src/ui/fleet-list.ts` (7/3).
+- Scheduling persistence/admission failures: `src/schedule.ts` (6/3), store (5/0).
+- Widget rendering (15/0) is independent of #182 but follows the recent widget PR.
+
+Priority independent work: manager lifecycle (21/7), workflow runtime (12/1).
 `index.ts` (352/33) and PR #182's model-selection/home/default/process-budget files
 are deliberately untouched. Widget work is separate from the viewer.
