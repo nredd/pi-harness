@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
+import * as settings from "../src/settings.js";
 import { createMockContext, createMockPi } from "./support.js";
 
 const watchFixture = vi.hoisted(() => ({
@@ -30,6 +31,13 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
       closed += 1;
     },
   });
+  const readSettings = settings.readPlanModeSettings;
+  const reads: ReturnType<typeof readSettings>[] = [];
+  const readSpy = vi.spyOn(settings, "readPlanModeSettings").mockImplementation((...args) => {
+    const read = readSettings(...args);
+    reads.push(read);
+    return read;
+  });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "low" }));
@@ -46,15 +54,26 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(mock.thinkingLevel, "low", "the superseded deadline must not reload settings");
     await mock.commands.get("plan")?.handler("off", context.ctx);
+    await vi.advanceTimersByTimeAsync(1);
+    assert.equal(reads.length, 2, "only the surviving deadline may start a settings read");
+    await reads.at(-1);
+    await vi.advanceTimersByTimeAsync(0);
+    await mock.commands.get("plan")?.handler("start", context.ctx);
+    assert.equal(mock.thinkingLevel, "high", "the surviving reload must apply the real file contents");
+    await mock.commands.get("plan")?.handler("off", context.ctx);
+    await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "medium" }));
+    watchFixture.callback("change", "settings.json");
     watcher.emit("error", new Error("watch backend closed"));
     assert.equal(closed, 1);
     await vi.advanceTimersByTimeAsync(100);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    assert.equal(mock.thinkingLevel, "low", "an errored watch must cancel its pending reload");
+    assert.equal(mock.thinkingLevel, "high", "an errored watch must cancel its pending reload");
+    assert.equal(reads.length, 2, "cancelled reload must not start another filesystem read");
     await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
     assert.equal(closed, 1, "shutdown must not close an already stopped watcher twice");
   } finally {
     vi.useRealTimers();
+    readSpy.mockRestore();
     watchFixture.callback = undefined;
     watchFixture.watcher = undefined;
     await rm(directory, { recursive: true, force: true });

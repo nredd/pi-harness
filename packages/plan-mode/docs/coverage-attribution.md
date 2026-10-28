@@ -196,7 +196,9 @@ The follow-up adds 14 tests across three files, without changing runtime source:
 - `settings-watch-lifecycle.test.ts` installs an explicit watcher boundary before delivering
   events, then advances fake timers over the real debounce callbacks. A burst must cancel
   the old deadline, a watcher error must close the watch and cancel its pending timer, and
-  shutdown must not close it twice. No native readiness timeout was enlarged. Existing
+  shutdown must not close it twice. A positive control awaits the real filesystem read
+  from the surviving deadline and verifies the new thinking setting. No native readiness
+  timeout was enlarged. Existing
   native filesystem watcher tests remain unchanged and run in the full suite.
 - `runtime-failure-attribution.test.ts` verifies six restored-runtime failure classes:
   lookup throws, missing model, negative authentication result, authentication throws,
@@ -216,8 +218,8 @@ Three temporary mutations were killed and restored before the final gate:
 | Bypass legacy completion decline gate | Legacy test fails: unauthorized plan replaces existing plan |
 | Preserve the consumed runtime intent | All six runtime failure tests fail: pending intent remains |
 
-Resource awareness before the final sequential gate: 10 CPUs, 23.3% sampled utilization,
-1.3 GiB free, `memory_pressure` 60% free. The owner reported other coverage, policy, Bun,
+Resource awareness before the final sequential gate: 10 CPUs, 47.5% sampled utilization,
+1.6 GiB free, `memory_pressure` 64% free. The owner reported other coverage, policy, Bun,
 and crash-diagnostic agents active; no process-to-agent inference was used. This worker
 used one Vitest worker and did not edit any sibling worktree.
 
@@ -227,8 +229,8 @@ Executed locally on 2026-10-28:
   strict types, Node Vitest 52 files / 567 tests, native Bun 8 tests / 255 assertions.
 - `node ../../scripts/run-vitest.ts bun --maxWorkers=1`: passed, 52 files / 567 tests.
 - Full Node Istanbul run, unchanged `src/plan-mode.ts` include: 52 files / 567 tests passed.
-  JSON and LCOV are at `/tmp/pm-takeover-final/{coverage-final.json,lcov.info}`.
-  Logs: `/tmp/pm-final-{check,bun,coverage}.log`. These local files are not durable PR assets.
+  JSON and LCOV are at `/tmp/pm-takeover-final2/{coverage-final.json,lcov.info}`.
+  Logs: `/tmp/pm-final2-{check,bun,coverage}.log`. These local files are not durable PR assets.
 
 | File | Initial diagnosis | Follow-up | Denominator |
 | --- | ---: | ---: | ---: |
