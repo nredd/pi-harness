@@ -1,0 +1,19 @@
+name: Capture CI WSL reports
+description: Export bounded reports to the host before ordinary artifact upload
+inputs:
+  cleanup:
+    description: Remove the disposable guest checkout after capture
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Export synthetic artifacts
+      shell: pwsh
+      env:
+        WSL_CAPTURE_MODE: ${{ inputs.cleanup }}
+      run: |
+        $env:WSL_HOST_WORKSPACE = $env:GITHUB_WORKSPACE
+        $env:WSL_HOST_TEMP = $env:RUNNER_TEMP
+        $env:WSLENV = 'WSL_HOST_WORKSPACE/p:WSL_HOST_TEMP/p:WSL_CAPTURE_MODE:PI_BIN'
+        wsl -d Ubuntu-24.04 -- bash -euo pipefail -c 'export RUNNER_TEMP="$HOME/pi-harness-ci/.ci-temp"; export PATH; PATH=$(< "$RUNNER_TEMP/tool-path"); bash "$HOME/pi-harness-ci/scripts/wsl2_capture.sh" "$WSL_CAPTURE_MODE"'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

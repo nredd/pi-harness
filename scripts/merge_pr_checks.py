@@ -23,10 +23,12 @@ LOGGER = logging.getLogger(__name__)
 ACTIONS_APP = 15368
 JOB_URL = re.compile(r"https://github.com/nredd/pi-harness/actions/runs/(\d+)/job/(\d+)")
 MATRIX = {
-    "owned (${{ matrix.os }})": {f"owned ({os})" for os in ("ubuntu-24.04", "macos-14")},
-    "contracts (${{ matrix.os }})": {f"contracts ({os})" for os in ("ubuntu-24.04", "macos-14")},
+    "owned (${{ matrix.os }})": {f"owned ({os})" for os in ("ubuntu-24.04", "macos-14", "wsl2")},
+    "contracts (${{ matrix.os }})": {f"contracts ({os})" for os in ("ubuntu-24.04", "macos-14", "wsl2")},
     "stack (${{ matrix.os }}, ${{ matrix.stack }})": {
-        f"stack ({os}, {stack})" for os in ("ubuntu-24.04", "macos-14") for stack in ("personal", "local")
+        f"stack ({os}, {stack})"
+        for os in ("ubuntu-24.04", "macos-14", "wsl2")
+        for stack in ("personal", "local")
     },
 }
 EXPECTED_MATRIX = set.union(*MATRIX.values())

@@ -22,7 +22,7 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 - Non-legacy tags need `gh` >= 2.49 with a read-only `GH_TOKEN` (or `gh auth login`). `make install` hides `GH_TOKEN` from `npm ci` and `uv sync`; only the preflight sees it. Today's `.7`/`.6` pins are legacy and need no `gh`. The preflight still downloads the selected assets; unavailable network access fails closed.
 - Stage 1 (this change) keeps the legacy pins and the offline guard `test_root_overrides_stay_tied_to_verified_legacy_releases` unchanged: that guard still requires each override to be a legacy tag matching the frozen sha256 values.
 - Stage 2 (the later `.8` pin PR) must migrate that guard to the attested preflight contract and exercise the actual new release bytes and provenance, without expanding the legacy exception set. A new pin needs that migration plus a published `SHA256SUMS` and attestations, not just the bump.
-- Callers: `make install`, the `owned` and `contracts` CI jobs, the `stack` job (before `npm ci`), `publish.yml` verify, and `wsl2.yml`. The `forks.yml`/`stack` fork-local `npm ci` run in `forks/pi` with the fork's own lock and are not root installs.
+- Callers: `make install`, the `owned` and `contracts` CI jobs, the `stack` job (before `npm ci`), `publish.yml` verify, including the WSL2 cells of the shared CI matrices. The `forks.yml`/`stack` fork-local `npm ci` run in `forks/pi` with the fork's own lock and are not root installs.
 
 Historical release receipts follow. They preserve their dated Gitlink and `forks.yml` provenance; current package selection uses the imported workspaces and published npm packages.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Preserve bounded diagnostics while retaining the harness status in `wsl2.yml`.
+# Preserve bounded diagnostics while retaining the CI guest's first failure status.
 
 cleanup_wsl2_worktree() {
   status=$?
