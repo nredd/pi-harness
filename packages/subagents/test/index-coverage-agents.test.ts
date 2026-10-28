@@ -21,6 +21,7 @@ let confirmations: boolean[];
 let agentSelections: (string | undefined)[];
 let menuRows: string[][];
 let beforePick: (() => void) | undefined;
+let beforeAction: (() => void) | undefined;
 const notify = vi.fn();
 const original = "---\nname: auditor\ndescription: Original audit\ntools: read\n---\nAudit privately.\n";
 
@@ -38,13 +39,20 @@ beforeEach(async () => {
     disableDefaultAgents: false, schedulingEnabled: false, fleetView: false, workflowsEnabled: false,
   } });
   selections = []; inputs = []; edits = []; confirmations = []; agentSelections = []; menuRows = [];
-  notify.mockReset(); beforePick = undefined;
+  notify.mockReset(); beforePick = undefined; beforeAction = undefined;
+  const packageRoot = join(env.dir, "fixture-package");
+  mkdirSync(join(packageRoot, "agents"), { recursive: true });
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "index-fixture", version: "1.0.0", pi: { subagents: { agents: ["./agents"] } } }));
+  writeFileSync(join(packageRoot, "agents", "packaged.md"), original.replace("name: auditor", "name: packaged"));
+  writeFileSync(join(packageRoot, "agents", "off-package.md"), "---\nname: off-package\ndescription: Disabled by author\nenabled: false\n---\nPrivate package body.\n");
+  writeFileSync(join(process.env.PI_CODING_AGENT_DIR!, "settings.json"), JSON.stringify({ packages: [packageRoot] }));
   boot = makePi();
   createSubagentsExtension({ clock: new FakeClock() })(boot.pi);
   const ui = {
     ...ctx().ui, notify,
     select: vi.fn(async (_title: string, choices: string[]) => {
       menuRows.push(choices);
+      if (_title === "auditor") { beforeAction?.(); beforeAction = undefined; }
       const next = selections.shift();
       return next === "Agent types" ? choices.find(c => c.startsWith("Agent types (")) : next;
     }),
@@ -78,6 +86,29 @@ afterEach(async () => {
 });
 
 describe("agent file operations from /agents", () => {
+  it("keeps an author-disabled package read-only and names its provider", async () => {
+    await detail("off-package", "Back");
+    expect(menuRows[1]).toEqual(["Eject (export as .md)", "Back"]);
+    expect(context.ui.select).toHaveBeenCalledWith("off-package — index-fixture", menuRows[1]);
+    expect(readFileSync(join(env.dir, "fixture-package", "agents", "off-package.md"), "utf8")).toContain("enabled: false");
+  });
+  it("disables a package with a local stub without touching installed bytes", async () => {
+    const installed = join(env.dir, "fixture-package", "agents", "packaged.md");
+    const before = readFileSync(installed, "utf8");
+    await detail("packaged", "Disable", "Project");
+    expect(readFileSync(path("packaged"), "utf8")).toBe("---\nenabled: false\n---\n");
+    expect(readFileSync(installed, "utf8")).toBe(before);
+    expect(getAgentConfig("packaged")?.enabled).toBe(false);
+  });
+  it.each([false, true])("confirms before overwriting an ejected package copy: %s", async confirmed => {
+    const target = path("packaged");
+    beforePick = () => writeFileSync(target, "External private edit.\n");
+    confirmations.push(confirmed);
+    await detail("packaged", "Eject (export as .md)", "Project");
+    expect(context.ui.confirm).toHaveBeenCalledWith("Overwrite", `${target} already exists. Overwrite?`);
+    expect(readFileSync(target, "utf8")).toBe(confirmed ? '---\ndescription: "Original audit"\ntools: read\nprompt_mode: replace\n---\n\nAudit privately.\n' : "External private edit.\n");
+    if (!confirmed) expect(notify).not.toHaveBeenCalled();
+  });
   it.each([undefined, "Back"])("cancels detail with %s without changing its file", async action => {
     await detail("auditor", action);
     expect(readFileSync(path(), "utf8")).toBe(original);
@@ -122,6 +153,13 @@ describe("agent file operations from /agents", () => {
     await detail("auditor", "Disable");
     expect(readFileSync(path(), "utf8")).toBe("Private body only.\n");
     expect(notify).toHaveBeenCalledWith(`Cannot disable auditor: ${path()} has no frontmatter block.`, "error");
+  });
+  it("reports a file disabled by an external editor while its detail picker was open", async () => {
+    const disabled = original.replace("---\n", "---\nenabled: false\n");
+    beforeAction = () => writeFileSync(path(), disabled);
+    await detail("auditor", "Disable");
+    expect(readFileSync(path(), "utf8")).toBe(disabled);
+    expect(notify).toHaveBeenCalledWith("auditor is already disabled.", "info");
   });
   it("does not claim to enable a noncanonical disabled flag it cannot remove", async () => {
     const content = original.replace("---\n", "---\nenabled: FALSE\n");
