@@ -10,6 +10,7 @@
  * renderer and fails the ones that do not.
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { TierDisclosure } from "../model-tiers.js";
 
 /** Minimal theme surface, so this module has no dependency on the widgets that use it. */
 interface FlagTheme {
@@ -20,18 +21,36 @@ interface FlagTheme {
 export interface FallbackCarrier {
   modelFallback?: unknown;
   modelNote?: string;
+  modelTier?: TierDisclosure;
 }
 
-/** Whether `carrier` ran on a substituted model. */
-export const hasFallback = (carrier: FallbackCarrier | undefined): boolean =>
-  carrier?.modelFallback !== undefined || carrier?.modelNote !== undefined;
+/** Whether this tier's answer differs from the member/profile admitted for it. */
+function switchedWithinTier(tier: TierDisclosure): boolean {
+  if (tier.kind !== "routed" && tier.kind !== "static") return false;
+  const baseline = tier.kind === "routed" ? tier.admitted : tier.member;
+  return baseline !== undefined && tier.answered !== undefined && tier.answered !== baseline;
+}
 
-/** Plain flag text: `[fallback]`, or `[fallback x3]` for a count of members. */
-export const fallbackFlagText = (count = 1): string => (count > 1 ? `[fallback x${count}]` : "[fallback]");
+/** Whether `carrier` needs an actionable fallback warning, not merely tier identity. */
+export const hasFallback = (carrier: FallbackCarrier | undefined): boolean => {
+  if (carrier?.modelFallback !== undefined) return true;
+  const tier = carrier?.modelTier;
+  if (!tier) return carrier?.modelNote !== undefined;
+  return tier.kind === "unmapped" || tier.kind === "unavailable" || switchedWithinTier(tier);
+};
 
-/** The themed flag for `carrier`, or "" when it did not fall back. */
+/** Plain tier identity/outcome flag, or `[fallback]`; group counts retain the same identity. */
+export function fallbackFlagText(count = 1, carrier?: FallbackCarrier): string {
+  const tier = carrier?.modelTier;
+  const suffix = count > 1 ? ` x${count}` : "";
+  return tier ? `[@${tier.tier}${tier.kind !== "routed" && tier.kind !== "static" ? ` ${tier.kind}` : ""}${suffix}]`
+    : `[fallback${suffix}]`;
+}
+
+/** The themed tier identity or actionable fallback flag for `carrier`. */
 export function fallbackFlag(theme: FlagTheme, carrier: FallbackCarrier | undefined, count = 1): string {
-  return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count)) : "";
+  if (carrier?.modelTier) return theme.fg(hasFallback(carrier) ? "warning" : "dim", fallbackFlagText(count, carrier));
+  return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count, carrier)) : "";
 }
 
 /** What a flag degrades to when even it does not fit; plain so it cannot depend on a theme. */
