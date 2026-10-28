@@ -230,7 +230,9 @@ Command completion scenarios resolve public runner suggestions and execute the s
 Pidfile age-boundary fixtures pin file/directory mtimes to the injected sweep clock and check the
 24-hour threshold under both past and future wall clocks.
 The interactive host/VirtualTerminal covers `/diff`, `/stats` and real `/name`, including width/resize
-matrices, chart glyph ports/colours and file-backed titles. Stats histories use a fixed clock;
+matrices, chart glyph ports/colours and file-backed titles. Mounted command callbacks also verify
+live-theme invalidation, empty Models ranges, help page boundaries, source-failure reopening,
+stale deferred factories and stats load-error cleanup without replacing the interactive host. Stats histories use a fixed clock;
 `createSessionKit({ agentDir, clock })` scopes both offline loading and displayed time ranges.
 Terminal fixtures route input chunks through pi-tui's real `StdinBuffer`, matching ProcessTerminal's
 keypress splitting (complete keys only; lone Escape is flushed immediately). Stats scroll-to-clamp
