@@ -100,7 +100,11 @@ partitions before its later current-session mismatch checks: a delayed old-conte
 might encounter a newer session's queue. Without a supported reproduction or complete host
 ordering proof, deleting retention could lose prompts. This branch stays open.
 
-## Cross-session queue partition closure
+## Pinned-host queue partition proof (superseded)
+
+The proof below describes stock CLI lifecycle dispatch only. It does not justify deleting
+an SDK-host defensive guard from a package with unrestricted Pi peers. The audit correction
+and restored guard are documented below.
 
 The tentative delayed-old-context schedule above is not a core-host schedule. Verified
 against the checked-in `forks/pi` Gitlink `2bfb8e7c61d35167b09f8ce70693df39660fc197`,
@@ -146,7 +150,7 @@ application can suspend settlement, but cannot transplant a queued object across
 resets or across fresh closures. Injecting a stale shutdown into a newer extension
 instance would violate core dispatch rather than model it.
 
-Remove only the dead session partition from `takeQueuedRuntimeAdmissionInputs`; retain
+The original change removed the session partition from `takeQueuedRuntimeAdmissionInputs`; retained
 all live lifecycle/admission checks and the per-input manager used by pending detection.
 The helper now takes the whole extension-local queue and replaces it with an empty one.
 This removes four executable line entries, including the last uncovered line, rather
@@ -171,6 +175,75 @@ A temporary mutation omitting the helper's queue reset fails the new fixture's e
 incoming delivery assertion: the second `agent_start` sends the follower twice. The
 restored source passes. Package build, Biome, types and native Bun session checks also
 pass; exact commands and logs belong in the PR receipt.
+
+## Package-range audit correction
+
+Option (b): restore the partition. Keep `peerDependencies: "*"` and the README's Pi
+`0.80.6` floor unchanged. Stock CLI inspection is not a proof for every SDK embedding.
+In published `@earendil-works/pi-coding-agent@0.80.6`, `dist/core/sdk.js:63-78`
+accepts a caller-provided `resourceLoader` without reloading it. Moreover,
+`dist/core/resource-loader.js:279` installs the result of `extensionsOverride`, which
+can return previously initialized extension objects. Neither API requires a new extension
+factory invocation per runtime. Thus shared-instance SDK hosts remain unproven; no old
+stock release was demonstrated broken, and narrowing the peer range is not justified.
+
+Read-only audit: `npm view @earendil-works/pi-coding-agent versions --json`, then
+`npm pack @earendil-works/pi-coding-agent@VERSION --ignore-scripts` and extract under
+`/tmp/planmode-pi-audit`, without installing or running upstream code. The registry listed
+`0.80.6` through `0.87.x`, `0.99.x`, and `1.0.x` through `1.4.0` (no `0.88`-`0.98`).
+The following release-boundary samples all use ordered stock teardown and fresh factories.
+Patch releases were not exhaustively inspected; this is NOT a supported-range closure proof.
+
+All citations below are published-package `dist/` JavaScript, not fork source offsets.
+`R` = `core/agent-session-runtime.js` (await shutdown; then new/resume/fork/import),
+`S` = `core/agent-session-services.js` (new loader then reload),
+`F` = `core/extensions/loader.js` (factory invocation),
+`L` = `core/agent-session.js` (reload: await shutdown before resource reload/build).
+Exact bytes are retrievable at `https://unpkg.com/@earendil-works/pi-coding-agent@VERSION/dist/FILE`.
+
+| Version | R | S | F | L |
+| --- | --- | --- | --- | --- |
+| 0.80.6 | 102-109; 133-158, 203-242, 272-279 | 60-66 | 356, 372 | 2023-2034 |
+| 0.81.0 | 102-109; 133-158, 203-245, 275-282 | 62-68 | 373, 389 | 2056-2067 |
+| 0.82.0 | 102-109; 133-158, 203-245, 275-282 | 62-68 | 373, 389 | 2056-2067 |
+| 0.83.0 | 102-112; 136-161, 206-248, 278-285 | 62-68 | 373, 389 | 2052-2063 |
+| 0.84.0 | 102-112; 136-161, 206-248, 278-285 | 63-69 | 409, 425 | 2052-2065 |
+| 0.85.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 462 | 2217-2230 |
+| 0.86.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 449 | 2319-2332 |
+| 0.87.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 449 | 2603-2616 |
+| 0.99.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 497 | 2867-2880 |
+| 1.0.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 509 | 2899-2921 |
+| 1.1.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 514 | 2936-2959 |
+| 1.2.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 514 | 2968-2991 |
+| 1.3.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 514 | 2969-2992 |
+| 1.4.0 | 102-112; 136-161, 206-249, 286-293 | 63-69 | 517 | 2998-3021 |
+
+The retained stock replacement fixture remains a stock-host contract test. A separate
+explicitly fault-injected shared-instance fixture sends shutdown with a different manager
+while the owner has a queued text/image/RPC input. The partition retains that input, and
+an early manager check prevents global shutdown resets from discarding it. Owner admission
+then delivers it exactly once. Mutating `else remaining.push(queued)` to
+`else matching.push(queued)` fails the assertion that unrelated shutdown emits no recovery.
+This covers the formerly missing retention line without pretending a stock schedule reaches it.
+
+Input during awaited shutdown is possible for an embedding that dispatches concurrently;
+we do not assume the CLI serializes every input source. Mark the shutting-down manager
+before awaiting model/settings writes. Later input from that manager is immediately
+persisted as a visible `plan-mode-recovered-input` message with text/images/source and
+`triggerTurn: false`, rather than joining a queue whose stale continuation would remove it.
+Session start clears the marker. The replacement fixture injects late extension input
+while `setModel` is blocked and verifies exact recovery and no duplicate follow-up.
+A second fault-injection fixture replaces the manager during the await and covers the
+post-await identity recheck. Disabling the late-input check kills the exact recovery assertion.
+
+The combined measurement above is historical, before this correction. Restoring the guard
+and adding late-input recovery raises the denominator to **2997/2997 lines and 699/699
+functions** on both Node and Bun (629 tests, 65 files). This combined run temporarily overlays
+only the sibling tests/support from scratch merge `cfe214a` (#185/#188/#189); those overlays
+are removed afterward and are not part of this PR. The standalone #209 stack passes 604
+tests in 61 files, with 97.69% lines and 96.99% functions; its remaining gaps belong to those
+siblings, not this guard. `src/plan-mode.ts` itself has complete lines/functions. No coverage
+exclusion, provider change or threshold relaxation is used. Commands belong in the PR receipt.
 
 ## Historical counts
 

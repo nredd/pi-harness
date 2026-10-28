@@ -183,44 +183,46 @@ test("failed runtime persistence keeps queued prompts protected after the applic
   assert.deepEqual(mock.sentUserMessages, []);
 });
 
+/** Public-event host fixture with a deterministic model-application barrier. */
+function createDestination() {
+  const started = deferred<void>();
+  const release = deferred<void>();
+  const mock = createMockPi();
+  const setModel = mock.rawPi.setModel;
+  mock.rawPi.setModel = async (model) => {
+    started.resolve();
+    await release.promise;
+    return setModel(model);
+  };
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const branch = [
+    {
+      type: "custom",
+      customType: "plan-mode-state",
+      data: {
+        enabled: false,
+        awaitingAction: false,
+        pendingImplementationRuntime: { version: 1, model: { provider: "fixture", modelId: "target" } },
+      },
+    },
+  ];
+  const context = createMockContext({
+    sessionManager: { getBranch: () => branch, getEntries: () => branch },
+    modelRegistry: {
+      find: () => ({ provider: "fixture", id: "target" }),
+      getApiKeyAndHeaders: async () => ({ ok: true as const }),
+    },
+  });
+  const input = mock.events.get("input")?.[0];
+  const start = mock.events.get("session_start")?.[0];
+  const shutdown = mock.events.get("session_shutdown")?.[0];
+  const agentStart = mock.events.get("agent_start")?.[0];
+  assert.ok(input && start && shutdown && agentStart);
+  return { mock, context, started, release, input, start, shutdown, agentStart };
+}
+
 /** Mirror core teardownCurrent -> dispose -> createRuntime, with input suspended in setModel. */
 test("replacement recovers outgoing input once before the fresh runner admits its own queue", async () => {
-  const createDestination = () => {
-    const started = deferred<void>();
-    const release = deferred<void>();
-    const mock = createMockPi();
-    const setModel = mock.rawPi.setModel;
-    mock.rawPi.setModel = async (model) => {
-      started.resolve();
-      await release.promise;
-      return setModel(model);
-    };
-    planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-    const branch = [
-      {
-        type: "custom",
-        customType: "plan-mode-state",
-        data: {
-          enabled: false,
-          awaitingAction: false,
-          pendingImplementationRuntime: { version: 1, model: { provider: "fixture", modelId: "target" } },
-        },
-      },
-    ];
-    const context = createMockContext({
-      sessionManager: { getBranch: () => branch, getEntries: () => branch },
-      modelRegistry: {
-        find: () => ({ provider: "fixture", id: "target" }),
-        getApiKeyAndHeaders: async () => ({ ok: true as const }),
-      },
-    });
-    const input = mock.events.get("input")?.[0];
-    const start = mock.events.get("session_start")?.[0];
-    const shutdown = mock.events.get("session_shutdown")?.[0];
-    const agentStart = mock.events.get("agent_start")?.[0];
-    assert.ok(input && start && shutdown && agentStart);
-    return { mock, context, started, release, input, start, shutdown, agentStart };
-  };
   const outgoing = createDestination();
   const image = { type: "image" as const, data: "outgoing-image", mimeType: "image/png" };
   await outgoing.start({ reason: "new" }, outgoing.context.ctx);
@@ -239,7 +241,22 @@ test("replacement recovers outgoing input once before the fresh runner admits it
       options: { triggerTurn: false },
     },
   ]);
+  // Shutdown is still awaiting setModel. Input dispatched now must be recovered, not queued then lost.
+  const late = outgoing.input(
+    { text: "late shutdown input", images: [image], source: "extension" },
+    outgoing.context.ctx,
+  );
   outgoing.release.resolve();
+  assert.deepEqual(await late, { action: "handled" });
+  assert.deepEqual(outgoing.mock.sentMessages[1], {
+    message: {
+      customType: "plan-mode-recovered-input",
+      content: [{ type: "text", text: "late shutdown input" }, image],
+      display: true,
+      details: { source: "extension" },
+    },
+    options: { triggerTurn: false },
+  });
   assert.deepEqual(await Promise.all([leading, follower]), [{ action: "handled" }, { action: "handled" }]);
   await shutdown;
   assert.deepEqual(outgoing.mock.sentUserMessages, []);
@@ -259,5 +276,52 @@ test("replacement recovers outgoing input once before the fresh runner admits it
     { text: "incoming follower", options: { deliverAs: "followUp", expandPromptTemplates: true } },
   ]);
   assert.deepEqual(incoming.mock.sentMessages, []);
-  assert.equal(outgoing.mock.sentMessages.length, 1);
+  assert.equal(outgoing.mock.sentMessages.length, 2);
+});
+
+/** Fault injection: replacement can occur while an SDK host awaits old shutdown. */
+test("shutdown rechecks its manager after awaited model application", async () => {
+  const host = createDestination();
+  const incoming = createMockContext();
+  await host.start({ reason: "new" }, host.context.ctx);
+  const leading = host.input({ text: "implement", source: "rpc" }, host.context.ctx);
+  await host.started.promise;
+  const shutdown = host.shutdown({ reason: "resume" }, host.context.ctx);
+  try {
+    await host.start({ reason: "resume" }, incoming.ctx);
+  } finally {
+    host.release.resolve();
+    await Promise.all([leading, shutdown]);
+  }
+  assert.deepEqual(host.mock.sentUserMessages, []);
+  assert.deepEqual(host.mock.sentMessages, []);
+  assert.equal(incoming.notifications.length, 0);
+});
+
+/** Fault injection: an SDK host retains one extension and sends another manager's shutdown. */
+test("shared-instance host shutdown cannot drain or discard another manager's queued input", async () => {
+  const host = createDestination();
+  const other = createMockContext();
+  const image = { type: "image" as const, data: "retained-image", mimeType: "image/png" };
+  await host.start({ reason: "new" }, host.context.ctx);
+  const leading = host.input({ text: "implement", source: "rpc" }, host.context.ctx);
+  await host.started.promise;
+  const follower = host.input({ text: "retain for owner", images: [image], source: "rpc" }, host.context.ctx);
+  try {
+    await host.shutdown({ reason: "resume" }, other.ctx);
+    assert.deepEqual(host.mock.sentMessages, []);
+  } finally {
+    host.release.resolve();
+    await Promise.all([leading, follower]);
+  }
+  await host.agentStart({}, host.context.ctx);
+  await host.agentStart({}, host.context.ctx);
+  await host.shutdown({ reason: "quit" }, host.context.ctx);
+  assert.deepEqual(host.mock.sentUserMessages, [
+    {
+      text: [{ type: "text", text: "retain for owner" }, image],
+      options: { deliverAs: "followUp", expandPromptTemplates: true },
+    },
+  ]);
+  assert.deepEqual(host.mock.sentMessages, []);
 });

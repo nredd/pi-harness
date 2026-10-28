@@ -190,6 +190,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let activeImplementationRuntimeApplication: ActiveImplementationRuntimeApplication | undefined;
   let pendingRuntimeAdmissionSession: object | undefined;
   let queuedRuntimeAdmissionInputs: QueuedRuntimeAdmissionInput[] = [];
+  let shuttingDownSession: object | undefined;
   let menuController = new AbortController();
   let settingsWatch: ReturnType<typeof watch> | undefined;
   let settingsReloadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -512,6 +513,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     finalizationRequest.reset();
     currentSession = ctx.sessionManager;
     currentSessionContext = ctx;
+    shuttingDownSession = undefined;
     workflowOwner = undefined;
     workflowMutex.bindSession(ctx.sessionManager);
     refreshStateBeforeFirstAgentStart = event.reason === "new";
@@ -604,18 +606,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       activeImplementationRuntimeApplication.drainOnShutdown
         ? activeImplementationRuntimeApplication
         : undefined;
-    const queuedInputs = takeQueuedRuntimeAdmissionInputs();
-    for (const queued of queuedInputs) {
-      pi.sendMessage(
-        {
-          customType: RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE,
-          content: runtimeAdmissionInputContent(queued),
-          display: true,
-          details: { source: queued.source },
-        },
-        { triggerTurn: false },
-      );
+    const queuedInputs = takeQueuedRuntimeAdmissionInputs(shutdownSession);
+    for (const queued of queuedInputs) recoverRuntimeAdmissionInput(queued);
+    if (currentSession !== undefined && currentSession !== shutdownSession) {
+      workflowMutex.unbindSession(shutdownSession);
+      return;
     }
+    shuttingDownSession = shutdownSession;
     finalizationRequest.reset();
     menuGeneration += 1;
     menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
@@ -794,6 +791,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("input", async (event, ctx) => {
+    // A host may still dispatch input while shutdown awaits model/settings writes.
+    if (shuttingDownSession === ctx.sessionManager) {
+      recoverRuntimeAdmissionInput({ ...event, sessionManager: ctx.sessionManager });
+      return { action: "handled" };
+    }
     refreshStateForFirstPrompt(ctx);
     // A reply typed while a plan awaits action declines it; the extension's own prompts do not.
     if (event.source !== "extension") recordPlanDecline();
@@ -823,7 +825,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (pendingRuntimeAdmissionSession === ctx.sessionManager) {
       pendingRuntimeAdmissionSession = undefined;
     }
-    const queuedInputs = takeQueuedRuntimeAdmissionInputs();
+    const queuedInputs = takeQueuedRuntimeAdmissionInputs(ctx.sessionManager);
     for (const queued of queuedInputs) {
       pi.sendUserMessage(runtimeAdmissionInputContent(queued), {
         deliverAs: "followUp",
@@ -1643,12 +1645,27 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     );
   }
 
-  function takeQueuedRuntimeAdmissionInputs() {
-    // Core shuts down the outgoing runner before creating its replacement; tree changes
-    // keep the same manager. Proof: docs/plan-mode-final-guards.md, cross-session closure.
-    const queuedInputs = queuedRuntimeAdmissionInputs;
-    queuedRuntimeAdmissionInputs = [];
-    return queuedInputs;
+  function takeQueuedRuntimeAdmissionInputs(sessionManager: ExtensionContext["sessionManager"]) {
+    const matching: QueuedRuntimeAdmissionInput[] = [];
+    const remaining: QueuedRuntimeAdmissionInput[] = [];
+    for (const queued of queuedRuntimeAdmissionInputs) {
+      if (queued.sessionManager === sessionManager) matching.push(queued);
+      else remaining.push(queued);
+    }
+    queuedRuntimeAdmissionInputs = remaining;
+    return matching;
+  }
+
+  function recoverRuntimeAdmissionInput(queued: QueuedRuntimeAdmissionInput) {
+    pi.sendMessage(
+      {
+        customType: RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE,
+        content: runtimeAdmissionInputContent(queued),
+        display: true,
+        details: { source: queued.source },
+      },
+      { triggerTurn: false },
+    );
   }
 
   function removeQueuedRuntimeAdmissionInput(queuedInput: QueuedRuntimeAdmissionInput) {
