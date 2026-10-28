@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, opendir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, open, opendir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { type CpuInfo, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -40,6 +40,18 @@ const core = (user: number, idle: number): CpuInfo => ({
  * @param identity PID/start identity used to test reuse.
  * @returns A process counter with fixed parent/name/RSS.
  */
+/** Independent LP64 ABI layout literals used by the reloaded native-decoder regression. */
+const RUSAGE_INFO_V0_BYTES = 96;
+const PROC_BSDINFO_BYTES = 136;
+const PROC_BSDINFO_PID_OFFSET = 12;
+const PROC_BSDINFO_START_SECONDS_OFFSET = 120;
+const RUSAGE_USER_TICKS_OFFSET = 16;
+const RUSAGE_START_TICKS_OFFSET = 80;
+const ROLLBACK_PID = 12;
+const ROLLBACK_START_TICKS = 1n;
+const ROLLBACK_BEFORE_USER_TICKS = 2n;
+const ROLLBACK_AFTER_USER_TICKS = 0n;
+
 const proc = (cpuMs: number, at: number, identity = "12:50"): ProcessCounter => ({
 	pid: 12,
 	parentPid: 1,
@@ -283,7 +295,7 @@ describe("bounded child lifecycle", () => {
 // Real readlink, except where a test forces a runtime result no real symlink can produce.
 vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
-	return { ...actual, opendir: vi.fn(actual.opendir), readlink: vi.fn(actual.readlink) };
+	return { ...actual, open: vi.fn(actual.open), opendir: vi.fn(actual.opendir), readlink: vi.fn(actual.readlink) };
 });
 
 describe("bounded executable links", () => {
@@ -421,48 +433,142 @@ describe("bounded proc reads and Linux process collection", () => {
 });
 
 describe("platform dispatch", () => {
-	async function samplerFor(platformName: string, helperOutput?: string) {
+	const FIXTURE_DURATION_MS = 1000;
+	const FIXTURE_MEMORY_TOTAL_BYTES = 16_384;
+	const FIXTURE_MEMORY_FREE_BYTES = 4096;
+	const FIXTURE_PID = 12;
+	const FIXTURE_PID_LIMIT = 1;
+	const FIXTURE_MAX_BYTES = 4096;
+	const FIXTURE_CLK_TCK = "100\n";
+	const FIXTURE_EXE = "/usr/bin/node";
+	const FIXTURE_STAT = "12 (untrusted comm) S 1 0 0 0 0 0 0 0 0 0 20 30 0 0 0 0 0 0 77 0 0";
+	const FIXTURE_STATUS = "VmRSS:\t42 kB\n";
+	const FIXTURE_PSI = "some avg10=1.25 avg60=0 avg300=0 total=42\n";
+	/**
+	 * Provide one deterministic fixed-output helper child.
+	 * @param output Complete C-locale stdout fixture.
+	 * @returns Spawn fake recording the executable and fixed arguments.
+	 * @sideEffects Schedules `data` and `close` events on the returned child.
+	 */
+	function helper(output: string) {
+		return vi.fn((_executable: string, _args: string[]) => {
+			const child = Object.assign(new EventEmitter(), {
+				kill: () => true,
+				stderr: new EventEmitter(),
+				stdout: new EventEmitter(),
+			});
+			queueMicrotask(() => {
+				child.stdout.emit("data", Buffer.from(output));
+				child.emit("close", 0);
+			});
+			return child;
+		});
+	}
+	/**
+	 * Configure fixed Linux proc and getconf boundaries, never reading the host `/proc`.
+	 * @returns Spawn fake for asserting fixed `getconf CLK_TCK` invocation.
+	 * @sideEffects Replaces mocked filesystem boundaries for the next dynamically imported sampler.
+	 */
+	function linuxBoundaries() {
+		const contents = new Map([
+			["/proc/pressure/memory", [FIXTURE_PSI]],
+			[`/proc/${FIXTURE_PID}/stat`, [FIXTURE_STAT, FIXTURE_STAT]],
+			[`/proc/${FIXTURE_PID}/status`, [FIXTURE_STATUS]],
+		]);
+		vi.mocked(opendir).mockImplementation(
+			async () =>
+				({
+					async *[Symbol.asyncIterator]() {
+						yield { name: String(FIXTURE_PID) };
+					},
+				}) as never,
+		);
+		vi.mocked(readlink).mockResolvedValue(Buffer.from(FIXTURE_EXE));
+		vi.mocked(open).mockImplementation(async (path) => {
+			const values = contents.get(String(path));
+			const text = values?.shift();
+			if (text === undefined) throw new Error(`unexpected fixture read: ${path}`);
+			return {
+				close: vi.fn(async () => {}),
+				read: vi.fn(async (buffer: Buffer) => {
+					const bytes = Buffer.from(text);
+					bytes.copy(buffer);
+					return { bytesRead: bytes.length, buffer };
+				}),
+			} as never;
+		});
+		return helper(FIXTURE_CLK_TCK);
+	}
+	/**
+	 * Load a sampler with fixed platform and optional fixed-helper boundaries.
+	 * @param platformName Platform reported by the mocked `node:os` module.
+	 * @param spawn Fake child launcher, if the platform path uses a helper.
+	 * @returns Fresh sampler with no shared baselines.
+	 * @sideEffects Resets modules and installs per-test runtime mocks.
+	 */
+	async function samplerFor(platformName: string, spawn?: ReturnType<typeof helper>) {
 		vi.resetModules();
 		vi.doMock("node:os", async () => {
 			const actual = await vi.importActual<typeof import("node:os")>("node:os");
-			return { ...actual, platform: () => platformName };
+			return {
+				...actual,
+				cpus: () => [core(0, 0)],
+				freemem: () => FIXTURE_MEMORY_FREE_BYTES,
+				loadavg: () => [1, 2, 3],
+				platform: () => platformName,
+				totalmem: () => FIXTURE_MEMORY_TOTAL_BYTES,
+			};
 		});
-		if (helperOutput !== undefined) {
-			vi.doMock("node:child_process", () => ({
-				spawn: () => {
-					const child = Object.assign(new EventEmitter(), {
-						kill: () => true,
-						stderr: new EventEmitter(),
-						stdout: new EventEmitter(),
-					});
-					queueMicrotask(() => {
-						child.stdout.emit("data", Buffer.from(helperOutput));
-						child.emit("close", 0);
-					});
-					return child;
-				},
-			}));
-		}
-		return (await import("../src/index.js")).createResourceSampler({ maxDurationMs: 1000 });
+		if (spawn) vi.doMock("node:child_process", () => ({ spawn }));
+		return (await import("../src/index.js")).createResourceSampler({
+			maxBytes: FIXTURE_MAX_BYTES,
+			maxDurationMs: FIXTURE_DURATION_MS,
+			maxPids: FIXTURE_PID_LIMIT,
+		});
 	}
-	afterEach(() => {
+	afterEach(async () => {
+		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+		vi.mocked(open).mockImplementation(actual.open);
+		vi.mocked(opendir).mockImplementation(actual.opendir);
+		vi.mocked(readlink).mockImplementation(actual.readlink);
 		vi.doUnmock("node:child_process");
 		vi.doUnmock("node:os");
 		vi.resetModules();
 	});
-	it("reports Linux PSI and collection availability without treating this Darwin host as Linux evidence", async () => {
-		const sampler = await samplerFor("linux");
+	it("collects a complete fixed Linux snapshot through mocked proc and getconf boundaries", async () => {
+		const spawn = linuxBoundaries();
+		const sampler = await samplerFor("linux", spawn);
 		try {
 			const snapshot = await sampler.sample();
-			expect(snapshot.platform).toBe("linux");
-			expect(snapshot.pressure.source).toBe("linux-psi");
-			expect(snapshot.coverage.reasons).not.toContain("unsupported-platform");
+			expect(snapshot).toMatchObject({
+				cpu: { state: "warming", reason: "initial sample or CPU topology changed" },
+				logicalCpus: 1,
+				loadAverage: [1, 2, 3],
+				memory: { totalBytes: FIXTURE_MEMORY_TOTAL_BYTES, freeBytes: FIXTURE_MEMORY_FREE_BYTES },
+				platform: "linux",
+				processes: [
+					{
+						cpu: { state: "warming", reason: "initial sample or PID reused" },
+						identity: "12:77",
+						name: "node",
+						parentPid: 1,
+						pid: FIXTURE_PID,
+						rssBytes: 43008,
+					},
+				],
+				pressure: {
+					source: "linux-psi",
+					memory: { state: "available", value: { some: { avg10: 1.25, avg60: 0, avg300: 0, total: 42 }, full: null } },
+				},
+			});
+			expect(snapshot.coverage).toMatchObject({ complete: true, enumerated: 1, sampled: 1, skipped: 0, reasons: [] });
+			expect(spawn).toHaveBeenCalledExactlyOnceWith("/usr/bin/getconf", ["CLK_TCK"], expect.any(Object));
 		} finally {
 			await sampler.dispose();
 		}
 	});
 	it("records malformed Darwin ps metadata without inventing a process row", async () => {
-		const sampler = await samplerFor("darwin", "malformed helper output\n");
+		const sampler = await samplerFor("darwin", helper("malformed helper output\n"));
 		try {
 			const snapshot = await sampler.sample();
 			expect(snapshot.processes).toEqual([]);
@@ -472,11 +578,27 @@ describe("platform dispatch", () => {
 		}
 	});
 	it("reports unavailable clock ticks when the fixed lookup cannot supply a safe integer", async () => {
-		const sampler = await samplerFor("linux", "not-a-clock-rate\n");
+		linuxBoundaries();
+		const sampler = await samplerFor("linux", helper("not-a-clock-rate\n"));
 		try {
 			const snapshot = await sampler.sample();
 			expect(snapshot.processes).toEqual([]);
 			expect(snapshot.coverage.reasons).toContain("clock-ticks-unavailable");
+		} finally {
+			await sampler.dispose();
+		}
+	});
+	it("reports both unavailable Linux pressure and process collection failures", async () => {
+		vi.mocked(open).mockRejectedValue(new Error("fixture proc unavailable"));
+		vi.mocked(opendir).mockRejectedValue(new Error("fixture proc unavailable"));
+		const sampler = await samplerFor("linux", helper(FIXTURE_CLK_TCK));
+		try {
+			const snapshot = await sampler.sample();
+			expect(snapshot.pressure).toEqual({
+				source: "linux-psi",
+				memory: { state: "unavailable", reason: "PSI absent, invalid or scan budget exhausted" },
+			});
+			expect(snapshot.coverage.reasons).toContain("process-collection-unavailable");
 		} finally {
 			await sampler.dispose();
 		}
@@ -501,15 +623,16 @@ describe("platform dispatch", () => {
 describe("reloaded native decoder", () => {
 	it("rejects cumulative CPU counters that move backwards", async () => {
 		const { darwinNativeCounter } = await import("../src/darwin.js");
-		const before = Buffer.alloc(96);
-		const after = Buffer.alloc(96);
-		const bsd = Buffer.alloc(136);
-		bsd.writeUInt32LE(12, 12);
-		bsd.writeBigUInt64LE(1n, 120);
-		before.writeBigUInt64LE(2n, 16);
-		before.writeBigUInt64LE(1n, 80);
-		after.writeBigUInt64LE(1n, 80);
-		expect(darwinNativeCounter(12, before, bsd, after, 1, 1)).toBeNull();
+		const before = Buffer.alloc(RUSAGE_INFO_V0_BYTES);
+		const after = Buffer.alloc(RUSAGE_INFO_V0_BYTES);
+		const bsd = Buffer.alloc(PROC_BSDINFO_BYTES);
+		bsd.writeUInt32LE(ROLLBACK_PID, PROC_BSDINFO_PID_OFFSET);
+		bsd.writeBigUInt64LE(ROLLBACK_START_TICKS, PROC_BSDINFO_START_SECONDS_OFFSET);
+		before.writeBigUInt64LE(ROLLBACK_BEFORE_USER_TICKS, RUSAGE_USER_TICKS_OFFSET);
+		after.writeBigUInt64LE(ROLLBACK_AFTER_USER_TICKS, RUSAGE_USER_TICKS_OFFSET);
+		before.writeBigUInt64LE(ROLLBACK_START_TICKS, RUSAGE_START_TICKS_OFFSET);
+		after.writeBigUInt64LE(ROLLBACK_START_TICKS, RUSAGE_START_TICKS_OFFSET);
+		expect(darwinNativeCounter(ROLLBACK_PID, before, bsd, after, 1, 1)).toBeNull();
 	});
 });
 
