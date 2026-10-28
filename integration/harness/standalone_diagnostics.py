@@ -57,6 +57,7 @@ FIXED_PATHS = frozenset(
 )
 CACHE_PATH = re.compile(r"jiti/(?:primary|replay)/pi-memory-index(?:\+map)?(?:\.i)?\.[a-f0-9]{8}\.[cm]js\Z")
 # Signature matching is deliberately conservative: refuse publication, never redact executable/code bytes.
+# Deliberately local: overlap the preset pack gate's token shapes, adding artifact-specific auth formats.
 CREDENTIAL = re.compile(
     rb"(?:npm_[A-Za-z0-9]{36,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{30,}|"
     rb"(?:sk|pk)-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{16}|"
@@ -81,7 +82,11 @@ export default async function (pi) {
 
 @dataclass(frozen=True)
 class StartupResult:
-    """Hold original startup pipe bytes and a separate timeout verdict."""
+    """Hold original pipe bytes and process status independently of text matching.
+
+    `returncode` is the child's status unless `timed_out` is true, when it is synthetic 124.
+    `stdout` and `stderr` are untouched pipe bytes, with absent timeout data represented by empty bytes.
+    """
 
     returncode: int
     stdout: bytes

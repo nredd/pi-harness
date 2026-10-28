@@ -205,6 +205,7 @@ def test_unknown_artifact_paths_are_denied(name: str) -> None:
     "token",
     [
         b"npm_" + b"aB1" * 12,
+        b"npm_" + b"a" * 37,
         b"ghp_" + b"a" * 20,
         b"github_pat_" + b"a" * 30,
         b"sk-" + b"a" * 16,
@@ -233,6 +234,17 @@ def test_credential_scan_refuses_entire_publication(tmp_path: Path, name: str, t
     with pytest.raises(ValueError, match="credential"):
         diag.publish({name: b"\xffprefix " + token + b" suffix\r\n"}, output)
     assert not output.exists()
+
+
+def test_npm_signature_length_boundary() -> None:
+    """Require at least 36 alphanumeric npm-token characters without reading real credentials.
+
+    Returns:
+        None: synthetic boundary assertions complete.
+    """
+    assert diag.CREDENTIAL.search(b"npm_" + b"a" * 35) is None
+    assert diag.CREDENTIAL.search(b"npm_" + b"a" * 36) is not None
+    assert diag.CREDENTIAL.search(b"npm_" + b"a" * 37) is not None
 
 
 def test_symlink_cache_is_not_read(tmp_path: Path) -> None:

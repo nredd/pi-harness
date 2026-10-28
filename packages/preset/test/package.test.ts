@@ -36,6 +36,9 @@ const HOST_PEERS = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]
 const HOST_PACKAGES = ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core", ...HOST_PEERS, "typebox"];
 /** Require a domain TLD so pinned npm specs are not mistaken for addresses. */
 const EMAIL_PATTERN = /[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b/i;
+// Kept local to the pack privacy gate; diagnostics additionally scan binary streams and auth formats.
+const TOKEN_PATTERN =
+	/\b(?:sk|pk)-[A-Za-z0-9_-]{16,}|npm_[A-Za-z0-9]{36,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}/;
 const HOST_RELEASE_TARBALL =
 	/^https:\/\/github\.com\/nredd\/pi\/releases\/download\/v1\.3\.0-nredd\.\d+\/earendil-works-pi-[a-z-]+-1\.3\.0\.tgz$/;
 
@@ -110,6 +113,11 @@ test("privacy email scan distinguishes addresses from exact npm pins", () => {
 	assert.ok(!EMAIL_PATTERN.test("npm:@nredd/pi-preset@0.2.0"));
 });
 
+test("privacy token scan rejects synthetic npm credentials at the length boundary", () => {
+	for (const length of [36, 37]) assert.ok(TOKEN_PATTERN.test(`npm_${"aB1".repeat(13).slice(0, length)}`));
+	assert.ok(!TOKEN_PATTERN.test(`npm_${"a".repeat(35)}`));
+});
+
 test("shipped files contain no machine, network, account, or credential details", () => {
 	const FORBIDDEN: [RegExp, string][] = [
 		[/\/Users\/[^/\s]+/, "macOS home path"],
@@ -119,10 +127,7 @@ test("shipped files contain no machine, network, account, or credential details"
 		[/\b(?:192\.168|10\.\d+|172\.(?:1[6-9]|2\d|3[01]))\.\d+\.\d+\b/, "private IP"],
 		[/tailscale|tailnet|magicdns/i, "tailnet"],
 		[/\bHA_TOKEN\b|\bhome\.meep|homeassistant|home-assistant/i, "home automation"],
-		[
-			/\b(?:sk|pk)-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}/,
-			"token",
-		],
+		[TOKEN_PATTERN, "token"],
 		[/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "private key"],
 		[EMAIL_PATTERN, "e-mail address"],
 		[/enterprise\.local|personal\.local|auth\.json|\.ssh\/|id_ed25519/i, "local manifest or credential file"],
