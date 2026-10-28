@@ -66,19 +66,23 @@ test("disabled tool admission bypasses policy resolution before and after a work
     policyReads += 1;
     throw new Error("registry unavailable");
   };
-  mock.rawPi.getAllTools = unavailableRegistry;
-  const call = mock.events.get("tool_call")?.[0];
-  assert.ok(call);
-  assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
-  assert.equal(policyReads, 0);
-  mock.rawPi.getAllTools = allTools;
-  await mock.commands.get("plan")?.handler("start", context.ctx);
-  assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
-  await mock.commands.get("plan")?.handler("off", context.ctx);
-  mock.rawPi.getAllTools = unavailableRegistry;
-  assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
-  assert.equal(policyReads, 0);
-  assert.equal(context.statuses.get("plan-mode"), undefined);
+  try {
+    mock.rawPi.getAllTools = unavailableRegistry;
+    const call = mock.events.get("tool_call")?.[0];
+    assert.ok(call);
+    assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
+    assert.equal(policyReads, 0);
+    mock.rawPi.getAllTools = allTools;
+    await mock.commands.get("plan")?.handler("start", context.ctx);
+    assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
+    await mock.commands.get("plan")?.handler("off", context.ctx);
+    mock.rawPi.getAllTools = unavailableRegistry;
+    assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
+    assert.equal(policyReads, 0);
+    assert.equal(context.statuses.get("plan-mode"), undefined);
+  } finally {
+    mock.rawPi.getAllTools = allTools;
+  }
 });
 
 /** Drive the real RPC menu while a supported agent-start event invalidates its plan. */

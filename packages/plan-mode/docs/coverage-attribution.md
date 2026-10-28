@@ -47,7 +47,7 @@ node ../../scripts/run-vitest.ts bun --maxWorkers=1
   --coverage.reporter=lcov --coverage.include=src/plan-mode.ts
 ```
 
-Current measured result: **940/952 lines, 153/155 functions**, only for
+Measured #199 base (`83a10bc`): **940/952 lines, 153/155 functions**, only for
 `src/plan-mode.ts`. This is NOT whole-package 100% or coverage completion.
 Gate execution and temporary-mutant command receipts belong in the PR comment,
 not in a tracked workstation process log.
@@ -86,7 +86,8 @@ real-read positive control; it does not enlarge native watcher timeouts.
 
 ## Remaining caller inventory
 
-Twelve lines and two functions remain uncovered:
+At that #199 base, twelve lines and two functions were uncovered. The subsequent
+[final-guard ledger](final-guards.md) records their dispositions and current counts:
 
 ```text
 Lines: 1210,1211,1396,1397,1483,1511,1512,1517,1518,1609,1650,1659
