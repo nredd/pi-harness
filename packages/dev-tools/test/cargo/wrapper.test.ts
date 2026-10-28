@@ -13,6 +13,7 @@ afterEach(() => {
 	for (const fixture of fixtures.splice(0)) fixture.cleanup();
 });
 function setup() {
+	vi.stubEnv("CARGO_TARGET_DIR", "");
 	const fixture = wrapperFixture("Cargo.toml");
 	fixtures.push(fixture);
 	const mock = createMockPi();

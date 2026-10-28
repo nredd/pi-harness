@@ -1,8 +1,8 @@
 # Dev-tools wrapper coverage
 
-This change is stacked on `origin/redd/cargo-diag` (`4322d5fb`, PR #155). That PR owns
-nextest's absolute per-call JUnit path and `CARGO_TARGET_DIR` handling. Do not merge this
-stack before #155. No cargo product fix is duplicated here.
+Measurement baseline: `4322d5fb` (PR #155), which supplies nextest's absolute per-call
+JUnit path and `CARGO_TARGET_DIR` handling. No cargo product fix is duplicated here.
+The PR records stack ordering and execution/review receipts [here](https://github.com/nredd/pi-harness/pull/195).
 
 ## Scope and measurement
 
@@ -67,13 +67,22 @@ The other ten modules already had zero line/function gaps: `index.ts`, `core/out
 - Exercise default SSH configuration discovery using an injected home under a disposable root,
   tilde includes and glob failure fallback; never connect to a real host.
 - Exercise the resource wrapper's default optional Linux read and disposal, with an injected
-  sampler rather than asserting internals of the external sampler.
+  sampler rather than asserting internals of the external sampler. This one smoke assertion is
+  host-conditional intentionally: it covers the default reader, whereas the existing injected-reader
+  tests cover available/missing memory outcomes deterministically on every platform.
 - Check invalid commit bodies, unreadable HEAD after a real commit, worktree lock error mapping,
   and propagation of unexpected lock defects.
 
 The only production edit removes an unused no-op initializer for `release`: a Promise executor
 synchronously assigns it before any use. The no-op was not reachable; definite assignment makes
 that invariant explicit. No reachable code was removed to raise coverage.
+
+Mutation checks (both restored before the final gates): changing the doctest failure transition
+from `failed` to `passed` makes the cargo test fail its `isError` assertion; substituting
+`wrong-group` for uv's requested group makes the Python wrapper test fail its exact argv summary.
+Running `vitest run --maxWorkers=1 test/cargo/wrapper.test.ts test/py/wrapper.test.ts` against
+both mutations produced exactly two failed and ten passed tests. These checks test outcomes,
+not incidental execution of lines.
 
 Full Bun execution exposed two existing fixture portability assumptions: Bun's `ChildProcess`
 stdio accessors are read-only, and its missing-executable message differs from Node's ENOENT.
@@ -88,14 +97,20 @@ config. The Git test commands below ignore system/global configuration and use e
 Git's fixture hook test now creates its hooks directory explicitly. The installed cargo/uv tools
 still run their existing real project gates; their implementation is outside coverage scope.
 
-`CARGO_TARGET_DIR` was inherited as `/Volumes/Scratch/build/cargo`. Unset it for ordinary fixture
-runs; retain the existing explicit absolute/relative target-directory tests from #155. All real
-cargo assertions pass, including the strict two-test/one-failure JUnit assertion. The `@{u}` stderr
-is an intentional negative assertion in `commit-remote.test.ts`; that same fixture subsequently
-asserts `fork/feat` after push. It is not an unexplained suite failure.
+Unset ambient `CARGO_TARGET_DIR` for ordinary fixture runs; retain the existing explicit
+absolute/relative target-directory tests from #155. The historical expected-two-tests/got-zero
+failure was not reproduced on this stacked baseline: `test/cargo/tools.test.ts` strictly asserts
+two tests and one failure, and its relocated-target tests assert those same counts. #155 places
+JUnit outside Cargo's target directory; unsetting the ambient variable is fixture hygiene, not
+a substitute for that product fix. No assertion was relaxed.
 
-Commands from `packages/dev-tools` (providers 5.0.3 supplied in untracked `node_modules` from an
-isolated npm exec cache, without lockfile/dependency changes):
+The `@{u}` stderr comes from the explicit `expect(() => sh(repo, ["rev-parse", "--abbrev-ref",
+"@{u}"])).toThrow()` in `test/git/commit-remote.test.ts`, in the test named "pushes a new branch
+to branch.<n>.remote when its tracking ref does not exist yet". That test subsequently asserts
+`fork/feat` after the push. The initial absent-upstream diagnostic is expected, not a suite failure.
+
+Commands from `packages/dev-tools` (providers 5.0.3 supplied without tracked
+lockfile/dependency changes):
 
 ```sh
 npm run lint

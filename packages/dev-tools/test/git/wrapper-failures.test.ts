@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FileLockFailedError, LockAbortedError, withFileLock } from "../../src/core/index.ts";
 import { registerGitTools } from "../../src/git/index.ts";
 import { git } from "../../src/git/run.ts";
@@ -16,7 +16,18 @@ vi.mock("../../src/core/index.ts", async (original) => {
 	const actual = await original<typeof import("../../src/core/index.ts")>();
 	return { ...actual, withFileLock: vi.fn(actual.withFileLock) };
 });
+beforeEach(async () => {
+	for (const [key, value] of Object.entries({
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_TEMPLATE_DIR: "",
+	}))
+		vi.stubEnv(key, value);
+	const actual = await vi.importActual<typeof import("../../src/git/run.ts")>("../../src/git/run.ts");
+	vi.mocked(git).mockImplementation(actual.git);
+});
 afterEach(() => {
+	vi.mocked(git).mockReset();
 	vi.clearAllMocks();
 	vi.unstubAllEnvs();
 });
@@ -24,12 +35,6 @@ afterEach(() => {
 it("returns body-validation and unreadable-HEAD errors without claiming a push", async () => {
 	const f = wrapperFixture("Cargo.toml");
 	try {
-		for (const [key, value] of Object.entries({
-			GIT_CONFIG_NOSYSTEM: "1",
-			GIT_CONFIG_GLOBAL: "/dev/null",
-			GIT_TEMPLATE_DIR: "",
-		}))
-			vi.stubEnv(key, value);
 		execFileSync("git", ["init", "-q", "-b", "main", f.root]);
 		const mock = createMockPi();
 		registerGitTools(mock.pi);
@@ -65,7 +70,6 @@ it("returns body-validation and unreadable-HEAD errors without claiming a push",
 		expect(execFileSync("git", ["-C", f.root, "log", "-1", "--format=%s"], { encoding: "utf8" }).trim()).toBe(
 			"Commit fixture",
 		);
-		vi.mocked(git).mockImplementation(actual.git);
 	} finally {
 		f.cleanup();
 	}
