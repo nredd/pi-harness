@@ -259,7 +259,7 @@ def test_credential_scan_refuses_entire_publication(
     name: str,
     token: bytes,
 ) -> None:
-    """Reject every synthetic token/path pair without replacing the primary failure.
+    """Publish the clean collector candidate before rejecting each contaminated token/path pair.
 
     Parameters:
         tmp_path (Path): private publication directory.
@@ -269,19 +269,16 @@ def test_credential_scan_refuses_entire_publication(
         token (bytes): generated synthetic credential signature, never a real credential.
 
     Returns:
-        None: scanner refusal, absent publication and primary-status assertions complete.
+        None: clean byte preservation, scanner refusal and primary-status assertions complete.
     """
     output = tmp_path / "artifacts"
     content = b"\xffprefix " + token + b" suffix\r\n"
     publish = diag.publish
     assert diag.allowed_artifact_path(Path(name))
-    with pytest.raises(ValueError, match="credential"):
-        publish({name: content}, output)
-    assert not output.exists()
     publications: list[Path] = []
 
     def contaminated_publish(files: dict[str, bytes], destination: Path) -> None:
-        """Inject at the final boundary, including generated metadata and stream files.
+        """Prove the actual collector dictionary publishes before injecting the synthetic token.
 
         Parameters:
             files (dict[str, bytes]): actual collector publication candidates.
@@ -294,8 +291,19 @@ def test_credential_scan_refuses_entire_publication(
             ValueError: the verified credential refusal, passed through to the collector.
         """
         publications.append(destination)
+        clean = tmp_path / "clean-artifacts"
+        # SHA256SUMS is generated, not an original input; all other selected paths get clean bytes.
+        candidate = files if name == "SHA256SUMS" else files | {name: b"\xffclean input\r\n"}
+        publish(candidate, clean)
+        assert (clean / name).is_file()
+        for original_name, original_bytes in candidate.items():
+            assert (clean / original_name).read_bytes() == original_bytes
+        sums = "".join(
+            f"{hashlib.sha256(data).hexdigest()}  {path}\n" for path, data in sorted(candidate.items())
+        )
+        assert (clean / "SHA256SUMS").read_bytes() == sums.encode()
         with pytest.raises(ValueError, match="credential") as refused:
-            publish(files | {name: content}, destination)
+            publish(candidate | {name: content}, destination)
         raise refused.value
 
     box = build_sandbox(tmp_path / "sandbox")
