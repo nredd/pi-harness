@@ -35,7 +35,8 @@ function abortable(prior: Promise<void>, key: string, signal?: AbortSignal): Pro
 
 export async function withLock<T>(key: string, fn: () => Promise<T>, opts: LockOptions = {}): Promise<T> {
 	const prior = queues.get(key);
-	let release: () => void = () => {};
+	// Promise executors run synchronously, before `release` can be used in finally.
+	let release!: () => void;
 	const mine = new Promise<void>((resolve) => {
 		release = resolve;
 	});
