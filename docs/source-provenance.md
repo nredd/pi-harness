@@ -136,7 +136,7 @@ and provider-wrapped narrow rows (see the preset README). The initial import of 
 and the two migrated helper tests was likewise formatting-only plus sibling import paths, with no
 assertion changes. The native footer port adds the optional `createExpandedFooter({ clock })` seam,
 retaining real defaults, and switches both helper tests to static sibling imports and Vitest. Their
-assertions remain unchanged. Package-native host scenarios now live in `packages/preset/test/scenarios/`.
+assertions remain unchanged at that point; `footer-quota.test.mjs` later dropped its OpenAI 5h and row-text expectations for the reset-time change. Package-native host scenarios now live in `packages/preset/test/scenarios/`.
 
 New in this package (not from the source): `test/{discovery,resources,package}.test.ts`,
 `test/support.ts`.
