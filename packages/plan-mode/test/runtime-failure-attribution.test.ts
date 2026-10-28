@@ -21,8 +21,10 @@ for (const failure of ["lookup", "missing", "auth-result", "auth-throw", "apply-
       },
     };
     const branch = [entry];
+    const attemptedModels: unknown[] = [];
     if (failure === "apply-throw")
-      mock.rawPi.setModel = async () => {
+      mock.rawPi.setModel = async (target) => {
+        attemptedModels.push(target);
         throw new Error("apply denied");
       };
     if (failure === "thinking")
@@ -63,9 +65,11 @@ for (const failure of ["lookup", "missing", "auth-result", "auth-throw", "apply-
     );
     assert.equal(mock.thinkingLevel, failure === "thinking" ? "low" : "high");
     assert.equal(mock.setModels.length, failure === "thinking" ? 1 : 0);
+    assert.deepEqual(attemptedModels, failure === "apply-throw" ? [model] : []);
     const warnings = context.notifications.length;
     await mock.events.get("input")?.[0]?.({ text: "implement", source: "user" }, context.ctx);
     assert.equal(context.notifications.length, warnings, "consumed intent must not retry on input");
+    assert.deepEqual(attemptedModels, failure === "apply-throw" ? [model] : []);
   });
 }
 
@@ -80,11 +84,11 @@ test("a throwing tool registry falls back safely instead of admitting unknown to
   const blocked = (await mock.events.get("tool_call")?.[0]?.({ toolName: "read", input: {} }, context.ctx)) as {
     block?: boolean;
   };
-  assert.equal(blocked.block, true);
+  assert.equal(blocked?.block, true, "registry failure must block read");
   const unknown = (await mock.events.get("tool_call")?.[0]?.(
     { toolName: "unregistered_mutation", input: {} },
     context.ctx,
   )) as { block?: boolean };
-  assert.equal(unknown.block, true);
+  assert.equal(unknown?.block, true, "unknown tools must be blocked");
   assert.equal(context.statuses.get("plan-mode"), "plan active");
 });
