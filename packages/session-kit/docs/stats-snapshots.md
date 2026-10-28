@@ -3,7 +3,9 @@
 Build the committed `dist/pi-stats-export.mjs` with `npm ci && npm run build:stats-export`.
 The exact esbuild version and dependencies are locked; tests assert byte-identical rebuilds.
 Copy only that file. Runtime is Node 22+ with builtins only, no Pi install, extension, private
-repository, package install, auth or network access.
+repository, package install, auth or network access. Importing the artifact is silent, even when
+an importing process supplies a nonexistent entrypoint argument; direct and symlinked Node execution
+still run the CLI.
 
 ```
 node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]
@@ -36,10 +38,16 @@ Installation state, never synced:
 - `DIR/pi-session-kit/stats-cache.json`: local parser cache v2, including file paths and compact
   usage tuples. Version 1 entries for deleted files stay intact; existing files reparse even if
   their mtime/size match. Strong identities are not invented for inaccessible legacy files.
+  Failed stat/parse operations count as incomplete history; a failed reparse retains the last-good
+  cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
+  child markers apply only to the matching session ID, surviving user-visible renames.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
-  time; a partial import records valid updates and marks coverage incomplete.
+  time; a partial import records valid updates and marks coverage incomplete. The assembled cache
+  accepts up to 128 MiB; exceeding that limit fails before replacement and retains its last-good
+  bytes. Tests inject final-document byte accounting at the exact limit and one byte over, while
+  retaining real import validation and atomic publication.
 
 Snapshot version 1:
 

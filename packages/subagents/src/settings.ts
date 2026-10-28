@@ -4,9 +4,9 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
 import { readEnterpriseLocalManifest } from "./enterprise-local.js";
+import { resolveAgentDir } from "./home-paths.js";
 import { type ModelResolution, parseTierBinding, setModelTiers } from "./model-tiers.js";
 import { type BudgetPolicy, DEFAULT_BUDGET_POLICY } from "./process-budget.js";
 import type { AgentMentionMode, JoinMode, ViewerMarkdownMode, WidgetMode } from "./types.js";
@@ -653,8 +653,8 @@ function sanitizeModelAliases(raw: unknown): Record<string, string[]> | undefine
   return aliases;
 }
 
-function globalPath(): string {
-  return join(getAgentDir(), "subagents.json");
+function globalPath(homeDir?: string): string {
+  return join(resolveAgentDir(homeDir), "subagents.json");
 }
 
 function projectPath(cwd: string): string {
@@ -678,7 +678,7 @@ function readSettingsFile(path: string): SubagentsSettings {
 }
 
 /** Load merged settings: global provides defaults, project overrides. */
-export function loadSettings(cwd: string = process.cwd()): SubagentsSettings {
+export function loadSettings(cwd: string = process.cwd(), homeDir?: string): SubagentsSettings {
   // Aliases pick the provider a subagent runs on, so they are machine
   // configuration: a cloned repo's project file must not redirect them.
   const {
@@ -704,14 +704,14 @@ export function loadSettings(cwd: string = process.cwd()): SubagentsSettings {
   if (projectMaxActive !== undefined || projectReserve !== undefined) {
     console.warn("[pi-subagents] Ignoring maxActiveSubagents/nestedSubagentReserve in project .pi/subagents.json: the process-wide budget is read from global configuration only.");
   }
-  return { ...trustedSettings(), ...project };
+  return { ...trustedSettings(homeDir), ...project };
 }
 
 /** Global settings with the enterprise manifest over them: the layer a project file cannot touch. */
-function trustedSettings(): SubagentsSettings {
-  const enterprise = readEnterpriseLocalManifest()?.subagents;
+function trustedSettings(homeDir?: string): SubagentsSettings {
+  const enterprise = readEnterpriseLocalManifest(homeDir)?.subagents;
   const enterpriseSettings = enterprise === undefined ? {} : sanitize(enterprise);
-  return { ...readSettingsFile(globalPath()), ...enterpriseSettings };
+  return { ...readSettingsFile(globalPath(homeDir)), ...enterpriseSettings };
 }
 
 /**
@@ -720,8 +720,8 @@ function trustedSettings(): SubagentsSettings {
  * how deep its own sessions nest, but not what the process-wide reserve
  * covers. A missing key means its default, so removing the cap turns it off.
  */
-export function loadBudgetPolicy(): BudgetPolicy {
-  const trusted = trustedSettings();
+export function loadBudgetPolicy(homeDir?: string): BudgetPolicy {
+  const trusted = trustedSettings(homeDir);
   return {
     maxActive: trusted.maxActiveSubagents ?? DEFAULT_BUDGET_POLICY.maxActive,
     nestedReserve: trusted.nestedSubagentReserve ?? DEFAULT_BUDGET_POLICY.nestedReserve,
@@ -804,10 +804,11 @@ export function applyAndEmitLoaded(
   appliers: SettingsAppliers,
   emit: SettingsEmit,
   cwd: string = process.cwd(),
+  homeDir?: string,
 ): SubagentsSettings {
-  const settings = loadSettings(cwd);
+  const settings = loadSettings(cwd, homeDir);
   applySettings(settings, appliers);
-  appliers.setBudgetPolicy(loadBudgetPolicy());
+  appliers.setBudgetPolicy(loadBudgetPolicy(homeDir));
   emit("subagents:settings_loaded", { settings });
   return settings;
 }
