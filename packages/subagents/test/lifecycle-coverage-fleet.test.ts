@@ -57,12 +57,16 @@ describe("fleet overlay lifecycle", () => {
   it("returns navigation after the workflow inspector rejects without acknowledging it", async () => {
     const f = fixture();
     const open = vi.fn(() => Promise.reject(new Error("inspector failed")));
-    f.fleet.setWorkflowSource(() => [{ id: "wf", name: "running workflow", status: "running", doneCount: 0, totalCount: 1, startedAt: 1, tokens: 0 }], open);
+    const workflow = { id: "wf", name: "failed workflow", status: "failed" as const, doneCount: 0, totalCount: 1, startedAt: 1, completedAt: 2, tokens: 0 };
+    f.fleet.setWorkflowSource(() => [workflow], open);
     try {
       f.open();
       await expect(open.mock.results[0].value).rejects.toThrow("inspector failed");
       expect(f.fleet.handleKey("\x1b[A")).toEqual({ consume: true });
       expect(f.custom).not.toHaveBeenCalled();
+      // A rejected inspection must retain the unread alert even after its runtime disappears.
+      f.fleet.setWorkflowSource(() => [], open);
+      expect(f.component.render(120).join("\n")).toContain("failed workflow");
     } finally { f.fleet.dispose(); }
   });
 
@@ -93,8 +97,8 @@ describe("fleet overlay lifecycle", () => {
       f.open();
       f.reject(new Error("overlay failed"));
       await expect(f.overlay).rejects.toThrow("overlay failed");
-      expect(f.fleet.handleKey("\x1b[A")).toEqual({ consume: true });
       expect(f.record.resultConsumed).not.toBe(true);
+      expect(f.fleet.handleKey("\x1b[A")).toEqual({ consume: true });
     } finally { f.viewer().dispose(); f.fleet.dispose(); }
   });
 

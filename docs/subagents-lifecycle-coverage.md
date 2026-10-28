@@ -1,124 +1,70 @@
 # Subagents lifecycle coverage
 
-Baseline `b51e1774` (main, including #182). This branch deliberately leaves
-`src/index.ts` and #193's inspector/viewer/metadata surfaces and tests untouched.
-Only dedicated `test/lifecycle-coverage*.test.ts` files are added. No policy,
-config, dependency, exclusion, HOME mutation or production change.
+For contributors measuring lifecycle tests, not runtime configuration.
+Baseline `b51e1774` includes #182. This PR adds `lifecycle-coverage*.test.ts`,
+its `.mjs` extension fixture, and the fixture-local compiler spy correction in
+`process-budget.test.ts`. No production/config/dependency/policy/exclusion change.
+The merged `166e801a` todo changes and existing source guards are retained.
+`src/index.ts` and #193's inspector/viewer/metadata files remain separately owned,
+not excluded from measurement.
 
-Istanbul measurement uses the same 75 explicit owned sources as #162's read-only
-phase0 config. The exact expanded executed command is retained in
-`subagents-lifecycle-command.txt`; before/remaining inventories report exact
-uncovered line locations and function labels, pinned to this source revision.
-The root Vitest 5.0.3 uses the ignored Istanbul 5.0.3 tooling link (the existing
-package provider dependency is nested at 4.x). No manifests or lockfiles change.
-
-| Checkpoint | Lines covered | Functions covered |
+| Checkpoint | Covered lines | Covered functions |
 | --- | ---: | ---: |
-| Current main | 6658/7164 | 1351/1423 |
-| Initial UI theme measurement | 6672/7164 | 1352/1423 |
-| Wave 3 (before final protocol/transcript cases) | 6761/7164 | 1375/1423 |
-| Pushed checkpoint, final test contents | 6766/7164 | 1375/1423 |
+| Main `b51e1774` | 6658/7164 | 1351/1423 |
+| Final lifecycle tests | 6766/7164 | 1375/1423 |
 
-Initial UI theme per-file missing lines/functions:
-- `src/ui/agent-widget.ts`: 15/0 -> 2/0.
-- `src/ui/agent-row.ts`: 2/2 -> 2/1.
-- `src/ui/fleet-state.ts`: 1/0 -> 0/0.
+Close 108 lines and 24 functions; 27 previously gapped modules close completely.
+Of 71 lifecycle-owned sources, 67 have full lines/functions. Target is NOT 100%.
+All 75 measured sources, per-file denominators and before/final gaps are in
+`subagents-lifecycle-files.md`; stable remaining anchors are in
+`subagents-lifecycle-remaining.txt`. `subagents-lifecycle-before.txt` records the
+baseline gap counts. The expanded command is `subagents-lifecycle-command.txt`.
+Istanbul 5.0.3 matches the root Vitest 5.0.3 runner through an ignored tooling link;
+no manifest/lock changes. Branches remain report-only.
 
-Additional UI assertions after that measurement cover clearing a stale active
-status, queued wording, expanded output capped at 50 lines with a full-output
-hint, and static call invalidation. The next full measurement includes them.
+The older #193 report at `6d7b13cb` has 7161 LF, not 7164. Comparing its actual
+complete LCOV with the lifecycle LCOV yields `model-selection.ts 67 -> 68` and
+`process-budget.ts 94 -> 96`; the other 73 LF and every FNF are unchanged.
+The measured additions correspond to `cheapCompatibility` initialization and
+the expanded active-lease loop. All 75 current source files match `b51e1774`
+byte-for-byte. No three-line attribution was guessed from a physical diff.
 
-UI completion adds failed-overlay non-acknowledgement, viewer disposal, missing
-workflow inspection, manager stop/steer routing, theme invalidation, queued rows,
-bounded expanded results and multi-model notices. A mutated fleet rejection path
-that acknowledges failure makes the failed-record assertion fail. UI widget,
-row, journal, notification, card and dialog functions now have full lines/functions;
-the fleet's filtered-out no-session wording is retained.
+Tests use actual private files, git children, worker threads, faux-backed SDK
+sessions, injected owned clocks and explicit promise controls. Non-injectable
+Croner/nested timer boundaries use virtual timers. The manager tests set the
+public typed record's `outputCleanup`, matching extension wiring; this is boundary
+state setup, not a claim that every fixture avoids record mutation. The callback
+runs the real `streamToOutputFile` final flush and then throws; assertions read
+the JSONL answer, check unsubscribe, and verify the manager clears the callback
+without losing the run's verdict. Eviction uses the public `markConsumed` helper,
+checks its consumed timestamp, and asserts the oldest two IDs disappear while
+the third/newest remain. No private field or arbitrary no-op callback is poked
+to manufacture execution.
 
-The public widget factory renders terminal verdicts, retained turn stats and
-session duration. Replacement disposal cannot unregister the new component.
-The alert journal uses 129 real alert transitions to exercise an unread overflow
-attempt changing kind, then restores and acknowledges it, independently checking
-all four exact persisted counters. Tool-row ticking uses an injected FakeClock.
+The failed workflow inspector uses one stable failed record. After its actual
+rejection and removal from the runtime source, the unread row must still render.
+The failed agent overlay independently must leave `resultConsumed` unset.
+Separate exact acknowledgement mutants fail those semantic assertions, not an
+unrelated keyboard-consumption assertion. Mutation commands, red outcomes and
+byte-exact restoration are recorded in `subagents-lifecycle-mutations.txt`.
 
-Manager/workflow theme: real control promises drive detached resume telemetry,
-parent abort, throwing startup/completion observers, output-cleanup failures,
-queued detach and 502 evictions with exact newest/oldest assertions. Review
-strengthened the 500-entry boundary: first two ids absent, third and newest
-retained. Changing the bound to 501 fails the off-by-one mutation. Real workers
-exercise queued skip/cancel, spawn/load failures, hostile diagnostic getters and
-an unknown RPC envelope injected at Node's public worker event boundary. Host
-resume after actual manager eviction fails honestly; explicit nested script files
-load from private roots. Mutation batches change compaction count, eviction bound
-and detached verdict (three failures), and queued skip/host error/worker error
-(four failures). The protocol fatal-bit mutation also fails its envelope assertion.
+Remaining lifecycle-owned gaps:
 
-Mutation batch: replace every non-success finished wording, wrong turn count,
-incorrect repeated-search plural, invert replacement-dispose identity guard,
-and fail to decrement the previous overflow kind. Dedicated UI suite exits 1
-before source restoration. No production edit remains.
+| Symbol/anchor | Missing L/F | Trace |
+| --- | ---: | --- |
+| `AgentManager.enqueueStart` grant guard; `startResume` session guard; `cancel: () => {}` | 6/1 | `dequeue` withdraws budget waiters; resume requires a session and sweeps skip queued records; initial cancel is overwritten before use. |
+| `observeRun`, `let unsubscribe = () => {}` | 0/1 | Session subscription replaces the initial closure before publication. |
+| `FleetList.openSelected`, "no session available" | 2/0 | The openable roster requires a session for non-failure rows; no await separates selection from the guard. |
+| Workflow boundary `walk`, final non-object check | 1/0 | Earlier `typeof` branches exhaust non-object values. |
 
-Private persistence theme: real permission/lock failures, malformed settings and
-private manifests, invalid YAML, schema serialization/getter/pattern errors,
-historical tier provenance, and disappearing files at exists/stat/realpath
-boundaries. Race fixtures remove actual private files; only the triggering FS
-boundary is wrapped. A real git child removes its disposable repository between
-validation and toplevel lookup. Mutating exclusive lock creation to overwrite
-and accepting invalid manifests produces five failures. Wrong toplevel wording
-fails the real-git race assertion. No owned source is deleted or weakened.
+These nine lines/two functions remain intact. Reachability conclusions concern
+the current call graph, not permission to remove guards or lower denominators.
 
-Runner/scheduler/nested theme: a real private ModelRuntime and real child sessions
-use a scripted faux provider. Assertions inspect actual inherited provider input,
-clamped thinking, tool registry and extension-startup diagnostics. A second real
-child with its denylist removed confirms bash is otherwise present. A real nested
-JSONL transcript records prompt and answer and unsubscribes on flush. Scheduler
-admission uses a real credential-aware registry, with a targeted `find` spy
-injecting failure after preflight; it persists that injected mid-admission error. Owned clocks are injected; existing non-injectable Croner/nested polling
-boundaries use virtual timers, never sleeps. Mutated admission status, failed
-inspection acknowledgement and thinking assignment fail three owning tests.
-Mutated nested transcript wiring/steer diagnostics, git wording and RPC fatal bit
-fail their corresponding tests. Every temporary production mutation is restored.
-
-Gate at the first theme: full single-worker Istanbul suite, pinned Bun 1.3.14
-native session/compatibility suites, lint and typecheck pass. Additional UI cases
-pass focused tests, lint and typecheck. Latest full evidence: `subagents-lifecycle-gates.txt`; mutation failure excerpts:
-`subagents-lifecycle-mutations.txt`. Full remaining inventory:
-`subagents-lifecycle-remaining.txt`. Exact command uses the final report directory.
-
-Checkpoint closes 108 lines and 24 functions without changing the denominator.
-Of 71 files in this branch's ownership, 67 are now 100% lines/functions; 27
-previously gapped modules are fully closed. This excludes the four separately
-owned files `src/index.ts`, `src/ui/workflow-menu.ts`,
-`src/ui/conversation-viewer.ts`, `src/workflow/meta.ts`, not from coverage, only
-from ownership. The complete 75-file before/after table is committed in
-`subagents-lifecycle-files.md`.
-
-Remaining owned gaps:
-
-| File | Main missing L/F | Checkpoint missing L/F |
-| --- | ---: | ---: |
-| `src/agent-manager.ts` | 21/7 | 6/1 |
-| `src/agent-runner.ts` | 8/2 | 0/1 |
-| `src/ui/fleet-list.ts` | 7/3 | 2/0 |
-| `src/workflow/runtime.ts` | 12/1 | 1/0 |
-
-The nine remaining lines and two functions are retained, not claimed closed:
-manager budget-grant stale-record guard (three lines), queued-resume missing-session
-guard (three), fleet non-failure/no-session notice (two), exhaustive `typeof`
-safety guard (one), and initial manager-cancel/runner-unsubscribe no-op closures
-that are replaced before use. No reachable validator was deleted and no private
-record mutation was used to manufacture these counters. Call-graph trace:
-`dequeue` cancels budget waiters, `resume` requires a session and eviction skips
-queued records, the fleet roster requires sessions, and the typeof alternatives
-are exhaustive. These are not reachable through the current public call graph;
-removal remains a production-owner decision, not a coverage-policy exception.
-The #174 stack-mapping diagnosis is
-exclusively owned by debugger `b9968f19`; this branch makes NO production edit to
-`workflow/runtime.ts` or any other source file.
-
-Final gate after checkpoint review: Node 166 files pass, 3525 tests pass and 8 skip;
-full Bun 165 files pass, one fails, 3525 tests pass, one fails and 7 skip;
-Bun native session scenarios 31 pass and home-loader compatibility 10 pass;
-lint/typecheck clean. No root-wide or extra inprocess suite was run. The genuine full Bun compatibility run is NOT green:
-its remaining #174 source-location failure is recorded in `subagents-budget-mock.md`. No root-wide suite duplicated; resource snapshots
-precede full runs and tests are serialized alongside other active coverage agents.
+Fresh gate evidence is in `subagents-lifecycle-gates.txt`. Full Node/Istanbul,
+lint/types and pinned Bun native `31 + 10` pass. Full Bun compatibility remains
+NOT green: the unchanged #174 authored-stack-location assertion fails. Its
+production fix is separately owned; this PR neither duplicates it nor weakens
+that test. The historical process-budget mock failure's original cause remains
+unproven; the controlled real-compiler namespace reproduction is documented in
+`subagents-budget-mock.md`. No root-wide/inprocess gate, live activation, release
+or merge is claimed.

@@ -1,48 +1,13 @@
-Log: /tmp/lifecycle-final-lint.log
-Checked 260 files in 129ms. No fixes applied.
+Fresh final lifecycle test contents, after merging main 166e801a and restoring all mutations.
+Node 26.12.0; root Vitest/Istanbul 5.0.3; Bun 1.3.14; one Vitest worker.
 
-Log: /tmp/lifecycle-final-types.log
-> tsc --noEmit
+From packages/subagents:
+- Execute ../../docs/subagents-lifecycle-command.txt, additionally --coverage.reporter=json --coverage.reporter=json-summary: exit 0; 166 files passed; 3525 passed / 8 skipped. Istanbul 6766/7164 lines; 1375/1423 functions; all 75 sources measured.
+- npm run lint: exit 0; Checked 260 files, no fixes applied.
+- npm run typecheck: exit 0; tsc --noEmit.
+- npm exec --yes --package=bun@1.3.14 -- node ../../scripts/run-vitest.ts bun --maxWorkers=1: exit 1; 165 files passed / 1 failed; 3525 passed / 1 failed / 7 skipped. Only failure: workflow-runtime.test.ts, "reports line numbers that match the script the author wrote"; expects workflow.js:3:, receives workflow.js:4:23. Existing #174, not fixed or weakened here.
+- npm exec --yes --package=bun@1.3.14 -- npm run test:bun: exit 0; native session scenarios 31 passed, compatibility home-loader 10 passed.
 
-Log: /tmp/lifecycle-final.log
- Test Files  166 passed (166)
-      Tests  3525 passed | 8 skipped (3533)
+Runs serialized, not parallelized. A host snapshot preceded the final sequence: 10 logical CPUs, 58% interval utilization, memory_pressure 63% free. No nested implementation writers; original author done, #174 fix separately owned. Process names were not treated as agent identity. No root-wide/inprocess gate or release/activation claimed.
 
-Log: /tmp/lifecycle-final-bun-full.log
-⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
- FAIL  test/workflow-runtime.test.ts > script globals > reports line numbers that match the script the author wrote
-AssertionError: expected 'Error: x\n    at <anonymous> (workflo…' to contain 'workflow.js:3:'
- Test Files  1 failed | 165 passed (166)
-      Tests  1 failed | 3525 passed | 7 skipped (3533)
-bun Vitest timing: darwin | subagents | 140.98 s | exit 1
-
-Log: /tmp/lifecycle-final-bun-native.log
- 31 pass
- 0 fail
- Test Files  1 passed (1)
-      Tests  10 passed (10)
-bun Vitest timing: darwin | subagents | 6.68 s | exit 0
-
-Log: /tmp/lifecycle-budget-default-only-before.log
-⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
- FAIL  test/process-budget.test.ts > process budget across managers > settles an old manager to wake a genuine reloaded manager's waiter
-Error: [vitest] No "ModuleKind" export is defined on the "typescript" mock. Did you forget to return it from "vi.mock"?
-    309|           compilerOptions: { module: ModuleKind.ESNext },
- FAIL  test/process-budget.test.ts > process budget across managers > shares the cap and waiters with a separately loaded copy of the budget module
-Error: [vitest] No "ModuleKind" export is defined on the "typescript" mock. Did you forget to return it from "vi.mock"?
- Test Files  1 failed (1)
-      Tests  2 failed | 37 passed (39)
-
-Log: /tmp/lifecycle-budget-default-only-after.log
- Test Files  1 passed (1)
-      Tests  39 passed (39)
-
-Log: /tmp/lifecycle-budget-node-after.log
- Test Files  1 passed (1)
-      Tests  39 passed (39)
-
-Log: /tmp/lifecycle-budget-bun-after.log
- Test Files  1 passed (1)
-      Tests  39 passed (39)
-bun Vitest timing: darwin | subagents | 4.67 s | exit 0
-
+Source restoration: all 75 source files compare byte-for-byte with b51e1774. The main merge retains todo changes and source guards; no denominator, policy or exclusion was changed.

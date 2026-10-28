@@ -1,11 +1,12 @@
 /** Manager callbacks, resumed-turn ownership and bounded eviction through public APIs. */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentManager } from "../src/agent-manager.js";
+import { AgentManager, markConsumed } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
+import { streamToOutputFile } from "../src/output-file.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
 import * as worktrees from "../src/worktree.js";
 import { FakeClock } from "./helpers/fake-clock.js";
@@ -16,11 +17,28 @@ const pi = {} as ExtensionAPI;
 const ctx = { cwd: "/tmp" } as ExtensionContext;
 const session = { dispose: vi.fn() } as unknown as AgentSession;
 const managers: AgentManager[] = [];
+const transcriptRoots: string[] = [];
 beforeEach(() => {
   vi.mocked(runAgent).mockReset().mockResolvedValue({ responseText: "spawn", session, aborted: false, steered: false });
   vi.mocked(resumeAgent).mockReset();
 });
-afterEach(async () => { for (const manager of managers.splice(0)) await manager.dispose(); vi.restoreAllMocks(); });
+afterEach(async () => {
+  for (const manager of managers.splice(0)) await manager.dispose();
+  for (const root of transcriptRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
+
+/** Match the typed record callback installed by the extension, with a real final flush. */
+function transcriptCleanup(id: string) {
+  const root = mkdtempSync(join(tmpdir(), "lifecycle-cleanup-"));
+  transcriptRoots.push(root);
+  const path = join(root, "child.output");
+  const unsubscribe = vi.fn();
+  const child = { messages: [{ role: "assistant", content: [{ type: "text", text: "final answer" }] }], subscribe: () => unsubscribe } as unknown as AgentSession;
+  const flush = streamToOutputFile(child, path, id, root, 0);
+  const cleanup = vi.fn(() => { flush(); throw new Error("flush observer failed"); });
+  return { cleanup, unsubscribe, path };
+}
 
 /** A caller-controlled runner boundary, no timer or scheduling assumptions. */
 function deferred<T>() {
@@ -46,10 +64,13 @@ describe("resumed-turn lifecycle", () => {
     const id = f.manager.spawn(pi, ctx, "general-purpose", "fail", { description: "fail", isBackground: true });
     const record = f.manager.getRecord(id);
     if (!record) throw new Error("record missing");
-    const cleanup = vi.fn(() => { throw new Error("flush failed"); });
-    record.outputCleanup = cleanup;
+    const transcript = transcriptCleanup(id);
+    // Public record setup at the extension/manager boundary, not private state.
+    record.outputCleanup = transcript.cleanup;
     await record.promise;
-    expect(cleanup).toHaveBeenCalledOnce();
+    expect(JSON.parse(readFileSync(transcript.path, "utf8"))).toMatchObject({ agentId: id, message: { content: [{ type: "text", text: "final answer" }] } });
+    expect(transcript.unsubscribe).toHaveBeenCalledOnce();
+    expect(transcript.cleanup).toHaveBeenCalledOnce();
     expect(record).toMatchObject({ status: "error", error: "runner failed", outputCleanup: undefined });
   });
 
@@ -108,8 +129,8 @@ describe("resumed-turn lifecycle", () => {
     vi.mocked(resumeAgent).mockReturnValue(held.promise);
     const controller = new AbortController();
     const remove = vi.spyOn(controller.signal, "removeEventListener");
-    const outputCleanup = vi.fn(() => { throw new Error("disk flush failed"); });
-    record.outputCleanup = outputCleanup;
+    const transcript = transcriptCleanup(id);
+    record.outputCleanup = transcript.cleanup;
     const onToolActivity = vi.fn();
     const onAssistantUsage = vi.fn();
     const onCompaction = vi.fn();
@@ -132,7 +153,9 @@ describe("resumed-turn lifecycle", () => {
     held.resolve({ text: "resumed", aborted: false, steered: false });
     await record.promise;
     expect(record).toMatchObject({ status: "completed", result: "resumed", outputCleanup: undefined });
-    expect(outputCleanup).toHaveBeenCalledOnce();
+    expect(JSON.parse(readFileSync(transcript.path, "utf8"))).toMatchObject({ agentId: id, message: { content: [{ type: "text", text: "final answer" }] } });
+    expect(transcript.unsubscribe).toHaveBeenCalledOnce();
+    expect(transcript.cleanup).toHaveBeenCalledOnce();
     expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
     controller.abort();
     expect(record.status).toBe("completed");
@@ -209,7 +232,8 @@ describe("bounded eviction records", () => {
       const { id, record } = await f.manager.spawnAndWait(pi, ctx, "general-purpose", `run-${i}`, { description: `run-${i}` });
       ids.push(id);
       newest = id;
-      record.resultConsumed = true;
+      markConsumed(record, f.clock.now());
+      expect(record).toMatchObject({ resultConsumed: true, consumedAt: f.clock.now() });
       f.clock.advance(600000);
     }
     expect(f.manager.getRecord(newest)).toBeUndefined();
