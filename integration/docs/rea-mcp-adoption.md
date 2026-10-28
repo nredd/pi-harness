@@ -1,5 +1,20 @@
 # REA MCP server adoption: verify record
 
+Historical evidence only, not an installation or release requirement. The managed REA
+integration was retired in `nredd/dotfiles#58` (`52913a1`). Current harness installers,
+package/stack profiles, sandbox configuration, native hooks and tests do not bundle or
+start REA. Generic native MCP support and unrelated reverse-engineering research remain.
+No owned REA binary or download cache is tracked here. The resource-sampler documentation's
+REA process-title example is retained as bug provenance, not active wiring.
+
+Installed configuration predating retirement can still register REA until an authorized chezmoi
+apply/update writes `~/.pi/agent/mcp.json` and removes
+`~/.agents/skills/reverse-engineer-anything`. The dotfiles source owns both retirement
+paths and disposable-home regression tests. Its targeted MCP modifier preserves unrelated
+servers/settings. Existing Pi sessions retain their MCP children after source/config edits:
+restart all such sessions after activation. Do not treat them as orphans or broadly kill
+processes. Source preparation does not authorize activation, deployment or release.
+
 Date: 2026-10-16. Chezmoi `cf994ec` registers the `rea` MCP server (`npx -y rea-agents@6.5.0 mcp`,
 default `codemode` exposure, both profiles) in `~/.pi/agent/mcp.json` and vendors the
 `reverse-engineer-anything` skill. No pin or fork changed; core stays `v1.3.0-nredd.1`.
