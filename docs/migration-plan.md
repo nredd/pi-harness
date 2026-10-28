@@ -12,6 +12,11 @@
   is NOT RUN.
 - Owned packages ship via `publish.yml`, core via the Homebrew tap, and dotfiles activates pins with
   `chezmoi update --upgrade` plus `pi-profile doctor`. The plan body below is unchanged.
+- REA retirement supersedes every REA-specific requirement in historical sections 5, 6 and 9
+  and the explicit boundaries below. `nredd/dotfiles#58` removed the managed server, warm hook,
+  skill and doctor assertions; REA is not a package input, Bun prerequisite or release gate.
+  Native MCP support remains. Dotfiles' `tests/rea-retirement.test.mjs` owns absence and
+  disposable-home cleanup/no-launch regressions, not REA operation or engine installation.
 
 ## Summary
 

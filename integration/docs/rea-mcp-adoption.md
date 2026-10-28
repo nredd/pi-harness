@@ -4,8 +4,13 @@ Historical evidence only, not an installation or release requirement. The manage
 integration was retired in `nredd/dotfiles#58` (`52913a1`). Current harness installers,
 package/stack profiles, sandbox configuration, native hooks and tests do not bundle or
 start REA. Generic native MCP support and unrelated reverse-engineering research remain.
-No owned REA binary or download cache is tracked here. The resource-sampler documentation's
-REA process-title example is retained as bug provenance, not active wiring.
+Audit of the 1,266 paths in `git ls-files` at `166e801a`, including filename inventory and
+tracked-file content searches for the REA name, `rea-agents`, `mcp__rea`, the skill and warm
+hook names, found no owned REA binary/download-cache asset or active installer/package wiring.
+Remaining matches are this historical record, superseded requirements marked retired in
+`docs/`, integration exclusions, and process-title fixtures/provenance in
+`packages/dev-tools/{README.md,test/resource.test.ts}` and
+`scripts/tests/test_package_contracts.py`. Those fixtures never launch a REA server.
 
 Installed configuration predating retirement can still register REA until an authorized chezmoi
 apply/update writes `~/.pi/agent/mcp.json` and removes
