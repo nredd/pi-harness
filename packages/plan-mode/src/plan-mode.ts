@@ -1392,10 +1392,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   async function showActivePlanMenu(ctx: ExtensionContext) {
-    if (!ctx.hasUI) {
-      ctx.ui.notify(planStatusText(), "info");
-      return;
-    }
     const lifecycle = captureMenuLifecycle();
     if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
     const ui = await loadInteractiveUi();
@@ -1479,8 +1475,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function planModePolicyToolNames() {
-    if (state.enabled) return workflowAllowedToolNames ?? [];
-    return computePlanModePolicyToolNames();
+    return workflowAllowedToolNames ?? [];
   }
 
   function workflowDesiredToolNames() {
@@ -1603,10 +1598,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   function arrayEquals(left: readonly string[], right: readonly string[]) {
     return left.length === right.length && left.every((value, index) => value === right[index]);
-  }
-
-  function computePlanModePolicyToolNames() {
-    return resolvePlanModePolicyToolNames(desiredPlanModeToolNames());
   }
 
   function resolvePlanModePolicyToolNames(desiredNames: readonly string[]) {
