@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withLock } from "../../src/core/index.ts";
@@ -90,16 +90,26 @@ describe("uv executable boundary", () => {
 		}
 	});
 
-	it("cancels a queued uv call and publishes waiting feedback", async () => {
+	it.each([false, true])("cancels a queued uv call and publishes waiting feedback (symlink: %s)", async (symlink) => {
 		const f = setup();
+		const cwd = symlink ? join(f.root, "alias") : f.root;
+		if (symlink) symlinkSync(f.root, cwd, "dir");
 		f.script('require("node:fs").writeFileSync("started", "wrong"); throw new Error("must not start");');
 		const controller = new AbortController();
 		const updates: unknown[] = [];
-		await withLock(`uv:${f.root}`, async () => {
-			const pending = f.tools
-				.get("py_lint")
-				?.execute("id", {}, controller.signal, ((value: unknown) => updates.push(value)) as never, { cwd: f.root });
-			controller.abort();
+		// Match the wrapper's canonical project identity, even when TMPDIR or cwd is a symlink.
+		await withLock(`uv:${realpathSync(f.root)}`, async () => {
+			const pending = f.tools.get("py_lint")?.execute(
+				"id",
+				{},
+				controller.signal,
+				((value: unknown) => {
+					updates.push(value);
+					// Cancel only once the contended lock has actually published waiting feedback.
+					controller.abort();
+				}) as never,
+				{ cwd },
+			);
 			expect(await pending).toMatchObject({ isError: true });
 		});
 		expect(JSON.stringify(updates)).toContain("waiting for another uv run");
