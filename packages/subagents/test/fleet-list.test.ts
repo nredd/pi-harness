@@ -2,6 +2,7 @@ import { Editor, type OverlayOptions, type TuiMode, visibleWidth } from "@earend
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { registerAgents } from "../src/agent-types.js";
+import type { Clock } from "../src/clock.js";
 import type { AgentConfig, AgentRecord, ViewerMarkdownMode } from "../src/types.js";
 import { type AgentActivity, getDisplayName } from "../src/ui/agent-widget.js";
 import type { ViewerBackgroundAction } from "../src/ui/conversation-viewer.js";
@@ -13,6 +14,7 @@ import {
   formatFleetTokens,
 } from "../src/ui/fleet-list.js";
 import { FLEET_STATE_ENTRY, type FleetJournalEntry } from "../src/ui/fleet-state.js";
+import { FakeClock } from "./helpers/fake-clock.js";
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
 const DOWN = "\x1b[B";
@@ -128,6 +130,7 @@ function harness(
     viewerMarkdown?: () => ViewerMarkdownMode;
     onViewerMarkdown?: (mode: ViewerMarkdownMode) => void;
     backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction;
+    clock?: Clock;
   } = {},
 ): Harness {
   const notices: string[] = [];
@@ -160,7 +163,18 @@ function harness(
   };
 
   const manager = fakeManager(agents);
-  const fleet = new FleetList(manager, new Map(), undefined, opts.viewerMarkdown, opts.onViewerMarkdown, undefined, opts.backgroundAction);
+  const fleet = new FleetList(
+    manager,
+    new Map(),
+    undefined,
+    opts.viewerMarkdown,
+    opts.onViewerMarkdown,
+    undefined,
+    opts.backgroundAction,
+    undefined,
+    undefined,
+    opts.clock,
+  );
   const journal: FleetJournalEntry[] = [];
   fleet.restoreSession(() => journal, data => journal.push({ type: "custom", customType: FLEET_STATE_ENTRY, data }));
   fleet.setUICtx(ui);
@@ -1366,13 +1380,24 @@ describe("FleetList workflow rows", () => {
     // The contract: a session without workflows behaves exactly as it did
     // before they existed. Asserted as an equality rather than an absence, so
     // a future change to the roster cannot quietly alter the agents-only path.
-    const withNone = harness([makeRecord({ id: "a1", description: "one" })]);
-    const before = withNone.render().join("\n");
-    expect(before).not.toContain("workflow");
+    const clock = new FakeClock();
+    const now = vi.spyOn(Date, "now").mockReturnValue(clock.now());
+    const startedAt = clock.now();
+    const withNone = harness([makeRecord({ id: "a1", description: "one", startedAt })], { clock });
+    const withEmpty = harness([makeRecord({ id: "a1", description: "one", startedAt })], { clock });
+    try {
+      const before = withNone.render().join("\n");
+      expect(before).not.toContain("workflow");
 
-    const withEmpty = harness([makeRecord({ id: "a1", description: "one" })]);
-    withEmpty.setWorkflows([]);
-    expect(withEmpty.render().join("\n")).toBe(before);
+      // A wall-clock advance must not change either injected-clock fixture.
+      now.mockReturnValue(clock.now() + 1_000);
+      withEmpty.setWorkflows([]);
+      expect(withEmpty.render().join("\n")).toBe(before);
+    } finally {
+      withNone.fleet.dispose();
+      withEmpty.fleet.dispose();
+      now.mockRestore();
+    }
   });
 
   it("navigates agents exactly as before when no run is present", () => {
