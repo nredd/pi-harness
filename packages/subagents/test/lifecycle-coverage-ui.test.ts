@@ -38,13 +38,16 @@ function record(status: AgentRecord["status"], error?: string): AgentRecord {
 const details: AgentDetails = { displayName: "Agent", description: "observed", subagentType: "general-purpose", toolUses: 0, tokens: "", durationMs: 2000, status: "running", agentId: "run" };
 
 describe("static fleet display contracts", () => {
-  it("keeps notification/dialog pixels stable on host invalidation and returns left from agent detail", () => {
+  it("keeps notification pixels stable on host invalidation", () => {
     const details = { description: "finished", status: "completed", toolUses: 0, totalTokens: 0, durationMs: 0, turnCount: 0, resultPreview: "answer" } as NotificationDetails;
     const notice = renderNotification(details, true, theme, false);
     const before = notice.render(120);
     notice.invalidate();
     expect(notice.render(120)).toEqual(before);
     expect(before.join("\n")).toContain("answer");
+  });
+
+  it("keeps dialog pixels stable on invalidation and returns left from agent detail", () => {
     const source = { progress: [], task: { status: "completed" as const, startTime: 1000, endTime: 2000 } };
     const dialog = new WorkflowDialog({ requestRender: vi.fn() } as unknown as TUI, () => source, theme, vi.fn());
     try {
@@ -54,7 +57,13 @@ describe("static fleet display contracts", () => {
       const state: WorkflowDialogState = { ...initialWorkflowDialogState(), level: "agent", promptExpanded: true };
       expect(handleWorkflowDialogKey("\x1b[D", state, resolveWorkflowDialog({ ...source, state }))).toEqual({ state: { ...state, level: "phases", promptExpanded: false } });
     } finally { dialog.dispose(); }
+  });
+
+  it("keeps sub-thousand workflow token counts exact", () => {
     expect(formatCompactTokens(99)).toBe("99");
+  });
+
+  it("names every unresolved model in a multi-model fallback notice", () => {
     expect(modelFallbackNote({ input: "missing-a", also: ["missing-b"], used: "p/parent" })).toBe('Note: configured models "missing-a", "missing-b" did not resolve; running on parent model p/parent.');
   });
 });

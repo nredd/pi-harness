@@ -43,7 +43,9 @@ all four exact persisted counters. Tool-row ticking uses an injected FakeClock.
 
 Manager/workflow theme: real control promises drive detached resume telemetry,
 parent abort, throwing startup/completion observers, output-cleanup failures,
-queued detach and 502 evictions with exact newest/oldest assertions. Real workers
+queued detach and 502 evictions with exact newest/oldest assertions. Review
+strengthened the 500-entry boundary: first two ids absent, third and newest
+retained. Changing the bound to 501 fails the off-by-one mutation. Real workers
 exercise queued skip/cancel, spawn/load failures, hostile diagnostic getters and
 an unknown RPC envelope injected at Node's public worker event boundary. Host
 resume after actual manager eviction fails honestly; explicit nested script files
@@ -67,10 +69,11 @@ fails the real-git race assertion. No owned source is deleted or weakened.
 
 Runner/scheduler/nested theme: a real private ModelRuntime and real child sessions
 use a scripted faux provider. Assertions inspect actual inherited provider input,
-clamped thinking, tool registry and extension-startup diagnostics. A real nested
+clamped thinking, tool registry and extension-startup diagnostics. A second real
+child with its denylist removed confirms bash is otherwise present. A real nested
 JSONL transcript records prompt and answer and unsubscribes on flush. Scheduler
-admission uses a real credential-aware registry and persists a mid-admission
-failure. Owned clocks are injected; existing non-injectable Croner/nested polling
+admission uses a real credential-aware registry, with a targeted `find` spy
+injecting failure after preflight; it persists that injected mid-admission error. Owned clocks are injected; existing non-injectable Croner/nested polling
 boundaries use virtual timers, never sleeps. Mutated admission status, failed
 inspection acknowledgement and thinking assignment fail three owning tests.
 Mutated nested transcript wiring/steer diagnostics, git wording and RPC fatal bit
@@ -85,7 +88,10 @@ pass focused tests, lint and typecheck. Latest full evidence: `subagents-lifecyc
 Checkpoint closes 108 lines and 24 functions without changing the denominator.
 Of 71 files in this branch's ownership, 67 are now 100% lines/functions; 27
 previously gapped modules are fully closed. This excludes the four separately
-owned index/inspector/viewer/meta files, not from coverage, only from ownership.
+owned files `src/index.ts`, `src/ui/workflow-menu.ts`,
+`src/ui/conversation-viewer.ts`, `src/workflow/meta.ts`, not from coverage, only
+from ownership. The complete 75-file before/after table is committed in
+`subagents-lifecycle-files.md`.
 
 Remaining owned gaps:
 
@@ -101,13 +107,17 @@ manager budget-grant stale-record guard (three lines), queued-resume missing-ses
 guard (three), fleet non-failure/no-session notice (two), exhaustive `typeof`
 safety guard (one), and initial manager-cancel/runner-unsubscribe no-op closures
 that are replaced before use. No reachable validator was deleted and no private
-record mutation was used to manufacture these counters. Reachability review is
-still required before deciding any removal. The #174 stack-mapping diagnosis is
+record mutation was used to manufacture these counters. Call-graph trace:
+`dequeue` cancels budget waiters, `resume` requires a session and eviction skips
+queued records, the fleet roster requires sessions, and the typeof alternatives
+are exhaustive. These are not reachable through the current public call graph;
+removal remains a production-owner decision, not a coverage-policy exception.
+The #174 stack-mapping diagnosis is
 exclusively owned by debugger `b9968f19`; this branch makes NO production edit to
 `workflow/runtime.ts` or any other source file.
 
-Final gate at this checkpoint: Node 166 files pass, 3521 tests pass and 8 skip;
-full Bun 165 files pass, one fails, 3521 tests pass, one fails and 7 skip;
+Final gate after checkpoint review: Node 166 files pass, 3525 tests pass and 8 skip;
+full Bun 165 files pass, one fails, 3525 tests pass, one fails and 7 skip;
 Bun native session scenarios 31 pass and home-loader compatibility 10 pass;
 lint/typecheck clean. No root-wide or extra inprocess suite was run. The genuine full Bun compatibility run is NOT green:
 its remaining #174 source-location failure is recorded in `subagents-budget-mock.md`. No root-wide suite duplicated; resource snapshots

@@ -81,3 +81,10 @@ AssertionError: expected "postMessage" to be called with arguments: [ { type: 'r
  Test Files  3 failed (3)
       Tests  5 failed | 7 passed (12)
 
+Log: /tmp/lifecycle-eviction-offbyone-mutant.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/lifecycle-coverage-manager.test.ts > bounded eviction records > retains only the newest 500 evicted ids, without dropping the newest result
+AssertionError: expected { id: 'e5ab2c47-1698-4f8', …(5) } to be undefined
+ Test Files  1 failed (1)
+      Tests  1 failed | 8 passed (9)
+

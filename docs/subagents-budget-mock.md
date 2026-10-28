@@ -65,7 +65,8 @@ interop did not reproduce the failure. Temporary tagged instrumentation showed
 keys in the normal install. All instrumentation and import-order changes were
 removed before the fix.
 
-Genuine full gates after this patch and the current lifecycle tests:
+Intermediate full gates after `a8573ab`, before the last lifecycle additions
+(superseded by the final gate receipt in `subagents-lifecycle-coverage.md`):
 
 - Node 26.12.0, Vitest 5.0.3, Istanbul, maxWorkers 1: 165 files pass,
   3518 tests pass and 8 skip.

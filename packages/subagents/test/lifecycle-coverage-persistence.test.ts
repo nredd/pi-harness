@@ -165,6 +165,9 @@ describe("diagnostic and schema boundaries", () => {
     const env = await detectEnv({ exec } as unknown as ExtensionAPI, root);
     expect(env).toMatchObject({ isGitRepo: true, branch: "unknown" });
     expect(exec).toHaveBeenNthCalledWith(2, "git", ["branch", "--show-current"], { cwd: root, timeout: 5000 });
+  });
+
+  it("preserves the shipped default-agent namespace", () => {
     expect(DEFAULT_AGENT_NAMES).toEqual(["general-purpose", "Explore", "Plan"]);
   });
 

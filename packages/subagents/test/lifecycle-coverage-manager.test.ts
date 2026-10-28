@@ -203,17 +203,19 @@ describe("workflow host lifecycle", () => {
 describe("bounded eviction records", () => {
   it("retains only the newest 500 evicted ids, without dropping the newest result", async () => {
     const f = managerWithClock();
-    let first = "";
+    const ids: string[] = [];
     let newest = "";
     for (let i = 0; i < 502; i++) {
       const { id, record } = await f.manager.spawnAndWait(pi, ctx, "general-purpose", `run-${i}`, { description: `run-${i}` });
-      if (i === 0) first = id;
+      ids.push(id);
       newest = id;
       record.resultConsumed = true;
       f.clock.advance(600000);
     }
     expect(f.manager.getRecord(newest)).toBeUndefined();
-    expect(f.manager.getEvictedNote(first)).toBeUndefined();
+    expect(f.manager.getEvictedNote(ids[0])).toBeUndefined();
+    expect(f.manager.getEvictedNote(ids[1])).toBeUndefined();
+    expect(f.manager.getEvictedNote(ids[2])).toMatchObject({ id: ids[2], description: "run-2", status: "completed" });
     expect(f.manager.getEvictedNote(newest)).toMatchObject({ id: newest, description: "run-501", status: "completed", evictedAfterMin: 10 });
   });
 });

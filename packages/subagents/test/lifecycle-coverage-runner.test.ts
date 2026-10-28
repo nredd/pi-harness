@@ -60,5 +60,12 @@ describe("real child lifecycle boundaries", () => {
     expect(prompts[0]).toContain("[User]: remember parent context");
     expect(prompts[0]).toContain("# Your Task (below)\nnew task");
     expect(onToolActivity).toHaveBeenCalledWith({ type: "end", toolName: expect.stringContaining("extension-error:") });
+    session?.dispose();
+    session = undefined;
+    registerAgents(new Map([[config.name, { ...config, disallowedTools: undefined }]]));
+    faux.setResponses([fauxAssistantMessage("control completed")]);
+    const control = await runAgent(context(), config.name, "control task", { pi, homeDir: root, onSessionCreated: child => { session = child; } });
+    expect(control.responseText).toBe("control completed");
+    expect(control.session.getAllTools().map(tool => tool.name)).toContain("bash");
   });
 });
