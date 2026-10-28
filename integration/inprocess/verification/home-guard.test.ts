@@ -31,8 +31,8 @@ test("missing HOME fails closed", () => {
 	}
 });
 
-test("Bun negative control rejects the real todo setup before test execution", () => {
-	const home = mkdtempSync(join(tmpdir(), "pi-home-guard-control-"));
+test("Bun runs the injected todo setup with the guard active", () => {
+	const home = realpathSync(mkdtempSync(join(tmpdir(), "pi-home-guard-control-")));
 	try {
 		const config = join(home, "negative.config.mjs");
 		writeFileSync(
@@ -54,9 +54,8 @@ export default mergeConfig(config, { test: {
 			},
 		);
 		expect(result.error).toBeUndefined();
-		expect(result.status).toBe(FAILURE_EXIT_STATUS);
-		expect(result.stdout + result.stderr).toMatch(/HOMEDIR GUARD: .*todo.invalidation.test.ts/);
-		expect(result.stdout + result.stderr).toContain("Inject the home directory");
+		expect(result.status, result.stdout + result.stderr).toBe(0);
+		expect(result.stdout + result.stderr).not.toContain("HOMEDIR GUARD");
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 	}
@@ -103,21 +102,35 @@ test("boundary mismatch", () => { ${boundary === "afterEach" ? mismatch : ""} })
 	},
 );
 
-test("four full Bun suites keep the shared setup and launcher in their gates", async () => {
+test("guarded suites keep the shared setup and launcher in their gates", async () => {
 	for (const directory of [
 		"packages/subscription-router",
 		"packages/preset",
 		"packages/resource-sampler",
 		"integration/inprocess",
+		"packages/todo",
+		"packages/subagents",
 	]) {
 		const manifest = JSON.parse(readFileSync(join(root, directory, "package.json"), "utf8"));
-		expect(manifest.scripts["test:bun"]).toMatch(/^node ..\/..\/scripts\/run-vitest.ts bun(?: --maxWorkers=1)?$/);
+		if (directory === "packages/subagents") {
+			// Full Bun remains blocked by the unrelated workflow stack-line issue #174.
+			expect(manifest.scripts["test:bun"]).toContain(
+				"node ../../scripts/run-vitest.ts bun test/resource-loader-home.test.ts",
+			);
+			expect(manifest.scripts["test:bun"]).toContain("bun test test/session-scenarios.test.ts");
+		} else {
+			expect(manifest.scripts["test:bun"]).toMatch(
+				/^node ..\/..\/scripts\/run-vitest.ts bun(?: --maxWorkers=1| --config .vitest.config.ts)?$/,
+			);
+		}
 		expect(manifest.scripts.check).toContain("npm run test:bun");
-		const config = await import(join(root, directory, "vitest.config.ts"));
-		expect(config.default.test.setupFiles).toEqual([
+		const config = await import(
+			join(root, directory, directory === "packages/todo" ? ".vitest.config.ts" : "vitest.config.ts")
+		);
+		expect(config.default.test.setupFiles).toContain(
 			directory === "integration/inprocess"
 				? "./verification/home-setup.ts"
 				: "../../integration/inprocess/verification/home-setup.ts",
-		]);
+		);
 	}
 });

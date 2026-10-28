@@ -55,7 +55,8 @@
 
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { DefaultPackageManager, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { normalizeHomePath, resolveAgentDir } from "./home-paths.js";
 
 /** Resource kinds a package may declare. Agents are `.md`, workflows are `.js`. */
 export type PackageResourceKind = "agents" | "workflows";
@@ -103,6 +104,8 @@ export interface PiPackage {
 export type PackageGate = boolean | string[] | undefined;
 
 export interface PackageDiscoveryOptions {
+  /** Home directory for user settings and installed resources, resolved at call time. */
+  homeDir?: string;
   /**
    * Pi's project-trust state for `cwd`, from `ctx.isProjectTrusted()`. When
    * false, `.pi/settings.json` is not read — so a package configured only by an
@@ -376,14 +379,26 @@ interface ConfiguredPackageRow {
  * so a later pi that drops or renames this API contributes no packages instead
  * of failing activation.
  */
-function configuredPackages(cwd: string, projectTrusted: boolean): ConfiguredPackageRow[] {
+function configuredPackages(cwd: string, projectTrusted: boolean, homeDir?: string): ConfiguredPackageRow[] {
   try {
     if (typeof DefaultPackageManager !== "function") return [];
-    const agentDir = getAgentDir();
+    const agentDir = resolveAgentDir(homeDir);
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
     const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
     if (typeof manager.listConfiguredPackages !== "function") return [];
-    return manager.listConfiguredPackages();
+    if (homeDir === undefined) return manager.listConfiguredPackages();
+    // Pi's enumerator expands local package sources through its own ambient
+    // home. Reuse its public installed-path resolver with normalized inputs,
+    // preserving the original source for package-gate matching and diagnostics.
+    const rows: ConfiguredPackageRow[] = [];
+    for (const scope of ["user", "project"] as const) {
+      const settings = scope === "user" ? settingsManager.getGlobalSettings() : settingsManager.getProjectSettings();
+      for (const pkg of settings.packages ?? []) {
+        const source = typeof pkg === "string" ? pkg : pkg.source;
+        rows.push({ source, scope, installedPath: manager.getInstalledPath(normalizeHomePath(source, homeDir), scope) });
+      }
+    }
+    return rows;
   } catch {
     return [];
   }
@@ -394,10 +409,10 @@ function configuredPackages(cwd: string, projectTrusted: boolean): ConfiguredPac
  * order (global entries first, then project). Duplicates by root are collapsed —
  * a package listed in both scopes is one package on disk.
  */
-export function listPiPackages(cwd: string, projectTrusted = false): PiPackage[] {
+export function listPiPackages(cwd: string, projectTrusted = false, homeDir?: string): PiPackage[] {
   const seen = new Set<string>();
   const out: PiPackage[] = [];
-  for (const entry of configuredPackages(cwd, projectTrusted)) {
+  for (const entry of configuredPackages(cwd, projectTrusted, homeDir)) {
     const root = entry.installedPath;
     if (!root || seen.has(root)) continue;
     const manifest = readPackageJson(root);
@@ -484,9 +499,9 @@ export function invalidatePackageCache(): void {
   cache.clear();
 }
 
-function scan(cwd: string, projectTrusted: boolean, gate: PackageGate): CacheEntry {
+function scan(cwd: string, projectTrusted: boolean, gate: PackageGate, homeDir?: string): CacheEntry {
   const entry = emptyEntry();
-  for (const pkg of listPiPackages(cwd, projectTrusted)) {
+  for (const pkg of listPiPackages(cwd, projectTrusted, homeDir)) {
     if (!packageAllowed(pkg, gate)) continue;
     // The root is normalized here, not at lookup time: the declared paths below
     // go through `resolve(root, entry)`, so a root that arrived with a trailing
@@ -520,10 +535,10 @@ function cacheEntryFor(cwd: string, kind: PackageResourceKind, opts: PackageDisc
   // `\u0000` written as an escape, not a raw byte: a literal NUL makes this
   // whole file read as binary to grep, ripgrep and git, which silently drops
   // it from search results.
-  const key = `${cwd}\u0000${projectTrusted ? 1 : 0}\u0000${JSON.stringify(gate ?? true)}`;
+  const key = `${cwd}\u0000${opts.homeDir ?? ""}\u0000${resolveAgentDir(opts.homeDir)}\u0000${projectTrusted ? 1 : 0}\u0000${JSON.stringify(gate ?? true)}`;
   let hit = cache.get(key);
   if (!hit) {
-    hit = scan(cwd, projectTrusted, gate);
+    hit = scan(cwd, projectTrusted, gate, opts.homeDir);
     cache.set(key, hit);
   }
   return hit;

@@ -1,6 +1,6 @@
 import { createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import registerTodo from "./index.ts";
+import registerTodo from "./.test-support/home-fixtures.ts";
 import { getState, replaceState } from "./state/store.ts";
 import { __resetState } from "./todo.ts";
 
