@@ -651,7 +651,16 @@ async function main() {
       "usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] | import --agent-dir DIR --input REPO"
     );
 }
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : "Stats operation failed");
-  process.exitCode = 1;
-});
+async function run() {
+  try {
+    await main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Stats operation failed");
+    process.exitCode = 1;
+  }
+}
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) void run();
+export {
+  main,
+  run
+};

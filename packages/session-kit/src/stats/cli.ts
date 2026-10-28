@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { agentDir } from "./load.ts";
 import { exportStats, importStats } from "./snapshot.ts";
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
 	const [command, ...args] = process.argv.slice(2);
 	const options = new Map<string, string>();
 	for (let i = 0; i < args.length; i += 2) {
@@ -44,7 +44,13 @@ async function main(): Promise<void> {
 			"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] | import --agent-dir DIR --input REPO",
 		);
 }
-main().catch((error: unknown) => {
-	console.error(error instanceof Error ? error.message : "Stats operation failed");
-	process.exitCode = 1;
-});
+export async function run(): Promise<void> {
+	try {
+		await main();
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : "Stats operation failed");
+		process.exitCode = 1;
+	}
+}
+
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) void run();
