@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, readlink, rm, symlink } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { mkdtemp, opendir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { type CpuInfo, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
-import { Budget, command, darwinHostMemory } from "../src/collect.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Budget, command, darwinHostMemory, linuxProcesses, pressure } from "../src/collect.js";
 import {
 	cpuSnapshot,
 	darwinMemory,
@@ -135,6 +136,7 @@ describe("privacy-safe native parsers", () => {
 		expect(linuxRss("VmRSS:\t42 kB\n")).toBe(43008);
 		expect(linuxRss("no RSS")).toBeNull();
 		expect(linuxStat("12 malformed", 100, 1)).toBeNull();
+		expect(linuxStat(`0 (name) ${fields.join(" ")}`, 100, 1)).toBeNull();
 		expect(linuxStat(`12 (name) ${fields.join(" ")}`, 0, 1)).toBeNull();
 	});
 	it("parses measured Darwin ps precision and strips control characters", () => {
@@ -281,7 +283,7 @@ describe("bounded child lifecycle", () => {
 // Real readlink, except where a test forces a runtime result no real symlink can produce.
 vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
-	return { ...actual, readlink: vi.fn(actual.readlink) };
+	return { ...actual, opendir: vi.fn(actual.opendir), readlink: vi.fn(actual.readlink) };
 });
 
 describe("bounded executable links", () => {
@@ -311,6 +313,203 @@ describe("bounded executable links", () => {
 		expect(await budget.executable("/proc/1/exe")).toBe("");
 		expect(budget.bytesRead).toBe(4096);
 		expect([...budget.reasons]).toEqual(["file-byte-limit"]);
+	});
+});
+
+describe("bounded proc reads and Linux process collection", () => {
+	it("reads complete proc data, rejects a full bounded read, and preserves byte accounting", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "resource-sampler-read-"));
+		try {
+			const short = join(dir, "short");
+			const full = join(dir, "full");
+			await writeFile(short, "ok");
+			await writeFile(full, "x".repeat(4096));
+			const complete = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+			expect(await complete.read(short)).toBe("ok");
+			expect(complete.bytesRead).toBe(2);
+			const truncated = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+			await expect(truncated.read(full)).rejects.toThrow("proc file may be truncated");
+			expect(truncated.bytesRead).toBe(4096);
+			expect([...truncated.reasons]).toContain("file-byte-limit");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+	it("drops an unreadable executable link without leaking its failure", async () => {
+		vi.mocked(readlink).mockRejectedValueOnce(new Error("ptrace denied"));
+		const budget = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+		expect(await budget.executable("/proc/1/exe")).toBe("");
+		expect(budget.bytesRead).toBe(0);
+	});
+	it("captures stderr limits and nonzero helper exits", async () => {
+		const noisy = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+		expect(await command(process.execPath, ["-e", "process.stderr.write('x'.repeat(8192))"], noisy)).toMatchObject({
+			complete: false,
+			text: "",
+		});
+		expect([...noisy.reasons]).toContain("byte-limit");
+		const failed = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+		expect(await command(process.execPath, ["-e", "process.exit(7)"], failed)).toMatchObject({ complete: false });
+		expect([...failed.reasons]).toContain("command-failed");
+	});
+	it("returns parsed Linux PSI instead of a fabricated unavailable metric", async () => {
+		const budget = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+		vi.spyOn(budget, "read").mockResolvedValue("some avg10=1.25 avg60=0 avg300=0 total=42\n");
+		expect(await pressure(budget, "linux")).toEqual({
+			source: "linux-psi",
+			memory: { state: "available", value: { some: { avg10: 1.25, avg60: 0, avg300: 0, total: 42 }, full: null } },
+		});
+	});
+	it("keeps valid Linux identity-bracketed rows and skips changed rows", async () => {
+		const entries = [{ name: "not-a-pid" }, { name: "12" }, { name: "13" }];
+		vi.mocked(opendir).mockResolvedValueOnce({
+			async *[Symbol.asyncIterator]() {
+				yield* entries;
+			},
+		} as never);
+		const fields = Array<string>(22).fill("0");
+		fields[0] = "S";
+		fields[1] = "1";
+		fields[11] = "20";
+		fields[12] = "30";
+		fields[19] = "77";
+		const stat = `12 (kernel-owned name) ${fields.join(" ")}`;
+		const budget = new Budget(performance.now() + 1000, 8192, 3, new AbortController().signal);
+		vi.spyOn(budget, "read")
+			.mockResolvedValueOnce(stat)
+			.mockResolvedValueOnce("VmRSS:\t42 kB\n")
+			.mockResolvedValueOnce(stat)
+			.mockResolvedValueOnce("bad");
+		vi.spyOn(budget, "executable").mockResolvedValueOnce("node");
+		const rows = await linuxProcesses(budget, 100);
+		expect(rows).toEqual([
+			expect.objectContaining({ pid: 12, parentPid: 1, name: "node", identity: "12:77", rssBytes: 43008, cpuMs: 500 }),
+		]);
+		expect(budget.skipped).toBe(1);
+		expect([...budget.reasons]).toContain("process-unreadable-or-changed");
+	});
+	it("stops enumeration at the PID cap and rejects a changed second identity", async () => {
+		vi.mocked(opendir).mockResolvedValueOnce({
+			async *[Symbol.asyncIterator]() {
+				yield { name: "12" };
+			},
+		} as never);
+		const capped = new Budget(performance.now() + 1000, 4096, 0, new AbortController().signal);
+		expect(await linuxProcesses(capped, 100)).toEqual([]);
+		expect([...capped.reasons]).toContain("pid-limit");
+
+		vi.mocked(opendir).mockResolvedValueOnce({
+			async *[Symbol.asyncIterator]() {
+				yield { name: "12" };
+			},
+		} as never);
+		const fields = Array<string>(22).fill("0");
+		fields[0] = "S";
+		fields[1] = "1";
+		fields[11] = "20";
+		fields[12] = "30";
+		fields[19] = "77";
+		const changed = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+		vi.spyOn(changed, "read")
+			.mockResolvedValueOnce(`12 (name) ${fields.join(" ")}`)
+			.mockResolvedValueOnce("VmRSS:\t42 kB\n")
+			.mockResolvedValueOnce(`12 (name) ${fields.map((field, index) => (index === 19 ? "78" : field)).join(" ")}`);
+		vi.spyOn(changed, "executable").mockResolvedValue("node");
+		expect(await linuxProcesses(changed, 100)).toEqual([]);
+		expect(changed.skipped).toBe(1);
+	});
+});
+
+describe("platform dispatch", () => {
+	async function samplerFor(platformName: string, helperOutput?: string) {
+		vi.resetModules();
+		vi.doMock("node:os", async () => {
+			const actual = await vi.importActual<typeof import("node:os")>("node:os");
+			return { ...actual, platform: () => platformName };
+		});
+		if (helperOutput !== undefined) {
+			vi.doMock("node:child_process", () => ({
+				spawn: () => {
+					const child = Object.assign(new EventEmitter(), {
+						kill: () => true,
+						stderr: new EventEmitter(),
+						stdout: new EventEmitter(),
+					});
+					queueMicrotask(() => {
+						child.stdout.emit("data", Buffer.from(helperOutput));
+						child.emit("close", 0);
+					});
+					return child;
+				},
+			}));
+		}
+		return (await import("../src/index.js")).createResourceSampler({ maxDurationMs: 1000 });
+	}
+	afterEach(() => {
+		vi.doUnmock("node:child_process");
+		vi.doUnmock("node:os");
+		vi.resetModules();
+	});
+	it("collects the Linux-only /proc path with the runtime's real counters", async () => {
+		const sampler = await samplerFor("linux");
+		try {
+			const snapshot = await sampler.sample();
+			expect(snapshot.platform).toBe("linux");
+			expect(snapshot.pressure.source).toBe("linux-psi");
+			expect(snapshot.coverage.reasons).not.toContain("unsupported-platform");
+		} finally {
+			await sampler.dispose();
+		}
+	});
+	it("records malformed Darwin ps metadata without inventing a process row", async () => {
+		const sampler = await samplerFor("darwin", "malformed helper output\n");
+		try {
+			const snapshot = await sampler.sample();
+			expect(snapshot.processes).toEqual([]);
+			expect(snapshot.coverage.reasons).toContain("malformed-process-row");
+		} finally {
+			await sampler.dispose();
+		}
+	});
+	it("reports unavailable clock ticks when the fixed lookup cannot supply a safe integer", async () => {
+		const sampler = await samplerFor("linux", "not-a-clock-rate\n");
+		try {
+			const snapshot = await sampler.sample();
+			expect(snapshot.processes).toEqual([]);
+			expect(snapshot.coverage.reasons).toContain("clock-ticks-unavailable");
+		} finally {
+			await sampler.dispose();
+		}
+	});
+	it("reports non-Linux, non-Darwin process collection as explicitly unsupported", async () => {
+		const sampler = await samplerFor("freebsd");
+		try {
+			const snapshot = await sampler.sample();
+			expect(snapshot.platform).toBe("freebsd");
+			expect(snapshot.processes).toEqual([]);
+			expect(snapshot.coverage.reasons).toContain("unsupported-platform");
+			expect(snapshot.pressure).toEqual({
+				source: "unsupported",
+				reason: "no comparable native PSI metric on this platform",
+			});
+		} finally {
+			await sampler.dispose();
+		}
+	});
+});
+
+describe("reloaded native decoder", () => {
+	it("rejects cumulative CPU counters that move backwards", async () => {
+		const { darwinNativeCounter } = await import("../src/darwin.js");
+		const before = Buffer.alloc(96);
+		const after = Buffer.alloc(96);
+		const bsd = Buffer.alloc(136);
+		bsd.writeUInt32LE(12, 12);
+		bsd.writeBigUInt64LE(1n, 120);
+		before.writeBigUInt64LE(2n, 16);
+		before.writeBigUInt64LE(1n, 80);
+		after.writeBigUInt64LE(1n, 80);
+		expect(darwinNativeCounter(12, before, bsd, after, 1, 1)).toBeNull();
 	});
 });
 
