@@ -55,6 +55,15 @@ incorrect repeated-search plural, invert replacement-dispose identity guard,
 and fail to decrement the previous overflow kind. Dedicated UI suite exits 1
 before source restoration. No production edit remains.
 
+Private persistence theme: real permission/lock failures, malformed settings and
+private manifests, invalid YAML, schema serialization/getter/pattern errors,
+historical tier provenance, and disappearing files at exists/stat/realpath
+boundaries. Race fixtures remove actual private files; only the triggering FS
+boundary is wrapped. A real git child removes its disposable repository between
+validation and toplevel lookup. Mutating exclusive lock creation to overwrite
+and accepting invalid manifests produces five failures. Wrong toplevel wording
+fails the real-git race assertion. No owned source is deleted or weakened.
+
 Gate at the first theme: full single-worker Istanbul suite, pinned Bun 1.3.14
 native session/compatibility suites, lint and typecheck pass. Additional UI cases
 pass focused tests, lint and typecheck. Full final evidence follows with later
