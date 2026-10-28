@@ -35,7 +35,7 @@
     "format": "biome check --write extensions/ lib/ test/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:bun": "bun test test",
+    "test:bun": "node ../../scripts/run-vitest.ts bun",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
