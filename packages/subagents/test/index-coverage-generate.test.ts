@@ -1,4 +1,4 @@
-/** Generation wizard drives the real manager/runner; only provider responses are scripted. */
+/** Real manager/runner with scripted providers and an auto-acknowledging admission RPC boundary. */
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -67,11 +67,17 @@ afterEach(async () => {
 describe("menu conversation viewer", () => {
   it("persists markdown from the fleet entry point and records disclosure changes", async () => {
     initTheme("dark");
-    const listeners: ((data: string) => unknown)[] = [];
+    const listeners = new Set<(data: string) => unknown>();
     context.hasUI = true;
-    context.ui.onTerminalInput = vi.fn(handler => { listeners.push(handler); return () => {}; });
+    context.ui.onTerminalInput = vi.fn(handler => { listeners.add(handler); return () => { listeners.delete(handler); }; });
     context.ui.getEditorText = vi.fn(() => "");
+    // Intentionally bind the same session after attaching its UI; no agents exist yet.
+    // Rebinding must not duplicate listeners, and shutdown must release them and timers.
     await startSession(boot.lifecycle, true, context);
+    const listenerCount = listeners.size;
+    expect(listenerCount).toBeGreaterThan(0);
+    await startSession(boot.lifecycle, true, context);
+    expect(listeners.size).toBe(listenerCount);
     provider.setResponses([answer("Private fleet answer.")]);
     const result = await boot.tools.get("Agent").execute("fleet-viewer", {
       subagent_type: "general-purpose", description: "Private fleet child", prompt: "Work", run_in_background: false,
@@ -82,7 +88,9 @@ describe("menu conversation viewer", () => {
         { fg: (_color: string, text: string) => text, bold: (text: string) => text } as never,
         undefined as never, () => {});
       const content = component.render(120).join("\n");
-      component.handleInput?.("m"); component.handleInput?.("q"); component.dispose?.();
+      expect(component.handleInput).toBeTypeOf("function");
+      expect(component.dispose).toBeTypeOf("function");
+      component.handleInput("m"); component.handleInput("q"); component.dispose();
       rendered.resolve(content);
       return undefined;
     });
@@ -95,6 +103,9 @@ describe("menu conversation viewer", () => {
     expect(boot.pi.appendEntry).toHaveBeenCalledWith("subagents:fleet-state", expect.objectContaining({ version: 1 }));
     const output = await boot.tools.get("get_subagent_result").execute("fleet-read", { agent_id: result.details.agentId, verbose: true }, undefined, undefined, context);
     expect(output.content[0].text).toContain("Private fleet answer.");
+    await boot.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, context);
+    expect(listeners.size).toBe(0);
+    expect(clock.pending).toBe(0);
   });
 
   it.each(["steer", "stop", "background"] as const)("routes the running viewer's %s action to its actual child", async action => {
@@ -107,7 +118,8 @@ describe("menu conversation viewer", () => {
     const pending = boot.tools.get("Agent").execute("running-viewer", {
       subagent_type: "general-purpose", description: "Interactive private child", prompt: "Begin private work", run_in_background: action !== "background",
     }, undefined, undefined, context);
-    // Background spawns settle immediately; foreground handoff remains pending until b.
+    // steer/stop spawn in the background and settle immediately; the background
+    // action starts foreground and remains pending until the viewer handles b.
     const initial = action === "background" ? undefined : await pending;
     await entered.promise;
     try {
@@ -118,12 +130,14 @@ describe("menu conversation viewer", () => {
           undefined as never, () => {});
         expect(options?.overlayOptions?.()).toBeDefined();
         expect(component.render(120).join("\n")).toContain("Interactive private child");
+        expect(component.handleInput).toBeTypeOf("function");
+        expect(component.dispose).toBeTypeOf("function");
         if (action === "steer") {
-          component.handleInput?.("\r"); component.handleInput?.("Prioritize privacy"); component.handleInput?.("\r");
+          component.handleInput("\r"); component.handleInput("Prioritize privacy"); component.handleInput("\r");
         } else if (action === "stop") {
-          component.handleInput?.("x"); component.handleInput?.("x");
-        } else component.handleInput?.("b");
-        component.handleInput?.("q"); component.dispose?.();
+          component.handleInput("x"); component.handleInput("x");
+        } else component.handleInput("b");
+        component.handleInput("q"); component.dispose();
         return undefined;
       });
       selections = ["Running agents", "first", undefined, undefined];
@@ -136,7 +150,10 @@ describe("menu conversation viewer", () => {
       await registry.waitForAll();
       expect(registry.hasRunning()).toBe(false);
       const output = await boot.tools.get("get_subagent_result").execute("read-viewer", { agent_id: id, verbose: true }, undefined, undefined, context);
-      if (action === "steer") expect(output.content[0].text).toContain("Prioritize privacy");
+      if (action === "steer") {
+        expect(output.content[0].text).toContain("Prioritize privacy");
+        expect(output.content[0].text).toContain("Redirected answer.");
+      }
       if (action === "stop") expect(registry.getRecord(id)?.status).toBe("stopped");
       else expect(output.content[0].text).toContain("Original answer.");
     } finally { release.resolve(); await pending; await registry.waitForAll(); }
@@ -157,10 +174,12 @@ describe("menu conversation viewer", () => {
         undefined as never, () => {});
       const component = await viewer;
       rendered.push(...component.render(120));
-      component.handleInput?.("m");
+      expect(component.handleInput).toBeTypeOf("function");
+      expect(component.dispose).toBeTypeOf("function");
+      component.handleInput("m");
       rendered.push(...component.render(120));
-      component.handleInput?.("q");
-      component.dispose?.();
+      component.handleInput("q");
+      component.dispose();
       return undefined;
     });
     selections = ["Running agents", "first", undefined, undefined];

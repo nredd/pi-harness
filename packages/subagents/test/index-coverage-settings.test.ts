@@ -14,7 +14,7 @@ const rows = ["maxConcurrent", "maxConcurrentForeground", "defaultMaxTurns", "gr
 let env: Hermetic;
 let boot: BootedPi;
 let context: ExtensionCommandContext;
-let scripts: string[][];
+let scripts: (string | { selectedDescription: string })[][];
 let inputs: (string | undefined)[];
 const notify = vi.fn();
 
@@ -52,6 +52,11 @@ beforeEach(async () => {
       expect(component.render(140).join("\n")).toContain("Subagent Settings");
       component.invalidate();
       for (const key of scripts.shift() ?? ["\u001b"]) {
+        if (typeof key !== "string") {
+          // SettingsList renders only the selected row's description.
+          expect(component.render(140).join("\n")).toContain(key.selectedDescription);
+          continue;
+        }
         component.handleInput(key);
         if (settled) break;
       }
@@ -123,7 +128,9 @@ describe("settings callbacks", () => {
     selectRow("agentMentions", 3);
     // All rows share one real settings component; navigate back to fallback.
     const keys = scripts[0];
-    keys.splice(keys.length - 1, 0, ...Array<string>(8).fill("\u001b[A"), "\r", "\r", "\r");
+    const distance = rows.indexOf("agentMentions") - rows.indexOf("fallbackSubagent");
+    keys.splice(keys.length - 1, 0, ...Array<string>(distance).fill("\u001b[A"),
+      { selectedDescription: "Agent used when subagent_type is unknown" }, "\r", "\r", "\r");
     await command();
     expect(saved().agentMentions).toBe("model");
     expect(saved().fallbackSubagent).toBe("none");
