@@ -604,7 +604,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       activeImplementationRuntimeApplication.drainOnShutdown
         ? activeImplementationRuntimeApplication
         : undefined;
-    const queuedInputs = takeQueuedRuntimeAdmissionInputs(shutdownSession);
+    const queuedInputs = takeQueuedRuntimeAdmissionInputs();
     for (const queued of queuedInputs) {
       pi.sendMessage(
         {
@@ -823,7 +823,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (pendingRuntimeAdmissionSession === ctx.sessionManager) {
       pendingRuntimeAdmissionSession = undefined;
     }
-    const queuedInputs = takeQueuedRuntimeAdmissionInputs(ctx.sessionManager);
+    const queuedInputs = takeQueuedRuntimeAdmissionInputs();
     for (const queued of queuedInputs) {
       pi.sendUserMessage(runtimeAdmissionInputContent(queued), {
         deliverAs: "followUp",
@@ -1643,15 +1643,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     );
   }
 
-  function takeQueuedRuntimeAdmissionInputs(sessionManager: ExtensionContext["sessionManager"]) {
-    const matching: QueuedRuntimeAdmissionInput[] = [];
-    const remaining: QueuedRuntimeAdmissionInput[] = [];
-    for (const queued of queuedRuntimeAdmissionInputs) {
-      if (queued.sessionManager === sessionManager) matching.push(queued);
-      else remaining.push(queued);
-    }
-    queuedRuntimeAdmissionInputs = remaining;
-    return matching;
+  function takeQueuedRuntimeAdmissionInputs() {
+    // Core shuts down the outgoing runner before creating its replacement; tree changes
+    // keep the same session manager. This extension-local queue cannot contain another session.
+    const queuedInputs = queuedRuntimeAdmissionInputs;
+    queuedRuntimeAdmissionInputs = [];
+    return queuedInputs;
   }
 
   function removeQueuedRuntimeAdmissionInput(queuedInput: QueuedRuntimeAdmissionInput) {
