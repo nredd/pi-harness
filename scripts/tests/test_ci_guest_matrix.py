@@ -173,14 +173,17 @@ def test_guest_adapter_real_execution_and_status(tmp_path: Path, status: int) ->
     assert not list((worktree / ".ci-temp").glob("step.*"))
 
 
-def test_guest_adapter_refuses_escaping_directory(tmp_path: Path) -> None:
+@pytest.mark.parametrize("directory", ["..", "../escape", "integration/../..", "escape-link"])
+def test_guest_adapter_refuses_escaping_directory(tmp_path: Path, directory: str) -> None:
     """Fail before running a host script outside the guest checkout.
 
     Parameters:
         tmp_path (Path): Disposable fixture directory.
+        directory (str): Logical or symlink traversal outside the guest checkout.
     """
-    _, env = guest_fixture(tmp_path)
-    env["WSL_STEP_DIRECTORY"] = "../escape"
+    worktree, env = guest_fixture(tmp_path)
+    (worktree / "escape-link").symlink_to(tmp_path, target_is_directory=True)
+    env["WSL_STEP_DIRECTORY"] = directory
     result = subprocess.run(
         ["/bin/bash", str(ROOT / "scripts/wsl2_run.sh")], env=env, capture_output=True, text=True, check=False
     )
@@ -188,11 +191,15 @@ def test_guest_adapter_refuses_escaping_directory(tmp_path: Path) -> None:
     assert "escapes guest checkout" in result.stderr
 
 
-def test_capture_retains_first_failure_and_only_explicit_reports(tmp_path: Path) -> None:
+@pytest.mark.parametrize("export_failure", [False, True])
+def test_capture_retains_first_failure_and_only_explicit_reports(
+    tmp_path: Path, export_failure: bool
+) -> None:
     """Run real export/cleanup against successively failed/successful guest steps.
 
     Parameters:
         tmp_path (Path): Disposable fixture directory.
+        export_failure (bool): Inject a report-copy failure before cleanup.
     """
     worktree, env = guest_fixture(tmp_path)
     ti = worktree / ".ci-temp"
@@ -209,6 +216,13 @@ def test_capture_retains_first_failure_and_only_explicit_reports(tmp_path: Path)
     host_temp = host / "temp"
     (host_temp / "wsl2-diagnostics").mkdir(parents=True)
     env |= {"WSL_HOST_WORKSPACE": str(host), "WSL_HOST_TEMP": str(host_temp), "RUNNER_TEMP": str(ti)}
+    if export_failure:
+        commands = tmp_path / "commands"
+        commands.mkdir()
+        (commands / "cp").write_text("#!/bin/sh\nexit 92\n")
+        (commands / "cp").chmod(0o755)
+        env["PATH"] = f"{commands}{os.pathsep}{env['PATH']}"
+        (ti / "tool-path").write_text(env["PATH"])
     result = subprocess.run(
         ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh"), "cleanup"],
         env=env,
@@ -218,7 +232,121 @@ def test_capture_retains_first_failure_and_only_explicit_reports(tmp_path: Path)
     )
     assert result.returncode == 47
     assert not worktree.exists()
-    assert (host / "integration/artifacts/wsl2-personal.xml").is_file()
-    assert (host_temp / "package-contracts.json").is_file()
+    assert (host / "integration/artifacts/wsl2-personal.xml").is_file() is not export_failure
+    assert (host_temp / "package-contracts.json").is_file() is not export_failure
     assert not (host_temp / "secret.txt").exists()
     assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
+
+
+def test_capture_replaces_stale_node_snapshot(tmp_path: Path) -> None:
+    """Keep Node and standalone report trees distinct across guest renames.
+
+    Parameters:
+        tmp_path (Path): Disposable fixture directory.
+    """
+    worktree, env = guest_fixture(tmp_path)
+    host = tmp_path / "host"
+    (host / "temp/wsl2-diagnostics").mkdir(parents=True)
+    env |= {"WSL_HOST_WORKSPACE": str(host), "WSL_HOST_TEMP": str(host / "temp")}
+    artifacts = worktree / "integration/artifacts"
+    artifacts.mkdir()
+    (artifacts / "node.xml").write_text("Node report")
+    command = ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh")]
+    subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+    artifacts.rename(worktree / "integration/artifacts-node")
+    artifacts.mkdir()
+    (artifacts / "standalone.xml").write_text("Standalone report")
+    subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+    assert not (host / "integration/artifacts/node.xml").exists()
+    assert (host / "integration/artifacts/standalone.xml").read_text() == "Standalone report"
+    assert (host / "integration/artifacts-node/node.xml").read_text() == "Node report"
+
+
+def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
+    """Pin the new per-step credential lifetime, not the retired monolithic unset.
+
+    Returns:
+        None: Verification precedes installers and tokens exist only in fetch steps.
+    """
+    tools = yaml.safe_load((ROOT / ".github/actions/setup-ci-tools/action.yml").read_text())
+    uv = next(step for step in tools["runs"]["steps"] if "setup-uv@" in step.get("uses", ""))
+    bootstrap = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    assert f"uv_version={uv['with']['version']}" in bootstrap
+    assert bootstrap.index("unset GH_TOKEN") < bootstrap.index("curl ")
+    assert "< .node-version" in bootstrap
+    assert "< .bun-version" in bootstrap
+    assert 'require("./package.json").packageManager' in bootstrap
+    cfg = jobs()
+    for name in ("owned", "contracts", "stack"):
+        steps = cfg[name]["steps"]
+        token_steps = [step for step in steps if "GH_TOKEN" in step.get("env", {})]
+        if name == "stack":
+            assert [step["name"] for step in token_steps] == [
+                "Verify root core overrides before install",
+                "Fetch exact Gitlinked core release, formula-equivalent install",
+            ]
+            commands = "\n".join(step.get("run", "") for step in steps)
+            assert commands.index("--verify-root-overrides") < commands.index("npm ci --ignore-scripts")
+            assert commands.index("--gitlink ../forks/pi") < commands.index("pytest scenarios/")
+        else:
+            assert [step["name"] for step in token_steps] == ["Install"]
+        assert all(step["env"]["GH_TOKEN"] == "${{ github.token }}" for step in token_steps)
+    wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
+    assert "GH_TOKEN/u" in wrapper
+    assert "Get-ChildItem Env:" not in wrapper
+    capture = (ROOT / ".github/actions/capture-ci-wsl/action.yml").read_text()
+    assert '--exec bash -euo pipefail "$capture" "$env:WSL_CAPTURE_MODE"' in capture
+    assert "-- bash" not in capture
+    for boundary in (wrapper, capture, (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()):
+        assert "--exec wslpath -u" in boundary
+        assert "--exec bash -euo pipefail" in boundary
+        assert " -c " not in boundary
+
+
+def test_guest_preflight_failure_is_recorded(tmp_path: Path) -> None:
+    """Retain missing-toolchain failure before attempting an ordinary script.
+
+    Parameters:
+        tmp_path (Path): Disposable fixture directory.
+    """
+    worktree, env = guest_fixture(tmp_path)
+    (worktree / ".ci-temp/tool-path").unlink()
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/wsl2_run.sh")], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 1
+    assert (worktree / ".ci-temp/first-failure").read_text() == "1\n"
+
+
+@pytest.mark.parametrize("filesystem", ["drvfs", ""])
+def test_setup_refuses_non_linux_filesystem(tmp_path: Path, filesystem: str) -> None:
+    """Execute setup's mount refusal before any download or install.
+
+    Parameters:
+        tmp_path (Path): Disposable fixture directory.
+        filesystem (str): Unsupported findmnt result.
+    """
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "cp").write_text("#!/bin/sh\nexit 0\n")
+    (commands / "findmnt").write_text(f"#!/bin/sh\nprintf '%s' '{filesystem}'\n")
+    (commands / "curl").write_text("#!/bin/sh\necho unexpected-download >&2\nexit 99\n")
+    for command in commands.iterdir():
+        command.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env = dict(os.environ) | {
+        "HOME": str(home),
+        "WSL_HOST_WORKSPACE": "/mnt/c/synthetic-checkout",
+        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+    }
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/wsl2_setup.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "not on a Linux filesystem" in result.stderr
+    assert "unexpected-download" not in result.stderr

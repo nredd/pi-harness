@@ -171,7 +171,9 @@ def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     capture = (ROOT / "scripts/wsl2_capture.sh").read_text()
     assert "wsl2-diagnostics" in workflow
     assert 'source "$worktree/scripts/wsl2_cleanup.sh"' in capture
-    assert "trap cleanup_wsl2_worktree EXIT" in capture
+    assert "trap finish_capture EXIT" in capture
+    assert capture.index("trap finish_capture EXIT") < capture.index("for name in")
+    assert "cleanup_wsl2_worktree" in capture
     assert workflow.count("cleanup: cleanup") == 3
     assert workflow.count("path: ${{ runner.temp }}/wsl2-diagnostics/") == 3
     assert "if: always()" in workflow
@@ -207,6 +209,9 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert "GH_TOKEN/u" in wrapper
+    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.sh").read_text()
+    action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
+    assert "python3" in action.split("additional-packages:")[1].splitlines()[0]
     assert "unset GH_TOKEN" in setup
     assert 'bash scripts/install_gh_linux.sh "$tool_dir/gh"' in setup
     assert "env -u GH_TOKEN npm ci --ignore-scripts" in workflow
