@@ -54,7 +54,7 @@ def commit_base(root: Path, cfg: Policy) -> None:
     (root / "coverage").mkdir(exist_ok=True)
     (root / "coverage/policy.json").write_text(cfg.model_dump_json())
     for args in [
-        ["init", "-q"],
+        ["init", "-q", "--template="],
         ["add", "."],
         [
             "-c",
@@ -63,6 +63,8 @@ def commit_base(root: Path, cfg: Policy) -> None:
             "user.email=fixture@example.invalid",
             "-c",
             "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
             "commit",
             "-qm",
             "Base",

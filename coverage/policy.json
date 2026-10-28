@@ -44,7 +44,7 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [],
       "status": "pending",
-      "note": "Pending a clean cargo-suite measurement after PR #155 lands. Failed-run reports are diagnostics, never baseline evidence.",
+      "note": "Pending merged PR #155 then stacked PR #195 (head 5d827a32): use #195's primary Istanbul decision and explicit 22-executable-module inventory, with its re-export-only src/core/index.ts separately validated before measurement. Its local 1502/1502 lines and 260/260 functions are advisory, not hosted floors. Require complete clean per-OS producers; never baseline failed main or partial reports.",
       "signals": {}
     },
     "plan-mode": {

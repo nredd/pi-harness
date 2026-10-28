@@ -12,7 +12,9 @@ goal must be report-only and still require complete, valid reports and per-OS re
 
 The initial integration checkpoint is recorded [here](../coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
-[here](../coverage/receipts/facade-followup.md). `enforce_target` remains false. No 100% claim.
+[here](../coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
+#155 -> #195 dev-tools dependency decision are recorded [here](../coverage/receipts/git-isolation.md).
+`enforce_target` remains false. No 100% claim.
 
 The target is **100% of owned executable source lines AND functions**, measured by each
 package's primary runner. Branches are reported, not gated. This is source coverage, not
@@ -194,6 +196,12 @@ Coverage is part of those invocations, not a second test pass. From the reposito
 ```sh
 make check-coverage BASE=origin/main
 ```
+
+All Git base/inventory reads honor the explicit repository root: inherited `GIT_*` routing,
+alternate index/object paths and injected config entries are removed, and global/system config
+reads are disabled. Repository-local configuration/worktree topology remains intact. Disposable
+Git fixtures use this same boundary with empty templates and disabled hooks; a real private decoy
+regression verifies inherited routing/config cannot redirect writes or execute injected hooks.
 
 This consumes reports without executing tests, writes `coverage/summary.json`, and compares
 each independent per-OS budget with `git show <base>:coverage/policy.json`. The default OS is

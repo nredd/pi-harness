@@ -16,7 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from coverage_accounting import Policy, account, check_ratchet, inventory, parse_lcov
+from coverage_accounting import Policy, account, check_ratchet, git_read, inventory, parse_lcov
 
 FIXTURES = Path(__file__).parent / "fixtures" / "coverage"
 SCRIPT = Path(__file__).resolve().parents[1] / "coverage_accounting.py"
@@ -322,7 +322,7 @@ def test_cli_uses_real_git_base_and_always_writes_summary(tmp_path: Path) -> Non
     cfg = policy()
     path.write_text(cfg.model_dump_json())
     for argv in [
-        ["init", "-q"],
+        ["init", "-q", "--template="],
         ["add", "."],
         [
             "-c",
@@ -331,14 +331,14 @@ def test_cli_uses_real_git_base_and_always_writes_summary(tmp_path: Path) -> Non
             "user.email=fixture@example.invalid",
             "-c",
             "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
             "commit",
             "-qm",
             "Base policy",
         ],
     ]:
-        subprocess.check_output(
-            ["/usr/bin/git", "-C", str(tmp_path), *argv], text=True, stderr=subprocess.STDOUT
-        )
+        git_read(tmp_path, argv)
     cfg.packages["example"].signals["primary"].max_uncovered[sys.platform].lines = 1
     path.write_text(cfg.model_dump_json())
     summary = tmp_path / "summary.json"

@@ -11,6 +11,7 @@ import argparse
 import difflib
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -518,7 +519,7 @@ def inventory(root: Path, package: Package) -> set[str]:
 
 
 def git_read(root: Path, args: list[str]) -> str:
-    """Read Git metadata while preserving failed-command diagnostics.
+    """Read explicit-root Git metadata without ambient routing or config injection.
 
     Parameters:
         root (Path): Absolute repository root.
@@ -529,7 +530,14 @@ def git_read(root: Path, args: list[str]) -> str:
         subprocess.CalledProcessError: Git fails; output contains its diagnostics.
         OSError: The absolute Git executable cannot be invoked.
     """
-    return subprocess.check_output([str(GIT), "-C", str(root), *args], text=True, stderr=subprocess.STDOUT)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")} | {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    }
+    return subprocess.check_output(
+        [str(GIT), "-C", str(root), *args], text=True, stderr=subprocess.STDOUT, env=env
+    )
 
 
 def repository_files(root: Path, revision: str | None = None) -> set[str]:
