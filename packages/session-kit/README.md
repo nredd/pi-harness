@@ -79,7 +79,9 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
 - Children run in process groups: SIGTERM, then SIGKILL. Exit cleanup and pidfiles cover orderly quit
   and later recovery after SIGKILL. Sweeps reauthenticate the leader after enumerating members;
   uncertain identities or guards never authorize signaling. Reap checks are bounded to 20 polls
-  after escalation; a timeout keeps authenticated recovery on disk rather than claiming cleanup. Files live at
+  after escalation; a timeout keeps authenticated recovery on disk rather than claiming cleanup.
+  Spawn failures after child creation kill the child; matcher initialization failures also remove
+  its pidfile. A spawn completing after session disposal is killed without registration. Files live at
   `$TMPDIR/pi-monitors-<uid>/<sessionId>.<ownerPid>/<monitorId>.json`. Startup checks dead-owner
   records, including a resumed session, and validates process identity before signalling. It never
   sweeps a live owner's monitors. Two panes resuming the same session have separate directories.
