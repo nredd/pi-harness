@@ -1,13 +1,13 @@
 import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	advanceQuietly,
 	ControlledProcesses,
 	configFor,
 	FakeClock,
 	goalStates,
 	ScenarioFixture,
 	spoken,
-	tick,
 	tool,
 } from "./support.ts";
 
@@ -76,10 +76,22 @@ describe("public command completion routing", () => {
 		await harness.session.prompt("/loop 30s callback ping --max 2");
 		await choose(harness, "loop", "li");
 		expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("callback ping"), "info");
+		harness.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "fixture provider failed" }),
+			fauxAssistantMessage("tick received"),
+		]);
+		await harness.session.prompt("pause through real provider settlement");
+		expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("loop paused (1): provider error"), "warning");
+		await advanceQuietly(harness, clock, 30_000);
+		expect(spoken(harness)).toEqual([]);
+		expect(harness.getPendingResponseCount()).toBe(1);
 		await choose(harness, "loop", "res");
 		expect(notify).toHaveBeenLastCalledWith("resumed 1", "info");
-		harness.setResponses([fauxAssistantMessage("tick received")]);
-		await tick(harness, clock);
+		clock.advance(30_000);
+		// Drain host dispatch tasks without sleeping; a missing resume transition must fail an outcome,
+		// not hang waiting for an event that never happens.
+		for (let turn = 0; turn < 3; turn++) await new Promise<void>((resolve) => setImmediate(resolve));
+		await harness.session.waitForIdle();
 		expect(spoken(harness)).toEqual(["tick received"]);
 		await choose(harness, "loop", "st");
 		expect(notify).toHaveBeenLastCalledWith("stopped 1", "info");

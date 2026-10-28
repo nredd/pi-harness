@@ -227,6 +227,9 @@ covering goals, file-backed restore, child rename/reload, read-rule injection, t
 monitor output/wakes/cursors/caps/timeouts and loop scheduling with same-cwd session isolation.
 Command completion scenarios resolve public runner suggestions and execute the selected `/goal`,
 `/loop` and `/monitor` commands, checking persisted state, timer removal and the selected child.
+Loop resume starts from a provider-error pause: ticks stay quiet until the selected resume command
+restores dispatch. Git setup uses child-only scratch HOME/config and empty hooks/templates, with
+hostile config/template/hook controls; it never changes the parent process HOME.
 Pidfile age-boundary fixtures pin file/directory mtimes to the injected sweep clock and check the
 24-hour threshold under both past and future wall clocks.
 The interactive host/VirtualTerminal covers `/diff`, `/stats` and real `/name`, including width/resize
@@ -241,6 +244,8 @@ tabs and exact provider totals remain covered at every width. Each stats-view bo
 and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
+The native diff descendant timeout fixture gates its fake deadline on real stdout readiness, so
+slow process startup cannot race a fixed wall-clock deadline.
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
 Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
 `docs/verification-rebuild.md` at the monorepo root tracks their destinations.

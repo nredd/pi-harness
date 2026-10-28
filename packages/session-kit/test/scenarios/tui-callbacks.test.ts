@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
@@ -59,22 +60,104 @@ function overlayProbe(admission?: { entered: () => void; wait: Promise<void> }) 
 	};
 }
 
-/** Isolated unsigned repository; fixture Git commands never use workstation hooks or identity. */
-function dirtyRepo(root: string): void {
+/** Unsigned Git fixture with child-only scratch HOME/config and explicit empty hooks/templates. */
+function dirtyRepo(root: string, inherited: NodeJS.ProcessEnv = process.env): void {
+	const home = mkdtempSync(join(tmpdir(), "psk-git-home-"));
+	const hooks = join(home, "hooks");
+	const templates = join(home, "templates");
+	mkdirSync(hooks);
+	mkdirSync(templates);
+	const config = join(home, "gitconfig");
+	writeFileSync(config, "");
+	const env = {
+		...Object.fromEntries(Object.entries(inherited).filter(([key]) => !key.startsWith("GIT_"))),
+		HOME: home,
+		XDG_CONFIG_HOME: home,
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_SYSTEM: "/dev/null",
+		GIT_CONFIG_GLOBAL: config,
+	};
 	const git = (...args: string[]) =>
 		execFileSync(
 			"git",
-			["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args],
-			{ cwd: root },
+			[
+				"-c",
+				"user.name=fixture",
+				"-c",
+				"user.email=fixture@example.invalid",
+				"-c",
+				"commit.gpgsign=false",
+				"-c",
+				`core.hooksPath=${hooks}`,
+				"-c",
+				`init.templateDir=${templates}`,
+				...args,
+			],
+			{ cwd: root, env },
 		);
-	git("init", "-q");
-	writeFileSync(join(root, "tracked.txt"), "before\n");
-	git("add", "tracked.txt");
-	git("commit", "-qm", "fixture");
-	writeFileSync(join(root, "tracked.txt"), "after\n");
+	try {
+		git("init", "-q");
+		writeFileSync(join(root, "tracked.txt"), "before\n");
+		git("add", "tracked.txt");
+		git("commit", "-qm", "fixture");
+		writeFileSync(join(root, "tracked.txt"), "after\n");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
 }
 
 describe("mounted public command callback outcomes", () => {
+	it.each(["invalid config", "hooks and templates"])("isolates fixture Git from hostile inherited %s", (kind) => {
+		fixture = new TerminalFixture();
+		const hostile = join(fixture.root, "hostile");
+		const hooks = join(hostile, "hooks");
+		const templates = join(hostile, "templates");
+		const repo = join(fixture.root, "repo");
+		for (const directory of [hooks, join(templates, "hooks"), repo]) mkdirSync(directory, { recursive: true });
+		const marker = join(hostile, "hook-ran");
+		const hook = `#!/bin/sh\nprintf hostile > ${JSON.stringify(marker)}\nexit 1\n`;
+		for (const path of [join(hooks, "pre-commit"), join(templates, "hooks", "pre-commit")]) {
+			writeFileSync(path, hook);
+			chmodSync(path, 0o755);
+		}
+		writeFileSync(join(templates, "copied-global-template"), "must not be copied");
+		const config = join(hostile, ".gitconfig");
+		writeFileSync(
+			config,
+			kind === "invalid config"
+				? "[unterminated\n"
+				: `[core]\n hooksPath = ${hooks}\n[init]\n templateDir = ${templates}\n`,
+		);
+		const env = {
+			...process.env,
+			HOME: hostile,
+			XDG_CONFIG_HOME: hostile,
+			GIT_CONFIG_GLOBAL: config,
+			GIT_CONFIG_SYSTEM: config,
+			GIT_TEMPLATE_DIR: templates,
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "core.hooksPath",
+			GIT_CONFIG_VALUE_0: hooks,
+		};
+		if (kind === "invalid config") {
+			const control = spawnSync("git", ["config", "--file", config, "--list"], { env, encoding: "utf8" });
+			expect(control.status).not.toBe(0);
+			expect(control.stderr).toContain("bad config line");
+		} else {
+			const control = join(hostile, "unisolated-control");
+			expect(spawnSync("git", ["init", "-q", control], { env }).status).toBe(0);
+			expect(existsSync(join(control, ".git", "copied-global-template"))).toBe(true);
+			expect(spawnSync(join(hooks, "pre-commit"), [], { env }).status).toBe(1);
+			expect(existsSync(marker)).toBe(true);
+			rmSync(marker);
+		}
+		dirtyRepo(repo, env);
+		expect(readFileSync(join(repo, "tracked.txt"), "utf8")).toBe("after\n");
+		expect(existsSync(marker)).toBe(false);
+		expect(existsSync(join(repo, ".git", "copied-global-template"))).toBe(false);
+		expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+	});
+
 	it("diff invalidation keeps the selected patch and refreshes its live theme", async () => {
 		fixture = new TerminalFixture();
 		dirtyRepo(fixture.root);
