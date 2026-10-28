@@ -36,6 +36,9 @@ Installation state, never synced:
 - `DIR/pi-session-kit/stats-cache.json`: local parser cache v2, including file paths and compact
   usage tuples. Version 1 entries for deleted files stay intact; existing files reparse even if
   their mtime/size match. Strong identities are not invented for inaccessible legacy files.
+  Failed stat/parse operations count as incomplete history; a failed reparse retains the last-good
+  cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
+  child markers apply only to the matching session ID, surviving user-visible renames.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
