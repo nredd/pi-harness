@@ -17,6 +17,7 @@ package provider dependency is nested at 4.x). No manifests or lockfiles change.
 | Current main | 6658/7164 | 1351/1423 |
 | Initial UI theme measurement | 6672/7164 | 1352/1423 |
 | Wave 3 (before final protocol/transcript cases) | 6761/7164 | 1375/1423 |
+| Pushed checkpoint, final test contents | 6766/7164 | 1375/1423 |
 
 Initial UI theme per-file missing lines/functions:
 - `src/ui/agent-widget.ts`: 15/0 -> 2/0.
@@ -77,7 +78,37 @@ fail their corresponding tests. Every temporary production mutation is restored.
 
 Gate at the first theme: full single-worker Istanbul suite, pinned Bun 1.3.14
 native session/compatibility suites, lint and typecheck pass. Additional UI cases
-pass focused tests, lint and typecheck. Full final evidence follows with later
-coherent module closures. The genuine full Bun compatibility run is NOT green:
+pass focused tests, lint and typecheck. Latest full evidence: `subagents-lifecycle-gates.txt`; mutation failure excerpts:
+`subagents-lifecycle-mutations.txt`. Full remaining inventory:
+`subagents-lifecycle-remaining.txt`. Exact command uses the final report directory.
+
+Checkpoint closes 108 lines and 24 functions without changing the denominator.
+Of 71 files in this branch's ownership, 67 are now 100% lines/functions; 27
+previously gapped modules are fully closed. This excludes the four separately
+owned index/inspector/viewer/meta files, not from coverage, only from ownership.
+
+Remaining owned gaps:
+
+| File | Main missing L/F | Checkpoint missing L/F |
+| --- | ---: | ---: |
+| `src/agent-manager.ts` | 21/7 | 6/1 |
+| `src/agent-runner.ts` | 8/2 | 0/1 |
+| `src/ui/fleet-list.ts` | 7/3 | 2/0 |
+| `src/workflow/runtime.ts` | 12/1 | 1/0 |
+
+The nine remaining lines and two functions are retained, not claimed closed:
+manager budget-grant stale-record guard (three lines), queued-resume missing-session
+guard (three), fleet non-failure/no-session notice (two), exhaustive `typeof`
+safety guard (one), and initial manager-cancel/runner-unsubscribe no-op closures
+that are replaced before use. No reachable validator was deleted and no private
+record mutation was used to manufacture these counters. Reachability review is
+still required before deciding any removal. The #174 stack-mapping diagnosis is
+exclusively owned by debugger `b9968f19`; this branch makes NO production edit to
+`workflow/runtime.ts` or any other source file.
+
+Final gate at this checkpoint: Node 166 files pass, 3521 tests pass and 8 skip;
+full Bun 165 files pass, one fails, 3521 tests pass, one fails and 7 skip;
+Bun native session scenarios 31 pass and home-loader compatibility 10 pass;
+lint/typecheck clean. No root-wide or extra inprocess suite was run. The genuine full Bun compatibility run is NOT green:
 its remaining #174 source-location failure is recorded in `subagents-budget-mock.md`. No root-wide suite duplicated; resource snapshots
 precede full runs and tests are serialized alongside other active coverage agents.

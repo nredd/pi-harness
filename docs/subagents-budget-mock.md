@@ -11,7 +11,8 @@ worktree no longer has dependencies installed, so its exact original loader
 identity cannot be reconstructed from that checkout. Do not conflate the
 controlled namespace reproduction below with recovering that original install.
 
-The shared-root defect is the global partial mock: it intercepts SDK/compiler
+The controlled reproduction demonstrates a fragility in the global partial mock,
+NOT the recovered cause of the historical index failure: it intercepts SDK/compiler
 imports too, spreads whatever namespace importOriginal returns, and assumes
 named `ModuleKind`/`transpileModule` exports. A default-only namespace retains
 the REAL compiler on `default` but the spread loses the named enum. The
@@ -48,6 +49,15 @@ npm exec --yes --package=bun@1.3.14 -- node ../../scripts/run-vitest.ts bun \
   test/process-budget.test.ts --maxWorkers=1
 # After: exit 0; 39 passed.
 ```
+
+Exact installed/locked fixture: Node `26.12.0`; package-local TypeScript `6.0.3`,
+root TypeScript `7.0.2`; root runner/provider Vitest/Istanbul `5.0.3`;
+package-local Vitest `4.1.12`. Lockfile Git blob
+`e5df1538f04042bb160565438c70efc2df044cb4`, unchanged from `b51e1774`.
+The controlled default-only wrapper loads the real `6.0.3` compiler. Fresh main's
+historical error did not reproduce here; provider installation/cache identity is
+still unproven. No guessed mock export field was added. This patch simply removes
+the shared module mock in favor of fixture-local counting.
 
 Other probes: merely moving the manager import earlier or disabling default
 interop did not reproduce the failure. Temporary tagged instrumentation showed

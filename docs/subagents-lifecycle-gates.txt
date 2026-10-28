@@ -1,0 +1,48 @@
+Log: /tmp/lifecycle-final-lint.log
+Checked 260 files in 131ms. No fixes applied.
+
+Log: /tmp/lifecycle-final-types.log
+> tsc --noEmit
+
+Log: /tmp/lifecycle-final.log
+ Test Files  166 passed (166)
+      Tests  3521 passed | 8 skipped (3529)
+
+Log: /tmp/lifecycle-final-bun-full.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/workflow-runtime.test.ts > script globals > reports line numbers that match the script the author wrote
+AssertionError: expected 'Error: x\n    at <anonymous> (workflo…' to contain 'workflow.js:3:'
+ Test Files  1 failed | 165 passed (166)
+      Tests  1 failed | 3521 passed | 7 skipped (3529)
+bun Vitest timing: darwin | subagents | 130.85 s | exit 1
+
+Log: /tmp/lifecycle-final-bun-native.log
+ 31 pass
+ 0 fail
+ Test Files  1 passed (1)
+      Tests  10 passed (10)
+bun Vitest timing: darwin | subagents | 5.76 s | exit 0
+
+Log: /tmp/lifecycle-budget-default-only-before.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/process-budget.test.ts > process budget across managers > settles an old manager to wake a genuine reloaded manager's waiter
+Error: [vitest] No "ModuleKind" export is defined on the "typescript" mock. Did you forget to return it from "vi.mock"?
+    309|           compilerOptions: { module: ModuleKind.ESNext },
+ FAIL  test/process-budget.test.ts > process budget across managers > shares the cap and waiters with a separately loaded copy of the budget module
+Error: [vitest] No "ModuleKind" export is defined on the "typescript" mock. Did you forget to return it from "vi.mock"?
+ Test Files  1 failed (1)
+      Tests  2 failed | 37 passed (39)
+
+Log: /tmp/lifecycle-budget-default-only-after.log
+ Test Files  1 passed (1)
+      Tests  39 passed (39)
+
+Log: /tmp/lifecycle-budget-node-after.log
+ Test Files  1 passed (1)
+      Tests  39 passed (39)
+
+Log: /tmp/lifecycle-budget-bun-after.log
+ Test Files  1 passed (1)
+      Tests  39 passed (39)
+bun Vitest timing: darwin | subagents | 4.67 s | exit 0
+

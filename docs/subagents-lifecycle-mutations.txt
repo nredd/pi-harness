@@ -1,0 +1,83 @@
+Log: /tmp/lifecycle-ui-mutant.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/lifecycle-coverage-ui.test.ts > widget lifecycle > displays the terminal steered verdict independently of a running activity tracker
+AssertionError: expected '○ Agents\n└─ ✓ Agent (twin)  observed…' to contain '(turn limit)'
+ FAIL  test/lifecycle-coverage-ui.test.ts > widget lifecycle > displays the terminal stopped verdict independently of a running activity tracker
+AssertionError: expected '○ Agents\n└─ ■ Agent (twin)  observed…' to contain 'stopped'
+ FAIL  test/lifecycle-coverage-ui.test.ts > widget lifecycle > displays the terminal error verdict independently of a running activity tracker
+AssertionError: expected '○ Agents\n└─ ✗ Agent (twin)  observed…' to contain 'error: diagnostic'
+ FAIL  test/lifecycle-coverage-ui.test.ts > widget lifecycle > displays the terminal error verdict independently of a running activity tracker
+AssertionError: expected '○ Agents\n└─ ✗ Agent (twin)  observed…' to contain 'error'
+ FAIL  test/lifecycle-coverage-ui.test.ts > widget lifecycle > displays the terminal aborted verdict independently of a running activity tracker
+AssertionError: expected '○ Agents\n└─ ✗ Agent (twin)  observed…' to contain 'aborted'
+ FAIL  test/lifecycle-coverage-ui.test.ts > widget lifecycle > invalidates the themed factory without letting an old component dispose its replacement
+AssertionError: expected "vi.fn()" to be called 2 times, but got 3 times
+ FAIL  test/lifecycle-coverage-ui.test.ts > widget lifecycle > groups simultaneous searches as patterns and other repeated tools as files
+AssertionError: expected 'searching 2 files, reading 2 files…' to be 'searching 2 patterns, reading 2 files…' // Object.is equality
+ FAIL  test/lifecycle-coverage-ui.test.ts > fleet journal overflow attempt replacement > moves the unread overflow count across failure kinds for a newer attempt with the same id
+AssertionError: expected 130 to be 129 // Object.is equality
+ Test Files  1 failed (1)
+      Tests  8 failed | 1 passed (9)
+
+Log: /tmp/lifecycle-manager-mutant.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/lifecycle-coverage-manager.test.ts > resumed-turn lifecycle > stops a foreground owner at detach without overwriting the stop on late runner settlement
+AssertionError: expected 'aborted' to be 'stopped' // Object.is equality
+ FAIL  test/lifecycle-coverage-manager.test.ts > resumed-turn lifecycle > forwards detached activity, usage and compaction, detaches parent abort, and flushes output once
+AssertionError: expected 2 to be 1 // Object.is equality
+ FAIL  test/lifecycle-coverage-manager.test.ts > bounded eviction records > retains only the newest 500 evicted ids, without dropping the newest result
+AssertionError: expected { id: 'f294a94d-49b0-4ba', …(5) } to be undefined
+ Test Files  1 failed (1)
+      Tests  3 failed | 3 passed (6)
+
+Log: /tmp/lifecycle-persistence-mutant.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/lifecycle-coverage-persistence.test.ts > private persistence boundaries > rejects invalid private manifest null without logging payloads
+ FAIL  test/lifecycle-coverage-persistence.test.ts > private persistence boundaries > rejects invalid private manifest {"version":1,"settings":[]} without logging payloads
+ FAIL  test/lifecycle-coverage-persistence.test.ts > private persistence boundaries > rejects invalid private manifest {"version":1,"models":{"providers":[]}} without logging payloads
+AssertionError: expected { version: 1 } to be undefined
+ FAIL  test/lifecycle-coverage-persistence.test.ts > private persistence boundaries > reports bounded lock contention without overwriting the owner or backing file
+AssertionError: expected [Function] to throw an error
+ FAIL  test/lifecycle-coverage-persistence.test.ts > private persistence boundaries > bounds retries even when the lock cannot be read as a PID file
+AssertionError: expected [Function] to throw error including 'Failed to acquire schedule lock' but got 'EISDIR: illegal operation on a direct…'
+ Test Files  1 failed (1)
+      Tests  5 failed | 10 passed (15)
+
+Log: /tmp/lifecycle-workflow-mutant.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/lifecycle-coverage-workflow.test.ts > workflow lifecycle boundaries > turns host spawn rejection into a failed child, not a failed script: Error: host spawn failed
+AssertionError: expected [ …(3) ] to deep equally contain ObjectContaining{…}
+ FAIL  test/lifecycle-coverage-workflow.test.ts > workflow lifecycle boundaries > turns host spawn rejection into a failed child, not a failed script: host spawn failed
+AssertionError: expected [ …(3) ] to deep equally contain ObjectContaining{…}
+ FAIL  test/lifecycle-coverage-workflow.test.ts > workflow lifecycle boundaries > skips an agent already parked behind the semaphore without consuming its permit
+AssertionError: expected { status: 'completed', …(5) } to match object { status: 'completed', …(1) }
+ FAIL  test/lifecycle-coverage-workflow.test.ts > workflow lifecycle boundaries > settles a native worker error caused by a hostile thrown-value diagnostic getter
+AssertionError: expected { status: 'failed', …(5) } to match object { status: 'failed', …(2) }
+ Test Files  1 failed (1)
+      Tests  4 failed | 5 passed (9)
+
+Log: /tmp/lifecycle-controls-mutant.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/lifecycle-coverage-fleet.test.ts > fleet overlay lifecycle > returns keyboard navigation to the fleet after the overlay rejects
+AssertionError: expected undefined to deeply equal { consume: true }
+ FAIL  test/lifecycle-coverage-runner.test.ts > real child lifecycle boundaries > inherits the actual parent prompt, excludes a denied builtin, and reports child extension startup failure
+AssertionError: expected 'off' to be 'low' // Object.is equality
+ FAIL  test/lifecycle-coverage-schedule.test.ts > scheduler lifecycle failures > persists an asynchronous tier-admission registry failure without spawning
+AssertionError: expected 'success' to be 'error' // Object.is equality
+ Test Files  3 failed (3)
+      Tests  3 failed | 8 passed (11)
+
+Log: /tmp/lifecycle-boundaries-mutant.log
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  test/lifecycle-coverage-filesystem.test.ts > resource filesystem races > reports a git repository removed between validation and toplevel lookup
+AssertionError: expected [Function] to throw error including '/Volumes/Scratch/tmp/lifecycle-filesy…' but got 'wrong toplevel diagnostic (repository…'
+ FAIL  test/lifecycle-coverage-nested.test.ts > nested lifecycle boundaries > attaches a real nested transcript before session creation and flushes the child's answer
+AssertionError: expected undefined to be type of 'function'
+ FAIL  test/lifecycle-coverage-nested.test.ts > nested lifecycle boundaries > reports live steer rejection Error: delivery failed without queuing a duplicate
+ FAIL  test/lifecycle-coverage-nested.test.ts > nested lifecycle boundaries > reports live steer rejection delivery failed without queuing a duplicate
+AssertionError: expected { content: [ { …(2) } ], …(2) } to match object { Object (isError, content) }
+ FAIL  test/lifecycle-coverage-protocol.test.ts > worker protocol boundary > returns a fatal unknown-method envelope without starting another child
+AssertionError: expected "postMessage" to be called with arguments: [ { type: 'response', …(7) } ]
+ Test Files  3 failed (3)
+      Tests  5 failed | 7 passed (12)
+
