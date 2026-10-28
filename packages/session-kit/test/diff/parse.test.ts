@@ -102,6 +102,12 @@ describe("parseUnifiedDiff", () => {
 		expect(small?.notice).toBeUndefined();
 	});
 
+	it("preserves unknown C escapes and ignores preamble lines", () => {
+		expect(unquoteC('"a\\q"')).toBe("a\\q");
+		const [file] = parseUnifiedDiff("warning before diff\ndiff --git a/a b/a\nold mode 100644\nnew mode 100755\n");
+		expect(file).toMatchObject({ path: "a", status: "mode", additions: 0, deletions: 0 });
+	});
+
 	it("returns nothing for empty input", () => {
 		expect(parseUnifiedDiff("")).toEqual([]);
 	});
