@@ -221,7 +221,9 @@ Exact bytes are retrievable at `https://unpkg.com/@earendil-works/pi-coding-agen
 The retained stock replacement fixture remains a stock-host contract test. A separate
 explicitly fault-injected shared-instance fixture sends shutdown with a different manager
 while the owner has a queued text/image/RPC input. The partition retains that input, and
-an early manager check prevents global shutdown resets from discarding it. Owner admission
+an early manager check prevents unrelated shutdown from resetting workflow state. Shutdown
+also no longer clears the retained queue after partitioning it, including when no current
+manager is bound. Owner admission
 then delivers it exactly once. Mutating `else remaining.push(queued)` to
 `else matching.push(queued)` fails the assertion that unrelated shutdown emits no recovery.
 This covers the formerly missing retention line without pretending a stock schedule reaches it.
@@ -237,7 +239,7 @@ A second fault-injection fixture replaces the manager during the await and cover
 post-await identity recheck. Disabling the late-input check kills the exact recovery assertion.
 
 The combined measurement above is historical, before this correction. Restoring the guard
-and adding late-input recovery raises the denominator to **2997/2997 lines and 699/699
+and adding late-input recovery raises the denominator to **2996/2996 lines and 699/699
 functions** on both Node and Bun (629 tests, 65 files). This combined run temporarily overlays
 only the sibling tests/support from scratch merge `cfe214a` (#185/#188/#189); those overlays
 are removed afterward and are not part of this PR. The standalone #209 stack passes 604

@@ -619,7 +619,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     readyPresentationIntent = undefined;
     refreshStateBeforeFirstAgentStart = false;
     pendingRuntimeAdmissionSession = undefined;
-    queuedRuntimeAdmissionInputs = [];
     workflowAllowedToolNames = undefined;
     pendingWorkflowToolPolicy = undefined;
     implementationRetention.reset();

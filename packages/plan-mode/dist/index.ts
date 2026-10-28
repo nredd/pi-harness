@@ -1472,7 +1472,6 @@ function planMode(pi, dependencies = {}) {
     readyPresentationIntent = void 0;
     refreshStateBeforeFirstAgentStart = false;
     pendingRuntimeAdmissionSession = void 0;
-    queuedRuntimeAdmissionInputs = [];
     workflowAllowedToolNames = void 0;
     pendingWorkflowToolPolicy = void 0;
     implementationRetention.reset();
