@@ -14,6 +14,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
@@ -32,13 +33,28 @@ def test_exit_event_and_status(engine: str, mode: str) -> None:
     assert executable is not None, f"Required engine '{engine}' is absent"
     endings = {
         "explicit": "process.exit(7);",
-        "listener": 'process.on("exit", () => { process.exitCode = 9; }); process.exit(7);',
+        "listener": dedent("""\
+            process.on("exit", () => {
+                process.exitCode = 9;
+            });
+            process.exit(7);
+        """),
         "natural": "process.exitCode = 7;",
-        "eof": 'process.stdin.resume(); process.stdin.on("end", () => { process.exitCode = 7; });',
+        "eof": dedent("""\
+            process.stdin.resume();
+            process.stdin.on("end", () => {
+                process.exitCode = 7;
+            });
+        """),
     }
     script = (
-        'process.on("exit", code => { process.stdout.write(`exit:${code}\\n`); });'
-        'process.stdout.write("ready\\n");' + endings[mode]
+        dedent("""\
+        process.on("exit", code => {
+            process.stdout.write(`exit:${code}\\n`);
+        });
+        process.stdout.write("ready\\n");
+    """)
+        + endings[mode]
     )
     result = subprocess.run(
         [str(Path(executable).resolve()), "-e", script],
