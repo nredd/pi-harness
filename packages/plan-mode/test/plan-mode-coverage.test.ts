@@ -135,6 +135,11 @@ test("restoring Plan mode without helpers fails closed even without a UI", async
 
   assert.equal(context.statuses.get("plan-mode"), undefined);
   assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+  const blocked = (await mock.events.get("tool_call")?.[0]?.(
+    { toolName: "plan_mode_question", input: {} },
+    context.ctx,
+  )) as { reason?: string };
+  assert.match(blocked.reason ?? "", /only available while Plan mode is active/u);
 });
 
 test("failed finalization retry resets the request instead of retrying forever", async () => {
