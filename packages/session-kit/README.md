@@ -248,7 +248,10 @@ The native diff descendant timeout fixture gates its fake deadline on real stdou
 slow process startup cannot race a fixed wall-clock deadline. Adapter fault tests cover monitor
 startup/sweep/widget failures, post-spawn errors, worker startup timeout, rejected sampler cleanup,
 first/latest dropped-match evidence, title-stream failure and real rule reinjection after tree
-navigation. Synthetic PIDs are never passed to real signal capabilities.
+navigation. Synthetic PIDs are never passed to real signal capabilities. Native Promise construction
+initializes the monitor exit resolver before child handlers register; synchronous close/error
+registration fixtures lock that ordering. The overwritten no-op resolver initializer is removed,
+not a reachable validation or lifecycle path.
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
 Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
 `docs/verification-rebuild.md` at the monorepo root tracks their destinations.
