@@ -1,7 +1,7 @@
 # Plan-mode coverage attribution
 
 This page records the #199 diagnosis before the subsequent
-[final-guard closure](final-guards.md). Its counts and caller inventory are historical;
+[final-guard closure](plan-mode-final-guards.md). Its counts and caller inventory are historical;
 the ledger documents the dead-code removals and five defensive lines still open.
 
 ## Root cause and scope
@@ -87,7 +87,7 @@ real-read positive control; it does not enlarge native watcher timeouts.
 ## Remaining caller inventory
 
 At that #199 base, twelve lines and two functions were uncovered. The subsequent
-[final-guard ledger](final-guards.md) records their dispositions and current counts:
+[final-guard ledger](plan-mode-final-guards.md) records their dispositions and current counts:
 
 ```text
 Lines: 1210,1211,1396,1397,1483,1511,1512,1517,1518,1609,1650,1659
