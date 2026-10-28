@@ -14,7 +14,9 @@ The initial integration checkpoint is recorded [here](../coverage/receipts/main-
 Facade validation and the actual hosted producer failure diagnosis are recorded
 [here](../coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
 #155 -> #195 dev-tools dependency decision are recorded [here](../coverage/receipts/git-isolation.md).
-`enforce_target` remains false. No 100% claim.
+`enforce_target` remains false. No 100% claim. The conflict-resolution decisions and exact
+base-relative facade ledger regression for the `b51e177` main merge are recorded
+[here](../coverage/receipts/tier-main-merge.md).
 
 The target is **100% of owned executable source lines AND functions**, measured by each
 package's primary runner. Branches are reported, not gated. This is source coverage, not
@@ -131,7 +133,9 @@ Plan-mode's `src/index.ts` and `src/interactive-ui.ts` qualify: esbuild's emitte
 Vitest Istanbul instrumenter both have zero statement/function/branch maps for these files. They
 link bindings; their target modules remain fully owned and instrumented. No LF/FNF records are
 invented, no imported dependency execution is attributed to a facade, and membership reclassification
-still requires the base-relative ledger once a base policy exists. Real compilation/instrumentation
+still requires the base-relative ledger once a base policy exists. The current ledger explicitly
+accounts for both owned plan-mode facade paths and the affected Bun subset relative to integration
+base `71b0aea`; a real-base regression rejects deleting any one receipt. Real compilation/instrumentation
 and executable-addition rejection are pinned by `scripts/tests/test_coverage_facades.py`.
 
 Verification-only harnesses outside conventional test directories are classified under

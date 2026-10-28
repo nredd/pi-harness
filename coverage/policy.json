@@ -2,7 +2,11 @@
   "version": 2,
   "target": { "lines": 0, "functions": 0 },
   "enforce_target": false,
-  "reclassifications": [],
+  "reclassifications": [
+    { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
+    { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: pure static ESM named re-export facade, with zero statements/functions in source/emitted-ESM Istanbul maps. Strict shape validation rejects executable additions; every UI target remains owned and measured." },
+    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." }
+  ],
   "enforcement_changes": [],
   "verification_helpers": [
     { "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Non-shipped readiness and bounded subprocess helpers used only by verification check harnesses." },

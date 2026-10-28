@@ -8,12 +8,7 @@
   "author": "nredd",
   "license": "MIT",
   "type": "module",
-  "files": [
-    "src",
-    "CHANGELOG.md",
-    "LICENSE",
-    "README.md"
-  ],
+  "files": ["src", "examples", "CHANGELOG.md", "LICENSE", "README.md"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nredd/pi-harness.git",

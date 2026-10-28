@@ -10,17 +10,18 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 from test_coverage_accounting import policy, setup_report
 
-from coverage_accounting import Exclusion, inventory
+from coverage_accounting import Exclusion, Policy, check_inventory_ratchet, check_ratchet, git_read, inventory
 
 ROOT = Path(__file__).resolve().parents[2]
 FACADES = ["src/index.ts", "src/interactive-ui.ts"]
-INSTRUMENT = """
+INSTRUMENT = textwrap.dedent("""
 import { readFileSync } from 'node:fs';
 import { createInstrumenter } from '@vitest/istanbul-lib-instrument';
 import { transformSync } from 'esbuild';
@@ -41,7 +42,7 @@ for (const file of process.argv.slice(1)) {
   }
 }
 process.stdout.write(JSON.stringify(result));
-"""
+""")
 
 
 def facade(path: str = "src/index.ts") -> Exclusion:
@@ -161,3 +162,42 @@ def test_facade_requires_exact_typescript_path(path: str) -> None:
     """
     with pytest.raises(ValidationError, match="exact package-relative TypeScript path"):
         facade(path)
+
+
+def test_actual_policy_facade_receipts_preserve_integration_base_ratchet() -> None:
+    """Require exact facade membership receipts against the real integration base policy.
+
+    Parameters:
+        None.
+    Returns:
+        None: Both owned paths and the affected Bun subset pass only with their explicit ledger entries.
+    Raises:
+        AssertionError: Missing receipts bypass the inventory ratchet or valid receipts fail.
+        subprocess.CalledProcessError: The recorded integration base cannot be read.
+    """
+    revision = "71b0aea29173d56b181551b7579ff7557c500a24"
+    base = Policy.model_validate_json(git_read(ROOT, ["show", f"{revision}:coverage/policy.json"]))
+    current = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    expected = {
+        ("owned", "packages/plan-mode/src/index.ts"),
+        ("owned", "packages/plan-mode/src/interactive-ui.ts"),
+        ("bun", "packages/plan-mode/src/interactive-ui.ts"),
+    }
+    assert {
+        (entry.signal, entry.path) for entry in current.reclassifications if entry.package == "plan-mode"
+    } == expected
+    check_ratchet(current, base)
+    check_inventory_ratchet(ROOT, current, base, revision)
+    without_receipts = current.model_copy(deep=True)
+    without_receipts.reclassifications = []
+    with pytest.raises(ValueError, match="Inventory ratchet requires"):
+        check_inventory_ratchet(ROOT, without_receipts, base, revision)
+    for signal, path in expected:
+        missing_one = current.model_copy(deep=True)
+        missing_one.reclassifications = [
+            entry
+            for entry in missing_one.reclassifications
+            if not (entry.package == "plan-mode" and entry.signal == signal and entry.path == path)
+        ]
+        with pytest.raises(ValueError, match="Inventory ratchet requires"):
+            check_inventory_ratchet(ROOT, missing_one, base, revision)

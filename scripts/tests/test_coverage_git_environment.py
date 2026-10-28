@@ -80,8 +80,8 @@ def test_hostile_git_environment_cannot_redirect_fixture_writes(
     hook = hooks / "pre-commit"
     hook.write_text(f"#!/bin/sh\n/usr/bin/touch {shlex.quote(str(marker))}\n")
     hook.chmod(0o700)
-    config = tmp_path / "hostile.gitconfig"
-    config.write_text(f"[core]\n\thooksPath = {hooks.as_posix()}\n")
+    cfg = tmp_path / "hostile.gitconfig"
+    cfg.write_text(f"[core]\n\thooksPath = {hooks.as_posix()}\n")
     injected_index = tmp_path / "injected-index"
     for name, value in {
         "GIT_DIR": str(decoy / ".git"),
@@ -93,8 +93,8 @@ def test_hostile_git_environment_cannot_redirect_fixture_writes(
         "GIT_CONFIG_KEY_0": "core.hooksPath",
         "GIT_CONFIG_VALUE_0": str(hooks),
         "GIT_CONFIG_PARAMETERS": shlex.quote(f"core.hooksPath={hooks}"),
-        "GIT_CONFIG_GLOBAL": str(config),
-        "GIT_CONFIG_SYSTEM": str(config),
+        "GIT_CONFIG_GLOBAL": str(cfg),
+        "GIT_CONFIG_SYSTEM": str(cfg),
         "GIT_TEMPLATE_DIR": str(hooks.parent),
     }.items():
         monkeypatch.setenv(name, value)
