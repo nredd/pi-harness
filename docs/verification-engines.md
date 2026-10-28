@@ -1,6 +1,6 @@
 # Verification engines
 
-Phase 1 of [spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
+Phases 1 and 2 of [spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
 [#160](https://github.com/nredd/pi-harness/issues/160). Vitest is the owned TypeScript tool;
 Node stays primary because it ships today. Bun remains required for the standalone target.
 No coverage-provider, threshold, required-check-name or runtime-pin change is included here.
@@ -67,8 +67,11 @@ guard; native `bun test` scenarios do not consume Vitest setup files.
 
 Merge #175 first. Then update [#162](https://github.com/nredd/pi-harness/pull/162)
 (`coverage-phase0`) against the merged source; phase 1 deliberately adds no coverage flags.
-The four full Bun producers must keep the entry point `node ../../scripts/run-vitest.ts bun`
-and pass Vitest options through it, not restore native `bun test`:
+The four phase 1 full Bun producers must keep the entry point `node ../../scripts/run-vitest.ts bun`
+and pass Vitest options through it, not restore native `bun test`. Phase 2 adds todo through
+the same entry point with `--config .vitest.config.ts`; its coverage inventory and eventual
+`packages/todo/coverage/bun/lcov.info` report belong to the separate #162 policy review,
+not an implicit coverage-enforcement promotion here:
 
 ```sh
 node ../../scripts/run-vitest.ts bun --coverage --coverage.provider=istanbul \
