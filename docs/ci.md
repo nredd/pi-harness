@@ -232,7 +232,7 @@ Tap and profile pin bumps require green CI on the candidate stack, not local `pi
 A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
 `stack` still tests the released Homebrew-shaped Node bundle. Fork release `v1.3.0-nredd.7`
 publishes the coding-agent and pi-tui npm tarballs, no standalone assets. Each OS's existing `stack (..., personal)` job also builds the exact
-Gitlinked source using `.bun-version` (1.3.14), the official `scripts/build-binaries.sh`, and frozen
+Gitlinked source using `.bun-version` (1.4.4), the official `scripts/build-binaries.sh`, and frozen
 release model data with `build:offline`. It does not depend on a future standalone release, commit
 binaries, or test a Node wrapper in place of the compiled executable.
 

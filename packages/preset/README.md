@@ -174,7 +174,7 @@ From the repository root:
 
 ```sh
 npm ci --ignore-scripts
-npm run check -w @nredd/pi-preset   # biome, strict tsc, Vitest, bun test (Bun 1.3.14)
+npm run check -w @nredd/pi-preset   # biome, strict tsc, full Vitest on Node and Bun 1.4.4
 ```
 
 - `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
