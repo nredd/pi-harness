@@ -3,22 +3,23 @@ import { Input, ScrollView, type ScrollViewScrollbar, type Terminal, Text, type 
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
 import { ConversationViewer, getConversationOverlayOptions } from "../src/ui/conversation-viewer.js";
+import { FakeClock } from "./helpers/fake-clock.js";
 
-function setup(rows = 20, columns = 100, host?: TUI, scrollbar: ScrollViewScrollbar = "always", mode: TuiMode = "fullscreen") {
+function setup(rows = 20, columns = 100, host?: TUI, scrollbar: ScrollViewScrollbar = "always", mode: TuiMode = "fullscreen", clock = new FakeClock()) {
   const terminal = { rows, columns };
   const tui = host ?? { mode, terminal, requestRender: vi.fn(), handleMouse: () => undefined } as unknown as TUI;
   const messages = [{ role: "user", content: Array.from({ length: 100 }, (_, i) => `row-${i.toString().padStart(3, "0")}`).join("\n") }];
   const unsubscribe = vi.fn();
   let listener: AgentSessionEventListener = () => {};
   const session = { messages, subscribe: (onEvent: AgentSessionEventListener) => { listener = onEvent; return unsubscribe; } } as unknown as AgentSession;
-  const record = { type: "Explore", description: "Observe only", status: "running", toolUses: 0, startedAt: Date.now() } as AgentRecord;
+  const record = { type: "Explore", description: "Observe only", status: "running", toolUses: 0, startedAt: clock.now() } as AgentRecord;
   const done = vi.fn();
   const stop = vi.fn();
   const steer = vi.fn();
   const viewer = new ConversationViewer(tui, session, record, undefined, {
     fg: (_color: string, text: string) => text,
     bold: (text: string) => text,
-  }, done, stop, undefined, steer, false, undefined, undefined, scrollbar);
+  }, done, stop, undefined, steer, false, undefined, undefined, scrollbar, undefined, clock);
   const render = () => viewer.render(terminal.columns);
   const mouse = (event: Partial<TuiMouseEvent>) => viewer.handleMouse({
     type: "wheel", button: "none", x: 10, y: 8, screenX: 10, screenY: 8,
@@ -66,6 +67,25 @@ describe("regular conversation viewer", () => {
       expect(viewer.render(5)).toEqual([]);
     } finally {
       viewer.dispose();
+    }
+  });
+
+  it("renders elapsed time from its injected clock", () => {
+    const clock = new FakeClock();
+    const now = vi.spyOn(Date, "now").mockReturnValue(clock.now());
+    const { viewer, render } = setup(30, 90, undefined, "always", "regular", clock);
+    try {
+      const before = render();
+      expect(before.join("\n")).toContain("0.0s (running)");
+
+      now.mockReturnValue(clock.now() + 100);
+      expect(render()).toEqual(before);
+
+      clock.advance(100);
+      expect(render().join("\n")).toContain("0.1s (running)");
+    } finally {
+      viewer.dispose();
+      now.mockRestore();
     }
   });
 });
