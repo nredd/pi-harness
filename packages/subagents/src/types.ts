@@ -6,6 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ModelFallback } from "./model-resolver.js";
 import type { ModelSelection } from "./model-selection.js";
+import type { TierDisclosure } from "./model-tiers.js";
 import type { BudgetLease } from "./process-budget.js";
 import type { LifetimeUsage } from "./usage.js";
 
@@ -149,7 +150,8 @@ export interface AgentTombstone {
   description: string;
   /** Always set — a record with no session file is never tombstoned. */
   sessionFile: string;
-  /** The evicted run's model fallback, handed back to the record `@handle` reopens it as. */
+  /** The evicted run's tier and fallback, handed back when `@handle` reopens it. */
+  modelTier?: TierDisclosure;
   modelFallback?: ModelFallback;
   completedAt: number;
 }
@@ -282,10 +284,16 @@ export interface AgentRecord {
   modelFallback?: ModelFallback;
   /**
    * This record's selection, retained across live resumes and physical relabelling.
-   * An evicted-session reopen selects anew; modelFallback separately retains the
-   * original conversation's disclosure even when the new selection resolves.
+   * An evicted-session reopen selects anew; current fallback disclosure always
+   * comes from that selection.
    */
   modelSelection?: ModelSelection;
+  /** Actual run's tier provenance, preserved through eviction and replay. */
+  modelTier?: TierDisclosure;
+  /** Prior evicted run's outcome, never the continuation's selection or disclosure. */
+  previousModelTier?: TierDisclosure;
+  /** Prior evicted run's fallback, retained separately from the continuation's current disclosure. */
+  previousModelFallback?: ModelFallback;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
   /**
@@ -368,6 +376,7 @@ export interface NotificationDetails {
   error?: string;
   /** The `Note:` line when the agent ran on the parent model because its configured one did not resolve. */
   modelNote?: string;
+  modelTier?: TierDisclosure;
   resultPreview: string;
   /** Additional agents in a group notification. */
   others?: NotificationDetails[];

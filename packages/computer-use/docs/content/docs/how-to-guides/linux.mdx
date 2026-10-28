@@ -27,6 +27,105 @@ In-session setup keeps its existing 60s deadline, and a cold build can exceed it
 
 The upstream [AT-SPI development guide](https://gnome.pages.gitlab.gnome.org/at-spi2-core/devel-docs/index.html) describes the accessibility stack. Containers, system services, `sudo`, and unrelated SSH sessions do not automatically inherit the graphical user's bus.
 
+## Cancellation checks
+
+`npm run test:linux-scripts` runs real POSIX process groups on macOS and Linux. Each fixture process publishes readiness only after installing its TERM handler. A test-only Node preload also observes the wrapper adding all three cancellation listeners and an exit listener before publishing a separate wrapper PID marker. Cancellation and exit-first release wait for leader, descendant and wrapper readiness; production handlers are never replaced or instrumented. The checks record injected group signals and require TERM followed by KILL after the grace period, plus dead descendants and an empty group. A TERM-responsive negative control must fail that same escalation assertion. The reaped-group guard requires TERM without a later exit-hook KILL; the injected EPERM case has no real process to synchronize.
+
+Readiness and wrapper completion have bounded waits with explicit failures, rather than startup sleeps or elapsed-wrapper-time lower bounds. Signal timestamps are recorded immediately after successful syscalls in memory; the trace is flushed once on wrapper exit, after its cleanup exit hook. Failed signal attempts are retained separately so the reaped-group guard still detects forbidden exit-hook attempts. `npm run test:linux-native` uses the same observer for the actual packed-source setup process, waiting for its wrapper marker as well as the compiler and leader markers before TERM. Initial setup, missing-tool rejection, cancellation and native setup completion all use contextual bounded waits. Native setup gets 30 seconds for fixture cases and 15 minutes for the real cold source build, with a bounded cancellation fallback. Cargo tests and ARM64 checks each get 15 minutes, npm packing two minutes, extraction one minute and permission changes 30 seconds. These native build/packaging operations use the same contextual command runner, with capped TERM then KILL close waits of five seconds each; the setup CLI shares that bounded cleanup helper. Failed cleanup releases its pipes/handle and surfaces an error instead of hanging the check. Child signal registration gets 10 seconds and parent readiness gets 15 seconds, preserving captured output if preload startup or registration fails. The main fixture lifetime is 60 seconds so sequential 15-second readiness waits cannot cause its deliberate self-exit before cancellation; this does not relax the TERM/KILL grace or reap backstop. Final native cleanup attempts permission restoration and scratch removal independently and aggregates cleanup failures with any original check error, rather than masking it or skipping removal. Readiness, poll cadence, fixture lifetime and backstop budgets are named constants. Its cargo/build checks require Linux and report NOT RUN elsewhere. The `test:linux-scripts` gate also runs unit checks for deferred readiness, contextual timeout/rejection behavior, the observer's post-registration marker, its explicit missing-handler deadline diagnostic, bounded external-command output/failure/timeout behavior and both failed and never-arriving close events.
+
+The cold source build, cargo tests and alternate-target check each get 15 minutes because they compile dependencies in cold scratch caches and may share a loaded CI runner. Packing needs only two minutes: `npm pack --ignore-scripts` archives local files without compiler or network work. The complete live D-Bus session gets a five-minute overall budget covering desktop startup, assertions and inner teardown, then capped group TERM/KILL cleanup. Stream closure is not group quiescence: the shared cleanup helper independently probes the owned group until `ESRCH`, with separate five-second stream-close and group-probe caps after TERM and KILL. Once a leader has already exited, its former numeric PGID no longer proves ownership: cleanup is probe-only, never TERM/KILL, even if a probe sees a potentially recycled group. This applies to successful live sessions, completed failed commands and completed integration fixtures; regressions assert that success sends only signal `0` and that inherited pipes/handles are released when probe-only cleanup times out. Polling every 20ms avoids busy-spinning while promptly observing exit within the caps. One-second recurring fixture intervals only keep the leader and descendant alive until explicit cleanup; they are neither readiness delays nor finite lifetime backstops. Helper test cases use named, JSDoc-documented callbacks so formatting cannot attach their return/error contracts to the preceding test-name argument. The redirected-descendant failure fallback also refuses group signals after its leader exits. Its regression starts a TERM-responsive leader and a TERM-ignoring descendant with redirected stdio; leader closure must not skip group KILL. Readiness failures at *any* leader, compiler, descendant or wrapper marker retain captured output, as do native setup completion timeouts.
+
+The synchronization audit covers `scripts/*.mjs` and `integration/probes/`:
+- Keep the named `DISPOSE_NO_RESTART_WINDOW_MS` and `FOREGROUND_BLOCKED_WINDOW_MS` negative-observation windows: they watch start/setup counters and completion/delivery markers after observable probe/fallback readiness, not elapsed time as a proxy for readiness.
+- Use cooperative microtask yields for mock concurrent workloads and await their completion; do not inject fixed signing/installation latency. Register the CDP close listener before triggering shutdown, then await shutdown and close together so a close-deadline rejection is handled even while shutdown is pending. Live Linux checks poll accessible roots instead of sleeping before discovery or Terminal launch.
+- Trigger integration lifecycle TERM escalation from the fixture's post-handler `ready` line, not a startup timer. Normal-exit leaders retain an IPC channel until their descendant acknowledges an installed lifetime timer; only then do they disconnect, unreference the child and exit. Remaining timers bound observable file/process/socket polls, fixture lifetime, requests or teardown. The slow diagnostics reply is deliberate fault injection, not a readiness guarantee.
+- Keep the latency probe's injected stall and Python overhead probe's metric-sampling windows: they define the measured workload rather than synchronize startup or infer completion.
+
+Production cancellation policy is unchanged here. Permission-denied group probes and unsuccessful final quiescence have confirmed fault-injection follow-ups [here](https://github.com/nredd/pi-harness/issues/167) and [here](https://github.com/nredd/pi-harness/issues/168); this fixture fix does not establish that EPERM means PGID reuse or that a positive post-KILL probe is harmless.
+
+## Reproducing cancellation checks
+
+These are recorded local macOS results, not guarantees that a future baseline run reproduces the same failure count:
+
+| Revision | Loaded script failures |
+| --- | --- |
+| `f2255c1b86a89192a55d77b9f26b12c131fd0464` (original main) | 4/200 |
+| `1e144407b8f6928c7d674d9fdf49cb3779afc9ba` | 0/200 |
+| `25945870fc6709c07cb17ac3eafa9f918da95527` | 0/200 |
+| `36e2001f8552a7882f40802f8703957a90f45912` | 0/200 |
+| Current polish HEAD | Run the command below; final SHA/count is recorded in the PR body |
+
+Run this Bash script with `REPO OUTPUT_DIR EXPECTED_SHA` on a clean checkout of either the baseline or the current HEAD. The same Node executable must be used for both (recorded runs used `v26.12.0`). No npm lifecycle script, live desktop test or production helper install is invoked by the loop:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+repo=$1
+out=$2
+expected=$3
+[[ "$(git -C "$repo" rev-parse HEAD)" == "$expected" ]]
+[[ -z "$(git -C "$repo" status --porcelain)" ]]
+mkdir -p "$out"
+[[ ! -e "$out/progress" ]]
+printf 'HEAD=%s\nnode=%s\n' "$expected" "$(node --version)" >"$out/metadata"
+loads=()
+trap 'kill "${loads[@]}" 2>/dev/null || true; wait "${loads[@]}" 2>/dev/null || true' EXIT
+trap 'exit 130' INT TERM
+for i in 1 2 3 4; do yes >/dev/null & loads+=("$!"); done
+failed=0
+for ((i=1;i<=200;i++)); do
+  if node "$repo/packages/computer-use/scripts/check-linux-build-scripts.mjs" >"$out/$i.log" 2>&1; then result=pass; else result=FAIL; failed=$((failed+1)); fi
+  printf '%s %s failures=%s\n' "$i" "$result" "$failed" >>"$out/progress"
+done
+[[ "$(git -C "$repo" rev-parse HEAD)" == "$expected" ]]
+[[ -z "$(git -C "$repo" status --porcelain)" ]]
+printf 'failures=%s/200\n' "$failed" | tee "$out/result"
+[[ "$failed" == 0 ]]
+```
+
+For example, after saving the script as `/tmp/stress-cancellation.sh`:
+
+```bash
+bash /tmp/stress-cancellation.sh /path/to/baseline /tmp/pr165-before f2255c1b86a89192a55d77b9f26b12c131fd0464
+bash /tmp/stress-cancellation.sh "$PWD" /tmp/pr165-after "$(git rev-parse HEAD)"
+```
+
+The original baseline failed at iterations 6, 52, 115 and 174 with these raw assertion messages:
+
+```text
+AssertionError [ERR_ASSERTION]: leader-exits-first: wrapper returned after 13ms, before the 800ms TERM grace (no SIGKILL escalation?)
+AssertionError [ERR_ASSERTION]: leader-exits-first: wrapper returned after 0ms, before the 800ms TERM grace (no SIGKILL escalation?)
+AssertionError [ERR_ASSERTION]: leader-exits-first: wrapper returned after 15ms, before the 800ms TERM grace (no SIGKILL escalation?)
+AssertionError [ERR_ASSERTION]: leader-exits-first: wrapper returned after 22ms, before the 800ms TERM grace (no SIGKILL escalation?)
+```
+
+Mutation controls change **only a disposable copy** of `scripts/setup-helper.mjs`; restore that copy between cases:
+
+| Copied-production mutation | Required failing oracle |
+| --- | --- |
+| `quiesce(GROUP_TERM_GRACE_MS)` -> `quiesce(0)` | `SIGKILL preceded the TERM grace` |
+| Delete `signalGroup("SIGKILL")` | `expected TERM then KILL escalation` (TERM-only trace) |
+| Delete `if (reaped) return` from `onExit` | `expected TERM then KILL escalation` (extra exit-hook KILL attempt) |
+| Built-in TERM-responsive descendant | The same escalation assertion must throw inside its negative-control test |
+
+Prepare a runnable disposable copy, apply one mutation from the table, then run its check directly:
+
+```bash
+repo="$PWD/packages/computer-use"
+work=$(mktemp -d /tmp/pr165-mutant.XXXXXX)
+mkdir "$work/scripts"
+cp "$repo/scripts/"{check-async,check-linux-build-scripts,setup-helper,build-native}.mjs "$work/scripts/"
+for name in src native docs package.json; do ln -s "$repo/$name" "$work/$name"; done
+# Apply ONE table mutation to "$work/scripts/setup-helper.mjs", never the real module.
+node "$work/scripts/check-linux-build-scripts.mjs"  # Must exit nonzero with the table's assertion.
+```
+
+Production follow-ups, quoted here so review does not require issue access:
+- **#167, permission-denied group cleanup:** `EPERM` means permission denied, not proven PGID reuse. A spawned group can remain alive after credential changes. The injected-EPERM scratch test currently resolves instead of reporting cleanup uncertainty. Proposed fix: distinguish `ESRCH` from permission/other errors and propagate an explicit outcome without blindly signalling a potentially foreign group. No privileged UID transition was executed; effective-UID-only setuid is not sufficient under POSIX.
+- **#168, failed final quiescence:** the final positive group probe is discarded and `runCancellable` sets `reaped=true`, suppressing its exit retry. A controlled live-descendant repro with deliberately undelivered KILL returns success with an executable survivor. Proposed fix: propagate failed/inconclusive cleanup, retain ownership-safe fallback and distinguish executable survivors from zombies. This is explicit fault injection, not a claim that the kernel ignored KILL.
+
+Both are labelled `follow-up`, remain out of scope here, and have intentionally failing scratch tests. Production `setup-helper.mjs` is unchanged by this PR.
+
 ## Capability matrix
 
 | Capability | X11 | Wayland | Delivery |

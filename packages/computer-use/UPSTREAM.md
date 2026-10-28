@@ -60,6 +60,12 @@ The note is historical evidence, not validation of this sync.
 - Preserve the local build/signing path. Add `activity_glow.swift` to both source lists and the exact
   packed contract. Rebuild both loose payloads; do not import upstream's stale July binaries.
 
+Main-branch merge follow-up (2026-10-28): retain main's #165 event-driven race fix and
+#177 compiler-lifecycle checks alongside the sync's compact `button` rendering, screenshot mock
+and moved Linux documentation. `npm run check`, `make check-scripts`, the packed computer-use
+contract and scoped Biome passed locally after resolution. The prior macOS contracts/local-stack
+jobs were never acquired by a runner (capacity annotations), not package failures; no blind rerun.
+
 ## Signing decision and rollback
 
 KEEP local builds and local signing for now. Upstream builds a CI self-signed bundle, not a
