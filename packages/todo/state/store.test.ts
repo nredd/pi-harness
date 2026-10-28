@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Task } from "../tool/types.ts";
 import { EMPTY_STATE, type TaskState } from "./state.ts";
 import {
@@ -14,7 +14,38 @@ import {
 	replaceState,
 	setActiveRenderSession,
 	sid,
+	watchRenderState,
 } from "./store.ts";
+
+describe("render observer lifetime", () => {
+	it("prunes collected observers after the first missed dereference", () => {
+		__resetState();
+		const deref = vi.fn(() => undefined);
+		vi.stubGlobal(
+			"WeakRef",
+			class {
+				deref = deref;
+			},
+		);
+		setActiveRenderSession("fg");
+		const observer = { onRenderStateChange: vi.fn() };
+		watchRenderState(observer);
+		commitState("fg", { tasks: [], nextId: 2 });
+		commitState("fg", { tasks: [], nextId: 3 });
+		expect(deref).toHaveBeenCalledTimes(1);
+		expect(observer.onRenderStateChange).not.toHaveBeenCalled();
+	});
+
+	it("retains live observers across commits", () => {
+		__resetState();
+		setActiveRenderSession("fg");
+		const observer = { onRenderStateChange: vi.fn() };
+		watchRenderState(observer);
+		commitState("fg", { tasks: [], nextId: 2 });
+		commitState("fg", { tasks: [], nextId: 3 });
+		expect(observer.onRenderStateChange).toHaveBeenCalledTimes(2);
+	});
+});
 
 const SID = "s1";
 

@@ -58,12 +58,14 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-`check` runs Biome, strict TypeScript, all 390 Vitest tests (including every
-upstream test), and two native Bun interactive-row regressions. The test host
+`check` runs Biome, strict TypeScript, and all 408 Vitest tests (including every
+upstream test) on both Node and Bun. The two real interactive settled-row regressions
+run inside that same suite on both engines. The test host
 pins core `v1.3.0-nredd.6` release tarballs. Unpublished upstream mock helpers
 are vendored under `.test-support/`; provenance and test counts are documented
 [here](.test-support/README.md). Tests inject temporary homes and use faux providers, never
-a pi process or credentials.
+a pi process or credentials. The measured line/function coverage and mutation receipts
+are documented [here](docs/coverage-closure.md); coverage policy remains separate.
 
 Settled update/delete rows with a valid result snapshot retain that historical
 subject. Legacy/error rows without one still read the live store and now call

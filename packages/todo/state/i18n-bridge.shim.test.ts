@@ -23,7 +23,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const PACKAGE_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 const BRIDGE = resolve(PACKAGE_DIR, "state/i18n-bridge.ts");
@@ -87,16 +87,25 @@ describe("i18n soft-peer shim — runtime fallback contract", () => {
 		await expect(import(MISSING_SDK_SPECIFIER)).rejects.toThrow();
 	});
 
-	it("try/catch around await import() falls through to the alternative branch", async () => {
-		type ScopeFn = (key: string, fallback: string) => string;
-		let scopeImpl: ScopeFn;
+	it("the real bridge falls back to English when the SDK import fails", async () => {
+		vi.resetModules();
+		const sdk = await vi.importActual<typeof import("@juicesharp/rpiv-i18n")>(SDK_SPECIFIER);
+		const previousLocale = sdk.getActiveLocale();
 		try {
-			const sdk = (await import(MISSING_SDK_SPECIFIER)) as { scope: (n: string) => ScopeFn };
-			scopeImpl = sdk.scope("test");
-		} catch {
-			scopeImpl = (_key, fallback) => fallback;
+			const normal = await import("./i18n-bridge.ts");
+			sdk.registerStrings(normal.I18N_NAMESPACE, { de: { "status.completed": "abgeschlossen" } });
+			sdk.applyLocale("de");
+			expect(normal.formatStatusLabel("completed")).toBe("abgeschlossen");
+			vi.resetModules();
+			vi.doMock("@juicesharp/rpiv-i18n", () => {
+				throw new Error("not installed");
+			});
+			const fallback = await import("./i18n-bridge.ts");
+			expect(fallback.formatStatusLabel("completed")).toBe("completed");
+		} finally {
+			vi.doUnmock("@juicesharp/rpiv-i18n");
+			sdk.applyLocale(previousLocale);
+			vi.resetModules();
 		}
-		expect(scopeImpl("any.key", "literal fallback")).toBe("literal fallback");
-		expect(scopeImpl("status.completed", "completed")).toBe("completed");
 	});
 });

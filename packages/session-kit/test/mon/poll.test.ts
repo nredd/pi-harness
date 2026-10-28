@@ -7,6 +7,41 @@ afterEach(() => {
 });
 
 describe("mon polling ownership", () => {
+	it.each(["initial", "timer"])(
+		"contains %s probe cleanup rejection while exposing stale state and retaining cleanup failure",
+		async (stage) => {
+			vi.useFakeTimers();
+			vi.setSystemTime(Date.parse("2026-10-18T12:00:00Z"));
+			const sample = vi.fn<MonSource["sample"]>();
+			if (stage === "timer") sample.mockResolvedValueOnce(snapshot());
+			sample.mockRejectedValue(new Error("private probe failure"));
+			const cleanupError = new Error("cleanup failed");
+			const source: MonSource = {
+				sample,
+				dispose: vi.fn(async () => {
+					throw cleanupError;
+				}),
+			};
+			const update = vi.fn();
+			const poll = new MonPoll(source, update);
+			poll.start();
+			await vi.advanceTimersByTimeAsync(stage === "timer" ? 2000 : 0);
+			expect(update.mock.calls.at(-1)?.[0]).toMatchObject({
+				status: "stale",
+				notice: "Sampling stopped. Close and reopen to retry.",
+				...(stage === "timer" ? { cpuPercent: 36.2 } : { cpuPercent: null, capturedAt: Date.now() }),
+			});
+			expect(JSON.stringify(update.mock.calls)).not.toContain("private probe failure");
+			await expect(poll.dispose()).rejects.toBe(cleanupError);
+			expect(source.dispose).toHaveBeenCalledOnce();
+			expect(sample).toHaveBeenCalledTimes(stage === "timer" ? 2 : 1);
+			expect(sample.mock.calls.at(-1)?.[0].aborted).toBe(true);
+			expect(vi.getTimerCount()).toBe(0);
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(sample).toHaveBeenCalledTimes(stage === "timer" ? 2 : 1);
+		},
+	);
+
 	it("does no work before start and has exactly one in-flight probe without catchup", async () => {
 		vi.useFakeTimers();
 		let resolve!: (value: ReturnType<typeof snapshot>) => void;
