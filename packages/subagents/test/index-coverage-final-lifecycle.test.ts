@@ -1,8 +1,8 @@
 /** Public index menu, workflow and lifecycle callbacks with real child sessions and private files. */
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -247,9 +247,13 @@ describe("index scheduler and file errors", () => {
     const hold = heldResponse("blocking private child"); provider.setResponses([hold.response]);
     const bound = await bind();
     const gitConfig = join(env.dir, "gitconfig"); writeFileSync(gitConfig, "");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    expect(isAbsolute(realGit)).toBe(true);
     bound.boot.pi.exec = vi.fn(async (command: string, args: string[], options: { cwd?: string; timeout?: number } = {}) => {
-      const child = spawnSync(command, args, { cwd: options.cwd, timeout: options.timeout, encoding: "utf8",
+      expect(command).toBe("git");
+      const child = spawnSync(realGit, args, { cwd: options.cwd, timeout: options.timeout, encoding: "utf8",
         env: { PATH: process.env.PATH, HOME: env.dir, USERPROFILE: env.dir,
+          GIT_CEILING_DIRECTORIES: realpathSync(env.dir),
           GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
       });
       return { stdout: child.stdout ?? "", stderr: child.stderr ?? "", code: child.status ?? 1, killed: child.signal !== null };
@@ -262,6 +266,7 @@ describe("index scheduler and file errors", () => {
     hold.release(); await bound.registry.waitForAll();
     const id = queued.details.agentId;
     expect(bound.registry.getRecord(id)?.status).toBe("error");
+    expect(bound.registry.getRecord(id)?.error).toContain("fatal: not a git repository");
     expect(bound.registry.getRecord(id)?.session).toBeUndefined();
     const resumed = await bound.boot.tools.get("Agent").execute("resume-no-session", {
       resume: id, prompt: "No session", description: "resume failed startup", subagent_type: "general-purpose", run_in_background: true,
