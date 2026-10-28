@@ -65,7 +65,16 @@ local themes, skills, agents and their configuration. Restart sessions after act
   calendar days follow it). 5h resets show `HH:MM`, or `Mon D HH:MM` when past local midnight;
   weekly resets always show the date. An unknown reset is omitted and the percent stays. A
   reset already in the past hides the cached percent (`--`), since it describes the old window.
-  A stale retained percent keeps its own reset. Layout is the widest of: full row, compact row,
+  A stale retained percent keeps its own reset. A reset time already in the past is simply
+  not shown; it never changes the percent, its color or its staleness.
+  OpenAI window identity comes from the router's optional `windows[].spanSource`
+  (`reported` | `assumed`, provenance only; names, `durationMs`, scoring and admission are unchanged):
+  weekly is the window with a reported 604800000 ms duration (or the legacy `7d` name on snapshots with no
+  `spanSource`). A reported 18000s window is never shown. If no weekly is proven but the router only
+  *assumed* a span (Codex payload with no `limit_window_seconds`), the footer does not claim 5h or weekly:
+  it shows the most limiting such window as `OpenAI quota 62% (resets Oct 24 11:05; window unknown)`,
+  compact `OAI quota? 62% @Oct 24 11:05`, with the same local-timezone date and time.
+  A proven weekly always wins over an assumed window, and a stale retained weekly is not displaced by one. Layout is the widest of: full row, compact row,
   one compact row per provider, one per provider without resets; narrow terminals wrap by
   provider so a value never loses its provider label (only the last layout can still be clipped). Deferred
   startup, 60s polling, one outstanding request, unique reply channel, 12s timeout, expiry repaint,
@@ -164,7 +173,7 @@ is exactly the known managed link, and it happens only during explicit activatio
 
 ## Evidence and what is pending
 
-Executed in this workspace (see the gate below): preserved footer helper assertions, real interactive
+Executed in this workspace (see the gate below): footer helper assertions (preserved, except the quota expectations superseded by the reset-time/OpenAI-window change), real interactive
 footer scenarios (quota, cache, widths, lifecycle), headless mode bindings, static resource/schema/privacy/
 dependency tests, `npm pack` allowlist/license tests, and real Pi 1.3.0 resource discovery in a temporary
 `HOME`/agent dir with no live model calls or auth. Every test runs under Vitest and Bun.
@@ -191,8 +200,8 @@ npm run check -w @nredd/pi-preset   # biome, strict tsc, Vitest, bun test (Bun 1
 - `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
 - `createExpandedFooter({ clock, timeZone })` optionally injects one clock (and an IANA zone pinning reset labels; default process-local) for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
 - `test/*.test.ts` and support code are checked by strict TypeScript; preserved `test/footer-*.test.mjs` helper assertions stay JavaScript. Everything under `extensions/`, `lib/` and `test/` is Biome-formatted.
-- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam. `lib/footer-quota.ts` additionally drops OpenAI 5h and adds reset times and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
-- All live dotfiles helper assertions already exist here. `test/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Once `0.2.0` is published and promoted, the dotfiles `remove-footer` change drops its own copy and only installs/configures this footer.
+- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam. `lib/footer-quota.ts` additionally drops OpenAI 5h, adds reset times, router window-identity handling and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
+- All live dotfiles helper assertions exist here, except the OpenAI 5h and quota row-text expectations, which this package deliberately superseded (see the quota row above). `test/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Once `0.2.0` is published and promoted, the dotfiles `remove-footer` change drops its own copy and only installs/configures this footer.
 
 Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_*`,
 and `PI_OFFLINE` into a temporary directory (restored afterwards) and pass the agent dir explicitly.

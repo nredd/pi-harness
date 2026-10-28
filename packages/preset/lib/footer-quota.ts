@@ -16,9 +16,14 @@ export const REPLY_TIMEOUT_MS = 12_000;
 export const WARNING_AT = 20;
 export const ERROR_AT = 5;
 
+/** Router `durationMs` of a weekly window. */
+const WEEK_MS = 604_800_000;
+
 /**
- * Providers shown, in order, with their router ids and window names. A provider
- * without a `fiveHour` window name has no 5h quota (OpenAI Codex), so none is shown.
+ * Providers shown, in order, with their router ids. A provider without a `fiveHour` window
+ * name has no 5h quota (OpenAI Codex), so none is shown. `identify` says how the weekly
+ * window is recognised: `name` (Anthropic's fixed `seven_day`), or `span` (OpenAI: a
+ * reported 604800000 ms duration, or the legacy `7d` name on snapshots without `spanSource`).
  */
 export const QUOTA_PROVIDERS = [
 	{
@@ -27,12 +32,14 @@ export const QUOTA_PROVIDERS = [
 		compact: "Anth",
 		fiveHour: "five_hour",
 		weekly: "seven_day",
+		identify: "name",
 	},
 	{
 		id: "openai-codex",
 		full: "OpenAI",
 		compact: "OAI",
 		weekly: "7d",
+		identify: "span",
 	},
 ] as const satisfies readonly QuotaProviderSpec[];
 
@@ -42,6 +49,7 @@ interface QuotaProviderSpec {
 	compact: string;
 	fiveHour?: string;
 	weekly: string;
+	identify: "name" | "span";
 }
 
 /**
@@ -56,6 +64,11 @@ export interface ProviderQuota {
 	weekly?: number;
 	/** Epoch ms the weekly window resets, as reported by the router; absent when unknown. */
 	weeklyResetAt?: number;
+	/**
+	 * True when `weekly`/`weeklyResetAt` describe a window whose span the router only assumed
+	 * (`spanSource: "assumed"`): it is shown as an unidentified quota, never as weekly.
+	 */
+	weeklyUnknown?: boolean;
 	stale: boolean;
 	/** Epoch ms after which a fresh reading is stale. Absent: never fresh. */
 	expiresAt?: number;
@@ -73,36 +86,75 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-type WindowReading = Pick<ProviderQuota, "fiveHour" | "fiveHourResetAt" | "weekly" | "weeklyResetAt">;
+type WindowReading = Pick<ProviderQuota, "fiveHour" | "fiveHourResetAt" | "weekly" | "weeklyResetAt" | "weeklyUnknown">;
 
 /** Epoch ms from a router `resetAt`; non-finite or non-positive -> `undefined`. */
 function resetAtOf(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-/** Remaining percents and reset times of the provider-scoped 5h and weekly windows. Reset keys exist only when known. */
-function readWindows(windows: unknown[], spec: QuotaProviderSpec): WindowReading {
-	const out: WindowReading = {};
-	for (const rawWindow of windows) {
-		const window = asRecord(rawWindow);
-		if (window?.scope !== "provider") continue;
-		const key = window.name === spec.fiveHour ? "fiveHour" : window.name === spec.weekly ? "weekly" : undefined;
-		if (!key) continue;
-		out[key] = remainingPercent(window.usedPercent);
-		const resetAt = resetAtOf(window.resetAt);
-		if (resetAt !== undefined) out[`${key}ResetAt`] = resetAt;
-	}
+/**
+ * Whether a router window is proven weekly for a span-identified provider: a reported
+ * 604800000 ms duration, or, only when the snapshot predates `spanSource`, the legacy `7d` name.
+ */
+function isReportedWeekly(window: Record<string, unknown>, spec: QuotaProviderSpec): boolean {
+	if (window.spanSource === undefined) return window.name === spec.weekly;
+	return window.spanSource === "reported" && window.durationMs === WEEK_MS;
+}
+
+function readingOf(window: Record<string, unknown>, key: "fiveHour" | "weekly"): WindowReading {
+	const out: WindowReading = { [key]: remainingPercent(window.usedPercent) };
+	const resetAt = resetAtOf(window.resetAt);
+	if (resetAt !== undefined) out[`${key}ResetAt`] = resetAt;
 	return out;
 }
 
-/** Per window: a valid new percent brings its own reset time; otherwise the prior pair is retained. */
+/**
+ * Remaining percents and reset times of the provider-scoped windows. Reset keys exist only when known.
+ * Span-identified providers: weekly is the first proven-weekly window. Only if none exists and
+ * the router reported windows with an assumed span, the most limiting of those is kept as an
+ * unidentified quota (`weeklyUnknown`); reported non-weekly spans (e.g. 18000s) stay hidden.
+ */
+function readWindows(windows: unknown[], spec: QuotaProviderSpec): WindowReading {
+	const provider = windows.flatMap((raw) => {
+		const window = asRecord(raw);
+		return window?.scope === "provider" ? [window] : [];
+	});
+	if (spec.identify === "name") {
+		const out: WindowReading = {};
+		for (const window of provider) {
+			const key = window.name === spec.fiveHour ? "fiveHour" : window.name === spec.weekly ? "weekly" : undefined;
+			if (key) Object.assign(out, readingOf(window, key));
+		}
+		return out;
+	}
+	const weekly = provider.find((window) => isReportedWeekly(window, spec));
+	if (weekly) return readingOf(weekly, "weekly");
+	const assumed = provider.filter((window) => window.spanSource === "assumed");
+	const percent = (window: Record<string, unknown>) => remainingPercent(window.usedPercent);
+	let limiting: Record<string, unknown> | undefined;
+	for (const window of assumed) {
+		const left = percent(window);
+		if (limiting === undefined || (left !== undefined && (percent(limiting) ?? 101) > left)) limiting = window;
+	}
+	return limiting ? { ...readingOf(limiting, "weekly"), weeklyUnknown: true } : {};
+}
+
+/**
+ * Per window: a valid new percent brings its own reset time (and identity); otherwise the prior
+ * pair is retained. An unidentified new reading never displaces a retained proven-weekly one.
+ */
 function mergeReadings(seen: WindowReading, prior: ProviderQuota | undefined): WindowReading {
 	const out: WindowReading = {};
 	for (const key of ["fiveHour", "weekly"] as const) {
-		const source = seen[key] !== undefined ? seen : prior;
+		const usable =
+			seen[key] !== undefined &&
+			!(key === "weekly" && seen.weeklyUnknown && prior?.weekly !== undefined && !prior.weeklyUnknown);
+		const source = usable ? seen : prior;
 		out[key] = source?.[key];
 		const resetAt = source?.[`${key}ResetAt`];
 		if (resetAt !== undefined) out[`${key}ResetAt`] = resetAt;
+		if (key === "weekly" && source?.weeklyUnknown) out.weeklyUnknown = true;
 	}
 	return out;
 }
@@ -233,14 +285,22 @@ function windowText(
 	layout: Layout,
 	colorize: Colorize,
 	opts: Required<Pick<FormatOptions, "now">> & FormatOptions,
+	unidentified = false,
 ): string {
 	const dim = (text: string) => colorize("dim", text);
-	// A reset already in the past means the cached percent describes the old window: show unknown.
-	const elapsed = resetAt !== undefined && resetAt <= opts.now;
-	const value = formatValue(elapsed ? undefined : remaining, colorize);
-	if (!layout.resets || resetAt === undefined || elapsed) return `${dim(`${label} `)}${value}`;
-	const when = formatResetAt(resetAt, opts.now, opts.timeZone, weekly);
-	return `${dim(`${label} `)}${value}${dim(layout.tier === "full" ? ` (resets ${when})` : ` @${when}`)}`;
+	const value = formatValue(remaining, colorize);
+	// Percent and freshness are never altered by the reset; a missing or already-past reset is just not shown.
+	const when =
+		layout.resets && resetAt !== undefined && resetAt > opts.now
+			? formatResetAt(resetAt, opts.now, opts.timeZone, weekly)
+			: undefined;
+	const full = layout.tier === "full";
+	const name = unidentified && !full ? `${label}?` : label;
+	// An unidentified window states that in the full tier; compact carries it as the `?` on the label.
+	const note = unidentified && full ? "window unknown" : undefined;
+	const parts = full ? [when ? `resets ${when}` : undefined, note].filter(Boolean).join("; ") : "";
+	const suffix = full ? (parts ? ` (${parts})` : "") : when ? ` @${when}` : "";
+	return `${dim(`${name} `)}${value}${dim(suffix)}`;
 }
 
 function providerRows(state: QuotaState, layout: Layout, colorize: Colorize, opts: FormatOptions): string[] {
@@ -253,8 +313,10 @@ function providerRows(state: QuotaState, layout: Layout, colorize: Colorize, opt
 		const windows: string[] = [];
 		if (spec.fiveHour !== undefined)
 			windows.push(windowText("5h", quota.fiveHour, quota.fiveHourResetAt, false, layout, colorize, resolved));
+		const unidentified = quota.weeklyUnknown === true;
+		const weeklyLabel = unidentified ? "quota" : full ? "weekly" : "7d";
 		windows.push(
-			windowText(full ? "weekly" : "7d", quota.weekly, quota.weeklyResetAt, true, layout, colorize, resolved),
+			windowText(weeklyLabel, quota.weekly, quota.weeklyResetAt, true, layout, colorize, resolved, unidentified),
 		);
 		return `${dim(`${label} `)}${windows.join(" ")}`;
 	});
@@ -266,7 +328,7 @@ function providerRows(state: QuotaState, layout: Layout, colorize: Colorize, opt
 /**
  * Single row text for one tier, with reset times; always lists both providers. Labels are
  * dimmed and low values colored individually, so a value color never bleeds into the rest.
- * Windows with an unknown reset omit it; OpenAI shows only its weekly window.
+ * Windows with an unknown or already-past reset omit it (the percent is unchanged); OpenAI shows only its weekly window, or an `unknown window` quota when the router could not prove the span.
  */
 export function formatQuotaRow(state: QuotaState, tier: Tier, colorize: Colorize, opts: FormatOptions = {}): string {
 	return providerRows(state, { tier, resets: true, split: false }, colorize, opts).join("\n");

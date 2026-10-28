@@ -86,11 +86,20 @@ export function snapshot(
 	};
 }
 
+function withWindows<T extends { windows: unknown[] }>(
+	base: T,
+	windows: readonly Record<string, unknown>[] | undefined,
+): T {
+	return windows ? { ...base, windows: [...windows] } : base;
+}
+
 /** Usage-bus double only; the real footer owns parsing, polling, timeout and stale recovery. */
 export class UsageBus {
 	anthropic: readonly [number, number] | undefined = [20, 40];
 	codex: readonly [number, number] | undefined = [30, 50];
 	statuses: [string, string] = ["available", "available"];
+	/** Raw router windows replacing the codex fixture windows (spans, provenance); `codex` still gates presence. */
+	codexWindows: readonly Record<string, unknown>[] | undefined = undefined;
 	/** Router `resetAt` epoch ms per window ([5h-or-first, weekly]); unset means the router reported none. */
 	anthropicResets: readonly (number | undefined)[] = [];
 	codexResets: readonly (number | undefined)[] = [];
@@ -113,7 +122,12 @@ export class UsageBus {
 						? [snapshot("anthropic", this.anthropic, this.clock.now(), this.statuses[0], this.anthropicResets)]
 						: []),
 					...(this.codex
-						? [snapshot("openai-codex", this.codex, this.clock.now(), this.statuses[1], this.codexResets)]
+						? [
+								withWindows(
+									snapshot("openai-codex", this.codex, this.clock.now(), this.statuses[1], this.codexResets),
+									this.codexWindows,
+								),
+							]
 						: []),
 				],
 				blocks: [],

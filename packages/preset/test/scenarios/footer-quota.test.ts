@@ -280,7 +280,7 @@ it("narrow footer wraps by provider keeping resets, then drops them before clipp
 	for (const row of host.viewport()) expect(visibleWidth(row)).toBeLessThanOrEqual(30);
 });
 
-it("unknown, past and stale resets: omitted, unknown percent, retained", async () => {
+it("unknown, past and stale resets: reset text omitted, percent and staleness unchanged", async () => {
 	fixture = new FooterFixture();
 	// Anthropic: no 5h reset reported; weekly reset already passed. OpenAI: weekly reset known.
 	fixture.usage.anthropicResets = [undefined, Date.parse("2026-10-19T11:59:00Z")];
@@ -288,13 +288,62 @@ it("unknown, past and stale resets: omitted, unknown percent, retained", async (
 	const host = await fixture.start();
 	host.resize(200, 40);
 	await host.settle();
-	expect(quotaRows(host)).toEqual(["Quota left: Anthropic 5h 80% weekly -- | OpenAI weekly 50% (resets Oct 24 11:05)"]);
+	expect(quotaRows(host)).toEqual([
+		"Quota left: Anthropic 5h 80% weekly 60% | OpenAI weekly 50% (resets Oct 24 11:05)",
+	]);
 	// A failed poll keeps the last reading and its reset, marked stale.
 	fixture.usage.mode = "error";
 	await fixture.advance(60_000);
 	expect(quotaRows(host)).toEqual([
-		"Quota left: Anthropic (stale) 5h 80% weekly -- | OpenAI (stale) weekly 50% (resets Oct 24 11:05)",
+		"Quota left: Anthropic (stale) 5h 80% weekly 60% | OpenAI (stale) weekly 50% (resets Oct 24 11:05)",
 	]);
+});
+
+const WEEK = 604_800_000;
+const codexWindow = (usedPercent: number, durationMs: number, spanSource: string | undefined, resetAt?: number) => ({
+	name: spanSource === "reported" && durationMs === 18_000_000 ? "5h" : "7d",
+	scope: "provider",
+	usedPercent,
+	durationMs,
+	spanSource,
+	resetAt,
+});
+
+async function wideCodexRow(windows: readonly Record<string, unknown>[]): Promise<string[]> {
+	fixture = new FooterFixture();
+	fixture.usage.codexWindows = windows;
+	const host = await fixture.start();
+	host.resize(200, 40);
+	await host.settle();
+	return quotaRows(host);
+}
+
+it("weekly-only OpenAI with a reported weekly span shows weekly date and time", async () => {
+	const rows = await wideCodexRow([codexWindow(38, WEEK, "reported", RESETS.codex[1])]);
+	expect(rows[0]).toMatch(/\| OpenAI weekly 62% \(resets Oct 24 11:05\)$/);
+	expect(rows[0]).not.toMatch(/window unknown|OpenAI 5h|OAI 5h/);
+});
+
+it("OpenAI with an assumed span is labeled unknown, never 5h or weekly, and keeps its percent and reset", async () => {
+	const rows = await wideCodexRow([codexWindow(38, 18_000_000, "assumed", RESETS.codex[1])]);
+	expect(rows[0]).toMatch(/\| OpenAI quota 62% \(resets Oct 24 11:05; window unknown\)$/);
+	expect(rows[0]).not.toMatch(/OpenAI (weekly|5h)/);
+});
+
+it("a reported 18000s OpenAI window is not shown", async () => {
+	const rows = await wideCodexRow([codexWindow(38, 18_000_000, "reported", RESETS.codex[0])]);
+	expect(rows[0]).toMatch(/\| OpenAI weekly --$/);
+	expect(rows[0]).not.toMatch(/62%|13:00/);
+});
+
+it("an unknown-span OpenAI quota keeps its provider association at narrow widths", async () => {
+	fixture = new FooterFixture();
+	fixture.usage.codexWindows = [codexWindow(38, 18_000_000, "assumed", RESETS.codex[1])];
+	const host = await fixture.start();
+	host.resize(40, 40);
+	await host.settle();
+	expect(quotaRows(host).at(-1)).toBe("OAI quota? 62% @Oct 24 11:05");
+	expect(values(host, "openai-codex")).toEqual(["62%"]);
 });
 
 it("absent usage listener leaves quota hidden", async () => {

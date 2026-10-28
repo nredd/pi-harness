@@ -519,14 +519,17 @@ test("format: unknown reset is omitted per window, percent stays", () => {
 	);
 });
 
-test("format: stale readings keep label and reset; elapsed resets show unknown, not an old percent", () => {
+test("format: stale readings keep label and reset; an elapsed reset hides only its own text, never the percent", () => {
 	const opts = { now: CLOCK, timeZone: UTC };
 	assert.match(
 		q.formatQuotaRow(resetState({ stale: true }), "full", plain, opts),
 		/^Quota left: Anthropic \(stale\) 5h 66% \(resets 14:30\)/,
 	);
 	const elapsed = resetState({ fiveHourResetAt: CLOCK, weeklyResetAt: CLOCK - 1 });
-	assert.equal(q.formatQuotaRow(elapsed, "compact", plain, opts), "Left: Anth 5h -- 7d -- | OAI 7d 76% @Jan 15 11:05");
+	assert.equal(
+		q.formatQuotaRow(elapsed, "compact", plain, opts),
+		"Left: Anth 5h 66% 7d 35% | OAI 7d 76% @Jan 15 11:05",
+	);
 	const hot = q.formatQuotaRow(
 		{ anthropic: { fiveHour: 3, fiveHourResetAt: CLOCK + 60_000, stale: false } },
 		"compact",
@@ -580,4 +583,168 @@ test("fitQuotaRows: widest layout that fits; narrow widths wrap by provider, nev
 	for (const row of rows(5)) assert.match(row, /^(Left: )?(Anth|OAI) /);
 	// Default clock works.
 	assert.equal(q.fitQuotaRows({}, 200, plain).length, 1);
+});
+
+// --- OpenAI window identity (router `spanSource`) ---------------------------
+
+const WEEK = 604_800_000;
+const span = (name, usedPercent, durationMs, spanSource, resetAt) => ({
+	...win(name, usedPercent),
+	durationMs,
+	spanSource,
+	resetAt,
+});
+const codexOf = (windows) =>
+	q.parseUsageReply(reply([snap("openai-codex", windows, { expiresAt: NOW + 5 })]), NOW)["openai-codex"];
+
+test("identity: reported weekly primary (no 5h, no secondary) is weekly with its reset", () => {
+	const state = codexOf([span("7d", 38, WEEK, "reported", 9_000)]);
+	assert.deepEqual(state, { weekly: 62, weeklyResetAt: 9_000, stale: false, expiresAt: NOW + 5 });
+	assert.ok(!("weeklyUnknown" in state));
+});
+
+test("identity: weekly is chosen by reported duration, not by name", () => {
+	const state = codexOf([span("weekly-ish", 10, WEEK, "reported", 7_000)]);
+	assert.equal(state.weekly, 90);
+	assert.ok(!("weeklyUnknown" in state));
+});
+
+test("identity: reported 18000s window is hidden; with no weekly the provider shows `weekly --`", () => {
+	const state = codexOf([span("5h", 10, 18_000_000, "reported", 7_000)]);
+	assert.ok(!("weekly" in state) || state.weekly === undefined);
+	assert.ok(!("fiveHour" in state));
+	assert.ok(!("weeklyUnknown" in state));
+	assert.equal(
+		q.formatQuotaRow({ "openai-codex": state }, "full", plain, { now: CLOCK }).split("| ")[1],
+		"OpenAI weekly --",
+	);
+});
+
+test("identity: reported other spans (3600s) never become weekly or unknown", () => {
+	const state = codexOf([span("3600s", 10, 3_600_000, "reported", 7_000)]);
+	assert.ok(!("weeklyUnknown" in state));
+	assert.equal(state.weekly, undefined);
+});
+
+test("identity: assumed-only window is an unidentified quota, never weekly; most limiting wins", () => {
+	const only = codexOf([span("5h", 38, 18_000_000, "assumed", 9_000)]);
+	assert.deepEqual(only, { weekly: 62, weeklyResetAt: 9_000, weeklyUnknown: true, stale: false, expiresAt: NOW + 5 });
+	const both = codexOf([span("5h", 38, 18_000_000, "assumed", 9_000), span("7d", 80, WEEK, "assumed", 8_000)]);
+	assert.deepEqual([both.weekly, both.weeklyResetAt, both.weeklyUnknown], [20, 8_000, true]);
+	const tie = codexOf([span("5h", 50, 1, "assumed", 1_000), span("7d", 50, 2, "assumed", 2_000)]);
+	assert.equal(tie.weeklyResetAt, 1_000);
+});
+
+test("identity: a proven weekly suppresses any assumed window", () => {
+	const state = codexOf([span("5h", 99, 18_000_000, "assumed", 1_000), span("7d", 38, WEEK, "reported", 9_000)]);
+	assert.deepEqual([state.weekly, state.weeklyResetAt], [62, 9_000]);
+	assert.ok(!("weeklyUnknown" in state));
+});
+
+test("identity: an assumed `7d` (positional secondary) is not proven weekly", () => {
+	const state = codexOf([span("7d", 38, WEEK, "assumed", 9_000)]);
+	assert.equal(state.weeklyUnknown, true);
+});
+
+test("identity: snapshots without spanSource keep the legacy `7d` behavior and ignore legacy 5h", () => {
+	const state = codexOf([resetWin("5h", 99, 1_000), resetWin("7d", 38, 9_000)]);
+	assert.deepEqual([state.weekly, state.weeklyResetAt], [62, 9_000]);
+	assert.ok(!("weeklyUnknown" in state));
+	const only5h = codexOf([resetWin("5h", 99, 1_000)]);
+	assert.equal(only5h.weekly, undefined);
+	assert.ok(!("weeklyUnknown" in only5h));
+});
+
+test("identity: model-scoped and malformed windows are ignored", () => {
+	const scoped = { ...span("7d", 38, WEEK, "assumed", 9_000), scope: "model" };
+	assert.equal(codexOf([scoped]).weekly, undefined);
+	assert.equal(codexOf([span("7d", Number.NaN, WEEK, "assumed", 9_000)]).weeklyUnknown, true);
+	assert.equal(codexOf([span("7d", Number.NaN, WEEK, "assumed", 9_000)]).weekly, undefined);
+});
+
+test("identity: stale merge keeps unidentified flag with its pair, and never displaces a proven weekly", () => {
+	const unknownPrior = {
+		"openai-codex": { weekly: 40, weeklyResetAt: 5_000, weeklyUnknown: true, stale: false, expiresAt: NOW + 1 },
+	};
+	const failed = { provider: "openai-codex", status: "error", windows: [], expiresAt: NOW + 1 };
+	const kept = q.parseUsageReply(reply([failed]), NOW, unknownPrior)["openai-codex"];
+	assert.deepEqual([kept.weekly, kept.weeklyResetAt, kept.weeklyUnknown, kept.stale], [40, 5_000, true, true]);
+	// Proven weekly arrives later: replaces the unidentified reading and clears the flag.
+	const proven = q.parseUsageReply(
+		reply([{ ...failed, windows: [span("7d", 10, WEEK, "reported", 6_000)] }]),
+		NOW,
+		unknownPrior,
+	)["openai-codex"];
+	assert.deepEqual([proven.weekly, proven.weeklyResetAt], [90, 6_000]);
+	assert.ok(!("weeklyUnknown" in proven));
+	// An unidentified reading cannot displace a retained proven weekly.
+	const provenPrior = { "openai-codex": { weekly: 70, weeklyResetAt: 4_000, stale: false, expiresAt: NOW + 1 } };
+	const guarded = q.parseUsageReply(
+		reply([{ ...failed, windows: [span("5h", 10, 18_000_000, "assumed", 6_000)] }]),
+		NOW,
+		provenPrior,
+	)["openai-codex"];
+	assert.deepEqual([guarded.weekly, guarded.weeklyResetAt], [70, 4_000]);
+	assert.ok(!("weeklyUnknown" in guarded));
+});
+
+test("format: unidentified OpenAI quota says so, full and compact, with date and time", () => {
+	const opts = { now: CLOCK, timeZone: UTC };
+	const state = {
+		anthropic: {
+			fiveHour: 66,
+			fiveHourResetAt: at("2026-01-10T14:30:00Z"),
+			weekly: 35,
+			weeklyResetAt: at("2026-01-14T09:00:00Z"),
+			stale: false,
+		},
+		"openai-codex": { weekly: 62, weeklyResetAt: at("2026-01-15T11:05:00Z"), weeklyUnknown: true, stale: false },
+	};
+	assert.equal(
+		q.formatQuotaRow(state, "full", plain, opts),
+		"Quota left: Anthropic 5h 66% (resets 14:30) weekly 35% (resets Jan 14 09:00) | OpenAI quota 62% (resets Jan 15 11:05; window unknown)",
+	);
+	assert.equal(
+		q.formatQuotaRow(state, "compact", plain, opts),
+		"Left: Anth 5h 66% @14:30 7d 35% @Jan 14 09:00 | OAI quota? 62% @Jan 15 11:05",
+	);
+	const bare = { "openai-codex": { weekly: 62, weeklyUnknown: true, stale: false } };
+	assert.equal(q.formatQuotaRow(bare, "full", plain, opts).split("| ")[1], "OpenAI quota 62% (window unknown)");
+	assert.equal(q.formatQuotaRow(bare, "compact", plain, opts).split("| ")[1], "OAI quota? 62%");
+	assert.ok(!/weekly|7d/.test(q.formatQuotaRow(bare, "full", plain, opts).split("| ")[1]));
+	// A past reset omits only the text.
+	const past = { "openai-codex": { weekly: 62, weeklyResetAt: CLOCK - 1, weeklyUnknown: true, stale: false } };
+	assert.equal(q.formatQuotaRow(past, "full", plain, opts).split("| ")[1], "OpenAI quota 62% (window unknown)");
+	// Narrowest layout keeps the `?` provenance.
+	assert.equal(q.fitQuotaRows(state, 20, plain, opts).at(-1), "OAI quota? 62%");
+});
+
+test("format: a past reset never blanks a percent or changes its color", () => {
+	const opts = { now: CLOCK, timeZone: UTC };
+	const colored = [];
+	const text = q.formatQuotaRow(
+		{ anthropic: { fiveHour: 3, fiveHourResetAt: CLOCK - 1, weekly: 4, weeklyResetAt: CLOCK, stale: false } },
+		"compact",
+		(c, t) => {
+			colored.push(`${c}:${t}`);
+			return t;
+		},
+		opts,
+	);
+	assert.match(text, /^Left: Anth 5h 3% 7d 4% \|/);
+	assert.ok(colored.includes("error:3%") && colored.includes("error:4%"));
+});
+
+test("identity: unrecognized provider windows are ignored; invalid assumed percents never win limiting", () => {
+	const anth = q.parseUsageReply(
+		reply([snap("anthropic", [win("mystery", 1), win("five_hour", 10)], { expiresAt: NOW + 5 })]),
+		NOW,
+	).anthropic;
+	assert.deepEqual([anth.fiveHour, anth.weekly], [90, undefined]);
+	const nanSecond = codexOf([span("5h", 30, 1, "assumed", 1_000), span("7d", Number.NaN, 2, "assumed", 2_000)]);
+	assert.deepEqual([nanSecond.weekly, nanSecond.weeklyResetAt], [70, 1_000]);
+	const nanFirst = codexOf([span("5h", Number.NaN, 1, "assumed", 1_000), span("7d", 30, 2, "assumed", 2_000)]);
+	assert.deepEqual([nanFirst.weekly, nanFirst.weeklyResetAt], [70, 2_000]);
+	const looser = codexOf([span("5h", 30, 1, "assumed", 1_000), span("7d", 10, 2, "assumed", 2_000)]);
+	assert.equal(looser.weekly, 70);
 });

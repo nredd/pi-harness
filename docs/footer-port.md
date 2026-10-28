@@ -20,7 +20,7 @@ Paths below are relative to those directories unless otherwise stated.
 | Token/cost/subscription | `formatTokens`, `buildParts`, `:143-150`; OAuth or kimi-coding | same `formatTokens`, `buildParts`, subscription detection | None |
 | Model/provider/thinking | `:193-239`, minimum two cells padding; provider only when it fits | same `rightSideBase`/`buildLine` | None |
 | Full/compact tier and clipping | `:178-244`, word labels only if untruncated with model | same `buildParts`/`buildLine`/`fitsUntruncated` | None |
-| Quota protocol, parsing, rendering | `lib/footer-quota.ts`, all exports | same exports plus `formatResetAt`/`fitQuotaRows`; changed: OpenAI 5h hidden, reset times, provider-wrapped narrow rows | Intentional: OpenAI has no 5h window, rows carry reset times and wrap by provider when narrow. Unchanged: Anthropic/OpenAI weekly window names, floors, clamps, freshness/merge, 20/5 colors, error/timeout retained values, expiry, 60s/12s, unique channels, single flight |
+| Quota protocol, parsing, rendering | `lib/footer-quota.ts`, all exports | same exports plus `formatResetAt`/`fitQuotaRows`; changed: OpenAI 5h hidden, reset times, provider-wrapped narrow rows | Intentional: OpenAI has no 5h window, rows carry reset times and wrap by provider when narrow. Unchanged: Anthropic/OpenAI weekly window names, floors, clamps, freshness and the per-field stale merge of percents (a reset or identity now travels with its percent), 20/5 colors, error/timeout retained values, expiry, 60s/12s, unique channels, single flight |
 | Deferred startup | `:82-91`, zero-delay startup timer, cancelled on dispose | same `:125-139` using injected clock | Same behavior, clock seam only |
 | Quota timers | helper default Node timers remain referenced | footer passes clock timers, default clock unrefs all handles | Preset timers do not keep Node alive; no visual/poll cadence change |
 | Statuses | `:252-262`, sorted keys, whitespace normalized, clipped row after quota | same `getExtensionStatuses` block | None |
@@ -87,13 +87,13 @@ the published personal footer renders without injecting a local copy. These scen
 existing CI `stack` job; they were deliberately not run locally.
 
 Gate (rebased onto `e18831a`): `make check-integration` clean, 123 Python unit tests and 15 Node
-probe tests passed; `make check-scripts` 457 passed; `make check-ts` exit 0 (preset 126 Vitest, 62 in-process
+probe tests passed; `make check-scripts` 457 passed; `make check-ts` exit 0 (preset 126 Vitest at that time, HISTORICAL; 62 in-process
 stack tests). No scenario pytest, Pi binary or tmux was invoked locally; the CI `stack` jobs are the gate.
 
 ## Local gate evidence
 
 - `npm run check -w @nredd/pi-preset` with the pinned Bun 1.3.14 (`.bun-version`) on PATH: Biome/strict tsc clean,
-  126 Vitest tests and 126 Bun tests passed. This includes all preserved helper assertions,
+  126 Vitest tests and 126 Bun tests passed (HISTORICAL count at the original port; the current suite is 156 on each runtime after the quota reset change). This includes all then-preserved helper assertions,
   real-host footer scenarios, the new renderer contracts and resource-filter discovery.
 - `make check-ts`: passed across every workspace, including 62 Vitest and 62 Bun in-process
   stack tests. The first attempt failed because the fresh worktree had no fork files; initializing
@@ -104,3 +104,16 @@ stack tests). No scenario pytest, Pi binary or tmux was invoked locally; the CI 
 
 No live Pi, assembled process scenarios, benchmark, tag, publication, push or machine activation
 is claimed. Separate mandatory reviewer reports and CI remain the owner's pre-merge gates.
+
+## Quota reset change gate (current)
+
+- Quota rows: OpenAI weekly only, reset date/time from router `windows[].resetAt` in the process-local
+  timezone (tests inject `timeZone`/clock), and router `spanSource` (`reported` | `assumed`) decides OpenAI
+  window identity. An assumed-only OpenAI window renders as `quota ... (window unknown)`, never 5h or weekly.
+- Current counts (this change): preset 156 Vitest + 156 Bun; router 209 Vitest + 209 Bun. The 126 above is historical.
+- NOT run: real Pi binary, tmux scenarios (`integration/scenarios/tui/test_footer_resize.py`), live provider
+  payloads. No captured real Codex payload exists in-repo; weekly-only support rests on the documented
+  `limit_window_seconds` contract and router fixtures, not a live capture.
+- Istanbul (provider `@vitest/coverage-istanbul@5.0.3`, Vitest 5.0.3, Node 26.12.0, reused from an untracked
+  `/tmp` install and symlinked into the ignored worktree `node_modules`; no dependency, config or lock change)
+  over `lib/**` + `extensions/**`: see the PR comment for before/after totals. Primary coverage policy stays with #162/#190.
