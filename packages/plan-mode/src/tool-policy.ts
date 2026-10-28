@@ -832,25 +832,15 @@ const BUILTIN_GIT_VALIDATORS: Record<BuiltinSafeGitSubcommand, ArgumentValidator
   "ls-files": allowReadOnlyArguments,
   grep: isSafeGitGrepArguments,
 };
-const CONFIGURABLE_GIT_VALIDATORS: Record<ConfigurableSafeGitSubcommand, ArgumentValidator> = {
+const CONFIGURABLE_GIT_VALIDATORS: Record<Exclude<ConfigurableSafeGitSubcommand, "cat-file">, ArgumentValidator> = {
   "rev-parse": allowReadOnlyArguments,
   blame: allowReadOnlyArguments,
   describe: allowReadOnlyArguments,
   "merge-base": allowReadOnlyArguments,
   "ls-tree": allowReadOnlyArguments,
-  "cat-file": isSafeGitCatFileArguments,
 };
-const GH_VALIDATORS: Record<SafeGhSubcommandPath, ArgumentValidator> = {
-  "pr view": isSafeGhReadArguments,
-  "pr list": isSafeGhReadArguments,
-  "issue view": isSafeGhReadArguments,
-  "issue list": isSafeGhReadArguments,
-};
-
 function isSafeStructuredCommand(command: string, args: string[], safeSubcommands: SafeSubcommands, paths: PathPolicy) {
   if (command === "git") return isSafeGitCommand(args, safeSubcommands, paths);
-  if (command === "gh") return isSafeGhCommand(args, safeSubcommands);
-
   const subcommandIndex = args.findIndex((argument) => !argument.startsWith("-"));
   const subcommand = args[subcommandIndex]?.toLowerCase();
   const subcommandArgs = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
@@ -1005,13 +995,6 @@ function hasSafeGitArguments(subcommand: string, args: string[]) {
   );
 }
 
-function isSafeGitCatFileArguments(args: string[]) {
-  return !args.some(
-    (argument) =>
-      matchesLongOptionPrefix(argument, "--filters", "--fi") || matchesLongOptionPrefix(argument, "--textconv", "--t"),
-  );
-}
-
 function isSafeGitGrepArguments(args: string[]) {
   return !args.some(
     (argument) =>
@@ -1052,50 +1035,4 @@ function isSafeGitRemoteArguments(args: string[]) {
   if (showArgs.includes("--")) return false;
   const remotes = showArgs.filter((argument) => !argument.startsWith("-"));
   return remotes.length === 0 || (remotes.length === 1 && showArgs.includes("-n"));
-}
-
-function isSafeGhCommand(args: string[], safeSubcommands: SafeSubcommands) {
-  const group = args[0]?.toLowerCase();
-  const action = args[1]?.toLowerCase();
-  if (!group || !action || group.startsWith("-") || action.startsWith("-")) return false;
-  const path = `${group} ${action}` as SafeGhSubcommandPath;
-  if (!safeSubcommands.gh?.includes(path)) return false;
-  const validator = (GH_VALIDATORS as Record<string, ArgumentValidator>)[path];
-  return validator?.(args.slice(2)) ?? false;
-}
-
-function isSafeGhReadArguments(args: string[]) {
-  return !args.some(isUnsafeGhReadArgument) && hasGhJsonOutput(args);
-}
-
-function isUnsafeGhReadArgument(argument: string) {
-  return (
-    argument.startsWith("-w") ||
-    argument === "--web" ||
-    argument.startsWith("--web=") ||
-    argument === "--browser" ||
-    argument.startsWith("--browser=") ||
-    argument === "--paginate" ||
-    argument === "--pager" ||
-    argument.startsWith("--pager=") ||
-    argument === "--output" ||
-    argument.startsWith("--output=")
-  );
-}
-
-function hasGhJsonOutput(args: string[]) {
-  let hasJson = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "--json") {
-      const value = args[index + 1];
-      if (!value || value.startsWith("-")) return false;
-      hasJson = true;
-      index += 1;
-    } else if (argument.startsWith("--json=")) {
-      if (argument === "--json=") return false;
-      hasJson = true;
-    }
-  }
-  return hasJson;
 }

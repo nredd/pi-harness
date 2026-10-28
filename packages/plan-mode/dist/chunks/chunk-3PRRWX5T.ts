@@ -2044,18 +2044,10 @@ var CONFIGURABLE_GIT_VALIDATORS = {
   blame: allowReadOnlyArguments,
   describe: allowReadOnlyArguments,
   "merge-base": allowReadOnlyArguments,
-  "ls-tree": allowReadOnlyArguments,
-  "cat-file": isSafeGitCatFileArguments
-};
-var GH_VALIDATORS = {
-  "pr view": isSafeGhReadArguments,
-  "pr list": isSafeGhReadArguments,
-  "issue view": isSafeGhReadArguments,
-  "issue list": isSafeGhReadArguments
+  "ls-tree": allowReadOnlyArguments
 };
 function isSafeStructuredCommand(command, args, safeSubcommands, paths) {
   if (command === "git") return isSafeGitCommand(args, safeSubcommands, paths);
-  if (command === "gh") return isSafeGhCommand(args, safeSubcommands);
   const subcommandIndex = args.findIndex((argument) => !argument.startsWith("-"));
   const subcommand = args[subcommandIndex]?.toLowerCase();
   const subcommandArgs = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
@@ -2170,11 +2162,6 @@ function hasSafeGitArguments(subcommand, args) {
     (argument) => argument === "--help" || argument === "--show-signature" || argument.startsWith("--show-signature=") || argument.includes("%G") || argument === "--output" || argument.startsWith("--output=") || argument === "--ext-diff" || argument.startsWith("--ext-diff=") || argument === "--textconv" || argument.startsWith("--textconv=") || argument === "--paginate" || argument === "--open-files-in-pager" || argument.startsWith("--open-files-in-pager=") || subcommand === "grep" && (argument === "-O" || argument.startsWith("-O"))
   );
 }
-function isSafeGitCatFileArguments(args) {
-  return !args.some(
-    (argument) => matchesLongOptionPrefix(argument, "--filters", "--fi") || matchesLongOptionPrefix(argument, "--textconv", "--t")
-  );
-}
 function isSafeGitGrepArguments(args) {
   return !args.some(
     (argument) => matchesLongOptionPrefix(argument, "--textconv", "--textc") || matchesLongOptionPrefix(argument, "--open-files-in-pager", "--op") || matchesLongOptionPrefix(argument, "--ext-grep", "--ext")
@@ -2200,37 +2187,6 @@ function isSafeGitRemoteArguments(args) {
   if (showArgs.includes("--")) return false;
   const remotes = showArgs.filter((argument) => !argument.startsWith("-"));
   return remotes.length === 0 || remotes.length === 1 && showArgs.includes("-n");
-}
-function isSafeGhCommand(args, safeSubcommands) {
-  const group = args[0]?.toLowerCase();
-  const action = args[1]?.toLowerCase();
-  if (!group || !action || group.startsWith("-") || action.startsWith("-")) return false;
-  const path = `${group} ${action}`;
-  if (!safeSubcommands.gh?.includes(path)) return false;
-  const validator = GH_VALIDATORS[path];
-  return validator?.(args.slice(2)) ?? false;
-}
-function isSafeGhReadArguments(args) {
-  return !args.some(isUnsafeGhReadArgument) && hasGhJsonOutput(args);
-}
-function isUnsafeGhReadArgument(argument) {
-  return argument.startsWith("-w") || argument === "--web" || argument.startsWith("--web=") || argument === "--browser" || argument.startsWith("--browser=") || argument === "--paginate" || argument === "--pager" || argument.startsWith("--pager=") || argument === "--output" || argument.startsWith("--output=");
-}
-function hasGhJsonOutput(args) {
-  let hasJson = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "--json") {
-      const value = args[index + 1];
-      if (!value || value.startsWith("-")) return false;
-      hasJson = true;
-      index += 1;
-    } else if (argument.startsWith("--json=")) {
-      if (argument === "--json=") return false;
-      hasJson = true;
-    }
-  }
-  return hasJson;
 }
 
 // src/tool-selection.ts
@@ -2382,4 +2338,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-WIDWMEV5.ts.map
+//# sourceMappingURL=chunk-3PRRWX5T.ts.map

@@ -9,6 +9,7 @@ import planMode, {
 import {
   findBlockedCommandSegment,
   findBlockedPowerShellCommandSegment,
+  isSafeCommand as isPolicySafeCommand,
   isSafePowerShellCommand,
 } from "../src/tool-policy.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
@@ -495,6 +496,24 @@ test("tool policy classifies built-ins and extension tools consistently", () => 
   assert.equal(classifyPlanModeTool(builtinTool("powershell") as PlanTool), "limited");
   assert.equal(classifyPlanModeTool(builtinTool("write") as PlanTool), "blocked");
   assert.equal(classifyPlanModeTool(extensionTool("custom") as PlanTool), "user-opt-in");
+});
+
+test("public policy entry points preserve quoted input, escaped shell words, and structured read-only commands", () => {
+  const ghPolicy = { gh: ["pr view"] };
+
+  for (const command of ['Get-Content "README file.md"', "Get-Content 'it''s a README'"]) {
+    assert.equal(isSafePowerShellCommand(command), true, command);
+  }
+  for (const command of ['Get-Content "$' + '{env:HOME}"', 'Get-Content "`"README.md`""']) {
+    assert.equal(isSafePowerShellCommand(command), false, command);
+  }
+
+  assert.equal(isPolicySafeCommand("grep escaped\\ file README.md"), true);
+  assert.equal(isPolicySafeCommand("sed -En '1,10p' README.md"), true);
+  assert.equal(isPolicySafeCommand("git cat-file --filters HEAD", { git: ["cat-file"] }), true);
+
+  assert.equal(isPolicySafeCommand("gh pr view 185 --json number,title", ghPolicy), true);
+  assert.equal(isPolicySafeCommand("gh pr --help view", ghPolicy), false);
 });
 
 type TestSafeSubcommands = Record<string, readonly string[] | undefined>;
