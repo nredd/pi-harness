@@ -59,6 +59,84 @@ test("a declined plan requires renewed confirmation before a second proposal", a
   assert.equal((mock.entries.at(-1)?.data as { declinedPlans?: number } | undefined)?.declinedPlans, 1);
 });
 
+test("invalid settings warn without changing the extension's safe defaults", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, {
+    readSettings: async () => ({ kind: "invalid" as const, reason: "bad JSON", notice: "use a valid file" }),
+  });
+  const context = createMockContext({ hasUI: true });
+
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+
+  assert.deepEqual(context.notifications, [
+    { message: "pi-plan-mode settings ignored: bad JSON", level: "warning" },
+    { message: "use a valid file", level: "warning" },
+  ]);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+});
+
+test("an unavailable settings directory leaves Plan mode usable", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, { settingsPath: "/definitely-missing-plan-mode-directory/settings.json" });
+  const context = createMockContext();
+
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+});
+
+test("a replaced session cannot finish the previous session shutdown", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const first = createMockContext({ sessionManager: { getBranch: () => [], getEntries: () => [] } });
+  const second = createMockContext({ sessionManager: { getBranch: () => [], getEntries: () => [] } });
+  const start = mock.events.get("session_start")?.[0];
+  const shutdown = mock.events.get("session_shutdown")?.[0];
+  assert.ok(start);
+  assert.ok(shutdown);
+
+  await start({ reason: "startup" }, first.ctx);
+  const stopping = Promise.resolve(shutdown({ reason: "reload" }, first.ctx));
+  await start({ reason: "reload" }, second.ctx);
+  await stopping;
+
+  assert.equal(first.statuses.get("plan-mode"), undefined);
+  assert.equal(second.statuses.get("plan-mode"), undefined);
+});
+
+test("legacy malformed plans remain active and explain the rejection", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext();
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  await mock.events.get("agent_end")?.[0]?.(
+    { messages: [{ role: "assistant", content: "<proposed_plan>unfinished", stopReason: "stop" }] },
+    context.ctx,
+  );
+
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+  assert.match(context.notifications.at(-1)?.message ?? "", /closing tag is missing/u);
+});
+
+test("restoring Plan mode without helpers fails closed even without a UI", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  mock.rawPi.setActiveTools(["read"]);
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const state = { type: "custom", customType: "plan-mode-state", data: { enabled: true, awaitingAction: false } };
+  const context = createMockContext({
+    hasUI: false,
+    sessionManager: { getBranch: () => [state], getEntries: () => [state] },
+  });
+
+  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+
+  assert.equal(context.statuses.get("plan-mode"), undefined);
+  assert.deepEqual(mock.rawPi.getActiveTools(), ["read"]);
+});
+
 test("failed finalization retry resets the request instead of retrying forever", async () => {
   const mock = createMockPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
