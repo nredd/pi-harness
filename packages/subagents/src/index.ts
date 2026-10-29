@@ -402,7 +402,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   });
 
   // Fuzzy model names ("opus") prefer what the user enabled in pi's settings.
-  setModelScopeProvider(registry => resolveEnabledModels(readEnabledModels(process.cwd(), options.homeDir), registry, process.cwd(), options.homeDir));
+  setModelScopeProvider((registry, context) => {
+    const cwd = context?.cwd ?? process.cwd();
+    const homeDir = context?.homeDir ?? options.homeDir;
+    return resolveEnabledModels(readEnabledModels(cwd, homeDir), registry, cwd, homeDir);
+  });
 
   // Read directly rather than waiting for applyAndEmitLoaded below: these decide
   // the initial load, which happens hundreds of lines before settings are applied.
