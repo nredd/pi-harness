@@ -352,13 +352,14 @@ describe("actual portable bundled CLI", () => {
 		const clean = { ...process.env };
 		delete clean.PI_CODING_AGENT_DIR;
 		delete clean.PI_CODING_AGENT_SESSION_DIR;
-		return spawnSync(process.execPath, [artifact, ...args], { cwd: dir, env: { ...clean, ...env }, encoding: "utf8" });
+		// The packed CLI targets Node 22+, even when Vitest itself runs on Bun.
+		return spawnSync("node", [artifact, ...args], { cwd: dir, env: { ...clean, ...env }, encoding: "utf8" });
 	}
 
-	/** Import a packed standalone executable and capture any accidental CLI output. */
+	/** Import with the artifact's Node runtime and capture any accidental CLI output. */
 	function importArtifact(artifact: string, importerArgs: string[] = []) {
 		return spawnSync(
-			process.execPath,
+			"node",
 			["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(artifact).href)})`, ...importerArgs],
 			{
 				cwd: dir,
