@@ -56,6 +56,28 @@ def read_regular(path: Path, *, follow: bool) -> str | None:
         return handle.read()
 
 
+def read_regular_bytes(path: Path) -> bytes:
+    """Read raw diagnostic bytes without following a final link or blocking on a FIFO.
+
+    Parameters:
+        path (Path): candidate file; parent policy belongs to the calling collector.
+
+    Returns:
+        bytes: unmodified contents of the opened regular file.
+
+    Raises:
+        NonRegularFileError: the entry or opened descriptor is not regular.
+        OSError: the path disappears or opening/reading fails.
+    """
+    if entry_kind(path) != "file":
+        raise NonRegularFileError("Diagnostic candidate is not a regular file")
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | os.O_NOFOLLOW
+    with os.fdopen(os.open(path, flags), "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise NonRegularFileError("Diagnostic candidate stopped being a regular file")
+        return handle.read()
+
+
 def entry_kind(path: Path) -> str | None:
     """Classify a path without following a final symlink.
 
