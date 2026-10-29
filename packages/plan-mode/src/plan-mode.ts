@@ -190,6 +190,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let activeImplementationRuntimeApplication: ActiveImplementationRuntimeApplication | undefined;
   let pendingRuntimeAdmissionSession: object | undefined;
   let queuedRuntimeAdmissionInputs: QueuedRuntimeAdmissionInput[] = [];
+  let shuttingDownSession: object | undefined;
   let menuController = new AbortController();
   let settingsWatch: ReturnType<typeof watch> | undefined;
   let settingsReloadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -512,6 +513,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     finalizationRequest.reset();
     currentSession = ctx.sessionManager;
     currentSessionContext = ctx;
+    shuttingDownSession = undefined;
     workflowOwner = undefined;
     workflowMutex.bindSession(ctx.sessionManager);
     refreshStateBeforeFirstAgentStart = event.reason === "new";
@@ -605,24 +607,18 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         ? activeImplementationRuntimeApplication
         : undefined;
     const queuedInputs = takeQueuedRuntimeAdmissionInputs(shutdownSession);
-    for (const queued of queuedInputs) {
-      pi.sendMessage(
-        {
-          customType: RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE,
-          content: runtimeAdmissionInputContent(queued),
-          display: true,
-          details: { source: queued.source },
-        },
-        { triggerTurn: false },
-      );
+    for (const queued of queuedInputs) recoverRuntimeAdmissionInput(queued);
+    if (currentSession !== undefined && currentSession !== shutdownSession) {
+      workflowMutex.unbindSession(shutdownSession);
+      return;
     }
+    shuttingDownSession = shutdownSession;
     finalizationRequest.reset();
     menuGeneration += 1;
     menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
     readyPresentationIntent = undefined;
     refreshStateBeforeFirstAgentStart = false;
     pendingRuntimeAdmissionSession = undefined;
-    queuedRuntimeAdmissionInputs = [];
     workflowAllowedToolNames = undefined;
     pendingWorkflowToolPolicy = undefined;
     implementationRetention.reset();
@@ -794,6 +790,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("input", async (event, ctx) => {
+    // A host may still dispatch input while shutdown awaits model/settings writes.
+    if (shuttingDownSession === ctx.sessionManager) {
+      recoverRuntimeAdmissionInput({ ...event, sessionManager: ctx.sessionManager });
+      return { action: "handled" };
+    }
     refreshStateForFirstPrompt(ctx);
     // A reply typed while a plan awaits action declines it; the extension's own prompts do not.
     if (event.source !== "extension") recordPlanDecline();
@@ -1652,6 +1653,18 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
     queuedRuntimeAdmissionInputs = remaining;
     return matching;
+  }
+
+  function recoverRuntimeAdmissionInput(queued: QueuedRuntimeAdmissionInput) {
+    pi.sendMessage(
+      {
+        customType: RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE,
+        content: runtimeAdmissionInputContent(queued),
+        display: true,
+        details: { source: queued.source },
+      },
+      { triggerTurn: false },
+    );
   }
 
   function removeQueuedRuntimeAdmissionInput(queuedInput: QueuedRuntimeAdmissionInput) {
