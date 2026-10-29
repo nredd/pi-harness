@@ -12,14 +12,14 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import type * as TypeScript from "typescript";
-import { ModuleKind, transpileModule } from "typescript";
+import TypeScript from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("typescript", async importOriginal => {
-  const actual = await importOriginal<typeof TypeScript>();
-  return { ...actual, transpileModule: vi.fn(actual.transpileModule) };
-});
+// Count this fixture's compilation only. A module-wide TypeScript mock also
+// intercepts the real SDK loader, and spreading a default-only CJS namespace
+// drops ModuleKind. Keep the real compiler API and wrap only our own calls.
+const { ModuleKind } = TypeScript;
+const transpileModule = vi.fn(TypeScript.transpileModule);
 
 vi.mock("../src/agent-runner.js", () => ({
   runAgent: vi.fn(),

@@ -120,7 +120,7 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 			expect(manifest.scripts["test:bun"]).toContain("bun test test/session-scenarios.test.ts");
 		} else {
 			expect(manifest.scripts["test:bun"]).toMatch(
-				/^node ..\/..\/scripts\/run-vitest.ts bun(?: --maxWorkers=1| --config .vitest.config.ts)?$/,
+				/^node ..\/..\/scripts\/run-vitest.ts bun(?: --maxWorkers=1| --config .vitest.config.ts)? --coverage --coverage.provider=istanbul --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage\/bun$/,
 			);
 		}
 		expect(manifest.scripts.check).toContain("npm run test:bun");

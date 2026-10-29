@@ -96,7 +96,9 @@ export function bucketize(
  */
 export function niceStep(x: number): number {
 	if (!(x > 1)) return 1;
-	const exp = 10 ** Math.floor(Math.log10(x));
+	if (!Number.isFinite(x)) return Number.POSITIVE_INFINITY;
+	// Parse decimal powers directly: exponentiation accuracy differs across JS engines.
+	const exp = Number(`1e${Math.floor(Math.log10(x))}`);
 	for (const m of NICE) {
 		const step = m * exp;
 		if (Number.isInteger(step) && step >= x - 1e-9 * exp) return step;

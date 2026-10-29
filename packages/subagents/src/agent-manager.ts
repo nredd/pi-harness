@@ -495,6 +495,7 @@ const CHILD_SHUTDOWN_TIMEOUT_MS = 3_000;
  * `assertActive()` from a bare timer callback — an uncaughtException that kills pi (#242).
  */
 async function shutdownChildSession(session: AgentSession | undefined): Promise<void> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     const runner = session?.extensionRunner;
     // Optional all the way down: on a pi without the getter, or a stubbed session from a
@@ -505,10 +506,17 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
       // already torn down — one hung handler would leave a dead terminal.
       await Promise.race([
         runner.emit({ type: "session_shutdown", reason: "quit" }),
-        new Promise<void>(resolve => setTimeout(resolve, CHILD_SHUTDOWN_TIMEOUT_MS).unref()),
+        new Promise<void>(resolve => {
+          deadline = setTimeout(resolve, CHILD_SHUTDOWN_TIMEOUT_MS);
+          deadline.unref();
+        }),
       ]);
     }
   } catch { /* a partial session must degrade, not take the teardown down with it */ }
+  finally {
+    // Promise.race does not cancel its loser, even when a handler rejects.
+    if (deadline !== undefined) clearTimeout(deadline);
+  }
   // Always, even on timeout: disposal is what this function ultimately exists to do.
   try { session?.dispose?.(); } catch { /* ignore */ }
 }
@@ -891,28 +899,29 @@ export class AgentManager {
         release();
         markLeft();
       },
-      cancel: () => {},
+      // enqueueBudget only registers; grant cannot run until the next pump,
+      // after this entry has been initialized and published in the queue.
+      cancel: enqueueBudget({
+        depth: record.depth ?? 1,
+        ready: () => pool === undefined || this.poolHasRoom(pool),
+        grant: (lease) => {
+          this.queue = this.queue.filter(e => e !== entry);
+          if (this.agents.get(id) !== record || record.status !== "queued") {
+            releaseBudget(lease);
+            entry.release();
+            return;
+          }
+          record.budgetLease = lease;
+          // Detached, and never rejects: a late failure (e.g. strict worktree
+          // isolation) lands on the record inside `launch`. The release waits
+          // for that startup to SETTLE: a release at grant time would wake a
+          // blocked `spawnAndWait` while `record.promise` was still undefined,
+          // and it would read a healthy agent as one that never ran.
+          void entry.start().then(() => entry.release(), () => entry.release());
+        },
+      }),
       left,
     };
-    entry.cancel = enqueueBudget({
-      depth: record.depth ?? 1,
-      ready: () => pool === undefined || this.poolHasRoom(pool),
-      grant: (lease) => {
-        this.queue = this.queue.filter(e => e !== entry);
-        if (this.agents.get(id) !== record || record.status !== "queued") {
-          releaseBudget(lease);
-          entry.release();
-          return;
-        }
-        record.budgetLease = lease;
-        // Detached, and never rejects: a late failure (e.g. strict worktree
-        // isolation) lands on the record inside `launch`. The release waits
-        // for that startup to SETTLE: a release at grant time would wake a
-        // blocked `spawnAndWait` while `record.promise` was still undefined,
-        // and it would read a healthy agent as one that never ran.
-        void entry.start().then(() => entry.release(), () => entry.release());
-      },
-    });
     this.queue.push(entry);
   }
 

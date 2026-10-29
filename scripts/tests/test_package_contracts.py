@@ -1333,6 +1333,25 @@ def test_real_workspace_tarballs_pass_audit(
     assert artifact.integrity.startswith("sha512-")
 
 
+def test_router_contract_requires_the_cheap_profile() -> None:
+    """Require the published cheap example without broadly allowing JSON files.
+
+    Parameters:
+        None.
+
+    Returns:
+        None: The profile is required and unrelated JSON files remain forbidden.
+
+    Raises:
+        AssertionError: The contract omits the profile or permits unrelated JSON files.
+    """
+    contract = next(c for c in pc.CONTRACTS if c.directory == "subscription-router")
+    example = "examples/subscription-router.json"
+    assert example in contract.required
+    assert any(pattern.fullmatch(example) for pattern in contract.allowed)
+    assert not any(pattern.fullmatch("examples/secrets.json") for pattern in contract.allowed)
+
+
 def test_pack_without_allowlist_is_rejected(tmp_path: Path, sandbox: pc.Sandbox) -> None:
     """The original leak: no `files` allowlist and no license ships tests and dev config.
 

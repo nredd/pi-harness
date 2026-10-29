@@ -78,6 +78,7 @@ import {
 } from "./ui/agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./ui/conversation-viewer.js";
 import { FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.js";
+import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "./ui/fleet-state.js";
 import { renderNotification } from "./ui/notification-view.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
@@ -293,12 +294,18 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
  *   agents and those with `extensions: false`.
  */
 export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
-  const tools = cfg?.builtinToolNames;
+  const denied = cfg?.disallowedTools ?? [];
+  const tools = denied.length > 0
+    ? (cfg?.builtinToolNames ?? BUILTIN_TOOL_NAMES).filter((tool) => !denied.includes(tool))
+    : cfg?.builtinToolNames;
+  // Only claim what is known at registration: extensions may supply command
+  // tools (including ssh_exec), so missing bash is not proof of no remote access.
+  const shellNote = tools && !tools.includes("bash") ? "; no built-in shell: cannot run bash commands" : "";
   // `isolated` overrides extensions to false in the runner, so both mean the
   // agent has no extension tools.
   const noExtensionTools = cfg?.isolated === true || cfg?.extensions === false;
   if (tools && tools.length === 0) {
-    return noExtensionTools ? "none" : "no built-ins, extension tools only";
+    return (noExtensionTools ? "none" : "no built-ins, extension tools only") + shellNote;
   }
   const isFullSet = !tools
     || (tools.length === BUILTIN_TOOL_NAMES.length && BUILTIN_TOOL_NAMES.every((t) => tools.includes(t)));
@@ -306,7 +313,7 @@ export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
   // Extension tools resolve at run time, so they cannot be enumerated here, but
   // omitting the fact reads as "built-ins only": an agent that can search the
   // web through an extension then looks web-less, and the work gets routed away.
-  return noExtensionTools ? builtins : `${builtins} + extension tools`;
+  return (noExtensionTools ? builtins : `${builtins} + extension tools`) + shellNote;
 }
 
 /** CLI flag that runs a workflow script at session start. */
@@ -634,7 +641,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   function deliverDetachedResult(result: DetachedResult) {
     try {
-      if (result.record) pi.appendEntry("subagents:record", result.record);
+      if (result.record) {
+        pi.appendEntry("subagents:record", result.record);
+        fleet.ingestFailure(result.record);
+        fleet.update();
+      }
       const details = result.details as NotificationDetails;
       outbox.add({
         ids: [details.id, ...(details.others?.map(other => other.id) ?? [])],
@@ -661,6 +672,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       return;
     }
 
+    if (!record.resultConsumed) fleet.ingestFailure(record);
     // Emit lifecycle event based on terminal status
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
     const eventData = buildEventData(record);
@@ -883,6 +895,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   // --- Cross-extension RPC via pi.events ---
   let currentCtx: ExtensionContext | undefined;
+  let unwatchFleetSchedules: (() => void) | undefined;
   // RPC handlers + the `subagents:ready` broadcast are wired on `session_start`
   // (a bound lifecycle event), not at factory time. pi runs every extension
   // factory before the `extensions:` filter and only fires lifecycle events for
@@ -920,6 +933,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // bound session_start, so a filtered-out activation never advertises (#142).
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    restoreFleetDisclosure(ctx);
     // Pi resolves project trust before the first session starts, so this is the
     // earliest honest answer. The activation-time load defaulted to untrusted,
     // so a trusted project's `packages[]` only becomes visible now.
@@ -947,6 +961,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       widget.setUICtx(ctx.ui);
       fleet.setUICtx(ctx.ui as any);
       watchHandoffKey(ctx.ui);
+      unwatchFleetSchedules ??= pi.events.on("subagents:scheduled", () => fleet.update());
     }
     manager.clearCompleted(true);
     const sessionFile = ctx.sessionManager?.getSessionFile?.();
@@ -981,6 +996,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
             if (!record || record.parentAgentId) return false;
             if (record.status === "running" || record.status === "queued") return false;
             markConsumed(record, clock.now());
+            fleet.acknowledgeFailure(record.id);
             outbox.cancel(record.id);
             return true;
           },
@@ -993,6 +1009,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       pi.events.emit("subagents:ready", {});
     }
     if (isSchedulingEnabled() && !scheduler.isActive()) startScheduler(ctx);
+    fleet.update(); // restored quota-parked jobs have no agent record
     // Stack `@handle` suggestions on pi's built-in autocomplete. Registered at
     // most once per activation: pi appends wrappers to a list it never prunes,
     // so a second call would layer a duplicate provider on the first. TUI only
@@ -1267,6 +1284,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // to this session (see detached-results.ts). Only agents that cannot outlive the
   // session are aborted.
   pi.on("session_shutdown", async (event: { reason?: string }) => {
+    fleet.flushState(); // appendEntry must run before this activation loses its context
     const sessionFile = currentCtx?.sessionManager?.getSessionFile?.();
     unwatchDetached?.();
     unwatchDetached = undefined;
@@ -1316,6 +1334,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     widget.dispose();
     outbox.dispose();
     fleet.dispose();
+    unwatchFleetSchedules?.();
+    unwatchFleetSchedules = undefined;
     unsubHandoffKey?.();
     unsubHandoffKey = undefined;
     handoffKeyUi = undefined;
@@ -1453,6 +1473,17 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     getFullscreenScrollbar, backgroundActionFor, isShowModelEnabled,
     // Agents the previous instance of this session left running (/reload, /new, ...).
     () => listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.()), clock);
+  fleet.setParkedSource(() => scheduler.list().filter(job => job.enabled && job.quotaParked && job.lastStatus !== "running").length);
+  /** Replay UI-only state from the active branch, like workflow/goal custom snapshots. */
+  function restoreFleetDisclosure(ctx: ExtensionContext): void {
+    fleet.restoreSession(() => ctx.sessionManager?.getBranch?.() ?? [], state => {
+      pi.appendEntry(FLEET_STATE_ENTRY, { ...state, version: FLEET_STATE_VERSION });
+    });
+  }
+  pi.on("session_tree", (_event, ctx) => {
+    restoreFleetDisclosure(ctx);
+    fleet.update();
+  });
   /** What the Agent tool row reads at render time, so its summary stays live. */
   const agentRowLive: AgentRowLive = {
     getRecord: (id) => manager.getRecord(id),
@@ -2107,7 +2138,7 @@ Terse command-style prompts produce shallow, generic work.
         agentType: subagentType, definitionModel: customConfig?.model, paramModel: params.model,
         parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: customConfig?.displayName,
       });
-      if (typeof selection === "string") return textResult(selection);
+      if (typeof selection === "string") return { ...textResult(selection), isError: true };
       const tierBlock = selection?.tierBinding && !params.schedule ? await admitModelSelection(selection, ctx.modelRegistry, pi.events) : undefined;
       const model = selection?.model;
       const modelFallback = selection?.fallback;
@@ -2757,6 +2788,7 @@ Terse command-style prompts produce shallow, generic work.
       startedAt: task.startTime,
       ...(task.endTime !== undefined ? { completedAt: task.endTime } : {}),
       tokens: task.totalTokens,
+      observationKey: task,
     }));
   }
 
@@ -3232,6 +3264,7 @@ Terse command-style prompts produce shallow, generic work.
       // Mark result as consumed — suppresses the completion notification
       if (record.status !== "running" && record.status !== "queued") {
         markConsumed(record, clock.now());
+        fleet.acknowledgeFailure(record.id);
         outbox.cancel(record.id);
       }
 
@@ -3462,8 +3495,9 @@ Terse command-style prompts produce shallow, generic work.
       };
     });
 
-    if (selected && getAgentConfig(selected)) {
-      await showAgentDetail(ctx, selected);
+    const cfg = selected ? getAgentConfig(selected) : undefined;
+    if (selected && cfg) {
+      await showAgentDetail(ctx, selected, cfg);
       await showAllAgentsList(ctx);
     }
   }
@@ -3517,13 +3551,7 @@ Terse command-style prompts produce shallow, generic work.
     );
   }
 
-  async function showAgentDetail(ctx: ExtensionCommandContext, name: string) {
-    const cfg = getAgentConfig(name);
-    if (!cfg) {
-      ctx.ui.notify(`Agent config not found for "${name}".`, "warning");
-      return;
-    }
-
+  async function showAgentDetail(ctx: ExtensionCommandContext, name: string, cfg: AgentConfig) {
     const isPackage = cfg.source === "package";
     const file = locateAgentFile(name, cfg.sourcePath, undefined, cfg.source);
     const isDefault = cfg.isDefault === true;

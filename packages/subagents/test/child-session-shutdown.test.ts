@@ -72,9 +72,12 @@ describe("child session shutdown (#242)", () => {
     manager = new AgentManager();
     const session = boundSession();
     await spawnCompleted(manager, session);
+    const disposed = new Promise<void>(resolve => { session.dispose.mockImplementation(resolve); });
 
+    vi.useFakeTimers();
     manager.clearCompleted();
-    await vi.waitFor(() => expect(session.dispose).toHaveBeenCalled());
+    await disposed;
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(session.extensionRunner.emit).toHaveBeenCalledWith({
       type: "session_shutdown",
@@ -108,6 +111,27 @@ describe("child session shutdown (#242)", () => {
     expect(session.dispose).toHaveBeenCalledOnce();
   });
 
+  it.each(["resolve", "reject"] as const)("cancels the shutdown deadline when a held handler %ss", async outcome => {
+    manager = new AgentManager();
+    let settle!: () => void;
+    const session = boundSession(() => new Promise<void>((resolve, reject) => {
+      settle = outcome === "resolve" ? resolve : () => reject(new Error("shutdown failed"));
+    }));
+    await spawnCompleted(manager, session);
+
+    vi.useFakeTimers();
+    const disposed = manager.dispose();
+    // dispose enters the handler and arms its ceiling before returning. Holding
+    // the handler makes the ordering deterministic without advancing any time.
+    expect(vi.getTimerCount()).toBe(1);
+    expect(session.dispose).not.toHaveBeenCalled();
+    settle();
+    await disposed;
+
+    expect(session.dispose).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("quit is not hostage to a handler that never resolves", async () => {
     manager = new AgentManager();
     const session = boundSession(() => new Promise<void>(() => {}));
@@ -125,6 +149,7 @@ describe("child session shutdown (#242)", () => {
     expect(session.dispose).toHaveBeenCalledOnce();
     // Teardown continues past the timeout rather than unwinding.
     expect(pruneWorktrees).toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("skips the emit when no extension handles session_shutdown", async () => {

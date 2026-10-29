@@ -108,6 +108,17 @@ and moved Linux documentation. `npm run check`, `make check-scripts`, the packed
 contract and scoped Biome passed locally after resolution. The prior macOS contracts/local-stack
 jobs were never acquired by a runner (capacity annotations), not package failures; no blind rerun.
 
+Main integration follow-up (2026-10-29): plain-merge main `4d578352`, retaining Bun 1.4.4,
+WSL's shared twelve-check matrix and strict protection. Adopt #191's merged collector and #194's
+shared `harness.credentials` policy; port #178's raw-byte/timeout metadata without restoring its
+collector-local scanner. Preserve #178's npm/short GitHub/sk/pk/Slack/private-key signatures in the
+shared policy alongside main's short JSON/Bearer and URL/proxy handling. Retain the complete
+clean/contaminated artifact matrix and add main's short credential cases across that matrix.
+Coverage policy only inventories newly imported source and exact non-shipped verification helpers:
+computer-use remains owner-excluded with no signals or percentage gate. `coverage:rust` remains
+optional report-only tooling, never invoked by `check` or CI. No live helper, signing, pin or
+installed path changes are part of this integration.
+
 ## Signing decision and rollback
 
 KEEP local builds and local signing for now. Upstream builds a CI self-signed bundle, not a

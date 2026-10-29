@@ -2,7 +2,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { makeGitFixture } from "../../packages/dev-tools/test/scenarios/support.ts";
 import { agentStack, ask, call, closeAgentStack, GIT_READS, listTools, READS, report } from "./agents-support.ts";
 import { isolateStackHome } from "./support.ts";
@@ -15,10 +15,16 @@ beforeAll(async () => {
 	fixture = makeGitFixture();
 });
 beforeEach(async () => {
+	// Read tools must use provisioned rg/fd, never a live latest-release download.
+	vi.stubEnv("PI_OFFLINE", "1");
 	h = await agentStack(home.root);
 });
 afterEach(async () => {
-	if (h) await closeAgentStack(h);
+	try {
+		if (h) await closeAgentStack(h);
+	} finally {
+		vi.unstubAllEnvs();
+	}
 });
 afterAll(async () => {
 	if (fixture) rmSync(dirname(fixture.repo), { recursive: true, force: true });

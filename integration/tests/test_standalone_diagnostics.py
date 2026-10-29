@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from harness import standalone_diagnostics as diag
+from harness.credentials import CREDENTIAL
 from harness.sandbox import build_sandbox
 
 
@@ -249,6 +250,10 @@ def test_fixed_artifact_inventory_is_explicit() -> None:
         b"-----BEGIN DSA PRIVATE KEY-----",
         b"Bearer " + b"a" * 24,
         b'"refresh_token": "' + b"a" * 24 + b'"',
+        b'{"access_token":"x"}',
+        b'{"refresh_token":"x"}',
+        b'{"api_key":"x"}',
+        b"bEaReR x",
         b"https://user:password@example.invalid/",
     ],
 )
@@ -322,9 +327,9 @@ def test_npm_signature_length_boundary() -> None:
     Returns:
         None: synthetic boundary assertions complete.
     """
-    assert diag.CREDENTIAL.search(b"npm_" + b"a" * 35) is None
-    assert diag.CREDENTIAL.search(b"npm_" + b"a" * 36) is not None
-    assert diag.CREDENTIAL.search(b"npm_" + b"a" * 37) is not None
+    assert CREDENTIAL.search(b"npm_" + b"a" * 35) is None
+    assert CREDENTIAL.search(b"npm_" + b"a" * 36) is not None
+    assert CREDENTIAL.search(b"npm_" + b"a" * 37) is not None
 
 
 def test_symlink_cache_is_not_read(tmp_path: Path) -> None:

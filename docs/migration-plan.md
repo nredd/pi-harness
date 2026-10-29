@@ -14,7 +14,13 @@
   subagents, plan-mode, todo and computer-use are imported npm workspaces. Computer-use's upstream
   base, carried patches and re-sync commands live [here](../packages/computer-use/UPSTREAM.md).
 - Owned packages ship via `publish.yml`, core via the Homebrew tap, and dotfiles activates pins with
-  `chezmoi update --upgrade` plus `pi-profile doctor`. The plan body below is unchanged.
+  `chezmoi update --upgrade` plus `pi-profile doctor`. Historical REA requirements below
+  are marked retired inline; the original adoption research remains in `integration/docs/`.
+- REA retirement supersedes every REA-specific requirement in historical sections 5, 6 and 9
+  and the explicit boundaries below. `nredd/dotfiles#58` removed the managed server, warm hook,
+  skill and doctor assertions; REA is not a package input, Bun prerequisite or release gate.
+  Native MCP support remains. Dotfiles' `tests/rea-retirement.test.mjs` owns absence and
+  disposable-home cleanup/no-launch regressions, not REA operation or engine installation.
 
 ## Summary
 
@@ -116,11 +122,15 @@ Before distribution cutover, test the compiled artifact with packed plugins and 
 - Detached process groups, signal escalation, pipe closure, and descendant cleanup.
 - Subagents, quota admission/recovery, Plan-mode transitions, and tool annotations.
 - TUI rendering, input, resizing, footer behavior, images, and codemode workers.
-- Native helpers and engine-free REA MCP operation on supported platforms.
+- Native helpers on supported platforms. RETIRED: engine-free REA MCP operation; REA is no
+  longer bundled or required. Generic native MCP/codemode behavior remains supported.
 
 Replace Node-specific harness assumptions with explicit runtime adapters. Verify mock-transport/preload readiness before scenarios run; missing interception must abort rather than contact real providers. Preserve credential-free faux execution and disable unrelated MCP servers in ordinary sandboxes.
 
-Bun failures must be fixed and covered by regression tests, or the migration stops. Node remains a declared prerequisite for REA and other Node-based tooling; this is not a Node-free workstation project.
+Bun failures must be fixed and covered by regression tests, or the migration stops. Node remains
+a declared prerequisite for other Node-based tooling; this is not a Node-free workstation
+project. RETIRED: the REA-specific Node prerequisite, not the independent dotfiles modifier
+runtime prerequisite.
 
 ## 6. Exact release inputs and artifacts
 
@@ -134,11 +144,17 @@ Use a schema-versioned release manifest containing:
 - Profile resource selections, prerequisite versions, and renderer/policy schema versions.
 - Verification and review evidence identifying the exact source and artifacts tested.
 
-Generate source identities from Gitlinks and package manifests rather than maintaining duplicate hand-edited fork pins. Lock third-party resolution, including extensions, REA, and required package-based helpers. Keep downloaded model data and optional analysis engines outside release artifacts.
+Generate source identities from Gitlinks and package manifests rather than maintaining duplicate
+hand-edited fork pins. Lock third-party resolution for extensions and required package-based
+helpers. RETIRED: locking or shipping REA as a release input. Keep downloaded model data and
+optional analysis engines outside release artifacts.
 
 Build platform runtime trees from the exact package artifacts and locked dependencies. Archive the installed runtime tree explicitly; do not assume `npm pack` includes `node_modules`. Preserve licenses and reject accidental duplicate host packages.
 
-Use one aggregate local runtime package with explicit nested resource declarations and per-profile filters. Include both profiles’ public code so switching profiles needs no download or release activation. Keep all declared resource paths within the package root. Preserve the REA server/skill version relationship and its required real-directory skill installation.
+Use one aggregate local runtime package with explicit nested resource declarations and per-profile
+filters. Include both profiles’ public code so switching profiles needs no download or release
+activation. Keep all declared resource paths within the package root. RETIRED: the REA server/skill
+version relationship and real-directory skill installation requirement; neither resource is bundled.
 
 Publish the same plugin tarballs and stack archives that passed verification. Use immutable release assets, checksums, and provenance. Do not rebuild between verification and publication.
 
@@ -202,7 +218,7 @@ Required scenarios include:
 | Contracts | Real-package optional-integration tests plus missing-package behavior; no replacement with mocks alone |
 | Profiles | Personal/enterprise switching on one active release; strict missing-role refusal; no personal fallback |
 | Bun | Compiled-artifact tests pass on all three platforms, including workers, process cleanup, and native resources |
-| MCP | REA pin/skill alignment, local engine-free operation, codemode exposure, and sandbox disablement |
+| MCP | Generic native MCP/codemode support is retained. RETIRED: REA pin/skill alignment, engine-free operation, exposure and sandbox-disablement requirements. Dotfiles owns REA absence/cleanup regressions, not harness runtime acceptance. |
 | Staging | Offline retry, corrupt checksum, unsupported platform, malicious archive paths, interrupted download, idempotency, dry-run, and no active-state changes |
 | Activation | Initial legacy cutover, configuration failure, interrupted transaction, rollback, restrictive backup permissions, and credential/state preservation |
 | Promotion | Known-flake rerun rules, blocking benchmarks, unavailable runner, stale-candidate rejection, manifest-only writes, current-HEAD review, and untrusted-PR isolation |
@@ -218,5 +234,6 @@ Validate the new distribution on personal macOS and actual enterprise WSL, recor
 - Every migration PR receives proper independent reviewer subagents; no direct-merge shortcut for bootstrap, documentation, tiny changes, or bot-generated pins.
 - Bun compatibility and publication safety are blocking validation work, not assumed successes.
 - Missing npm ownership, GitHub App setup, runner provisioning, review-model access, or enterprise access is a reported prerequisite blocker, never bypassed with broader credentials or skipped review.
-- Optional REA engines, historical benchmark reruns, native Windows, and Intel macOS support are outside this migration.
+- RETIRED: REA integration and optional REA engine adoption, not deferred migration work.
+  Historical benchmark reruns, native Windows and Intel macOS support remain outside this migration.
 - Manual live/desktop checks are reported separately and never described as having passed when they were not run.
