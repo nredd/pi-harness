@@ -93,3 +93,7 @@ Then validate it with `StackSnapshot` (`integration/harness/promotion.py`) and r
 ## First promotion
 
 After this PR merges, run `verify-only` on a `main` SHA whose CI ran the stack job, then `promote` with the same SHA and approve the `stack-promotion` environment. This PR dispatches nothing and creates no tag, release, ruleset or environment.
+
+## Owner override
+
+`owner-override` promotes a main commit without green CI. It still verifies the core release and the published `@nredd/` package evidence, still requires the `stack-promotion` environment approval, and records every push/main CI run of the commit as stack evidence whatever its conclusion. Each waived required check and run conclusion is logged as `OWNER OVERRIDE` in the workflow run. Use it only when the owner accepts shipping ahead of CI.

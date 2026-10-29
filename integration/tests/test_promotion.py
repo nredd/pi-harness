@@ -1123,7 +1123,7 @@ def test_workflow_permissions_environment_and_concurrency() -> None:
     assert all("concurrency" not in job for job in jobs.values())
     triggers = next(value for key, value in wf.items() if key in {True, "on"})  # YAML 1.1 reads `on` as True
     inputs = triggers["workflow_dispatch"]["inputs"]
-    assert inputs["operation"]["options"] == ["verify-only", "promote"]
+    assert inputs["operation"]["options"] == ["verify-only", "promote", "owner-override"]
     assert set(inputs) == {"source_sha", "operation"}
     assert inputs["source_sha"]["required"] is True
     assert "secrets." not in PROMOTION_WORKFLOW.read_text()
