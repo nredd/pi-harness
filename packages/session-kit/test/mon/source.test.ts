@@ -43,6 +43,11 @@ function raw(overrides: Partial<ResourceSnapshot> = {}): ResourceSnapshot {
 }
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const nativeDarwinCpu =
+	platform() === "darwin" &&
+	(Boolean(process.versions.bun) ||
+		Number(process.versions.node.split(".")[0]) > 26 ||
+		(Number(process.versions.node.split(".")[0]) === 26 && Number(process.versions.node.split(".")[1]) >= 1));
 
 describe("published sampler source on this host", () => {
 	it("resolves the exact registry sampler, never the workspace copy", async () => {
@@ -83,11 +88,17 @@ describe("published sampler source on this host", () => {
 			const self = second.processes.find((p) => p.pid === process.pid);
 			expect(self?.rssBytes).toBeGreaterThan(0);
 			if (platform() === "darwin") {
-				// Unavailable stays unknown; it never becomes 0%.
-				expect(second.processes.every((p) => p.cpuPercent === null)).toBe(true);
-				expect(second.processCpu).toBe("unavailable");
-				expect(second.hint).toContain("macOS: process CPU unavailable");
-				// 0.1.1 names come from `p_comm`, never argv or a rewritten process title.
+				// 0.2.0 provides native interval CPU after the baseline, never a ps average.
+				if (nativeDarwinCpu) {
+					expect(self?.cpuPercent).toBeGreaterThanOrEqual(0);
+					expect(second.processCpu).toBeUndefined();
+					expect(second.hint ?? "").not.toContain("macOS: process CPU unavailable");
+				} else {
+					expect(second.processes.every((p) => p.cpuPercent === null)).toBe(true);
+					expect(second.processCpu).toBe("unavailable");
+					expect(second.hint).toContain("macOS: process CPU unavailable");
+				}
+				// Names come from `p_comm`, never argv or a rewritten process title.
 				const node = second.processes.find((p) => p.pid === process.pid);
 				expect(node?.name).toMatch(/^(node|bun)/);
 				expect(second.processes.every((p) => !p.name.includes(" exec "))).toBe(true);

@@ -42,15 +42,15 @@
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "test": "vitest run --coverage",
+    "test": "node ../../scripts/run-vitest.ts node --coverage",
     "test:watch": "vitest",
-    "test:e2e": "vitest run e2e --reporter=verbose",
+    "test:e2e": "node ../../scripts/run-vitest.ts node e2e --reporter=verbose",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/",
     "lint:fix": "biome check --fix src/ test/",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun",
     "test:bun": "bun test test/session-scenarios.test.ts test/fleet-session.test.ts test/viewer-session.test.ts test/worktree-isolation-e2e.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && PI_EXPECT_BUN_RUNTIME=1 node ../../scripts/run-vitest.ts bun test/resource-loader-home.test.ts --coverage.enabled=false",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "node ../../scripts/run-vitest.ts node --coverage",
     "bench": "vitest bench",
     "bench:ab": "node test/perf/ab.mjs"
   },
