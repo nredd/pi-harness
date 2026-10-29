@@ -15,6 +15,17 @@ import {
 } from "../src/tool-policy.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
+test("injected homes govern trusted tilde roots for Bash and PowerShell", () => {
+  const home = "/isolated/home";
+  const roots = ["/isolated/home/trusted"];
+  for (const command of ["cd ~/trusted && git status", "git -C ~/trusted status"]) {
+    assert.equal(isPolicySafeCommand(command, {}, "/work", "darwin", roots, home), true, command);
+    assert.equal(isPolicySafeCommand(command, {}, "/work", "darwin", roots, "/other/home"), false, command);
+  }
+  assert.equal(isSafePowerShellCommand("git -C ~/trusted status", {}, "/work", roots, home), true);
+  assert.equal(isSafePowerShellCommand("git -C ~other/trusted status", {}, "/work", roots, home), false);
+});
+
 test("tool selection allows safe built-ins and non-built-ins only", () => {
   type PlanTool = Parameters<typeof canSelectToolInPlanMode>[0];
   assert.equal(canSelectToolInPlanMode(builtinTool("read") as PlanTool), true);

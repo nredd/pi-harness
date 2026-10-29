@@ -9,7 +9,7 @@ import type { KitConfig } from "../config.ts";
 import { say } from "../output.ts";
 import { StatsView, summary } from "./component.ts";
 import { freshnessLines } from "./freshness.ts";
-import type { Loaded } from "./load.ts";
+import { agentDir, type Loaded } from "./load.ts";
 import { type Combined, coverageLabel, loadCombined } from "./snapshot.ts";
 
 const STATUS_KEY = "session-kit:stats";
@@ -26,7 +26,7 @@ function problems({ errors, badLines }: Pick<Loaded, "errors" | "badLines">): st
 export function register(
 	pi: ExtensionAPI,
 	_config: KitConfig,
-	options: { agentDir?: string; clock?: Clock } = {},
+	options: { agentDir?: string; homeDir?: string; clock?: Clock } = {},
 ): void {
 	const clock = options.clock ?? realClock;
 	pi.registerCommand("stats", {
@@ -41,7 +41,7 @@ export function register(
 			let loaded: Combined;
 			try {
 				loaded = await loadCombined(
-					options.agentDir,
+					options.agentDir ?? agentDir(options.homeDir),
 					tui ? (done, total) => ctx.ui.setStatus(STATUS_KEY, `stats: loading ${done}/${total}...`) : undefined,
 				);
 			} catch (error) {

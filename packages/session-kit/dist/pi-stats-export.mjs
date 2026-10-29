@@ -17,8 +17,8 @@ var EXCLUDED_PROVIDERS = /* @__PURE__ */ new Set(["faux", "faux-provider", "fake
 var CHILD_NAME = /#[0-9a-f]{8}$/;
 var LEADING_TIMESTAMP = /^.{0,200}?"timestamp"\s*:\s*"([^"]+)"/;
 var YIELD_EVERY_LINES = 2e3;
-function agentDir() {
-  return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+function agentDir(homeDir = homedir()) {
+  return process.env.PI_CODING_AGENT_DIR ?? join(homeDir, ".pi", "agent");
 }
 function sessionsDir(dir = agentDir()) {
   return process.env.PI_CODING_AGENT_SESSION_DIR ?? join(dir, "sessions");

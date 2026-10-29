@@ -1,6 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readKnownHosts, validateHost } from "../../src/ssh/hosts.ts";
+import { readKnownHosts, sshConfigPath, validateHost } from "../../src/ssh/hosts.ts";
 
 const CONFIG = join(import.meta.dirname, "..", "fixtures", "ssh", "config");
 
@@ -36,6 +38,29 @@ describe("readKnownHosts", () => {
 	});
 	it("is empty for a missing file", () => {
 		expect(readKnownHosts("/nonexistent/config").size).toBe(0);
+	});
+
+	it("uses the injected home for a tilde Include without probing the real home", () => {
+		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
+		const config = join(home, ".ssh", "config");
+		const included = join(home, ".ssh", "included.conf");
+		mkdirSync(join(home, ".ssh"), { recursive: true });
+		writeFileSync(
+			config,
+			`Include ~/.ssh/included.conf
+`,
+		);
+		writeFileSync(
+			included,
+			`Host isolated
+`,
+		);
+		try {
+			expect(sshConfigPath(home)).toBe(config);
+			expect([...readKnownHosts(config, undefined, undefined, undefined, home)]).toEqual(["isolated"]);
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
 	});
 });
 

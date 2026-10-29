@@ -10,7 +10,7 @@ import { FakeClock } from "./scenarios/support.ts";
 type Factory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 
 /** Only fields read by the renderer are supplied; casts mark this isolated host boundary. */
-async function mount(useDefaultClock = false) {
+async function mount(useDefaultClock = false, homeDir?: string) {
 	const clock = new FakeClock();
 	let start: ((_event: unknown, ctx: ExtensionContext) => unknown) | undefined;
 	let factory: Factory | undefined;
@@ -48,7 +48,7 @@ async function mount(useDefaultClock = false) {
 			emit,
 		},
 	};
-	await createExpandedFooter(useDefaultClock ? {} : { clock })(pi as unknown as ExtensionAPI);
+	await createExpandedFooter(useDefaultClock ? { homeDir } : { clock, homeDir })(pi as unknown as ExtensionAPI);
 	await start?.({}, ctx as unknown as ExtensionContext);
 	if (!factory) throw new Error("Footer not mounted");
 	const paint = vi.fn((_color: string, text: string) => text);
@@ -154,6 +154,16 @@ it.each([
 	try {
 		f.entries.push({ type: "usage", usage: { ...f.usage, input } });
 		expect(f.component.render(240)[1]).toContain(`in ${formatted} out`);
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
+it("uses the injected home when formatting the cwd", async () => {
+	const f = await mount(false, "/isolated/home");
+	try {
+		f.ctx.cwd = "/isolated/home/project";
+		expect(f.component.render(240)[0]).toBe("~/project (feature) • session");
 	} finally {
 		f.component.dispose?.();
 	}

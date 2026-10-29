@@ -95,8 +95,8 @@ interface CacheDoc {
 	files: Record<string, FileStats>;
 }
 
-export function agentDir(): string {
-	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+export function agentDir(homeDir = homedir()): string {
+	return process.env.PI_CODING_AGENT_DIR ?? join(homeDir, ".pi", "agent");
 }
 
 export function sessionsDir(dir = agentDir()): string {
