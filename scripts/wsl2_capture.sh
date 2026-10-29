@@ -34,8 +34,14 @@ for name in artifacts artifacts-node artifacts-personal; do
 done
 # Published atomically by the startup collector only after its allowlist/credential scan.
 if [ -d "$RUNNER_TEMP/standalone-startup-diagnostics" ]; then
-  mkdir -p "$WSL_HOST_TEMP/standalone-startup-diagnostics"
-  cp -a "$RUNNER_TEMP/standalone-startup-diagnostics/." "$WSL_HOST_TEMP/standalone-startup-diagnostics/"
+  staging=$(mktemp -d "$WSL_HOST_TEMP/.standalone-startup.XXXXXX")
+  if cp -a "$RUNNER_TEMP/standalone-startup-diagnostics/." "$staging/"; then
+    rm -rf "$WSL_HOST_TEMP/standalone-startup-diagnostics"
+    mv "$staging" "$WSL_HOST_TEMP/standalone-startup-diagnostics"
+  else
+    rm -rf "$staging"
+    exit 1
+  fi
 fi
 shopt -s nullglob
 for report in "$RUNNER_TEMP/"*contracts*.json; do

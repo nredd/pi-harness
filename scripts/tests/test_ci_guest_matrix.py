@@ -132,7 +132,8 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     )
     assert startup["if"] == (
         "${{ !cancelled() && steps.startup.outcome == 'failure' "
-        "&& steps.startup.outputs.artifact_ready == 'true' }}"
+        "&& steps.startup.outputs.artifact_ready == 'true' "
+        "&& (matrix.os != 'wsl2' || steps.startup_capture.outcome == 'success') }}"
     )
     assert all("always()" in step["if"] for step in uploads if step is not startup)
     assert startup["with"]["name"] == (
@@ -140,6 +141,7 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     )
     capture = stack["steps"][stack["steps"].index(startup) - 1]
     assert capture["uses"] == "./.github/actions/capture-ci-wsl"
+    assert capture["id"] == "startup_capture"
     assert "matrix.os == 'wsl2'" in capture["if"]
     assert "steps.startup.outputs.artifact_ready == 'true'" in capture["if"]
     standalone = next(step for step in uploads if "standalone-wsl2" in step["with"]["name"])
@@ -284,6 +286,41 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     assert not (host_temp / "secret.txt").exists()
     assert (host_temp / "standalone-startup-diagnostics/SHA256SUMS").is_file() is not export_failure
     assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
+
+
+def test_capture_does_not_publish_partial_startup_evidence(tmp_path: Path) -> None:
+    """Refuse a partial host copy before announcing uploadable startup evidence.
+
+    Parameters:
+        tmp_path (Path): Disposable guest and host directories.
+    """
+    worktree, env = guest_fixture(tmp_path)
+    startup = worktree / ".ci-temp/standalone-startup-diagnostics"
+    startup.mkdir()
+    (startup / "SHA256SUMS").write_text("synthetic manifest\n")
+    host = tmp_path / "host"
+    host_temp = host / "temp"
+    host_temp.mkdir(parents=True)
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "cp").write_text('#!/bin/sh\nprintf partial > "$3/partial"\nexit 92\n')
+    (commands / "cp").chmod(0o755)
+    env |= {
+        "WSL_HOST_WORKSPACE": str(host),
+        "WSL_HOST_TEMP": str(host_temp),
+        "PATH": f"{commands}{os.pathsep}{env['PATH']}",
+    }
+    (worktree / ".ci-temp/tool-path").write_text(env["PATH"])
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert not (host_temp / "standalone-startup-diagnostics").exists()
+    assert not list(host_temp.glob(".standalone-startup.*"))
 
 
 def test_capture_replaces_stale_node_snapshot(tmp_path: Path) -> None:
