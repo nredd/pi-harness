@@ -107,6 +107,9 @@ it("Plan round trip preserves running fleet", async () => {
 		stack.clock.advance(200);
 		await host.settle();
 		expect(outcomes(h, "Agent").map((result) => result.isError)).toEqual([false]);
+		expect(host.viewport().join("\n")).toContain("agents: 1 running");
+		host.input("\x1b[97;6u"); // explicitly expand; plan-mode disposal must preserve this choice
+		await host.settle();
 		const before = host.viewport().join("\n");
 		expect(before).toContain("SPAWNED");
 		expect(before).toMatch(CHILD);

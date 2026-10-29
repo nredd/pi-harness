@@ -82,6 +82,21 @@ function setup(options: Setup = {}) {
 }
 
 describe("titles agent_end", () => {
+	it("silently contains a stream adapter failure, does not retry, and resets on a new session", async () => {
+		const t = setup();
+		t.streamSimple.mockImplementationOnce(() => {
+			throw new Error("private stream failure");
+		});
+		await t.end();
+		await t.end();
+		expect(t.streamSimple).toHaveBeenCalledOnce();
+		expect(t.setSessionName).not.toHaveBeenCalled();
+		t.start();
+		await t.end();
+		expect(t.streamSimple).toHaveBeenCalledTimes(2);
+		expect(t.setSessionName).toHaveBeenCalledExactlyOnceWith("Fix Login Bug");
+	});
+
 	it("names an unnamed TUI session once", async () => {
 		const t = setup();
 		await t.end();

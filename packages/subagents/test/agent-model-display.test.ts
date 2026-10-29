@@ -19,9 +19,9 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
-import subagentsExtension from "../src/index.js";
 import { setModelAliases } from "../src/model-resolver.js";
 import { type SessionStartHandler, startSession } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 /** Boot the extension and start a session on a trusted project, as pi would. */
 async function agentTool() {
@@ -102,7 +102,6 @@ function pinnedAgent(frontmatter: string): void {
 let cwd: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
-let originalHome: string | undefined;
 
 beforeEach(() => {
   originalCwd = process.cwd();
@@ -110,9 +109,7 @@ beforeEach(() => {
   process.chdir(cwd);
   // A developer's own ~/.pi agents and settings would otherwise leak in.
   originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-  originalHome = process.env.HOME;
   process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-  process.env.HOME = cwd;
   setModelAliases(undefined);
 });
 
@@ -121,8 +118,6 @@ afterEach(() => {
   process.chdir(originalCwd);
   if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-  if (originalHome == null) delete process.env.HOME;
-  else process.env.HOME = originalHome;
   registerAgents(new Map());
   rmSync(cwd, { recursive: true, force: true });
   vi.restoreAllMocks();

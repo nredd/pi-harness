@@ -14,10 +14,9 @@ import {
   createCodemodeExtension,
   createMcpExtension,
   createToolSearchExtension,
-  DefaultResourceLoader,
+  type DefaultResourceLoader,
   defineTool,
   type ExtensionAPI,
-  getAgentDir,
   type InlineExtension,
   SessionManager,
   SettingsManager,
@@ -28,6 +27,7 @@ import { runInChildSessionContext } from "./child-context.js";
 import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
+import { normalizeHomePath, resolveAgentDir } from "./home-paths.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import type { ModelCallEvent } from "./model-call.js";
 import type { ModelFallback } from "./model-resolver.js";
@@ -40,6 +40,7 @@ import {
   type NestedAgentManager,
 } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
+import { createHomeResourceLoader } from "./resource-loader.js";
 import { preloadSkills } from "./skill-loader.js";
 import { isStaleCtxError } from "./stale-ctx.js";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
@@ -190,6 +191,7 @@ export function extensionCanonicalNames(extPath: string): string[] {
 export function parseExtensionsSpec(
   entries: string[],
   cwd: string,
+  homeDir = homedir(),
 ): { names: Set<string>; paths: string[]; wildcard: boolean } {
   const names = new Set<string>();
   const paths: string[] = [];
@@ -205,10 +207,10 @@ export function parseExtensionsSpec(
       names.add(entry.toLowerCase());
       continue;
     }
+    // This frontmatter caller historically expands both slash forms on every
+    // platform, without interpreting file URLs or Windows shell drive forms.
     let p = entry;
-    if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) {
-      p = homedir() + p.slice(1);
-    }
+    if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) p = homeDir + p.slice(1);
     const abs = isAbsolute(p) ? p : resolve(cwd, p);
     paths.push(abs);
     names.add(extensionCanonicalName(abs));
@@ -533,6 +535,8 @@ export interface RunOptions {
   workflow?: boolean;
   /** Override working directory (e.g. for worktree isolation). */
   cwd?: string;
+  /** Home directory for tilde expansion and user-scoped storage. Defaults at run time. */
+  homeDir?: string;
   /**
    * Directory the worktree copy was created from. Set only when `cwd` points
    * into a worktree — the prompt then tells the agent to stay in the copy
@@ -965,9 +969,9 @@ function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => 
   return () => signal.removeEventListener("abort", onAbort);
 }
 
-function resolveConfiguredSessionDir(sessionDir: string | undefined, cwd: string): string | undefined {
+function resolveConfiguredSessionDir(sessionDir: string | undefined, cwd: string, homeDir = homedir()): string | undefined {
   if (!sessionDir) return undefined;
-  if (sessionDir === "~" || sessionDir.startsWith("~/")) return resolve(homedir(), sessionDir.slice(2));
+  if (sessionDir === "~" || sessionDir.startsWith("~/")) return resolve(homeDir, sessionDir.slice(2));
   if (isAbsolute(sessionDir)) return sessionDir;
   return resolve(cwd, sessionDir);
 }
@@ -1009,7 +1013,7 @@ export async function runAgent(
 
   // Skill preloading: when skills is string[], preload their content into prompt
   if (Array.isArray(skills)) {
-    const loaded = preloadSkills(skills, configCwd);
+    const loaded = preloadSkills(skills, configCwd, options.homeDir);
     if (loaded.length > 0) {
       extras.skillBlocks = loaded;
     }
@@ -1029,12 +1033,12 @@ export async function runAgent(
       // Read-write memory: add any missing memory tool names (read/write/edit)
       const extraNames = getMemoryToolNames(existingNames);
       if (extraNames.length > 0) toolNames = [...toolNames, ...extraNames];
-      extras.memoryBlock = buildMemoryBlock(agentConfig.name, agentConfig.memory, configCwd);
+      extras.memoryBlock = buildMemoryBlock(agentConfig.name, agentConfig.memory, configCwd, options.homeDir);
     } else {
       // Read-only memory: only add read tool name, use read-only prompt
       const extraNames = getReadOnlyMemoryToolNames(existingNames);
       if (extraNames.length > 0) toolNames = [...toolNames, ...extraNames];
-      extras.memoryBlock = buildReadOnlyMemoryBlock(agentConfig.name, agentConfig.memory, configCwd);
+      extras.memoryBlock = buildReadOnlyMemoryBlock(agentConfig.name, agentConfig.memory, configCwd, options.homeDir);
     }
   }
 
@@ -1070,7 +1074,7 @@ export async function runAgent(
   // Still pass noSkills: true since we don't need the skill loader to load them again.
   const noSkills = skills === false || Array.isArray(skills);
 
-  const agentDir = getAgentDir();
+  const agentDir = resolveAgentDir(options.homeDir);
 
   // Extension loading:
   // - true  → all default-discovered extensions
@@ -1095,7 +1099,7 @@ export async function runAgent(
   const noExtensions = extensions === false;
 
   const extensionsSpec = Array.isArray(extensions)
-    ? parseExtensionsSpec(extensions, configCwd)
+    ? parseExtensionsSpec(extensions, configCwd, options.homeDir)
     : undefined;
   const keepNames = extensionsSpec?.names ?? new Set<string>();
   // `exclude_extensions:` is a denylist applied AFTER the include set — exclude wins.
@@ -1150,7 +1154,7 @@ export async function runAgent(
         });
   const nestedCallGate: NestedCallGate = {};
 
-  const loader = new DefaultResourceLoader({
+  const loader = createHomeResourceLoader({
     settingsManager,
     // pi's CLI hands its built-in extensions to the loader it builds; this one starts
     // with none. Forwarded as `builtin:` resources they load as in the main session —
@@ -1182,7 +1186,7 @@ export async function runAgent(
     noContextFiles: true,
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
-  });
+  }, options.homeDir);
   await runInChildSessionContext(() => loader.reload());
 
   // Plain entries in `tools:` are expected to be built-in names (extension tools
@@ -1276,6 +1280,7 @@ export async function runAgent(
         depth: nestedRuntime.depth,
         maxSubagentDepth: effectiveMaxDepth,
         allowedSubagents: agentConfig.allowedSubagents,
+        homeDir: options.homeDir,
         configCwd,
         projectTrusted,
       })
@@ -1376,8 +1381,17 @@ export async function runAgent(
     sessionExcludeTools = [...denyTools];
   }
 
-  const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd);
-  const defaultSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
+  const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd, options.homeDir);
+  const sessionDirSetting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
+  // SessionManager's implicit default consults the host home again. Pin the
+  // same cwd encoding under our injected agentDir instead when isolating a run.
+  // SDK settings go straight through SessionManager's native normalization;
+  // unlike frontmatter, file URLs expand and relative settings stay relative.
+  const defaultSessionDir = options.homeDir === undefined
+    ? sessionDirSetting
+    : sessionDirSetting
+      ? normalizeHomePath(sessionDirSetting, options.homeDir)
+      : join(resolve(agentDir), "sessions", `--${resolve(effectiveCwd).replace(/^[/\\\\]/, "").replace(/[/\\\\:]/g, "-")}--`);
   // Frontmatter wins when it says anything; otherwise the project default,
   // which `rememberAgents` supplies for top-level agents only. Same precedence
   // as `outputTranscript`.

@@ -1,5 +1,8 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import type { GuidanceFields } from "@juicesharp/rpiv-config";
-import { loadJsonConfigWithLegacyFallback, validateGuidanceFields } from "@juicesharp/rpiv-config";
+import { loadJsonConfig, validateGuidanceFields } from "@juicesharp/rpiv-config";
 
 interface TodoConfig {
 	guidance?: GuidanceFields;
@@ -28,21 +31,40 @@ export const DEFAULT_COLLAPSE_KEY: CollapseKeySpec = "ctrl+shift+t";
 /** Sentinel value for `collapseKey` that disables the collapse shortcut entirely. */
 export const COLLAPSE_KEY_OFF: CollapseKeySpec = "off";
 
-export function loadConfig(): TodoConfig {
-	return loadJsonConfigWithLegacyFallback<TodoConfig>("rpiv-todo");
+/**
+ * Load config from an explicitly supplied home directory. The default resolves at
+ * call time so callers can isolate filesystem access without mutating `HOME`.
+ */
+export function loadConfig(homeDir = homedir()): TodoConfig {
+	const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+	const configDir = resolveConfigDir(xdgConfigHome, homeDir);
+	const configPath = join(configDir, "rpiv-todo", "config.json");
+	if (existsSync(configPath)) return loadJsonConfig<TodoConfig>(configPath);
+	return loadJsonConfig<TodoConfig>(join(homeDir, ".config", "rpiv-todo", "config.json"));
+}
+
+function resolveConfigDir(xdgConfigHome: string | undefined, homeDir: string): string {
+	if (!xdgConfigHome) return join(homeDir, ".config");
+	const expanded =
+		xdgConfigHome === "~"
+			? homeDir
+			: xdgConfigHome.startsWith("~/")
+				? join(homeDir, xdgConfigHome.slice(2))
+				: xdgConfigHome;
+	return isAbsolute(expanded) ? expanded : join(homeDir, ".config");
 }
 
 /** Whether a resumed session starts with the panel collapsed. Read fresh per session start. */
-export function getCollapseOnResume(): boolean {
-	return loadConfig().collapseOnResume !== false;
+export function getCollapseOnResume(homeDir?: string): boolean {
+	return loadConfig(homeDir).collapseOnResume !== false;
 }
 
 /** Content-row budget for the overlay, read fresh on every call (per-render —
  *  no `/reload`). Mirrors warp's getHeartbeatMs minus its `=== 0` disabled
  *  sentinel: a non-number or a value below the floor of 3 falls back to the
  *  default; no ceiling. */
-export function getMaxWidgetLines(): number {
-	const config = loadConfig();
+export function getMaxWidgetLines(homeDir?: string): number {
+	const config = loadConfig(homeDir);
 	const lines = config.maxWidgetLines;
 	if (typeof lines !== "number" || lines < 3) return DEFAULT_MAX_WIDGET_LINES;
 	return lines;
@@ -97,8 +119,8 @@ export function isValidCollapseKeySpec(spec: string): boolean {
  *  Returns DEFAULT_COLLAPSE_KEY when the field is missing/non-string/empty/blank/
  *  invalid, COLLAPSE_KEY_OFF when set to the sentinel, or the lowercased validated
  *  spec. */
-export function resolveCollapseKey(): CollapseKeySpec {
-	const config = loadConfig();
+export function resolveCollapseKey(homeDir?: string): CollapseKeySpec {
+	const config = loadConfig(homeDir);
 	const raw = typeof config.collapseKey === "string" ? config.collapseKey.trim().toLowerCase() : undefined;
 	if (raw === undefined || raw === "") return DEFAULT_COLLAPSE_KEY;
 	if (raw === COLLAPSE_KEY_OFF) return COLLAPSE_KEY_OFF;

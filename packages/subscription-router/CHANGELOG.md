@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Ship an opt-in `cheap` profile example: ordered Haiku 5.5 then GPT 6 Luna, with the usual wait policy and no implicit profile registration. Real-registry stack tests exercise it through built-in Explore's `@cheap` default
+
 - Score expired snapshots no older than `STALE_GRACE_MS` (15 min after retrieval, about 10 min past the TTL) as measured, flagged `stale`, instead of fallback; fixes balanced routing favouring `chain[0]` when a new child's first route races the background refresh. No network read added before routing
 - Record each scored routing decision (candidates, scores, limiting window, data age, chosen model) as a `router:decision` session entry (a profile's first pick per session and each change of chosen model only; this reduces growth but is not a hard bound, since flapping and restarts still append) and list the last five in `/router status`
 

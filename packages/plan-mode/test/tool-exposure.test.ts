@@ -7,11 +7,18 @@ import {
   defaultPlanModeToolNames,
   filterAvailableSelectedToolNames,
   planModeToolSelection,
+  toolNameFromLegacyKey,
 } from "../src/tool-selection.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 type Decision = { block?: boolean; reason?: string } | undefined;
+
+test("legacy tool keys resolve their pre-separator name", () => {
+  const tools = [builtinTool("read") as ToolInfo];
+  assert.equal(toolNameFromLegacyKey("read\u001fold metadata", tools), "read");
+  assert.equal(toolNameFromLegacyKey("missing\u001fold metadata", tools), undefined);
+});
 
 async function fixture(tools: ToolInfo[], activeTools: string[], selected?: string[]) {
   const mock = createMockPi({ allTools: tools, activeTools });

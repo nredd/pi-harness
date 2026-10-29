@@ -21,8 +21,8 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import { getAllTypes, getAvailableTypes, NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
-import subagentsExtension from "../src/index.js";
 import { startSession } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -45,7 +45,6 @@ function makePi() {
 let cwd: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
-let originalHome: string | undefined;
 
 /** Real agent files on disk. The Agent tool reloads the registry from
  *  `process.cwd()` on every call, so an in-memory registry would be wiped before
@@ -81,9 +80,7 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     // A developer's real ~/.pi/subagents.json would otherwise set this very
     // setting under the tests, and their global agents would pollute the roster.
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    originalHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-    process.env.HOME = cwd;
     vi.mocked(runAgent).mockReset();
   });
 
@@ -93,8 +90,6 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     process.chdir(originalCwd);
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     registerAgents(new Map());
     rmSync(cwd, { recursive: true, force: true });
   });

@@ -4,8 +4,9 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
+import { resolveAgentDir } from "./home-paths.js";
 import {
   isPackageResourceExcluded,
   isProjectTrusted,
@@ -55,6 +56,8 @@ export interface LoadCustomAgentsOptions {
    * answer is recorded.
    */
   projectTrusted?: boolean;
+  /** Home directory for the default global agent directory. Defaults at call time. */
+  homeDir?: string;
 }
 
 /**
@@ -94,16 +97,17 @@ export function loadCustomAgents(
   strict = false,
   opts: LoadCustomAgentsOptions = {},
 ): Map<string, AgentConfig> {
-  const globalDir = join(getAgentDir(), "agents");
+  const globalDir = join(resolveAgentDir(opts.homeDir), "agents");
   const workspaceProjectDir = join(cwd, ".agents", "agents");
   const projectDir = join(cwd, ".pi", "agents");
 
   const projectTrusted = opts.projectTrusted ?? isProjectTrusted();
-  const pkgDirs = opts.packageDirs ?? packageAgentDirs(cwd, { projectTrusted });
-  const pkgFiles = opts.packageFiles ?? packageAgentFiles(cwd, { projectTrusted });
+  const discovery = { projectTrusted, homeDir: opts.homeDir };
+  const pkgDirs = opts.packageDirs ?? packageAgentDirs(cwd, discovery);
+  const pkgFiles = opts.packageFiles ?? packageAgentFiles(cwd, discovery);
   // `!./agents/wip.md` alongside `./agents` excludes one file out of a directory
   // that is only enumerated here, so the check has to run per file.
-  const excluded: Excluder = opts.packageExcluded ?? (path => isPackageResourceExcluded(path, cwd, "agents", { projectTrusted }));
+  const excluded: Excluder = opts.packageExcluded ?? (path => isPackageResourceExcluded(path, cwd, "agents", discovery));
 
   const agents = new Map<string, AgentConfig>();
   for (const dir of pkgDirs) loadFromDir(dir, agents, "package", strict, excluded); // lowest priority
