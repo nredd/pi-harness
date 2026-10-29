@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetState, registerTodoTool, setActiveRenderSession, TOOL_NAME } from "./todo.ts";
+import { __resetState, registerTodoTool, setActiveRenderSession, TOOL_NAME } from "./.test-support/home-fixtures.ts";
 
 const theme = makeTheme() as unknown as Theme;
 const SESSION_ID = "foreground";
@@ -32,6 +32,34 @@ async function call(tool: ReturnType<typeof setup>, params: Record<string, unkno
 
 beforeEach(__resetState);
 afterEach(__resetState);
+
+describe("registered rendering callbacks", () => {
+	it.each([1, 2])("renders a batch of %i operations with the correct plural", (count) => {
+		const tool = setup();
+		const ops = Array.from({ length: count }, () => ({ action: "list" }));
+		expect(text(tool.renderCall?.({ ops } as never, theme, {} as never))).toBe(
+			count === 1 ? "todo ≡ 1 op" : "todo ≡ 2 ops",
+		);
+	});
+
+	it("echoes snapshot status without an explicit status and expands sanitized deferral reasons", async () => {
+		const tool = setup();
+		await call(tool, { action: "create", subject: "blocked" });
+		const deferred = await call(tool, {
+			action: "update",
+			id: 1,
+			status: "deferred",
+			reason: "needs \u001b[31mreview\u001b[0m",
+		});
+		const render = (result: unknown, expanded: boolean) =>
+			text(tool.renderResult?.(result as never, { expanded, isPartial: false } as never, theme, {} as never));
+		expect(render(deferred, false)).toBe("⊖ deferred");
+		expect(render(deferred, true)).toBe("⊖ deferred\nreason: needs review");
+		const renamed = await call(tool, { action: "update", id: 1, subject: "waiting" });
+		expect(render(renamed, false)).toBe("⊖ deferred");
+		expect(render({ details: { action: "update", params: { id: 99 }, tasks: [], nextId: 1 } }, false)).toBe("✓");
+	});
+});
 
 describe("registerTodoTool -- historical renderer state", () => {
 	it("keeps a settled update row on its result snapshot after the live task changes", async () => {

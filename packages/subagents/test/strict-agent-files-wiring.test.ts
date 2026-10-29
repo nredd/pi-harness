@@ -18,8 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.js";
-import subagentsExtension from "../src/index.js";
 import { ctx, makePi, startSession } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 vi.mock("@earendil-works/pi-coding-agent", async importOriginal => {
   class ExtensionStartupError extends Error {
@@ -36,7 +36,6 @@ const BROKEN = "---\nname: broken\ndescription: Use this: that\n---\n\nBroken.\n
 let cwd: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
-let originalHome: string | undefined;
 
 function writeSettings(settings: Record<string, unknown>): void {
   const dir = join(cwd, ".pi");
@@ -62,9 +61,7 @@ describe("strictAgentFiles gates session startup", () => {
     // A developer's real ~/.pi/subagents.json would otherwise set this very
     // setting under the tests, and their global agents would pollute the roster.
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    originalHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-    process.env.HOME = cwd;
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -74,8 +71,6 @@ describe("strictAgentFiles gates session startup", () => {
     process.chdir(originalCwd);
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     registerAgents(new Map());
     rmSync(cwd, { recursive: true, force: true });
   });

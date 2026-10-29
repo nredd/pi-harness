@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Make the portable stats CLI import-safe: importing `dist/pi-stats-export.mjs` no longer runs an operation; direct Node execution still runs it
+
 - Replace `/mon`'s ambiguous non-free label with `total-free` (`T-F` compact); accept additive native App+Wired+Compressed and swap metrics without silently substituting free-page subtraction
 - Accept native macOS interval CPU and footprint; add `f` to toggle the labelled byte column between `RSS` and `FOOT`, with failed measurements shown as `--`
 - Explain RSS versus footprint, compressed pages, executable names (`pi` as `node`), strong native identity and unavailable-CPU fallback in `?`; native metrics require the subsequent published sampler dependency bump

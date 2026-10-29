@@ -32,14 +32,11 @@ model: anthropic/claude-haiku-4-5
 
 describe("BOM-prefixed agent files", () => {
   let tmpDir: string;
-  let originalHome: string | undefined;
   let originalAgentDir: string | undefined;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-bom-"));
-    originalHome = process.env.HOME;
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.HOME = tmpDir;
     delete process.env.PI_CODING_AGENT_DIR;
     // Project agent files load only for a trusted project.
     resetPackageState();
@@ -47,8 +44,6 @@ describe("BOM-prefixed agent files", () => {
   });
 
   afterEach(() => {
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
     resetPackageState();
