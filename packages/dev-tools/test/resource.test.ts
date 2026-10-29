@@ -273,7 +273,7 @@ describe("resource fixture ownership", () => {
 describe("resource_snapshot on the real host through the published sampler", () => {
 	it("resolves the exact registry sampler, never the workspace copy", async () => {
 		const manifest = JSON.parse(await readFile(join(PACKAGE_ROOT, "package.json"), "utf8"));
-		expect(manifest.dependencies).toEqual({ "@nredd/pi-resource-sampler": "0.1.1" });
+		expect(manifest.dependencies).toEqual({ "@nredd/pi-resource-sampler": "0.2.0" });
 		const { stdout } = await execFileAsync(
 			process.execPath,
 			["--input-type=module", "-e", "console.log(import.meta.resolve('@nredd/pi-resource-sampler'))"],
@@ -283,7 +283,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		const installed = join(PACKAGE_ROOT, "node_modules", "@nredd", "pi-resource-sampler");
 		expect(resolved).toBe(join(installed, "dist", "index.js"));
 		expect((await lstat(installed)).isSymbolicLink()).toBe(false);
-		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe("0.1.1");
+		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe("0.2.0");
 	});
 
 	it("smokes the real host through tool execution and output schema validation", async () => {
