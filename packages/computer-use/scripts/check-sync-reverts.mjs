@@ -216,8 +216,8 @@ const cases = [
 	{
 		name: "Linux compiler group escalation (harness c59eb11)",
 		file: "scripts/setup-helper.mjs",
-		before: 'signalGroup("SIGKILL");',
-		after: "/* compiler group not killed */",
+		before: 'if (!signalGroup("SIGKILL")) return;',
+		after: "return; /* compiler group not killed */",
 		check: "check-linux-build-scripts.mjs",
 		failure: /compiler cleanup must escalate to group SIGKILL/,
 	},
