@@ -28,10 +28,12 @@ artifact, run `uv run --locked --project integration python scripts/coverage_acc
 artifact for macOS). The full download/replay and independent-two-run comparison procedure is
 [here](coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Branches
 are reported only: `Counts`, the accounting budget predicate and the base ratchet enforce only
-lines/functions. Darwin sampler branch variation (#164) changes no floor. Linux session-kit primary
-uses the transitional observed maximum 110/32 from two independent hosted runs; the coalescing/teardown
-race and deterministic-test fix (#163) are documented in the coverage guide. Once established, that
-per-OS floor can only decrease under the base ratchet. Another `always()` step retains LCOV and the per-package/per-file JSON summary
+lines/functions. Darwin sampler branch variation (#164) changes no floor. Final hosted run
+`40857829296` establishes zero primary misses for all eight packages on macOS and all except
+resource-sampler on Linux. Linux retains 47 lines / 8 functions in native `darwin.ts` paths as
+an explicit per-OS floor, not an exclusion. Session-kit now has zero primary misses on both
+OSes after the deterministic formatter test removes the incidental comparator hit (#163).
+The earlier 110/32 transitional floor is historical only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
 on either outcome. All current Bun signals explicitly use `enforcement: "report-only"` with
 mandatory reasons linked to #160. They retain fail-closed LCOV parsing, expected-file checks,
 per-OS references, inventory ratcheting, and text+LCOV reporter checks. Counts and signed deltas
@@ -51,8 +53,9 @@ by #160. Accounting rejects enforced partial Bun inventories. Any later enforced
 flip requires a new reasoned `enforcement_changes` entry relative to base; standing reasons or
 historical approvals cannot silently waive enforcement. Initial policy introduction is allowed.
 Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
-`computer-use` is not measured, tracked; `dev-tools` awaits a clean cargo baseline after #155.
-Neither is silently called 100%. Python tooling/harness code, remaining boundary probes/providers,
+`computer-use` is not measured, tracked. `dev-tools` uses #195's primary Istanbul decision with
+all 22 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
+Its independent native Bun scenarios remain advisory. Python tooling/harness code, remaining boundary probes/providers,
 benchmark source and producer configurations are also explicitly inventoried as measurement-pending.
 The repository-wide TS/Python/JavaScript audit and the base-tree/current-tree inventory ratchet
 prevent silent source omission; reasoned reclassifications are required for membership losses.
