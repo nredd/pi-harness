@@ -1,0 +1,66 @@
+
+> @nredd/pi-subagents@0.22.0-nredd.7 test:bun
+> bun test test/session-scenarios.test.ts test/fleet-session.test.ts test/viewer-session.test.ts test/worktree-isolation-e2e.test.ts && PI_EXPECT_BUN_RUNTIME=1 node ../../scripts/run-vitest.ts bun test/resource-loader-home.test.ts
+
+bun test v1.3.14 (0d9b296a)
+
+test/fleet-session.test.ts:
+(pass) running fleet re-registers after core reload [270.54ms]
+(pass) restores explicit collapsed=%s from disk when a fresh host resumes the same session [122.07ms]
+(pass) restores explicit collapsed=%s from disk when a fresh host resumes the same session [117.16ms]
+(pass) disclosure key round-trips through the real editor without colliding with registered shortcuts [73.28ms]
+(pass) quota parking refreshes the one-line fleet without creating a child session [29.93ms]
+(pass) keeps a failed child flagged after linger and clears it only when its result is consumed [81.64ms]
+(pass) reloads unread failures, then honors their acknowledgement on fresh-host disk resume [111.81ms]
+(pass) ingests a running detached failure between ticks after reload unregisters its record [66.49ms]
+(pass) journals terminal failure before its public lifecycle event and result consumption in a headless session [38.70ms]
+(pass) never journals an inline-consumed failure, even before polling or after disk resume [37.15ms]
+(pass) fleet paints model and live thinking activity [62.30ms]
+(pass) silent stream repaints at the stall threshold without input [64.27ms]
+(pass) virtual child row repaints physical model after first response [129.58ms]
+
+test/session-scenarios.test.ts:
+(pass) background child result is fetched through the session [39.31ms]
+(pass) running child receives steer after held tool [41.84ms]
+(pass) queued child receives steer when slot opens [53.75ms]
+(pass) zero consumed TTL from env is wired through session sweep [31.26ms]
+(pass) coalesced notice reaches next provider request after turn_end [44.67ms]
+(pass) waiting fetch suppresses completion notice [29.56ms]
+(pass) dispatch ranks only enabled fuzzy candidates [94.49ms]
+(pass) dispatch applies all five model precedence levels [129.17ms]
+(pass) child workflow stand-in refuses with reason [30.42ms]
+(pass) held stream terminates a throw response with its error [28.08ms]
+(pass) held stream terminates a reject response with its error [32.60ms]
+(pass) absent admission RPC admits physical child [34.66ms]
+
+test/viewer-session.test.ts:
+(pass) fleet opens viewer and raw mouse closes its footer [77.50ms]
+
+test/worktree-isolation-e2e.test.ts:
+(pass) worktree isolation e2e (real git, real pi-mono, faux model) > runs the child in the copy and lands its changes on a branch, not the main checkout [331.12ms]
+(pass) worktree isolation e2e (real git, real pi-mono, faux model) > isolates a repo other than the session cwd when the caller names it as `cwd` (absolute) [340.17ms]
+(pass) worktree isolation e2e (real git, real pi-mono, faux model) > isolates a repo other than the session cwd when the caller names it as `cwd` (home) [351.85ms]
+(pass) worktree isolation e2e (real git, real pi-mono, faux model) > names the directory and cause when the session cwd is not a repo [25.77ms]
+(pass) worktree isolation e2e (real git, real pi-mono, faux model) > downgrades to the main checkout when the project set worktreeIsolation: false [169.28ms]
+
+ 31 pass
+ 0 fail
+ 223 expect() calls
+Ran 31 tests across 4 files. [3.56s]
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - ESM syntax in a file loaded as CommonJS (vitest.config.ts:1:1). Use a `.mjs` extension or set `"type": "module"` in the closest package.json
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v5.0.3 /Volumes/Scratch/code/cov-subagents-pr/packages/subagents
+
+
+ Test Files  1 passed (1)
+      Tests  10 passed (10)
+   Start at  07:56:01
+   Duration  6.85s (transform 54%, tests 36%, import 10%)
+
+  Transform  transforming modules took 3.64s · 54% of tracked time, re-done on every run
+             persist transforms across runs with fsModuleCache: true
+             learn more: https://vitest.dev/guide/improving-performance#caching-between-reruns
+
+bun Vitest timing: darwin | subagents | 7.13 s | exit 0
