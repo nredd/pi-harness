@@ -94,6 +94,13 @@ describe("selectModel", () => {
     expect(select(undefined, "selection-unavailable/unavailable-pin")).toContain("Model not found");
   });
 
+  it("advertises only enabled models when an explicit dispatch model does not resolve", () => {
+    setModelScopeProvider(() => new Set([ref("parent")]));
+    const result = select(undefined, "missing-model");
+    expect(result).toContain(`  ${ref("parent")}`);
+    expect(result).not.toContain(ref("explicit"));
+  });
+
   it("discloses an unresolved config without falling through to another config source", () => {
     setAgentModels({ scout: "does-not-exist", "*": ref("wildcard") });
     expect(select(ref("definition"))).toMatchObject({
