@@ -231,7 +231,11 @@ describe("MonitorManager", () => {
 		const grandchild = Number(mgr.read(a.id)?.lines[0]?.text);
 		sent.length = 0;
 		await mgr.dispose();
-		expect(alive(a.pid) || alive(b.pid) || alive(grandchild)).toBe(false);
+		expect(alive(a.pid)).toBe(false);
+		expect(alive(b.pid)).toBe(false);
+		// `dispose` awaits the leaders, not PID 1 reaping their orphaned descendants.
+		// Like `stop` above, observe group cleanup rather than assuming signal delivery is synchronous.
+		await waitFor(() => !alive(grandchild));
 		expect(sent).toEqual([]);
 		expect(existsSync(join(tmp.dir, `sess-1.${process.pid}`))).toBe(false);
 		await expect(mgr.start({ argv: node(STAY), name: "c" }, tmp.dir)).rejects.toThrow(/shutting down/);
