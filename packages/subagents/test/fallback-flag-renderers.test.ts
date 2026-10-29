@@ -269,11 +269,12 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
   });
 
   it("keeps the workflow-dialog fallback disclosure intact at narrow render widths", () => {
-    for (const width of [40, 60, 80]) {
+    for (const width of [40, 46, 60, 80]) {
       const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ label: UGLY.ascii })], "agent")));
       const listRow = lines.find(l => /\[fallback|\[fb\]|!/.test(l));
       expect(listRow, `${width} columns:\n${lines.join("\n")}`).toBeDefined();
       expect(listRow).toMatch(/\[fallback\]|\[fb\]|!/);
+      if (width === 46) expect(listRow).toContain("[fb] ZZ");
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
   });
