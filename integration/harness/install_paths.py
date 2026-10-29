@@ -40,7 +40,19 @@ class AnchoredStore:
     def __exit__(
         self, kind: type[BaseException] | None, error: BaseException | None, tb: TracebackType | None
     ) -> None:
-        """Close all descriptors, including after a partial traversal failure."""
+        """Close all descriptors, including after a partial traversal failure.
+
+        Parameters:
+            kind (type[BaseException] | None): exception type leaving the context, if any.
+            error (BaseException | None): exception instance leaving the context, if any.
+            tb (TracebackType | None): traceback leaving the context, if any.
+
+        Returns:
+            None: all held directory descriptors are closed; exceptions are not suppressed.
+
+        Raises:
+            OSError: a held descriptor cannot be closed.
+        """
         for descriptor in reversed(self.directories.values()):
             os.close(descriptor)
         self.directories.clear()
