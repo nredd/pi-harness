@@ -404,9 +404,13 @@ export function registerCargoTools(pi: ExtensionAPI, options: CargoToolOptions =
 			const cfgDir = mkdtempSync(join(tmpdir(), "pi-dev-tools-nextest-"));
 			try {
 				const cfg = join(cfgDir, "nextest.toml");
-				writeFileSync(cfg, '[profile.pi-dev-tools]\n[profile.pi-dev-tools.junit]\npath = "junit.xml"\n');
-				const junitPath = join(targetDir(root), "nextest", "pi-dev-tools", "junit.xml");
-				rmSync(junitPath, { force: true });
+				// Nextest's store is independent of CARGO_TARGET_DIR and can be relocated by repo config.
+				// An absolute report path avoids guessing either directory and is cleaned with cfgDir.
+				const junitPath = join(cfgDir, "junit.xml");
+				writeFileSync(
+					cfg,
+					`[profile.pi-dev-tools]\n[profile.pi-dev-tools.junit]\npath = ${JSON.stringify(junitPath)}\n`,
+				);
 				const args = [
 					"nextest",
 					"run",
