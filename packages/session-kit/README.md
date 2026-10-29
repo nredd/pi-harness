@@ -244,6 +244,10 @@ tabs and exact provider totals remain covered at every width. Each stats-view bo
 and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
+Native stop/dispose checks assert direct children are reaped when the operation resolves, then
+observe orphaned descendants disappearing with the existing bounded liveness check. Leader exit
+and pipe closure do not synchronize PID 1's reaping; on Linux, `kill(pid, 0)` can still succeed
+for a terminated zombie. No extra signal, fixed delay or larger timeout is needed.
 The native diff descendant timeout fixture gates its fake deadline on real stdout readiness, so
 slow process startup cannot race a fixed wall-clock deadline. Adapter fault tests cover monitor
 startup/sweep/widget failures, post-spawn errors, worker startup timeout, rejected sampler cleanup,
