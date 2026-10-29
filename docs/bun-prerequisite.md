@@ -20,7 +20,8 @@ Current CI scope (2026-10-20):
   (`integration/harness/probe.py`, `scenarios/bench/test_render.py`). The actual adapter issue is
   [here](https://github.com/nredd/pi-harness/issues/14), not the nonexistent repository issue #58
 - NOT RUN: Linux ARM64 (no `ubuntu-24.04-arm` job), other architectures/Windows, auth interception,
-  packed contracts under standalone, benchmarks, live credentials, REA and desktop/TCC helpers.
+  packed contracts under standalone, benchmarks, live credentials and desktop/TCC helpers.
+  REA was retired in `nredd/dotfiles#58`; it is not an outstanding Bun or release requirement.
   This is a source-build D/E gate, not full Bun acceptance or a published-artifact gate
 - CI results, run IDs and measured runner cost belong in the draft PR; job definitions alone are
   not evidence that these new runs pass. See [here](ci.md) for the zero-added-job capacity budget
@@ -83,9 +84,10 @@ with a readiness handshake redirected fetch and blocked `node:child_process`, bu
 runtime adapter is integrated and fails closed. The new CI explicitly skips those branches;
 only the existing missing-preload refusal is exercised without interception. Do not mistake a probe adapter for a sandbox.
 
-Still required: integrated interception readiness, packed plugins, model-role behavior, subagents,
-Plan mode, full monitor/process cleanup, TUI scenarios, native helpers, REA, full integration and
-performance gates, and both Linux architectures. The local executable is unsigned/unnotarized.
+At that historical checkpoint, remaining work included integrated interception readiness, packed
+plugins, model-role behavior, subagents, Plan mode, full monitor/process cleanup, TUI scenarios,
+native helpers, REA, full integration and performance gates, and both Linux architectures.
+REA is now retired and is no longer required. The local executable is unsigned/unnotarized.
 
 Dependency audit:
 
