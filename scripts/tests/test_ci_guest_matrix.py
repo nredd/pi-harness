@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -272,7 +273,13 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     copy_script = (
         "#!/bin/sh\nexit 92\n"
         if export_failure
-        else ('#!/bin/sh\ncase "$1" in -a|-p|--preserve*) exit 93 ;; esac\nexec /bin/cp "$@"\n')
+        else (
+            f"#!{sys.executable}\n"
+            "import os\nimport sys\n"
+            "if sys.argv[1] in ('-a', '-p') or sys.argv[1].startswith('--preserve'):\n"
+            "    sys.exit(93)\n"
+            "os.execv('/bin/cp', ['/bin/cp', *sys.argv[1:]])\n"
+        )
     )
     (commands / "cp").write_text(copy_script)
     (commands / "cp").chmod(0o755)
