@@ -10,7 +10,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 describe.each(["before stderr drains", "after stderr drains"])("run when the leader exits %s", (exitOrder) => {
 	it.each([
-		{ name: "an oversized line followed by a short line", chunks: ["z".repeat(101) + "\ntail\n"], lines: ["tail"] },
+		{ name: "an oversized line followed by a short line", chunks: [`${"z".repeat(101)}\ntail\n`], lines: ["tail"] },
 		{
 			name: "short lines whose combined length exceeds the cap",
 			chunks: ["a\n".repeat(60)],
@@ -18,7 +18,7 @@ describe.each(["before stderr drains", "after stderr drains"])("run when the lea
 		},
 		{
 			name: "a valid line before an oversized line",
-			chunks: ["head\n" + "z".repeat(101) + "\ntail\n"],
+			chunks: [`head\n${"z".repeat(101)}\ntail\n`],
 			lines: ["head", "tail"],
 		},
 		{ name: "an oversized line spanning chunks", chunks: ["z".repeat(100), "z\ntail\n"], lines: ["tail"] },
@@ -28,7 +28,7 @@ describe.each(["before stderr drains", "after stderr drains"])("run when the lea
 			lines: ["tail"],
 		},
 		{ name: "a dropped line ending without a newline", chunks: ["z".repeat(101), "suffix"], lines: [] },
-		{ name: "a valid partial line after a dropped line", chunks: ["z".repeat(101) + "\ntail"], lines: ["tail"] },
+		{ name: "a valid partial line after a dropped line", chunks: [`${"z".repeat(101)}\ntail`], lines: ["tail"] },
 		{
 			name: "a line at the cap followed by its newline",
 			chunks: ["z".repeat(100), "\ntail\n"],
@@ -36,15 +36,17 @@ describe.each(["before stderr drains", "after stderr drains"])("run when the lea
 		},
 		{
 			name: "CRLF and empty lines after a dropped line",
-			chunks: ["z".repeat(101) + "\n\ntail\r\n"],
+			chunks: [`${"z".repeat(101)}\n\ntail\r\n`],
 			lines: ["", "tail"],
 		},
 	])("preserves $name", async ({ chunks, lines: expected }) => {
 		// Drive the real runner with fixed data-event boundaries, independent of pipe scheduling.
 		vi.mocked(spawn).mockImplementationOnce(() => {
 			const child = new ChildProcess();
-			child.stdout = new PassThrough();
-			child.stderr = new PassThrough();
+			Object.defineProperties(child, {
+				stdout: { value: new PassThrough() },
+				stderr: { value: new PassThrough() },
+			});
 			queueMicrotask(() => {
 				if (exitOrder === "before stderr drains") child.emit("exit", 0, null);
 				for (const chunk of chunks) child.stderr?.emit("data", Buffer.from(chunk));
