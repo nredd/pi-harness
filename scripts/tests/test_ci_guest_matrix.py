@@ -255,9 +255,10 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     startup = ti / "standalone-startup-diagnostics"
     startup.mkdir()
     (startup / "SHA256SUMS").write_text("synthetic scanned manifest\n")
-    artifacts = worktree / "integration/artifacts"
-    artifacts.mkdir()
-    (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n")
+    for name in ("artifacts", "artifacts-node", "artifacts-personal"):
+        artifacts = worktree / "integration" / name
+        artifacts.mkdir()
+        (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n")
     scripts = worktree / "scripts"
     scripts.mkdir()
     shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", scripts / "wsl2_cleanup.sh")
@@ -286,7 +287,8 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     )
     assert result.returncode == 47
     assert not worktree.exists()
-    assert (host / "integration/artifacts/wsl2-personal.xml").is_file() is not export_failure
+    for name in ("artifacts", "artifacts-node", "artifacts-personal"):
+        assert (host / "integration" / name / "wsl2-personal.xml").is_file() is not export_failure
     assert (host_temp / "package-contracts.json").is_file() is not export_failure
     assert (host_temp / "wsl2-diagnostics/artifacts/wsl2-personal.xml").is_file() is not export_failure
     assert not (host_temp / "secret.txt").exists()
@@ -459,6 +461,12 @@ def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
         assert "--user pi-ci --exec bash -euo pipefail" in boundary
     setup = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
     assert "--user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci" in setup
+    guest_setup = yaml.safe_load(setup)
+    distribution = next(
+        step for step in guest_setup["runs"]["steps"] if "Vampire/setup-wsl@" in step.get("uses", "")
+    )
+    # install-action needs jq; install system prerequisites before dropping root.
+    assert "jq" in distribution["with"]["additional-packages"].split()
 
 
 def test_guest_preflight_failure_is_recorded(tmp_path: Path) -> None:
