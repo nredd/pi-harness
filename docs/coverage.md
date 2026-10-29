@@ -148,7 +148,13 @@ link bindings; their target modules remain fully owned and instrumented. No LF/F
 invented, no imported dependency execution is attributed to a facade, and membership reclassification
 still requires the base-relative ledger once a base policy exists. The current ledger explicitly
 accounts for both owned plan-mode facade paths and the affected Bun subset relative to integration
-base `71b0aea`; a real-base regression rejects deleting any one receipt. Real compilation/instrumentation
+base `71b0aea`; an attributed policy/path snapshot in
+`scripts/tests/fixtures/coverage/plan-mode-integration-base.json` reconstructs that package's base
+membership in disposable Git and rejects deleting any one receipt. That pre-squash PR object is
+not reachable from main, so tests do not require it in fresh hosted clones. The fixture copies
+current source bytes only to exercise real tree expansion, not to assert historical runtime behavior
+or establish budgets. CLI accounting still ratchets the entire repository against the actual PR base.
+Real compilation/instrumentation
 and executable-addition rejection are pinned by `scripts/tests/test_coverage_facades.py`.
 
 Verification-only harnesses outside conventional test directories are classified under

@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from test_coverage_accounting import policy, setup_report
+from test_coverage_round2 import commit_base
 
 from coverage_accounting import Exclusion, Policy, check_inventory_ratchet, git_read, inventory
 
@@ -166,20 +167,34 @@ def test_facade_requires_exact_typescript_path(path: str) -> None:
         facade(path)
 
 
-def test_actual_policy_facade_receipts_preserve_integration_base_ratchet() -> None:
+def test_actual_policy_facade_receipts_preserve_integration_base_ratchet(tmp_path: Path) -> None:
     """Require exact facade membership receipts against the real integration base policy.
 
     Parameters:
-        None.
+        tmp_path (Path): Disposable Git history reconstructed from the attributed base inventory.
     Returns:
         None: Both owned paths and the affected Bun subset pass only with their explicit ledger entries.
     Raises:
         AssertionError: Missing receipts bypass the inventory ratchet or valid receipts fail.
         subprocess.CalledProcessError: The recorded integration base cannot be read.
     """
-    revision = "71b0aea29173d56b181551b7579ff7557c500a24"
-    base = Policy.model_validate_json(git_read(ROOT, ["show", f"{revision}:coverage/policy.json"]))
+    snapshot = json.loads(
+        (ROOT / "scripts/tests/fixtures/coverage/plan-mode-integration-base.json").read_text()
+    )
+    assert snapshot["source_revision"] == "71b0aea29173d56b181551b7579ff7557c500a24"
+    base = Policy.model_validate(snapshot["policy"])
+    # Preserve historical path membership in real Git without depending on an unmerged PR object.
+    # Contents here are current source bytes; this fixture tests membership, not historical behavior.
+    for name in snapshot["tracked_paths"]:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
+    commit_base(tmp_path, base)
+    revision = git_read(tmp_path, ["rev-parse", "HEAD"]).strip()
     current = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    current.packages = {"plan-mode": current.packages["plan-mode"]}
+    current.reclassifications = [entry for entry in current.reclassifications if entry.package == "plan-mode"]
+    shutil.copytree(ROOT / "packages/plan-mode/src", tmp_path / "packages/plan-mode/src", dirs_exist_ok=True)
     expected = {
         ("owned", "packages/plan-mode/src/index.ts"),
         ("owned", "packages/plan-mode/src/interactive-ui.ts"),
@@ -190,11 +205,11 @@ def test_actual_policy_facade_receipts_preserve_integration_base_ratchet() -> No
     } == expected
     # This historical pre-main policy anchors source membership, not hosted budgets.
     # The CLI separately ratchets budgets against the actual PR base (origin/main).
-    check_inventory_ratchet(ROOT, current, base, revision)
+    check_inventory_ratchet(tmp_path, current, base, revision)
     without_receipts = current.model_copy(deep=True)
     without_receipts.reclassifications = []
     with pytest.raises(ValueError, match="Inventory ratchet requires"):
-        check_inventory_ratchet(ROOT, without_receipts, base, revision)
+        check_inventory_ratchet(tmp_path, without_receipts, base, revision)
     for signal, path in expected:
         missing_one = current.model_copy(deep=True)
         missing_one.reclassifications = [
@@ -203,4 +218,4 @@ def test_actual_policy_facade_receipts_preserve_integration_base_ratchet() -> No
             if not (entry.package == "plan-mode" and entry.signal == signal and entry.path == path)
         ]
         with pytest.raises(ValueError, match="Inventory ratchet requires"):
-            check_inventory_ratchet(ROOT, missing_one, base, revision)
+            check_inventory_ratchet(tmp_path, missing_one, base, revision)

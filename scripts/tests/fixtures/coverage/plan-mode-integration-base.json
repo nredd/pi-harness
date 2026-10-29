@@ -1,0 +1,144 @@
+{
+  "source_revision": "71b0aea29173d56b181551b7579ff7557c500a24",
+  "purpose": "Audited plan-mode policy and expanded owned source paths from the pre-squash integration base; membership only, not historical source bytes or hosted budget acceptance.",
+  "policy": {
+    "version": 2,
+    "target": {
+      "lines": 0,
+      "functions": 0
+    },
+    "enforce_target": false,
+    "reclassifications": [],
+    "enforcement_changes": [],
+    "packages": {
+      "plan-mode": {
+        "root": "packages/plan-mode",
+        "owned": [
+          "src/**/*.ts"
+        ],
+        "exclusions": [
+          {
+            "path": "dist/**/*.ts",
+            "kind": "generated",
+            "reason": "Runtime builder output, including hashed chunks, duplicates src/; assembled Bun hosts load these generated files."
+          }
+        ],
+        "status": "measured",
+        "note": "Per-OS floors measured from hosted run 40441614924. Local receipts remain advisory; no source paths or assertions were excluded.",
+        "signals": {
+          "primary": {
+            "report": "coverage/primary/lcov.info",
+            "max_uncovered": {
+              "darwin": {
+                "lines": 555,
+                "functions": 138
+              },
+              "linux": {
+                "lines": 555,
+                "functions": 138
+              }
+            },
+            "reporters": [
+              "text",
+              "lcov"
+            ]
+          },
+          "bun": {
+            "report": "coverage/bun/lcov.info",
+            "files": [
+              "src/active-implementation-menu.ts",
+              "src/command.ts",
+              "src/completion-tool.ts",
+              "src/decline-contract.ts",
+              "src/extension-runtime.ts",
+              "src/finalization-request.ts",
+              "src/fresh-implementation.ts",
+              "src/headless-turn.ts",
+              "src/implementation-models.ts",
+              "src/implementation-retention.ts",
+              "src/interactive-ui.ts",
+              "src/message-transform.ts",
+              "src/mode-contract.ts",
+              "src/plan-action-controller.ts",
+              "src/plan-action-menus.ts",
+              "src/plan-approval.ts",
+              "src/plan-export-controller.ts",
+              "src/plan-export-screen.ts",
+              "src/plan-export.ts",
+              "src/plan-launch-menu.ts",
+              "src/plan-mode.ts",
+              "src/presentation.ts",
+              "src/prompt.ts",
+              "src/question-tool.ts",
+              "src/ready-plan-chooser.ts",
+              "src/required-tools.ts",
+              "src/saved-plan-menu.ts",
+              "src/saved-plan-preflight.ts",
+              "src/settings-menu.ts",
+              "src/settings.ts",
+              "src/state.ts",
+              "src/tool-availability.ts",
+              "src/tool-policy.ts",
+              "src/tool-selection.ts",
+              "src/workflow-mutex.ts"
+            ],
+            "max_uncovered": {
+              "darwin": {
+                "lines": 3479,
+                "functions": 245
+              },
+              "linux": {
+                "lines": 3479,
+                "functions": 245
+              }
+            },
+            "enforcement": "report-only",
+            "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
+            "reporters": [
+              "text",
+              "lcov"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "tracked_paths": [
+    "packages/plan-mode/src/active-implementation-menu.ts",
+    "packages/plan-mode/src/command.ts",
+    "packages/plan-mode/src/completion-tool.ts",
+    "packages/plan-mode/src/decline-contract.ts",
+    "packages/plan-mode/src/extension-runtime.ts",
+    "packages/plan-mode/src/finalization-request.ts",
+    "packages/plan-mode/src/fresh-implementation.ts",
+    "packages/plan-mode/src/headless-turn.ts",
+    "packages/plan-mode/src/implementation-models.ts",
+    "packages/plan-mode/src/implementation-retention.ts",
+    "packages/plan-mode/src/index.ts",
+    "packages/plan-mode/src/interactive-ui.ts",
+    "packages/plan-mode/src/message-transform.ts",
+    "packages/plan-mode/src/mode-contract.ts",
+    "packages/plan-mode/src/plan-action-controller.ts",
+    "packages/plan-mode/src/plan-action-menus.ts",
+    "packages/plan-mode/src/plan-approval.ts",
+    "packages/plan-mode/src/plan-export-controller.ts",
+    "packages/plan-mode/src/plan-export-screen.ts",
+    "packages/plan-mode/src/plan-export.ts",
+    "packages/plan-mode/src/plan-launch-menu.ts",
+    "packages/plan-mode/src/plan-mode.ts",
+    "packages/plan-mode/src/presentation.ts",
+    "packages/plan-mode/src/prompt.ts",
+    "packages/plan-mode/src/question-tool.ts",
+    "packages/plan-mode/src/ready-plan-chooser.ts",
+    "packages/plan-mode/src/required-tools.ts",
+    "packages/plan-mode/src/saved-plan-menu.ts",
+    "packages/plan-mode/src/saved-plan-preflight.ts",
+    "packages/plan-mode/src/settings-menu.ts",
+    "packages/plan-mode/src/settings.ts",
+    "packages/plan-mode/src/state.ts",
+    "packages/plan-mode/src/tool-availability.ts",
+    "packages/plan-mode/src/tool-policy.ts",
+    "packages/plan-mode/src/tool-selection.ts",
+    "packages/plan-mode/src/workflow-mutex.ts"
+  ]
+}
