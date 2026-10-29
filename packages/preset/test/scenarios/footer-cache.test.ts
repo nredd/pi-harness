@@ -72,9 +72,8 @@ it.each(WIDTHS)("cache marker fits the width and history matrix: %i", async (wid
 		expect(result.marker).toBe(` ${compact ? marker[0] : marker}`);
 		expect(result.cause).toBe(compact && cause ? COMPACT_CAUSE[cause] : cause);
 		if (width >= 120) expect(result.rows[1]?.trimEnd()).toMatch(/main$/);
-		expect(result.rows[2]?.trimStart().startsWith("Quota left:")).toBe(
-			width >= 80 && (result.rows[2]?.length ?? width) < width,
-		);
+		// Without OpenAI 5h the full quota row is 59 columns, so it now fits every tested width untruncated.
+		expect(result.rows[2]?.trimEnd()).toBe("Quota left: Anthropic 5h 80% weekly 60% | OpenAI weekly 50%");
 		await fixture.dispose();
 	}
 });

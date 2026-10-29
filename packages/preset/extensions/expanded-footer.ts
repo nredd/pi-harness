@@ -25,7 +25,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { analyzeCache, cacheTtlSeconds, formatCacheMarker } from "../lib/footer-cache.ts";
-import { createQuotaPoller, formatQuotaRow } from "../lib/footer-quota.ts";
+import { createQuotaPoller, fitQuotaRows } from "../lib/footer-quota.ts";
 
 /** Format token counts for compact footer display. Mirrors the stock footer's formatTokens. */
 function formatTokens(count: number): string {
@@ -92,8 +92,11 @@ const realClock: FooterClock = {
 	},
 };
 
-/** Mount the expanded footer; omitted options preserve the real clock and timers. */
-export function createExpandedFooter(options: { clock?: FooterClock } = {}): ExtensionFactory {
+/**
+ * Mount the expanded footer; omitted options preserve the real clock and timers.
+ * `timeZone` (IANA) only pins the quota reset labels; default is the process-local zone.
+ */
+export function createExpandedFooter(options: { clock?: FooterClock; timeZone?: string } = {}): ExtensionFactory {
 	const clock = options.clock ?? realClock;
 	return (pi: ExtensionAPI) => {
 		let stopQuota: (() => void) | undefined;
@@ -295,10 +298,11 @@ export function createExpandedFooter(options: { clock?: FooterClock } = {}): Ext
 						const quotaState = quota.getState();
 						if (quotaState) {
 							const colorize = (color: "warning" | "error" | "dim", text: string) => theme.fg(color, text);
-							const plainFull = formatQuotaRow(quotaState, "full", (_color, text) => text);
-							const tier = visibleWidth(plainFull) <= width ? "full" : "compact";
-							const row = formatQuotaRow(quotaState, tier, colorize);
-							lines.push(truncateToWidth(row, width, theme.fg("dim", "...")));
+							for (const row of fitQuotaRows(quotaState, width, colorize, {
+								now: clock.now(),
+								timeZone: options.timeZone,
+							}))
+								lines.push(truncateToWidth(row, width, theme.fg("dim", "...")));
 						}
 
 						// --- Line 3: extension statuses (unchanged from stock) ---

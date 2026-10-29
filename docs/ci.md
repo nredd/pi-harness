@@ -20,6 +20,108 @@ runs an isolated Node consumer in each `contracts` OS cell. This library has no 
 Darwin process CPU is explicitly unavailable because `ps` start identity has one-second precision.
 No consumer migration, publication, extra CI job or runner is added.
 
+## Startup exit failure evidence
+
+The existing per-scenario artifacts now retain `*.pane.json` captured **before** tmux teardown,
+`*.exit` wrapper status files when present, and raw startup/RPC `*.stderr`. The pane report keeps
+the native PID/dead/status/signal response (empty fields can mean unsupported tmux formats), the
+wrapper status path and its contents or absence; a vanished server is recorded as an error rather
+than replacing the original failure. Only these named artifact patterns are added to the existing
+allowlist, never arbitrary JSON, environment dumps or a recursive sandbox HOME. Every candidate's
+complete raw bytes, including existing sessions/screens, are scanned **before publication**.
+`harness.credentials.require_safe_diagnostic` is the shared publication policy: it reuses
+`release.redact_diagnostic` for URL/known proxy credentials and centralizes the signature rules
+extracted from the unmerged #191 collector. There is no dependency on that unmerged module and no
+collector-local regex here; #191/#178 must consume this same helper when integrated, not copy or
+maintain another policy. Long token/key signatures remain checked. Explicit canonical JSON string
+fields `access_token`, `refresh_token` and `api_key` are refused for **any nonempty string value**;
+case-insensitive `Bearer` followed by any nonempty whitespace-delimited value is refused regardless
+of length. Empty/null credential slots and metadata keys such as `api_key_available`,
+`access_token_count`, `auth_type: "Bearer"` and `token_count` are not auth dumps by themselves.
+The Bearer rule deliberately may reject prose describing a token. Signatures are heuristics, not
+proof against arbitrary secrets, unknown/escaped credential keys or encoded values.
+
+Candidates are staged outside the uploaded artifacts root, scanned and written from the same byte
+snapshot, then renamed into place only when the complete set is safe. Any unsafe/unreadable candidate
+or staging error refuses the whole set, removes stale publication and leaves the primary verdict
+unchanged; raw bytes are never redacted into a misleading "exact" capture. Every ancestor from the
+sandbox root itself through the candidate's parent must be an actual directory, including internal
+parent links that happen to resolve inside the sandbox. Candidate reads reuse the `harness.files`
+regular-file pattern: reject known nonregular entries before opening, then use `O_NOFOLLOW`,
+`O_NONBLOCK`, `O_NOCTTY` and descriptor `fstat` before reading. Final symlink/FIFO replacements cannot
+turn cleanup into a blocking FIFO read. Ancestry checks are observations, not a descriptor-anchored
+sandbox against concurrent malicious same-UID parent replacement. No broader filesystem-security
+claim is made. Pane reports use a strict `PaneExitEvidence` Pydantic model. Missing tmux, invalid UTF-8
+markers and capture/write failures cannot prevent server teardown. RPC evidence open/write/flush
+failures disable only the disk sink: bounded pipe drainage and in-memory diagnostics continue.
+This supplements, not duplicates, the separate standalone build/startup collector proposed in #191.
+
+Observed on 2026-10-28, both in `Standalone D and E (local)`:
+
+- PR #155, run `40666549747`, job `122742471639`: `ordinary-session_start-tui` fails with
+  `TUI never reported its exit status`. Its saved screen contains `STARTUP-OK` and the resume hint.
+  Original `pi.stderr` reports `Bun v1.3.14 (0d9b296a) macOS Silicon`, macOS `14.8.9`,
+  `Elapsed: 8573ms`, feature `exited`, and `Segmentation fault at address 0xC`.
+  The decoded trace [here](https://bun.report/1.3.14/M_10d9b296mggQugggC______mk04Yuw4uhBu7l7H_2lkjlDurh5kD27p5tC+xt2yC+1+3H_2lkjlDurh5kDunr21Cusw11CA2AY)
+  resolves through `jsc.VirtualMachine.globalExit`, `Bun__Process__exit` and
+  `Bun::Process_functionReallyExit` / `Process_functionExit`.
+- PR #178, run `40667021371`, job `122744482131`: the failure is instead
+  `ordinary-session_start-rpc`, `subprocess.TimeoutExpired` after 60 seconds. Its TUI case passes.
+  The traceback's truncated `stderr_seq` contains the Bun `1.3.14` crash banner; the original full
+  timeout stderr was not archived. The `-9` return code is observed after Python's timeout kill,
+  not a successful runtime shutdown.
+
+Both include a curl-shim `Bad file descriptor` error. Bun's macOS crash reporter invokes curl
+([here](https://github.com/oven-sh/bun/blob/0d9b296af33f2b851fcbf4df3e9ec89751734ba4/src/crash_handler/crash_handler.zig));
+that downstream error is not evidence that an extension's curl caused the crash. The historical
+artifacts lack pre-cleanup pane state and `*.exit`; they cannot distinguish a live crashed process
+from a dead wrapper or missing status file. RPC does not use that wrapper at all.
+
+A local rebuild of Gitlink `2bfb8e7c61d35167b09f8ce70693df39660fc197` with Bun `1.3.14` and frozen
+release model data passed 29 original TUI and 29 RPC startup calls, including two concurrent drivers.
+The initial two-case command was `PI_BIN=<rebuilt-pi> uv run --locked pytest
+'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-tui]'
+'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-rpc]'
+--stack stacks/local.json --runtime bun-standalone -q`: 2 passed. A diagnostic driver then invoked
+that unchanged scenario function on copied explicit fixtures: 12 serial pairs, then two concurrent
+drivers of 8 pairs each (qmd failure shim for the concurrent run), all passed. Recorded local logs:
+`/tmp/fix-tui-repro.log`, `/tmp/fix-tui-repeat.log`, `/tmp/fix-tui-stress-a.log` and
+`/tmp/fix-tui-stress-b.log`; these workstation logs are not durable CI artifacts.
+This is not a native-crash reproduction or a fix. Synthetic abort and timeout tests prove the
+original nonzero/timeout failure and raw evidence survive cleanup; no assertions, deadlines, Bun
+pins or runtime behavior are relaxed. The exact native trigger and a failing-CI pane-state capture
+remain unresolved. No capacity cancellation is classified as this failure.
+
+Final privacy/cleanup proofs additionally reject internal parent/root links and a root `pi.stderr`
+FIFO without ever opening it for reading. Stale regular-file prechecks with a FIFO or final symlink
+replacement are refused through the descriptor checks; removing `O_NONBLOCK` fails a pre-open test
+assertion, so the mutant cannot hang the test. Short synthetic fields/Bearer values are injected
+across all seven artifact categories while the primary exception remains unchanged and no artifact
+set is published. Public metadata negative controls still pass. Removing ancestor checks, restoring
+plain `Path.read_bytes`, reverting the short-credential rule, or removing `O_NONBLOCK` each fails a
+focused mutant (workstation logs `/tmp/tui-finalprivacy-mutant-{ancestry,regular,short,nonblock}.log`).
+
+Blocker regression receipts:
+
+- Unsafe-byte injections cover markers, pane reports, raw stderr, screens, scripts, event logs and
+  session history for token signatures, URL credentials and known proxy passwords. No partial/stale
+  artifact tree is published; injected staging write failure preserves the primary assertion.
+- Missing-executable/server/I/O pane queries still attempt teardown. Invalid UTF-8 marker bytes
+  remain unchanged, produce an explicit model error field and retain the original decode failure.
+  Real fixture-generator and direct-startup-owner tests inject missing tmux, screen decode and
+  screenshot write errors: every owned pane is killed and the primary failure is retained.
+  An unavailable final screenshot cannot replace `wait_dead`'s exit-status assertion.
+- RPC evidence open/write/flush failures still drain 262144 stderr bytes plus a tail diagnostic;
+  the real child exits 17 without pipe blockage and bounded in-memory diagnostics retain the tail.
+- The startup proof prints the required startup message and observes exit 17 specifically. Its
+  exit-0 control succeeds. Mutating the observed exit 17 to 0 makes that regression fail with
+  `DID NOT RAISE AssertionError`, rather than accidentally testing the missing-message assertion.
+- Mutation checks disable scanning, restore the prior pane capture, restore the prior RPC writer,
+  and change the nonzero result to zero. All four are killed by the focused regressions. Local
+  logs are `/tmp/tui-mutant-{scan,pane,writer,zero}.log`, not durable CI artifacts. Restoring the
+  old fixture teardown or final timeout screenshot separately also fails the caller regressions
+  (`/tmp/tui-mutant-teardown.log`, `/tmp/tui-mutant-wait-capture.log`).
+
 ## Capacity controls
 
 `classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all eight required matrix jobs and `wsl2 (windows-2022)` start and report a terminal status. A docs-only change skips their expensive steps, and every skipped job writes a notice plus a step summary containing the changed-file list. Each job's `plan` step emits `run=true` or `run=false`, logs the changed files when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates.
