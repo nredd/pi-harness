@@ -29,13 +29,13 @@ for name in artifacts artifacts-node artifacts-personal; do
   rm -rf "$WSL_HOST_WORKSPACE/integration/$name"
   if [ -d "$worktree/integration/$name" ]; then
     mkdir -p "$WSL_HOST_WORKSPACE/integration/$name"
-    cp -a "$worktree/integration/$name/." "$WSL_HOST_WORKSPACE/integration/$name/"
+    cp -RP "$worktree/integration/$name/." "$WSL_HOST_WORKSPACE/integration/$name/"
   fi
 done
 # Published atomically by the startup collector only after its allowlist/credential scan.
 if [ -d "$RUNNER_TEMP/standalone-startup-diagnostics" ]; then
   staging=$(mktemp -d "$WSL_HOST_TEMP/.standalone-startup.XXXXXX")
-  if cp -a "$RUNNER_TEMP/standalone-startup-diagnostics/." "$staging/"; then
+  if cp -RP "$RUNNER_TEMP/standalone-startup-diagnostics/." "$staging/"; then
     rm -rf "$WSL_HOST_TEMP/standalone-startup-diagnostics"
     mv "$staging" "$WSL_HOST_TEMP/standalone-startup-diagnostics"
   else

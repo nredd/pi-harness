@@ -265,13 +265,18 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     host_temp = host / "temp"
     (host_temp / "wsl2-diagnostics").mkdir(parents=True)
     env |= {"WSL_HOST_WORKSPACE": str(host), "WSL_HOST_TEMP": str(host_temp), "RUNNER_TEMP": str(ti)}
-    if export_failure:
-        commands = tmp_path / "commands"
-        commands.mkdir()
-        (commands / "cp").write_text("#!/bin/sh\nexit 92\n")
-        (commands / "cp").chmod(0o755)
-        env["PATH"] = f"{commands}{os.pathsep}{env['PATH']}"
-        (ti / "tool-path").write_text(env["PATH"])
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    # Model DrvFs refusing timestamp/ownership preservation by an ordinary user.
+    copy_script = (
+        "#!/bin/sh\nexit 92\n"
+        if export_failure
+        else ('#!/bin/sh\ncase "$1" in -a|-p|--preserve*) exit 93 ;; esac\nexec /bin/cp "$@"\n')
+    )
+    (commands / "cp").write_text(copy_script)
+    (commands / "cp").chmod(0o755)
+    env["PATH"] = f"{commands}{os.pathsep}{env['PATH']}"
+    (ti / "tool-path").write_text(env["PATH"])
     result = subprocess.run(
         ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh"), "cleanup"],
         env=env,
@@ -283,6 +288,7 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     assert not worktree.exists()
     assert (host / "integration/artifacts/wsl2-personal.xml").is_file() is not export_failure
     assert (host_temp / "package-contracts.json").is_file() is not export_failure
+    assert (host_temp / "wsl2-diagnostics/artifacts/wsl2-personal.xml").is_file() is not export_failure
     assert not (host_temp / "secret.txt").exists()
     assert (host_temp / "standalone-startup-diagnostics/SHA256SUMS").is_file() is not export_failure
     assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()

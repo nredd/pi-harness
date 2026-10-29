@@ -6,7 +6,7 @@ cleanup_wsl2_worktree() {
   set +e
   if [ -n "$worktree" ] && [ -d "$worktree/integration/artifacts" ]; then
     mkdir -p "$diagnostics_dir/artifacts" || true
-    cp -a "$worktree/integration/artifacts/." "$diagnostics_dir/artifacts/" \
+    cp -RP "$worktree/integration/artifacts/." "$diagnostics_dir/artifacts/" \
       || printf 'WARNING: could not preserve WSL failure artifacts\n' >&2
   fi
   printf 'WSL harness exited with status %s.\n' "$status" >"$diagnostics_dir/capture-status.txt" \
