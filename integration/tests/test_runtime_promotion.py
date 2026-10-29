@@ -30,7 +30,14 @@ SHA = "a" * 40
 
 
 def inputs() -> tuple[StackSnapshot, DependencyGraph]:
-    """Build synthetic promotion evidence from actual source-selected runtime graph identities."""
+    """Build synthetic promotion evidence from actual source-selected runtime graph identities.
+
+    Returns:
+        tuple[StackSnapshot, DependencyGraph]: internally consistent synthetic evidence.
+
+    Raises:
+        OSError | ValueError: source fixtures cannot be read or validated.
+    """
     stack = Stack.model_validate_json((ROOT / "integration/stacks/personal.json").read_bytes())
     runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
     entries = runtime.platforms["darwin-arm64"]["agent"].lock["packages"]
@@ -67,14 +74,40 @@ def test_supplemental_graph_is_attested_before_any_registry_bytes_are_acquired(
     events: list[str] = []
 
     def download(url: str, destination: Path) -> Path:
-        """Provide the exact supplemental asset, never a registry-generated lock."""
+        """Provide the exact supplemental asset, never a registry-generated lock.
+
+        Parameters:
+            url (str): requested graph URL.
+            destination (Path): private output path.
+
+        Returns:
+            Path: written fixture graph.
+
+        Raises:
+            AssertionError: the requested promotion differs.
+            OSError: fixture writing fails.
+        """
         assert url.endswith(f"stack/{SHA}/dependency-graph.json")
         destination.write_bytes(contents)
         events.append("download")
         return destination
 
     def attest(path: Path, repo: str, workflow: str, ref: str, **kwargs: Any) -> None:
-        """Check the fixed existing promotion identity, not an identity supplied by the graph."""
+        """Check the fixed existing promotion identity, not an identity supplied by the graph.
+
+        Parameters:
+            path (Path): downloaded fixture bytes.
+            repo (str): required attesting repository.
+            workflow (str): required signer workflow.
+            ref (str): required source ref.
+            **kwargs (Any): selected GitHub CLI path.
+
+        Returns:
+            None: the fixed identity and exact bytes match.
+
+        Raises:
+            AssertionError: any expected identity or content differs.
+        """
         assert path.read_bytes() == contents
         assert repo == "nredd/pi-harness"
         assert workflow == "nredd/pi-harness/.github/workflows/promote-stack.yml"
@@ -83,7 +116,17 @@ def test_supplemental_graph_is_attested_before_any_registry_bytes_are_acquired(
         events.append("attest")
 
     def acquire(*args: Any) -> dict[str, Path]:
-        """Refuse an acquisition ordered before the existing attestation verifier."""
+        """Refuse an acquisition ordered before the existing attestation verifier.
+
+        Parameters:
+            *args (Any): graph acquisition arguments, unused by this ordering fixture.
+
+        Returns:
+            dict[str, Path]: empty archive inventory for the isolated ordering test.
+
+        Raises:
+            AssertionError: acquisition preceded attestation.
+        """
         assert events[-1] in {"attest", "acquire"}
         events.append("acquire")
         return {}
@@ -118,14 +161,39 @@ def test_replaced_or_unbound_graphs_fail_before_registry_or_npm(
     acquired: list[str] = []
 
     def download(url: str, destination: Path) -> Path:
-        """Model missing legacy evidence or downloaded attacker-controlled bytes."""
+        """Model missing legacy evidence or downloaded attacker-controlled bytes.
+
+        Parameters:
+            url (str): requested supplemental asset URL.
+            destination (Path): private fixture output.
+
+        Returns:
+            Path: written modified graph.
+
+        Raises:
+            VerificationError: the legacy asset is absent.
+            OSError: fixture writing fails.
+        """
         if mutation == "missing":
             raise VerificationError("dependency-graph.json HTTP 404 Not Found")
         destination.write_bytes(changed)
         return destination
 
     def attest(path: Path, *args: Any, **kwargs: Any) -> None:
-        """The local verifier stands in only for the existing cryptographic identity check."""
+        """Stand in only for the existing cryptographic identity check.
+
+        Parameters:
+            path (Path): downloaded modified graph.
+            *args (Any): fixed verification identity arguments.
+            **kwargs (Any): selected verifier options.
+
+        Returns:
+            None: non-attestation mutations proceed to binding validation.
+
+        Raises:
+            AssertionError: expected modified bytes are absent.
+            RuntimeError: modified content or a foreign signer fails attestation.
+        """
         if mutation in {"metadata", "signer"}:
             assert path.read_bytes() != golden or mutation == "signer"
             raise RuntimeError("Existing promotion attestation rejected modified bytes or foreign signer/ref")
@@ -162,7 +230,17 @@ def test_existing_promotion_must_retain_the_exact_supplemental_asset(
     monkeypatch.setattr(publish_gate, "_json", lambda *args: {"assets": assets})
 
     def command(*args: str) -> None:
-        """Download deterministic existing assets through the publication CLI seam."""
+        """Download deterministic existing assets through the publication CLI seam.
+
+        Parameters:
+            *args (str): ignored native publication command arguments.
+
+        Returns:
+            None: deterministic existing fixture assets were written.
+
+        Raises:
+            OSError: fixture directories or files cannot be written.
+        """
         destination = tmp_path / "existing"
         destination.mkdir(exist_ok=True)
         (destination / "stack-snapshot.json").write_bytes(b"snapshot")

@@ -2690,6 +2690,40 @@ def run_preflighted(
             workdir,
             gh_bin=tools.get("gh"),
         )
+        # Verified archives are paths under this directory, needed by planning,
+        # staging and the no-op audit. Keep them alive through the entire run.
+        return run_verified(
+            opts, env, ask, layout, tools=tools, verified=verified, missing_before_lock=missing_before_lock
+        )
+
+
+def run_verified(
+    opts: Options,
+    env: Mapping[str, str],
+    ask: Callable[[str], str] | None,
+    layout: Layout,
+    *,
+    tools: Mapping[str, str],
+    verified: Verified,
+    missing_before_lock: frozenset[Path],
+) -> ExitCode:
+    """Plan and apply while the caller retains authenticated archive storage.
+
+    Parameters:
+        opts (Options): requested operation.
+        env (Mapping[str, str]): original layout/search environment.
+        ask (Callable[[str], str] | None): consent prompt.
+        layout (Layout): admitted installation paths.
+        tools (Mapping[str, str]): preflight-selected absolute executables.
+        verified (Verified): authenticated graph and still-live archive paths.
+        missing_before_lock (frozenset[Path]): absent permanent directories before locking.
+
+    Returns:
+        ExitCode: successful install or unchanged plan.
+
+    Raises:
+        InstallError: planning, consent, staging, recovery or executable checks fail.
+    """
     if opts.plan_only:
         report_plan(plan_install(layout, verified, missing_before_lock=missing_before_lock), verified)
         return ExitCode.OK
