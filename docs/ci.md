@@ -490,7 +490,14 @@ Bun scope:
 - `--runtime bun-standalone` skips only the seven marked auth dispatch/refresh cases from
   `integration/scenarios/test_auth_transport.py`: Bun ignores the `NODE_OPTIONS --import` redirect
   and egress/readiness preload in `harness/anthropic_mock.py`. The missing-preload refusal case runs
-  on both runtimes. Skip reasons appear in pytest and JUnit before fake auth fixtures can dispatch
+  on both runtimes. Skip reasons appear in pytest and JUnit before fake auth fixtures can dispatch.
+  Separate candidate auth steps pass `--bun-auth-adapter` for each stack on the same compiled core:
+  `BUN_OPTIONS --preload` loads the shared redirect before entrypoint startup, while Node retains
+  its original hook. These steps retain the actual shaping/refresh/refusal assertions and write
+  `standalone-auth-personal.xml` / `standalone-auth-local.xml`. This is an explicit receipt lane,
+  not a blanket unskip or a claim that those hosted executions passed. Default skips remain until
+  receipts demonstrate compiled-core acceptance. The small native fixture in infrastructure units
+  proves hook admission and failures only, not assembled-stack behavior
 - No other selected D/E case uses preloads, scaled timers or `--expose-gc`. Clock-driven behavior
   moved to native suites. `providers/fast_timers.mjs` is no longer used by selected D/E scenarios;
   `harness/probe.py`'s `--expose-gc` is used only by excluded `scenarios/bench/test_render.py`

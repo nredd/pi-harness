@@ -47,14 +47,16 @@ RECORDER = dedent(
 
 
 @pytest.mark.parametrize("runtime", ["node", "bun-standalone"])
-def test_only_node_preload_cases_skip_on_standalone(runtime: str) -> None:
+@pytest.mark.parametrize("adapter", [False, True])
+def test_only_node_preload_cases_skip_on_standalone(runtime: str, *, adapter: bool) -> None:
     """Keep portable boundaries and the missing-preload refusal active on either runtime.
 
     Parameters:
         runtime (str): declared binary runtime.
+        adapter (bool): explicit candidate receipt lane.
     """
     cfg = Mock(spec=pytest.Config)
-    cfg.getoption.return_value = runtime
+    cfg.getoption.side_effect = lambda name: runtime if name == "--runtime" else adapter
     auth = Mock(spec=pytest.Item)
     portable = Mock(spec=pytest.Item)
     auth.get_closest_marker.side_effect = lambda name: name == "node_preload"
@@ -63,7 +65,7 @@ def test_only_node_preload_cases_skip_on_standalone(runtime: str) -> None:
     pytest_collection_modifyitems(cfg, [auth, portable])
 
     portable.add_marker.assert_not_called()
-    if runtime == "node":
+    if runtime == "node" or adapter:
         auth.add_marker.assert_not_called()
         return
     auth.add_marker.assert_called_once()
@@ -74,7 +76,8 @@ def test_only_node_preload_cases_skip_on_standalone(runtime: str) -> None:
 
 
 @pytest.mark.parametrize("runtime", ["node", "bun-standalone"])
-def test_real_auth_scenarios_collect_exact_skips(runtime: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize("adapter", [False, True])
+def test_real_auth_scenarios_collect_exact_skips(runtime: str, tmp_path: Path, *, adapter: bool) -> None:
     """Collect the real auth scenario file: a dropped or misplaced marker changes this set.
 
     Collection only imports and marks the scenarios; no Pi binary or provider is started.
@@ -82,6 +85,7 @@ def test_real_auth_scenarios_collect_exact_skips(runtime: str, tmp_path: Path) -
     Parameters:
         runtime (str): declared binary runtime.
         tmp_path (Path): holds the collection-recording plugin.
+        adapter (bool): explicitly opt in to the candidate CI receipt lane.
     """
     (tmp_path / "record_skips.py").write_text(RECORDER)
     output = subprocess.check_output(
@@ -98,6 +102,7 @@ def test_real_auth_scenarios_collect_exact_skips(runtime: str, tmp_path: Path) -
             "no:cacheprovider",
             "--runtime",
             runtime,
+            *(["--bun-auth-adapter"] if adapter else []),
         ],
         cwd=INTEGRATION,
         env=os.environ | {"PYTHONPATH": str(tmp_path)},
@@ -108,4 +113,4 @@ def test_real_auth_scenarios_collect_exact_skips(runtime: str, tmp_path: Path) -
     states = dict(line.split()[1:] for line in output.splitlines() if line.startswith("ITEM "))
     assert "test_request_uses_auth_json_token_with_claude_code_headers[missing-preload]" in states
     skipped = {name for name, state in states.items() if state == "SKIP"}
-    assert skipped == (STANDALONE_SKIPS if runtime == "bun-standalone" else set())
+    assert skipped == (STANDALONE_SKIPS if runtime == "bun-standalone" and not adapter else set())

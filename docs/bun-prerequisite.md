@@ -14,7 +14,8 @@ Current CI scope (2026-10-29):
   test markers/collection policy and JUnit: `NODE_OPTIONS --import` interception is unavailable.
   `test_request_uses_auth_json_token_with_claude_code_headers[missing-preload]` still exercises
   fail-closed startup on standalone. `integration/harness/anthropic_mock.py::anthropic_env`,
-  `providers/redirect_anthropic.mjs` and `providers/auth_guard.mjs` implement this dependency
+  `providers/redirect_anthropic.mjs` and `providers/auth_guard.mjs` implement this dependency.
+  The candidate adapter receipt lane below does not remove those default skips
 - None of the remaining selected D/E scenarios uses `fast_timers.mjs` or `--expose-gc`.
   Injected-clock behavior is native; GC instrumentation is confined to excluded render benches
   (`integration/harness/probe.py`, `scenarios/bench/test_render.py`). The actual adapter issue is
@@ -25,6 +26,38 @@ Current CI scope (2026-10-29):
   This is a source-build D/E gate, not full Bun acceptance or a published-artifact gate
 - CI results, run IDs and measured runner cost belong in the draft PR; job definitions alone are
   not evidence that these new runs pass. See [here](ci.md) for the zero-added-job capacity budget
+
+## Candidate auth runtime adapter (#14)
+
+The harness sets both `NODE_OPTIONS=--import <redirect>` and
+`BUN_OPTIONS=--preload <redirect>`. Compiled Bun 1.4.4 honors the latter before its entrypoint;
+Node continues using the former. Both load the same harness-only fetch/egress hook. No SDK,
+production extension, live configuration, timer behavior or runtime pin changes.
+
+`auth_guard.mjs` still runs readiness during extension factory loading, before session-start
+warmup or auth dispatch: a per-launch identity nonce, refused non-loopback fetch, then a real
+loopback echo. Invalid mock origins fail before hook installation; redirects are disabled so an
+HTTP redirect cannot escape interception. Both Node child-process and direct Bun spawn calls
+refuse `claude`/`security`. This is instrumentation, NOT a sandbox against arbitrary subprocess,
+native-addon, socket or deliberately hostile extension activity.
+
+Local native fixture evidence (2026-10-29): `tests/test_auth_runtime.py` compiles the two-module
+fixture with pinned Bun and directly executes that native artifact. Before adding `BUN_OPTIONS`
+to `anthropic_env`, its admission test failed with `redirect preload is missing`; the missing-hook
+negative control passed. After wiring the hook, admission and refusal pass. The fixture uses the
+real hook, shared readiness verifier, recording loopback server and fake-only environment. It
+also exercises replaced fetch, identity/echo/egress failures, unsafe mock origins, forbidden
+Node/Bun subprocess APIs and a real HTTP redirect that must not reach its destination. It is
+NOT the compiled Pi core and proves no auth shaping, router dispatch or refresh acceptance.
+
+CI keeps the default seven skips and adds explicit `--bun-auth-adapter` candidate auth steps on
+the actual compiled core for each stack, reusing the existing standalone build. Those steps run
+the unchanged shaping, direct/router/API-key/custom, refresh persistence/refusal and missing-hook
+assertions. Their individual outcomes and `standalone-auth-{personal,local}.xml` are the required
+receipt. They are NOT RUN locally; no hosted receipt is claimed by this document. Keep #14 open
+and do not remove default skips until the actual compiled-core CI receipts pass on both stacks
+and both native OSes. Linux ARM64, timer/GC adapter requirements and published-artifact acceptance
+remain outside this change.
 
 Historical local evidence below predates the rebuilt integration gate. Do not treat the old
 `pi-harness-e2e` failures or smoke results as execution evidence for the new Gitlink/CI jobs.
