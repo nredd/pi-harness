@@ -19,6 +19,11 @@ The separate approved D7 toolchain upgrade selects Bun 1.4.4; evidence and remai
 | `computer-use` | Existing check scripts | Not run |
 | `integration/probes`, `scripts/import_audit.test.ts` | Existing `node --test` | Not run; migration in phase 4 (import audit remains Node-only) |
 
+Owned Vitest configs cap workers at two (sampler: one), including direct Node/Bun
+Vitest runs. These are per-gate defaults, not a host-wide concurrency limit.
+The #105 source audit, regression loop and remaining acceptance criterion are
+[here](test-worker-budgets.md).
+
 Python stays on pytest, uv, ruff and ty. The separate dotfiles repository stays on dependency-free
 `node --test`: its bootstrap gate runs before dependency installation. Vitest benches stay on
 Node. Coverage PR #162 integrates these producers after this PR, as specified in the handoff
