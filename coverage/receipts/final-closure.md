@@ -140,3 +140,20 @@ This run is NOT globally green: the sole failed required cell is `stack (wsl2, p
 11 required cells passed. This infrastructure failure does not invalidate the successful owned
 producers or authorize retrying tests to obtain lower coverage counters. The final exact-head
 run must still pass all 12 required contexts; no merge is authorized.
+
+Run `40868682068` at `07277f7` passes WSL personal stack but fails the WSL owned gate. Its
+source bytes expose a different, reproducible boundary defect: committed plan-mode runtime
+snapshots contain CRLF while the fresh build emits LF, and the Swift source-string invariant
+fails on its exact newline. Dev-tools' format check also reports drift. Those partial coverage
+reports do not establish any floor. The final cleanup action returns the original owned failure,
+not an independently diagnosed export defect.
+
+A real disposable Git regression recreates a clean CRLF text checkout with explicit EOL
+configuration, then executes the setup action's actual Git command lines. Old setup fails the
+exact Swift/TypeScript byte comparison while preserving the binary sentinel. Pinning `core.eol=lf`
+alone, adding forced `checkout-index`, or forced path checkout still fails: cached clean index
+entries prevent rematerialization. Emptying the **disposable CI checkout's index** before the
+existing hard reset passes (one focused test), while exact binary bytes remain unchanged.
+No production source, formatter rule, source-string assertion or runtime snapshot is relaxed.
+Full `make check-scripts` after the fix: 918 passed plus 8 import-audit tests. Hosted confirmation
+is still required; failed-run counters remain diagnostic only.

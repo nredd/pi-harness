@@ -1,5 +1,10 @@
 # CI
 
+WSL bootstrap explicitly sets `core.autocrlf=false` and `core.eol=lf`, then rebuilds the
+**disposable host checkout's** index before resetting to HEAD. Disabling autocrlf or resetting
+alone can retain clean CRLF stat entries. The real-Git regression verifies exact tracked text
+and unchanged binary bytes; no source assertion or generated-runtime comparison is weakened.
+
 CI is the gate. Local runs are for development. Hosted runners only, no stored credentials or secrets.
 The publish job alone requests a short-lived npm OIDC identity.
 

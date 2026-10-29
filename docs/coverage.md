@@ -363,5 +363,5 @@ reports correctly fail rather than pretending full coverage. Do not reuse stale 
 to claim a clean gate.
 
 The Python benchmark's existing combined line/branch 90% gate is unchanged. Instrumented runs
-must not refresh performance baselines. Quiet-runner benches, WSL2 workspace coverage and live
-platform/TCC checks are NOT RUN by this coverage gate. See [CI](ci.md) for platform boundaries.
+must not refresh performance baselines. Quiet-runner benches and live platform/TCC checks are NOT RUN by this coverage gate.
+The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](ci.md) for platform boundaries.
