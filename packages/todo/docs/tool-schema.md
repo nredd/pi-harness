@@ -270,11 +270,13 @@ carries the bare message. Task state is unchanged.
 
 ## Prompt guidance
 
-The tool ships a `promptSnippet` and ten `promptGuidelines` bullets telling the
-model when to open a list, to keep exactly one task `in_progress`, to mark work
-completed immediately rather than in batches, never to complete a task with
-failing tests, the literal `update {id, status}` call shape for changing a
-task's status, that `completed` needs `evidence`, and that plan items are
-completed with evidence or deferred with a reason, never reported done while
-open. Both are overridable — see
+The tool ships a `promptSnippet` and `promptGuidelines` bullets telling the
+model when to open a list, to mark every started task `in_progress`, including
+parallel work, and use `owner` to identify each worker. Each verified task is
+completed immediately; atomic batches record only independently verified outcomes
+together and never delay an individual completion. The guidance also
+covers failing tests, the literal `update {id, status}` call shape for changing
+a task's status, `completed` evidence, and plan items, whose text stays locked
+and which must be completed with evidence or deferred with a reason before
+work is reported done. Both are overridable — see
 [configuration.md](./configuration.md#guidance).
