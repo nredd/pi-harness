@@ -1,0 +1,90 @@
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - ESM syntax in a file loaded as CommonJS (vitest.config.ts:1:1). Use a `.mjs` extension or set `"type": "module"` in the closest package.json
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v5.0.3 /Volumes/Scratch/code/cov-subagents-pr/packages/subagents
+      Coverage enabled with istanbul
+
+
+ Test Files  159 passed (159)
+      Tests  3470 passed | 8 skipped (3478)
+   Start at  07:52:49
+   Duration  186.90s (import 46%, tests 44%, transform 10%)
+
+     Import  2155 modules were evaluated 245658 times · 76.01s total, 46% of tracked time
+             ~75.35s faster with isolate: false — shared modules are evaluated once per worker instead of once per file
+             learn more: https://vitest.dev/guide/improving-performance#test-isolation
+
+[34m % [39m[2mCoverage report from [22m[33mistanbul[39m
+-------------------|---------|----------|---------|---------|-------------------
+File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+-------------------|---------|----------|---------|---------|-------------------
+All files          |   92.59 |     86.9 |   95.78 |   93.42 |                   
+ src               |   90.05 |    83.29 |   94.66 |   90.61 |                   
+  abortable.ts     |   96.15 |       90 |     100 |     100 | 21                
+  agent-color.ts   |     100 |    95.65 |     100 |     100 | 111,156           
+  ...ile-toggle.ts |   95.53 |    90.81 |     100 |   98.66 | 157               
+  agent-manager.ts |   95.96 |    90.99 |   93.91 |   96.47 | ...1983,2059-2062 
+  agent-runner.ts  |   97.19 |    94.84 |   97.61 |   98.21 | ...1458,1494-1496 
+  agent-types.ts   |     100 |    92.42 |     100 |     100 | ...79,288-289,325 
+  context.ts       |     100 |    95.83 |     100 |     100 | 39                
+  ...ension-rpc.ts |     100 |    96.87 |     100 |     100 | 94                
+  custom-agents.ts |   98.26 |    97.58 |     100 |    97.8 | 140,254           
+  ...ed-results.ts |     100 |    88.88 |     100 |     100 | 46,87             
+  ...rise-local.ts |   89.28 |       72 |     100 |   88.88 | 44,53,58          
+  env.ts           |    90.9 |    83.33 |     100 |    90.9 | 24                
+  group-join.ts    |   94.82 |    73.91 |     100 |     100 | 64,75,86,111-143  
+  home-paths.ts    |     100 |     87.5 |     100 |     100 | 16,20             
+  index.ts         |   75.45 |     63.1 |   86.85 |    75.5 | ...4455-4514,4542 
+  memory.ts        |   98.03 |      100 |     100 |   97.82 | 53                
+  mention-clone.ts |     100 |    83.33 |     100 |     100 | 154,191           
+  model-call.ts    |     100 |    95.83 |     100 |     100 | 48                
+  ...l-resolver.ts |   98.98 |     95.4 |   96.55 |     100 | 113,116,233,278   
+  ...-selection.ts |     100 |    96.39 |     100 |     100 | 121,137,145,149   
+  model-tiers.ts   |    87.5 |    75.18 |   83.33 |   95.94 | 145-146,167       
+  nested-tools.ts  |   92.52 |    78.88 |     100 |   93.75 | 367,391,443-448   
+  output-file.ts   |    92.3 |    81.48 |     100 |   97.72 | 58                
+  ...-resources.ts |    97.6 |    94.02 |     100 |   98.57 | 356,403           
+  ...ess-budget.ts |   98.23 |    96.87 |     100 |   98.93 | 330               
+  ...-admission.ts |   96.77 |    95.83 |     100 |     100 | 74                
+  ...rce-loader.ts |     100 |    91.66 |     100 |     100 | 15,41             
+  ...dule-store.ts |   90.41 |    83.33 |     100 |   91.66 | 38-45             
+  schedule.ts      |   91.26 |    81.02 |   90.62 |   96.55 | ...17,288-290,450 
+  settings.ts      |   97.41 |    95.06 |     100 |    97.4 | ...16-617,634-635 
+  skill-loader.ts  |   95.08 |    91.11 |     100 |   95.91 | 93,103            
+  ...red-output.ts |   94.44 |     87.5 |     100 |     100 | 86                
+  types.ts         |       0 |      100 |     100 |       0 | 19                
+  usage.ts         |     100 |    96.55 |     100 |     100 | 82                
+  worktree.ts      |   98.27 |       90 |   91.66 |   98.18 | 122               
+ src/ui            |   97.21 |    92.94 |   97.82 |   98.51 |                   
+  agent-mention.ts |   98.46 |    87.75 |     100 |     100 | ...34,176,214-215 
+  agent-row.ts     |   96.93 |    90.08 |   88.23 |   97.59 | 77,217            
+  agent-widget.ts  |   94.55 |    90.26 |     100 |   94.23 | ...09-422,628-629 
+  ...ion-viewer.ts |   98.68 |    93.83 |   98.21 |     100 | ...85,794-796,820 
+  fallback-flag.ts |   96.87 |    95.83 |     100 |     100 | 29,86             
+  fleet-list.ts    |    96.9 |    94.27 |   97.14 |    98.2 | ...98,712-713,733 
+  fleet-state.ts   |   96.15 |       95 |     100 |   98.75 | 117               
+  ...ation-view.ts |     100 |    94.23 |   94.11 |     100 | 82-84,128         
+  schedule-menu.ts |   84.44 |    60.97 |     100 |     100 | 20-62             
+  workflow-card.ts |   98.11 |     97.8 |     100 |   98.86 | 191               
+  ...low-dialog.ts |   98.75 |    96.38 |    97.5 |   99.64 | 955               
+  workflow-menu.ts |     100 |    84.37 |     100 |     100 | 95-105,186-187    
+ src/workflow      |   95.91 |    91.08 |   98.31 |    97.4 |                   
+  collisions.ts    |     100 |       90 |     100 |     100 | 100               
+  entry.ts         |     100 |       50 |     100 |     100 | 38-45             
+  host.ts          |   97.75 |    91.45 |   93.75 |   97.46 | 367,388           
+  journal.ts       |     100 |    97.36 |     100 |     100 | 167               
+  json-schema.ts   |   87.09 |    69.56 |     100 |   89.28 | 77,92,110         
+  meta.ts          |   96.95 |    95.23 |     100 |   99.15 | 264               
+  progress.ts      |   99.39 |    95.73 |     100 |     100 | ...13-517,520-521 
+  runtime.ts       |   93.88 |    90.44 |   97.72 |   96.23 | ...1194-1195,1222 
+  saved.ts         |      95 |    92.64 |     100 |   97.01 | 185,214           
+  task.ts          |   95.89 |    77.61 |     100 |   96.92 | 228,269           
+-------------------|---------|----------|---------|---------|-------------------
+
+=============================== Coverage summary ===============================
+Statements   : 92.59% ( 7788/8411 )
+Branches     : 86.9% ( 5927/6820 )
+Functions    : 95.78% ( 1363/1423 )
+Lines        : 93.42% ( 6690/7161 )
+================================================================================
