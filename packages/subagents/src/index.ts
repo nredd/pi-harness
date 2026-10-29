@@ -294,12 +294,18 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
  *   agents and those with `extensions: false`.
  */
 export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
-  const tools = cfg?.builtinToolNames;
+  const denied = cfg?.disallowedTools ?? [];
+  const tools = denied.length > 0
+    ? (cfg?.builtinToolNames ?? BUILTIN_TOOL_NAMES).filter((tool) => !denied.includes(tool))
+    : cfg?.builtinToolNames;
+  // Only claim what is known at registration: extensions may supply command
+  // tools (including ssh_exec), so missing bash is not proof of no remote access.
+  const shellNote = tools && !tools.includes("bash") ? "; no built-in shell: cannot run bash commands" : "";
   // `isolated` overrides extensions to false in the runner, so both mean the
   // agent has no extension tools.
   const noExtensionTools = cfg?.isolated === true || cfg?.extensions === false;
   if (tools && tools.length === 0) {
-    return noExtensionTools ? "none" : "no built-ins, extension tools only";
+    return (noExtensionTools ? "none" : "no built-ins, extension tools only") + shellNote;
   }
   const isFullSet = !tools
     || (tools.length === BUILTIN_TOOL_NAMES.length && BUILTIN_TOOL_NAMES.every((t) => tools.includes(t)));
@@ -307,7 +313,7 @@ export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
   // Extension tools resolve at run time, so they cannot be enumerated here, but
   // omitting the fact reads as "built-ins only": an agent that can search the
   // web through an extension then looks web-less, and the work gets routed away.
-  return noExtensionTools ? builtins : `${builtins} + extension tools`;
+  return (noExtensionTools ? builtins : `${builtins} + extension tools`) + shellNote;
 }
 
 /** CLI flag that runs a workflow script at session start. */
@@ -2132,7 +2138,7 @@ Terse command-style prompts produce shallow, generic work.
         agentType: subagentType, definitionModel: customConfig?.model, paramModel: params.model,
         parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: customConfig?.displayName,
       });
-      if (typeof selection === "string") return textResult(selection);
+      if (typeof selection === "string") return { ...textResult(selection), isError: true };
       const tierBlock = selection?.tierBinding && !params.schedule ? await admitModelSelection(selection, ctx.modelRegistry, pi.events) : undefined;
       const model = selection?.model;
       const modelFallback = selection?.fallback;

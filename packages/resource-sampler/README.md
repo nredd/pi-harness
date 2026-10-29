@@ -41,7 +41,7 @@ Semantics:
 - `cpu` copies every `os.cpus()` counter when sampled. Bun returns lazy placeholders that read native
   counters on first property access; an unread stored baseline would describe a later instant.
 - Darwin enumerates metadata with fixed `/bin/ps -A -o pid=,ppid=,lstart=,time=,rss=,ucomm=`
-  and `LC_ALL=C`. Builtin FFI (Node >=26.1, Bun, verified on pinned 1.3.14) then reads fixed symbols
+  and `LC_ALL=C`. Builtin FFI (Node >=26.1, Bun; toolchain pin in root `.bun-version`) then reads fixed symbols
   `proc_pidinfo`, `proc_pid_rusage` and `mach_timebase_info` from `/usr/lib/libproc.dylib`, without
   root, a compiler, addon or new binary/package dependency. Import/construction does not load FFI.
   Node emits its builtin experimental-FFI warning on first use; Bun does not. Node 22-25 keeps

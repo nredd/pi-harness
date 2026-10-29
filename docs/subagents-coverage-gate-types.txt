@@ -1,0 +1,4 @@
+
+> @nredd/pi-subagents@0.22.0-nredd.7 typecheck
+> tsc --noEmit
+

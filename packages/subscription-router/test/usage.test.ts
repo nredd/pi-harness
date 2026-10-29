@@ -325,7 +325,14 @@ describe("UsageService", () => {
 		]);
 		const snapshot = await service.get(ctx, "openai-codex");
 		expect(snapshot.windows).toEqual([
-			{ name: "7d", usedPercent: 38, resetAt: undefined, durationMs: 604_800_000, scope: "provider" },
+			{
+				name: "7d",
+				usedPercent: 38,
+				resetAt: undefined,
+				durationMs: 604_800_000,
+				spanSource: "reported",
+				scope: "provider",
+			},
 		]);
 	});
 
@@ -341,6 +348,41 @@ describe("UsageService", () => {
 			},
 		]);
 		expect((await service.get(ctx, "openai-codex")).windows.map((window) => window.name)).toEqual(["7d", "5h"]);
+	});
+
+	it("marks span provenance: reported seconds and Anthropic are reported, positional fallback is assumed", async () => {
+		const spans = async (body: unknown, provider = "openai-codex") => {
+			const { service } = harness([{ body }]);
+			return (await service.get(ctx, provider)).windows.map((w) => [w.name, w.durationMs, w.spanSource]);
+		};
+		// Weekly-only primary with reported seconds: weekly is proven.
+		expect(await spans({ rate_limit: { primary_window: { used_percent: 1, limit_window_seconds: 604_800 } } })).toEqual(
+			[["7d", 604_800_000, "reported"]],
+		);
+		// Reported 5h-length window stays a reported 5h.
+		expect(await spans({ rate_limit: { primary_window: { used_percent: 1, limit_window_seconds: 18_000 } } })).toEqual([
+			["5h", 18_000_000, "reported"],
+		]);
+		// Absent seconds, absent secondary: identity is a guess, so it is `assumed`.
+		expect(await spans({ rate_limit: { primary_window: { used_percent: 1 } } })).toEqual([
+			["5h", 18_000_000, "assumed"],
+		]);
+		// Absent seconds on both: both positional guesses are assumed.
+		expect(
+			await spans({ rate_limit: { primary_window: { used_percent: 1 }, secondary_window: { used_percent: 2 } } }),
+		).toEqual([
+			["5h", 18_000_000, "assumed"],
+			["7d", 604_800_000, "assumed"],
+		]);
+		// Zero or negative seconds are not a reported span.
+		expect(await spans({ rate_limit: { primary_window: { used_percent: 1, limit_window_seconds: 0 } } })).toEqual([
+			["5h", 18_000_000, "assumed"],
+		]);
+		// Anthropic's fixed windows are the provider contract.
+		expect(await spans({ five_hour: { utilization: 1 }, seven_day: { utilization: 2 } }, "anthropic")).toEqual([
+			["five_hour", 18_000_000, "reported"],
+			["seven_day", 604_800_000, "reported"],
+		]);
 	});
 
 	it("keeps unknown Codex durations explicit instead of mislabeling them", async () => {
