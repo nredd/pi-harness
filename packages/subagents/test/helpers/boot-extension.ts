@@ -8,7 +8,7 @@
  * small divergences that would have to be reconciled blind. New files use this.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext, SessionShutdownEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
@@ -130,7 +130,7 @@ export interface Hermetic {
 }
 
 /**
- * Redirect cwd, `PI_CODING_AGENT_DIR` and `HOME` into a fresh temp dir, so the
+ * Redirect cwd and `PI_CODING_AGENT_DIR` into a fresh temp dir, so the
  * developer's real settings and agent files can't reach the extension under
  * test. Call BEFORE instantiating the extension — settings are read at boot.
  */
@@ -138,11 +138,11 @@ export function hermeticDir(opts: {
   settings?: Record<string, unknown>;
   agentFiles?: Record<string, string>;
 } = {}): Hermetic {
-  const dir = mkdtempSync(join(tmpdir(), "pi-boot-"));
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-boot-agentdir-"));
+  // process.cwd() and project discovery use physical paths, including macOS /var.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-boot-")));
+  const agentDir = realpathSync(mkdtempSync(join(tmpdir(), "pi-boot-agentdir-")));
   const prevCwd = process.cwd();
   const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const prevHome = process.env.HOME;
 
   mkdirSync(join(dir, ".pi"), { recursive: true });
   if (opts.settings) {
@@ -156,7 +156,6 @@ export function hermeticDir(opts: {
   }
 
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  process.env.HOME = agentDir;
   process.chdir(dir);
 
   return {
@@ -165,8 +164,6 @@ export function hermeticDir(opts: {
       process.chdir(prevCwd);
       if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-      if (prevHome == null) delete process.env.HOME;
-      else process.env.HOME = prevHome;
       rmSync(dir, { recursive: true, force: true });
       rmSync(agentDir, { recursive: true, force: true });
     },

@@ -2,6 +2,7 @@ import { Editor, type OverlayOptions, type TuiMode, visibleWidth } from "@earend
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { registerAgents } from "../src/agent-types.js";
+import type { Clock } from "../src/clock.js";
 import type { AgentConfig, AgentRecord, ViewerMarkdownMode } from "../src/types.js";
 import { type AgentActivity, getDisplayName } from "../src/ui/agent-widget.js";
 import type { ViewerBackgroundAction } from "../src/ui/conversation-viewer.js";
@@ -12,6 +13,8 @@ import {
   formatFleetElapsed,
   formatFleetTokens,
 } from "../src/ui/fleet-list.js";
+import { FLEET_STATE_ENTRY, type FleetJournalEntry } from "../src/ui/fleet-state.js";
+import { FakeClock } from "./helpers/fake-clock.js";
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
 const DOWN = "\x1b[B";
@@ -122,10 +125,12 @@ function makeWorkflow(over: Partial<FleetWorkflow> = {}): FleetWorkflow {
 function harness(
   agents: AgentRecord[],
   opts: {
+    collapsed?: boolean;
     tuiMode?: TuiMode;
     viewerMarkdown?: () => ViewerMarkdownMode;
     onViewerMarkdown?: (mode: ViewerMarkdownMode) => void;
     backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction;
+    clock?: Clock;
   } = {},
 ): Harness {
   const notices: string[] = [];
@@ -158,8 +163,22 @@ function harness(
   };
 
   const manager = fakeManager(agents);
-  const fleet = new FleetList(manager, new Map(), undefined, opts.viewerMarkdown, opts.onViewerMarkdown, undefined, opts.backgroundAction);
+  const fleet = new FleetList(
+    manager,
+    new Map(),
+    undefined,
+    opts.viewerMarkdown,
+    opts.onViewerMarkdown,
+    undefined,
+    opts.backgroundAction,
+    undefined,
+    undefined,
+    opts.clock,
+  );
+  const journal: FleetJournalEntry[] = [];
+  fleet.restoreSession(() => journal, data => journal.push({ type: "custom", customType: FLEET_STATE_ENTRY, data }));
   fleet.setUICtx(ui);
+  if (!opts.collapsed) fleet.toggleCollapse(); // existing row tests exercise the expanded rendering
   let workflows: FleetWorkflow[] = [];
   const openedWorkflows: string[] = [];
   let closeWorkflowDialog: (() => void) | undefined;
@@ -224,6 +243,7 @@ describe("FleetList detached agents", () => {
     const fleet = new FleetList(fakeManager(own), new Map(), undefined, undefined, undefined, undefined, undefined, undefined, orphans);
     fleet.setUICtx(ui);
     fleet.update();
+    fleet.toggleCollapse();
     const render = () => (factory ? factory({ requestRender: () => {} }, theme).render(120).join("\n") : "");
     return { fleet, render };
   }
@@ -398,7 +418,7 @@ describe("FleetList navigation", () => {
       const record = makeRecord({ id: "late", session: undefined });
       const h = harness([record]);
       h.fleet.update(); // spawn time: running but no session yet, so no rows
-      expect(h.render()).toEqual([]);
+      expect(h.render().join("\n")).toContain("1 running"); // summary includes pending starts
       (record as { session?: unknown }).session = FAKE_SESSION;
       vi.advanceTimersByTime(250); // the tick must still be armed to pick it up
       expect(h.render().join("\n")).toContain("Sleep then report 1");
@@ -644,6 +664,48 @@ describe("FleetList rendering", () => {
 });
 
 describe("FleetList overlay lifecycle", () => {
+  it("acknowledges an old failed record only after its viewer closes successfully", async () => {
+    const failed = makeRecord({ status: "error", completedAt: Date.now() - 60_000, error: "BROKEN" });
+    const h = harness([failed], { collapsed: true });
+    expect(h.render().join("\n")).toContain("[1 failed]");
+    h.press(DOWN);
+    h.press(DOWN);
+    h.press(ENTER);
+    expect(h.overlayOpened()).toBe(true);
+    expect(failed.resultConsumed).not.toBe(true);
+    await h.closeOverlay();
+    expect(failed.resultConsumed).toBe(true);
+    h.press(ESC);
+    expect(h.render()).toEqual([]);
+    h.fleet.dispose();
+  });
+
+  it("does not acknowledge a failed record when opening its viewer rejects", async () => {
+    const failed = makeRecord({ status: "error", completedAt: Date.now() - 60_000 });
+    const h = harness([failed], { collapsed: true });
+    h.ui.custom = () => Promise.reject(new Error("viewer unavailable"));
+    h.press(DOWN);
+    h.press(DOWN);
+    h.press(ENTER);
+    await Promise.resolve();
+    expect(failed.resultConsumed).not.toBe(true);
+    h.press(ESC);
+    expect(h.render().join("\n")).toContain("[1 failed]");
+    h.fleet.dispose();
+  });
+
+  it("retains an old failed workflow until its inspector is actually viewed", async () => {
+    const h = harness([], { collapsed: true });
+    h.setWorkflows([makeWorkflow({ status: "failed", completedAt: Date.now() - 60_000 })]);
+    expect(h.render().join("\n")).toContain("[1 failed]");
+    h.press(DOWN);
+    h.press(DOWN);
+    h.press(ENTER);
+    await h.closeWorkflowDialog();
+    h.press(ESC);
+    expect(h.render()).toEqual([]);
+    h.fleet.dispose();
+  });
   it.each<{ mode: TuiMode; expected: OverlayOptions }>([
     { mode: "regular", expected: { anchor: "center", width: "90%", maxHeight: "70%" } },
     { mode: "fullscreen", expected: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } },
@@ -833,6 +895,7 @@ describe("FleetList cost display", () => {
     };
     fleet.setUICtx(ui);
     fleet.update();
+    fleet.toggleCollapse();
     return factory!({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme).render(120).join("\n");
   }
 
@@ -882,6 +945,7 @@ describe("FleetList model and activity", () => {
     };
     fleet.setUICtx(ui);
     fleet.update();
+    fleet.toggleCollapse();
     return factory!({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme).render(160).join("\n");
   }
 
@@ -936,6 +1000,7 @@ describe("FleetList model and activity", () => {
     fleet.setUICtx(ui);
     fleet.update();
 
+    fleet.toggleCollapse();
     const cellStart = (line: string, text: string) => {
       expect(line).toContain(text);
       return visibleWidth(line.split(text, 1)[0]);
@@ -1315,13 +1380,24 @@ describe("FleetList workflow rows", () => {
     // The contract: a session without workflows behaves exactly as it did
     // before they existed. Asserted as an equality rather than an absence, so
     // a future change to the roster cannot quietly alter the agents-only path.
-    const withNone = harness([makeRecord({ id: "a1", description: "one" })]);
-    const before = withNone.render().join("\n");
-    expect(before).not.toContain("workflow");
+    const clock = new FakeClock();
+    const now = vi.spyOn(Date, "now").mockReturnValue(clock.now());
+    const startedAt = clock.now();
+    const withNone = harness([makeRecord({ id: "a1", description: "one", startedAt })], { clock });
+    const withEmpty = harness([makeRecord({ id: "a1", description: "one", startedAt })], { clock });
+    try {
+      const before = withNone.render().join("\n");
+      expect(before).not.toContain("workflow");
 
-    const withEmpty = harness([makeRecord({ id: "a1", description: "one" })]);
-    withEmpty.setWorkflows([]);
-    expect(withEmpty.render().join("\n")).toBe(before);
+      // A wall-clock advance must not change either injected-clock fixture.
+      now.mockReturnValue(clock.now() + 1_000);
+      withEmpty.setWorkflows([]);
+      expect(withEmpty.render().join("\n")).toBe(before);
+    } finally {
+      withNone.fleet.dispose();
+      withEmpty.fleet.dispose();
+      now.mockRestore();
+    }
   });
 
   it("navigates agents exactly as before when no run is present", () => {

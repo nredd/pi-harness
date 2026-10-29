@@ -7,7 +7,7 @@ The publish job alone requests a short-lived npm OIDC identity.
 
 | Job | Normal PR | `main` push | Docs-only PR or push | Proves |
 | --- | --- | --- | --- | --- |
-| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Reports success after the classifier logs the bypass | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler and inprocess run FULL Vitest suites on both engines with the shared homedir guard; the other packages retain native Bun subsets; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN. See the computer-use note below. |
+| `owned (ubuntu-24.04, macos-14)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Reports success after the classifier logs the bypass | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo and inprocess run FULL Vitest suites on both engines with the shared homedir guard; subagents retains native scenarios plus a guarded real-loader gate until #174, with its full Node suite guarded; the other packages retain native Bun subsets; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux reports it NOT RUN. See the computer-use note below. |
 | `contracts (ubuntu-24.04, macos-14)` | `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract` | Same | Reports success after the classifier logs the bypass | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
 | `stack (ubuntu-24.04, macos-14; personal, local)` | Node release-bundle D/E scenarios in each cell; each personal cell also builds the core Gitlink with Bun and runs standalone D/E for both stacks | Only `stack (ubuntu-24.04, personal)` runs, including both standalone stacks; the other three required job names log the selective smoke | Every cell reports success after the classifier logs the bypass | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 | `bench (not run)` | a notice and a step summary | Same | Same | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
@@ -19,6 +19,164 @@ The resource sampler's package gate runs real host sampling and bounded helper c
 runs an isolated Node consumer in each `contracts` OS cell. This library has no Pi entrypoint;
 Darwin process CPU is explicitly unavailable because `ps` start identity has one-second precision.
 No consumer migration, publication, extra CI job or runner is added.
+
+## Standalone startup failure evidence
+
+The Linux personal cell runs one extra **strict** text startup before D/E: the same explicit
+personal stack, faux provider, `STACK-OK` output, zero exit and empty stderr as
+`test_extensions_load_without_warnings[text]`. No retry can turn a failure green. On failure only,
+`standalone-startup-linux-x64` retains the exact executable and `SHA256SUMS` for seven days.
+The normal standalone suites still run and retain their original assertions.
+
+`harness.standalone_diagnostics` stages an explicit allowlist and scans *every input*, binary
+included, through the shared `harness.credentials.require_safe_diagnostic` policy before atomically
+publishing the upload directory. A scan or
+capture failure leaves no partial upload and cannot mask the original failing exit status.
+The upload also requires the probe's `artifact_ready=true` output, emitted only after a new
+scanned publication; stale directories and early failures cannot authorize an upload.
+It never copies installed homes, `auth.json`, `.storage`, sessions, environment dumps or token stores.
+All subprocesses use a new harness fixture HOME, empty synthetic auth and the existing command shims.
+This is diagnostic hygiene, not isolation from malicious same-UID package code.
+
+Artifact files:
+
+- `pi`, `SHA256SUMS`, `build.json`: exact executable, per-file SHA-256, schema-validated
+  Gitlink/harness SHAs, tool versions, build/startup commands and separate primary/replay verdicts.
+- `compile-command.json`, `module-graph.json`, `build.log`: the actual compile argv, Bun's
+  module graph and the frozen-data build log. A transparent build-only Bun wrapper adds
+  `--metafile`; it changes neither core sources nor production pins. Missing optional metadata
+  is explicit; a graph cannot establish the undefined symbol's cause by itself.
+- `packages/pi-memory/{index.ts,package.json,npm-lock.json}` (the lock's memory entry only),
+  `core/*.js`, `core/*-package.json`,
+  `core/package-lock.json`, `harness-package-lock.json`, `stack.json`: named public package/build
+  inputs only, with original bytes. No recursive package or home upload.
+- `startup.{stdout,stderr}` and `jiti/primary/*`: original failed startup streams and *only*
+  Jiti 2.7 transform filenames keyed to this fixture's exact `pi-memory/index.ts` path (MD5 and
+  FIPS SHA-256 naming variants). Cache absence is recorded, not replaced with another run's code.
+- `replay.{stdout,stderr}`, `replay-wrapper.ts`, `jiti/replay/*`: supplemental failure-only replay.
+  In the disposable fixture, memory's resource declaration/filter selects a wrapper at the same
+  package-order slot. It imports the untouched original entry, prints `error.stack` before Pi
+  reduces it to a message, then **rethrows**. Original package manifest/source/cache bytes are
+  captured *before* this instrumentation; the executable is never rebuilt or patched. A replay
+  passing or failing differently does not replace the primary failure or prove a root cause.
+
+To diagnose an already-built binary without running the whole suite:
+
+```sh
+cd integration
+uv run --locked python -m harness.standalone_diagnostics startup \
+  --binary /absolute/path/to/linux-x64/pi --core ../forks/pi \
+  --build-evidence /absolute/path/to/pi-build-evidence \
+  --output /absolute/path/to/new-failure-evidence
+```
+
+For PR #178's exact graph, cherry-pick the diagnostic harness commit onto that branch and run its
+normal CI. The workflow observes that branch's existing frozen-core build; do not copy a binary
+from this diagnostic PR or change package/core/Bun pins. Do not reuse an installed live HOME.
+Local successful startup creates no artifact. A deliberate synthetic throwing memory factory can
+verify the raw-stack/capture path, but is not a reproduction of the unexplained CI `Type3` failure.
+
+## Startup exit failure evidence
+
+The existing per-scenario artifacts now retain `*.pane.json` captured **before** tmux teardown,
+`*.exit` wrapper status files when present, and raw startup/RPC `*.stderr`. The pane report keeps
+the native PID/dead/status/signal response (empty fields can mean unsupported tmux formats), the
+wrapper status path and its contents or absence; a vanished server is recorded as an error rather
+than replacing the original failure. Only these named artifact patterns are added to the existing
+allowlist, never arbitrary JSON, environment dumps or a recursive sandbox HOME. Every candidate's
+complete raw bytes, including existing sessions/screens, are scanned **before publication**.
+`harness.credentials.require_safe_diagnostic` is the shared publication policy: it reuses
+`release.redact_diagnostic` for URL/known proxy credentials and centralizes the signature rules
+extracted from the #191 collector. Both scenario publication and the standalone collector consume
+this same helper, with no collector-local credential regex or dependency from the shared helper
+back onto a collector. Long token/key signatures remain checked. Explicit canonical JSON string
+fields `access_token`, `refresh_token` and `api_key` are refused for **any nonempty string value**;
+case-insensitive `Bearer` followed by any nonempty whitespace-delimited value is refused regardless
+of length. Empty/null credential slots and metadata keys such as `api_key_available`,
+`access_token_count`, `auth_type: "Bearer"` and `token_count` are not auth dumps by themselves.
+The Bearer rule deliberately may reject prose describing a token. Signatures are heuristics, not
+proof against arbitrary secrets, unknown/escaped credential keys or encoded values.
+
+Candidates are staged outside the uploaded artifacts root, scanned and written from the same byte
+snapshot, then renamed into place only when the complete set is safe. Any unsafe/unreadable candidate
+or staging error refuses the whole set, removes stale publication and leaves the primary verdict
+unchanged; raw bytes are never redacted into a misleading "exact" capture. Every ancestor from the
+sandbox root itself through the candidate's parent must be an actual directory, including internal
+parent links that happen to resolve inside the sandbox. Candidate reads reuse the `harness.files`
+regular-file pattern: reject known nonregular entries before opening, then use `O_NOFOLLOW`,
+`O_NONBLOCK`, `O_NOCTTY` and descriptor `fstat` before reading. Final symlink/FIFO replacements cannot
+turn cleanup into a blocking FIFO read. Ancestry checks are observations, not a descriptor-anchored
+sandbox against concurrent malicious same-UID parent replacement. No broader filesystem-security
+claim is made. Pane reports use a strict `PaneExitEvidence` Pydantic model. Missing tmux, invalid UTF-8
+markers and capture/write failures cannot prevent server teardown. RPC evidence open/write/flush
+failures disable only the disk sink: bounded pipe drainage and in-memory diagnostics continue.
+This supplements, not duplicates, the separate standalone build/startup collector from #191.
+
+Observed on 2026-10-28, both in `Standalone D and E (local)`:
+
+- PR #155, run `40666549747`, job `122742471639`: `ordinary-session_start-tui` fails with
+  `TUI never reported its exit status`. Its saved screen contains `STARTUP-OK` and the resume hint.
+  Original `pi.stderr` reports `Bun v1.3.14 (0d9b296a) macOS Silicon`, macOS `14.8.9`,
+  `Elapsed: 8573ms`, feature `exited`, and `Segmentation fault at address 0xC`.
+  The decoded trace [here](https://bun.report/1.3.14/M_10d9b296mggQugggC______mk04Yuw4uhBu7l7H_2lkjlDurh5kD27p5tC+xt2yC+1+3H_2lkjlDurh5kDunr21Cusw11CA2AY)
+  resolves through `jsc.VirtualMachine.globalExit`, `Bun__Process__exit` and
+  `Bun::Process_functionReallyExit` / `Process_functionExit`.
+- PR #178, run `40667021371`, job `122744482131`: the failure is instead
+  `ordinary-session_start-rpc`, `subprocess.TimeoutExpired` after 60 seconds. Its TUI case passes.
+  The traceback's truncated `stderr_seq` contains the Bun `1.3.14` crash banner; the original full
+  timeout stderr was not archived. The `-9` return code is observed after Python's timeout kill,
+  not a successful runtime shutdown.
+
+Both include a curl-shim `Bad file descriptor` error. Bun's macOS crash reporter invokes curl
+([here](https://github.com/oven-sh/bun/blob/0d9b296af33f2b851fcbf4df3e9ec89751734ba4/src/crash_handler/crash_handler.zig));
+that downstream error is not evidence that an extension's curl caused the crash. The historical
+artifacts lack pre-cleanup pane state and `*.exit`; they cannot distinguish a live crashed process
+from a dead wrapper or missing status file. RPC does not use that wrapper at all.
+
+A local rebuild of Gitlink `2bfb8e7c61d35167b09f8ce70693df39660fc197` with Bun `1.3.14` and frozen
+release model data passed 29 original TUI and 29 RPC startup calls, including two concurrent drivers.
+The initial two-case command was `PI_BIN=<rebuilt-pi> uv run --locked pytest
+'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-tui]'
+'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-rpc]'
+--stack stacks/local.json --runtime bun-standalone -q`: 2 passed. A diagnostic driver then invoked
+that unchanged scenario function on copied explicit fixtures: 12 serial pairs, then two concurrent
+drivers of 8 pairs each (qmd failure shim for the concurrent run), all passed. Recorded local logs:
+`/tmp/fix-tui-repro.log`, `/tmp/fix-tui-repeat.log`, `/tmp/fix-tui-stress-a.log` and
+`/tmp/fix-tui-stress-b.log`; these workstation logs are not durable CI artifacts.
+This is not a native-crash reproduction or a fix. Synthetic abort and timeout tests prove the
+original nonzero/timeout failure and raw evidence survive cleanup; no assertions, deadlines, Bun
+pins or runtime behavior are relaxed. The exact native trigger and a failing-CI pane-state capture
+remain unresolved. No capacity cancellation is classified as this failure.
+
+Final privacy/cleanup proofs additionally reject internal parent/root links and a root `pi.stderr`
+FIFO without ever opening it for reading. Stale regular-file prechecks with a FIFO or final symlink
+replacement are refused through the descriptor checks; removing `O_NONBLOCK` fails a pre-open test
+assertion, so the mutant cannot hang the test. Short synthetic fields/Bearer values are injected
+across all seven artifact categories while the primary exception remains unchanged and no artifact
+set is published. Public metadata negative controls still pass. Removing ancestor checks, restoring
+plain `Path.read_bytes`, reverting the short-credential rule, or removing `O_NONBLOCK` each fails a
+focused mutant (workstation logs `/tmp/tui-finalprivacy-mutant-{ancestry,regular,short,nonblock}.log`).
+
+Blocker regression receipts:
+
+- Unsafe-byte injections cover markers, pane reports, raw stderr, screens, scripts, event logs and
+  session history for token signatures, URL credentials and known proxy passwords. No partial/stale
+  artifact tree is published; injected staging write failure preserves the primary assertion.
+- Missing-executable/server/I/O pane queries still attempt teardown. Invalid UTF-8 marker bytes
+  remain unchanged, produce an explicit model error field and retain the original decode failure.
+  Real fixture-generator and direct-startup-owner tests inject missing tmux, screen decode and
+  screenshot write errors: every owned pane is killed and the primary failure is retained.
+  An unavailable final screenshot cannot replace `wait_dead`'s exit-status assertion.
+- RPC evidence open/write/flush failures still drain 262144 stderr bytes plus a tail diagnostic;
+  the real child exits 17 without pipe blockage and bounded in-memory diagnostics retain the tail.
+- The startup proof prints the required startup message and observes exit 17 specifically. Its
+  exit-0 control succeeds. Mutating the observed exit 17 to 0 makes that regression fail with
+  `DID NOT RAISE AssertionError`, rather than accidentally testing the missing-message assertion.
+- Mutation checks disable scanning, restore the prior pane capture, restore the prior RPC writer,
+  and change the nonzero result to zero. All four are killed by the focused regressions. Local
+  logs are `/tmp/tui-mutant-{scan,pane,writer,zero}.log`, not durable CI artifacts. Restoring the
+  old fixture teardown or final timeout screenshot separately also fails the caller regressions
+  (`/tmp/tui-mutant-teardown.log`, `/tmp/tui-mutant-wait-capture.log`).
 
 ## Capacity controls
 
@@ -40,7 +198,7 @@ The required checks live in ruleset `main required checks` (id `25524267`, not c
 
 Root core overrides: before the WSL `npm ci`, the job installs the pinned official GitHub CLI with `scripts/install_gh_linux.sh` and runs `harness.release --verify-root-overrides`. Ubuntu 24.04's apt `gh` is 2.45 and has no `attestation` command, and the later `harness.release --gitlink` fetch of a non-legacy core tag needs it too. The script downloads `gh_2.103.2_linux_amd64.tar.gz` from the immutable `cli/cli` release, refuses anything but the pinned sha256 (`62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8`, confirmed with `gh release verify-asset v2.103.2 gh_2.103.2_linux_amd64.tar.gz --repo cli/cli`), and checks `attestation` exists. Bump the version and digest together after repeating that verification. `setup-wsl` does not forward Windows environment, so the step sets `GH_TOKEN: ${{ github.token }}` (read-only `contents: read`) with `WSLENV: GH_TOKEN/u`. The token is never written to a file or echoed. The CLI bootstrap, `npm ci` and `uv sync` run with `env -u GH_TOKEN`; verification and the later core fetch retain it. The script `unset`s it right after the core fetch, before any scenario runs. `python3` is installed via `additional-packages`. The job stays a single WSL job on the Linux filesystem.
 
-The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, a mounted Windows worktree, bootstrap failure, or any scenario failure fails it. Its always-running `wsl2-diagnostics` artifact retains the JUnit result, harness-generated synthetic failure artifacts, and explicit WSL/Pi/Gitlink identities outside the disposable Linux worktree. A pre-created status file makes an early failure explicit; preservation and cleanup warn without replacing the original harness status. It uploads neither arbitrary worktree files nor command/environment logs, so no credentials or runner state are dumped. It does not test the local stack, standalone binaries, macOS, Linux ARM64, packed contracts, benchmarks, live credentials, REA, or desktop/TCC helpers. It is deliberately one serial Windows-hosted execution rather than another broad OS/stack matrix. Its stable check name is a candidate for protection only after independent review and a native WSL2 green run; this PR does not change rulesets.
+The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, a mounted Windows worktree, bootstrap failure, or any scenario failure fails it. Its always-running `wsl2-diagnostics` artifact retains the JUnit result, harness-generated synthetic failure artifacts, and explicit WSL/Pi/Gitlink identities outside the disposable Linux worktree. A pre-created status file makes an early failure explicit; preservation and cleanup warn without replacing the original harness status. It uploads neither arbitrary worktree files nor command/environment logs, so no credentials or runner state are dumped. It does not test the local stack, standalone binaries, macOS, Linux ARM64, packed contracts, benchmarks, live credentials or desktop/TCC helpers. REA is retired, not pending WSL acceptance. It is deliberately one serial Windows-hosted execution rather than another broad OS/stack matrix. Its stable check name is a candidate for protection only after independent review and a native WSL2 green run; this PR does not change rulesets.
 
 `.github/workflows/installer.yml`, PRs and `main` pushes that change the installer or the harness modules it reuses, plus manual dispatch with a `stack_sha`:
 
@@ -106,8 +264,8 @@ The unit gates must not read the machine: the first CI run found three `integrat
 passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
 
 Verification engines: Vitest stays the owned TypeScript runner, with Node primary (the shipped
-runtime) and Bun the standalone target. Phase 1 replaces native Bun subsets with full Vitest
-for `subscription-router`, `preset`, `resource-sampler` and `integration/inprocess` only.
+runtime) and Bun the standalone target. Full Vitest runs on both engines for
+`subscription-router`, `preset`, `resource-sampler`, `todo` and `integration/inprocess`.
 `test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
 spawn-time home; `make check-ts` and both existing `owned` OS cells run it. Each invocation
 prints engine/OS/package duration and exit status and appends it to the CI step summary.
@@ -115,16 +273,15 @@ The shared guard checks `os.homedir() === HOME` at setup, before each test and a
 failing with the offending file and an instruction to inject home directories. These are
 boundary checks, not interception of transient mutations between boundaries.
 
-Full Bun activation **and guard wiring** for `todo`/`subagents` are deferred to phase 2
-([spec PR #170](https://github.com/nredd/pi-harness/pull/170), phase 1 owner-approved scope
-correction; tracking [#160](https://github.com/nredd/pi-harness/issues/160)). No quarantine list:
-the spec's 26 assertion failures are not an exhaustive hazard inventory. With pinned Bun
-1.3.14, a guard probe fails **387/387 todo tests** because `.test-support/setup.ts` mutates
-`HOME` for every test, versus **387/387 passing on Node**. Removing the spec's 15 failing
-assertions would leave **372 guard failures**. Their current native Bun subsets remain
-unchanged, not a claim of full dual-engine verification. Owner: nredd; expiry: phase 2's
-home-injection PR, before either full suite is enabled. See the engine matrix, boundary
-limitations, negative control and package-addition procedure [here](verification-engines.md).
+Phase 2 #171 resolves the todo/subagents guard deferral from
+[spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
+[#160](https://github.com/nredd/pi-harness/issues/160). Both Vitest configs now install the
+shared guard and fixtures inject their homes instead of mutating `HOME`. Todo runs its full
+390-test suite on Bun. Subagents keeps its native-scenario subset plus the guarded real-loader
+gate; full Bun activation remains blocked by the unrelated workflow-runtime stack-line
+failure [#174](https://github.com/nredd/pi-harness/issues/174). Its full Node suite is guarded.
+No guard-related skip list or informational-only guard is used. See the current matrix,
+boundary negative controls and package-addition procedure [here](verification-engines.md).
 Python stays on pytest/uv/ruff/ty; dotfiles stays on dependency-free `node --test` as the
 bootstrap exception. Istanbul consolidation is phase 3, not part of this producer change.
 
@@ -226,7 +383,9 @@ The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
 `integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
 No unported non-boundary Python scenarios remain. Package-native suites and `integration/inprocess/`
 own the ported assertions; the destination ledger is [here](verification-rebuild.md).
-The thirteen `DOTFILES` rows moved to dotfiles' implemented `pi-profile doctor`, not a distribution check. See
+The thirteen historical `DOTFILES` rows belong to dotfiles, not a distribution check. Eleven
+remain doctor checks; the two REA rows were retired in `nredd/dotfiles#58` and replaced with
+absence/cleanup regressions in dotfiles' `tests/rea-retirement.test.mjs`. See
 [here](../integration/README.md) for inputs, package sets and deliberate headless exclusions.
 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
@@ -252,7 +411,8 @@ Bun scope:
   to #58 are stale: no such issue exists in this repository. The timer migration removed one
   dependency, not the remaining auth transport interception requirement
 - NOT RUN: linux-arm64 (no `ubuntu-24.04-arm` job added), darwin-x64, Windows, packed contracts
-  hosted by the standalone, quiet-runner benchmarks, live credentials, REA and desktop/TCC helpers.
+  hosted by the standalone, quiet-runner benchmarks, live credentials and desktop/TCC helpers.
+  REA is retired, not an outstanding standalone acceptance requirement.
   Source-built D/E coverage is not published-binary acceptance or a completed Bun checklist
 
 Capacity: ZERO added jobs, including zero new macOS jobs. Full CI still requests four macOS jobs,
