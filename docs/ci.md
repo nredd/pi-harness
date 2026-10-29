@@ -198,7 +198,7 @@ The required checks live in ruleset `main required checks` (id `25524267`, not c
 
 Root core overrides: before the WSL `npm ci`, the job installs the pinned official GitHub CLI with `scripts/install_gh_linux.sh` and runs `harness.release --verify-root-overrides`. Ubuntu 24.04's apt `gh` is 2.45 and has no `attestation` command, and the later `harness.release --gitlink` fetch of a non-legacy core tag needs it too. The script downloads `gh_2.103.2_linux_amd64.tar.gz` from the immutable `cli/cli` release, refuses anything but the pinned sha256 (`62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8`, confirmed with `gh release verify-asset v2.103.2 gh_2.103.2_linux_amd64.tar.gz --repo cli/cli`), and checks `attestation` exists. Bump the version and digest together after repeating that verification. `setup-wsl` does not forward Windows environment, so the step sets `GH_TOKEN: ${{ github.token }}` (read-only `contents: read`) with `WSLENV: GH_TOKEN/u`. The token is never written to a file or echoed. The CLI bootstrap, `npm ci` and `uv sync` run with `env -u GH_TOKEN`; verification and the later core fetch retain it. The script `unset`s it right after the core fetch, before any scenario runs. `python3` is installed via `additional-packages`. The job stays a single WSL job on the Linux filesystem.
 
-The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, a mounted Windows worktree, bootstrap failure, or any scenario failure fails it. Its always-running `wsl2-diagnostics` artifact retains the JUnit result, harness-generated synthetic failure artifacts, and explicit WSL/Pi/Gitlink identities outside the disposable Linux worktree. A pre-created status file makes an early failure explicit; preservation and cleanup warn without replacing the original harness status. It uploads neither arbitrary worktree files nor command/environment logs, so no credentials or runner state are dumped. It does not test the local stack, standalone binaries, macOS, Linux ARM64, packed contracts, benchmarks, live credentials, REA, or desktop/TCC helpers. It is deliberately one serial Windows-hosted execution rather than another broad OS/stack matrix. Its stable check name is a candidate for protection only after independent review and a native WSL2 green run; this PR does not change rulesets.
+The job has no docs-only bypass: unavailable WSL, a non-version-2 distribution, a mounted Windows worktree, bootstrap failure, or any scenario failure fails it. Its always-running `wsl2-diagnostics` artifact retains the JUnit result, harness-generated synthetic failure artifacts, and explicit WSL/Pi/Gitlink identities outside the disposable Linux worktree. A pre-created status file makes an early failure explicit; preservation and cleanup warn without replacing the original harness status. It uploads neither arbitrary worktree files nor command/environment logs, so no credentials or runner state are dumped. It does not test the local stack, standalone binaries, macOS, Linux ARM64, packed contracts, benchmarks, live credentials or desktop/TCC helpers. REA is retired, not pending WSL acceptance. It is deliberately one serial Windows-hosted execution rather than another broad OS/stack matrix. Its stable check name is a candidate for protection only after independent review and a native WSL2 green run; this PR does not change rulesets.
 
 `.github/workflows/installer.yml`, PRs and `main` pushes that change the installer or the harness modules it reuses, plus manual dispatch with a `stack_sha`:
 
@@ -383,7 +383,9 @@ The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
 `integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
 No unported non-boundary Python scenarios remain. Package-native suites and `integration/inprocess/`
 own the ported assertions; the destination ledger is [here](verification-rebuild.md).
-The thirteen `DOTFILES` rows moved to dotfiles' implemented `pi-profile doctor`, not a distribution check. See
+The thirteen historical `DOTFILES` rows belong to dotfiles, not a distribution check. Eleven
+remain doctor checks; the two REA rows were retired in `nredd/dotfiles#58` and replaced with
+absence/cleanup regressions in dotfiles' `tests/rea-retirement.test.mjs`. See
 [here](../integration/README.md) for inputs, package sets and deliberate headless exclusions.
 
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
@@ -409,7 +411,8 @@ Bun scope:
   to #58 are stale: no such issue exists in this repository. The timer migration removed one
   dependency, not the remaining auth transport interception requirement
 - NOT RUN: linux-arm64 (no `ubuntu-24.04-arm` job added), darwin-x64, Windows, packed contracts
-  hosted by the standalone, quiet-runner benchmarks, live credentials, REA and desktop/TCC helpers.
+  hosted by the standalone, quiet-runner benchmarks, live credentials and desktop/TCC helpers.
+  REA is retired, not an outstanding standalone acceptance requirement.
   Source-built D/E coverage is not published-binary acceptance or a completed Bun checklist
 
 Capacity: ZERO added jobs, including zero new macOS jobs. Full CI still requests four macOS jobs,
