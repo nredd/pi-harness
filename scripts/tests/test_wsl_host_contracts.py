@@ -147,6 +147,7 @@ def test_adapter_failure_labels_name_each_hop_without_environment_dumping() -> N
     guest = (ROOT / "scripts/wsl2_run.sh").read_text()
     assert "wsl2-host: pwsh command not found" in host
     assert "wsl2-shell: wslpath failed with status $status" in shell
+    assert shell.index("$status = $LASTEXITCODE") < shell.index("$adapter = $adapterOutput.Trim()")
     assert "wsl2-shell: guest dispatch failed with status $status" in shell
     assert "wsl2-run: guest-step failed with status %s" in guest
     assert "Get-ChildItem Env:" not in host + shell + guest
