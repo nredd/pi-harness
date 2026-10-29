@@ -1,6 +1,6 @@
 /** Real Markdown, injected time, and visible fullscreen navigation outcomes. */
 import type { AgentSession, AgentSessionEventListener } from "@earendil-works/pi-coding-agent";
-import { getCapabilities, setCapabilities, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
+import { getCapabilities, ScrollView, setCapabilities, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
@@ -22,6 +22,23 @@ function fixture(messages: unknown[], fullscreen = false, streamingMessage?: unk
 }
 
 describe("embedded conversation outcomes", () => {
+  it("preserves live text when the scrolling collaborator invalidates its content before rendering", () => {
+    const render = ScrollView.prototype.render;
+    const invalidating = vi.spyOn(ScrollView.prototype, "render").mockImplementation(function(this: ScrollView, width) {
+      this.invalidate();
+      return render.call(this, width);
+    });
+    const messages = [{ role: "user", content: "before invalidation" }];
+    const f = fixture(messages, true);
+    try {
+      expect(f.render()).toContain("before invalidation");
+      messages[0].content = "after invalidation";
+      const after = f.render();
+      expect(after).toContain("after invalidation");
+      expect(after).not.toContain("before invalidation");
+      expect(invalidating).toHaveBeenCalledTimes(2);
+    } finally { f.viewer.dispose(); invalidating.mockRestore(); }
+  });
   it("styles links, quotes, separators and fenced source without an initialized host theme", () => {
     const capabilities = getCapabilities();
     setCapabilities({ ...capabilities, hyperlinks: false });

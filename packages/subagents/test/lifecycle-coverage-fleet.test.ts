@@ -10,7 +10,7 @@ import { FakeClock } from "./helpers/fake-clock.js";
 
 const theme: Theme = { fg: (_color, text) => text, bold: text => text };
 
-function fixture() {
+function fixture(sessionFor?: (record: AgentRecord) => AgentRecord["session"]) {
   const clock = new FakeClock();
   const session = { messages: [], subscribe: () => () => {} } as unknown as AgentSession;
   const record = { id: "observed", type: "general-purpose", description: "observed", status: "running", session, startedAt: clock.now(), toolUses: 0 } as AgentRecord;
@@ -30,7 +30,7 @@ function fixture() {
   const fleet = new FleetList({ listAgents: () => [record], abort, steer } as unknown as AgentManager, new Map(), () => false, undefined, undefined, () => "hidden", (_record, notify) => {
     notify("background action prepared");
     return { available: () => false, send: vi.fn() };
-  }, () => false, () => [], clock);
+  }, () => false, () => [], clock, { sessionFor });
   fleet.setUICtx(ui);
   fleet.update();
   if (!build) throw new Error("fleet not registered");
@@ -43,6 +43,24 @@ function fixture() {
 }
 
 describe("fleet overlay lifecycle", () => {
+  it("reports a session lost by its lookup collaborator without opening or acknowledging a viewer", () => {
+    const sessionFor = vi.fn(() => undefined);
+    const f = fixture(sessionFor);
+    try {
+      f.open();
+      expect(sessionFor).toHaveBeenCalledExactlyOnceWith(f.record);
+      expect(f.ui.notify).toHaveBeenCalledWith("Agent is running — no session available.", "info");
+      expect(f.custom).not.toHaveBeenCalled();
+      expect(f.record.resultConsumed).not.toBe(true);
+      expect(f.fleet.handleKey("\x1b[A")).toEqual({ consume: true });
+    } finally { f.fleet.dispose(); }
+  });
+
+  it("opens the session supplied by the lookup collaborator", async () => {
+    const f = fixture(record => record.session);
+    try { f.open(); expect(f.custom).toHaveBeenCalledOnce(); f.finish(); await f.overlay; }
+    finally { f.viewer().dispose(); f.fleet.dispose(); }
+  });
   it("closes a live viewer during fleet disposal without registering the list again", async () => {
     const f = fixture();
     try {

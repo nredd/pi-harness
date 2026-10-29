@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager, markConsumed } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { streamToOutputFile } from "../src/output-file.js";
+import * as budget from "../src/process-budget.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
 import * as worktrees from "../src/worktree.js";
 import { FakeClock } from "./helpers/fake-clock.js";
@@ -56,6 +57,48 @@ function managerWithClock(onStart?: ConstructorParameters<typeof AgentManager>[2
   managers.push(manager);
   return { manager, clock, onComplete, onCompact, onUsage };
 }
+
+describe("retained manager safety guards", () => {
+  it("returns a late budget grant after a faulty cancellation without starting the stopped child", async () => {
+    const f = managerWithClock();
+    const held = deferred<Awaited<ReturnType<typeof runAgent>>>();
+    vi.mocked(runAgent).mockReturnValueOnce(held.promise);
+    const enqueue = budget.enqueueBudget;
+    // The collaborator retains its waiter despite cancellation. The REAL pump,
+    // not this test, later invokes grant through the normal queue protocol.
+    vi.spyOn(budget, "enqueueBudget").mockImplementation(waiter => {
+      enqueue(waiter);
+      return () => {};
+    });
+    const running = f.manager.spawn(pi, ctx, "general-purpose", "running", { description: "running", isBackground: true });
+    const blocked = f.manager.spawn(pi, ctx, "general-purpose", "queued", { description: "queued", isBackground: true });
+    expect(f.manager.getRecord(blocked)?.status).toBe("queued");
+    expect(f.manager.abort(blocked)).toBe(true);
+    held.resolve({ responseText: "done", session, aborted: false, steered: false });
+    await f.manager.getRecord(running)?.promise;
+    await f.manager.waitForAll();
+    expect(f.manager.getRecord(blocked)?.status).toBe("stopped");
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(budget.budgetUsage()).toMatchObject({ active: 0, pending: 0 });
+  });
+
+  it("releases admission when a reentrant budget collaborator evicts the resume session", async () => {
+    vi.mocked(resumeAgent).mockResolvedValue({ text: "must not run without a session", aborted: false, steered: false });
+    const f = managerWithClock();
+    const prior = await f.manager.spawnAndWait(pi, ctx, "general-purpose", "prior", { description: "prior" });
+    const acquire = budget.tryAcquireBudget;
+    vi.spyOn(budget, "tryAcquireBudget").mockImplementationOnce(depth => {
+      f.manager.clearCompleted();
+      return acquire(depth);
+    });
+    await expect(f.manager.resume(prior.id, "again", undefined, { isBackground: true })).resolves.toBe(prior.record);
+    expect(prior.record.session).toBeUndefined();
+    expect(resumeAgent).not.toHaveBeenCalled();
+    expect(budget.budgetUsage()).toMatchObject({ active: 0, pending: 0 });
+    const next = await f.manager.spawnAndWait(pi, ctx, "general-purpose", "next", { description: "next" });
+    expect(next.record.status).toBe("completed");
+  });
+});
 
 describe("resumed-turn lifecycle", () => {
   it("flushes and clears output cleanup when a spawned runner rejects", async () => {

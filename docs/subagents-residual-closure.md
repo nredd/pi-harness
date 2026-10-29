@@ -1,5 +1,9 @@
 # Subagents residual closure
 
+Historical report. The retained guards are fixture gaps, not untestable behavior.
+Their behavioral closure, fault-injection seams and fresh all-source measurements
+are documented in [subagents-guard-seams.md](subagents-guard-seams.md).
+
 For maintainers auditing the last index and lifecycle coverage counters. This is
 partial closure, not a 100% claim. No coverage/config/provider/policy changes,
 exclusions, private-closure calls, merges to main, or releases.
