@@ -1,6 +1,6 @@
 # Verification engines
 
-Phase 1 of [spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
+Phases 1 and 2 of [spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
 [#160](https://github.com/nredd/pi-harness/issues/160). Vitest is the owned TypeScript tool;
 Node stays primary because it ships today. Bun remains required for the standalone target.
 No coverage-provider, threshold, required-check-name or runtime-pin change is included here.
@@ -12,7 +12,8 @@ No coverage-provider, threshold, required-check-name or runtime-pin change is in
 | `resource-sampler` | Full Vitest + guard, one worker | Full Vitest + guard, one worker |
 | `integration/inprocess` | Full Vitest + guard, spawn-time home | Full Vitest + guard, spawn-time home |
 | `session-kit`, `plan-mode`, `dev-tools` | Existing full Vitest | Existing native Bun subsets; full-suite fixes in phase 2 |
-| `todo`, `subagents` | Existing full Vitest, guard deferred | Existing native Bun subsets; full suite AND guard deferred to phase 2 |
+| `todo` | Full Vitest + guard | Full Vitest + guard |
+| `subagents` | Full Vitest + guard | Native-scenario subset + guarded real-loader gate; full suite blocked by #174 |
 | `computer-use` | Existing check scripts | Not run |
 | `integration/probes`, `scripts/import_audit.test.ts` | Existing `node --test` | Not run; migration in phase 4 (import audit remains Node-only) |
 
@@ -40,31 +41,37 @@ independent Pi/XDG directories without mutating HOME. This prevents reads of the
 while keeping the guard active; it does not isolate unrelated absolute paths or credentials
 explicitly supplied through other environment variables.
 
-Unit tests cover matching, mismatched and missing homes, the four-workspace wiring contract,
+Unit tests cover matching, mismatched and missing homes, the six-workspace wiring contract,
 and launcher failure/cleanup/argument forwarding. Two subprocess fixtures pin the beforeEach
 and afterEach boundaries independently, using canonicalized symlinked temporary homes:
 Bun/Vite's bundled config loader otherwise fails through macOS `/var` aliases before reaching
-the guard. A subprocess negative control runs the real
-`todo.invalidation.test.ts` with todo's existing setup and this guard under Bun: it MUST fail
-with `HOMEDIR GUARD`, before test execution. This does not enable or alter todo's normal gate.
+the guard. A subprocess regression runs the real
+`todo.invalidation.test.ts` with todo's injected setup and this guard under Bun: it must pass
+without mutating HOME. The boundary negative controls still prove mismatches fail closed.
 `support.test.ts` pins the fixed launch home and independent fixture paths on both engines.
 
-## Phase 2 deferral
+## Phase 2 home injection
 
-Owner: nredd. Expiry: the phase 2 home-injection PR, before full Bun activation for those
-packages. The spec's 26 failing assertions are NOT an exhaustive quarantine inventory.
-A pinned-Bun guard probe of todo fails 387/387 tests across 28 files: its shared setup mutates
-HOME for every test. The same probe passes 387/387 on Node. Excluding the spec's 15 todo
-assertion failures would leave 372 guard failures. There is deliberately no skip list and no
-informational-only guard. Phase 2 must inject home paths, install this setup in todo/subagents,
-and establish full-suite green on both engines. Phase 1 does not touch that worktree or source.
+The todo/subagents guard deferral is resolved by #171. Both Vitest configs install the shared
+setup on both engines; fixtures inject disposable homes instead of mutating HOME. Todo's
+`test:bun` uses the full-suite launcher with `.vitest.config.ts` (390 tests).
+
+Subagents retains its native-scenario subset plus the real-loader Vitest gate through the
+spawn-time-home launcher. Full Bun activation remains blocked by the unrelated workflow-runtime
+stack-line failure tracked in [#174](https://github.com/nredd/pi-harness/issues/174), not by home
+injection. The guard is active for its full Node suite and any Bun Vitest invocation, including
+the real-loader exact-equality ambient-access canary. No tests are skipped to accommodate the
+guard; native `bun test` scenarios do not consume Vitest setup files.
 
 ## Coverage handoff
 
 Merge #175 first. Then update [#162](https://github.com/nredd/pi-harness/pull/162)
 (`coverage-phase0`) against the merged source; phase 1 deliberately adds no coverage flags.
-The four full Bun producers must keep the entry point `node ../../scripts/run-vitest.ts bun`
-and pass Vitest options through it, not restore native `bun test`:
+The four phase 1 full Bun producers must keep the entry point `node ../../scripts/run-vitest.ts bun`
+and pass Vitest options through it, not restore native `bun test`. Phase 2 adds todo through
+the same entry point with `--config .vitest.config.ts`; its coverage inventory and eventual
+`packages/todo/coverage/bun/lcov.info` report belong to the separate #162 policy review,
+not an implicit coverage-enforcement promotion here:
 
 ```sh
 node ../../scripts/run-vitest.ts bun --coverage --coverage.provider=istanbul \

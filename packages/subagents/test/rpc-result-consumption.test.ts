@@ -25,7 +25,7 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 /** pi-subagents holds a completion notification for NUDGE_HOLD_MS (200ms). */
 const PAST_THE_HOLD_MS = 400;
@@ -83,16 +83,13 @@ describe("subagents:rpc:consume", () => {
   let agentDir: string;
   let prevCwd: string;
   let prevAgentDir: string | undefined;
-  let prevHome: string | undefined;
   let shutdown: (() => Promise<void>) | undefined;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-consume-"));
     agentDir = mkdtempSync(join(tmpdir(), "pi-consume-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    prevHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.env.HOME = agentDir;
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
     writeFileSync(
@@ -109,8 +106,6 @@ describe("subagents:rpc:consume", () => {
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
     vi.restoreAllMocks();

@@ -1,6 +1,7 @@
 /**
  * fleet-list.ts — Claude Code-style "FleetView" list rendered below the editor.
  *
+ * Starts as a one-line state/count summary; ctrl+shift+a toggles the full list.
  * Shows `main` + each running/queued subagent as a navigable list. Pressing ↓ (or
  * ←) at an empty prompt activates the list; ↑/↓ move the selection (filled ● marker),
  * Enter opens the selected agent's live conversation overlay, Esc returns to the prompt.
@@ -11,9 +12,9 @@
  * can `consume` keys — gated on `getEditorText() === ""` so normal typing is untouched.
  */
 
-import { isKeyRelease, Key, matchesKey, type ScrollViewScrollbar, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { isKeyRelease, isKeyRepeat, Key, matchesKey, type ScrollViewScrollbar, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentName } from "../agent-color.js";
-import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
+import { type AgentManager, isTopLevelAgent, markConsumed } from "../agent-manager.js";
 import { type Clock, realClock, type TimerHandle } from "../clock.js";
 import type { RunningDetached } from "../detached-results.js";
 import { describeModelCall } from "../model-call.js";
@@ -21,7 +22,18 @@ import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, buildInvocationTags, fgPreservingNestedStyles, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
-import { fallbackFlag, withLeadingFlag } from "./fallback-flag.js";
+import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.js";
+import { FleetJournal, type FleetJournalEntry, type FleetSnapshot, fleetAlert, MAX_COMPACT_ALERT_COUNT } from "./fleet-state.js";
+
+/** Matches the todo/monitor disclosure shortcut family; arrows keep their navigation roles. */
+export const FLEET_COLLAPSE_KEY = "ctrl+shift+a";
+/** Quiet-period debounce bounds journal writes per toggle burst; shutdown flushes immediately. */
+export const FLEET_DISCLOSURE_SETTLE_MS = 300;
+
+/** Existing result-consumption semantics also acknowledge a failed fleet row. */
+function isOutstandingFailure(record: AgentRecord): boolean {
+  return (record.status === "error" || record.status === "aborted") && !record.resultConsumed;
+}
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -68,6 +80,8 @@ export interface FleetWorkflow {
   /** Set once the run settles, which is what freezes its clock. */
   completedAt?: number;
   tokens: number;
+  /** Stable, weakly observed owner when the source rebuilds its display projection each tick. */
+  observationKey?: object;
 }
 
 type MainEntry = { kind: "main" };
@@ -168,6 +182,53 @@ function summarizeHidden(rows: readonly (WorkflowEntry | AgentEntry)[]): string 
   return BUCKET_ORDER.filter(b => counts.has(b)).map(b => `${counts.get(b)} ${b}`).join(", ");
 }
 
+/** One bounded line, including zero agents; the controller still hides an empty fleet. */
+export function renderFleetSummary(
+  agents: readonly AgentRecord[],
+  workflows: readonly FleetWorkflow[],
+  parked: number,
+  showCost: boolean,
+  width: number,
+  theme: Theme,
+  overflowFailures = 0,
+): string {
+  const rows: (AgentEntry | WorkflowEntry)[] = [
+    ...agents.map(record => ({ kind: "agent" as const, record })),
+    ...workflows.map(workflow => ({ kind: "workflow" as const, workflow })),
+  ];
+  const failed = rows.filter(row => row.kind === "agent"
+    ? agentState(row.record.status).bucket === "failed"
+    : workflowBucket(row.workflow.status) === "failed").length + overflowFailures;
+  const paused = workflows.filter(run => run.status === "paused").length;
+  const fallback = agents.filter(hasFallback).length;
+  // Actionable counts lead. Cap ONLY compact counts, then remove spaces before
+  // dropping any alert: all four fit at 20 columns even for arbitrarily large fleets.
+  const alerts = [
+    { count: failed, label: "failed", key: "E" },
+    { count: parked, label: "parked", key: "P" },
+    { count: paused, label: "paused", key: "B" },
+    { count: fallback, label: "fallback", key: "F" },
+  ].filter(alert => alert.count > 0);
+  let flagText = alerts.length ? `[${alerts.map(a => `${a.count} ${a.label}`).join(", ")}]` : "";
+  if (visibleWidth(flagText) > width) {
+    const compact = alerts.map(a => `${a.key}${a.count > MAX_COMPACT_ALERT_COUNT ? `${MAX_COMPACT_ALERT_COUNT}+` : a.count}`);
+    flagText = `[${compact.join(" ")}]`;
+    if (visibleWidth(flagText) > width) flagText = `[${compact.join("")}]`;
+    // Below the supported 20-column floor, shed lowest-priority alerts first.
+    // Failure is first and never becomes the shared helper's misleading [fb].
+    while (visibleWidth(flagText) > width && compact.length > 1) {
+      compact.pop();
+      flagText = `[${compact.join("")}]`;
+    }
+    if (visibleWidth(flagText) > width) flagText = width > 0 ? "!" : "";
+  }
+  const flag = theme.fg(failed ? "error" : "warning", flagText);
+  const cost = showCost ? formatCost(agents.reduce((sum, agent) => sum + getLifetimeCost(agent.lifetimeUsage), 0)) : "";
+  const summary = [summarizeHidden(rows), overflowFailures ? `${overflowFailures} more failed` : ""].filter(Boolean).join(", ") || "0 running";
+  const text = `agents: ${summary}${parked ? `, ${parked} parked` : ""}${cost ? ` · ${cost}` : ""} · ${FLEET_COLLAPSE_KEY} to expand`;
+  return withLeadingFlag("", alerts.length ? flag : "", theme.fg("dim", text), width);
+}
+
 export class FleetList {
   private ui: FleetUICtx | undefined;
   private tui: any | undefined;
@@ -178,6 +239,14 @@ export class FleetList {
   private timer: TimerHandle | undefined;
 
   private enabled = true;
+  /** Explicit session choice. Navigation temporarily reveals rows without changing it. */
+  private readonly journal = new FleetJournal();
+  private disclosureTimer: TimerHandle | undefined;
+  /** Weak observation prevents repeated journal lookups, without retaining manager records. */
+  private readonly observed = new WeakMap<AgentRecord, boolean>();
+  private readonly observedWorkflows = new WeakMap<object, number>();
+  /** Quota parking has no AgentRecord; the scheduler supplies its enabled-job count. */
+  private parkedSource: () => number = () => 0;
   /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
   private active = false;
   /** 0 = `main`, 1..N = subagents. */
@@ -240,6 +309,52 @@ export class FleetList {
     private readonly clock: Clock = realClock,
   ) {}
 
+  /** UI-only disclosure; never claims a dialog's key or touches running work. */
+  toggleCollapse(): void {
+    if (!this.enabled || !this.ui || this.viewerClose || this.viewingWorkflowId || !this.editorHasFocus()) return;
+    this.journal.collapsed = this.active ? true : !this.journal.collapsed;
+    this.disclosureTimer?.cancel();
+    this.disclosureTimer = this.clock.setTimeout(() => this.flushState(), FLEET_DISCLOSURE_SETTLE_MS);
+    this.active = false;
+    this.selectedIndex = 0;
+    this.update();
+  }
+
+  /** Restore the last valid active-branch disclosure entry without writing another entry. */
+  restoreSession(
+    entries: readonly FleetJournalEntry[] | (() => readonly FleetJournalEntry[]),
+    persist: (state: FleetSnapshot) => void,
+  ): void {
+    this.disclosureTimer?.cancel();
+    this.disclosureTimer = undefined;
+    this.journal.restore(typeof entries === "function" ? entries : () => entries, persist);
+    this.active = false;
+    this.selectedIndex = 0;
+  }
+
+  /** Flush while the activation's appendEntry/context is still valid. */
+  flushState(): void {
+    this.disclosureTimer?.cancel();
+    this.disclosureTimer = undefined;
+    this.journal.flushDisclosure();
+  }
+
+  /** Terminal callback and detached-notice ingress, never dependent on a render tick. */
+  ingestFailure(value: unknown): void {
+    const alert = fleetAlert(value);
+    if (alert) this.journal.report(alert);
+  }
+
+  /** Shared semantic edge for result consumption, RPC and successful human inspection. */
+  acknowledgeFailure(id: string): void {
+    this.journal.acknowledge(id);
+  }
+
+  /** Inject scheduler display data, without coupling the fleet to scheduling behavior. */
+  setParkedSource(source: () => number): void {
+    this.parkedSource = source;
+  }
+
   // ---- Lifecycle ----
 
   setEnabled(enabled: boolean): void {
@@ -274,6 +389,7 @@ export class FleetList {
   }
 
   dispose(): void {
+    this.flushState();
     if (this.timer) { this.timer.cancel(); this.timer = undefined; }
     this.inputUnsub?.();
     this.inputUnsub = undefined;
@@ -294,11 +410,9 @@ export class FleetList {
   /** Re-register/refresh the below-editor widget; clears it when nothing remains. */
   update(): void {
     if (!this.ui) return;
-    // A run with no agents of its own left in the list is still worth a row —
-    // it is the thing the user opens to see what its children did. Read off the
-    // roster for the same reason activation does: two counts of "is there
-    // anything here" drifted apart once before.
-    const hasRows = this.enabled && this.roster().length > 1;
+    // Summary existence includes pending starts and quota parking: neither has
+    // an openable row yet. Navigation still uses the openable roster only.
+    const hasRows = this.enabled && (this.agentRecords(true).length > 0 || this.workflows().length > 0 || this.journal.count > 0 || this.parkedSource() > 0);
 
     if (!hasRows) {
       if (this.widgetRegistered) {
@@ -359,22 +473,45 @@ export class FleetList {
    * started sooner sit at the top. Every row is openable (has a session), so Enter
    * never dead-ends. Included: running/queued, plus the agent currently being
    * viewed, plus recently-finished ones (they linger briefly before dropping out).
-   * Pending agents with no session yet are hidden until they start.
+   * Pending agents have no openable row; includePending counts them in the summary.
    * (`listAgents()` is newest-first, so we re-sort.)
    */
-  private agentRecords(): AgentRecord[] {
+  private agentRecords(includePending = false): AgentRecord[] {
     const now = this.clock.now();
     // Orphans are live objects, so a settled one is simply skipped; the
     // registry drops it itself. Own records win if an id appears in both.
     const own = this.manager.listAgents();
     const ownIds = new Set(own.map(a => a.id));
     const orphans = this.detachedSource().map(d => d.record).filter(r => !ownIds.has(r.id));
-    return [...own, ...orphans]
-      .filter(a => isTopLevelAgent(a) && a.session && (
-        a.status === "running" || a.status === "queued"
-        || a.id === this.viewingAgentId
-        || (a.completedAt != null && now - a.completedAt < FINISHED_LINGER_MS)
-      ))
+    const records = new Map([...own, ...orphans].map(a => [a.id, a]));
+    for (const a of records.values()) {
+      if (!isTopLevelAgent(a) || (a.status !== "error" && a.status !== "aborted")) continue;
+      const consumed = !!a.resultConsumed;
+      if (this.observed.get(a) === consumed) continue;
+      this.observed.set(a, consumed);
+      if (consumed) this.acknowledgeFailure(a.id);
+      else this.ingestFailure(a);
+    }
+    for (const alert of this.journal.alerts) {
+      if (alert.state !== "error" && alert.state !== "aborted") continue;
+      const live = records.get(alert.id);
+      if (!live || !isOutstandingFailure(live)) records.set(`fleet-alert:${alert.id}`, {
+        id: alert.id, type: alert.type, description: alert.description, status: alert.state,
+        startedAt: alert.timestamp, completedAt: alert.timestamp, toolUses: 0, compactionCount: 0,
+        lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
+      });
+    }
+    return [...records.values()]
+      .filter(a => {
+        if (!isTopLevelAgent(a)) return false;
+        if (isOutstandingFailure(a)) return this.journal.alerts.some(alert => alert.id === a.id);
+        // Consumed failures may linger as expanded history, never as outstanding alerts.
+        if (includePending && (a.status === "error" || a.status === "aborted")) return false;
+        return (includePending || a.session) && (
+          a.status === "running" || a.status === "queued" || a.id === this.viewingAgentId
+          || (a.completedAt != null && now - a.completedAt < FINISHED_LINGER_MS)
+        );
+      })
       .sort((a, b) => a.startedAt - b.startedAt);
   }
 
@@ -404,14 +541,31 @@ export class FleetList {
 
   /** Live runs, plus recently settled ones — the same linger the agents get. */
   private workflows(): FleetWorkflow[] {
-    if (!this.workflowSource) return [];
     const now = this.clock.now();
-    return [...this.workflowSource()]
-      .filter(run =>
-        run.status === "running"
-        || run.status === "paused"
-        || (run.completedAt != null && now - run.completedAt < FINISHED_LINGER_MS)
-      )
+    const runs = new Map((this.workflowSource?.() ?? []).map(run => [run.id, run]));
+    for (const run of runs.values()) {
+      if (run.status === "failed" || run.status === "killed") {
+        const key = run.observationKey ?? run;
+        const timestamp = run.completedAt ?? run.startedAt;
+        if (this.observedWorkflows.get(key) === timestamp) continue;
+        this.observedWorkflows.set(key, timestamp);
+        this.ingestFailure({ id: run.id, type: "workflow", description: run.name, status: run.status, startedAt: run.startedAt, completedAt: run.completedAt });
+      }
+    }
+    for (const alert of this.journal.alerts) {
+      if (alert.state !== "failed" && alert.state !== "killed") continue;
+      const live = runs.get(alert.id);
+      if (!live || (live.status !== "failed" && live.status !== "killed")) runs.set(`fleet-alert:${alert.id}`, {
+        id: alert.id, name: alert.description, status: alert.state, startedAt: alert.timestamp,
+        completedAt: alert.timestamp, doneCount: 0, totalCount: 0, tokens: 0,
+      });
+    }
+    return [...runs.values()]
+      .filter(run => {
+        if (run.status === "failed" || run.status === "killed") return this.journal.alerts.some(alert => alert.id === run.id);
+        return run.status === "running" || run.status === "paused"
+          || (run.completedAt != null && now - run.completedAt < FINISHED_LINGER_MS);
+      })
       .sort((a, b) => a.startedAt - b.startedAt);
   }
 
@@ -454,6 +608,13 @@ export class FleetList {
     if (!this.editorHasFocus()) {
       if (this.active) this.deactivate();
       return undefined;
+    }
+
+    if (matchesKey(data, FLEET_COLLAPSE_KEY)) {
+      // Kitty event type 2 is auto-repeat; arrows deliberately still repeat.
+      if (isKeyRepeat(data)) return { consume: true };
+      this.toggleCollapse();
+      return { consume: true };
     }
 
     if (!this.active) {
@@ -522,12 +683,18 @@ export class FleetList {
       return;
     }
     if (entry.kind === "workflow") {
+      if (!this.workflowSource?.().some(run => run.id === entry.workflow.id) || !this.openWorkflow) {
+        this.ui?.notify(`workflow: ${entry.workflow.name} (${entry.workflow.status}).`, "error");
+        this.acknowledgeFailure(entry.workflow.id);
+        this.update();
+        return;
+      }
       // The extension owns this overlay and closes it, so there is no
       // `viewerClose` to hold — but the list still has to know one is up, and
       // still has to put the cursor back on the run when it comes down.
       this.viewingWorkflowId = entry.workflow.id;
       void Promise.resolve(this.openWorkflow?.(entry.workflow.id)).then(
-        () => this.clearViewer(),
+        () => this.clearViewer(true),
         () => this.clearViewer(),
       );
       return;
@@ -535,6 +702,13 @@ export class FleetList {
     const record = entry.record;
     if (!this.ui) return;
     if (!record.session) {
+      if (isOutstandingFailure(record)) {
+        this.ui.notify(record.error ?? `${record.type}: ${record.description} (${record.status}).`, "error");
+        markConsumed(record, this.clock.now());
+        this.acknowledgeFailure(record.id);
+        this.update();
+        return;
+      }
       this.ui.notify(`Agent is ${record.status} — no session available.`, "info");
       return;
     }
@@ -572,11 +746,11 @@ export class FleetList {
         overlay: true,
         overlayOptions: () => overlayOptions,
       },
-    ).then(() => this.clearViewer(), () => this.clearViewer());
+    ).then(() => this.clearViewer(true), () => this.clearViewer());
   }
 
   /** Reset overlay state and return to the list (on close, auto-close, or error). */
-  private clearViewer(): void {
+  private clearViewer(acknowledge = false): void {
     // Keep the cursor on the agent we were viewing — re-resolve by id so it
     // still feels natural if the list reordered (an earlier agent finished)
     // while the overlay was open. If that agent is gone, leave the index for
@@ -590,6 +764,17 @@ export class FleetList {
       );
       if (idx >= 0) this.selectedIndex = idx;
     }
+    if (acknowledge && this.viewingAgentId) {
+      const record = this.agentRecords(true).find(a => a.id === this.viewingAgentId);
+      if (record && isOutstandingFailure(record)) {
+        markConsumed(record, this.clock.now());
+        this.acknowledgeFailure(record.id);
+      }
+    }
+    if (acknowledge && this.viewingWorkflowId) {
+      const run = this.workflows().find(run => run.id === this.viewingWorkflowId);
+      if (run?.status === "failed" || run?.status === "killed") this.acknowledgeFailure(run.id);
+    }
     this.viewerClose = undefined;
     this.viewingAgentId = undefined;
     this.viewingWorkflowId = undefined;
@@ -600,16 +785,21 @@ export class FleetList {
 
   private renderBar(width: number, theme: Theme): string[] {
     const rows = this.roster().slice(1) as (WorkflowEntry | AgentEntry)[];
-    if (rows.length === 0) return [];
+    if ((this.journal.collapsed && !this.active) || rows.length === 0) {
+      return [renderFleetSummary(this.agentRecords(true), this.workflows(), this.parkedSource(), this.showCost(), width, theme, this.journal.overflowCount)];
+    }
     // Clamp locally so a render between a roster shrink and the next update()
     // (e.g. on terminal resize) never loses the selection marker.
     const sel = Math.min(this.selectedIndex, rows.length);
 
     const hint = this.active
       ? "↑↓ select · enter view · esc back"
-      : "esc to interrupt · ← for agents · ↓ to manage";
+      : `esc to interrupt · ← for agents · ↓ to manage · ${FLEET_COLLAPSE_KEY} to collapse`;
     const lines: string[] = [];
-    lines.push(truncateToWidth("  " + theme.fg("dim", hint), width));
+    // Overflow details are deliberately bounded, but their exact failure count stays visible.
+    lines.push(this.journal.overflowCount
+      ? renderFleetSummary(this.agentRecords(true), this.workflows(), this.parkedSource(), this.showCost(), width, theme, this.journal.overflowCount)
+      : truncateToWidth("  " + theme.fg("dim", hint), width));
     lines.push("");
     lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
 
