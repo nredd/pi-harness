@@ -27,6 +27,8 @@
     { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
     { "path": "integration/probes/anthropic-block-types.mjs", "reason": "Offline assertion probe for synthetic Anthropic block classification; no production entrypoint or real credentials." },
     { "path": "integration/providers/auth_guard.mjs", "reason": "Auth-scenario fixture verifies mock transport readiness and refused egress before synthetic credentials can dispatch; never shipped." },
+    { "path": "integration/providers/auth_transport.mjs", "reason": "Shared verification-only readiness assertion extracted from auth_guard.mjs for the compiled runtime fixture; never shipped." },
+    { "path": "integration/providers/auth_runtime_fixture.mjs", "reason": "Tiny compiled-host assertion fixture exercises the real auth redirect and readiness failures using fake-only loopback input; not a production entrypoint or compiled-Pi receipt." },
     { "path": "integration/providers/redirect_anthropic.mjs", "reason": "Test-only Node preload redirects synthetic auth requests to loopback and records forbidden credential access; never installed." },
     { "path": "integration/providers/fast_timers.mjs", "reason": "Scenario-only preload substitutes selected timer delays for verification; never installed in the product." },
     { "path": "packages/computer-use/scripts/check-act-outcomes.mjs", "reason": "Assertion harness for act outcome contracts; excluded from the published package files." },

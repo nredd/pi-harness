@@ -140,7 +140,7 @@ def run(
         extra_args=["-e", str(AUTH_GUARD_EXTENSION), "--thinking", "off", "--no-approve"],
         env=anthropic_env(mock, box)
         | ({"PI_CODING_AGENT_DIR": str(agent)} if agent else {})
-        | ({} if preload else {"NODE_OPTIONS": ""}),
+        | ({} if preload else {"NODE_OPTIONS": "", "BUN_OPTIONS": ""}),
         timeout_s=90,
     )
 
