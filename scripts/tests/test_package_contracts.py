@@ -2592,14 +2592,14 @@ def macho(cpu: int, magic: bytes = pc.MACHO_MAGIC_64) -> bytes:
     return magic + cpu.to_bytes(4, "little") + b"\0" * 16
 
 
-CU_SWIFT = ("agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift")
+CU_SWIFT = ("activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift")
 CU_SETUP_SCRIPT = (
-    'const helperSourcePaths = ["agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"]\n'
-    "\t.map(f);\n"
+    'const helperSourcePaths = ["activity_glow.swift", "agent_cursor.swift", '
+    '"agent_cursor_motion.swift", "bridge.swift"]\n\t.map(f);\n'
 )
 CU_BUILD_SCRIPT = (
-    'const macosSourcePaths = [\n\t"agent_cursor.swift",\n\t"agent_cursor_motion.swift",\n'
-    '\t"bridge.swift",\n].map(f);\n'
+    'const macosSourcePaths = [\n\t"activity_glow.swift",\n\t"agent_cursor.swift",\n'
+    '\t"agent_cursor_motion.swift",\n\t"bridge.swift",\n].map(f);\n'
 )
 
 
@@ -2904,9 +2904,9 @@ def test_shared_runner_unknown_package_exits_before_packing(
 
 
 def test_audit_files_computer_use_exact_payload() -> None:
-    """The pinned 56 paths pass; stray, missing and duplicated paths are each reported."""
+    """The pinned payload passes; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 56
+    assert len(packed) == 90
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])
@@ -2930,12 +2930,13 @@ def test_audit_files_computer_use_rejects_linux_build_output(stray: str) -> None
     assert any(stray in problem for problem in pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, stray]))
 
 
+@pytest.mark.parametrize("source", ["agent_cursor_motion.swift", "activity_glow.swift"])
 def test_scenario_computer_use_rejects_unpacked_helper_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
-    """A source the packed build scripts compile but the tarball lacks fails by name."""
-    tarball = helper_tarball(tmp_path / "bad.tgz", omit_source="agent_cursor_motion.swift")
-    with pytest.raises(pc.ContractError, match=r"no 'native/macos/agent_cursor_motion\.swift'"):
+    """Every helper source, including upstream activity glow, must ship with its build scripts."""
+    tarball = helper_tarball(tmp_path / "bad.tgz", omit_source=source)
+    with pytest.raises(pc.ContractError, match=rf"no 'native/macos/{re.escape(source)}'"):
         run_computer_use_scenario(
             tmp_path, monkeypatch, platform="darwin", tools=CU_ALL_TOOLS, tarball=tarball
         )
@@ -2957,7 +2958,8 @@ def test_scenario_computer_use_parses_mixed_quote_helper_sources(
 ) -> None:
     """Every literal Swift source, including single-quoted entries, is verified in the tarball."""
     setup_script = (
-        "const helperSourcePaths = ['agent_cursor.swift', \"agent_cursor_motion.swift\", 'bridge.swift']\n"
+        "const helperSourcePaths = ['activity_glow.swift', 'agent_cursor.swift', "
+        "\"agent_cursor_motion.swift\", 'bridge.swift']\n"
         ".map(f);\n"
     )
     tarball = helper_tarball(tmp_path / "mixed.tgz", setup_script=setup_script)

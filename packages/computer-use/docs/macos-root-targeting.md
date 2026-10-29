@@ -1,6 +1,6 @@
 # macOS root targeting
 
-Fork notes for `nredd/pi-computer-use`. Contracts the macOS path guarantees.
+Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based on upstream PR #95; see [sync provenance](../UPSTREAM.md) for the current base, remaining patches, and verification limits.
 
 ## Target contract
 
@@ -43,9 +43,9 @@ Terminal `act_ui` results always say the action was delivered, and:
 ## Ref lifecycle
 
 Measured, not assumed:
-- The helper stores native refs (`w<epoch>-<n>` roots, `e<epoch>-<n>` elements) in dictionaries with no TTL, no
-  idle exit and no eviction (look records are capped at 8). A ref dies when its AX element dies (window closed)
-  or the helper process restarts. The daemon does not exit when idle.
+- The helper stores native refs (`w<epoch>-<n>` roots, `e<epoch>-<n>` elements) without TTL or idle exit.
+  Look records are capped at 8; element refs are evicted with their owning look, as described below.
+  Window refs persist until their AX element dies or the helper restarts. The daemon does not exit when idle.
 - Refs carry a per-process epoch, so a ref from before a helper restart never resolves; it used to be possible
   for `w3` from an old helper to name a different window in a new one.
 - Helper restarts happen on reinstall, protocol/binary mismatch, permission relaunch. The extension's `@rN`

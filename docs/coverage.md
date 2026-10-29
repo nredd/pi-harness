@@ -148,7 +148,13 @@ link bindings; their target modules remain fully owned and instrumented. No LF/F
 invented, no imported dependency execution is attributed to a facade, and membership reclassification
 still requires the base-relative ledger once a base policy exists. The current ledger explicitly
 accounts for both owned plan-mode facade paths and the affected Bun subset relative to integration
-base `71b0aea`; a real-base regression rejects deleting any one receipt. Real compilation/instrumentation
+base `71b0aea`; an attributed policy/path snapshot in
+`scripts/tests/fixtures/coverage/plan-mode-integration-base.json` reconstructs that package's base
+membership in disposable Git and rejects deleting any one receipt. That pre-squash PR object is
+not reachable from main, so tests do not require it in fresh hosted clones. The fixture copies
+current source bytes only to exercise real tree expansion, not to assert historical runtime behavior
+or establish budgets. CLI accounting still ratchets the entire repository against the actual PR base.
+Real compilation/instrumentation
 and executable-addition rejection are pinned by `scripts/tests/test_coverage_facades.py`.
 
 Verification-only harnesses outside conventional test directories are classified under
@@ -170,7 +176,11 @@ The generated stats CLI bundle has a reasoned generated-artifact exclusion; its 
 `computer-use` is explicitly **not measured, tracked**. Its custom platform/native scripts
 continue running, but no invented instrumentation or 100% claim is made. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
-the global flip. Existing native/platform checks remain unchanged. `dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
+the global flip. Imported documentation-site TS/TSX/configuration, documentation generators and
+optional `scripts/rust-coverage.mjs` tooling are likewise inventory-only under that exclusion, not
+new measured or gated domains. The opt-in Rust report is never collected by normal checks; its
+mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
+`dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
 Python `scripts/*.py` and `integration/harness/*.py`, boundary probes, executable providers and

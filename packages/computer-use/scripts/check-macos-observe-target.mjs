@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Regression: native root identity must reach the macOS helper under one spelling.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 const { macosHelper } = await import("../src/platform/macos/helper.ts");
 const { macosBackend, normalizeTarget } = await import("../src/platform/macos/backend.ts");
@@ -44,6 +45,7 @@ assert.deepEqual(normalizeTarget({ pid: 1, windowId: -3 }), { pid: 1 });
 assert.deepEqual(normalizeTarget({ pid: 1, windowId: Number.NaN }), { pid: 1 });
 
 // waitFor and focusWindow agree with observe.
+
 calls.length = 0;
 await macosBackend.waitFor({ ...unpaired, gone: false, timeoutMs: 100, text: "x" });
 await macosBackend.focusWindow(unpaired);
@@ -56,9 +58,12 @@ for (const name of ["axWaitFor", "focusWindow"]) {
 
 // Stale daemon detection: process older than the installed binary runs old code.
 const { helperPredatesBinary } = await import("../src/platform/macos/helper.ts");
-assert.equal(helperPredatesBinary(1_000_000, 1_060_000), true);
+assert.equal(helperPredatesBinary(1_000_000, 1_060_000), true, "older daemon must be stale");
 assert.equal(helperPredatesBinary(1_060_000, 1_000_000), false);
 assert.equal(helperPredatesBinary(1_000_000, 1_000_500), false, "sub-second skew is not stale");
 assert.equal(helperPredatesBinary(Number.NaN, 5), false);
+const helperSource = readFileSync(new URL("../src/platform/macos/helper.ts", import.meta.url), "utf8");
+assert.match(helperSource, /const \{ ctimeMs \} = await stat\(HELPER_APP_EXECUTABLE_PATH\)/, "binary freshness must use ctime, not preserved mtime");
+assert.match(helperSource, /helperPredatesBinary\(Date\.now\(\) - seconds \* 1_000, ctimeMs\)/);
 
 console.log("macos observe target checks passed");

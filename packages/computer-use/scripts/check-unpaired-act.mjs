@@ -181,7 +181,7 @@ observeCalls.length = 0;
 const result = await call(executeAct, {
 	stateId,
 	actions: [
-		{ action: "press", ref: text(observed).match(/(@e\d+) AXButton/)[1] },
+		{ action: "press", ref: text(observed).match(/(@e\d+) button/)[1] },
 	],
 });
 assert.notEqual(
@@ -265,7 +265,7 @@ const second_state = text(second).match(/stateId ([0-9a-f-]{36})/)[1];
 const acted = await call(executeAct, {
 	stateId: second_state,
 	actions: [
-		{ action: "press", ref: text(second).match(/(@e\d+) AXButton/)[1] },
+		{ action: "press", ref: text(second).match(/(@e\d+) button/)[1] },
 	],
 });
 const deltaRef = text(acted).match(
@@ -331,7 +331,7 @@ const lockObs = await call(executeObserve, { root: "@r1", mode: "semantic" });
  * @throws {TypeError} If the state marker is missing.
  */
 const lockState = () => text(lockObs).match(/stateId ([0-9a-f-]{36})/)[1];
-const goRef = text(lockObs).match(/(@e\d+) AXButton/)[1];
+const goRef = text(lockObs).match(/(@e\d+) button/)[1];
 const background = await within(
 	call(executeAct, {
 		stateId: lockState(),
@@ -351,7 +351,7 @@ const again = await call(executeObserve, { root: "@r1", mode: "semantic" });
 let foregroundDone = false;
 const foreground = call(executeAct, {
 	stateId: text(again).match(/stateId ([0-9a-f-]{36})/)[1],
-	actions: [{ action: "press", ref: text(again).match(/(@e\d+) AXButton/)[1] }],
+	actions: [{ action: "press", ref: text(again).match(/(@e\d+) button/)[1] }],
 }).then(() => {
 	foregroundDone = true;
 });
@@ -404,7 +404,7 @@ currentPlatformBackend.act = async (request) => {
 	return { outcome: "worked", performed: { delivery: "hid" } };
 };
 const two = await call(executeObserve, { root: "@r1", mode: "semantic" });
-const goTwice = text(two).match(/(@e\d+) AXButton/)[1];
+const goTwice = text(two).match(/(@e\d+) button/)[1];
 await call(executeAct, {
 	stateId: text(two).match(/stateId ([0-9a-f-]{36})/)[1],
 	actions: [

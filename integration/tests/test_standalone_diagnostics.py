@@ -9,12 +9,14 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 from harness import standalone_diagnostics as diag
+from harness.credentials import CREDENTIAL
 from harness.sandbox import build_sandbox
 
 
@@ -60,7 +62,7 @@ def test_success_captures_nothing(
     box = build_sandbox(tmp_path / "sandbox")
     calls: list[list[str]] = []
 
-    def execute(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def execute(argv: list[str], **kwargs: object) -> diag.StartupResult:
         """Return one recorded successful startup.
 
         Parameters:
@@ -68,10 +70,10 @@ def test_success_captures_nothing(
             kwargs (object): unused synthetic environment options.
 
         Returns:
-            subprocess.CompletedProcess[str]: strict successful startup output.
+            diag.StartupResult: strict successful startup output.
         """
         calls.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "STACK-OK\n", "")
+        return diag.StartupResult(0, b"STACK-OK\n", b"")
 
     monkeypatch.setattr(diag, "execute", execute)
     output = tmp_path / "artifacts"
@@ -120,7 +122,7 @@ def test_failure_preserves_original_status_and_allowlist(
     (box.home / "live-token-store").write_text("DO NOT COPY")
     calls: list[list[str]] = []
 
-    def execute(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def execute(argv: list[str], **kwargs: object) -> diag.StartupResult:
         """Return a failed primary run followed by a deliberately passing replay.
 
         Parameters:
@@ -128,13 +130,13 @@ def test_failure_preserves_original_status_and_allowlist(
             kwargs (object): unused synthetic environment options.
 
         Returns:
-            subprocess.CompletedProcess[str]: primary failure or supplemental raw stack.
+            diag.StartupResult: primary failure or supplemental raw stack.
         """
         calls.append(argv)
         if len(calls) == 1:
-            return subprocess.CompletedProcess(argv, 23, "", "ORIGINAL Type3 is not defined\n")
-        return subprocess.CompletedProcess(
-            argv, 0, "STACK-OK\n", "ReferenceError: Type3 is not defined\n at original.ts:4:2\n"
+            return diag.StartupResult(23, b"", b"ORIGINAL Type3 is not defined\n")
+        return diag.StartupResult(
+            0, b"STACK-OK\n", b"ReferenceError: Type3 is not defined\n at original.ts:4:2\n"
         )
 
     monkeypatch.setattr(diag, "execute", execute)
@@ -187,36 +189,147 @@ def test_unknown_artifact_paths_are_denied(name: str) -> None:
     assert not diag.allowed_artifact_path(Path(name))
 
 
+def test_fixed_artifact_inventory_is_explicit() -> None:
+    """Require deliberate matrix review whenever a fixed artifact path changes.
+
+    Returns:
+        None: independent inventory equality assertion completes.
+    """
+    expected_paths = {
+        "pi",
+        "SHA256SUMS",
+        "build.json",
+        "build.log",
+        "compile-command.json",
+        "module-graph.json",
+        "startup.stdout",
+        "startup.stderr",
+        "replay.stdout",
+        "replay.stderr",
+        "replay-wrapper.ts",
+        "stack.json",
+        "packages/pi-memory/index.ts",
+        "packages/pi-memory/package.json",
+        "packages/pi-memory/npm-lock.json",
+        "core/loader.js",
+        "core/virtual-modules.js",
+        "core/typebox-helpers.js",
+        "core/jiti-package.json",
+        "core/typebox-package.json",
+        "core/package-lock.json",
+        "harness-package-lock.json",
+    }
+    assert expected_paths == diag.FIXED_PATHS
+
+
 @pytest.mark.parametrize(
     "name",
-    ["pi", "startup.stderr", "packages/pi-memory/index.ts", "jiti/primary/pi-memory-index.01234567.mjs"],
+    [
+        *sorted(diag.FIXED_PATHS),
+        *[
+            f"jiti/{phase}/pi-memory-index{maps}{interop}.01234567.{extension}"
+            for phase in ("primary", "replay")
+            for maps in ("", "+map")
+            for interop in ("", ".i")
+            for extension in ("cjs", "mjs")
+        ],
+    ],
 )
 @pytest.mark.parametrize(
-    "credential",
+    "token",
     [
-        b"prefix ghp_" + b"a" * 36 + b" suffix",
+        b"npm_" + b"aB1" * 12,
+        b"npm_" + b"a" * 37,
+        b"ghp_" + b"a" * 20,
+        b"github_pat_" + b"a" * 30,
+        b"sk-" + b"a" * 16,
+        b"pk-" + b"a" * 16,
+        b"sk-ant-" + b"a" * 20,
+        b"xoxb-" + b"a" * 10,
+        b"AKIA" + b"A" * 16,
+        b"-----BEGIN DSA PRIVATE KEY-----",
+        b"Bearer " + b"a" * 24,
+        b'"refresh_token": "' + b"a" * 24 + b'"',
         b'{"access_token":"x"}',
         b'{"refresh_token":"x"}',
         b'{"api_key":"x"}',
         b"bEaReR x",
-        b"https://user:password@example.invalid",
+        b"https://user:password@example.invalid/",
     ],
 )
-def test_credential_scan_refuses_entire_publication(tmp_path: Path, name: str, credential: bytes) -> None:
-    """Reject token-like contents even in an allowlisted binary or source file.
+def test_credential_scan_refuses_entire_publication(
+    tmp_path: Path,
+    inputs: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    token: bytes,
+) -> None:
+    """Publish the clean collector candidate before rejecting each contaminated token/path pair.
 
     Parameters:
         tmp_path (Path): private publication directory.
-        name (str): allowlisted file to contaminate.
-        credential (bytes): unsafe bytes covered by the shared publication policy.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): deterministic primary/replay and publication injection.
+        name (str): fixed or representative correlated-cache artifact path to contaminate.
+        token (bytes): generated synthetic credential signature, never a real credential.
 
     Returns:
-        None: assertions complete.
+        None: clean byte preservation, scanner refusal and primary-status assertions complete.
     """
     output = tmp_path / "artifacts"
-    with pytest.raises(ValueError, match="credential"):
-        diag.publish({name: credential}, output)
+    content = b"\xffprefix " + token + b" suffix\r\n"
+    publish = diag.publish
+    assert diag.allowed_artifact_path(Path(name))
+    publications: list[Path] = []
+
+    def contaminated_publish(files: dict[str, bytes], destination: Path) -> None:
+        """Prove the actual collector dictionary publishes before injecting the synthetic token.
+
+        Parameters:
+            files (dict[str, bytes]): actual collector publication candidates.
+            destination (Path): fresh publication directory.
+
+        Returns:
+            None: never returned because the real scanner must refuse publication.
+
+        Raises:
+            ValueError: the verified credential refusal, passed through to the collector.
+        """
+        publications.append(destination)
+        clean = tmp_path / "clean-artifacts"
+        # SHA256SUMS is generated, not an original input; all other selected paths get clean bytes.
+        candidate = files if name == "SHA256SUMS" else files | {name: b"\xffclean input\r\n"}
+        publish(candidate, clean)
+        assert (clean / name).is_file()
+        for original_name, original_bytes in candidate.items():
+            assert (clean / original_name).read_bytes() == original_bytes
+        sums = "".join(
+            f"{hashlib.sha256(data).hexdigest()}  {path}\n" for path, data in sorted(candidate.items())
+        )
+        assert (clean / "SHA256SUMS").read_bytes() == sums.encode()
+        with pytest.raises(ValueError, match="credential") as refused:
+            publish(candidate | {name: content}, destination)
+        raise refused.value
+
+    box = build_sandbox(tmp_path / "sandbox")
+    monkeypatch.setattr(diag, "execute", lambda *_, **__: diag.StartupResult(37, b"", b"failed"))
+    monkeypatch.setattr(diag, "replay_memory", lambda *_: diag.StartupResult(0, b"STACK-OK\n", b""))
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
+    monkeypatch.setattr(diag, "publish", contaminated_publish)
+    assert diag.diagnose(box, *inputs, output) == 37
+    assert publications == [output]
     assert not output.exists()
+
+
+def test_npm_signature_length_boundary() -> None:
+    """Require at least 36 alphanumeric npm-token characters without reading real credentials.
+
+    Returns:
+        None: synthetic boundary assertions complete.
+    """
+    assert CREDENTIAL.search(b"npm_" + b"a" * 35) is None
+    assert CREDENTIAL.search(b"npm_" + b"a" * 36) is not None
+    assert CREDENTIAL.search(b"npm_" + b"a" * 37) is not None
 
 
 def test_symlink_cache_is_not_read(tmp_path: Path) -> None:
@@ -281,9 +394,7 @@ def test_strict_startup_output_is_a_failure(
         None: assertion completes.
     """
     box = build_sandbox(tmp_path / "sandbox")
-    monkeypatch.setattr(
-        diag, "execute", lambda argv, **_: subprocess.CompletedProcess(argv, 0, "wrong", "warning")
-    )
+    monkeypatch.setattr(diag, "execute", lambda argv, **_: diag.StartupResult(0, b"wrong", b"warning"))
     monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
     assert diag.diagnose(box, *inputs, tmp_path / "artifacts") != 0
 
@@ -302,9 +413,7 @@ def test_capture_failure_never_masks_original_status(
         None: assertions complete.
     """
     box = build_sandbox(tmp_path / "sandbox")
-    monkeypatch.setattr(
-        diag, "execute", lambda argv, **_: subprocess.CompletedProcess(argv, 37, "", "failed")
-    )
+    monkeypatch.setattr(diag, "execute", lambda argv, **_: diag.StartupResult(37, b"", b"failed"))
     monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
     inputs[0].write_bytes(b"ghp_" + b"x" * 36)
     output = tmp_path / "artifacts"
@@ -348,7 +457,7 @@ def test_timeout_remains_failure_under_scrubbed_environment(
     box = build_sandbox(tmp_path / "sandbox")
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-not-for-diagnostics")
 
-    def timeout(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def timeout(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         """Check the scrubbed environment and raise a timeout with partial streams.
 
         Parameters:
@@ -356,7 +465,7 @@ def test_timeout_remains_failure_under_scrubbed_environment(
             kwargs (object): subprocess options including the scrubbed environment.
 
         Returns:
-            subprocess.CompletedProcess[str]: never returned.
+            subprocess.CompletedProcess[bytes]: never returned.
 
         Raises:
             subprocess.TimeoutExpired: deterministic timeout carrying partial output.
@@ -370,8 +479,9 @@ def test_timeout_remains_failure_under_scrubbed_environment(
     monkeypatch.setattr(subprocess, "run", timeout)
     result = diag.execute(["/fake/pi"], box=box, extra={})
     assert result.returncode == 124
-    assert result.stdout == "partial"
-    assert result.stderr.startswith("original error")
+    assert result.stdout == b"partial"
+    assert result.stderr == b"original error"
+    assert result.timed_out is True
 
 
 def test_workflow_captures_only_failed_linux_startup() -> None:
@@ -431,7 +541,7 @@ def test_cli_announces_only_scanned_failed_artifacts(
     monkeypatch.setattr(
         diag,
         "execute",
-        lambda argv, **_: subprocess.CompletedProcess(argv, status, "STACK-OK\n" if status == 0 else "", ""),
+        lambda argv, **_: diag.StartupResult(status, b"STACK-OK\n" if status == 0 else b"", b""),
     )
     monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
     if credential:
@@ -510,3 +620,116 @@ def test_metadata_refuses_wrong_types_and_unknown_fields(data: dict[str, object]
     """
     with pytest.raises(ValueError, match="validation error for BuildMetadata"):
         diag.BuildMetadata.model_validate(data)
+
+
+@pytest.mark.parametrize("status", [0, 23, 124])
+@pytest.mark.parametrize("replay_timeout", [False, True])
+@pytest.mark.parametrize(
+    ("stdout", "stderr"), [(b"STACK-OK\r\n", b"error\r\n"), (b"out\xff\r\n", b"err\xfe\r\n")]
+)
+def test_real_child_stream_bytes_and_primary_verdict(
+    tmp_path: Path,
+    inputs: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    status: int,
+    stdout: bytes,
+    stderr: bytes,
+    replay_timeout: bool,
+) -> None:
+    """Preserve real child bytes despite a passing or timed-out supplemental replay.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): deterministic metadata and replay.
+        status (int): original child exit status.
+        stdout (bytes): exact original output, including CRLF or invalid UTF8.
+        stderr (bytes): exact original error stream.
+        replay_timeout (bool): replace the successful replay verdict with a synthetic timeout.
+
+    Returns:
+        None: byte equality and original verdict assertions complete.
+    """
+    binary, core, evidence = inputs
+    binary.write_text(
+        f"#!{sys.executable}\nimport os\nos.write(1, {stdout!r})\n"
+        f"os.write(2, {stderr!r})\nraise SystemExit({status})\n"
+    )
+    binary.chmod(0o700)
+    box = build_sandbox(tmp_path / "sandbox")
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
+    replay = diag.execute(
+        [
+            sys.executable,
+            "-c",
+            'import os; os.write(1, b"STACK-OK\\r\\n"); os.write(2, b"replay\\xff\\r\\n")',
+        ],
+        box=box,
+        extra={},
+    )
+    if replay_timeout:
+        replay = diag.StartupResult(124, replay.stdout, replay.stderr, timed_out=True)
+    monkeypatch.setattr(diag, "replay_memory", lambda *_: replay)
+    output = tmp_path / "artifact"
+    assert diag.diagnose(box, binary, core, evidence, output) == (status or 1)
+    assert (output / "startup.stdout").read_bytes() == stdout
+    assert (output / "startup.stderr").read_bytes() == stderr
+    assert (output / "replay.stdout").read_bytes() == b"STACK-OK\r\n"
+    assert (output / "replay.stderr").read_bytes() == b"replay\xff\r\n"
+    report = json.loads((output / "build.json").read_text())
+    assert report["startup_returncode"] == status
+    assert report["replay_returncode"] == (124 if replay_timeout else 0)
+    assert report["startup_timed_out"] is False
+    assert report["replay_timed_out"] is replay_timeout
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr"), [(b"partial\r\n", b"error\r\n"), (b"\xff", b"\xfe"), (None, None)]
+)
+def test_timeout_artifact_keeps_partial_streams_unmodified(
+    tmp_path: Path,
+    inputs: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: bytes | None,
+    stderr: bytes | None,
+) -> None:
+    """Record timeout separately without appending to or decoding partial streams.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): deterministic timeout and metadata.
+        stdout (bytes | None): timeout partial output or absent pipe data.
+        stderr (bytes | None): timeout partial error or absent pipe data.
+
+    Returns:
+        None: raw stream and separate timeout metadata assertions complete.
+    """
+    box = build_sandbox(tmp_path / "sandbox")
+
+    def timeout(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        """Raise a deterministic timeout with original partial bytes.
+
+        Parameters:
+            argv (list[str]): requested command.
+            kwargs (object): unused subprocess options.
+
+        Returns:
+            subprocess.CompletedProcess[bytes]: never returned.
+
+        Raises:
+            subprocess.TimeoutExpired: original partial byte streams.
+        """
+        raise subprocess.TimeoutExpired(argv, 60, output=stdout, stderr=stderr)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
+    output = tmp_path / "artifact"
+    assert diag.diagnose(box, *inputs, output) == 124
+    assert (output / "startup.stdout").read_bytes() == (stdout or b"")
+    assert (output / "startup.stderr").read_bytes() == (stderr or b"")
+    report = json.loads((output / "build.json").read_text())
+    assert report["startup_returncode"] == 124
+    assert report["startup_timed_out"] is True
+    assert report["replay_timed_out"] is None

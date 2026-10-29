@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -70,6 +71,20 @@ export default async function (pi) {
 """
 
 
+@dataclass(frozen=True)
+class StartupResult:
+    """Hold original pipe bytes and process status independently of text matching.
+
+    `returncode` is the child's status unless `timed_out` is true, when it is synthetic 124.
+    `stdout` and `stderr` are untouched pipe bytes, with absent timeout data represented by empty bytes.
+    """
+
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+    timed_out: bool = False
+
+
 class BuildMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -89,7 +104,9 @@ class BuildMetadata(BaseModel):
 
 
 class DiagnosticReport(BuildMetadata):
-    startup_returncode: int = Field(description="Original unmodified startup subprocess status")
+    startup_returncode: int = Field(description="Original subprocess status, or synthetic 124 on timeout")
+    startup_timed_out: bool = Field(description="Primary startup exceeded the 60-second deadline")
+    replay_timed_out: bool | None = Field(description="Replay exceeded its deadline, or was not attempted")
     startup_argv: list[str] = Field(description="Original strict startup arguments")
     replay_returncode: int | None = Field(description="Supplemental wrapper replay status, if attempted")
     replay_note: str = Field(
@@ -225,7 +242,7 @@ def capture_cache(box: Sandbox, core: Path, source: Path, phase: str) -> dict[st
     return files
 
 
-def execute(argv: list[str], *, box: Sandbox, extra: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def execute(argv: list[str], *, box: Sandbox, extra: dict[str, str]) -> StartupResult:
     """Run one bounded startup with the existing scrubbed synthetic fixture environment.
 
     Parameters:
@@ -234,22 +251,15 @@ def execute(argv: list[str], *, box: Sandbox, extra: dict[str, str]) -> subproce
         extra (dict[str, str]): explicit synthetic script path.
 
     Returns:
-        subprocess.CompletedProcess[str]: original exit status and captured streams; timeout is 124.
+        StartupResult: original exit status and raw streams; timeout is separately marked with status 124.
     """
     try:
-        return subprocess.run(
-            argv, cwd=box.workdir, env=box.env(extra), capture_output=True, text=True, timeout=60, check=False
+        result = subprocess.run(
+            argv, cwd=box.workdir, env=box.env(extra), capture_output=True, timeout=60, check=False
         )
+        return StartupResult(result.returncode, result.stdout, result.stderr)
     except subprocess.TimeoutExpired as error:
-        stdout = (
-            error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout or ""
-        )
-        stderr = (
-            error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""
-        )
-        return subprocess.CompletedProcess(
-            argv, 124, stdout, stderr + "\nDiagnostic startup timed out (60s)\n"
-        )
+        return StartupResult(124, error.stdout or b"", error.stderr or b"", timed_out=True)
 
 
 def build_metadata(box: Sandbox, binary: Path, core: Path) -> BuildMetadata:
@@ -334,9 +344,7 @@ def capture_inputs(box: Sandbox, binary: Path, core: Path, evidence: Path) -> di
     return files
 
 
-def replay_memory(
-    box: Sandbox, argv: list[str], extra: dict[str, str]
-) -> subprocess.CompletedProcess[str] | None:
+def replay_memory(box: Sandbox, argv: list[str], extra: dict[str, str]) -> StartupResult | None:
     """At the same package-order slot, wrap memory's import/factory to print and rethrow its raw stack.
 
     Only a failed synthetic fixture is modified. Its original package entry and executable stay intact.
@@ -347,7 +355,7 @@ def replay_memory(
         extra (dict[str, str]): unchanged synthetic script path.
 
     Returns:
-        subprocess.CompletedProcess[str] | None: diagnostic-only replay; never replaces the primary verdict.
+        StartupResult | None: diagnostic-only replay; never replaces the primary verdict.
     """
     memory = box.agent_dir / "npm/node_modules/pi-memory"
     if not (memory / "index.ts").is_file():
@@ -390,25 +398,30 @@ def diagnose(box: Sandbox, binary: Path, core: Path, evidence: Path, output: Pat
     argv = [str(binary), "-e", str(FAUX_EXTENSION), "--model", "faux/main", "--no-approve", "-p", "hi"]
     extra = {"HARNESS_SCRIPT": str(script)}
     primary = execute(argv, box=box, extra=extra)
-    if primary.returncode == 0 and primary.stdout.strip() == "STACK-OK" and not primary.stderr.strip():
+    # Decode only for the existing strict text verdict; never alter the retained pipe bytes.
+    stdout = primary.stdout.decode("utf-8", errors="backslashreplace")
+    stderr = primary.stderr.decode("utf-8", errors="backslashreplace")
+    if primary.returncode == 0 and stdout.strip() == "STACK-OK" and not stderr.strip():
         return 0
     status = primary.returncode or 1
     try:
         files = capture_inputs(box, binary, core, evidence)
-        files |= {"startup.stdout": primary.stdout.encode(), "startup.stderr": primary.stderr.encode()}
+        files |= {"startup.stdout": primary.stdout, "startup.stderr": primary.stderr}
         source = box.agent_dir / "npm/node_modules/pi-memory/index.ts"
         files |= capture_cache(box, core, source, "primary")
         replay = replay_memory(box, argv, extra)
         if replay is not None:
             files |= {
-                "replay.stdout": replay.stdout.encode(),
-                "replay.stderr": replay.stderr.encode(),
+                "replay.stdout": replay.stdout,
+                "replay.stderr": replay.stderr,
                 "replay-wrapper.ts": WRAPPER.encode(),
             }
             files |= capture_cache(box, core, source, "replay")
         metadata = DiagnosticReport(
             **build_metadata(box, binary, core).model_dump(),
             startup_returncode=primary.returncode,
+            startup_timed_out=primary.timed_out,
+            replay_timed_out=replay.timed_out if replay is not None else None,
             startup_argv=argv,
             replay_returncode=replay.returncode if replay is not None else None,
             primary_jiti_files=[name for name in files if name.startswith("jiti/primary/")],

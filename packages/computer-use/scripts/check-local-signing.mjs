@@ -32,6 +32,9 @@ const setupCopy = await fs.readFile(
 	"utf8",
 );
 assert.doesNotMatch(setupCopy, /tccutil[\s\S]{0,80}reset|resetTcc/i);
+// Both replacement paths must stop old code before overwriting it. No real helper is launched here.
+assert.match(setupCopy, /await stopRunningHelper\(\);\s+await fs\.rm\(helperAppPath/, "sealed bundle replacement must stop the helper");
+assert.match(setupCopy, /await stopRunningHelper\(\);\s+await fs\.copyFile\(sourcePath, helperAppExecutablePath\)/, "local bundle replacement must stop the helper");
 
 const tempDir = await fs.mkdtemp(
 	path.join(os.tmpdir(), "pi-computer-use-signing-test-"),

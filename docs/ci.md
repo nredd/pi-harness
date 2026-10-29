@@ -89,8 +89,11 @@ The normal standalone suites still run and retain their original assertions.
 
 `harness.standalone_diagnostics` stages an explicit allowlist and scans *every input*, binary
 included, through the shared `harness.credentials.require_safe_diagnostic` policy before atomically
-publishing the upload directory. A scan or
-capture failure leaves no partial upload and cannot mask the original failing exit status.
+publishing the upload directory. This preserves #178's npm (at least 36 alphanumerics), short GitHub,
+sk/pk, Slack and general private-key signatures alongside main's nonempty JSON/Bearer and release
+URL/proxy policy. There is one shared scanner, not a collector-local duplicate. Signatures are
+conservative heuristics, not a guarantee against every secret format. A scan or capture failure
+leaves no partial upload and cannot mask the original failing exit status.
 The upload also requires the probe's `artifact_ready=true` output, emitted only after a new
 scanned publication; stale directories and early failures cannot authorize an upload.
 It never copies installed homes, `auth.json`, `.storage`, sessions, environment dumps or token stores.
@@ -109,7 +112,8 @@ Artifact files:
   `core/*.js`, `core/*-package.json`,
   `core/package-lock.json`, `harness-package-lock.json`, `stack.json`: named public package/build
   inputs only, with original bytes. No recursive package or home upload.
-- `startup.{stdout,stderr}` and `jiti/primary/*`: original failed startup streams and *only*
+- `startup.{stdout,stderr}` and `jiti/primary/*`: byte-exact original failed startup streams (including
+  CRLF and invalid UTF-8) and *only*
   Jiti 2.7 transform filenames keyed to this fixture's exact `pi-memory/index.ts` path (MD5 and
   FIPS SHA-256 naming variants). Cache absence is recorded, not replaced with another run's code.
 - `replay.{stdout,stderr}`, `replay-wrapper.ts`, `jiti/replay/*`: supplemental failure-only replay.
@@ -118,6 +122,10 @@ Artifact files:
   reduces it to a message, then **rethrows**. Original package manifest/source/cache bytes are
   captured *before* this instrumentation; the executable is never rebuilt or patched. A replay
   passing or failing differently does not replace the primary failure or prove a root cause.
+  Replay streams are also raw bytes. Primary-stream decoding is separate, only for strict startup matching,
+  never for artifact contents. Timeouts retain untouched partial streams (absent data becomes empty
+  bytes), use synthetic exit status 124 and record `startup_timed_out`/`replay_timed_out` in `build.json`;
+  no annotation is appended to stderr. A normal child exit 124 remains distinguishable from a timeout.
 
 To diagnose an already-built binary without running the whole suite:
 
@@ -258,6 +266,11 @@ Shared setup lives in `.github/actions/setup-ci-tools`, with WSL-specific host s
 A WSL-only pre-plan step selects `$ProgramFiles/Git/bin/bash.exe`, asserts the first ordered `Get-Command bash.exe -All` application resolves there, prepends that directory through `GITHUB_PATH`, and records the executable and `--version` in hosted logs/summary. The custom shell starts `bash scripts/wsl2_host.sh`, rechecks the resolved Windows source against that receipt (also accepting Git's own `usr/bin` binary), and delegates to `scripts/wsl2_shell.ps1`. Native defaults explicitly retain the prior implicit `bash -e {0}` behavior, without adding `pipefail`. GitHub must see a Bash shell so it does not inject PowerShell pre/postamble into the guest script; the initial direct `pwsh` shell failed with `=: command not found` before the first shared command. The Git-Bash launcher sets `MSYS2_ENV_CONV_EXCL=PI_BIN` before starting native PowerShell: the 45689e3 stack jobs otherwise rewrote `/root/.../pi` into `C:/Program Files/Git/root/.../pi`. Ordinary Windows PATH conversion remains enabled. The PowerShell adapter forwards an explicit `WSLENV` allowlist. Every host-to-guest call uses `wsl --exec` with a translated script-file argument, never a nested `-c` command string. This avoids the initial hosted attempt's lost variable expansion (`/scripts/wsl2_setup.sh` instead of the checkout path). GitHub control-file paths translate to mounted paths, while `RUNNER_TEMP`, builds and execution stay in the Linux filesystem. `GITHUB_ENV` carries Linux `PI_BIN` values unchanged between steps. Only the existing verification/fetch steps receive `GH_TOKEN`; guest bootstrap and scenarios do not. The existing `make install` scrubs the token from npm/uv children. The separate stack install step retains its native commands and receives no token in the first place; only the adjacent verify/fetch steps declare one. The token is never dumped or written by these scripts. The existing same-repo workflow trust assumption applies; this is not a sandbox against arbitrary PR code.
 
 Run `40824209455` exposed a root-user error, not DrvFs: owned tests ran from `/root/pi-harness-ci`, so uid 0 bypassed chmod-based EACCES checks. Setup now creates `pi-ci`; bootstrap, ordinary gates and capture explicitly select that unprivileged user, keeping the checkout under its Linux home. Setup and execution reject uid 0 before copying or running gates; identities record uid and filesystem. Permission tests remain unchanged. The first unprivileged bootstrap attempt (`40852212874`) failed before creating the user because WSL's direct-exec PATH omitted `/usr/sbin`; user creation now invokes `/usr/sbin/useradd` explicitly. Run `40854016032` then reached passing WSL Node scenarios but exposed DrvFs export metadata failures (`cp: preserving times ... Operation not permitted`). Guest-to-host artifact and cleanup copies now use recursive no-dereference copying without archive-mode metadata preservation; guest builds/tests remain on Linux and retain their permission semantics. The same run's owned setup stopped inside install-action's system-prerequisite installation group (missing `jq`); `setup-wsl` now installs `jq` with the root-owned apt prerequisites before dropping privileges. Rust/nextest installation remains unprivileged, without granting sudo access. The native owned failures were a stale contract requiring `always()` on the scanned startup failure-only upload. That upload retains its `!cancelled()`, failure and `artifact_ready` predicates; ordinary reports still require `always()`.
+
+The guest boundary forwards `GITHUB_EVENT_PATH/p` alongside `GITHUB_EVENT_NAME`, so computer-use's
+commit gate reads the translated original PR/push payload rather than falling back to local history.
+A host-allowlist/real-guest-adapter regression runs the actual commit gate over a disposable PR range;
+removing the payload entry fails closed with the same missing-event error as hosted WSL.
 
 WSL cells retain no docs-only or main-push bypass. Unavailable WSL, wrong distribution version/filesystem, bootstrap or gate failure fails the cell. Before ordinary artifact uploads, `capture-ci-wsl` exports only explicit synthetic artifact directories and contract JSON reports to the host. WSL Node artifacts survive standalone runs separately as `artifacts-node` in the final upload. Native upload contents stay at the previous two standalone directories; their Node reports already have the preceding `stack-*` upload. Native names remain `standalone-linux-x64` and `standalone-darwin-arm64`; WSL alone uses `standalone-wsl2-linux-x64` to avoid collision. The merged startup diagnostic gate likewise exports only its scanned directory through an atomic host-side staging rename, gates WSL upload on successful capture and names WSL evidence `standalone-startup-wsl2-linux-x64`, preserving the native `standalone-startup-linux-x64` name. The promotion consumer still reads `stack-ubuntu-24.04-personal` (`harness.promotion.PERSONAL_STACK_ARTIFACT`), unchanged; it does not consume standalone uploads. Final cleanup preserves the first guest-step failure status and bounded diagnostics. Early host diagnostics survive setup failures. No arbitrary worktree files, command logs, environment or HOME are uploaded.
 
