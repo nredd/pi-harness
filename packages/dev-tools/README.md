@@ -292,6 +292,10 @@ network; the rest write the tree or `target/`. All nine are deferred (found via 
 
 ## Development
 
+Wrapper coverage measurement, executable-boundary scope, fixture isolation, and Node/Bun commands:
+[coverage evidence](../../docs/dev-tools-coverage.md). External tool implementations are not part of
+this package's coverage denominator.
+
 ```
 # From the monorepo root:
 make install
