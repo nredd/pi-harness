@@ -3495,8 +3495,9 @@ Terse command-style prompts produce shallow, generic work.
       };
     });
 
-    if (selected && getAgentConfig(selected)) {
-      await showAgentDetail(ctx, selected);
+    const cfg = selected ? getAgentConfig(selected) : undefined;
+    if (selected && cfg) {
+      await showAgentDetail(ctx, selected, cfg);
       await showAllAgentsList(ctx);
     }
   }
@@ -3550,13 +3551,7 @@ Terse command-style prompts produce shallow, generic work.
     );
   }
 
-  async function showAgentDetail(ctx: ExtensionCommandContext, name: string) {
-    const cfg = getAgentConfig(name);
-    if (!cfg) {
-      ctx.ui.notify(`Agent config not found for "${name}".`, "warning");
-      return;
-    }
-
+  async function showAgentDetail(ctx: ExtensionCommandContext, name: string, cfg: AgentConfig) {
     const isPackage = cfg.source === "package";
     const file = locateAgentFile(name, cfg.sourcePath, undefined, cfg.source);
     const isDefault = cfg.isDefault === true;

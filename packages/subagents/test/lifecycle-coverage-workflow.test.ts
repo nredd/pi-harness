@@ -12,6 +12,18 @@ function deferred<T>() {
 }
 
 describe("workflow lifecycle boundaries", () => {
+  it.each([
+    { args: { private: undefined }, path: "args.private" },
+    { args: [undefined], path: "args[0]" },
+  ])("rejects nested undefined at $path before creating a worker or spawning", async ({ args, path }) => {
+    const adapter = host();
+    await expect(runWorkflow({ script: HEAD + 'return await agent("never");', args, host: adapter }))
+      .rejects.toThrow(`Cannot pass undefined across the workflow VM boundary (at ${path}).`);
+    expect(adapter.spawnAgent).not.toHaveBeenCalled();
+    const control = await runWorkflow({ script: HEAD + 'return typeof args;', host: adapter });
+    expect(control).toMatchObject({ status: "completed", value: "undefined", agentCount: 0 });
+  });
+
   it("rejects symbol-keyed inputs instead of silently losing their fields across JSON", () => {
     expect(() => assertBoundarySafe({ [Symbol("private")]: "not JSON" }, "args")).toThrow("Cannot pass an object with symbol keys across the workflow VM boundary (at args).");
   });
