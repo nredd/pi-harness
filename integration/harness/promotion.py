@@ -34,7 +34,8 @@ GIT_SHA_LENGTH = 40
 PERSONAL_STACK_ARTIFACT = "stack-ubuntu-24.04-personal"
 # The sole CI job that produces PERSONAL_STACK_ARTIFACT. Keep this machine contract exact.
 SHA_PATTERN = re.compile(rf"[0-9a-f]{{{GIT_SHA_LENGTH}}}")
-OPERATIONS = ("verify-only", "promote")
+OPERATIONS = ("verify-only", "promote", "owner-override")
+"""`owner-override` promotes without green CI; waived gates are logged, never hidden."""
 GIT_BIN = "/usr/bin/git"
 STACK_CHECK_TIMEOUT = 900
 STRICT = ConfigDict(extra="forbid", strict=True, frozen=True)
