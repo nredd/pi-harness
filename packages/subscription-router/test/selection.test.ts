@@ -207,4 +207,37 @@ describe("normalized durations", () => {
 			18_000_000, 604_800_000,
 		]);
 	});
+	it("spanSource is display-only: scores, ordering and decisions are identical without it", () => {
+		const NOW = 1_700_000_000_000;
+		const windows = (source?: "reported" | "assumed") => [
+			{
+				name: "5h",
+				usedPercent: 70,
+				durationMs: 18_000_000,
+				resetAt: NOW + 3_600_000,
+				scope: "provider" as const,
+				spanSource: source,
+			},
+			{
+				name: "7d",
+				usedPercent: 40,
+				durationMs: 604_800_000,
+				resetAt: NOW + 86_400_000,
+				scope: "provider" as const,
+				spanSource: source,
+			},
+		];
+		const snap = (source?: "reported" | "assumed") => ({
+			provider: "openai-codex",
+			status: "available" as const,
+			windows: windows(source),
+			retrievedAt: NOW,
+			expiresAt: NOW + 60_000,
+		});
+		const model = { provider: "openai-codex", id: "gpt-5.6-terra" };
+		const baseline = scoreQuota(model, snap(undefined), NOW);
+		expect(baseline.kind).toBe("measured");
+		for (const source of ["reported", "assumed"] as const)
+			expect(scoreQuota(model, snap(source), NOW)).toEqual(baseline);
+	});
 });

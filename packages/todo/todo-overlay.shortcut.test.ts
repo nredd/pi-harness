@@ -8,10 +8,11 @@ import {
 	makeTodoToolResult,
 } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_HOME } from "./.test-support/setup.ts";
 import registerTodo from "./index.ts";
 import { __resetState } from "./todo.ts";
 
-const CONFIG_PATH = join(process.env.HOME!, ".config", "rpiv-todo", "config.json");
+const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
 
 function writeConfigFile(contents: string): void {
 	mkdirSync(dirname(CONFIG_PATH), { recursive: true });
@@ -30,7 +31,7 @@ function removeConfigFile(): void {
 function setup() {
 	__resetState();
 	const { pi, captured } = createMockPi();
-	registerTodo(pi);
+	registerTodo(pi, undefined, { homeDir: TEST_HOME });
 	const sessionStart = captured.events.get("session_start")?.[0];
 	const toolEnd = captured.events.get("tool_execution_end")?.[0] as
 		| ((event: { toolName: string; isError: boolean }) => Promise<void>)

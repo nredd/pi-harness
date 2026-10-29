@@ -1,5 +1,6 @@
 import { buildSessionEntries, createMockCtx, createMockPi, makeTodoToolResult } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { TEST_HOME } from "./.test-support/setup.ts";
 
 const overlayMock = vi.hoisted(() => ({
 	importGate: undefined as Promise<void> | undefined,
@@ -26,7 +27,7 @@ function resumedBranch(subject: string) {
 async function setup(importOverlay?: () => Promise<typeof import("./todo-overlay.ts")>) {
 	const { default: registerTodo } = await import("./index.ts");
 	const { pi, captured } = createMockPi();
-	registerTodo(pi, importOverlay);
+	registerTodo(pi, importOverlay, { homeDir: TEST_HOME });
 	const start = captured.events.get("session_start")?.[0];
 	const shutdown = captured.events.get("session_shutdown")?.[0];
 	const toolEnd = captured.events.get("tool_execution_end")?.[0];

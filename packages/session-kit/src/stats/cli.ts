@@ -1,9 +1,12 @@
 /** Standalone data-only CLI. Bundles the parser; never imports Pi or the private extension entrypoint. */
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { agentDir } from "./load.ts";
 import { exportStats, importStats } from "./snapshot.ts";
 
-async function main(): Promise<void> {
+/** Parse the portable CLI argv, run its selected operation, and report JSON to stdout. */
+export async function main(): Promise<void> {
 	const [command, ...args] = process.argv.slice(2);
 	const options = new Map<string, string>();
 	for (let i = 0; i < args.length; i += 2) {
@@ -44,7 +47,23 @@ async function main(): Promise<void> {
 			"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] | import --agent-dir DIR --input REPO",
 		);
 }
-main().catch((error: unknown) => {
-	console.error(error instanceof Error ? error.message : "Stats operation failed");
-	process.exitCode = 1;
-});
+/** Run `main`, converting failures to one diagnostic and a nonzero process exit code. */
+export async function run(): Promise<void> {
+	try {
+		await main();
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : "Stats operation failed");
+		process.exitCode = 1;
+	}
+}
+
+/** Importers may supply an absent or unresolvable entrypoint, which must not prevent import. */
+function isEntrypoint(): boolean {
+	try {
+		return !!process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+	} catch {
+		return false;
+	}
+}
+
+if (isEntrypoint()) void run();

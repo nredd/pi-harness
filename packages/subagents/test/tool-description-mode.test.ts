@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import subagentsExtension from "../src/index.js";
 import { setWorktreeIsolationEnabled } from "../src/worktree.js";
 import { type SessionStartHandler, startSession } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 const EXAMPLE_TEMPLATE = fileURLToPath(new URL("../examples/agent-tool-description.md", import.meta.url));
 
@@ -48,7 +48,6 @@ describe("toolDescriptionMode", () => {
   let hermeticAgentDir: string;
   let prevCwd: string;
   let prevAgentDir: string | undefined;
-  let prevHome: string | undefined;
   let shutdown: (() => Promise<void>) | undefined;
   let handlers: Map<string, SessionStartHandler>;
 
@@ -58,9 +57,7 @@ describe("toolDescriptionMode", () => {
     // subagents.json can't leak into the "default is full" assertion.
     hermeticAgentDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    prevHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = hermeticAgentDir;
-    process.env.HOME = hermeticAgentDir;
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
     if (settings) {
@@ -90,8 +87,6 @@ describe("toolDescriptionMode", () => {
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(hermeticAgentDir, { recursive: true, force: true });
   });
@@ -348,6 +343,35 @@ describe("toolDescriptionMode", () => {
     });
   });
 
+  for (const mode of ["full", "compact", "custom"] as const) {
+    it(`${mode} discloses every preset shell restriction without mislabeling shell-capable agents`, () => {
+      const tools = setup({ toolDescriptionMode: mode }, () => {
+        mkdirSync(join(hermeticAgentDir, "agents"));
+        for (const name of ["researcher", "architect", "critic", "code-reviewer", "general-purpose", "debugger", "verifier"]) {
+          writeFileSync(
+            join(hermeticAgentDir, "agents", `${name}.md`),
+            readFileSync(new URL(`../../preset/agents/${name}.md`, import.meta.url), "utf8"),
+          );
+        }
+        if (mode === "custom") {
+          writeFileSync(join(hermeticAgentDir, "agent-tool-description.md"), "{{typeList}}\n{{compactTypeList}}");
+        }
+      });
+      const desc: string = tools.get("Agent").description;
+      for (const name of ["researcher", "architect", "critic", "code-reviewer"]) {
+        const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
+        expect(line).toContain("no shell/ssh: cannot run commands");
+        expect(line).toContain("no built-in shell: cannot run bash commands");
+      }
+      for (const name of ["general-purpose", "Explore", "Plan", "debugger", "verifier"]) {
+        const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
+        expect(line).toBeDefined();
+        expect(line).not.toContain("no shell/ssh");
+        expect(line).not.toContain("no built-in shell");
+      }
+    });
+  }
+
   // The tool description is the only thing the orchestrator LLM knows about an
   // agent's capabilities before spawning it. `tools: none` and an `ext:`-only
   // `tools:` both parse to zero built-ins (custom-agents.ts parseToolsField),
@@ -382,7 +406,7 @@ describe("toolDescriptionMode", () => {
       // built-ins AND zero extension tools — the one case "none" is true.
       for (const fm of ["tools: none\nextensions: false", "tools: none\nisolated: true"]) {
         const tools = await withAgent("silent", fm);
-        expect(tools.get("Agent").description).toContain("- silent: silent agent. (Tools: none)");
+        expect(tools.get("Agent").description).toContain("- silent: silent agent. (Tools: none; no built-in shell: cannot run bash commands)");
       }
     });
 
@@ -393,7 +417,7 @@ describe("toolDescriptionMode", () => {
       // that could do it — the mirror of the bug this suffix used to have.
       const tools = await withAgent("probe", 'tools: none\nextensions: "./ext-alpha.mjs"');
       const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- probe: probe agent. (Tools: no built-ins, extension tools only)");
+      expect(desc).toContain("- probe: probe agent. (Tools: no built-ins, extension tools only; no built-in shell: cannot run bash commands)");
       expect(desc).not.toContain("- probe: probe agent. (Tools: *)");
       expect(desc).not.toContain("- probe: probe agent. (Tools: none)");
     });
@@ -401,20 +425,27 @@ describe("toolDescriptionMode", () => {
     it("an ext:-only `tools:` is described by what it actually has", async () => {
       const tools = await withAgent("extonly", 'tools: "ext:probe.mjs"');
       const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- extonly: extonly agent. (Tools: no built-ins, extension tools only)");
+      expect(desc).toContain("- extonly: extonly agent. (Tools: no built-ins, extension tools only; no built-in shell: cannot run bash commands)");
       expect(desc).not.toContain("- extonly: extonly agent. (Tools: *)");
     });
 
     it("compact mode shares the suffix builder and must not diverge", async () => {
       const tools = await withAgent("quiet", "tools: none\nextensions: false", { toolDescriptionMode: "compact" });
       const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- quiet: quiet agent. (Tools: none)");
+      expect(desc).toContain("- quiet: quiet agent. (Tools: none; no built-in shell: cannot run bash commands)");
       expect(desc).not.toContain("- quiet: quiet agent. (Tools: *)");
     });
 
     it("a narrowed agent with extensions off lists only its built-ins", async () => {
       const tools = await withAgent("closed", "tools: read, grep\nextensions: false");
-      expect(tools.get("Agent").description).toContain("- closed: closed agent. (Tools: read, grep)");
+      expect(tools.get("Agent").description).toContain("- closed: closed agent. (Tools: read, grep; no built-in shell: cannot run bash commands)");
+    });
+
+    it("discloses a denied bash even when tools otherwise inherit all built-ins", async () => {
+      const tools = await withAgent("denied", "disallowed_tools: bash");
+      const line = tools.get("Agent").description.split("\n").find((line: string) => line.startsWith("- denied:"));
+      expect(line).toContain("no built-in shell: cannot run bash commands");
+      expect(line).not.toContain("Tools: *");
     });
 
     it("an omitted `tools:` still renders as * — absent means all built-ins", async () => {
@@ -428,7 +459,7 @@ describe("toolDescriptionMode", () => {
     it("a narrowed `tools:` still lists the names it actually has", async () => {
       const tools = await withAgent("narrow", "tools: read, grep");
       const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- narrow: narrow agent. (Tools: read, grep + extension tools)");
+      expect(desc).toContain("- narrow: narrow agent. (Tools: read, grep + extension tools; no built-in shell: cannot run bash commands)");
     });
   });
 });

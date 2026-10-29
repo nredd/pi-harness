@@ -23,6 +23,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from harness.credentials import require_safe_diagnostic
 from harness.paths import FAUX_EXTENSION, GIT_BIN, NODE_BIN, REPO_ROOT
 from harness.sandbox import Sandbox, install_stack
 
@@ -55,15 +56,6 @@ FIXED_PATHS = frozenset(
     }
 )
 CACHE_PATH = re.compile(r"jiti/(?:primary|replay)/pi-memory-index(?:\+map)?(?:\.i)?\.[a-f0-9]{8}\.[cm]js\Z")
-# Signature matching is deliberately conservative: refuse publication, never redact executable/code bytes.
-CREDENTIAL = re.compile(
-    rb"(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|"
-    rb"sk-(?:ant-)?[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|"
-    rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
-    rb"Bearer [A-Za-z0-9._~-]{24,}|"
-    rb'"(?:access_token|refresh_token|api_key)"\s*:\s*"[A-Za-z0-9._~-]{24,}"|'
-    rb"https?://[^\s/@:]+:[^\s/@]+@)"
-)
 WRAPPER = """// Failure-only synthetic replay: preserve the raw exception before Pi formats it.
 export default async function (pi) {
     try {
@@ -164,8 +156,9 @@ def publish(files: dict[str, bytes], output: Path) -> None:
     for name, content in files.items():
         if not allowed_artifact_path(Path(name)):
             raise ValueError("Unapproved diagnostic artifact path")
-        if len(content) > MAX_FILE_BYTES or CREDENTIAL.search(content):
-            raise ValueError("Diagnostic credential scan refused publication")
+        if len(content) > MAX_FILE_BYTES:
+            raise ValueError("Diagnostic input exceeds the publication size limit")
+        require_safe_diagnostic(content)
     sums = "".join(f"{hashlib.sha256(data).hexdigest()}  {name}\n" for name, data in sorted(files.items()))
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".standalone-evidence-", dir=output.parent) as temporary:

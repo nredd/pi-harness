@@ -71,9 +71,10 @@ def test_fatal_startup_modes(sandbox: Sandbox, mode: str, phase: str, fatal: boo
             code = wait_dead(pane)
             output = pane.capture() + (sandbox.root / "pi.stderr").read_text()
         finally:
-            (sandbox.root / "startup-tui.txt").write_text(pane.capture())
-            (sandbox.root / "startup-tui.ansi").write_text(pane.capture(styled=True))
-            pane.kill()
+            try:
+                pane.save_screen_evidence(sandbox.root, "startup-tui")
+            finally:
+                pane.kill()
     else:
         args = [*pi_command(), "-e", str(FAUX_EXTENSION), "--model", "faux/main", *extra]
         if mode == "rpc":
@@ -82,17 +83,23 @@ def test_fatal_startup_modes(sandbox: Sandbox, mode: str, phase: str, fatal: boo
         else:
             args += (["--mode", "json"] if mode == "json" else []) + ["-p", "hi"]
             stdin = ""
-        result = subprocess.run(
-            args,
-            cwd=sandbox.workdir,
-            env=sandbox.env(env),
-            input=stdin,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        code, output = result.returncode, result.stdout + result.stderr
+        # A TimeoutExpired traceback truncates stderr, including native Bun crash reports.
+        # Stream original bytes to the existing artifact allowlist, even on timeout/abnormal EOF.
+        stderr_path = sandbox.root / f"startup-{mode}.stderr"
+        with stderr_path.open("wb") as stderr:
+            result = subprocess.run(
+                args,
+                cwd=sandbox.workdir,
+                env=sandbox.env(env),
+                input=stdin,
+                stdout=subprocess.PIPE,
+                stderr=stderr,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        code = result.returncode
+        output = result.stdout + stderr_path.read_text(errors="replace")
     if mode != "tui" or fail_closed:
         assert MESSAGE in output, output
     if fail_closed:

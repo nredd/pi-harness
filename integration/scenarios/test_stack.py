@@ -48,7 +48,11 @@ def wait_dead(pane: TmuxPane) -> int:
         if pane.exit_status_path.is_file() and not pane.is_alive():
             return int(pane.exit_status_path.read_text().strip())
         time.sleep(0.05)
-    raise AssertionError(f"TUI never reported its exit status: {pane.capture()}")
+    try:
+        capture = pane.capture()
+    except (RuntimeError, OSError, UnicodeError):
+        capture = "Pane capture unavailable"
+    raise AssertionError(f"TUI never reported its exit status: {capture}")
 
 
 @pytest.mark.parametrize("mode", ["text", "json", "rpc", "tui"])

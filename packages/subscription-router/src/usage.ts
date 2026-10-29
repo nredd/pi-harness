@@ -49,6 +49,12 @@ export interface UsageWindow {
 	resetAt?: number;
 	/** Full quota-window duration in milliseconds, when known. */
 	durationMs?: number;
+	/**
+	 * Provenance of `name` and `durationMs`, for display only (never read by scoring or admission).
+	 * `reported`: the provider stated the span (Anthropic's fixed windows, Codex `limit_window_seconds`).
+	 * `assumed`: guessed from position because the provider stated none. Absent on older snapshots.
+	 */
+	spanSource?: "reported" | "assumed";
 	/** `provider` windows gate every model; `model` windows gate only matching `families`. */
 	scope: "provider" | "model";
 	/** Family tokens a `model`-scoped window applies to, e.g. `["opus"]`. See `modelMatchesFamily`. */
@@ -165,6 +171,7 @@ export function parseAnthropic(payload: unknown): ParsedUsage | undefined {
 			usedPercent,
 			resetAt: timestamp(item.resets_at ?? item.reset_at),
 			durationMs: key === "five_hour" ? 18_000_000 : 604_800_000,
+			spanSource: "reported",
 			scope: families ? "model" : "provider",
 			families: families ? [...families] : undefined,
 		});
@@ -197,6 +204,7 @@ export function parseCodex(payload: unknown): ParsedUsage | undefined {
 			resetAt: timestamp(item.reset_at),
 			scope: "provider",
 			durationMs: duration && duration > 0 ? duration * 1000 : key === "primary_window" ? 18_000_000 : 604_800_000,
+			spanSource: duration && duration > 0 ? "reported" : "assumed",
 		});
 	}
 	if (windows.length === 0) return undefined;

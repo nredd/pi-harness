@@ -19,8 +19,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GroupJoinManager } from "../src/group-join.js";
-import subagentsExtension from "../src/index.js";
 import { AgentWidget } from "../src/ui/agent-widget.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -64,7 +64,6 @@ describe("session_shutdown disposes activation-owned resources (#256)", () => {
   let agentDir: string;
   let prevCwd: string;
   let prevAgentDir: string | undefined;
-  let prevHome: string | undefined;
 
   beforeEach(() => {
     // Hermetic cwd + global dir, scheduling off, so session_start doesn't spin a
@@ -73,9 +72,7 @@ describe("session_shutdown disposes activation-owned resources (#256)", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-256-"));
     agentDir = mkdtempSync(join(tmpdir(), "pi-256-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    prevHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.env.HOME = agentDir;
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
     writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
@@ -86,8 +83,6 @@ describe("session_shutdown disposes activation-owned resources (#256)", () => {
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
     vi.restoreAllMocks();

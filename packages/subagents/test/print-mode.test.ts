@@ -9,7 +9,7 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 function makePi() {
   const tools = new Map<string, any>();

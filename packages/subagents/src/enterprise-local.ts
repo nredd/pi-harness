@@ -8,7 +8,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { resolveAgentDir } from "./home-paths.js";
 
 const MANIFEST_VERSION = 1;
 const MANIFEST_NAME = "enterprise.local.json";
@@ -21,16 +21,16 @@ export interface EnterpriseLocalManifest {
 }
 
 /** Return the target-local manifest path without reading it. */
-export function enterpriseLocalPath(): string {
-  return join(getAgentDir(), MANIFEST_NAME);
+export function enterpriseLocalPath(homeDir?: string): string {
+  return join(resolveAgentDir(homeDir), MANIFEST_NAME);
 }
 
 /**
  * Read and minimally validate the machine-local manifest. It never exposes its
  * contents in diagnostics: providers can include command-backed credentials.
  */
-export function readEnterpriseLocalManifest(): EnterpriseLocalManifest | undefined {
-  const path = enterpriseLocalPath();
+export function readEnterpriseLocalManifest(homeDir?: string): EnterpriseLocalManifest | undefined {
+  const path = enterpriseLocalPath(homeDir);
   if (!existsSync(path)) return undefined;
 
   try {

@@ -9,7 +9,7 @@ export default defineConfig({
 	},
 	test: {
 		include: ["*.test.ts", "state/**/*.test.ts", "tool/**/*.test.ts", "view/**/*.test.ts"],
-		setupFiles: ["./.test-support/setup.ts"],
+		setupFiles: ["./.test-support/setup.ts", "../../integration/inprocess/verification/home-setup.ts"],
 		pool: "forks",
 		maxWorkers: 2,
 		hookTimeout: 30_000,
