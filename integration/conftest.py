@@ -7,11 +7,14 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from harness.credentials import require_safe_diagnostic
+from harness.files import entry_kind, read_regular_bytes
 from harness.interactive import FIRST_FRAME_PATTERN, SOCKET_ROOT, launch_tui
 from harness.isolation import check_tier
 from harness.paths import ARTIFACTS_DIR, pi_command
@@ -211,14 +214,11 @@ def tui(
     yield launch
     failed = test_failed(request)
     for pane in panes:
-        if failed:
-            destination = artifact_dir(request.node.nodeid)
-            try:
-                (destination / f"{pane.name}.txt").write_text(pane.capture())
-                (destination / f"{pane.name}.ansi").write_text(pane.capture(styled=True))
-            except RuntimeError:
-                LOGGER.warning(f"Pane '{pane.name}' was gone before capture")
-        pane.kill()
+        try:
+            if failed:
+                pane.save_screen_evidence(sandbox.root, pane.name)
+        finally:
+            pane.kill()
 
 
 def test_failed(request: pytest.FixtureRequest) -> bool:
@@ -236,7 +236,7 @@ def test_failed(request: pytest.FixtureRequest) -> bool:
 
 
 def artifact_dir(nodeid: str) -> Path:
-    """Return (and create) the artifact directory for a test.
+    """Return the publication destination for a test without creating it.
 
     Parameters:
         nodeid (str): pytest node id.
@@ -244,9 +244,33 @@ def artifact_dir(nodeid: str) -> Path:
     Returns:
         Path: `artifacts/<sanitized node id>/`.
     """
-    path = ARTIFACTS_DIR / UNSAFE_NAME.sub("_", nodeid).strip("_")
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return ARTIFACTS_DIR / UNSAFE_NAME.sub("_", nodeid).strip("_")
+
+
+def read_artifact_bytes(source: Path, root: Path) -> bytes:
+    """Check every in-sandbox ancestor before a no-follow, nonblocking regular-file read.
+
+    Parameters:
+        source (Path): lexically in-sandbox candidate.
+        root (Path): sandbox root, itself required to be a real directory.
+
+    Returns:
+        bytes: exact candidate bytes, safe to scan before publication.
+
+    Raises:
+        ValueError: a candidate escapes the root or a parent is not a real directory.
+        OSError: metadata lookup or the regular-file read fails.
+    """
+    if source == root or not source.is_relative_to(root):
+        raise ValueError("Artifact candidate is outside the sandbox")
+    parent = source.parent
+    while True:
+        if entry_kind(parent) != "directory":
+            raise ValueError("Artifact candidate ancestry is not a real directory")
+        if parent == root:
+            break
+        parent = parent.parent
+    return read_regular_bytes(source)
 
 
 def save_sandbox_artifacts(box: Sandbox, nodeid: str) -> None:
@@ -257,20 +281,56 @@ def save_sandbox_artifacts(box: Sandbox, nodeid: str) -> None:
         nodeid (str): pytest node id.
     """
     destination = artifact_dir(nodeid)
-    sessions = box.agent_dir / "sessions"
-    if sessions.is_dir():
-        shutil.copytree(sessions, destination / "sessions", dirs_exist_ok=True)
-    leftovers = [
-        path
-        for pattern in ("script-*.json", "*.stderr", "*.jsonl", "*.txt", "*.ansi")
-        for path in box.root.glob(pattern)
-    ]
-    for leftover in leftovers:
-        shutil.copy2(leftover, destination / leftover.name)
-    for nested in box.root.glob("*/rpc-*"):
-        if nested.suffix in {".jsonl", ".stderr"}:
-            shutil.copy2(nested, destination / f"{nested.parent.name}-{nested.name}")
-    LOGGER.warning(f"Saved artifacts for '{nodeid}' to '{destination}'")
+    # Remove a stale publication too: refusal must never leave uploadable partial evidence.
+    shutil.rmtree(destination, ignore_errors=True)
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        candidates = {
+            path.name: path
+            for pattern in (
+                "script-*.json",
+                "*.stderr",
+                "*.jsonl",
+                "*.txt",
+                "*.ansi",
+                "*.exit",
+                "*.pane.json",
+            )
+            for path in box.root.glob(pattern)
+        }
+        sessions = box.agent_dir / "sessions"
+        if sessions.is_symlink():
+            raise ValueError("Artifact session directory symlinks are not publishable")
+        if sessions.is_dir():
+            candidates |= {
+                str(Path("sessions") / path.relative_to(sessions)): path
+                for path in sessions.rglob("*")
+                if path.is_file() or path.is_symlink()
+            }
+        candidates |= {
+            f"{path.parent.name}-{path.name}": path
+            for path in box.root.glob("*/rpc-*")
+            if path.suffix in {".jsonl", ".stderr"}
+        }
+        # Stage OUTSIDE the uploaded artifacts root. Scan the same bytes we write,
+        # not a path later copied again after it might have changed.
+        with tempfile.TemporaryDirectory(prefix="evidence-", dir=destination.parent.parent) as temporary:
+            staged = Path(temporary) / "payload"
+            staged.mkdir()
+            for name, source in sorted(candidates.items()):
+                data = read_artifact_bytes(source, box.root)
+                require_safe_diagnostic(data)
+                target = staged / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            staged.rename(destination)
+    except Exception:
+        # Candidate bytes and exception details can contain credentials. Never log
+        # them, and never replace the scenario's primary failure with capture failure.
+        shutil.rmtree(destination, ignore_errors=True)
+        LOGGER.warning(f"Refused unsafe or unreadable artifacts for '{nodeid}'")
+        return
+    LOGGER.warning(f"Saved scanned artifacts for '{nodeid}' to '{destination}'")
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)

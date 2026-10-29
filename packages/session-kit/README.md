@@ -77,7 +77,11 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
 - `monitor_stop({id})`, `/monitor list`, `/monitor stop <id|all>`: stop and inspect owned monitors.
 - Output batches every two seconds into the bounded ring buffer (with dropped-line reporting). Passive batches neither start turns nor create transcript/model-context entries; call `monitor_read` to fetch them. A regex match, natural exit, timeout or `wake: true` emits one compact visible wake with a cursor after the output the model last saw through a wake or read, not a replay of buffered output. A bounded batch preserves its first and latest dropped matching lines as wake evidence even if later output evicts them from the ring.
 - Children run in process groups: SIGTERM, then SIGKILL. Exit cleanup and pidfiles cover orderly quit
-  and later recovery after SIGKILL. Files live at
+  and later recovery after SIGKILL. Sweeps reauthenticate the leader after enumerating members;
+  uncertain identities or guards never authorize signaling. Reap checks are bounded to 20 polls
+  after escalation; a timeout keeps authenticated recovery on disk rather than claiming cleanup.
+  Spawn failures after child creation kill the child; matcher initialization failures also remove
+  its pidfile. A spawn completing after session disposal is killed without registration. Files live at
   `$TMPDIR/pi-monitors-<uid>/<sessionId>.<ownerPid>/<monitorId>.json`. Startup checks dead-owner
   records, including a resumed session, and validates process identity before signalling. It never
   sweeps a live owner's monitors. Two panes resuming the same session have separate directories.
@@ -221,8 +225,17 @@ the kit does not append a second reminder or request another continuation.
 `test/scenarios/` drives the real kit through core's in-process session harness under Vitest and Bun,
 covering goals, file-backed restore, child rename/reload, read-rule injection, titles,
 monitor output/wakes/cursors/caps/timeouts and loop scheduling with same-cwd session isolation.
+Command completion scenarios resolve public runner suggestions and execute the selected `/goal`,
+`/loop` and `/monitor` commands, checking persisted state, timer removal and the selected child.
+Loop resume starts from a provider-error pause: ticks stay quiet until the selected resume command
+restores dispatch. Git setup uses child-only scratch HOME/config and empty hooks/templates, with
+hostile config/template/hook controls; it never changes the parent process HOME.
+Pidfile age-boundary fixtures pin file/directory mtimes to the injected sweep clock and check the
+24-hour threshold under both past and future wall clocks.
 The interactive host/VirtualTerminal covers `/diff`, `/stats` and real `/name`, including width/resize
-matrices, chart glyph ports/colours and file-backed titles. Stats histories use a fixed clock;
+matrices, chart glyph ports/colours and file-backed titles. Mounted command callbacks also verify
+live-theme invalidation, empty Models ranges, help page boundaries, source-failure reopening,
+stale deferred factories and stats load-error cleanup without replacing the interactive host. Stats histories use a fixed clock;
 `createSessionKit({ agentDir, clock })` scopes both offline loading and displayed time ranges.
 Terminal fixtures route input chunks through pi-tui's real `StdinBuffer`, matching ProcessTerminal's
 keypress splitting (complete keys only; lone Escape is flushed immediately). Stats scroll-to-clamp
@@ -231,6 +244,14 @@ tabs and exact provider totals remain covered at every width. Each stats-view bo
 and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
+The native diff descendant timeout fixture gates its fake deadline on real stdout readiness, so
+slow process startup cannot race a fixed wall-clock deadline. Adapter fault tests cover monitor
+startup/sweep/widget failures, post-spawn errors, worker startup timeout, rejected sampler cleanup,
+first/latest dropped-match evidence, title-stream failure and real rule reinjection after tree
+navigation. Synthetic PIDs are never passed to real signal capabilities. Native Promise construction
+initializes the monitor exit resolver before child handlers register; synchronous close/error
+registration fixtures lock that ordering. The overwritten no-op resolver initializer is removed,
+not a reachable validation or lifecycle path.
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
 Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
 `docs/verification-rebuild.md` at the monorepo root tracks their destinations.
