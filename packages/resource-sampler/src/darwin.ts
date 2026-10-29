@@ -211,15 +211,12 @@ export function darwinNativeCounter(
 	const seconds = bsd.readBigUInt64LE(DARWIN_ABI.bsd.startSeconds);
 	const micros = bsd.readBigUInt64LE(DARWIN_ABI.bsd.startMicros);
 	if (seconds === DARWIN_ABI.unsetTime || micros >= MICROSECONDS_PER_SECOND) return null;
-	/**
-	 * Sum cumulative user/system Mach ticks from one validated fixed rusage layout.
-	 * @param buffer A size-checked rusage_info_v0 frame.
-	 * @returns Cumulative CPU Mach ticks, without lossy number conversion.
-	 */
-	const cpu = (buffer: Buffer) =>
-		buffer.readBigUInt64LE(DARWIN_ABI.usage.userTicks) + buffer.readBigUInt64LE(DARWIN_ABI.usage.systemTicks);
-	if (cpu(after) < cpu(before)) return null;
-	const cpuMs = (Number(cpu(after)) * ticksToNs) / NANOSECONDS_PER_MILLISECOND;
+	/** Cumulative user/system Mach ticks from one size-checked rusage frame. */
+	const beforeCpu =
+		before.readBigUInt64LE(DARWIN_ABI.usage.userTicks) + before.readBigUInt64LE(DARWIN_ABI.usage.systemTicks);
+	const afterCpu =
+		after.readBigUInt64LE(DARWIN_ABI.usage.userTicks) + after.readBigUInt64LE(DARWIN_ABI.usage.systemTicks);
+	const cpuMs = afterCpu < beforeCpu ? Number.NaN : (Number(afterCpu) * ticksToNs) / NANOSECONDS_PER_MILLISECOND;
 	const rssBytes = Number(after.readBigUInt64LE(DARWIN_ABI.usage.residentBytes));
 	const footprintBytes = Number(after.readBigUInt64LE(DARWIN_ABI.usage.footprintBytes));
 	if (![rssBytes, footprintBytes].every(Number.isSafeInteger) || !Number.isFinite(cpuMs) || !Number.isFinite(at))

@@ -39,6 +39,7 @@ export type ModelScopeVerdict =
  *     user authored/installed this agent or chose the parent's model; trust it).
  */
 export function checkModelScope(args: {
+  homeDir?: string;
   model: { provider: string; id: string } | undefined;
   cwd: string;
   modelRegistry: ModelRegistryRef;
@@ -52,7 +53,7 @@ export function checkModelScope(args: {
   const { model, cwd, modelRegistry, callerSupplied, agentLabel, modelInput } = args;
   if (!scopeModelsEnabled || !model) return { kind: "ok" };
 
-  const allowed = resolveEnabledModels(readEnabledModels(cwd), modelRegistry, cwd);
+  const allowed = resolveEnabledModels(readEnabledModels(cwd, args.homeDir), modelRegistry, cwd, args.homeDir);
   if (!allowed || isModelInScope(model, allowed)) return { kind: "ok" };
 
   if (callerSupplied) {

@@ -78,13 +78,11 @@ export const cwdParam = {
  * Blank means unset: models that fill every optional parameter send `""`.
  * Existence is checked later by the manager, which re-checks at start time.
  */
-export function resolveCwdParam(cwd: string | undefined, sessionCwd: string): string | undefined {
+export function resolveCwdParam(cwd: string | undefined, sessionCwd: string, homeDir = homedir()): string | undefined {
   const trimmed = cwd?.trim();
   if (!trimmed) return undefined;
-  // Bun 1.3 ignores HOME in os.homedir(); honor the same explicit override as Node.
-  const home = process.env[process.platform === "win32" ? "USERPROFILE" : "HOME"] || homedir();
-  if (trimmed === "~") return home;
-  if (trimmed.startsWith("~/")) return resolve(home, trimmed.slice(2));
+  if (trimmed === "~") return homeDir;
+  if (trimmed.startsWith("~/")) return resolve(homeDir, trimmed.slice(2));
   return resolve(sessionCwd, trimmed);
 }
 

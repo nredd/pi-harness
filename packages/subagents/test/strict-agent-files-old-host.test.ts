@@ -10,9 +10,9 @@ import { join } from "node:path";
 import * as hostSdk from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.js";
-import subagentsExtension from "../src/index.js";
 import { hostStartupErrorClass } from "../src/startup-error.js";
 import { makePi, startSession } from "./helpers/boot-extension.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 // The suite now runs on the fork host; remove only the optional export to keep
 // the old-host compatibility contract independent of the installed SDK version.
@@ -24,7 +24,6 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
 let cwd: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
-let originalHome: string | undefined;
 
 describe("strictAgentFiles on a host without ExtensionStartupError", () => {
   beforeEach(() => {
@@ -32,9 +31,7 @@ describe("strictAgentFiles on a host without ExtensionStartupError", () => {
     cwd = mkdtempSync(join(tmpdir(), "strict-old-host-"));
     process.chdir(cwd);
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    originalHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-    process.env.HOME = cwd;
     mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
     writeFileSync(join(cwd, ".pi", "agents", "broken.md"), "---\nname: broken\ndescription: Use this: that\n---\n\nBroken.\n");
   });
@@ -44,8 +41,6 @@ describe("strictAgentFiles on a host without ExtensionStartupError", () => {
     process.chdir(originalCwd);
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     registerAgents(new Map());
     rmSync(cwd, { recursive: true, force: true });
   });

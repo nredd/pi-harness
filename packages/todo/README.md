@@ -20,8 +20,8 @@ on long research → design → implement sessions.
 
 Imported from [`juicesharp/rpiv-mono`](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-todo)
 `packages/rpiv-todo` at fork commit `9a4e2e8` (`nredd/rpiv-todo`). Source, tests and docs are
-byte-identical to the fork except this README, `package.json` and comments in
-`state/i18n-bridge.ts`. Deliberate deltas:
+based on that snapshot, with the workspace's injected-home seams and standalone test
+support described below. Retained packaging deltas:
 
 - Renamed to `@nredd/pi-todo`; `repository`, `homepage`, `bugs` and the doc/license links point at
   `nredd/pi-harness/packages/todo`. Links that credit upstream stay on `juicesharp/rpiv-mono`
@@ -37,22 +37,35 @@ byte-identical to the fork except this README, `package.json` and comments in
   The packed contract `npm install`s the tarball into an empty consumer, resolving from the registry,
   and audits that fresh install
 
+## In-process home injection
+
+The default extension entry accepts `registerTodo(pi, importOverlay?, options?: { homeDir?: string })`.
+An embedder can call `registerTodo(pi, undefined, { homeDir: "/temporary/home" })` to bind config,
+guidance, shortcut, resume and overlay reads to that home without changing `HOME`.
+Omitting `homeDir` keeps the call-time `os.homedir()` default. An absolute `XDG_CONFIG_HOME`
+still overrides the config directory; if its file is missing, the legacy fallback uses
+`<homeDir>/.config/rpiv-todo/config.json`. This is an in-process dependency, not a new
+user setting, and it does not write or migrate config files. `importOverlay` retains its
+existing optional lazy-loader seam.
+
 ## Verification
 
 The workspace gate (from the repository root, or standalone in this directory):
 
 ```sh
 npm ci --ignore-scripts
-# Put Bun 1.3.14 (see .bun-version) on PATH.
+# Put Bun 1.4.4 (see .bun-version) on PATH.
 npm run check
 ```
 
-`check` runs Biome, strict TypeScript, all 382 Vitest tests (including every
-upstream test), and two native Bun interactive-row regressions. The test host
+`check` runs Biome, strict TypeScript, and all 408 Vitest tests (including every
+upstream test) on both Node and Bun. The two real interactive settled-row regressions
+run inside that same suite on both engines. The test host
 pins core `v1.3.0-nredd.6` release tarballs. Unpublished upstream mock helpers
 are vendored under `.test-support/`; provenance and test counts are documented
-[here](.test-support/README.md). Tests isolate HOME and use faux providers, never
-a pi process or credentials.
+[here](.test-support/README.md). Tests inject temporary homes and use faux providers, never
+a pi process or credentials. The measured line/function coverage and mutation receipts
+are documented [here](docs/coverage-closure.md); coverage policy remains separate.
 
 Settled update/delete rows with a valid result snapshot retain that historical
 subject. Legacy/error rows without one still read the live store and now call
