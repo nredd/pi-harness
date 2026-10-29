@@ -19,7 +19,7 @@ After `0.2.0` is published, add this object to `settings.json`'s `packages` arra
 
 ```json
 {
-  "source": "npm:@nredd/pi-preset@0.2.0",
+  "source": "npm:@nredd/pi-preset@0.3.0",
   "extensions": ["extensions/expanded-footer.ts"],
   "skills": [],
   "prompts": [],
