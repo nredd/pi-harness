@@ -204,11 +204,14 @@ export function resolveModel(
  * match score. A bare family name like "opus" therefore means the newest opus
  * the user has enabled, not whichever id happens to be shortest.
  */
-function rankFuzzy(matches: { entry: ModelEntry; score: number }[], registry: ModelRegistry): ModelEntry | undefined {
+function scopedCandidates<T extends { entry: ModelEntry }>(candidates: T[], registry: ModelRegistry): T[] {
   const scope = modelScopeProvider?.(registry);
-  const scoped = scope ? matches.filter(c => scope.has(`${c.entry.provider}/${c.entry.id}`.toLowerCase())) : [];
-  const pool = scoped.length > 0 ? scoped : matches;
-  const ranked = pool
+  const scoped = scope ? candidates.filter(candidate => scope.has(`${candidate.entry.provider}/${candidate.entry.id}`.toLowerCase())) : [];
+  return scoped.length > 0 ? scoped : candidates;
+}
+
+function rankFuzzy(matches: { entry: ModelEntry; score: number }[], registry: ModelRegistry): ModelEntry | undefined {
+  const ranked = scopedCandidates(matches, registry)
     .map(c => ({ ...c, version: parseModelVersion(c.entry.id) }))
     .sort((a, b) => compareVersionsDesc(a.version, b.version) || b.score - a.score);
   return ranked[0]?.entry;
@@ -288,8 +291,8 @@ function resolveCanonicalModel(
   }
 
   // 4. No match — list available models
-  const modelList = all
-    .map(m => `  ${m.provider}/${m.id}`)
+  const modelList = scopedCandidates(all.map(entry => ({ entry })), registry)
+    .map(({ entry }) => `  ${entry.provider}/${entry.id}`)
     .sort()
     .join("\n");
   return `Model not found: "${input}".\n\nAvailable models:\n${modelList}`;

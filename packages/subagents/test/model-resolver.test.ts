@@ -23,6 +23,10 @@ function makeRegistry(models = MODELS, available?: typeof MODELS): ModelRegistry
 }
 
 describe("resolveModel", () => {
+  afterEach(() => {
+    setModelScopeProvider(undefined);
+  });
+
   it("resolves a logical alias to its first available canonical candidate", () => {
     setModelAliases({ "logical-sonnet": ["missing/model", "anthropic/claude-sonnet-4-6"] });
     expect(getModelAliases().get("logical-sonnet")).toEqual(["missing/model", "anthropic/claude-sonnet-4-6"]);
@@ -205,6 +209,21 @@ describe("resolveModel", () => {
     });
 
     it("error lists available models", () => {
+      const result = resolveModel("xyz", makeRegistry());
+      expect(result).toContain("anthropic/claude-opus-4-6");
+      expect(result).toContain("openai/gpt-4o");
+    });
+
+    it("error lists only enabled models when the scope resolves candidates", () => {
+      setModelScopeProvider(() => new Set(["anthropic/claude-haiku-4-5-20251001"]));
+      const result = resolveModel("xyz", makeRegistry());
+      expect(result).toContain("anthropic/claude-haiku-4-5-20251001");
+      expect(result).not.toContain("anthropic/claude-opus-4-6");
+      expect(result).not.toContain("openai/gpt-4o");
+    });
+
+    it("retains all candidates when the scope resolves none", () => {
+      setModelScopeProvider(() => new Set(["missing/model"]));
       const result = resolveModel("xyz", makeRegistry());
       expect(result).toContain("anthropic/claude-opus-4-6");
       expect(result).toContain("openai/gpt-4o");
