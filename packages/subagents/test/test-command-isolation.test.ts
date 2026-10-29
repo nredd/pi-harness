@@ -10,6 +10,11 @@ import { run } from "../../dev-tools/src/core/process.ts";
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 const CHILD_TIMEOUT_MS = 60_000;
 
+it("the opt-in live smoke entry point retains its operator-backed Vitest command", () => {
+  const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+  expect(manifest.scripts["test:e2e"]).toBe("vitest run e2e --reporter=verbose");
+});
+
 it("npm test cannot inherit operator model tiers through HOME or explicit config roots", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-subagents-hostile-home-"));
   const agentDir = join(home, ".pi", "agent");
