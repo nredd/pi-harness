@@ -431,8 +431,13 @@ jobs:
           tar -xzf "$RUNNER_TEMP/model-data/earendil-works-pi-ai-$version.tgz" -C "$RUNNER_TEMP/model-data"
           rm -rf packages/ai/src/providers/data
           cp -R "$RUNNER_TEMP/model-data/package/dist/providers/data" packages/ai/src/providers/data
-          ./scripts/build-binaries.sh --skip-install --offline-model-data \
-            --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone"
+          # Observe Bun's compile argv/module graph without changing core sources or build flags.
+          PYTHONPATH=../../integration ../../integration/.venv/bin/python -m harness.standalone_diagnostics \
+            prepare-build --directory "$RUNNER_TEMP/pi-build-evidence"
+          PATH="$RUNNER_TEMP/pi-build-evidence/bin:$PATH" \
+            ./scripts/build-binaries.sh --skip-install --offline-model-data \
+            --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone" \
+            2>&1 | tee "$RUNNER_TEMP/pi-build-evidence/build.log"
           echo "PI_BIN=$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" >>"$GITHUB_ENV"
       - name: Report standalone binary and source identity
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
@@ -442,6 +447,23 @@ jobs:
           git -C forks/pi rev-parse HEAD
           bun --version
           shasum -a 256 "$PI_BIN" "$RUNNER_TEMP/pi-standalone/pi-${{ matrix.platform }}.tar.gz"
+      - name: Strict standalone startup with failure-only diagnostics
+        id: startup
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.platform == 'linux-x64' }}
+        working-directory: integration
+        run: |
+          uv run --locked python -m harness.standalone_diagnostics startup \
+            --binary "$PI_BIN" --core ../forks/pi \
+            --build-evidence "$RUNNER_TEMP/pi-build-evidence" \
+            --output "$RUNNER_TEMP/standalone-startup-diagnostics" --github-output "$GITHUB_OUTPUT"
+      - name: Upload scanned standalone startup failure evidence
+        if: ${{ !cancelled() && steps.startup.outcome == 'failure' && steps.startup.outputs.artifact_ready == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: standalone-startup-linux-x64
+          path: ${{ runner.temp }}/standalone-startup-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Standalone D and E (personal)
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
         working-directory: integration

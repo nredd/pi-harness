@@ -2116,10 +2116,6 @@ Blocked command: ${blocked}`
     });
   }
   async function showActivePlanMenu(ctx) {
-    if (!ctx.hasUI) {
-      ctx.ui.notify(planStatusText(), "info");
-      return;
-    }
     const lifecycle = captureMenuLifecycle();
     if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
     const ui = await loadInteractiveUi();
@@ -2191,8 +2187,7 @@ Blocked command: ${blocked}`
     };
   }
   function planModePolicyToolNames() {
-    if (state.enabled) return workflowAllowedToolNames ?? [];
-    return computePlanModePolicyToolNames();
+    return workflowAllowedToolNames ?? [];
   }
   function workflowDesiredToolNames() {
     const policy = state.workflowToolPolicy;
@@ -2290,9 +2285,6 @@ Blocked command: ${blocked}`
   }
   function arrayEquals(left, right) {
     return left.length === right.length && left.every((value, index) => value === right[index]);
-  }
-  function computePlanModePolicyToolNames() {
-    return resolvePlanModePolicyToolNames(desiredPlanModeToolNames());
   }
   function resolvePlanModePolicyToolNames(desiredNames) {
     const selectedNames = new Set(desiredNames);
