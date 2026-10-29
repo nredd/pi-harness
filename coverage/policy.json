@@ -58,7 +58,7 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "max_uncovered": { "darwin": { "lines": 1380, "functions": 95 }, "linux": { "lines": 1380, "functions": 94 } },
           "enforcement": "report-only",
           "reason": "Native Bun compatibility scenarios are not the full owned-source suite; remain report-only, not enforced, until complete-source receipts exist: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -78,7 +78,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 555, "functions": 138 }, "linux": { "lines": 555, "functions": 138 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -96,7 +96,7 @@
             "src/settings.ts", "src/state.ts", "src/tool-availability.ts", "src/tool-policy.ts",
             "src/tool-selection.ts", "src/workflow-mutex.ts"
           ],
-          "max_uncovered": { "darwin": { "lines": 3479, "functions": 245 }, "linux": { "lines": 3479, "functions": 245 } },
+          "max_uncovered": { "darwin": { "lines": 3344, "functions": 245 }, "linux": { "lines": 3344, "functions": 245 } },
           "enforcement": "report-only",
           "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -112,13 +112,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 19, "functions": 12 }, "linux": { "lines": 19, "functions": 12 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 244, "functions": 15 }, "linux": { "lines": 244, "functions": 15 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "enforcement": "report-only",
           "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -134,13 +134,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 58, "functions": 2 }, "linux": { "lines": 31, "functions": 2 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 52, "functions": 8 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 163, "functions": 14 }, "linux": { "lines": 46, "functions": 8 } },
+          "max_uncovered": { "darwin": { "lines": 8, "functions": 4 }, "linux": { "lines": 52, "functions": 8 } },
           "enforcement": "report-only",
           "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -155,11 +155,11 @@
         { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
       ],
       "status": "measured",
-      "note": "Per-OS floors measured from hosted runs 40441614924 and 40452767971. Linux primary 110 lines / 32 functions is a TRANSITIONAL observed maximum: incidental coverage of the messages.ts sort comparator depends on a monitor coalescing/teardown race. The per-OS base ratchet permits this floor only to go down after policy establishment; the deterministic test in https://github.com/nredd/pi-harness/issues/163 is the real fix. Local receipts remain advisory.",
+      "note": "Hosted run 40852918834 measures one uncovered sort comparator on both OSes. A deterministic multi-match formatter regression now removes the coalescing/teardown dependency; subsequent clean hosted reports must establish the zero-function floor.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 110, "functions": 32 }, "linux": { "lines": 110, "functions": 32 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 1 }, "linux": { "lines": 0, "functions": 1 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -179,7 +179,7 @@
             "src/stats/index.ts", "src/stats/load.ts", "src/stats/palette.ts", "src/stats/snapshot.ts",
             "src/stats/ticks.ts", "src/titles/aliases.ts", "src/titles/index.ts", "src/titles/logic.ts"
           ],
-          "max_uncovered": { "darwin": { "lines": 859, "functions": 116 }, "linux": { "lines": 859, "functions": 114 } },
+          "max_uncovered": { "darwin": { "lines": 947, "functions": 96 }, "linux": { "lines": 947, "functions": 94 } },
           "enforcement": "report-only",
           "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -195,7 +195,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 500, "functions": 68 }, "linux": { "lines": 500, "functions": 68 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -221,7 +221,7 @@
             "src/workflow/task.ts", "src/workflow/tool-description.ts", "src/workflow/worker-source.ts",
             "src/worktree.ts", "src/xml.ts"
           ],
-          "max_uncovered": { "darwin": { "lines": 7728, "functions": 512 }, "linux": { "lines": 7728, "functions": 512 } },
+          "max_uncovered": { "darwin": { "lines": 6534, "functions": 516 }, "linux": { "lines": 6534, "functions": 516 } },
           "enforcement": "report-only",
           "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -237,13 +237,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 20, "functions": 4 }, "linux": { "lines": 20, "functions": 4 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 226, "functions": 31 }, "linux": { "lines": 226, "functions": 31 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "enforcement": "report-only",
           "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -259,13 +259,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 120, "functions": 20 }, "linux": { "lines": 120, "functions": 20 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 936, "functions": 71 }, "linux": { "lines": 936, "functions": 71 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "enforcement": "report-only",
           "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -419,7 +419,7 @@
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 22, "functions": 4 }, "linux": { "lines": 37, "functions": 5 } },
+          "max_uncovered": { "darwin": { "lines": 17, "functions": 4 }, "linux": { "lines": 27, "functions": 8 } },
           "enforcement": "report-only",
           "reason": "Current Bun producer is not yet verified as a full source-complete port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]

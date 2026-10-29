@@ -17,7 +17,7 @@ import pytest
 from pydantic import ValidationError
 from test_coverage_accounting import policy, setup_report
 
-from coverage_accounting import Exclusion, Policy, check_inventory_ratchet, check_ratchet, git_read, inventory
+from coverage_accounting import Exclusion, Policy, check_inventory_ratchet, git_read, inventory
 
 ROOT = Path(__file__).resolve().parents[2]
 FACADES = ["src/index.ts", "src/interactive-ui.ts"]
@@ -188,7 +188,8 @@ def test_actual_policy_facade_receipts_preserve_integration_base_ratchet() -> No
     assert {
         (entry.signal, entry.path) for entry in current.reclassifications if entry.package == "plan-mode"
     } == expected
-    check_ratchet(current, base)
+    # This historical pre-main policy anchors source membership, not hosted budgets.
+    # The CLI separately ratchets budgets against the actual PR base (origin/main).
     check_inventory_ratchet(ROOT, current, base, revision)
     without_receipts = current.model_copy(deep=True)
     without_receipts.reclassifications = []

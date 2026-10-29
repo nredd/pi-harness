@@ -26,11 +26,47 @@ commas and inline type bindings, preserving rejection of executable additions.
 
 The subagents worker error is delivered at the real worker's public EventEmitter boundary with
 a held child. Both Error and string payloads must settle as failed and abort that exact child.
-No production guard or assertion is removed.
+No production guard or assertion is removed. Replacing the worker diagnostic with a fixed wrong
+message fails both new cases (`2 failed, 1 passed`); restore the source before full measurement.
 
 Bun 1.4.4 now exits nonzero for the 50%-function fixture with either LCOV alone or text plus
 LCOV. The pinned-runtime regression asserts that repair; both reporters remain mandatory.
 
-These are advisory local receipts, not hosted floors. Global enforcement remains disabled until
-complete independent hosted measurements establish applicable per-OS primary coverage. Linux's
-Darwin-native code remains inventoried and must retain an explicit per-OS floor, never an exclusion.
+The cross-platform Darwin collector regression injects two fixed metadata rows with absent PIDs,
+requires exact name/parent/RSS retention for the admitted row, and requires a PID-limit reason with
+one enumerated/sampled row. It runs on either host OS without attempting real Darwin commands.
+Replacing parsed RSS with zero makes this test fail. Both source mutations were restored.
+
+Local gates after restoration: `make check-ts check-scripts check-integration` passed, including
+887 scripts tests, 1,444 integration units, 8 import-audit tests and 15 probe tests. All workspace
+primary and declared compatibility suites passed. `make check-benchmark` reached 92.98% coverage
+but failed one test because `codex` is absent from this host's PATH (90 passed); no fake executable
+or skipped assertion substitutes for that dependency.
+
+## First complete hosted measurement
+
+Run [40852918834](https://github.com/nredd/pi-harness/actions/runs/40852918834), commit `b682723`,
+produced complete `coverage-macos-14` and `coverage-ubuntu-24.04` artifacts after successful owned
+producers. Only Linux accounting failed, on the outdated sampler budget. Both artifacts pass
+measurement-mode validation; the policy records each independent signal's exact observed counts.
+Primary counts match the table except session-kit has one uncovered function on both OSes and
+Linux sampler has 52 uncovered lines / 8 functions. No failed producer establishes a floor.
+
+Linux `collect.ts` misses are lines 155-157 (bounded stdout's row cap) and 240-241 (process-row
+admission cap). The new two-row fixed-output test exercises both. Linux's other 47 missing lines
+and all eight missing functions belong to Darwin-native FFI paths in `darwin.ts`; those remain
+owned, measured and recorded as a per-OS floor. No platform file is excluded.
+
+The hosted session-kit miss is `formatMessage`'s sort comparator in `src/monitor/messages.ts:38`.
+A direct fixture now combines unsorted retained/dropped matches, checks exact first/last text,
+ordered match IDs and unchanged input. It does not rely on manager flush timing.
+
+The historical facade regression's `71b0aea` base anchors membership only. Its old advisory
+pre-main budgets are not a second ratchet base: the CLI still enforces all budget/membership
+ratchets against the actual PR base, which has no policy yet. The historical membership test
+still rejects every missing classification receipt, including dev-tools' newly validated barrel.
+
+Global enforcement remains disabled pending final evidence. Independent Bun signals remain
+report-only even when they have zero misses. Eligible runtime tooling/examples remain explicit
+measurement-pending blockers; a global flip must not silently exempt them. Linux's Darwin-native
+per-OS floor is not a claim that those paths execute on Linux.
