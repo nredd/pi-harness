@@ -283,7 +283,7 @@
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "native/macos/bridge.swift", "native/macos/agent_cursor.swift", "native/macos/agent_cursor_motion.swift", "native/macos/activity_glow.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/docs-generators/*.mjs", "docs/**/*.ts", "docs/**/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "native/macos/bridge.swift", "native/macos/agent_cursor.swift", "native/macos/agent_cursor_motion.swift", "native/macos/activity_glow.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/docs-generators/*.mjs", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
       "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }],
       "status": "pending",
       "goal": "excluded",

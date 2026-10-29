@@ -170,7 +170,11 @@ The generated stats CLI bundle has a reasoned generated-artifact exclusion; its 
 `computer-use` is explicitly **not measured, tracked**. Its custom platform/native scripts
 continue running, but no invented instrumentation or 100% claim is made. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
-the global flip. Existing native/platform checks remain unchanged. `dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
+the global flip. Imported documentation-site TS/TSX/configuration, documentation generators and
+optional `scripts/rust-coverage.mjs` tooling are likewise inventory-only under that exclusion, not
+new measured or gated domains. The opt-in Rust report is never collected by normal checks; its
+mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
+`dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
 Python `scripts/*.py` and `integration/harness/*.py`, boundary probes, executable providers and
