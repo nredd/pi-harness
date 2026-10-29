@@ -185,6 +185,14 @@ def test_discovery_reads_all_pages(monkeypatch: pytest.MonkeyPatch) -> None:
     run, jobs, artifacts = evidence()
 
     def api(path: str) -> Any:
+        """Replay paginated run, current-attempt job and artifact responses.
+
+        Parameters:
+            path (str): Read-only Actions endpoint requested by the real verifier.
+
+        Returns:
+            Any: Slurped synthetic REST pages for the requested collection or detail.
+        """
         if "/workflows/" in path:
             return [{"workflow_runs": [{"id": 1}]}, {"workflow_runs": [{"id": 42}]}]
         if path.endswith("/runs/1"):
