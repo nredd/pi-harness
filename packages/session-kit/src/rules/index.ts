@@ -49,7 +49,7 @@ export function loadRuleDir(dir: string, source: "project" | "user"): Rule[] {
 	return rules;
 }
 
-export function register(pi: ExtensionAPI, _config: KitConfig, userAgentDir = agentDir(), homeDir = homedir()): void {
+export function register(pi: ExtensionAPI, _config: KitConfig, userAgentDir = agentDir(), homeDir?: string): void {
 	let injected = new Set<string>();
 	let turnCount = 0;
 
