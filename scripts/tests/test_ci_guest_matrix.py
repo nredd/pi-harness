@@ -452,7 +452,7 @@ def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
         assert " -c " not in boundary
         assert "--user pi-ci --exec bash -euo pipefail" in boundary
     setup = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
-    assert "--user root --exec useradd --create-home --shell /bin/bash pi-ci" in setup
+    assert "--user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci" in setup
 
 
 def test_guest_preflight_failure_is_recorded(tmp_path: Path) -> None:

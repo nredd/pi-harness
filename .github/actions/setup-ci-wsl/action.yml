@@ -32,7 +32,7 @@ runs:
           throw 'Ubuntu-24.04 is not listed as WSL version 2'
         }
         # Bootstrap apt as root via setup-wsl, but run every gate as an ordinary user.
-        wsl -d Ubuntu-24.04 --user root --exec useradd --create-home --shell /bin/bash pi-ci
+        wsl -d Ubuntu-24.04 --user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $env:WSL_HOST_WORKSPACE = $env:GITHUB_WORKSPACE
         $env:WSL_HOST_TEMP = $env:RUNNER_TEMP
