@@ -101,3 +101,25 @@ those inventories, falsify their goal or change global accounting semantics just
 report-only even when they have zero misses. Eligible runtime tooling/examples remain explicit
 measurement-pending blockers; a global flip must not silently exempt them. Linux's Darwin-native
 per-OS floor is not a claim that those paths execute on Linux.
+
+## WSL2 matrix reconciliation
+
+Main `f59b146a` (#206) moves WSL2 into `ci.yml`'s owned/contracts/stack matrix and restores
+strict up-to-date protection with 12 required contexts. The plain merge preserves its shared
+`setup-ci-tools` and guest adapter, with no rebase/force. The sole workflow conflict was the
+old native setup versus the new composite setup; the composite wins, while explicit offline
+reviewer binaries are retained (native Ubuntu apt, pinned macOS install-action, WSL setup apt).
+
+WSL2 coverage is explicitly Linux-like and **enforced**, not advisory: ordinary producer and
+accounting steps execute in Ubuntu's Linux filesystem, where `sys.platform` selects the existing
+Linux floors. A separate `coverage-wsl2` artifact preserves every independent signal. Neither
+native Windows coverage nor contract/stack scenario coverage is claimed. Never combine WSL and
+native Linux counters or use WSL evidence to substitute for a missing native artifact.
+
+Artifact actions run on the Windows host, so `wsl2_capture.sh` now mirrors only the declared
+LCOV locations and `coverage/summary.json` to the host before upload. It deletes stale host
+reports first. A real disposable guest/host filesystem regression checks exact contents and
+layout, prevents unrelated-file export, and verifies a subsequent empty capture clears all
+previous evidence. Producers/accounting still fail on missing reports; export does not invent
+coverage or erase their status. Full `make check-scripts`: 917 passed, plus 8 import-audit tests.
+The final 12-cell hosted run must establish WSL execution and complete artifact evidence.

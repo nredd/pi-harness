@@ -1,0 +1,43 @@
+name: Set up CI WSL guest
+description: Prepare one Linux filesystem checkout for the ordinary CI steps
+inputs:
+  owned:
+    description: Install Rust and nextest for owned gates
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Prepare LF checkout and early diagnostics
+      shell: pwsh
+      run: |
+        git config --local core.autocrlf false
+        git reset --hard HEAD
+        $diagnostics = Join-Path $env:RUNNER_TEMP 'wsl2-diagnostics'
+        New-Item -ItemType Directory -Force $diagnostics | Out-Null
+        Set-Content -Path (Join-Path $diagnostics 'capture-status.txt') -Value 'WSL guest has not started.'
+    - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
+      with:
+        distribution: Ubuntu-24.04
+        wsl-version: '2'
+        update: 'true'
+        additional-packages: build-essential curl fd-find git jq libatomic1 libssl-dev pkg-config python3 ripgrep tmux unzip xz-utils
+    - name: Assert WSL2 and prepare guest
+      shell: pwsh
+      env:
+        WSL_OWNED: ${{ inputs.owned }}
+      run: |
+        $listing = ((wsl --list --verbose) -join "`n") -replace ([char]0), ''
+        $listing
+        if ($listing -notmatch '(?m)^\s*\*?\s*Ubuntu-24\.04\s+\S+\s+2\s*$') {
+          throw 'Ubuntu-24.04 is not listed as WSL version 2'
+        }
+        # Bootstrap apt as root via setup-wsl, but run every gate as an ordinary user.
+        wsl -d Ubuntu-24.04 --user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $env:WSL_HOST_WORKSPACE = $env:GITHUB_WORKSPACE
+        $env:WSL_HOST_TEMP = $env:RUNNER_TEMP
+        $env:WSLENV = 'WSL_HOST_WORKSPACE/p:WSL_HOST_TEMP/p:WSL_OWNED'
+        $setup = (wsl -d Ubuntu-24.04 --exec wslpath -u "$env:GITHUB_WORKSPACE/scripts/wsl2_setup.sh").Trim()
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        wsl -d Ubuntu-24.04 --user pi-ci --exec bash -euo pipefail "$setup"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

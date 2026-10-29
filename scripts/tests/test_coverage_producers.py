@@ -142,6 +142,12 @@ def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
     assert "fetch-depth: 0" in owned
     assert "coverage/summary.json" in artifacts
     assert "lcov.info" in artifacts
+    # WSL runs ordinary producers/accounting inside Linux, but uploads from the Windows host.
+    export = owned.index(
+        "- uses: ./.github/actions/capture-ci-wsl", owned.index("- name: Coverage accounting")
+    )
+    assert export < owned.index("- name: Preserve independent coverage reports")
+    assert "name: coverage-${{ matrix.os }}" in artifacts
 
 
 def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
@@ -160,6 +166,10 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     verify = owned.index("Verify reviewer read dependencies")
     assert install < verify < owned.index("Owned gates (")
     assert "apt-get install --yes ripgrep fd-find" in owned
+    assert "matrix.os == 'ubuntu-24.04'" in owned
+    wsl = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
+    packages = wsl.split("additional-packages:", 1)[1].splitlines()[0].split()
+    assert {"ripgrep", "fd-find"}.issubset(packages)
     mac_install = owned.index("Install reviewer read dependencies (macOS)")
     assert mac_install < verify
     assert "tool: ripgrep@14.1.1,fd-find@10.2.0" in owned

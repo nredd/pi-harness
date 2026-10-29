@@ -34,8 +34,11 @@ cross-platform collector paths without removing guards.
 zero uncovered lines/functions. Schema version 2 keys each signal's transitional `max_uncovered`
 integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
 `linux` (`ubuntu-24.04`), never rounded
-percentages or platform averages. Windows and WSL coverage are **not measured**; the WSL scenario
-job is not an owned-source coverage measurement. Unsupported OSes and missing selected-OS floors
+percentages or platform averages. The `owned (wsl2)` cell runs the same producers inside Ubuntu
+on WSL2 and is explicitly **Linux-like, enforced**: guest `sys.platform == "linux"` selects the
+existing Linux floors. Native Windows coverage is not measured. WSL contract/stack scenarios
+remain separate acceptance evidence, not owned-source coverage. WSL reports are preserved as
+`coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
 fail closed, including when the global target is enabled. `enforce_target: false` is intentional; the final PR flips that field to
 `true`, without changing the accounting implementation. That flip applies to primary signals;
 independent runtime signals retain their declared enforcement modes. Primary signals of eligible packages always remain
@@ -281,14 +284,16 @@ The command also rejects npm workspaces missing from policy.
 
 ## Refresh floors from hosted artifacts
 
-Download each OS artifact from the same CI run, then print its measured counts and reviewable policy
+Download each runner artifact from the same CI run, then print its measured counts and reviewable policy
 diff (no policy files are modified, and measurement mode is explicitly **not a gate**):
 
 ```sh
 gh run download <run-id> -R nredd/pi-harness -n coverage-ubuntu-24.04 -D /tmp/cov-linux
 gh run download <run-id> -R nredd/pi-harness -n coverage-macos-14 -D /tmp/cov-darwin
+gh run download <run-id> -R nredd/pi-harness -n coverage-wsl2 -D /tmp/cov-wsl2
 uv run --locked --project integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json
 uv run --locked --project integration python scripts/coverage_accounting.py --measure --os darwin --reports-root /tmp/cov-darwin --summary /tmp/measured-darwin.json
+uv run --locked --project integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-wsl2 --summary /tmp/measured-wsl2.json
 ```
 
 Use a checkout matching the artifact's production source and inventory. `--reports-root` reads the
@@ -299,7 +304,12 @@ written or auto-committed. `--measure` rejects `--base` so it cannot be confused
 Replay the artifact as a gate by dropping `--measure` and adding `--base origin/main`; the summary's
 `measurement_only` is then false. Missing/inconsistent artifacts fail in either mode.
 
-Compare **two independent hosted runs on different commits**, per package/signal/OS. Do not retry
+Compare **two independent hosted runs on different commits**, per package/signal/runner.
+Validate WSL2 independently with `--os linux` and the same enforced floors as native Ubuntu;
+a complete WSL artifact cannot substitute for a missing native Linux or macOS artifact. Any
+WSL excess fails the owned gate: investigate/test the path, never widen a zero floor or call
+the WSL cell report-only. Guest-to-host export mirrors only declared LCOV paths and the summary,
+clears stale host reports, and precedes the Windows-hosted artifact action. Do not retry
 until green or widen beyond observed counts. Investigate changed counters; fix nondeterminism or
 retain the maximum actually observed per counter with a documented cause and follow-up issue.
 Never average platforms or combine their maxima. Once the policy is on main, the base ratchet still

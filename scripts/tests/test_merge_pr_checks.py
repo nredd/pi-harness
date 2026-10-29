@@ -10,7 +10,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import re
 import subprocess
 import sys
 import textwrap
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -42,6 +42,16 @@ class Replay(checks.GitHub):
             ValueError: The captured fixture contains invalid JSON.
         """
         self.data = json.loads(FIXTURE.read_text())
+        # Keep the historical capture unchanged. Explicit synthetic successors extend
+        # its replacement-run proof to the current matrix, not hosted WSL evidence.
+        present = {job["name"] for job in self.data["new_jobs"]}
+        template = next(job for job in self.data["new_jobs"] if job["name"] in checks.EXPECTED_MATRIX)
+        for index, name in enumerate(sorted(checks.EXPECTED_MATRIX - present), start=1):
+            job = copy.deepcopy(template)
+            job["id"] += index * 100000
+            job["name"] = name
+            job["html_url"] = f"https://github.com/{REPO}/actions/runs/{job['run_id']}/job/{job['id']}"
+            self.data["new_jobs"].append(job)
         self.old_run = self.data["runs"][1]
         self.commands: list[tuple[str, ...]] = []
         self.binary = "/fixture/gh"
@@ -328,21 +338,19 @@ def test_workflow_matrix_contract() -> None:
         None: Completes after comparing the workflow matrices with the gate contract.
     """
     workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
-    matrices = re.findall(r"      matrix:\n(.*?)(?=    runs-on:)", workflow, re.DOTALL)
-    os_matrix = "        os: [ubuntu-24.04, macos-14]\n"
-    assert matrices == [
-        os_matrix,
-        os_matrix,
-        os_matrix
-        + (
-            "        stack: [personal, local]\n"
-            "        include:\n"
-            "          - os: ubuntu-24.04\n"
-            "            platform: linux-x64\n"
-            "          - os: macos-14\n"
-            "            platform: darwin-arm64\n"
-        ),
-    ]
+    jobs = yaml.safe_load(workflow)["jobs"]
+    expected = set()
+    for name in ("owned", "contracts", "stack"):
+        matrix = jobs[name]["strategy"]["matrix"]
+        assert matrix["os"] == ["ubuntu-24.04", "macos-14", "wsl2"]
+        assert "exclude" not in matrix
+        for os_name in matrix["os"]:
+            if name == "stack":
+                assert matrix["stack"] == ["personal", "local"]
+                expected |= {f"stack ({os_name}, {stack})" for stack in matrix["stack"]}
+            else:
+                expected.add(f"{name} ({os_name})")
+    assert expected == checks.EXPECTED_MATRIX
     assert all(f"    name: {name}\n" in workflow for name in checks.MATRIX)
 
 
