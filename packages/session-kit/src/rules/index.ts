@@ -23,8 +23,8 @@ import {
 	TOOLS_WITH_PATH,
 } from "./logic.ts";
 
-function agentDir(): string {
-	return process.env.PI_CODING_AGENT_DIR ?? path.join(homedir(), ".pi", "agent");
+function agentDir(homeDir = homedir()): string {
+	return process.env.PI_CODING_AGENT_DIR ?? path.join(homeDir, ".pi", "agent");
 }
 
 /** Load every rule in a directory; a missing directory or unreadable file is skipped. */
@@ -49,7 +49,7 @@ export function loadRuleDir(dir: string, source: "project" | "user"): Rule[] {
 	return rules;
 }
 
-export function register(pi: ExtensionAPI, _config: KitConfig, userAgentDir = agentDir()): void {
+export function register(pi: ExtensionAPI, _config: KitConfig, userAgentDir = agentDir(), homeDir = homedir()): void {
 	let injected = new Set<string>();
 	let turnCount = 0;
 
@@ -70,7 +70,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, userAgentDir = ag
 		if (event.isError || !TOOLS_WITH_PATH.has(event.toolName)) return;
 		const raw = event.input.path;
 		if (typeof raw !== "string") return;
-		const rel = relativeToCwd(raw, ctx.cwd);
+		const rel = relativeToCwd(raw, ctx.cwd, homeDir);
 		if (rel === undefined) return;
 
 		const rules = [
