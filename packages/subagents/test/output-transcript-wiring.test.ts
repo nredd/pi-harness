@@ -21,8 +21,8 @@ vi.mock("../src/output-file.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
 import { createOutputFilePath, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -66,16 +66,13 @@ describe("output_transcript agent wiring", () => {
   let agentDir: string;
   let previousCwd: string;
   let previousAgentDir: string | undefined;
-  let previousHome: string | undefined;
 
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), "pi-output-transcript-cwd-"));
     agentDir = mkdtempSync(join(tmpdir(), "pi-output-transcript-agent-"));
     previousCwd = process.cwd();
     previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    previousHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.env.HOME = agentDir;
     mkdirSync(join(cwd, ".pi"), { recursive: true });
     writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
     mkdirSync(join(agentDir, "agents"), { recursive: true });
@@ -92,8 +89,6 @@ describe("output_transcript agent wiring", () => {
     process.chdir(previousCwd);
     if (previousAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    if (previousHome == null) delete process.env.HOME;
-    else process.env.HOME = previousHome;
     rmSync(cwd, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
     setOutputTranscriptDefault(true);

@@ -130,12 +130,13 @@ third-party skills, global `AGENTS.md`, `mcp.json`, router/subagents/enterprise 
 
 Byte-identical to the source (`cmp`): 6 of 7 agents (all but `architect`) and `coding-like-redd`.
 
-Also byte-identical: `lib/footer-cache.ts`. `lib/footer-quota.ts` differs only by Biome formatting
-(tabs, 120 columns, wrapping, trailing commas). The initial import of `extensions/expanded-footer.ts`
+Also byte-identical: `lib/footer-cache.ts`. `lib/footer-quota.ts` differed only by Biome formatting
+(tabs, 120 columns, wrapping, trailing commas) at import; it has since gained reset times, no OpenAI 5h,
+provider-wrapped narrow rows and router window-identity (`spanSource`) handling for OpenAI (see the preset README). The initial import of `extensions/expanded-footer.ts`
 and the two migrated helper tests was likewise formatting-only plus sibling import paths, with no
 assertion changes. The native footer port adds the optional `createExpandedFooter({ clock })` seam,
 retaining real defaults, and switches both helper tests to static sibling imports and Vitest. Their
-assertions remain unchanged. Package-native host scenarios now live in `packages/preset/test/scenarios/`.
+assertions remain unchanged at that point; `footer-quota.test.mjs` later dropped its OpenAI 5h and row-text expectations and gained reset, DST and window-identity tests (see the preset README). Package-native host scenarios now live in `packages/preset/test/scenarios/`.
 
 New in this package (not from the source): `test/{discovery,resources,package}.test.ts`,
 `test/support.ts`.
@@ -170,6 +171,31 @@ earlier `yellow` `#d08b30`, which is no longer shipped.
 Protected `main` review statuses (separate Standards and Spec reviewers on the final HEAD) apply to
 every PR, including this import. Commit this source snapshot only after the full owned-code gate passes, including the historical
 native sandbox regression. This is not evidence for the candidate/full-stack release gate.
+
+## Core release signer trust
+
+Core release SSH tag verification lives in `nredd/pi`'s
+`.github/workflows/fork-release.yml`, not this snapshot importer. Its allowlist retains the
+MacBook key `SHA256:YHzjQXY3SPl20zOMMOoNz8o4dk+eOZEi8FA+vS6nwFY` for historical tags and
+adds the owner-approved Mac mini (`nick-mac`) key
+`SHA256:+16+g7/7VKDJ2svgiuGIbfPnPF9pKKSU/h51+K9iHdk` for future tags, including `.8`.
+Both use principal `nredd`, restricted to SSH namespace `git`.
+
+Trust-location audit:
+
+- `scripts/release_manifest.py` records Gitlink/package identities; it does not verify SSH signatures.
+- `integration/harness/release.py` verifies core checksums and, for non-legacy releases,
+  GitHub attestations pinned to `nredd/pi/.github/workflows/fork-release.yml` and the exact tag ref.
+- `forks/pi` is a Gitlink, not another allowlist; signer changes are reviewed in the core fork.
+  This update does not move that Gitlink or select a new release.
+- Dotfiles' `dot_local/lib/pi-stack.mjs` verifies the promoted stack's
+  `nredd/pi-harness/.github/workflows/promote-stack.yml` attestation; `pi-package-sync`
+  consumes the verified snapshot. Neither has a core SSH signer allowlist.
+- `nredd/homebrew-tap` pins core tarball checksums; it has no SSH tag-verification policy.
+
+GitHub workflow attestation identities are not SSH signing keys. Updating the core's
+allowlist does not replace those consumer checks or authorize promotion/publication.
+See [stack promotion](stack-promotion.md) for the unchanged consumer trust policy.
 
 ## Development toolchain
 

@@ -25,7 +25,7 @@ import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { resolveAgentDir } from "./home-paths.js";
 import { isSymlink, isUnsafeName, safeReadFile } from "./memory.js";
 
 export interface PreloadedSkill {
@@ -33,21 +33,22 @@ export interface PreloadedSkill {
   content: string;
 }
 
-export function preloadSkills(skillNames: string[], cwd: string): PreloadedSkill[] {
-  return skillNames.map((name) => ({ name, content: loadSkillContent(name, cwd) }));
+export function preloadSkills(skillNames: string[], cwd: string, homeDir = homedir()): PreloadedSkill[] {
+  return skillNames.map((name) => ({ name, content: loadSkillContent(name, cwd, homeDir) }));
 }
 
-function loadSkillContent(name: string, cwd: string): string {
+function loadSkillContent(name: string, cwd: string, homeDir: string): string {
   if (isUnsafeName(name)) {
     return `(Skill "${name}" skipped: name contains path traversal characters)`;
   }
   // `trusted`: user-owned root, symlinks followed. Project roots stay strict.
+  const agentDir = resolveAgentDir(homeDir);
   const roots = [
     { path: join(cwd, ".pi", "skills"), trusted: false }, // project — Pi standard
     { path: join(cwd, ".agents", "skills"), trusted: false }, // project — Agent Skills spec
-    { path: join(getAgentDir(), "skills"), trusted: true }, // user — Pi standard
-    { path: join(homedir(), ".agents", "skills"), trusted: true }, // user — Agent Skills spec
-    { path: join(homedir(), ".pi", "skills"), trusted: true }, // legacy global, pre-Pi
+    { path: join(agentDir, "skills"), trusted: true }, // user — Pi standard
+    { path: join(homeDir, ".agents", "skills"), trusted: true }, // user — Agent Skills spec
+    { path: join(homeDir, ".pi", "skills"), trusted: true }, // legacy global, pre-Pi
   ];
   for (const root of roots) {
     const content = findInRoot(root.path, name, root.trusted);

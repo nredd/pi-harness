@@ -32,7 +32,7 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
+import subagentsExtension from "./helpers/home-extension.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -108,7 +108,6 @@ describe("issue #174: foreground agent that hits max_turns", () => {
   let agentDir: string;
   let prevCwd: string;
   let prevAgentDir: string | undefined;
-  let prevHome: string | undefined;
 
   beforeEach(() => {
     // Hermetic cwd + global dir, scheduling off — same isolation as
@@ -117,9 +116,7 @@ describe("issue #174: foreground agent that hits max_turns", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-174-"));
     agentDir = mkdtempSync(join(tmpdir(), "pi-174-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    prevHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.env.HOME = agentDir;
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
     writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
@@ -130,8 +127,6 @@ describe("issue #174: foreground agent that hits max_turns", () => {
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
     vi.restoreAllMocks();

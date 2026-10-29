@@ -204,7 +204,6 @@ describe("discovery through pi's configured packages", () => {
   let tmpDir: string;
   let agentDir: string;
   let projectDir: string;
-  let originalHome: string | undefined;
   let originalAgentDir: string | undefined;
 
   beforeEach(() => {
@@ -213,16 +212,12 @@ describe("discovery through pi's configured packages", () => {
     projectDir = join(tmpDir, "project");
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(join(projectDir, ".pi"), { recursive: true });
-    originalHome = process.env.HOME;
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.HOME = tmpDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
     resetPackageState();
   });
 
   afterEach(() => {
-    if (originalHome == null) delete process.env.HOME;
-    else process.env.HOME = originalHome;
     if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
     resetPackageState();
