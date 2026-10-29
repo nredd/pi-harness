@@ -62,8 +62,9 @@ DOCUMENTED_TESTS = (
 )
 SPAWNS = {"run", "Popen", "check_output", "check_call", "call", "getoutput", "getstatusoutput"}
 INSTALLER_SPAWNS = {
-    "install.py": {"node_version", "install_packages", "post_check"},
+    "install.py": {"node_version", "post_check"},
     "release.py": {"gitlink_tag", "verify_attestation", "fetch_release"},
+    "runtime_lock.py": {"run_npm", "replay_source"},
 }
 
 
@@ -809,7 +810,7 @@ def assert_spawn_policy(source: str, module: str) -> None:
     assert len(all_spawns) == len(found)
 
 
-@pytest.mark.parametrize("module", ["install.py", "release.py"])
+@pytest.mark.parametrize("module", ["install.py", "release.py", "runtime_lock.py"])
 def test_installer_subprocess_inventory_has_no_environment_bypass(module: str) -> None:
     """All installer-owned spawns use the shared helper; infrastructure modules are excluded.
 
@@ -825,7 +826,7 @@ def test_installer_subprocess_inventory_has_no_environment_bypass(module: str) -
     assert_spawn_policy(Path(release.__file__).with_name(module).read_text(), module)
 
 
-@pytest.mark.parametrize("module", ["install.py", "release.py"])
+@pytest.mark.parametrize("module", ["install.py", "release.py", "runtime_lock.py"])
 @pytest.mark.parametrize("kind", ["function", "module", "alias"])
 def test_spawn_inventory_rejects_added_bypass(module: str, kind: str) -> None:
     """Prove the AST gate detects a newly added unfiltered subprocess in either module.
@@ -881,11 +882,11 @@ def test_install_docs_define_scope_and_independent_authentication(topic: str) ->
         if topic == "child-scope"
         else (
             "## Network trust",
-            "NO independently authenticated integrity",
-            "generated npm lockfile",
-            "npm install",
-            "issues/169",
-            "AFTER installation",
+            "Snapshot-v1 is still strict evidence-only data",
+            "dependency-graph.json",
+            "before npm consumes them",
+            "upstream publisher identity",
+            "dotfiles' existing `pi install` path is UNCHANGED",
         )
     )
     for term in required:

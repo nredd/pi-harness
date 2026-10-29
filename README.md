@@ -7,7 +7,9 @@ benchmarks, and exact-stack release tooling. The Pi core retains its upstream hi
 - Dotfiles selects pins and applies them with `chezmoi update --upgrade`; require `pi-profile doctor`
   after activation.
 - Anyone else installs a promoted, attested `stack/<sha>` with one `uvx` command, no dotfiles or GitHub
-  login: [install](docs/install.md). macOS arm64 and Linux x86-64 only.
+  login: [install](docs/install.md). macOS arm64 and Linux x86-64 only. The hardened installer requires
+  both attested snapshot and complete runtime graph assets; old snapshot-only promotions are unsupported.
+  Source-selected npm locks replay offline with scripts disabled: [details](docs/runtime-locks.md).
 - CI builds the Bun standalone from the Gitlinked core and runs the stack D/E scenarios on it on darwin-arm64 and
   linux-x64; seven auth-interception cases are explicit skips. linux-arm64 is NOT RUN. Details [here](docs/bun-prerequisite.md).
 - CI also runs the existing personal-stack Node D/E entrypoint once on a hosted `windows-2022` runner inside verified

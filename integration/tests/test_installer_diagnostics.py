@@ -25,7 +25,7 @@ from urllib.parse import quote, unquote
 
 import pytest
 
-from harness import install, release
+from harness import install, release, runtime_lock
 from harness.install import verify_release, verify_snapshot
 from tests.test_install import SHA, Harness, shim_core_tarball
 
@@ -39,7 +39,7 @@ SCANNER_WORK_PER_CHARACTER = 12
 SCANNER_WORK_ALLOWANCE = 64
 BOUNDARIES = (
     "node",
-    "pi-install",
+    "runtime-npm",
     "post-check",
     "gitlink",
     "gh",
@@ -197,9 +197,15 @@ def prepare_boundary(
     }
     direct = {
         "node": FailureBoundary(partial(install.node_version, str(tool)), install.UnsupportedError),
-        "pi-install": FailureBoundary(
-            partial(install.install_packages, harness.verified, tool, tmp_path / "staging"),
-            install.InstallError,
+        "runtime-npm": FailureBoundary(
+            partial(
+                runtime_lock.run_npm,
+                str(tool),
+                ["ci", "--offline", "--ignore-scripts"],
+                tmp_path,
+                runtime_lock.npm_env(tmp_path / "runtime-config"),
+            ),
+            runtime_lock.RuntimeLockError,
         ),
         "post-check": FailureBoundary(partial(install.post_check, harness.layout), install.InstallError),
         "gitlink": FailureBoundary(partial(release.gitlink_tag, tmp_path), RuntimeError),
@@ -232,7 +238,7 @@ def prepare_boundary(
             partial(verify_release, harness.snapshot, str(tool), tmp_path), install.VerificationError
         )
     elif name == "core-stage":
-        monkeypatch.setattr(install, "fetch_release", failed_operation)
+        monkeypatch.setattr(install, "install_core", failed_operation)
         plan = install.plan_install(harness.layout, harness.verified)
         boundary = FailureBoundary(
             partial(install.stage, harness.layout, harness.verified, plan, tmp_path / "staging"),
