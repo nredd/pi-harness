@@ -162,7 +162,9 @@ Verification-only harnesses outside conventional test directories are classified
 each file. Blanket globs, missing files, duplicate entries and overlap with owned production
 source fail. Classification also applies to imported LCOV records. A verification label does
 not waive the base-tree ratchet: moving previously owned production into this classification
-still requires a reasoned `reclassifications` entry.
+still requires a reasoned `reclassifications` entry. Root-level `.test.mjs` files such as
+`scripts/check-biome-paths.test.mjs` need their own verification-helper entry; classifying the
+implementation helper does not implicitly classify its regression test.
 
 Shipped runtime code is NEVER a verification helper. In particular, computer-use's published
 `setup-helper.mjs`, `build-native.mjs` and `src/platform/macos/helper-path.mjs` remain owned,
