@@ -259,12 +259,9 @@ describe("TodoOverlay — collapse/expand state", () => {
 		return { overlay, widget, requestRender, tool: captured.tools.get("todo")! };
 	}
 
-	it("a new TodoOverlay starts with collapsed = false (renders the full view, not the 3-line collapsed shape)", async () => {
+	it("a new TodoOverlay starts expanded", async () => {
 		const { widget } = await setupRegistered();
-		// Full render: heading + 1 remaining task + trailing spacer = 3 visible-ish
-		// rows — but crucially NOT the collapsed "└─ ctrl+shift+t to expand" hint.
-		const out = widget.render(200).join("\n");
-		expect(out).not.toContain("ctrl+shift+t to expand");
+		expect(widget.render(200)[0]).toContain("▾");
 	});
 
 	it("toggleCollapse() flips collapsed and calls requestRender(true) (forced, distinct from the non-forced requestRender())", async () => {
@@ -272,13 +269,13 @@ describe("TodoOverlay — collapse/expand state", () => {
 		// Collapse → toggles to collapsed and forces a redraw.
 		overlay.toggleCollapse();
 		expect(requestRender).toHaveBeenCalledWith(true);
-		expect(widget.render(200).some((l) => l.includes("ctrl+shift+t to expand"))).toBe(true);
+		expect(widget.render(200)[0]).toContain("▸");
 
 		requestRender.mockClear();
 		// Expand → toggles back to expanded and forces a redraw again.
 		overlay.toggleCollapse();
 		expect(requestRender).toHaveBeenCalledWith(true);
-		expect(widget.render(200).some((l) => l.includes("ctrl+shift+t to expand"))).toBe(false);
+		expect(widget.render(200)[0]).toContain("▾");
 	});
 
 	it("left-clicking the heading toggles collapse and forces a redraw", async () => {

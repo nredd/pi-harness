@@ -104,7 +104,7 @@ describe("rpiv-todo — collapse/expand shortcut registration", () => {
 		expect(ctx.ui.setWidget as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
 	});
 
-	it("handler toggles the overlay when it is registered (render shape flips to the collapsed hint)", async () => {
+	it("handler toggles the overlay when it is registered", async () => {
 		const { captured, sessionStart, toolEnd, tool } = setup();
 		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
 		await sessionStart?.({} as never, ctx as never);
@@ -128,17 +128,20 @@ describe("rpiv-todo — collapse/expand shortcut registration", () => {
 		};
 		const widget = factory({ requestRender }, identityTheme);
 
-		// Before: expanded render carries the task, not the collapse hint.
-		expect(widget.render(200).some((l) => l.includes("ctrl+shift+t to expand"))).toBe(false);
+		const expanded = widget.render(200);
+		expect(expanded).toHaveLength(3);
+		expect(expanded[0]).toContain("▾");
 
-		// Toggle → collapses; forced redraw on the height step.
+		// Toggle -> collapses; forced redraw on the height step.
 		await captured.shortcuts.get("ctrl+shift+t")?.handler?.(ctx as never);
 		expect(requestRender).toHaveBeenCalledWith(true);
-		expect(widget.render(200).some((l) => l.includes("ctrl+shift+t to expand"))).toBe(true);
+		const collapsed = widget.render(200);
+		expect(collapsed).toHaveLength(2);
+		expect(collapsed[0]).toContain("▸");
 
-		// Toggle again → re-expands; hint gone.
+		// Toggle again -> re-expands.
 		await captured.shortcuts.get("ctrl+shift+t")?.handler?.(ctx as never);
-		expect(widget.render(200).some((l) => l.includes("ctrl+shift+t to expand"))).toBe(false);
+		expect(widget.render(200)[0]).toContain("▾");
 	});
 });
 
@@ -187,7 +190,7 @@ describe("rpiv-todo — collapsed on resume", () => {
 		await sessionStart({ reason: "resume" } as never, ctx as never);
 		const factory = (ctx.ui.setWidget as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
 		const widget = factory({ requestRender: () => {} }, makeTheme());
-		expect(widget.render(200).some((l: string) => l.includes("to expand"))).toBe(false);
+		expect(widget.render(200)[0]).toContain("▾");
 	});
 
 	it.each([
@@ -212,6 +215,6 @@ describe("rpiv-todo — collapsed on resume", () => {
 			theme: unknown,
 		) => { render: (w: number) => string[] };
 		const widget = factory({ requestRender: () => {} }, makeTheme());
-		expect(widget.render(200).some((l) => l.includes("to expand"))).toBe(collapsed);
+		expect(widget.render(200)[0]).toContain(collapsed ? "▸" : "▾");
 	});
 });
