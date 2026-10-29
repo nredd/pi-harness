@@ -79,8 +79,8 @@ export const DEFAULT_PROMPT_GUIDELINES: string[] = [
 	"Subject must be short and imperative (e.g. 'Research existing tool'); description is for long-form detail. activeForm is a present-continuous label shown while in_progress.",
 ];
 
-export function registerTodoTool(pi: ExtensionAPI): void {
-	const guidance = validateGuidanceFields(loadConfig().guidance);
+export function registerTodoTool(pi: ExtensionAPI, options: { homeDir?: string } = {}): void {
+	const guidance = validateGuidanceFields(loadConfig(options.homeDir).guidance);
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: TOOL_LABEL,

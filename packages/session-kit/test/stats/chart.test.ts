@@ -96,6 +96,7 @@ describe("plot", () => {
 		expect(niceStep(1.2)).toBe(2);
 		expect(niceStep(2.2)).toBe(3);
 		expect(niceStep(14)).toBe(15);
+		expect(niceStep(8.1)).toBe(10);
 	});
 
 	it("stretches buckets over columns, every bucket value landing exactly on a column", () => {

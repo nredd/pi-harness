@@ -39,7 +39,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { resolveAgentDir } from "../home-paths.js";
 import { isSymlink, isUnsafeName, safeReadFile } from "../memory.js";
 import { isPackageResourceExcluded, packageWorkflowDirs, packageWorkflowFiles } from "../package-resources.js";
 import { hasMetaDeclaration } from "./meta.js";
@@ -61,12 +61,12 @@ const WORKFLOW_EXTENSION = ".js";
  * reaches this without an options bag travelling through `resolveWorkflowScript`,
  * `resolveWorkflowSource` and `readSavedWorkflow` purely to be consulted once.
  */
-export function savedWorkflowRoots(cwd: string): string[] {
+export function savedWorkflowRoots(cwd: string, homeDir?: string): string[] {
   return [
     join(cwd, ".pi", "workflows"),
     join(cwd, ".agents", "workflows"),
-    join(getAgentDir(), "workflows"),
-    ...packageWorkflowDirs(cwd),
+    join(resolveAgentDir(homeDir), "workflows"),
+    ...packageWorkflowDirs(cwd, { homeDir }),
   ];
 }
 
@@ -81,7 +81,7 @@ export type SavedWorkflow =
  * names that do exist — a model that guessed the name can correct itself from
  * the error instead of spending a turn asking.
  */
-export function readSavedWorkflow(name: string, cwd: string): SavedWorkflow {
+export function readSavedWorkflow(name: string, cwd: string, homeDir?: string): SavedWorkflow {
   const trimmed = name.trim();
   if (isUnsafeName(trimmed)) {
     return {
@@ -92,13 +92,13 @@ export function readSavedWorkflow(name: string, cwd: string): SavedWorkflow {
     };
   }
 
-  const roots = savedWorkflowRoots(cwd);
+  const roots = savedWorkflowRoots(cwd, homeDir);
   for (const root of roots) {
     if (isSymlink(root)) continue; // reject a symlinked root entirely, as skill-loader does
     const path = join(root, `${trimmed}${WORKFLOW_EXTENSION}`);
     // A `!` entry in the declaring package's manifest. Only ever true for a path
     // under a package root, so the local roots pay one set lookup for it.
-    if (isPackageResourceExcluded(path, cwd, "workflows")) continue;
+    if (isPackageResourceExcluded(path, cwd, "workflows", { homeDir })) continue;
     const script = safeReadFile(path);
     if (script === undefined) continue;
     // Found the file, so stop looking — a shadowing name that turns out not to
@@ -117,7 +117,7 @@ export function readSavedWorkflow(name: string, cwd: string): SavedWorkflow {
   // Last: a package that declared an individual file rather than a directory.
   // It carries no root to look a name up in, so it is matched by name here
   // instead — after every root, which keeps package scripts lowest-precedence.
-  const declared = packageWorkflowFiles(cwd).get(trimmed);
+  const declared = packageWorkflowFiles(cwd, { homeDir }).get(trimmed);
   if (declared !== undefined) {
     const script = safeReadFile(declared);
     if (script !== undefined) {
@@ -133,7 +133,7 @@ export function readSavedWorkflow(name: string, cwd: string): SavedWorkflow {
     }
   }
 
-  const known = listSavedWorkflows(cwd);
+  const known = listSavedWorkflows(cwd, homeDir);
   return {
     ok: false,
     message:
@@ -154,6 +154,7 @@ export function readSavedWorkflow(name: string, cwd: string): SavedWorkflow {
 export function resolveWorkflowSource(
   ref: { name?: string; scriptPath?: string },
   cwd: string,
+  homeDir?: string,
 ): SavedWorkflow {
   const path = ref.scriptPath?.trim();
   if (path !== undefined && path !== "") {
@@ -168,14 +169,14 @@ export function resolveWorkflowSource(
     }
   }
   const name = ref.name?.trim();
-  if (name !== undefined && name !== "") return readSavedWorkflow(name, cwd);
+  if (name !== undefined && name !== "") return readSavedWorkflow(name, cwd, homeDir);
   return { ok: false, message: "A workflow reference needs a `name` or a `scriptPath`." };
 }
 
 /** Every saved workflow name, de-duplicated across roots and sorted. */
-export function listSavedWorkflows(cwd: string): string[] {
+export function listSavedWorkflows(cwd: string, homeDir?: string): string[] {
   const names = new Set<string>();
-  for (const root of savedWorkflowRoots(cwd)) {
+  for (const root of savedWorkflowRoots(cwd, homeDir)) {
     if (!existsSync(root) || isSymlink(root)) continue;
     let entries: string[];
     try {
@@ -188,11 +189,11 @@ export function listSavedWorkflows(cwd: string): string[] {
       const name = entry.slice(0, -WORKFLOW_EXTENSION.length);
       if (isUnsafeName(name)) continue;
       const path = join(root, entry);
-      if (isPackageResourceExcluded(path, cwd, "workflows")) continue;
+      if (isPackageResourceExcluded(path, cwd, "workflows", { homeDir })) continue;
       if (isWorkflowFile(path)) names.add(name);
     }
   }
-  for (const [name, path] of packageWorkflowFiles(cwd)) {
+  for (const [name, path] of packageWorkflowFiles(cwd, { homeDir })) {
     if (isUnsafeName(name)) continue;
     if (isWorkflowFile(path)) names.add(name);
   }
@@ -228,10 +229,11 @@ function isWorkflowFile(path: string): boolean {
 export function resolveWorkflowScript(
   params: { script?: string; scriptPath?: string; name?: string },
   cwd: string,
+  homeDir?: string,
 ): { ok: true; script: string; scriptPath?: string } | { ok: false; message: string } {
   const path = params.scriptPath?.trim();
   if (path !== undefined && path !== "") {
-    const resolved = resolveWorkflowSource({ scriptPath: path }, cwd);
+    const resolved = resolveWorkflowSource({ scriptPath: path }, cwd, homeDir);
     return resolved.ok ? { ok: true, script: resolved.script, scriptPath: resolved.path } : resolved;
   }
   const script = params.script;
@@ -244,11 +246,11 @@ export function resolveWorkflowScript(
   // reference means.
   const name = params.name?.trim();
   if (name !== undefined && name !== "") {
-    const saved = resolveWorkflowSource({ name }, cwd);
+    const saved = resolveWorkflowSource({ name }, cwd, homeDir);
     return saved.ok ? { ok: true, script: saved.script, scriptPath: saved.path } : saved;
   }
 
-  const known = listSavedWorkflows(cwd);
+  const known = listSavedWorkflows(cwd, homeDir);
   return {
     ok: false,
     message:
