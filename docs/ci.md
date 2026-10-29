@@ -194,7 +194,7 @@ The required checks live in ruleset `main required checks` (id `25524267`, not c
 
 | Job | Runs | Proves |
 | --- | --- | --- |
-| `wsl2 (windows-2022)` | One `windows-2022` host with `Ubuntu-24.04` explicitly verified as WSL version 2. The Windows checkout is copied from `/mnt/...` to a non-`drvfs` WSL filesystem before executing the existing release fetcher and personal-stack D/E pytest entrypoint. | Real Node release-bundle Pi startup, text/JSON/RPC and extension discovery, installed personal-stack integration, process lifetime/output/auth seams, and the tmux footer resize boundary under WSL2. Bun is installed at the repository's pinned `1.3.14` only to keep the WSL toolchain identity aligned; this job does not run standalone Bun scenarios. |
+| `wsl2 (windows-2022)` | One `windows-2022` host with `Ubuntu-24.04` explicitly verified as WSL version 2. The Windows checkout is copied from `/mnt/...` to a non-`drvfs` WSL filesystem before executing the existing release fetcher and personal-stack D/E pytest entrypoint. | Real Node release-bundle Pi startup, text/JSON/RPC and extension discovery, installed personal-stack integration, process lifetime/output/auth seams, and the tmux footer resize boundary under WSL2. Bun is installed at the repository's pinned `1.4.4` only to keep the WSL toolchain identity aligned; this job does not run standalone Bun scenarios. |
 
 Root core overrides: before the WSL `npm ci`, the job installs the pinned official GitHub CLI with `scripts/install_gh_linux.sh` and runs `harness.release --verify-root-overrides`. Ubuntu 24.04's apt `gh` is 2.45 and has no `attestation` command, and the later `harness.release --gitlink` fetch of a non-legacy core tag needs it too. The script downloads `gh_2.103.2_linux_amd64.tar.gz` from the immutable `cli/cli` release, refuses anything but the pinned sha256 (`62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8`, confirmed with `gh release verify-asset v2.103.2 gh_2.103.2_linux_amd64.tar.gz --repo cli/cli`), and checks `attestation` exists. Bump the version and digest together after repeating that verification. `setup-wsl` does not forward Windows environment, so the step sets `GH_TOKEN: ${{ github.token }}` (read-only `contents: read`) with `WSLENV: GH_TOKEN/u`. The token is never written to a file or echoed. The CLI bootstrap, `npm ci` and `uv sync` run with `env -u GH_TOKEN`; verification and the later core fetch retain it. The script `unset`s it right after the core fetch, before any scenario runs. `python3` is installed via `additional-packages`. The job stays a single WSL job on the Linux filesystem.
 
@@ -392,7 +392,7 @@ Tap and profile pin bumps require green CI on the candidate stack, not local `pi
 A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
 `stack` still tests the released Homebrew-shaped Node bundle. Fork release `v1.3.0-nredd.7`
 publishes the coding-agent and pi-tui npm tarballs, no standalone assets. Each OS's existing `stack (..., personal)` job also builds the exact
-Gitlinked source using `.bun-version` (1.3.14), the official `scripts/build-binaries.sh`, and frozen
+Gitlinked source using `.bun-version` (1.4.4), the official `scripts/build-binaries.sh`, and frozen
 release model data with `build:offline`. It does not depend on a future standalone release, commit
 binaries, or test a Node wrapper in place of the compiled executable.
 

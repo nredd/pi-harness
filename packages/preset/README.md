@@ -198,7 +198,7 @@ From the repository root:
 
 ```sh
 npm ci --ignore-scripts
-npm run check -w @nredd/pi-preset   # biome, strict tsc, Vitest on Node and Bun
+npm run check -w @nredd/pi-preset   # biome, strict tsc, full Vitest on Node and Bun 1.4.4
 ```
 
 Istanbul measurement commands, per-file before/after counts, default-timer/failure/replay

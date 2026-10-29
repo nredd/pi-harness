@@ -52,7 +52,7 @@ Where every e2e scenario moves in the verification rebuild: [verification rebuil
 What CI runs, what it does not, and the flake policy: [CI](docs/ci.md).
 
 Validated development toolchain: Node `26.12.0` (`.node-version`), Python `3.13.15`
-(`.python-version`), Bun `1.3.14` (`.bun-version`), npm `11.20.0` (`packageManager`), uv `0.13.1`.
+(`.python-version`), Bun `1.4.4` (`.bun-version`; upgrade evidence [here](docs/bun-upgrade.md)), npm `11.20.0` (`packageManager`), uv `0.13.1`.
 Fork build toolchains are separate, see [forks.md](docs/forks.md).
 
 Packages build and test against the core fork's `v1.3.0-nredd.7` coding-agent/TUI release tarballs (root `overrides`
