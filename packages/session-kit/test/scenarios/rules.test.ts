@@ -52,6 +52,26 @@ it("matching rule injects once after unmatched read", async () => {
 	expect(injectedRules(harness)).toEqual([{ rule: "project:ts.md" }]);
 });
 
+it("tree navigation rebuilds injected rules for the actual selected branch", async () => {
+	fixture = files();
+	const harness = await fixture.start(configFor("rules"));
+	const root = harness.sessionManager.appendCustomEntry("fixture:branch-root", {});
+	harness.setResponses([
+		tool("read", { path: "src/a.ts" }),
+		tool("read", { path: "src/b.ts" }),
+		fauxAssistantMessage("OK"),
+	]);
+	await harness.session.prompt("first branch");
+	expect(outcomes(harness, "read").map((result) => result.text.includes(RULE))).toEqual([true, false]);
+	expect(injectedRules(harness)).toEqual([{ rule: "project:ts.md" }]);
+	await harness.session.navigateTree(root, { summarize: false });
+	expect(injectedRules(harness)).toEqual([]);
+	harness.setResponses([tool("read", { path: "src/a.ts" }), fauxAssistantMessage("OK")]);
+	await harness.session.prompt("new branch");
+	expect(outcomes(harness, "read").at(-1)?.text).toContain(RULE);
+	expect(injectedRules(harness)).toEqual([{ rule: "project:ts.md" }]);
+});
+
 it("file-backed restore remembers injected rules", async () => {
 	fixture = files();
 	const first = await fixture.start(configFor("rules"));

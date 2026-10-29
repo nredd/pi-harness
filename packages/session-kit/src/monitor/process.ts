@@ -78,7 +78,8 @@ function wrap(child: ChildProcess, opts: SpawnOptions): MonitorProcess {
 	let hardTimer: NodeJS.Timeout | undefined;
 	let drainTimer: NodeJS.Timeout | undefined;
 	let exit: ExitInfo | undefined;
-	let finish: (info: ExitInfo) => void = () => {};
+	// The native Promise executor assigns this synchronously, before any child handlers register.
+	let finish!: (info: ExitInfo) => void;
 	const exited = new Promise<ExitInfo>((resolve) => {
 		finish = resolve;
 	});

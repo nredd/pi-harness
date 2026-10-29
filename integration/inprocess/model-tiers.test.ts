@@ -5,9 +5,11 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { createTestUiContext, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_AGENTS } from "../../packages/subagents/src/default-agents.ts";
 import { setAgentModels } from "../../packages/subagents/src/model-resolver.ts";
 import { setModelTiers, type TierDisclosure } from "../../packages/subagents/src/model-tiers.ts";
-import type { ChainEntry } from "../../packages/subscription-router/src/config.ts";
+import { hasFallback } from "../../packages/subagents/src/ui/fallback-flag.ts";
+import { type ChainEntry, parseConfig } from "../../packages/subscription-router/src/config.ts";
 import {
 	createSubscriptionRouter,
 	type SubscriptionRouterOptions,
@@ -47,12 +49,36 @@ describe("model-tier/router stack", () => {
 		);
 	}
 
+	/**
+	 * Build the real router extension from the shipped `cheap` profile.
+	 *
+	 * @param policy - Exhaustion policy to substitute into the profile for this scenario.
+	 * @returns An extension factory backed by this stack's real router dependencies.
+	 */
 	function router(policy: "wait" | "fail" = "wait"): ExtensionFactory {
+		const [cheap] = parseConfig(
+			JSON.parse(
+				readFileSync(
+					new URL("../../packages/subscription-router/examples/subscription-router.json", import.meta.url),
+					"utf8",
+				),
+			),
+		);
+		if (!cheap) throw new Error("Missing shipped cheap profile");
+		expect(cheap).toMatchObject({
+			id: "cheap",
+			strategy: "ordered",
+			exhaustion: { policy: "wait" },
+			chain: [
+				{ provider: "anthropic", id: "claude-haiku-5-5" },
+				{ provider: "openai-codex", id: "gpt-6-luna" },
+			],
+		});
 		const options: SubscriptionRouterOptions = {
 			config: {
 				ok: true,
 				profiles: [
-					{ id: "cheap", name: "Cheap", strategy: "balanced", chain: CHAIN, exhaustion: { policy } },
+					{ ...cheap, chain: CHAIN, exhaustion: { policy } },
 					{ id: "default", name: "Default must never run", strategy: "ordered", chain: [CHAIN[0]] },
 				],
 			},
@@ -81,6 +107,140 @@ describe("model-tier/router stack", () => {
 				| undefined;
 		};
 	}
+
+	it.each(["routed", "static", "unmapped", "unavailable", "enterprise"] as const)(
+		"built-in Explore resolves @cheap visibly under explicit error policies: %s",
+		async (kind) => {
+			stack = await GoalStack.create();
+			expect(DEFAULT_AGENTS.get("Explore")?.model).toBe("@cheap");
+			configure(kind === "static" ? [ref(0)] : undefined, {
+				agentModels: {},
+				...(kind === "unmapped" || kind === "enterprise" ? { modelTiers: {} } : {}),
+			});
+			if (kind === "enterprise")
+				writeFileSync(
+					join(stack.home.root, "agent/enterprise.local.json"),
+					JSON.stringify({
+						version: 1,
+						subagents: { modelAliases: { "claude-haiku-4-5": [ref(0)] } },
+					}),
+					{ mode: 0o600 },
+				);
+			const physical = stack.registerPhysical(CHAIN);
+			const h = await stack.start([await stack.subagents(), ...(kind === "unavailable" ? [] : [router()])], {
+				useModelRuntimeStream: true,
+			});
+			physical[0]?.setResponses([fauxAssistantMessage("EXPLORE CHEAP ANSWER")]);
+			h.setResponses([
+				tool("Agent", {
+					subagent_type: "Explore",
+					description: "built-in cheap",
+					prompt: "answer",
+					run_in_background: false,
+				}),
+				fauxAssistantMessage("DRIVER DONE"),
+			]);
+			await h.session.prompt("explore");
+			const result = outcomes(h, "Agent")[0];
+			if (kind === "unmapped" || kind === "unavailable") {
+				expect(result?.isError, JSON.stringify(result)).toBe(true);
+				expect(result?.text).toContain(`@cheap is ${kind}`);
+				expect(physical.map((p) => p.state.callCount)).toEqual([0, 0]);
+			} else {
+				expect(result?.isError).toBe(false);
+				expect(result?.text).toContain(`Model: @cheap -> ${ref(0)}`);
+				expect(result?.text).toContain(kind === "routed" ? "via router/cheap" : "(static");
+				expect(result?.text).toContain("EXPLORE CHEAP ANSWER");
+				expect(physical.map((p) => p.state.callCount)).toEqual([1, 0]);
+			}
+		},
+	);
+
+	it("inherits an unmapped built-in Explore tier visibly on a fresh install", async () => {
+		stack = await GoalStack.create();
+		const completed: { id: string }[] = [];
+		const h = await stack.start(
+			[
+				await stack.subagents(),
+				router(),
+				(api) => {
+					api.events.on("subagents:completed", (event) => completed.push(event as { id: string }));
+				},
+			],
+			{ useModelRuntimeStream: true },
+		);
+		h.setResponses([
+			tool("Agent", {
+				subagent_type: "Explore",
+				description: "fresh-install Explore",
+				prompt: "answer",
+				run_in_background: false,
+			}),
+			fauxAssistantMessage("PARENT INHERITED"),
+			fauxAssistantMessage("DRIVER DONE"),
+		]);
+		await h.session.prompt("explore");
+		const result = outcomes(h, "Agent")[0];
+		expect(result?.isError).toBe(false);
+		expect(result?.text).toContain("Note: model tier @cheap is unmapped; inheriting the parent model.");
+		expect(result?.text).toContain("PARENT INHERITED");
+		const completedId = completed[0]?.id;
+		if (!completedId) throw new Error("Fresh-install Explore did not complete");
+		const record = manager().getRecord(completedId);
+		if (!record) throw new Error("Fresh-install Explore record missing");
+		expect(record.modelTier).toEqual({ kind: "unmapped", tier: "cheap" });
+		expect(hasFallback(record)).toBe(true);
+	});
+
+	it.each(["inherit", "error"] as const)("handles a static cheap tier with no credentials: %s", async (policy) => {
+		stack = await GoalStack.create();
+		configure(["no-tier-credentials/a", "no-tier-credentials/b"], {
+			agentModels: {},
+			modelResolution: { onUnavailable: policy, onUnmapped: "error" },
+		});
+		const completed: { id: string }[] = [];
+		const h = await stack.start(
+			[
+				await stack.subagents(),
+				router(),
+				(api) => {
+					api.events.on("subagents:completed", (event) => completed.push(event as { id: string }));
+				},
+			],
+			{ useModelRuntimeStream: true },
+		);
+		h.setResponses([
+			tool("Agent", {
+				subagent_type: "Explore",
+				description: "credentialless static cheap",
+				prompt: "answer",
+				run_in_background: false,
+			}),
+			fauxAssistantMessage("PARENT INHERITED"),
+			fauxAssistantMessage("DRIVER DONE"),
+		]);
+		await h.session.prompt("explore");
+		const result = outcomes(h, "Agent")[0];
+		if (policy === "error") {
+			expect(result?.isError, JSON.stringify(result)).toBe(true);
+			expect(result?.text).toContain("Model tier @cheap is unavailable.");
+			expect(completed).toEqual([]);
+			return;
+		}
+		expect(result?.isError).toBe(false);
+		expect(result?.text).toContain("Note: model tier @cheap is unavailable; inheriting the parent model.");
+		expect(result?.text).toContain("PARENT INHERITED");
+		const completedId = completed[0]?.id;
+		if (!completedId) throw new Error("Credentialless Explore did not complete");
+		const record = manager().getRecord(completedId);
+		if (!record) throw new Error("Credentialless Explore record missing");
+		expect(record.modelTier).toEqual({
+			kind: "unavailable",
+			tier: "cheap",
+			tried: ["no-tier-credentials/a", "no-tier-credentials/b"],
+		});
+		expect(hasFallback(record)).toBe(true);
+	});
 
 	it.each(["Agent", "nested", "RPC", "mention"] as const)(
 		"real-router %s honors wildcard and definition tiers",

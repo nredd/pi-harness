@@ -3,20 +3,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Dynamic import below keeps production modules away from the owner's home.
+// Pass the temporary home through the production seam rather than mutating HOME.
 const home = mkdtempSync(join(tmpdir(), "rpiv-todo-bun-"));
-process.env.HOME = home;
-process.env.USERPROFILE = home;
 process.env.PI_OFFLINE = "1";
 delete process.env.PI_CODING_AGENT_DIR;
-delete process.env.XDG_CONFIG_HOME;
+process.env.XDG_CONFIG_HOME = join(home, ".config");
 const { settledRow } = await import("./settled-row.ts");
 afterAll(() => rmSync(home, { recursive: true, force: true }));
 
 for (const action of ["update", "delete"] as const) {
 	describe(`settled ${action} live fallback`, () => {
 		it("invalidates the real collapsed TUI row", async () => {
-			const fixture = await settledRow(action);
+			const fixture = await settledRow(action, home);
 			try {
 				expect(fixture.screen()).toContain("original subject");
 				fixture.change("changed subject");

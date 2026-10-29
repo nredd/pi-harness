@@ -34,10 +34,8 @@ export const DEFAULT_AGENTS: Map<string, AgentConfig> = new Map([
       builtinToolNames: READ_ONLY_TOOLS,
       extensions: true,
       skills: true,
-      // Exact Haiku stopgap: a target-local alias wins; otherwise the selector's
-      // explicit legacy table binds this name to anthropic/claude-haiku-4-5.
-      // Never infer a newer sibling or another provider.
-      model: "claude-haiku-4-5",
+      // Bind the role per machine, not to a provider or model generation.
+      model: "@cheap",
       systemPrompt: `# CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS
 You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
 Your role is EXCLUSIVELY to search and analyze existing code. You do NOT have access to file editing tools.

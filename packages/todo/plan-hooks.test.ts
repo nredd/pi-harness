@@ -1,8 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import registerTodo from "./index.ts";
-import { PLAN_REMINDER_MARKER } from "./plan-hooks.ts";
+import registerTodo from "./.test-support/home-fixtures.ts";
+import { PLAN_REMINDER_MARKER, remindedSinceLastPrompt } from "./plan-hooks.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import { getState } from "./state/store.ts";
 import { __resetState } from "./todo.ts";
@@ -63,6 +63,40 @@ function text(result: { content: Array<{ type: string; text?: string }> } | unde
 
 beforeEach(() => __resetState());
 afterEach(() => __resetState());
+
+describe("prompt-less settlement", () => {
+	it.each([{ messages: [] }, { messages: [{ role: "assistant" }] }])(
+		"still drafts a reminder for %j",
+		async ({ messages }) => {
+			expect(remindedSinceLastPrompt(messages)).toBe(false);
+			const { handler, announce } = setup();
+			const ctx = createMockCtx({ sessionId: "s1" });
+			await handler("session_start")({}, ctx);
+			await announce(approval("p1"));
+			expect(
+				await handler("agent_before_settle")(
+					{
+						outcome: "completed",
+						entries: [],
+						context: { contextMessages: messages },
+					},
+					ctx,
+				),
+			).toEqual({
+				continue: true,
+				entries: [
+					{
+						type: "custom_message",
+						customType: PLAN_REMINDER_MESSAGE_TYPE,
+						content: PLAN_REMINDER_MARKER,
+						display: false,
+						details: { open: [1, 2, 3] },
+					},
+				],
+			});
+		},
+	);
+});
 
 describe("plan approval event", () => {
 	it("seeds verbatim plan todos for the live session and persists a snapshot", async () => {

@@ -64,6 +64,26 @@ test("exactly the seven agents ship, each a well-formed definition", () => {
 	}
 });
 
+test("shell-less agents disclose their limits in the first sentence and stop on blocked commands", () => {
+	for (const agent of AGENTS) {
+		const { frontmatter, body } = frontmatterOf(`agents/${agent}.md`);
+		const description = String(frontmatter.description);
+		const firstSentence = description.split(/[.!?](?:\s|$)/)[0] ?? "";
+		if (["architect", "code-reviewer", "critic", "researcher"].includes(agent)) {
+			assert.ok(firstSentence.includes("no shell/ssh: cannot run commands"), agent);
+			assert.ok(body.includes("FIRST turn, before any tool calls"), agent);
+			assert.ok(body.includes("stop rather than spending a run on partial substitutes"), agent);
+		} else {
+			assert.ok(!description.includes("no shell/ssh"), agent);
+		}
+	}
+	assert.ok(
+		String(frontmatterOf("agents/critic.md").frontmatter.description).includes(
+			"except existing tests via py_test/cargo_test",
+		),
+	);
+});
+
 test("agents carry no model or logical-role references (strict roles are not implemented yet)", () => {
 	for (const file of [...walk("agents"), ...walk("skills")]) {
 		const text = readText(file);

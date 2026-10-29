@@ -6,10 +6,12 @@ References:
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 import subprocess
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from queue import Empty, Queue
 from threading import Thread
 from typing import TYPE_CHECKING, Any
@@ -21,8 +23,11 @@ from harness.paths import FAUX_EXTENSION, pi_command
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from types import TracebackType
+    from typing import BinaryIO
 
     from harness.sandbox import Sandbox
+
+LOGGER = logging.getLogger(__name__)
 
 MAX_OUTPUT = 8 * 1024 * 1024
 
@@ -188,14 +193,35 @@ class RpcProcess:
     def _stderr(self) -> None:
         """Drain diagnostics so a failed loader cannot block startup."""
         stderr = self.process.stderr
-        assert stderr is not None
+        assert isinstance(stderr, io.TextIOWrapper)
         size = 0
-        for chunk in iter(lambda: stderr.read(4096), ""):
-            size += len(chunk.encode())
-            if size > MAX_OUTPUT:
-                self.process.kill()
-                break
-            self.stderr.append(chunk)
+        # Popen's text wrapper normalizes newlines and rejects invalid UTF-8. Keep
+        # bounded original bytes on disk; decode only the assertion-message view.
+        evidence: BinaryIO | None = None
+        try:
+            evidence = self.stderr_path.open("wb")
+        except Exception:
+            LOGGER.warning("Could not open RPC stderr evidence; continuing bounded drainage")
+        try:
+            for chunk in iter(lambda: stderr.buffer.read1(4096), b""):
+                size += len(chunk)
+                if size > MAX_OUTPUT:
+                    self.process.kill()
+                    break
+                self.stderr.append(chunk.decode(errors="replace"))
+                if evidence is not None:
+                    try:
+                        evidence.write(chunk)
+                        evidence.flush()
+                    except Exception:
+                        LOGGER.warning("Could not write RPC stderr evidence; continuing bounded drainage")
+                        with suppress(Exception):
+                            evidence.close()
+                        evidence = None
+        finally:
+            if evidence is not None:
+                with suppress(Exception):
+                    evidence.close()
 
     def send(self, command: dict[str, Any]) -> None:
         """Send one RPC JSON record.
@@ -281,4 +307,3 @@ class RpcProcess:
             self.process.stdout.close()
             self.process.stderr.close()
             self.log_path.write_text("".join(json.dumps(event) + "\n" for event in self.events))
-            self.stderr_path.write_text("".join(self.stderr))

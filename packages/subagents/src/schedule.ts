@@ -53,6 +53,7 @@ export interface NewJobInput {
 
 /** Optional in-process scheduling dependencies; omitted clock uses native time. */
 export interface SubagentSchedulerOptions {
+  homeDir?: string;
   clock?: Clock;
 }
 
@@ -65,7 +66,7 @@ export class SubagentScheduler {
   private ctx: ExtensionContext | undefined;
   private manager: AgentManager | undefined;
 
-  constructor(options: SubagentSchedulerOptions = {}) {
+  constructor(private readonly options: SubagentSchedulerOptions = {}) {
     this.clock = options.clock ?? realClock;
   }
 
@@ -251,6 +252,7 @@ export class SubagentScheduler {
     const dispatch = resolveSpawnType(job.subagent_type);
     const config = dispatch.ok ? getAgentConfig(dispatch.type) : undefined;
     const selection = dispatch.ok ? selectModel({
+      homeDir: this.options.homeDir,
       agentType: dispatch.type, definitionModel: config?.model, agentLabel: config?.displayName,
       paramModel: job.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd,
     }) : dispatch.message;
