@@ -175,7 +175,7 @@ RESOURCE_SAMPLER_FILES = (
     ),
 )
 # Exact published release consumers install from the registry; never a range, workspace or file spec.
-RESOURCE_SAMPLER_VERSION = "0.1.1"
+RESOURCE_SAMPLER_VERSION = "0.2.0"
 # The hostile child puts a random secret in argv[0], its process title and (Linux) comm.
 SAMPLER_HOSTILE_CHILD = """process.title = process.env.S;
 if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
