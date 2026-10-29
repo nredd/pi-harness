@@ -105,7 +105,7 @@ start gate when present; legacy queued resumes retain the clock-driven fallback.
 
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `test:bun`. The four session scenario
 files (`test/{session-scenarios,fleet-session,viewer-session,worktree-isolation-e2e}.test.ts`) run under
-both Vitest and Bun 1.3.14 on core `v1.3.0-nredd.6` release tarballs. They use exported `createHarness`
+both Vitest and Bun 1.4.4 on core `v1.3.0-nredd.6` release tarballs. They use exported `createHarness`
 and `createInteractiveHarness`/`VirtualTerminal`, real child sessions and git, one injected extension
 clock, promise-held tools/streams and raw SGR mouse input. Homes, settings and provider credentials
 are fixtures; no installed pi, tmux or real-clock sleeps are needed. Existing old-host strict-mode
