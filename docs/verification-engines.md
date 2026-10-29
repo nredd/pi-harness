@@ -3,9 +3,11 @@
 Phases 1 and 2 of [spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
 [#160](https://github.com/nredd/pi-harness/issues/160). Vitest is the owned TypeScript tool;
 Node stays primary because it ships today. Bun remains required for the standalone target.
-No coverage-provider, threshold, required-check-name or runtime-pin change is included here.
+The phase 1/2 migration did not change coverage providers, thresholds or required check names.
+The separate approved D7 toolchain upgrade selects Bun 1.4.4; evidence and remaining gaps are
+[here](bun-upgrade.md).
 
-| Workspace | Node | Pinned Bun 1.3.14 |
+| Workspace | Node | Pinned Bun 1.4.4 |
 | --- | --- | --- |
 | `subscription-router` | Full Vitest + guard | Full Vitest + guard |
 | `preset` | Full Vitest + guard | Full Vitest + guard |
@@ -79,7 +81,7 @@ node ../../scripts/run-vitest.ts bun --coverage --coverage.provider=istanbul \
 ```
 
 Keep the sampler's `--maxWorkers=1`. Install the Istanbul provider version compatible with the
-pinned Vitest. Istanbul works on pinned Bun 1.3.14; do not substitute its broken V8 provider or
+pinned Vitest. Istanbul remains the provider on Bun 1.4.4; do not substitute the V8 provider or
 Bun-native coverage flags. Both `text` and `lcov` reporters are mandatory. Set explicit
 per-signal source inventories and matching instrumentation includes in #162, including
 never-imported files where full-source coverage is claimed; test counts alone are not source

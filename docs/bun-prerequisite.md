@@ -6,7 +6,7 @@ Current CI scope (2026-10-20):
   two OSes and two stacks. `owned`'s Bun package/in-process tests were not standalone coverage.
   The release API for `v1.3.0-nredd.7` confirms the coding-agent and pi-tui npm tarballs and no standalone archive
 - Each existing `stack (..., personal)` job builds Gitlink `2bfb8e7c61d35167b09f8ce70693df39660fc197`
-  (`v1.3.0-nredd.7`) using root `.bun-version` (1.3.14); the core has no `.bun-version` file.
+  (`v1.3.0-nredd.7`) using root `.bun-version` (1.4.4; upgrade evidence [here](bun-upgrade.md)); the core has no `.bun-version` file.
   They restore npm release model data, run the official `forks/pi/scripts/build-binaries.sh`
   with `--offline-model-data`, and execute the native archive on macOS ARM64 and Linux x64.
   Each build is reused for both explicit stacks. No binaries are committed or published
