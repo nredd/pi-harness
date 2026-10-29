@@ -1019,7 +1019,7 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     workflow = (pc.REPO_ROOT / ".github/workflows/publish.yml").read_text()
     assert "tags: ['@nredd/*@*']" in workflow
     assert "cancel-in-progress: false" in workflow
-    assert workflow.count("id-token: write") == 1
+    assert workflow.count("id-token: write") == 2  # Isolated attestor and npm publisher.
     assert workflow.count("contents: write") == 1
     assert "environment: npm" in workflow
     assert "secrets." not in workflow
@@ -1032,6 +1032,22 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     assert "npm pack" not in workflow  # Packing and release checks live in the tested Python module.
     assert "needs_fork_contract" not in workflow
     assert "directory == 'preset'" not in workflow
+
+
+def compile_native_fixture(root: Path, descriptor: rd.ReleaseDescriptor) -> str:
+    """Emit fresh fixture payloads only after the release builder deletes imported bytes.
+
+    Parameters:
+        root (Path): Staged package workspace.
+        descriptor (rd.ReleaseDescriptor): Selected native requirements.
+
+    Returns:
+        str: Compiler fixture diagnostics.
+    """
+    for relative in descriptor.native_artifacts:
+        assert not (root / relative).exists()
+        (root / relative).write_text("fresh compiler fixture")
+    return "substituted compiler"
 
 
 @pytest.mark.parametrize("contract", nr.CONTRACTS, ids=lambda c: c.directory)
@@ -1054,6 +1070,7 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
     """
     descriptor = rd.descriptor_for(contract.name)
     assert descriptor is not None
+    monkeypatch.setattr(sys, "platform", descriptor.native_build_platform or sys.platform)
     verify_args = [command[1:] for command in descriptor.verify_commands]
     verify_events = [args[0] for args in verify_args]
     events: list[str] = []
@@ -1077,6 +1094,9 @@ def test_verify_checks_then_packs_and_routes_exact_bytes(
             assert args in verify_args
             events.append(args[0])
             return "substituted package check"
+        if tool == "node" and descriptor.native_build_commands:
+            assert (tool, *args) in descriptor.native_build_commands
+            return compile_native_fixture(root, descriptor)
         return original_command(root, tool, *args, timeout=timeout)
 
     def pack(c: pc.PackageContract, dest: Path, sandbox: pc.Sandbox, source: Path) -> pc.PackedArtifact:

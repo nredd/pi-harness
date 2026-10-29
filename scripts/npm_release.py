@@ -515,6 +515,83 @@ def emit_outputs(**values: str) -> None:
                 stream.write(f"{key}={value}\n")
 
 
+def build_native_workspace(repo: Path, descriptor: rd.ReleaseDescriptor, work: Path) -> Path:
+    """Compile payloads in a disposable package copy, never the installed helper.
+
+    Parameters:
+        repo (Path): Exact checked-out source.
+        descriptor (rd.ReleaseDescriptor): Native build policy and commands.
+        work (Path): Temporary parent directory.
+
+    Returns:
+        Path: Original workspace for nonnative packages, otherwise the compiled copy.
+
+    Raises:
+        ReleaseError: If the host cannot build the required native payloads.
+    """
+    workspace = release_workspace(repo, descriptor)
+    if not descriptor.native_build_commands:
+        return workspace
+    if sys.platform != descriptor.native_build_platform:
+        raise ReleaseError(f"Native release requires platform '{descriptor.native_build_platform}'")
+    staged = work / "native-source"
+    shutil.copytree(workspace, staged, ignore=shutil.ignore_patterns("node_modules", "target"))
+    # No committed prebuilt may survive as a successful compiler's missing output.
+    for payload in native_matches(staged, descriptor):
+        payload.unlink()
+    for cmd in descriptor.native_build_commands:
+        LOGGER.info(command(staged, cmd[0], *cmd[1:], timeout=1200))
+    validate_native_sources(staged, descriptor)
+    return staged
+
+
+def check_built_payloads(workspace: Path, tarball: Path, descriptor: rd.ReleaseDescriptor) -> None:
+    """Require the packed native bytes to equal the newly compiled outputs.
+
+    Parameters:
+        workspace (Path): Disposable compiled workspace.
+        tarball (Path): Accepted pack-once candidate.
+        descriptor (rd.ReleaseDescriptor): Native artifact requirements.
+
+    Returns:
+        None: Every packed payload matches the compiler output.
+    """
+    with tarfile.open(tarball, "r:gz") as archive:
+        for payload in native_matches(workspace, descriptor):
+            name = f"package/{payload.relative_to(workspace).as_posix()}"
+            member = archive.getmember(name)
+            stream = archive.extractfile(member) if member.isfile() else None
+            if stream is None or stream.read() != payload.read_bytes():
+                raise ReleaseError(f"Packed native payload differs from compiled output: '{name}'")
+
+
+def native_check(repo: Path, output: Path) -> None:
+    """Build and pack computer-use in CI without a release tag or desktop actions.
+
+    Parameters:
+        repo (Path): PR checkout.
+        output (Path): New external artifact directory.
+
+    Returns:
+        None: Both built payloads passed the packed Mach-O contract.
+    """
+    if output.exists() or output.is_relative_to(repo):
+        raise ReleaseError(f"Artifact directory must be new and outside the checkout: '{output}'")
+    descriptor = rd.descriptor_for("@nredd/pi-computer-use")
+    if descriptor is None:
+        raise ReleaseError("Missing computer-use descriptor")
+    with tempfile.TemporaryDirectory(prefix="native-check-") as temporary:
+        work = Path(temporary)
+        workspace = build_native_workspace(repo, descriptor, work)
+        output.mkdir(parents=True)
+        sandbox = pc.Sandbox(work / "pack", pc.locate_tools())
+        artifact = pc.pack(descriptor.contract, output, sandbox, workspace)
+        validate_native_tarball(artifact.path, descriptor)
+        check_built_payloads(workspace, artifact.path, descriptor)
+        for arch in ("arm64", "x64"):
+            LOGGER.info(pc.check_macos_helper(artifact.path, arch))
+
+
 def verify(repo: Path, target: Target, output: Path) -> Identity:
     """Install, check, pack once, exercise those bytes, and record checksums plus a release manifest.
 
@@ -537,11 +614,13 @@ def verify(repo: Path, target: Target, output: Path) -> Identity:
     contract = descriptor.contract
     with tempfile.TemporaryDirectory(prefix="npm-release-") as temporary:
         work = Path(temporary)
+        workspace = build_native_workspace(repo, descriptor, work)
         sandbox = pc.Sandbox(work / "pack", pc.locate_tools())
         artifact = pc.pack(contract, output, sandbox, workspace)
         if artifact.version != target.version:
             raise ReleaseError("Packed version differs from release tag")
         validate_native_tarball(artifact.path, descriptor)
+        check_built_payloads(workspace, artifact.path, descriptor)
         supplied = {target.directory: artifact.path}
         stock = work / "stock"
         evidence: dict[str, str] = {}
@@ -891,14 +970,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "stage", choices=["preflight", "verify", "publish-check", "registry-check", "stack-check"]
+        "stage",
+        choices=["preflight", "verify", "publish-check", "registry-check", "stack-check", "native-check"],
     )
-    parser.add_argument("--tag", required=True)
+    parser.add_argument("--tag")
     parser.add_argument("--repo-root", type=Path, default=pc.REPO_ROOT)
     parser.add_argument("--artifact-dir", type=Path)
     args = parser.parse_args(argv)
     repo = args.repo_root.resolve()
     try:
+        if args.stage == "native-check":
+            if args.artifact_dir is None:
+                raise ReleaseError("This stage requires `--artifact-dir`")
+            native_check(repo, args.artifact_dir.resolve())
+            return 0
+        if args.tag is None:
+            raise ReleaseError("This stage requires `--tag`")
         if args.stage == "preflight":
             target = preflight(repo, args.tag)
             emit_outputs(
