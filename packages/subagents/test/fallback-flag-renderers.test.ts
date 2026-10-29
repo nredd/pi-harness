@@ -95,6 +95,7 @@ function fleetLine(rec: AgentRecord, width: number, renderTheme = theme): string
     notify: () => {}, custom: (() => new Promise(() => {})) as FleetUICtx["custom"],
   } as FleetUICtx);
   fleet.update();
+  fleet.toggleCollapse();
   const lines: string[] = factory({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, renderTheme).render(width);
   return lines.find(l => /\[fallback|\[fb\]|^\s*[●○]\s+!/.test(l)) ?? lines.join("\n");
 }

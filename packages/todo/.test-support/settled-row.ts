@@ -6,18 +6,21 @@ import { commitState, setActiveRenderSession } from "../state/store.ts";
 import { registerTodoTool } from "../todo.ts";
 
 /** Mount a legacy settled result without a valid snapshot in the real cached TUI row. */
-export async function settledRow(action: "update" | "delete") {
+export async function settledRow(action: "update" | "delete", homeDir?: string) {
 	const terminal = new VirtualTerminal(120, 40);
 	const ui = await createInteractiveHarness({
 		terminal,
 		extensionFactories: [
 			(pi) => {
 				let definition: ToolDefinition<any, any, any> | undefined;
-				registerTodoTool({
-					registerTool: (tool) => {
-						definition = tool;
-					},
-				} as ExtensionAPI);
+				registerTodoTool(
+					{
+						registerTool: (tool) => {
+							definition = tool;
+						},
+					} as ExtensionAPI,
+					{ homeDir },
+				);
 				if (!definition) throw new Error("todo tool missing");
 				pi.registerTool({
 					...definition,

@@ -12,13 +12,13 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type ExtensionFactory, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type ExtensionFactory, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, isKeyRelease, Key, matchesKey, type ScrollViewScrollbar, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { nanoid } from "nanoid";
 import { Type } from "typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
-import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
+import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
 import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.js";
@@ -39,6 +39,7 @@ import {
 } from "./detached-results.js";
 import { readEnabledModels, resolveEnabledModels } from "./enabled-models.js";
 import { GroupJoinManager } from "./group-join.js";
+import { resolveAgentDir } from "./home-paths.js";
 import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam, resolveJoinMode } from "./invocation-config.js";
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
@@ -77,6 +78,7 @@ import {
 } from "./ui/agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./ui/conversation-viewer.js";
 import { FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.js";
+import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "./ui/fleet-state.js";
 import { renderNotification } from "./ui/notification-view.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
@@ -292,12 +294,18 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
  *   agents and those with `extensions: false`.
  */
 export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
-  const tools = cfg?.builtinToolNames;
+  const denied = cfg?.disallowedTools ?? [];
+  const tools = denied.length > 0
+    ? (cfg?.builtinToolNames ?? BUILTIN_TOOL_NAMES).filter((tool) => !denied.includes(tool))
+    : cfg?.builtinToolNames;
+  // Only claim what is known at registration: extensions may supply command
+  // tools (including ssh_exec), so missing bash is not proof of no remote access.
+  const shellNote = tools && !tools.includes("bash") ? "; no built-in shell: cannot run bash commands" : "";
   // `isolated` overrides extensions to false in the runner, so both mean the
   // agent has no extension tools.
   const noExtensionTools = cfg?.isolated === true || cfg?.extensions === false;
   if (tools && tools.length === 0) {
-    return noExtensionTools ? "none" : "no built-ins, extension tools only";
+    return (noExtensionTools ? "none" : "no built-ins, extension tools only") + shellNote;
   }
   const isFullSet = !tools
     || (tools.length === BUILTIN_TOOL_NAMES.length && BUILTIN_TOOL_NAMES.every((t) => tools.includes(t)));
@@ -305,7 +313,7 @@ export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
   // Extension tools resolve at run time, so they cannot be enumerated here, but
   // omitting the fact reads as "built-ins only": an agent that can search the
   // web through an extension then looks web-less, and the work gets routed away.
-  return noExtensionTools ? builtins : `${builtins} + extension tools`;
+  return (noExtensionTools ? builtins : `${builtins} + extension tools`) + shellNote;
 }
 
 /** CLI flag that runs a workflow script at session start. */
@@ -325,6 +333,8 @@ export type { Clock, TimerHandle } from "./clock.js";
 
 /** Optional host dependencies, shared by the scheduler and completion delivery. */
 export interface SubagentsExtensionOptions {
+  /** Home for every user-scoped read and child run. Omitted uses host defaults at call time. */
+  homeDir?: string;
   clock?: Clock;
 }
 
@@ -337,6 +347,10 @@ export default createSubagentsExtension();
 
 function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions) {
   const clock = options.clock ?? realClock;
+  const getAgentDir = () => resolveAgentDir(options.homeDir);
+  const personalAgentsDir = () => personalAgentsDirAtHome(options.homeDir);
+  const locateAgentFile: typeof locateAgentFileAtHome = (name, path, cwd, source) =>
+    locateAgentFileAtHome(name, path, cwd, source, options.homeDir);
   // Child AgentSessions load normal extensions. Re-entering this extension there
   // would create another manager and leak handlers. Nested orchestration is
   // injected as scoped custom tools by the existing manager instead.
@@ -388,11 +402,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   });
 
   // Fuzzy model names ("opus") prefer what the user enabled in pi's settings.
-  setModelScopeProvider(registry => resolveEnabledModels(readEnabledModels(process.cwd()), registry, process.cwd()));
+  setModelScopeProvider(registry => resolveEnabledModels(readEnabledModels(process.cwd(), options.homeDir), registry, process.cwd(), options.homeDir));
 
   // Read directly rather than waiting for applyAndEmitLoaded below: these decide
   // the initial load, which happens hundreds of lines before settings are applied.
-  const bootSettings = loadSettings(process.cwd());
+  const bootSettings = loadSettings(process.cwd(), options.homeDir);
   let strictAgentFiles = bootSettings.strictAgentFiles === true;
   // Strict agent files fail a bind by throwing the host's `ExtensionStartupError`
   // from `session_start`. A host without that class would silently degrade to
@@ -417,7 +431,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   /** Reload agents from package/global/project agent dirs and merge with defaults (called on init and each Agent invocation). */
   const reloadCustomAgents = (strict = false) => {
-    const userAgents = loadCustomAgents(process.cwd(), strict);
+    const userAgents = loadCustomAgents(process.cwd(), strict, { homeDir: options.homeDir });
     registerAgents(userAgents);
   };
 
@@ -627,7 +641,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   function deliverDetachedResult(result: DetachedResult) {
     try {
-      if (result.record) pi.appendEntry("subagents:record", result.record);
+      if (result.record) {
+        pi.appendEntry("subagents:record", result.record);
+        fleet.ingestFailure(result.record);
+        fleet.update();
+      }
       const details = result.details as NotificationDetails;
       outbox.add({
         ids: [details.id, ...(details.others?.map(other => other.id) ?? [])],
@@ -654,6 +672,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       return;
     }
 
+    if (!record.resultConsumed) fleet.ingestFailure(record);
     // Emit lifecycle event based on terminal status
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
     const eventData = buildEventData(record);
@@ -761,7 +780,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   }, (record, message) => {
     if (!isTopLevelAgent(record)) return;
     pi.events.emit("subagents:steered", { id: record.id, message });
-  }, clock);
+  }, clock, options.homeDir);
 
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -876,6 +895,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   // --- Cross-extension RPC via pi.events ---
   let currentCtx: ExtensionContext | undefined;
+  let unwatchFleetSchedules: (() => void) | undefined;
   // RPC handlers + the `subagents:ready` broadcast are wired on `session_start`
   // (a bound lifecycle event), not at factory time. pi runs every extension
   // factory before the `extensions:` filter and only fires lifecycle events for
@@ -891,7 +911,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // Session-scoped: store is constructed inside session_start once sessionId
   // is available. Mirrors pi-chonky-tasks's session-scoped task store —
   // schedules reset on /new, restore on /resume.
-  const scheduler = new SubagentScheduler({ clock: options.clock });
+  const scheduler = new SubagentScheduler({ clock: options.clock, homeDir: options.homeDir });
 
   function startScheduler(ctx: ExtensionContext) {
     try {
@@ -913,6 +933,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // bound session_start, so a filtered-out activation never advertises (#142).
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    restoreFleetDisclosure(ctx);
     // Pi resolves project trust before the first session starts, so this is the
     // earliest honest answer. The activation-time load defaulted to untrusted,
     // so a trusted project's `packages[]` only becomes visible now.
@@ -940,6 +961,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       widget.setUICtx(ctx.ui);
       fleet.setUICtx(ctx.ui as any);
       watchHandoffKey(ctx.ui);
+      unwatchFleetSchedules ??= pi.events.on("subagents:scheduled", () => fleet.update());
     }
     manager.clearCompleted(true);
     const sessionFile = ctx.sessionManager?.getSessionFile?.();
@@ -954,6 +976,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // fires once per activation, but a double-bind must not leak listeners.
     if (!rpcHandle) {
       rpcHandle = registerRpcHandlers({
+        homeDir: options.homeDir,
         events: pi.events,
         pi,
         getCtx: () => currentCtx,
@@ -973,6 +996,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
             if (!record || record.parentAgentId) return false;
             if (record.status === "running" || record.status === "queued") return false;
             markConsumed(record, clock.now());
+            fleet.acknowledgeFailure(record.id);
             outbox.cancel(record.id);
             return true;
           },
@@ -985,6 +1009,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       pi.events.emit("subagents:ready", {});
     }
     if (isSchedulingEnabled() && !scheduler.isActive()) startScheduler(ctx);
+    fleet.update(); // restored quota-parked jobs have no agent record
     // Stack `@handle` suggestions on pi's built-in autocomplete. Registered at
     // most once per activation: pi appends wrappers to a list it never prunes,
     // so a second call would layer a duplicate provider on the first. TUI only
@@ -1201,7 +1226,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       // Not awaited: the clone runs a full model turn, and prompt() is blocked
       // until this hook returns. The user gets their prompt back immediately
       // and the agent appears in the widget when it starts.
-      void runMentionClone({ ctx, type, message: mention.message, agentTool: registeredAgentTool })
+      void runMentionClone({ ctx, type, message: mention.message, agentTool: registeredAgentTool, homeDir: options.homeDir })
         .then(async (result) => {
           if (result.spawned) return;
           // A clone that could not run must not swallow the mention: start the
@@ -1259,6 +1284,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // to this session (see detached-results.ts). Only agents that cannot outlive the
   // session are aborted.
   pi.on("session_shutdown", async (event: { reason?: string }) => {
+    fleet.flushState(); // appendEntry must run before this activation loses its context
     const sessionFile = currentCtx?.sessionManager?.getSessionFile?.();
     unwatchDetached?.();
     unwatchDetached = undefined;
@@ -1308,6 +1334,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     widget.dispose();
     outbox.dispose();
     fleet.dispose();
+    unwatchFleetSchedules?.();
+    unwatchFleetSchedules = undefined;
     unsubHandoffKey?.();
     unsubHandoffKey = undefined;
     handoffKeyUi = undefined;
@@ -1445,6 +1473,17 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     getFullscreenScrollbar, backgroundActionFor, isShowModelEnabled,
     // Agents the previous instance of this session left running (/reload, /new, ...).
     () => listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.()), clock);
+  fleet.setParkedSource(() => scheduler.list().filter(job => job.enabled && job.quotaParked && job.lastStatus !== "running").length);
+  /** Replay UI-only state from the active branch, like workflow/goal custom snapshots. */
+  function restoreFleetDisclosure(ctx: ExtensionContext): void {
+    fleet.restoreSession(() => ctx.sessionManager?.getBranch?.() ?? [], state => {
+      pi.appendEntry(FLEET_STATE_ENTRY, { ...state, version: FLEET_STATE_VERSION });
+    });
+  }
+  pi.on("session_tree", (_event, ctx) => {
+    restoreFleetDisclosure(ctx);
+    fleet.update();
+  });
   /** What the Agent tool row reads at render time, so its summary stays live. */
   const agentRowLive: AgentRowLive = {
     getRecord: (id) => manager.getRecord(id),
@@ -1777,6 +1816,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       setPackageWorkflows: setPackageWorkflowsGate,
     },
     (event, payload) => pi.events.emit(event, payload),
+    process.cwd(),
+    options.homeDir,
   );
 
   // ---- Agent tool ----
@@ -2093,10 +2134,11 @@ Terse command-style prompts produce shallow, generic work.
 
       // A live resume keeps its record's selection, ignoring new model inputs.
       const selection = params.resume ? undefined : selectModel({
+        homeDir: options.homeDir,
         agentType: subagentType, definitionModel: customConfig?.model, paramModel: params.model,
         parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd, agentLabel: customConfig?.displayName,
       });
-      if (typeof selection === "string") return textResult(selection);
+      if (typeof selection === "string") return { ...textResult(selection), isError: true };
       const tierBlock = selection?.tierBinding && !params.schedule ? await admitModelSelection(selection, ctx.modelRegistry, pi.events) : undefined;
       const model = selection?.model;
       const modelFallback = selection?.fallback;
@@ -2110,7 +2152,7 @@ Terse command-style prompts produce shallow, generic work.
       const isolation = resolvedConfig.isolation;
       // Undefined = the session cwd. The manager validates it (absolute,
       // existing directory) at spawn and again at start.
-      const cwd = resolveCwdParam(params.cwd, ctx.cwd);
+      const cwd = resolveCwdParam(params.cwd, ctx.cwd, options.homeDir);
       // Whether this spawn writes its .output transcript. Per-agent
       // frontmatter (`output_transcript`) wins; otherwise the project/global
       // default applies. `attachTranscript` below is the SOLE gate — every
@@ -2746,6 +2788,7 @@ Terse command-style prompts produce shallow, generic work.
       startedAt: task.startTime,
       ...(task.endTime !== undefined ? { completedAt: task.endTime } : {}),
       tokens: task.totalTokens,
+      observationKey: task,
     }));
   }
 
@@ -2762,6 +2805,7 @@ Terse command-style prompts produce shallow, generic work.
         args: task.args,
         signal: task.abortController.signal,
         host: createWorkflowHost({
+          homeDir: options.homeDir,
           pi,
           ctx,
           manager,
@@ -2919,6 +2963,7 @@ Terse command-style prompts produce shallow, generic work.
           ? { scriptPath: resumeFrom.scriptPath }
           : params,
         ctx.cwd,
+        options.homeDir,
       );
       if (!resolved.ok) return textResult(resolved.message);
 
@@ -3219,6 +3264,7 @@ Terse command-style prompts produce shallow, generic work.
       // Mark result as consumed — suppresses the completion notification
       if (record.status !== "running" && record.status !== "queued") {
         markConsumed(record, clock.now());
+        fleet.acknowledgeFailure(record.id);
         outbox.cancel(record.id);
       }
 
@@ -3305,7 +3351,7 @@ Terse command-style prompts produce shallow, generic work.
     if (!input) return "inherit";
     const label = getModelLabelFromConfig(input);
     if (!registry) return label;
-    const selection = selectModel({ agentType: type, definitionModel: cfg?.model, parentModel: undefined, registry, cwd: currentCtx?.cwd ?? process.cwd() });
+    const selection = selectModel({ homeDir: options.homeDir, agentType: type, definitionModel: cfg?.model, parentModel: undefined, registry, cwd: currentCtx?.cwd ?? process.cwd() });
     if (typeof selection === "string" || selection.outcome === "fallback" || !selection.model) {
       return `${label} (unavailable, fallback: inherit)`;
     }
@@ -3395,7 +3441,7 @@ Terse command-style prompts produce shallow, generic work.
    */
   function packageNameOf(cfg: AgentConfig | undefined): string | undefined {
     if (cfg?.source !== "package" || !cfg.sourcePath) return undefined;
-    return packageNameForPath(cfg.sourcePath, process.cwd());
+    return packageNameForPath(cfg.sourcePath, process.cwd(), "agents", { homeDir: options.homeDir });
   }
 
   async function showAllAgentsList(ctx: ExtensionCommandContext) {
