@@ -1,0 +1,169 @@
+"""Reproduce GitHub script generation and the pinned guest installer interface.
+
+References:
+    https://github.com/actions/runner/blob/main/src/Runner.Worker/Handlers/ScriptHandlerHelpers.cs
+    https://github.com/taiki-e/install-action/tree/8cca0918f8471c33515202b73f56ab27f2bed283
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import tarfile
+import textwrap
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("powershell_header", [False, True])
+def test_github_generated_step_header_breaks_only_the_old_boundary(
+    tmp_path: Path, powershell_header: bool
+) -> None:
+    """Execute the runner's documented PowerShell fixup under the real guest adapter.
+
+    Parameters:
+        tmp_path (Path): Disposable fixture directory.
+        powershell_header (bool): Apply the old pwsh shell's script-generation fixup.
+    """
+    guest = tmp_path / "home/pi-harness-ci"
+    (guest / ".ci-temp").mkdir(parents=True)
+    (guest / ".ci-temp/tool-path").write_text(os.environ["PATH"])
+    marker = tmp_path / "payload-ran"
+    payload = 'printf success > "$PAYLOAD_MARKER"\n'
+    generated = payload
+    if powershell_header:
+        generated = (
+            "$ErrorActionPreference = 'stop'\n"
+            + payload
+            + "\nif ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }\n"
+        )
+    step = tmp_path / "github-step"
+    step.write_text(generated)
+    env = dict(os.environ) | {
+        "HOME": str(tmp_path / "home"),
+        "WSL_STEP_DIRECTORY": ".",
+        "WSL_STEP_SCRIPT": str(step),
+        "PAYLOAD_MARKER": str(marker),
+    }
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/wsl2_run.sh")], env=env, capture_output=True, text=True, check=False
+    )
+    if powershell_header:
+        assert result.returncode == 127
+        assert "=: command not found" in result.stderr
+        assert not marker.exists()
+    else:
+        assert result.returncode == 0
+        assert marker.read_text() == "success"
+    assert step.read_text() == generated
+
+
+def test_native_shell_preserves_implicit_baseline_pipeline_behavior(tmp_path: Path) -> None:
+    """Keep native bash -e semantics rather than silently introducing pipefail.
+
+    Parameters:
+        tmp_path (Path): Disposable fixture directory.
+    """
+    step = tmp_path / "pipeline.sh"
+    step.write_text("false | true\nprintf survived\n")
+    baseline = subprocess.run(["/bin/bash", "-e", str(step)], capture_output=True, text=True, check=False)
+    changed = subprocess.run(
+        ["/bin/bash", "-e", "-o", "pipefail", str(step)], capture_output=True, text=True, check=False
+    )
+    assert baseline.returncode == 0
+    assert baseline.stdout == "survived"
+    assert changed.returncode == 1
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert workflow.count("github.workspace) || 'bash -e {0}' }}") == 3
+
+
+@pytest.mark.parametrize("references", [1, 0, 2])
+def test_guest_owned_tools_reuse_native_pinned_action(tmp_path: Path, references: int) -> None:
+    """Execute the installer against a local action fixture, refusing ambiguous pins.
+
+    Parameters:
+        tmp_path (Path): Disposable fixture directory.
+        references (int): Number of authoritative action references in the fixture.
+    """
+    repo = tmp_path / "repo"
+    action = repo / ".github/actions/setup-ci-tools/action.yml"
+    action.parent.mkdir(parents=True)
+    pin = "8cca0918f8471c33515202b73f56ab27f2bed283"
+    action.write_text(f"- uses: taiki-e/install-action@{pin}\n" * references)
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    for name in ("cargo", "rustc"):
+        command = commands / name
+        command.write_text("#!/bin/sh\nprintf 'fixture tool version\\n'\n")
+        command.chmod(0o755)
+    source = tmp_path / "action-source"
+    source.mkdir()
+    (source / "main.sh").write_text(
+        textwrap.dedent("""\
+        set -euo pipefail
+        test "$INPUT_TOOL" = rust+rustfmt+clippy,cargo-nextest
+        test "$INPUT_CHECKSUM" = true
+        test "$INPUT_FALLBACK" = none
+        test "$RUNNER_OS" = Linux
+        test "$RUNNER_ARCH" = X64
+        test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${DEFAULT_GITHUB_TOKEN:-}"
+        printf '%s\n' "$FAKE_BIN" >> "$GITHUB_PATH"
+        printf invoked > "$INSTALL_RECEIPT"
+        """)
+    )
+    archive = tmp_path / "action.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(source, arcname="install-action")
+    (commands / "curl").write_text(
+        textwrap.dedent(f"""\
+        #!{sys.executable}
+        import os
+        import shutil
+        import sys
+        from pathlib import Path
+        args = sys.argv[1:]
+        Path(os.environ['FETCH_RECEIPT']).write_text(args[-1])
+        shutil.copyfile(os.environ['FAKE_ARCHIVE'], args[args.index('--output') + 1])
+        """)
+    )
+    (commands / "curl").chmod(0o755)
+    receipt = tmp_path / "installed"
+    fetch = tmp_path / "fetched"
+    env = dict(os.environ) | {
+        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_BIN": str(commands),
+        "FAKE_ARCHIVE": str(archive),
+        "INSTALL_RECEIPT": str(receipt),
+        "FETCH_RECEIPT": str(fetch),
+        "GH_TOKEN": "sentinel",
+        "GITHUB_TOKEN": "sentinel",
+        "DEFAULT_GITHUB_TOKEN": "sentinel",
+    }
+    tools = tmp_path / "tools"
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/install_wsl_owned_tools.sh"), str(tools)],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if references != 1:
+        assert result.returncode != 0
+        assert not fetch.exists()
+        assert not receipt.exists()
+        return
+    assert result.returncode == 0, result.stderr
+    assert fetch.read_text() == f"https://codeload.github.com/taiki-e/install-action/tar.gz/{pin}"
+    assert receipt.read_text() == "invoked"
+    assert str(commands) in (tools / "owned-tool-path").read_text()
+    assert "sentinel" not in result.stdout + result.stderr
+    native = (ROOT / ".github/actions/setup-ci-tools/action.yml").read_text()
+    assert f"taiki-e/install-action@{pin}" in native
+    bootstrap = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    assert "cargo install cargo-nextest" not in bootstrap
+    assert "sh.rustup.rs" not in bootstrap

@@ -1,0 +1,44 @@
+name: Set up CI tools
+description: Install pinned tools in the selected execution environment
+inputs:
+  guest:
+    description: Execution environment, linux, macos or wsl2
+    required: true
+  owned:
+    description: Install the native owned-gate toolchain
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-ci-wsl
+      if: inputs.guest == 'wsl2'
+      with:
+        owned: ${{ inputs.owned }}
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      if: inputs.guest != 'wsl2'
+      with:
+        node-version-file: .node-version
+        cache: npm
+    - name: Pin npm to packageManager
+      if: inputs.guest != 'wsl2'
+      shell: bash
+      run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      if: inputs.guest != 'wsl2' && inputs.owned == 'true'
+      with:
+        bun-version-file: .bun-version
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      if: inputs.guest != 'wsl2'
+      with:
+        version: '0.13.1'
+    - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      if: inputs.guest != 'wsl2' && inputs.owned == 'true'
+      with:
+        tool: cargo-nextest
+    - name: Report native Rust and nextest identities
+      if: inputs.guest != 'wsl2' && inputs.owned == 'true'
+      shell: bash
+      run: |
+        rustc --version
+        cargo --version
+        cargo nextest --version
