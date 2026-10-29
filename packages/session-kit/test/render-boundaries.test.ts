@@ -39,6 +39,7 @@ describe("remaining render and pure boundaries", () => {
 	});
 
 	it("returns infinite headroom rather than a finite undersized tick above the numeric chart range", () => {
+		expect(niceStep(Number.POSITIVE_INFINITY)).toBe(Number.POSITIVE_INFINITY);
 		expect(niceStep(Number.MAX_VALUE)).toBe(Number.POSITIVE_INFINITY);
 		expect(niceStep(9e307)).toBe(1e308);
 	});
