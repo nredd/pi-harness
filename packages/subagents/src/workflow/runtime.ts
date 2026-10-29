@@ -322,6 +322,8 @@ export interface WorkflowRunResult {
   /** The script's return value, JSON-checked at the boundary. */
   value?: unknown;
   error?: string;
+  /** Authored-source stack, kept separately from the concise failure message. */
+  errorStack?: string;
   /** The append-only log, in emission order. */
   progress: WorkflowEntry[];
   /** Agents scheduled, including those that failed. */
@@ -1213,7 +1215,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           break;
         }
         case "error":
-          finish({ status: "failed", error: message.message });
+          finish({ status: "failed", error: message.message, errorStack: message.stack });
           break;
       }
     });

@@ -86,6 +86,8 @@ export interface WorkflowTask {
   /** The script's return value, once the run produced one. */
   value?: unknown;
   error?: string;
+  /** Full authored stack for the result; the compact status keeps only error. */
+  errorStack?: string;
 }
 
 export function createWorkflowTask(init: {
@@ -205,6 +207,7 @@ export function completeWorkflowTask(task: WorkflowTask, result: WorkflowRunResu
   task.replayedCount = result.replayedCount;
   task.value = result.value;
   task.error = result.error;
+  task.errorStack = result.errorStack;
   task.endTime = Date.now();
 }
 
@@ -222,6 +225,13 @@ export function failWorkflowTask(task: WorkflowTask, error: string): void {
 
 /** The run's outcome as text, for the notification and the LLM-facing result. */
 export function workflowResultText(task: WorkflowTask): string {
+  if (task.errorStack !== undefined) {
+    const stack = task.errorStack.slice(0, 16384);
+    const firstLine = stack.split("\n", 1)[0];
+    const message = task.error;
+    if (message === undefined || message === "" || firstLine === message || firstLine.endsWith(`: ${message}`)) return stack;
+    return `${message}\n${stack}`;
+  }
   if (task.error !== undefined) return task.error;
   if (task.value === undefined) return "No output.";
   if (typeof task.value === "string") return task.value;

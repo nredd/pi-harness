@@ -380,6 +380,47 @@ See [`compose.js`](../examples/workflows/compose.js).
 
 ## Troubleshooting
 
+**Finding the script line that failed.**
+Failed runs include the authored stack in their result, result preview and completion notification;
+compact status text still shows only the error message. `workflow.js` names the
+root script and `workflow:<meta.name>.js` names a nested script. Lines and columns
+refer to the source you wrote, including its `export const meta` declaration,
+not the runtime's async wrapper. The shared compiler keeps authored lines intact
+rather than relying on VM offsets, which Bun 1.3/1.4 ignore. Structured stack
+frames map first-line columns without replacing Error objects, subclasses or causes.
+Bun 1.3 parser errors expose a line but no usable column; those show the authored
+line without an invented caret. Node and Bun 1.4 parser excerpts retain their
+reported authored caret column; truncated excerpts are handled without masking
+the original SyntaxError. Runtime error frames retain exact columns.
+The worker transports at most 16,384 characters of stack text across eight cause levels
+and 4,096 characters of message text; cyclic causes stop at the repeated value. Captured
+stacks and message text are not reinterpreted as source frames. The LLM-facing
+result retains the concise message before the bounded stack unless the stack's
+first line is exactly the message or ends with `: <message>` (an error heading).
+A mere substring in captured context does not suppress the concise message.
+The combined worker diagnostic result is at most 20,481 characters: 4,096 for
+the message, one newline and 16,384 for the stack. Completion notifications
+retain their existing 4,000-character result limit. Trusted-workflow diagnostics
+can include host file paths and user-controlled captured stacks; these bounds are
+not sanitization or credential isolation. Host frames are retained for error and
+cause context.
+
+To reproduce the offset bug, run `test/workflow-runtime.test.ts`'s
+`reports line numbers that match the script the author wrote` case under Node
+and Bun. The old wrapper inserted a newline and relied on `vm.Script.lineOffset`
+to undo it; Bun ignored the offset and reported `workflow.js:4:23` instead of
+line 3. `compileWorkflow` now shares line-preserving compilation for root and
+nested scripts; `authoredFrame` adjusts only structured first-line frames of
+known synthetic workflow filenames. No user path is evaluated or used as a
+source filename. Nested parser failures now retain their original error object
+and synthetic source filename rather than adding a `workflow("<label>")` message
+wrapper; resolution failures still include that reference label.
+`installAuthoredStacks` is compiled inside the VM realm, including its private
+filename Set and formatter functions. Only primitive prefix length and filenames
+cross in; the formatter adds no host callback or host-object constructor route.
+The Set lasts one worker/run and is bounded by the root compilation plus accepted
+nested calls (256 by default), not a process-wide registry.
+
 **The run failed with `… is unavailable in workflow scripts (breaks resume)`.**
 The script called `Date.now()`, `new Date()` or `Math.random()`. A script that varies run to run cannot be replayed from its journal, so these throw. Use the loop index for ids, pass timestamps in through `args`, or stamp them after the workflow returns. This most often bites pasted-in helper code, and it throws at the line that calls it — *after* you have already paid for the preceding agents.
 
@@ -421,7 +462,7 @@ Concurrency is capped at `max(1, min(16, cpus - 2))`. Queued agents start as slo
 - **Results are not persisted** beyond the journal and the transcript card.
 - **No driving one from another extension.** A workflow cannot be started or steered over the `pi.events` bus, and its agents are invisible to the RPC surface — they emit no lifecycle events, and `subagents:rpc:stop` refuses them. See [`rpc.md`](rpc.md).
 
-The sandbox is a determinism and accident boundary, not a defence against a deliberately hostile script: the injected globals are host closures, and disabled code generation is what actually stops one being used to compile anything.
+The sandbox is a determinism and accident boundary, not a defence against a deliberately hostile script. Disabled code generation blocks realm-local `eval` and `Function`, including the realm-native stack formatter's constructor. Existing injected globals such as `agent` are host closures whose constructors remain a host-Function escape; this is not a credential or filesystem isolation boundary. Run only trusted workflow scripts.
 
 ## Coming from Claude Code
 
