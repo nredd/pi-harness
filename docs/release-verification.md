@@ -41,7 +41,10 @@ execution steps (not just successful job labels), and all retained, nonempty cov
 contract, Node stack and standalone stack artifacts bound to that run and SHA. Missing, skipped,
 failed, expired or mismatched evidence refuses. Ordinary push/main smoke and old PR checks are
 not fallbacks. Artifacts use normal Actions retention; expired evidence needs a real rerun, not
-a replacement receipt. The verifier paginates run, job and artifact collections.
+a replacement receipt. The verifier paginates run, job and artifact collections. Ubuntu publication/promotion jobs use
+trusted `/usr/bin/gh`, not PATH lookup. Read-only local diagnostics on another platform must set
+`RELEASE_GATE_GH` to its trusted absolute executable, e.g. `/opt/homebrew/bin/gh` on this Mac;
+relative, missing or nonexecutable paths refuse.
 
 Publication and promotion are distinct candidates and evidence:
 

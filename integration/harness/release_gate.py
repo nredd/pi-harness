@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -184,8 +186,15 @@ def api(path: str) -> Any:
 
     Returns:
         Any: Decoded slurped response pages.
+
+    Raises:
+        EvidenceError: The trusted absolute executable is unavailable or GitHub fails.
+        ValueError: The response is not JSON.
     """
-    return json.loads(run_command("gh", "api", "--paginate", "--slurp", path).stdout)
+    binary = Path(os.environ.get("RELEASE_GATE_GH", "/usr/bin/gh"))
+    if not binary.is_absolute() or not binary.is_file() or not os.access(binary, os.X_OK):
+        raise EvidenceError(f"Invalid trusted `gh` executable: '{binary}'")
+    return json.loads(run_command(str(binary.resolve()), "api", "--paginate", "--slurp", path).stdout)
 
 
 def require_full_verification(repo: str, source_sha: str) -> int:

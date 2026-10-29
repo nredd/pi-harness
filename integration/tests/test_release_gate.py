@@ -239,6 +239,30 @@ def test_typed_evidence_rejects_coercion() -> None:
         gate.validate_execution(SHA, run, jobs, artifacts)
 
 
+def test_api_uses_explicit_absolute_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A poisoned PATH cannot replace the release-barrier evidence client.
+
+    Parameters:
+        tmp_path (Path): Disposable executables.
+        monkeypatch (pytest.MonkeyPatch): Isolated executable configuration.
+
+    Returns:
+        None: Production subprocess adapter uses only the chosen trusted path.
+    """
+    trusted = tmp_path / "trusted-gh"
+    trusted.write_text("#!/bin/sh\nprintf '[{\"fixture\": true}]\\n'\n")
+    trusted.chmod(0o700)
+    poison = tmp_path / "gh"
+    poison.write_text("#!/bin/sh\nexit 99\n")
+    poison.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("RELEASE_GATE_GH", str(trusted))
+    assert gate.api("repos/nredd/pi-harness/actions/runs") == [{"fixture": True}]
+    monkeypatch.setenv("RELEASE_GATE_GH", "gh")
+    with pytest.raises(gate.EvidenceError, match="Invalid trusted"):
+        gate.api("repos/nredd/pi-harness/actions/runs")
+
+
 def test_no_evidence_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Historical green PRs or main pushes are not fallback release receipts.
 
