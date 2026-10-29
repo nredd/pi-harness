@@ -49,7 +49,7 @@
     "lint": "biome check src/ test/",
     "lint:fix": "biome check --fix src/ test/",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun",
-    "test:bun": "bun test test/session-scenarios.test.ts test/fleet-session.test.ts test/viewer-session.test.ts test/worktree-isolation-e2e.test.ts",
+    "test:bun": "bun test test/session-scenarios.test.ts test/fleet-session.test.ts test/viewer-session.test.ts test/worktree-isolation-e2e.test.ts && PI_EXPECT_BUN_RUNTIME=1 node ../../scripts/run-vitest.ts bun test/resource-loader-home.test.ts",
     "test:coverage": "vitest run --coverage",
     "bench": "vitest bench",
     "bench:ab": "node test/perf/ab.mjs"
