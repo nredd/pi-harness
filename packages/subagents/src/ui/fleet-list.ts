@@ -117,16 +117,17 @@ function rightAlign(left: string, right: string, width: number): string {
 }
 
 /**
- * Agent-row tail columns, left to right; text pads right, numbers pad left.
+ * Agent-row tail columns, left to right. `align` names the padding side:
+ * `start` keeps the cell's right edge aligned, `end` keeps its left edge aligned.
  * `drop` ranks how early a column goes on a narrow terminal (1 first); an
  * undefined rank is never dropped, so state, elapsed, tokens and cost survive
  * and the description is what truncates (#144).
  */
 const TAIL_SLOTS = [
   { align: "end" }, // state: glyph + label
-  { align: "end", drop: 3 }, // model
-  { align: "end", drop: 2 }, // thinking level
-  { align: "end", drop: 1 }, // live model-call activity
+  { align: "start", drop: 3 }, // model
+  { align: "start", drop: 2 }, // thinking level
+  { align: "start", drop: 1 }, // live model-call activity
   { align: "start" }, // elapsed
   { align: "start" }, // tokens
   { align: "start" }, // cost

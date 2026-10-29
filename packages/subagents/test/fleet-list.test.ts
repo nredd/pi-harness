@@ -1005,6 +1005,7 @@ describe("FleetList model and activity", () => {
       expect(line).toContain(text);
       return visibleWidth(line.split(text, 1)[0]);
     };
+    const cellEnd = (line: string, text: string) => cellStart(line, text) + visibleWidth(text);
     for (const width of [60, 80]) {
       const lines = factory?.({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, markupFree)
         .render(width).map(plain) ?? [];
@@ -1026,7 +1027,7 @@ describe("FleetList model and activity", () => {
       expect(emoji).toContain("...");
       expect(cjk).not.toContain("deliberately long description");
       expect(emoji).not.toContain("different long description");
-      expect(cellStart(cjk, "think:low")).toBe(cellStart(emoji, "think:ultrathink"));
+      expect(cellEnd(cjk, "think:low")).toBe(cellEnd(emoji, "think:ultrathink"));
       expect(cellStart(cjk, "tokens")).toBe(cellStart(emoji, "tokens"));
       expect(cellStart(cjk, "~$0.0042") + visibleWidth("~$0.0042"))
         .toBe(cellStart(emoji, "~$12.34") + visibleWidth("~$12.34"));
@@ -1042,8 +1043,8 @@ describe("FleetList model and activity", () => {
       .toBe(cellStart(b, "~$12.34") + visibleWidth("~$12.34"));
     expect(cellStart(a, "↓ 13.1k tokens") + visibleWidth("↓ 13.1k tokens"))
       .toBe(cellStart(b, "↓ 987.7k tokens") + visibleWidth("↓ 987.7k tokens"));
-    expect(cellStart(a, "銀河 4.6")).toBe(cellStart(b, "🧠 opus"));
-    expect(cellStart(a, "think:low")).toBe(cellStart(b, "think:ultrathink"));
+    expect(cellEnd(a, "銀河 4.6")).toBe(cellEnd(b, "🧠 opus"));
+    expect(cellEnd(a, "think:low")).toBe(cellEnd(b, "think:ultrathink"));
   });
 
   it("copes with a record that has no invocation yet", () => {
@@ -1101,6 +1102,21 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
     ];
   }
 
+  /** A visible mixed-state fixture matching the owner-visible FleetView surface. */
+  function snapshotRows(): AgentRecord[] {
+    const rows = mixed().slice(0, 5).map(row => ({
+      ...row,
+      invocation: { modelName: row.id === "c2" ? "gpt-6-luna" : "gpt-5.6-terra", modelId: "openai/test", thinking: "medium" },
+      lifetimeUsage: { ...row.lifetimeUsage },
+    }));
+    rows[0].lifetimeUsage.cost = 1.57;
+    rows[1].lifetimeUsage.cost = 0.8078;
+    rows[2].lifetimeUsage.cost = 0.0012;
+    rows[3].lifetimeUsage.cost = 0.0042;
+    rows[4].lifetimeUsage.cost = 0.05;
+    return rows;
+  }
+
   /** Real ANSI colour, so width maths and truncation run over escapes (the plain theme hides them). */
   const styledTheme = {
     fg: (color: string, text: string) => `\u001b[${color === "accent" ? 36 : color === "error" ? 31 : color === "success" ? 32 : 90}m${text}\u001b[39m`,
@@ -1136,6 +1152,10 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
     const lines = factory!({ requestRender: () => {}, terminal: { columns, rows } }, extra.styled ? styledTheme : plainTheme).render(columns);
     return extra.styled ? lines : lines.map(plain);
   }
+
+  it.each([80, 120, 200])("snapshots mixed states and activity cells at %i columns", (columns) => {
+    expect(renderAt(snapshotRows(), columns, 40, 0, true, { showCost: true })).toMatchSnapshot();
+  });
 
   it.each([[80, 24], [120, 40]])("keeps leading fallback flags, aliases and aligned state/stats at %ix%i", (columns, rows) => {
     const agents = mixed().slice(1, 3);
