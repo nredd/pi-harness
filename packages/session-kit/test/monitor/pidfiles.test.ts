@@ -152,6 +152,26 @@ describe("sweepOrphans", () => {
 		expect(existsSync(join(tmp.dir, "reuse", "m1.json"))).toBe(true);
 	});
 
+	it("refuses a reused supervisor identity before signalling its group", async () => {
+		const original = { pid: 123, pgid: 123, startedAt: Date.now(), command: "supervisor old-token" };
+		const path = writePidfile(
+			join(tmp.dir, "reuse-supervisor"),
+			"m1",
+			record({ ownerPid: 999, childPid: 123, pgid: 123, startedAt: original.startedAt, identity: "new-token" }),
+		);
+		const signals: string[] = [];
+		const result = await sweepOrphans(tmp.dir, "me", {
+			isAlive: () => false,
+			procInfo: async () => original,
+			groupMembers: async () => [original],
+			signal: (_pgid, signal) => {
+				signals.push(signal);
+			},
+		});
+		expect(result.failed).toContain(path);
+		expect(signals).toEqual([]);
+	});
+
 	it.each(["start", "command", "group"])("refuses a reused recovery member with changed %s", async (field) => {
 		const original = { pid: 124, pgid: 123, startedAt: Date.now(), command: "original" };
 		const reused = {
