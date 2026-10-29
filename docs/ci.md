@@ -76,7 +76,8 @@ No job or required-check name changes. Definition, exclusions, receipts and ratc
 The resource sampler's package gate runs real host sampling and bounded helper cleanup in each
 `owned` OS cell. `check-package-contracts` also builds/audits/installs its exact ESM tarball and
 runs an isolated Node consumer in each `contracts` OS cell. This library has no Pi entrypoint;
-Darwin process CPU is explicitly unavailable because `ps` start identity has one-second precision.
+Darwin process CPU is native interval CPU on Node >=26.1 and Bun, authenticated with libproc
+start identity rather than `ps` whole-second precision. Older Node remains explicitly unavailable.
 No consumer migration, publication, extra CI job or runner is added.
 
 ## Standalone startup failure evidence

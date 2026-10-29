@@ -29,7 +29,7 @@ it("attempts the default Linux memory read and keeps optional failures null off 
 const execFileAsync = promisify(execFile);
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const INTERVAL_MS = 100;
-/** What sampler 0.1.1 reports for a child exec'd from `process.execPath`: Darwin `p_comm` holds 16 bytes. */
+/** What sampler 0.2.0 reports for a child exec'd from `process.execPath`: Darwin `p_comm` holds 16 bytes. */
 const EXECUTABLE = basename(realpathSync(process.execPath)).slice(0, process.platform === "darwin" ? 16 : undefined);
 
 function completed(stdout: string): RunResult {
@@ -300,11 +300,12 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		if (snapshot.processes.status !== "available") throw new Error("missing process metadata");
 		expect(snapshot.processes.entries.length).toBeGreaterThan(0);
 		expect(snapshot.processes.entries.length).toBeLessThanOrEqual(50);
-		expect(snapshot.processes.ranking).toBe(process.platform === "linux" ? "interval-cpu" : "rss");
+		expect(snapshot.processes.ranking).toBe("interval-cpu");
+		if (process.platform === "darwin")
+			expect(snapshot.processes.entries.some((entry) => entry.cpu.state === "available")).toBe(true);
 		for (const entry of snapshot.processes.entries) {
 			expect(Object.keys(entry).sort()).toEqual(["cpu", "executable", "parentPid", "pid", "rssBytes"]);
 			expect(entry.executable).not.toContain("/");
-			if (process.platform === "darwin") expect(entry.cpu.state).toBe("unavailable");
 			if (entry.cpu.state === "available") expect(entry.cpu.value).toBeGreaterThanOrEqual(0);
 		}
 	});
@@ -336,8 +337,8 @@ describe("resource_snapshot on the real host through the published sampler", () 
 				expect(found?.name).toBe(EXECUTABLE);
 				const ps = await execFileAsync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { env: { LC_ALL: "C" } });
 				expect(Number(ps.stdout.trim())).toBe(found?.parentPid);
-				// Present in both scans, so Linux measures it; Darwin never can.
-				expect(found?.cpu.state).toBe(process.platform === "linux" ? "available" : "unavailable");
+				// Native samplers on both supported hosts measure the known child after a baseline.
+				expect(found?.cpu.state).toBe("available");
 				// The bounded tool output is exactly a projection of that same scan.
 				const { entries } = snapshot.processes;
 				expect(entries).toHaveLength(Math.min(50, raw.processes.length));

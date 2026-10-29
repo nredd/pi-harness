@@ -65,13 +65,11 @@ it("/mon shows two real observations, every size, then releases sampling on clos
 	expect(fixture.clock.pending).toBe(1);
 	await sleep(150);
 	fixture.clock.advance(2000);
-	// Sampler 0.1.1 copies Bun's lazy `os.cpus()` counters, so Node and Bun both measure the interval.
+	// Sampler 0.2.0 copies Bun's lazy `os.cpus()` counters, so Node and Bun both measure the interval.
 	const live = await until((s) => s.includes("LIVE") && /\d+\.\d%/.test(s));
 	expect(live).toMatch(SAMPLED);
-	if (platform() === "darwin") {
-		expect(live).toContain("RSS ↓");
-		expect(live).toContain("macOS: process CPU unavailable");
-	} else expect(live).toContain("CPU ↓");
+	expect(live).toContain("CPU ↓");
+	if (platform() === "darwin") expect(live).not.toContain("macOS: process CPU unavailable");
 	for (const [width, height] of SIZES) {
 		host.resize(width, height);
 		await host.settle();

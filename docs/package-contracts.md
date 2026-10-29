@@ -241,8 +241,8 @@ older Node keeps explicit unavailable process CPU. Native readers use only fixed
 libproc symbols, not an installed addon or helper. Linux retains absent
 native-Darwin fields. `test_library_probe_rejects_missing_native_memory` executes the probe against
 older/broken synthetic producers to prove each missing field fails and the hostile child is reaped.
-This library gate tests the newly packed sampler, not the consumers' still-pinned registry `0.1.1`;
-see [measurement and release limitations](mon-accuracy.md). A
+This library gate and both consumers pin the published registry `0.2.0`; their independent
+registry-resolution tests reject a workspace link. A
 child's argv[0], process title and Linux comm hold a random 32-hex secret; the probe first proves the
 0.1.0 name source (`ps -c` comm on Darwin, `/proc/PID/comm` on Linux) shows it, then requires the
 child in the second snapshot and no 12-character window of the secret anywhere in either snapshot.
@@ -280,7 +280,7 @@ reader, plus manifest/README/LICENSE). No `pi`
 field, peers or runtime dependencies are allowed. Import auditing permits Node builtins and
 in-package relative imports, never host modules or sibling extensions. The default extension
 contract still requires `pi.extensions` and retains its original host-module rules. The release
-descriptor uses the same audit/isolated execution gate; `publish.yml` published `0.1.1` (see
+descriptor uses the same audit/isolated execution gate; `publish.yml` published `0.2.0` (see
 [releases](releases.md)). Consumers declare the exact registry release (`RESOURCE_SAMPLER_VERSION`,
 never a range, `workspace:` or `file:` spec) as a contract `runtime_dependencies` entry and are admitted
 only through the narrow `SHARED_LIBRARIES` rule above, not a relaxed sibling import rule. Their stock
