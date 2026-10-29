@@ -304,6 +304,12 @@ describe("router usage RPC", () => {
 		expect(result.success).toBe(true);
 		expect(result.data.snapshots.map((s) => s.provider)).toEqual(["anthropic", "openai-codex"]);
 		expect(result.data.snapshots.map((s) => s.status)).toEqual(["available", "available"]);
+		// Span provenance travels through the RPC: Anthropic fixed windows are reported; this fixture's
+		// Codex windows carry no `limit_window_seconds`, so their names are positional guesses.
+		expect(result.data.snapshots.map((s) => s.windows.map((w) => w.spanSource))).toEqual([
+			["reported", "reported"],
+			["assumed", "assumed"],
+		]);
 		h.advance(MINUTE);
 		await h.rpc({ refresh: true });
 		expect(h.fetch).toHaveBeenCalledTimes(2);

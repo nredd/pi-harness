@@ -84,6 +84,8 @@ describe("sanitizeTitle", () => {
 		const out = sanitizeTitle("word ".repeat(30)) as string;
 		expect(out.length).toBeLessThanOrEqual(60);
 		expect(out.endsWith("word")).toBe(true);
+		const longWords = sanitizeTitle("abcdefghij klmnopqrst uvwxyzabcd efghijklmn opqrstuvwx yzabcdefgh") as string;
+		expect(longWords).toBe("abcdefghij klmnopqrst uvwxyzabcd efghijklmn opqrstuvwx");
 	});
 	it("caps at 6 words but keeps short titles", () => {
 		expect(sanitizeTitle("one two three four five six seven eight")).toBe("one two three four five six");

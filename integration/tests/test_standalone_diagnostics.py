@@ -191,19 +191,31 @@ def test_unknown_artifact_paths_are_denied(name: str) -> None:
     "name",
     ["pi", "startup.stderr", "packages/pi-memory/index.ts", "jiti/primary/pi-memory-index.01234567.mjs"],
 )
-def test_credential_scan_refuses_entire_publication(tmp_path: Path, name: str) -> None:
+@pytest.mark.parametrize(
+    "credential",
+    [
+        b"prefix ghp_" + b"a" * 36 + b" suffix",
+        b'{"access_token":"x"}',
+        b'{"refresh_token":"x"}',
+        b'{"api_key":"x"}',
+        b"bEaReR x",
+        b"https://user:password@example.invalid",
+    ],
+)
+def test_credential_scan_refuses_entire_publication(tmp_path: Path, name: str, credential: bytes) -> None:
     """Reject token-like contents even in an allowlisted binary or source file.
 
     Parameters:
         tmp_path (Path): private publication directory.
         name (str): allowlisted file to contaminate.
+        credential (bytes): unsafe bytes covered by the shared publication policy.
 
     Returns:
         None: assertions complete.
     """
     output = tmp_path / "artifacts"
     with pytest.raises(ValueError, match="credential"):
-        diag.publish({name: b"prefix ghp_" + b"a" * 36 + b" suffix"}, output)
+        diag.publish({name: credential}, output)
     assert not output.exists()
 
 
