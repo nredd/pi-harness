@@ -907,7 +907,7 @@ Precedence, highest first: the `Agent` tool's `model` parameter, `agentModels[ty
 
 - **Intentional blank-input change:** empty and whitespace-only model strings mean unset at every precedence level and on every entry path, falling through to the next default without recording a `param` or `definition` request. Previously RPC/workflow explicit blanks and runner-based configured blanks reached fuzzy resolution (and could select an available model); Agent/nested/scheduled paths skipped `""` but resolved whitespace. Nonblank inputs retain their original spelling and matching.
 
-**Known limits.** At terminal widths below about 60 the workflow dialog's agent-level list pane may show only a fragment of the `[fallback]` flag (every other row shows it first and never clips it, and `withLeadingFlag` degrades to `[fb]` then `!`), and a very long fallback note in the dialog's detail pane is clamped to the pane capacity. The full note stays in the result text, the record, the run log and `get_subagent_result`. Tracked in [#158](https://github.com/nredd/pi-harness/issues/158).
+At narrow terminal widths, the workflow dialog reserves its agent-list fallback disclosure: `[fallback]` compacts to `[fb]`, then `!`, rather than showing a clipped fragment. The detail pane middle-elides unusually long fallback notes so both the configured input and final diagnosis stay visible. The full note remains available in the result text, the record, the run log and `get_subagent_result`.
 
 ## Model Scope
 

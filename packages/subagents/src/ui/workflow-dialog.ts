@@ -62,7 +62,7 @@ import {
   type WorkflowEntry,
 } from "../workflow/progress.js";
 import { SPINNER, type Theme } from "./agent-widget.js";
-import { fallbackFlagText, hasFallback } from "./fallback-flag.js";
+import { fallbackFlagText, hasFallback, withLeadingFlag } from "./fallback-flag.js";
 import {
   ASCII_GLYPHS,
   clampLine,
@@ -638,18 +638,28 @@ function agentRow(options: {
 }): WorkflowCardLine {
   const { entry, selected, glyphs, width } = options;
   const display = displayState(entry, options.workflowActive);
-  const head: WorkflowCardLine = [
+  const prefix: WorkflowCardLine = [
     { text: " " },
     { text: selected ? glyphs.pointer : " ", color: "accent" },
     { text: " " },
     dialogRowGlyph(display, glyphs, options.spinnerFrame),
     { text: " " },
-    // Leading, ahead of the label, in both pane modes: the row clamps from the right.
-    ...(entry.modelTier || hasFallback(entry) ? [{ text: `${fallbackFlagText(1, entry)} `, color: hasFallback(entry) ? "warning" as const : "dim" as const }] : []),
+  ];
+  const flag = entry.modelTier || hasFallback(entry) ? fallbackFlagText(1, entry) : "";
+  // The narrow pane holds the label and nothing else; reserve its status prefix,
+  // then let the shared flag degrade rather than clipping it to `[fal…`.
+  if (options.compact && flag) {
+    const flagWidth = Math.max(0, width - lineWidth(prefix));
+    return [
+      ...prefix,
+      { text: withLeadingFlag("", flag, "", flagWidth), color: hasFallback(entry) ? "warning" : "dim" },
+    ];
+  }
+  const head: WorkflowCardLine = [
+    ...prefix,
+    ...(flag ? [{ text: `${flag} `, color: hasFallback(entry) ? "warning" as const : "dim" as const }] : []),
     { text: entry.label, color: selected ? "accent" : undefined },
   ];
-  // The narrow pane holds the label and nothing else; there is no room for a
-  // stat tail, and clamping one would just spend columns on a truncated word.
   if (options.compact) return clampLine(head, width);
 
   const model = formatModel(entry);
@@ -800,9 +810,21 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
       detailRows.push(clampLine([{ text: ` ${stats.join(" · ")}`, color: "dim" }], rightWidth));
     }
     // A substituted model is never cosmetic: name the failed input and what ran.
-    // Wrapped, not clamped: this is the one place the full note is readable.
+    // Four wrapped lines leave the rest of the detail readable; elide the middle
+    // so the diagnosis at the end survives rather than falling below the frame.
     if (entry.modelNote) {
-      for (const line of wrapTextWithAnsi(entry.modelNote, Math.max(1, rightWidth - 1))) {
+      const noteWidth = Math.max(1, rightWidth - 1);
+      const noteLimit = noteWidth * 4;
+      let note = entry.modelNote;
+      if (visibleWidth(note) > noteLimit) {
+        const marker = ` ${glyphs.ellipsis} `;
+        const retained = Math.max(1, Math.floor((noteLimit - visibleWidth(marker)) / 2));
+        const start = stripTerminalSequences(truncateToWidth(note, retained, ""));
+        const reversed = Array.from(note).reverse().join("");
+        const end = Array.from(stripTerminalSequences(truncateToWidth(reversed, retained, ""))).reverse().join("");
+        note = `${start}${marker}${end}`;
+      }
+      for (const line of wrapTextWithAnsi(note, noteWidth)) {
         detailRows.push(clampLine([{ text: ` ${line}`, color: "warning" }], rightWidth));
       }
     }
