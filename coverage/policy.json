@@ -3,6 +3,7 @@
   "target": { "lines": 0, "functions": 0 },
   "enforce_target": false,
   "reclassifications": [
+    { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: pure static ESM named re-export facade, with zero statements/functions in source/emitted-ESM Istanbul maps. Strict shape validation rejects executable additions; every UI target remains owned and measured." },
     { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." }
@@ -46,10 +47,23 @@
     "dev-tools": {
       "root": "packages/dev-tools",
       "owned": ["src/**/*.ts"],
-      "exclusions": [],
-      "status": "pending",
-      "note": "Pending merged PR #155 then stacked PR #195 (head 5d827a32): use #195's primary Istanbul decision and explicit 22-executable-module inventory, with its re-export-only src/core/index.ts separately validated before measurement. Its local 1502/1502 lines and 260/260 functions are advisory, not hosted floors. Require complete clean per-OS producers; never baseline failed main or partial reports.",
-      "signals": {}
+      "exclusions": [{ "path": "src/core/index.ts", "kind": "non-executable-facade", "reason": "Only static named ESM re-exports; no executable statements or functions. Strict facade validation rejects executable additions; every target module remains owned and instrumented." }],
+      "status": "measured",
+      "note": "Primary Istanbul follows the reviewed #195 provider decision; complete hosted measurements are required to establish per-OS floors.",
+      "signals": {
+        "primary": {
+          "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "reporters": ["text", "lcov"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "enforcement": "report-only",
+          "reason": "Native Bun compatibility scenarios are not the full owned-source suite; remain report-only, not enforced, until complete-source receipts exist: https://github.com/nredd/pi-harness/issues/160.",
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "plan-mode": {
       "root": "packages/plan-mode",

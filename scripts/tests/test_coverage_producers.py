@@ -1,7 +1,7 @@
 """Pin producer contracts separately from runner-agnostic LCOV accounting.
 
 References:
-    https://github.com/oven-sh/bun/blob/bun-v1.3.14/docs/test/code-coverage.mdx
+    https://github.com/oven-sh/bun/blob/bun-v1.4.4/docs/test/code-coverage.mdx
     ../../docs/coverage.md
 """
 
@@ -171,13 +171,13 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     assert "vi.unstubAllEnvs()" in reviewer
 
 
-def test_pinned_bun_lcov_only_threshold_bypass(tmp_path: Path) -> None:
-    """Reproduce the pinned LCOV-only threshold bypass with the real runtime.
+def test_pinned_bun_enforces_threshold_with_either_reporter(tmp_path: Path) -> None:
+    """Pin the repaired LCOV-only threshold enforcement in Bun 1.4.4.
 
     Parameters:
         tmp_path (Path): Disposable coverage probe project.
     Returns:
-        None: LCOV-only exits zero while adding text enforces the function threshold.
+        None: Both LCOV-only and text-plus-LCOV fail the same function threshold.
     Raises:
         AssertionError: The pinned runtime, LCOV output or threshold behavior differs.
     """
@@ -202,6 +202,6 @@ def test_pinned_bun_lcov_only_threshold_bypass(tmp_path: Path) -> None:
     enforced = subprocess.run(
         [*argv, "--coverage-reporter=text"], cwd=tmp_path, capture_output=True, check=False
     )
-    assert bypass.returncode == 0, bypass.stderr.decode()
+    assert bypass.returncode != 0, bypass.stderr.decode()
     assert enforced.returncode != 0, enforced.stderr.decode()
     assert b"50.00" in enforced.stderr

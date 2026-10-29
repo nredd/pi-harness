@@ -14,14 +14,16 @@ The initial integration checkpoint is recorded [here](../coverage/receipts/main-
 Facade validation and the actual hosted producer failure diagnosis are recorded
 [here](../coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
 #155 -> #195 dev-tools dependency decision are recorded [here](../coverage/receipts/git-isolation.md).
-`enforce_target` remains false. No 100% claim. The conflict-resolution decisions and exact
+`enforce_target` remains false. Local closure integration and the pending hosted verification are
+recorded [here](../coverage/receipts/final-closure.md). No hosted 100% claim. The conflict-resolution decisions and exact
 base-relative facade ledger regression for the `b51e177` main merge are recorded
 [here](../coverage/receipts/tier-main-merge.md).
 
 The target is **100% of owned executable source lines AND functions**, measured by each
 package's primary runner. Branches are reported, not gated. This is source coverage, not
 proof that every behavior is asserted. Every subsequently closed gap needs a test that fails
-without the change. Phase 0 adds accounting only, not tests for existing production gaps.
+without the change. Phase 0 adds accounting; the final integration also tests worker-error settlement and remaining
+cross-platform collector paths without removing guards.
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
 zero uncovered lines/functions. Schema version 2 keys each signal's transitional `max_uncovered`
@@ -46,11 +48,12 @@ The accounting script consumes LCOV, not runner APIs. Primary reports use Istanb
 Real Pi/Jiti reloads collide with Vitest-generated scripts at identical source URLs and corrupt
 V8 attribution. The preset and todo diagnoses demonstrate false misses and false hits; preserve
 real-loader tests rather than deleting assertions to repair counters. Istanbul credits instrumented
-Vitest transforms, not independent Jiti-only execution. Other primary producers retain V8 pending
-the broader provider migration. The `node --test` import-audit and probe helpers retain c8 as
+Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, with all 22 executable modules explicitly included.
+Its static `src/core/index.ts` facade is validated by real source/emitted-ESM instrumentation.
+Other primary producers retain V8. The `node --test` import-audit and probe helpers retain c8 as
 report-only verification signals.
 
-Every declared `test:bun` command also emits an independent `bun` LCOV signal. All eight currently measured
+Every declared `test:bun` command also emits an independent `bun` LCOV signal. All nine currently measured
 Bun signals explicitly declare `enforcement: "report-only"`, with a mandatory nonblank `reason`
 and a link to [#160](https://github.com/nredd/pi-harness/issues/160). Their stored `max_uncovered`
 values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
@@ -94,13 +97,13 @@ record complete-source receipts before establishing enforced Bun floors. Account
 enforced Bun signal whose file subset omits owned source. Enforced-to-enforced budgets ratchet;
 a report-only-to-enforced promotion establishes the new complete-source floor.
 
-Bun's `coverageThreshold` is bypassed by **lcov-only** reporting on pinned 1.3.14: a 50%-function
-fixture exits 0 with `lcov`, and nonzero with `text` plus `lcov`. Both reporters are mandatory
+Bun 1.3.14 bypassed `coverageThreshold` with **lcov-only** reporting. Pinned 1.4.4 repairs this:
+a 50%-function fixture exits nonzero with either `lcov` or `text` plus `lcov`. Both reporters remain mandatory
 in signal declarations and actual `test:bun` commands. `scripts/tests/test_coverage_producers.py`
 executes that reproduction with the pinned Bun and checks producer commands. Do not remove
 `text` as a cosmetic CI cleanup, even for report-only signals. Generic LCOV accounting independently
 enforces integer budgets for `enforced` signals only; producer declarations and the real pinned-Bun
-threshold-bypass reproduction remain mandatory in either mode.
+threshold-enforcement reproduction remain mandatory in either mode.
 LCOV producers may emit aggregate-only function totals; those must be internally consistent.
 Signed branch hit counts are retained as reported-only diagnostics, never used to gate lines or
 functions. Missing/empty reports, inconsistent counters, zero total owned lines, unknown files
@@ -126,7 +129,8 @@ Review exclusions as carefully as code; the script cannot prove every human just
 `non-executable-facade` requires an exact package-relative `.ts` path already matched by `owned`.
 Accounting reads the file on every inventory expansion and accepts only a deliberately narrow
 whole-file grammar: one or more static named `export { bindings } from "./local.js";`
-declarations (including `default`/aliases), plus whitespace. Comments, imports, export assignments,
+declarations (including `default`/aliases, inline type bindings and trailing commas), plus whitespace.
+Local `.ts` specifiers are also accepted for dev-tools' existing barrel. Comments, imports, export assignments,
 initializers, functions, attributes and all other syntax fail closed. Adding executable code requires
 removing the classification and restoring instrumentation, not widening the facade grammar.
 Plan-mode's `src/index.ts` and `src/interactive-ui.ts` qualify: esbuild's emitted ESM and the actual
@@ -157,8 +161,8 @@ The generated stats CLI bundle has a reasoned generated-artifact exclusion; its 
 `computer-use` is explicitly **not measured, tracked**. Its custom platform/native scripts
 continue running, but no invented instrumentation or 100% claim is made. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
-the global flip. Existing native/platform checks remain unchanged. `dev-tools` is pending a clean cargo-suite baseline after #155; failed-run
-reports are diagnostic artifacts only and never establish budgets.
+the global flip. Existing native/platform checks remain unchanged. `dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
+Failed-run reports are diagnostic artifacts only and never establish budgets.
 
 Python `scripts/*.py` and `integration/harness/*.py`, boundary probes, executable providers and
 producer configurations are named **measurement-pending** inventories, not silently omitted.

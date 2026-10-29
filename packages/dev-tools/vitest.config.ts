@@ -7,7 +7,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		coverage: {
-			provider: "v8",
+			provider: "istanbul",
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
@@ -16,7 +16,6 @@ export default defineConfig({
 				"src/cargo/index.ts",
 				"src/cargo/parse.ts",
 				"src/core/filelock.ts",
-				"src/core/index.ts",
 				"src/core/lock.ts",
 				"src/core/output.ts",
 				"src/core/process.ts",
@@ -24,6 +23,7 @@ export default defineConfig({
 				"src/core/tool.ts",
 				"src/git/commit-message.ts",
 				"src/git/guard.ts",
+				"src/git/push-remote.ts",
 				"src/git/index.ts",
 				"src/git/run.ts",
 				"src/git/status.ts",

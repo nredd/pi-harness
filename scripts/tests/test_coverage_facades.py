@@ -31,7 +31,7 @@ for (const file of process.argv.slice(1)) {
   const compiled = transformSync(source, { loader: 'ts', format: 'esm', target: 'es2022' }).code;
   result[file] = { compiled, maps: [] };
   for (const code of [source, compiled]) {
-    const instrumenter = createInstrumenter({ esModules: true });
+    const instrumenter = createInstrumenter({ esModules: true, parserPlugins: ['typescript'] });
     instrumenter.instrumentSync(code, file);
     const coverage = instrumenter.lastFileCoverage();
     result[file].maps.push({
@@ -76,6 +76,7 @@ def test_real_facades_have_zero_istanbul_counters_in_source_and_emitted_esm() ->
     node = shutil.which("node")
     assert node
     paths = [str(ROOT / "packages/plan-mode" / path) for path in FACADES]
+    paths.append(str(ROOT / "packages/dev-tools/src/core/index.ts"))
     result = json.loads(
         subprocess.check_output(
             [node, "--input-type=module", "-e", INSTRUMENT, *paths],
@@ -94,6 +95,7 @@ def test_real_facades_have_zero_istanbul_counters_in_source_and_emitted_esm() ->
     "source",
     [
         'export { default } from "./implementation.js";\n',
+        'export { run, type RunOptions, type RunResult, } from "./process.ts";\n',
         "export { menu as showMenu, other } from './menu.js';\n",
         'export { one } from "./one.js";\nexport { two } from "./two.js";\n',
     ],

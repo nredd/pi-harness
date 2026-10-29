@@ -28,8 +28,8 @@ GIT = Path("/usr/bin/git")
 FACADE_EXPORT = re.compile(
     r"(?:\s*export\s*\{\s*[A-Za-z_$][A-Za-z0-9_$]*"
     r"(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?"
-    r"(?:\s*,\s*[A-Za-z_$][A-Za-z0-9_$]*(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?)*"
-    r"\s*\}\s+from\s+(?:\"\./[A-Za-z0-9_./-]+\.js\"|'\./[A-Za-z0-9_./-]+\.js')\s*;\s*)+"
+    r"(?:\s*,\s*(?:type\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?)*"
+    r"\s*,?\s*\}\s+from\s+(?:\"\./[A-Za-z0-9_./-]+\.[jt]s\"|'\./[A-Za-z0-9_./-]+\.[jt]s')\s*;\s*)+"
 )
 
 

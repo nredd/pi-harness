@@ -415,7 +415,7 @@ def test_current_bun_policy_is_explicit_and_links_migration() -> None:
     """
     data = json.loads((ROOT / "coverage/policy.json").read_text())
     signals = [pkg["signals"]["bun"] for pkg in data["packages"].values() if "bun" in pkg["signals"]]
-    assert len(signals) == 8
+    assert len(signals) == 9
     for signal in signals:
         assert signal["enforcement"] == "report-only"
         assert "https://github.com/nredd/pi-harness/issues/160" in signal["reason"]
