@@ -94,9 +94,14 @@ describe("selectModel", () => {
     expect(select(undefined, "selection-unavailable/unavailable-pin")).toContain("Model not found");
   });
 
-  it("advertises only enabled models when an explicit dispatch model does not resolve", () => {
-    setModelScopeProvider(() => new Set([ref("parent")]));
+  it("advertises only models from the dispatch scope when an explicit model does not resolve", () => {
+    let scopeContext: { cwd: string; homeDir?: string } | undefined;
+    setModelScopeProvider((_registry, context) => {
+      scopeContext = context;
+      return new Set([ref("parent")]);
+    });
     const result = select(undefined, "missing-model");
+    expect(scopeContext).toEqual({ cwd: dir, homeDir: undefined });
     expect(result).toContain(`  ${ref("parent")}`);
     expect(result).not.toContain(ref("explicit"));
   });
