@@ -68,6 +68,31 @@ def test_github_generated_step_header_breaks_only_the_old_boundary(
     assert step.read_text() == generated
 
 
+def test_guest_adapter_labels_generated_step_failure(tmp_path: Path) -> None:
+    """Name generated guest-step failures while preserving Bash's status and stderr.
+
+    Parameters:
+        tmp_path (Path): Disposable guest worktree and generated step.
+    """
+    guest = tmp_path / "home/pi-harness-ci"
+    (guest / ".ci-temp").mkdir(parents=True)
+    (guest / ".ci-temp/tool-path").write_text(os.environ["PATH"])
+    step = tmp_path / "generated-step"
+    step.write_text("missing-wsl-guest-command\n")
+    env = dict(os.environ) | {
+        "HOME": str(tmp_path / "home"),
+        "WSL_STEP_DIRECTORY": ".",
+        "WSL_STEP_SCRIPT": str(step),
+    }
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/wsl2_run.sh")], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 127
+    assert "missing-wsl-guest-command: command not found" in result.stderr
+    assert "wsl2-run: guest-step failed with status 127" in result.stderr
+    assert (guest / ".ci-temp/first-failure").read_text() == "127\n"
+
+
 def test_guest_commit_gate_receives_event_payload(tmp_path: Path) -> None:
     """Run the actual commit gate through the adapter's declared environment boundary.
 
@@ -113,6 +138,18 @@ def test_guest_commit_gate_receives_event_payload(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert f"Checked 1 commit message(s) in {base}..{head}." in result.stdout
     assert "GITHUB_EVENT_PATH/p" in entries  # Windows paths require WSL's path translation.
+
+
+def test_adapter_failure_labels_name_each_hop_without_environment_dumping() -> None:
+    """Keep host, PowerShell, and guest diagnostics bounded to their failed hop."""
+    host = (ROOT / "scripts/wsl2_host.sh").read_text()
+    shell = (ROOT / "scripts/wsl2_shell.ps1").read_text()
+    guest = (ROOT / "scripts/wsl2_run.sh").read_text()
+    assert "wsl2-host: pwsh command not found" in host
+    assert "wsl2-shell: wslpath failed with status $status" in shell
+    assert "wsl2-shell: guest dispatch failed with status $status" in shell
+    assert "wsl2-run: guest-step failed with status %s" in guest
+    assert "Get-ChildItem Env:" not in host + shell + guest
 
 
 def test_native_shell_preserves_implicit_baseline_pipeline_behavior(tmp_path: Path) -> None:

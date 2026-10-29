@@ -34,4 +34,11 @@ case "$PWD/" in "$worktree/"*) ;; *) echo 'Step directory escapes guest checkout
 # Do not modify the host-generated step; CRLF is possible even with an LF checkout.
 step=$(mktemp "$RUNNER_TEMP/step.XXXXXX")
 tr -d '\r' < "$WSL_STEP_SCRIPT" > "$step"
+set +e
 bash --noprofile --norc -e -o pipefail "$step"
+status=$?
+set -e
+if [ "$status" -ne 0 ]; then
+  printf 'wsl2-run: guest-step failed with status %s\n' "$status" >&2
+  exit "$status"
+fi
