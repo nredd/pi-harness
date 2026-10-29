@@ -280,8 +280,8 @@ reader, plus manifest/README/LICENSE). No `pi`
 field, peers or runtime dependencies are allowed. Import auditing permits Node builtins and
 in-package relative imports, never host modules or sibling extensions. The default extension
 contract still requires `pi.extensions` and retains its original host-module rules. The release
-descriptor uses the same audit/isolated execution gate; `publish.yml` published `0.2.0` (see
-[releases](releases.md)). Consumers declare the exact registry release (`RESOURCE_SAMPLER_VERSION`,
+descriptor uses the same audit/isolated execution gate. Consumers declare the exact registry release
+(`RESOURCE_SAMPLER_VERSION`,
 never a range, `workspace:` or `file:` spec) as a contract `runtime_dependencies` entry and are admitted
 only through the narrow `SHARED_LIBRARIES` rule above, not a relaxed sibling import rule. Their stock
 gate installs it from npm next to the packed plugin. In the monorepo npm would link the same-version
