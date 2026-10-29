@@ -116,7 +116,8 @@ shared policy alongside main's short JSON/Bearer and URL/proxy handling. Retain 
 clean/contaminated artifact matrix and add main's short credential cases across that matrix.
 Coverage policy only inventories newly imported source and exact non-shipped verification helpers:
 computer-use remains owner-excluded with no signals or percentage gate. `coverage:rust` remains
-optional report-only tooling, never invoked by `check` or CI. No live helper, signing, pin or
+optional report-only tooling, never collected by `check` or CI; its mocked argument/path/error
+tests remain part of `check`. No live helper, signing, pin or
 installed path changes are part of this integration.
 
 ## Signing decision and rollback

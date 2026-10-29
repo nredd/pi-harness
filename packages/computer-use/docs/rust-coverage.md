@@ -1,8 +1,9 @@
 # Rust coverage (report-only)
 
 The native bridge crates retain their normal tests. `coverage:rust` is a separate opt-in report,
-not a percentage gate and not part of `make check`, release requirements or the repo coverage
-policy. The script's deterministic argument/path/tool-error tests *are* in the package check.
+not a percentage gate and not collected by `make check`, release requirements or CI. The repo
+coverage policy inventories this tooling under owner-excluded computer-use, with no measurement
+signal or threshold. The script's deterministic argument/path/tool-error tests *are* in the package check.
 A failed test, instrumentation error or empty/wrong-crate report returns nonzero. No thresholds,
 coverage service or source-file exclusion filters are used.
 
