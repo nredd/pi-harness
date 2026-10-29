@@ -24,7 +24,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_native_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Delete imported bytes before compilation and leave the source checkout untouched."""
+    """Delete imported bytes before compilation and leave the source checkout untouched.
+
+    Parameters:
+        tmp_path (Path): Isolated fixture repository and scratch parent.
+        monkeypatch (pytest.MonkeyPatch): Substitute the compiler and host platform.
+
+    Returns:
+        None: Imported payloads cannot survive a missing compiler output.
+    """
     descriptor = rd.descriptor_for("@nredd/pi-computer-use")
     assert descriptor is not None
     workspace = tmp_path / descriptor.workspace
@@ -40,7 +48,16 @@ def test_native_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     calls: list[tuple[str, ...]] = []
 
     def compile_fixture(cwd: Path, *cmd: str, timeout: int) -> str:
-        """Stand in for the compiler, requiring deletion before producing fresh bytes."""
+        """Stand in for the compiler, requiring deletion before producing fresh bytes.
+
+        Parameters:
+            cwd (Path): Disposable source workspace.
+            *cmd (str): Exact descriptor build invocation.
+            timeout (int): Required build deadline.
+
+        Returns:
+            str: Synthetic compiler diagnostics.
+        """
         assert timeout == 1200
         calls.append(cmd)
         for relative in descriptor.native_artifacts:
@@ -69,7 +86,14 @@ def test_native_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_packed_compiler_bytes(tmp_path: Path) -> None:
-    """A swapped or stale payload cannot pass merely because its path is present."""
+    """A swapped or stale payload cannot pass merely because its path is present.
+
+    Parameters:
+        tmp_path (Path): Disposable source and tarball parent.
+
+    Returns:
+        None: Only exact compiler bytes pass the packed-payload comparison.
+    """
     descriptor = rd.descriptor_for("@nredd/pi-computer-use")
     assert descriptor is not None
     for relative in descriptor.native_artifacts:
@@ -91,7 +115,11 @@ def test_packed_compiler_bytes(tmp_path: Path) -> None:
 
 
 def test_build_attestation_credential_boundary() -> None:
-    """Only the isolated attestor gets attestation write, and publish verifies the exact source."""
+    """Only the isolated attestor gets attestation write, and publish verifies the exact source.
+
+    Returns:
+        None: Build, attestation and publication permissions remain separated.
+    """
     jobs = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]
     assert "macos-15" in jobs["verify"]["runs-on"]
     assert jobs["verify"]["permissions"] == {"contents": "read"}
