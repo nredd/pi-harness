@@ -14,8 +14,9 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "wsl2.yml"
-CLEANUP = WORKFLOW.parents[2] / "scripts" / "wsl2_cleanup.sh"
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+CLEANUP = ROOT / "scripts" / "wsl2_cleanup.sh"
 
 
 def workflow_text() -> str:
@@ -32,27 +33,28 @@ def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
     workflow = workflow_text()
     assert "  pull_request:" in workflow
     assert "    branches: [main]" in workflow
-    assert "name: wsl2 (windows-2022)" in workflow
-    assert "runs-on: windows-2022" in workflow
-    assert "timeout-minutes: 45" in workflow
+    assert not (WORKFLOW.parent / "wsl2.yml").exists()
+    assert workflow.count("os: [ubuntu-24.04, macos-14, wsl2]") == 3
+    assert workflow.count("runner: windows-2022") == 3
+    assert "runs-on: wsl2" not in workflow
+    assert "timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}" in workflow
+    assert "timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 40 }}" in workflow
     assert "contents: read" in workflow
-    assert "additional-packages: curl git libatomic1 python3 tmux unzip xz-utils" in workflow
 
 
 def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     """Require explicit WSL2 proof and Linux-filesystem execution."""
-    workflow = workflow_text()
-    assert "wsl-version: '2'" in workflow
-    assert "wsl --list --verbose" in workflow
-    assert "$listing = $listing -replace ([char]0), ''" in workflow
-    assert "Ubuntu-24\\.04" in workflow
-    assert "Record Windows checkout path for WSL" in workflow
-    assert "wsl2-source-checkout.txt" in workflow
-    assert 'source_checkout=$(wslpath -u "$(tr -d \'\\r\\n\' < "$wsl_source_file")")' in workflow
-    assert "Expected the Windows checkout below /mnt" in workflow
-    assert "Harness worktree must be on the WSL Linux filesystem" in workflow
-    assert "findmnt --noheadings --output FSTYPE" in workflow
-    assert "drvfs|''" in workflow
+    action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
+    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    assert "wsl-version: '2'" in action
+    assert "wsl --list --verbose" in action
+    assert "-replace ([char]0), ''" in action
+    assert "Ubuntu-24\\.04" in action
+    assert "core.autocrlf false" in action
+    assert "Expected Windows source below /mnt" in setup
+    assert "Harness worktree is not on a Linux filesystem" in setup
+    assert "findmnt --noheadings --output FSTYPE" in setup
+    assert "drvfs|''" in setup
 
 
 def run_cleanup(
@@ -166,32 +168,35 @@ def test_wsl2_cleanup_retains_harness_failure_when_worktree_removal_fails(tmp_pa
 def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     """Keep the executable cleanup and bounded upload attached to the native job."""
     workflow = workflow_text()
-    assert "Prepare WSL diagnostics directory" in workflow
+    capture = (ROOT / "scripts/wsl2_capture.sh").read_text()
     assert "wsl2-diagnostics" in workflow
-    assert 'diagnostics_dir="$(dirname "$wsl_source_file")/wsl2-diagnostics"' in workflow
-    assert 'source "$source_checkout/scripts/wsl2_cleanup.sh"' in workflow
-    assert "trap cleanup_wsl2_worktree EXIT" in workflow
-    assert "name: wsl2-diagnostics" in workflow
+    assert 'source "$worktree/scripts/wsl2_cleanup.sh"' in capture
+    assert "trap finish_capture EXIT" in capture
+    assert capture.index("trap finish_capture EXIT") < capture.index("for name in")
+    assert "cleanup_wsl2_worktree" in capture
+    assert workflow.count("cleanup: cleanup") == 3
+    assert workflow.count("path: ${{ runner.temp }}/wsl2-diagnostics/") == 3
     assert "if: always()" in workflow
     assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in workflow
-    assert "path: ${{ runner.temp }}/wsl2-diagnostics/" in workflow
     assert "if-no-files-found: warn" in workflow
     assert "PI_BIN" in workflow
-    assert "Core Gitlink:" in workflow
 
 
 def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     """Require actual Pi startup, RPC, extension, and stack process coverage."""
     workflow = workflow_text()
     assert "git submodule update --init forks/pi" in workflow
-    assert 'test "$(bun --version)" = "$bun_version"' in workflow
-    assert "bun-v$bun_version" in workflow
-    assert "uv_version=0.13.1" in workflow
-    assert '"uv $uv_version"*' in workflow
+    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    assert 'test "$(bun --version)" = "$bun_version"' in setup
+    assert "bun-v$bun_version" in setup
+    assert "uv_version=0.13.1" in setup
+    assert '"uv $uv_version"*' in setup
     assert "uv run --locked python -m harness.release" in workflow
     assert "--gitlink ../forks/pi" in workflow
     assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in workflow
-    assert "--stack stacks/personal.json -m stack -n 2 --dist loadfile" in workflow
+    assert '--stack "stacks/${{ matrix.stack }}.json" -m stack -n 2 --dist loadfile' in workflow
+    assert "--stack stacks/personal.json --runtime bun-standalone" in workflow
+    assert "--stack stacks/local.json --runtime bun-standalone" in workflow
 
 
 INSTALL_GH = CLEANUP.parent / "install_gh_linux.sh"
@@ -200,20 +205,22 @@ INSTALL_GH = CLEANUP.parent / "install_gh_linux.sh"
 def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> None:
     """Install attestation-capable `gh`, forward the token via WSLENV, and gate `npm ci` on verification."""
     workflow = workflow_text()
-    assert workflow.count("runs-on:") == 1
-    assert "python3" in workflow.split("additional-packages:")[1].splitlines()[0]
+    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     assert "GH_TOKEN: ${{ github.token }}" in workflow
-    assert "WSLENV: GH_TOKEN/u" in workflow
-    assert 'env -u GH_TOKEN bash "$worktree/scripts/install_gh_linux.sh"' in workflow
-    assert "env -u GH_TOKEN npm ci --ignore-scripts" in workflow
-    assert "env -u GH_TOKEN uv sync --locked --python" in workflow
-    install = workflow.index('bash "$worktree/scripts/install_gh_linux.sh" "$tool_dir/gh"')
-    path = workflow.index('export PATH="$tool_dir/gh/bin:$PATH"')
+    assert "GH_TOKEN/u" in wrapper
+    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.sh").read_text()
+    action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
+    assert "python3" in action.split("additional-packages:")[1].splitlines()[0]
+    assert "unset GH_TOKEN" in setup
+    assert 'bash scripts/install_gh_linux.sh "$tool_dir/gh"' in setup
+    makefile = (ROOT / "Makefile").read_text()
+    assert "env -u GH_TOKEN npm ci --ignore-scripts" in makefile
+    assert "env -u GH_TOKEN uv sync --locked" in makefile
+    assert "cd integration && uv sync --locked --python" in workflow
     verify = workflow.index("python3 -m harness.release --verify-root-overrides --root .")
     npm_ci = workflow.index("npm ci --ignore-scripts")
-    fetch = workflow.index("uv run --locked python -m harness.release --gitlink")
-    unset = workflow.index("unset GH_TOKEN")
-    assert install < path < verify < npm_ci < fetch < unset
+    assert verify < npm_ci
     assert "echo $GH_TOKEN" not in workflow
 
 
