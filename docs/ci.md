@@ -371,19 +371,27 @@ bootstrap exception. Istanbul consolidation is phase 3, not part of this produce
 Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-version`, uv `0.13.1`
 (Python from `.python-version` via uv). Every action is pinned to a commit SHA.
 
+PR freshness and release verification follow [the frozen-candidate policy](release-verification.md).
+Do not update-branch solely because main advanced. Keep exact final-HEAD checks and both reviews.
+Manual `ci.yml` dispatch runs the complete matrix and core fork gate without docs/smoke shortcuts;
+push/main smoke is not release evidence.
+
 Required checks on `main`:
 
 - `owned (ubuntu-24.04)` and `owned (macos-14)`
 - `contracts (ubuntu-24.04)` and `contracts (macos-14)`
 - `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
 
-Migration required, not applied by this PR:
+- `owned (wsl2)`, `contracts (wsl2)`, `stack (wsl2, personal)` and `stack (wsl2, local)`
 
-- Remove the retired `wsl2 (windows-2022)` context and add `owned (wsl2)`, `contracts (wsl2)`, `stack (wsl2, personal)` and `stack (wsl2, local)` only after their hosted runs pass.
-- Preserve the existing eight native contexts. Until an authorized orchestrator updates the ruleset, the old WSL context stays pending and merge/promotion must remain blocked. No remote protection change is authorized here.
-- The historical nine-context receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged. Tests explicitly add synthetic replacement matrix records; they are not hosted execution evidence.
+The owner-authorized migration now configures all twelve contexts in active ruleset
+`main required checks` (`25524267`, `integration_id` 15368 each), with
+`strict_required_status_checks_policy=false` and no bypass actors. Do not re-enable strictness,
+disable checks or bypass protection. This PR edits no remote rules. The historical nine-context
+receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged; its synthetic matrix
+extensions are not hosted execution evidence.
 
-The historical nine jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
+Those twelve jobs are the configured required checks; `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both

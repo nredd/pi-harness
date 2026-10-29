@@ -39,6 +39,7 @@ from harness.promotion import (
     verify_core,
     verify_required_checks,
 )
+from harness.release_gate import require_full_verification
 from harness.stack import Stack
 
 if TYPE_CHECKING:
@@ -196,6 +197,7 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
         PromotionError: a gate failed.
         ValueError: evidence is malformed or insufficient.
     """
+    full_run = require_full_verification(ctx.repo, source_sha)
     rules = gh_json(f"repos/{ctx.repo}/rules/branches/main")
     pages = gh_json(f"repos/{ctx.repo}/commits/{source_sha}/check-runs?per_page=100")
     required = required_checks(flatten_pages(rules))
@@ -208,7 +210,8 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
         stack_runs = override_stack_runs(ctx, source_sha)
     else:
         checks = verify_required_checks(required, flatten_pages(pages), source_sha)
-        stack_runs = fetch_stack_runs(ctx, source_sha)
+        # Record the actual full dispatch, not the selective push/main smoke.
+        stack_runs = [full_run]
     stack_path = ctx.promo / "personal.json"
     stack_path.write_text(
         run_command(

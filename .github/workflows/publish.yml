@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,6 +40,13 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest
+      - name: Require frozen combined candidate full verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: >-
+          PYTHONPATH=integration uv run --locked --project integration python -m harness.release_gate
+          --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
       - name: Resolve and validate release tag
         id: target
         env:
@@ -71,6 +79,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,6 +98,13 @@ jobs:
         with:
           name: npm-release-${{ github.run_id }}
           path: ${{ runner.temp }}/npm-release/
+      - name: Recheck full candidate evidence before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: >-
+          PYTHONPATH=integration uv run --locked --project integration python -m harness.release_gate
+          --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
       - name: Assert toolchain, verify bytes, refuse duplicate publication
         id: candidate
         env:

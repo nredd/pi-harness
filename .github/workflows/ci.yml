@@ -3,11 +3,12 @@ name: CI
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -29,9 +30,22 @@ jobs:
       - id: classify
         name: Classify changed paths
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python3 scripts/ci_paths.py --base "$BASE" --head "$HEAD" --github-output "$GITHUB_OUTPUT"
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            # A frozen release-verification/<sha> ref can verify an older main
+            # candidate without moving it forward merely because main advanced.
+            case "$GITHUB_REF" in
+              refs/heads/main|"refs/heads/release-verification/$GITHUB_SHA") ;;
+              *) echo 'Full verification requires main or an exact frozen candidate ref' >&2; exit 1 ;;
+            esac
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+            echo 'docs_only=false' >>"$GITHUB_OUTPUT"
+            echo 'changed_files=Full frozen release candidate' >>"$GITHUB_OUTPUT"
+          else
+            python3 scripts/ci_paths.py --base "$BASE" --head "$HEAD" --github-output "$GITHUB_OUTPUT"
+          fi
       - name: Report classification
         env:
           DOCS_ONLY: ${{ steps.classify.outputs.docs_only }}
@@ -156,7 +170,7 @@ jobs:
       - name: Coverage accounting (existing reports, including test failures)
         if: always() && steps.plan.outputs.run == 'true'
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
         run: make check-coverage BASE="$BASE"
       # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
       - uses: ./.github/actions/capture-ci-wsl
@@ -545,6 +559,11 @@ jobs:
           name: wsl2-diagnostics-stack-${{ matrix.stack }}
           path: ${{ runner.temp }}/wsl2-diagnostics/
           if-no-files-found: warn
+
+  release-core:
+    if: github.event_name == 'workflow_dispatch'
+    needs: classify
+    uses: ./.github/workflows/forks.yml
 
   bench:
     name: bench (not run)

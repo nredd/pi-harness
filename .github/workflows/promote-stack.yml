@@ -56,6 +56,13 @@ jobs:
           version: "0.13.1"
       - name: Install harness
         run: uv sync --locked --directory integration
+      - name: Require frozen combined candidate full verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: >-
+          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.release_gate
+          --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
       - id: target
         name: Verify the selected commit and build the candidate snapshot
         env:

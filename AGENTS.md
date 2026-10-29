@@ -25,6 +25,16 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
   remains within the same-repo TRUST assumption and the submitted workflow's read-only token scope.
 - Do not activate the distribution, alter the live Pi install, or archive old repositories as part of staging.
 
+# Merge and release policy
+
+PRs need their own exact final-HEAD green checks and independent reviews, not another run solely
+because `main` advanced. Resolve actual conflicts and re-review every HEAD change. Preserve the
+active twelve app-bound checks and non-strict ruleset policy; never re-enable strictness, disable
+protection or bypass checks. Before publishing, promoting or deploying, require the exact frozen
+combined candidate's full executed CI and artifact evidence, not selective main smoke or old PR
+checks. Follow `docs/release-verification.md`; unrelated later main advances do not stale that
+candidate, but changed selected inputs do.
+
 # Mandatory PR review
 
 Every PR needs separate read-only Standards and Spec `code-reviewer` subagents, including bootstrap,
