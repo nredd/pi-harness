@@ -1087,6 +1087,7 @@ function planMode(pi, dependencies = {}) {
   let activeImplementationRuntimeApplication;
   let pendingRuntimeAdmissionSession;
   let queuedRuntimeAdmissionInputs = [];
+  let shuttingDownSession;
   let menuController = new AbortController();
   let settingsWatch;
   let settingsReloadTimer;
@@ -1376,6 +1377,7 @@ function planMode(pi, dependencies = {}) {
     finalizationRequest.reset();
     currentSession = ctx.sessionManager;
     currentSessionContext = ctx;
+    shuttingDownSession = void 0;
     workflowOwner = void 0;
     workflowMutex.bindSession(ctx.sessionManager);
     refreshStateBeforeFirstAgentStart = event.reason === "new";
@@ -1458,24 +1460,18 @@ function planMode(pi, dependencies = {}) {
     const shutdownSession = ctx.sessionManager;
     const runtimeApplication = activeImplementationRuntimeApplication?.sessionManager === shutdownSession && activeImplementationRuntimeApplication.drainOnShutdown ? activeImplementationRuntimeApplication : void 0;
     const queuedInputs = takeQueuedRuntimeAdmissionInputs(shutdownSession);
-    for (const queued of queuedInputs) {
-      pi.sendMessage(
-        {
-          customType: RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE,
-          content: runtimeAdmissionInputContent(queued),
-          display: true,
-          details: { source: queued.source }
-        },
-        { triggerTurn: false }
-      );
+    for (const queued of queuedInputs) recoverRuntimeAdmissionInput(queued);
+    if (currentSession !== void 0 && currentSession !== shutdownSession) {
+      workflowMutex.unbindSession(shutdownSession);
+      return;
     }
+    shuttingDownSession = shutdownSession;
     finalizationRequest.reset();
     menuGeneration += 1;
     menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
     readyPresentationIntent = void 0;
     refreshStateBeforeFirstAgentStart = false;
     pendingRuntimeAdmissionSession = void 0;
-    queuedRuntimeAdmissionInputs = [];
     workflowAllowedToolNames = void 0;
     pendingWorkflowToolPolicy = void 0;
     implementationRetention.reset();
@@ -1618,6 +1614,10 @@ Blocked command: ${blocked}`
     return { messages: withDecline };
   });
   pi.on("input", async (event, ctx) => {
+    if (shuttingDownSession === ctx.sessionManager) {
+      recoverRuntimeAdmissionInput({ ...event, sessionManager: ctx.sessionManager });
+      return { action: "handled" };
+    }
     refreshStateForFirstPrompt(ctx);
     if (event.source !== "extension") recordPlanDecline();
     const waitsForRuntimeAdmission = activeImplementationRuntimeApplication?.sessionManager === ctx.sessionManager || pendingRuntimeAdmissionSession === ctx.sessionManager;
@@ -2323,6 +2323,17 @@ Blocked command: ${blocked}`
     }
     queuedRuntimeAdmissionInputs = remaining;
     return matching;
+  }
+  function recoverRuntimeAdmissionInput(queued) {
+    pi.sendMessage(
+      {
+        customType: RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE,
+        content: runtimeAdmissionInputContent(queued),
+        display: true,
+        details: { source: queued.source }
+      },
+      { triggerTurn: false }
+    );
   }
   function removeQueuedRuntimeAdmissionInput(queuedInput) {
     const index = queuedRuntimeAdmissionInputs.indexOf(queuedInput);
