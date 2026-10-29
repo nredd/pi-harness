@@ -93,6 +93,7 @@ export function spawnMonitor(argv: readonly string[], opts: SpawnOptions): Promi
 			cwd: opts.cwd,
 			stdio: ["pipe", "pipe", "pipe", "pipe"],
 			detached: true,
+			env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", BUN_BE_BUN: "1" },
 		});
 		let status = "";
 		let completed = false;
