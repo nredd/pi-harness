@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { type AgentSession, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resumeAgent, retryStaleCtx, staleCtxOutcome } from "../src/agent-runner.js";
+import * as worktrees from "../src/worktree.js";
 import { answer, barrier, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
@@ -181,6 +182,33 @@ describe("backoff timing and timers", () => {
     expect(prompts).toHaveBeenCalledTimes(3);
     await done;
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("leaves no shutdown deadline when a real child's teardown overlaps the final re-prompt", async () => {
+    const { h, hold, record } = await startHeldChild([answer("CHILD DONE")]);
+    hold.release();
+    await record.promise;
+
+    // Git pruning is intentionally detached on quit. Its live child-process
+    // timeout is unrelated to the shutdown race this test measures.
+    const prune = vi.spyOn(worktrees, "pruneWorktrees").mockResolvedValue();
+    try {
+      vi.useFakeTimers();
+      const prompts = vi.fn(async () => {
+        // Deliberately pin teardown to the final re-prompt: an earlier 3s
+        // shutdown deadline would expire during the 13s backoff and hide the leak.
+        if (prompts.mock.calls.length === 3) await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      });
+      const done = retryStaleCtx(deadSession(prompts), 0, undefined);
+      await vi.advanceTimersByTimeAsync(13_000);
+      await done;
+
+      expect(prompts).toHaveBeenCalledTimes(3);
+      expect(record.session?.messages.at(-1)).toMatchObject({ stopReason: "stop" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      prune.mockRestore();
+    }
   });
 
   it("an abort mid-backoff ends the wait, sends nothing and leaks no timer", async () => {

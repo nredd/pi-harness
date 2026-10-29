@@ -1,0 +1,33 @@
+Lifecycle mutation evidence
+
+Run from packages/subagents with ../../node_modules/.bin/vitest run test/lifecycle-coverage-<theme>.test.ts --maxWorkers=1.
+Each row is a separate production mutation unless marked batch; every run exits 1.
+Every file is restored from its saved byte buffer in finally, then checked with Buffer.equals and SHA-256. Full gates run only after restoration.
+
+Fresh takeover proofs:
+- fleet / workflow rejection: change only the workflow Promise.reject handler in FleetList.openSelected from clearViewer() to clearViewer(true). 1 failed / 4 passed: "returns navigation after the workflow inspector rejects without acknowledging it" loses the visible "failed workflow" row after the runtime source disappears. Stable workflow identity prevents re-ingestion from hiding a false acknowledgement.
+- fleet / agent rejection: change only the agent custom-overlay rejection handler to clearViewer(true). 1 failed / 4 passed: "returns keyboard navigation to the fleet after the overlay rejects" sees resultConsumed=true, expected not true. This semantic assertion precedes key consumption; an unrelated {consume:true} failure is NOT acknowledgement evidence.
+- manager / cleanup: omit the three record.outputCleanup() invocations while preserving field clearing. 2 failed / 7 passed: spawn rejection and detached-resume settlement cannot read the final JSONL answer (ENOENT). Restored callbacks perform a real streamToOutputFile flush, unsubscribe, throw at the boundary and are cleared without losing the verdict.
+- manager / queued detach: skip every queued record during detach's stop bookkeeping. 1 failed / 8 passed: queued record stays queued instead of stopped; no old-context runner starts.
+- manager / resume abort: replace startResume's parent abort delivery with false. 1 failed / 8 passed: resumed runner signal remains un-aborted.
+- manager / exact eviction boundary: MAX_EVICTED_NOTES 500 -> 501. 1 failed / 8 passed: second-oldest ID remains, expected absent. Third/newest retained checks also remain.
+- ui / status batch: stale active-status text plus queued -> running wording. 2 failed / 13 passed: final agent disappearance fails exact status clear; queued summary fails exact queued text.
+- ui / expanded boundary: EXPANDED_RESULT_LINES 50 -> 51. 1 failed / 14 passed: forbidden result-50 appears.
+- ui / full-output hint: replace the verbose get_subagent_result hint with "truncated". 1 failed / 14 passed: owning expanded-result assertion loses the recovery instruction.
+- ui / settlement: omit keepTicking's timer cancellation. 1 failed / 14 passed: FakeClock.pending is 1, expected 0.
+
+Byte-exact restored SHA-256:
+- src/ui/fleet-list.ts: 182e8c8b8e78f8584d7d3268b725064268379d978a0b9ded37817ce4522041c3
+- src/agent-manager.ts: 1d3c90a86a86503b38b9bec54bce7863275d75421dc23a890efeb347bc641860
+- src/ui/agent-widget.ts: 6578f5f3b269d2c6a7be3cbcfee97d6a28f57475e0a6c519f61a51bfd2ed2502
+- src/ui/agent-row.ts: 3a284d488fb3210e6e954901c7b5c4746b4f157893fc8fca116bec601230b14d
+
+Earlier author receipts (before takeover, preserved as historical evidence):
+- ui: wrong terminal verdicts, turn count/search plural, replacement-dispose identity and overflow-kind decrement: 8 failed / 1 passed.
+- manager: detached verdict, compaction count and eviction bound: 3 failed / 3 passed.
+- persistence: accepting invalid manifests and replacing exclusive lock creation with overwrite: 5 failed / 10 passed.
+- workflow: wrong host-spawn error, queued-skip semantics and native worker error: 4 failed / 5 passed.
+- controls: thinking assignment and admission status are covered by their runner/scheduler failures. The fleet key-consumption failure from that batch did NOT prove acknowledgement; only the fresh isolated semantic failures above do.
+- boundaries: nested transcript wiring, live-steer diagnostic, real-git toplevel diagnostic and fatal unknown-method envelope: 5 failed / 7 passed. These are boundary proofs, not acknowledgement proofs.
+
+The restored source diff against b51e1774 is empty across all 75 sources. No task/runtime/worker-source mutation or #174 production change is retained. Static no-op invalidators are invocation/stability checks, not claims of newly invented mutable behavior.

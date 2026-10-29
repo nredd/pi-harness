@@ -1,0 +1,82 @@
+# Remaining executable counters
+
+Fresh merged lifecycle tests: 6766/7164 lines; 1375/1423 functions. Missing 398/48 across 8 files. Full 75-source denominator/missing-count table: `subagents-lifecycle-files.md`. Anchors below are symbols or quoted callback headers, never unstable anonymous IDs or offsets.
+
+`src/agent-manager.ts`: 6L/1F
+- 3L: `grant`
+- 3L: `startResume`
+- Missing-function regions: `enqueueStart / "cancel: () => {},"`
+
+`src/agent-runner.ts`: 0L/1F
+- Missing-function regions: `observeRun / "unsubscribe: () => {},"`
+
+`src/index.ts`: 352L/33F
+- 1L: `getStatusLabel`
+- 1L: `locateAgentFile`
+- 2L: `chooseViewerMarkdown`
+- 1L: `"r => {"`
+- 1L: `deliverDetachedResult`
+- 2L: `activateSubagents`
+- 1L: `startScheduler`
+- 1L: `"async (_event, ctx) => {"`
+- 3L: `"async (event: { reason?: string }) => {"`
+- 1L: `"(mode) => chooseViewerMarkdown(mode, currentCtx as unknown as ExtensionCommandContext | undefined),"`
+- 2L: `"(_event, ctx) => {"`
+- 2L: `loadCustomToolDescription`
+- 11L: `execute`
+- 1L: `warn`
+- 1L: `report`
+- 2L: `runWorkflowFlag`
+- 1L: `getModelLabel`
+- 4L: `showAgentsMenu`
+- 1L: `packageNameOf`
+- 4L: `showAllAgentsList`
+- 1L: `"id => done(id), // Enter/Space on a row → return that agent's name"`
+- 1L: `"() => done(undefined), // Esc → cancel"`
+- 4L: `"(_tui, _theme, _kb, done) => {"`
+- 2L: `showRunningAgents`
+- 3L: `viewAgentConversation`
+- 3L: `"() => {"`
+- 47L: `showAgentDetail`
+- 13L: `ejectAgent`
+- 25L: `disableAgent`
+- 16L: `enableAgent`
+- 8L: `showCreateWizard`
+- 19L: `showGenerateWizard`
+- 36L: `showManualWizard`
+- 2L: `gateAdmitsAnything`
+- 1L: `describeGateSetting`
+- 109L: `applyValue`
+- 1L: `"() => done(undefined as undefined),"`
+- 4L: `handleInput`
+- 11L: `showSettings`
+- 2L: `persistSettings`
+- 1L: `"(event, payload) => pi.events.emit(event, payload),"`
+- Missing-function regions: `activateSubagents` registration/overlay callbacks; `chooseViewerMarkdown`; `showAgentDetail`; `ejectAgent`; `disableAgent`; `enableAgent`; `showCreateWizard`; `showGenerateWizard`; `showManualWizard`; `persistSettings`
+
+`src/ui/conversation-viewer.ts`: 15L/8F
+- 5L: `fallbackMarkdownTheme`
+- 3L: `"() => {"`
+- 4L: `handleInput`
+- 3L: `buildContentLines`
+- Missing-function regions: `fallbackMarkdownTheme` linkUrl/code/quote/quoteBorder/hr callbacks; constructor ScrollView invalidator; live-timer callback; `invalidate`
+
+`src/ui/fleet-list.ts`: 2L/0F
+- 2L: `openSelected`
+
+`src/ui/workflow-menu.ts`: 11L/4F
+- 2L: `onSkipAgent`
+- 2L: `onRetryAgent`
+- 3L: `onOpenAgent`
+- 4L: `openWorkflowFromFleet`
+- Missing-function regions: `onSkipAgent`; `onRetryAgent`; `onOpenAgent` rejection callback; `openWorkflowFromFleet`
+
+`src/workflow/meta.ts`: 11L/1F
+- 5L: `isRegexPosition`
+- 3L: `"(entry, index) => {"`
+- 1L: `extractMeta`
+- 2L: `workflowCallName`
+- Missing-function regions: `isRegexPosition`
+
+`src/workflow/runtime.ts`: 1L/0F
+- 1L: `walk`
