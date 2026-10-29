@@ -9,7 +9,10 @@ import { run } from "../../packages/dev-tools/src/core/process.ts";
 import { spawnMonitor } from "../../packages/session-kit/src/monitor/process.ts";
 
 const READINESS_WATCHDOG_MS = 10_000;
+/** Explicit fixture-only completion deadline, not a production monitor default. */
 const COMPLETION_WATCHDOG_MS = 10_000;
+/** Deterministic cold-start delay that exceeded the former one-second fixture deadline. */
+const STARTUP_DELAY_MS = 1_500;
 const FIXTURE_LIFETIME_MS = 60_000;
 const TEST_TIMEOUT_MS = 30_000;
 const DESCENDANT_EXIT_TIMEOUT_MS = 1_000;
@@ -244,7 +247,7 @@ child.once("message", /** @returns {void} Releases the acknowledged leader. @thr
 			() => rm(cwd, { recursive: true, force: true }),
 		);
 		const result = await runner.execute(
-			'process.stdout.write("out\\n"); process.stderr.write("err\\n"); process.exitCode = 7;',
+			`setTimeout(() => { process.stdout.write("out\\n"); process.stderr.write("err\\n"); process.exitCode = 7; }, ${STARTUP_DELAY_MS});`,
 			cwd,
 		);
 		assert.deepEqual(result, {
