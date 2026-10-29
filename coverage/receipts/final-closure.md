@@ -122,4 +122,21 @@ reports first. A real disposable guest/host filesystem regression checks exact c
 layout, prevents unrelated-file export, and verifies a subsequent empty capture clears all
 previous evidence. Producers/accounting still fail on missing reports; export does not invent
 coverage or erase their status. Full `make check-scripts`: 917 passed, plus 8 import-audit tests.
-The final 12-cell hosted run must establish WSL execution and complete artifact evidence.
+Run [40865524633](https://github.com/nredd/pi-harness/actions/runs/40865524633), commit `dbcdb36d`,
+passes all three owned cells and produces complete artifacts, including `coverage-wsl2`. The WSL
+artifact replays with `--os linux --base origin/main`: `measurement_only=false`, 20 signals,
+`errors=[]`. Every primary counter matches native Linux, so no floor changes are needed.
+
+One advisory difference is explicit: WSL session-kit/Bun is 948 uncovered lines / 96 functions,
+versus native Linux's 947/94 reference. The extra missing line is `src/mon/source.ts:99`, the
+routine-skip-only process hint. Its conditional `filter`/`every` callbacks depend on real-host
+process visibility in the native compatibility subset; WSL's process population need not have
+kernel-thread/unreadable routine skips. The full primary remains zero on both. Keep the native
+Linux advisory reference and show WSL's signed delta, rather than blending runner maxima or
+calling the subset source-complete. Other signal counts agree with native Linux.
+
+This run is NOT globally green: the sole failed required cell is `stack (wsl2, personal)` during
+`wsl.exe --update`, before guest setup, with `Forbidden (403)` and exit 4294967295. All other
+11 required cells passed. This infrastructure failure does not invalidate the successful owned
+producers or authorize retrying tests to obtain lower coverage counters. The final exact-head
+run must still pass all 12 required contexts; no merge is authorized.
