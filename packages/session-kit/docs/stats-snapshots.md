@@ -5,7 +5,12 @@ The exact esbuild version and dependencies are locked; tests assert byte-identic
 Copy only that file. Runtime is Node 22+ with builtins only, no Pi install, extension, private
 repository, package install, auth or network access. Importing the artifact is silent, even when
 an importing process supplies a nonexistent entrypoint argument; direct and symlinked Node execution
-still run the CLI.
+still run the CLI. Packed-CLI tests explicitly launch `node`, including when their Vitest
+host is Bun; this tests the artifact's declared runtime, not Bun's entry-module resolver.
+
+Chart tick steps parse decimal powers directly rather than using implementation-approximated
+exponentiation, keeping large finite ticks consistent between Node and Bun. Steps above the
+numeric range retain infinite headroom.
 
 ```
 node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]

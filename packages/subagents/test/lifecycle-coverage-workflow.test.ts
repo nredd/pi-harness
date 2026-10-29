@@ -90,10 +90,11 @@ describe("workflow lifecycle boundaries", () => {
     expect(adapter.abortAgent).toHaveBeenCalledExactlyOnceWith("wf-agent-0");
   });
 
-  it("settles a native worker error caused by a hostile thrown-value diagnostic getter", async () => {
+  it("settles a hostile thrown-value diagnostic getter without replacing the original failure", async () => {
     const adapter = host();
     const result = await runWorkflow({ script: HEAD + 'throw { get message() { throw new Error("diagnostic getter failed"); } };', host: adapter });
-    expect(result).toMatchObject({ status: "failed", error: "diagnostic getter failed", agentCount: 0 });
+    expect(result).toMatchObject({ status: "failed", error: "Workflow threw an unreadable error.", agentCount: 0 });
+    expect(result.errorStack).toBeUndefined();
     expect(adapter.spawnAgent).not.toHaveBeenCalled();
   });
 });
