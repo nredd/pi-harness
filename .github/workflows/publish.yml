@@ -51,6 +51,8 @@ jobs:
       - name: Install, check package, pack once, exercise tarball and generate manifest
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          # Tag pushes have no comparison base; check the tagged commit itself.
+          COMMIT_RANGE: ${{ github.sha }}~1..${{ github.sha }}
         run: >-
           uv run --locked --project integration python scripts/npm_release.py verify
           --tag "$RELEASE_TAG" --artifact-dir "$RUNNER_TEMP/npm-release"

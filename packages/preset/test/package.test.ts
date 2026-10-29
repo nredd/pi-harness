@@ -45,7 +45,7 @@ const HOST_RELEASE_TARBALL =
 test("metadata: public, versioned, correctly attributed", () => {
 	const pkg = manifest();
 	assert.equal(pkg.name, "@nredd/pi-preset");
-	assert.equal(pkg.version, "0.2.0");
+	assert.equal(pkg.version, "0.3.0");
 	assert.ok(!("private" in pkg));
 	assert.deepEqual(pkg.publishConfig, { access: "public" });
 	assert.deepEqual(pkg.repository, {
@@ -169,7 +169,7 @@ test("README states public publication and keeps the pending work explicit", () 
 	for (const needle of [
 		"Published to npm as `@nredd/pi-preset` (public)",
 		"not a supported release",
-		"npm:@nredd/pi-preset@0.2.0",
+		"npm:@nredd/pi-preset@0.3.0",
 		'"packageAgents": false',
 		"test/footer-render.test.ts",
 		"no installer, no profile resolver, no activation path",
