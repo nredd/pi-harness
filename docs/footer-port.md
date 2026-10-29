@@ -4,7 +4,7 @@ Comparison inputs: dotfiles `origin/main` `bb7297f`,
 `private_dot_pi/agent/extensions/expanded-footer.ts`, `lib/footer-cache.ts`, `lib/footer-quota.ts`
 and `tests/footer-{cache,quota}.test.mjs`; pi-harness `origin/main` `aa5826f`,
 `packages/preset/extensions/expanded-footer.ts`, `lib/` and `test/`. The preset pins the
-core `v1.3.0-nredd.7` tarballs.
+core `v1.3.0-nredd.8` tarballs.
 Paths below are relative to those directories unless otherwise stated.
 
 ## Behavior comparison

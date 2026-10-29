@@ -9,7 +9,7 @@ The full managed preset is still not a supported release: no installer, no profi
 Standalone plugin users are unaffected. This is deliberately opt-in policy, not a replacement
 imposed on `@nredd/pi-dev-tools`, `@nredd/pi-session-kit`, or `@nredd/pi-subscription-router`.
 
-Tested hosts: the package tests run on core `v1.3.0-nredd.7` (upstream `1.3.0` plus the fork's patch queue,
+Tested hosts: the package tests run on core `v1.3.0-nredd.8` (upstream `1.3.0` plus the fork's patch queue,
 the release tarballs pinned in `devDependencies`); `make check-package-contracts` installs the packed
 preset into exact stock Pi `1.3.0`. Peers are `*` per Pi's package rules.
 

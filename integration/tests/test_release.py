@@ -59,23 +59,31 @@ class HTTPBody(io.BytesIO):
     headers = Message()
 
 
-# sha256 (frozen in `LEGACY_CHECKSUMS`) -> npm SRI sha512 of the same downloaded legacy tarball.
+# The root overrides' core release: the first non-legacy (attested) tag. Each asset maps to the
+# sha256 its release `SHA256SUMS` publishes and the npm SRI sha512 of the same downloaded bytes.
 # Re-derive both from one download: `gh release download <tag> --repo nredd/pi -p <asset>`, then
 # `shasum -a 256 <asset>` and `printf 'sha512-%s' "$(openssl dgst -sha512 -binary <asset> | base64)"`.
-LOCK_INTEGRITY = {
-    "16479a0cb393c7820d8b1fbcdc5c941ceb5a271dc64ecb4b8be6574df3a2e617": (
-        "sha512-M7jiF/SqKQdUOlogM7SqXzNVNNtTCpF3CxA8/tWnvCv0sHT48SEbagIyj8oriBRglz4Q5lZMrjDgt6QJDky3Tg=="
-    ),
-    "dd8ac6c221bfd8e76fcc5b93418ba8feffd63dd705bde814aea6d4b1b46938e0": (
-        "sha512-5eGojgZgCgakNg8GR19x+FS7PXGb0GLUllZEFJto9lUhKFXv5Z0u15UpWkvOyJmDiQ0EZXMyM2Xh75uA5a5FFw=="
-    ),
-    "e08bbd6b348a00eb97250ebfa33a722c70323b55a2d1e6f5b446513fcb5dad35": (
-        "sha512-zXQEUNTFyIt1a7uus/b1TY/VRWh+P8IjupnqKda2v4TZC6WrbuYZ+3JosZWhOqbh6RP38aYhRH9kb4qn2EbMJQ=="
-    ),
-    "1b7ed741d704e0e288056630c1abc1a71eaec83eac148689c1d9b152361085b7": (
-        "sha512-shL6PmzE7Dyb1dwGJ73leWPVu6zHis5lTs3o1NBaf5Z09oiG2VOYuIdBs0es66GxMAJ4z3mKILNogWx3+lRCWA=="
-    ),
-}
+ROOT_OVERRIDE_TAG = "v1.3.0-nredd.8"
+ROOT_OVERRIDE_DIGESTS = MappingProxyType(
+    {
+        "earendil-works-pi-coding-agent-1.3.0.tgz": (
+            "7730b607a6df491ed14862dbd5a8a4c6ac2712cf5a674bf43730a5b4877329bf",
+            "sha512-xNToGOloR+beYD9nAVIsM8Wpc1Ph+cE70dwgMBYbNPncNbFm5oMhvg9+/9xA55DvCPkiXNJLeJMt1IWFdJzljw==",
+        ),
+        "earendil-works-pi-tui-1.3.0.tgz": (
+            "4f1e74a43649fd2024ad7f5ba1f6ed5efa651df024caad1a60f0d4875be58201",
+            "sha512-m/hckLlwUbueyM7wwxmCWZc6qA5GBtUIo8Ji19RyJtWm/XopE5W+LrL8pZjlyXXtSdQY2rLNm60gst2KWdylHA==",
+        ),
+        "earendil-works-pi-agent-core-1.3.0.tgz": (
+            "e1c080999209a72e0919bb7fabefcdece49e8252433c8c3ae83ad18c6c52a51c",
+            "sha512-IHx5B9scwHB8jCbaLIwfSgiY5XJy2rje7Hy5G/1MvDPelNdfOThd2BACGDMd1yp8RQKRIOhENMOmEvGrSDVdmQ==",
+        ),
+        "earendil-works-pi-ai-1.3.0.tgz": (
+            "eaf94ad9a0fe6ecc3f77642e5ef3b5e6e907862d3f1667dd75fcbb32a293d65c",
+            "sha512-KF5wE5YjhV9wGPgl09Yxra1gcz/vTz3/UrrkaYXnlTry5T7omMhPOYllC2H3/GZTv9h7ftrztTf/g38BE5ZsaQ==",
+        ),
+    }
+)
 
 
 def checksums_for(tag: str, contents: bytes) -> dict[str, str]:
@@ -727,14 +735,15 @@ class _Installed(Exception):
     """Raised by the stubbed installer once every asset verified."""
 
 
-def test_root_overrides_stay_tied_to_verified_legacy_releases() -> None:
+def test_root_overrides_stay_tied_to_the_attested_core_release() -> None:
     """npm resolves the root overrides from the lockfile, NOT through `fetch_release`.
 
-    Each override tarball is covered only by the lockfile's sha512. Require every nredd/pi
-    override to name a legacy release, match the lockfile `resolved` URL, and carry an
-    `integrity` equal to the sha512 of the very bytes whose sha256 `LEGACY_CHECKSUMS` records,
-    so the two verification paths cannot silently diverge. Moving an override to a new tag
-    means migrating it onto `fetch_release`'s `SHA256SUMS` plus provenance path first.
+    Each override tarball is covered only by the lockfile's sha512. Require all four nredd/pi
+    overrides to name the one recorded non-legacy release, match the lockfile `resolved` URL,
+    and carry an `integrity` equal to the sha512 of the very bytes whose sha256 that release's
+    `SHA256SUMS` publishes. `verify_root_overrides` re-downloads them against `SHA256SUMS` plus
+    `fork-release.yml` provenance before every install; this pin keeps the two paths from
+    silently diverging. Legacy checksum-only tags are no longer accepted here.
     """
     root = Path(__file__).resolve().parents[2]
     overrides = json.loads((root / "package.json").read_text())["overrides"]
@@ -742,14 +751,19 @@ def test_root_overrides_stay_tied_to_verified_legacy_releases() -> None:
     prefix = "https://github.com/nredd/pi/releases/download/"
     pinned = {name: url for name, url in overrides.items() if isinstance(url, str) and url.startswith(prefix)}
     assert set(pinned) == {f"@earendil-works/{package}" for package in RELEASE_PACKAGES}
+    assert ROOT_OVERRIDE_TAG not in release.LEGACY_RELEASE_TAGS
+    assert set(ROOT_OVERRIDE_DIGESTS) == set(release_tarballs(ROOT_OVERRIDE_TAG))
     for name, url in pinned.items():
         tag, asset = url.removeprefix(prefix).split("/")
-        assert tag in release.LEGACY_RELEASE_TAGS, f"{name} moved to {tag}: verify it before changing"
-        assert asset in release.LEGACY_CHECKSUMS[tag], f"{name}: {tag} never shipped {asset}"
-        sha256 = release.LEGACY_CHECKSUMS[tag][asset]
+        assert tag == ROOT_OVERRIDE_TAG, f"{name} moved to {tag}: verify it and update the pin first"
+        assert asset in ROOT_OVERRIDE_DIGESTS, f"{name}: {tag} never shipped {asset}"
         entry = lock[f"node_modules/{name}"]
         assert entry["resolved"] == url
-        assert entry["integrity"] == LOCK_INTEGRITY[sha256]
+        assert entry["integrity"] == ROOT_OVERRIDE_DIGESTS[asset][1]
+    core = json.loads((root / "integration" / "stacks" / "personal.json").read_text())["core"]
+    if core["tag"] == ROOT_OVERRIDE_TAG:
+        for asset, sha256 in core["integrity"].items():
+            assert sha256 == ROOT_OVERRIDE_DIGESTS[asset][0], f"stack and override pins disagree on {asset}"
 
 
 def serve_attestations(monkeypatch: pytest.MonkeyPatch, outcome: bytes | int) -> list[str]:

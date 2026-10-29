@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-plan-mode",
-  "version": "0.59.3-nredd.2",
+  "version": "0.59.3-nredd.3",
   "description": "Pi extension that adds a Codex-like read-only /plan collaboration mode.",
   "type": "module",
   "license": "MIT",
@@ -53,8 +53,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-coding-agent-1.3.0.tgz",
-    "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-tui-1.3.0.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.8/earendil-works-pi-coding-agent-1.3.0.tgz",
+    "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.8/earendil-works-pi-tui-1.3.0.tgz",
     "@types/node": "^26.6.3",
     "@vitest/coverage-istanbul": "5.0.3",
     "@xterm/headless": "5.5.0",
@@ -66,8 +66,8 @@
   "overrides": {
     "@earendil-works/pi-coding-agent": "$@earendil-works/pi-coding-agent",
     "@earendil-works/pi-tui": "$@earendil-works/pi-tui",
-    "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-agent-core-1.3.0.tgz",
-    "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.6/earendil-works-pi-ai-1.3.0.tgz"
+    "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.8/earendil-works-pi-agent-core-1.3.0.tgz",
+    "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.8/earendil-works-pi-ai-1.3.0.tgz"
   },
   "dependencies": {
     "@narumitw/pi-tui-kit": "^0.65.2"
