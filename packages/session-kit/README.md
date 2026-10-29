@@ -244,6 +244,10 @@ tabs and exact provider totals remain covered at every width. Each stats-view bo
 and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
+Native stop/dispose checks assert direct children are reaped when the operation resolves, then
+observe orphaned descendants disappearing with the existing bounded liveness check. Leader exit
+and pipe closure do not synchronize PID 1's reaping; on Linux, `kill(pid, 0)` can still succeed
+for a terminated zombie. No extra signal, fixed delay or larger timeout is needed.
 The native diff descendant timeout fixture gates its fake deadline on real stdout readiness, so
 slow process startup cannot race a fixed wall-clock deadline. Adapter fault tests cover monitor
 startup/sweep/widget failures, post-spawn errors, worker startup timeout, rejected sampler cleanup,
@@ -252,6 +256,6 @@ navigation. Synthetic PIDs are never passed to real signal capabilities. Native 
 initializes the monitor exit resolver before child handlers register; synchronous close/error
 registration fixtures lock that ordering. The overwritten no-op resolver initializer is removed,
 not a reachable validation or lifecycle path.
-`npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.3.14).
+`npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.4.4).
 Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
 `docs/verification-rebuild.md` at the monorepo root tracks their destinations.

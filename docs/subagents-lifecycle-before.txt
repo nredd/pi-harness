@@ -1,0 +1,40 @@
+# Baseline missing counters
+
+Main `b51e1774`: lines 6658/7164, functions 1351/1423; missing 506/72.
+All 75 source denominators and zero-gap rows are retained in `subagents-lifecycle-files.md`.
+
+src/agent-file-toggle.ts: 1L/0F
+src/agent-manager.ts: 21L/7F
+src/agent-runner.ts: 8L/2F
+src/custom-agents.ts: 2L/0F
+src/enterprise-local.ts: 3L/0F
+src/env.ts: 1L/0F
+src/index.ts: 352L/33F
+src/memory.ts: 1L/0F
+src/model-resolver.ts: 0L/1F
+src/model-tiers.ts: 2L/3F
+src/nested-tools.ts: 6L/0F
+src/output-file.ts: 1L/0F
+src/package-resources.ts: 2L/0F
+src/process-budget.ts: 1L/0F
+src/schedule-store.ts: 5L/0F
+src/schedule.ts: 6L/3F
+src/settings.ts: 5L/0F
+src/skill-loader.ts: 2L/0F
+src/types.ts: 1L/0F
+src/ui/agent-row.ts: 2L/2F
+src/ui/agent-widget.ts: 15L/0F
+src/ui/conversation-viewer.ts: 15L/8F
+src/ui/fleet-list.ts: 7L/3F
+src/ui/fleet-state.ts: 1L/0F
+src/ui/notification-view.ts: 0L/1F
+src/ui/workflow-card.ts: 1L/0F
+src/ui/workflow-dialog.ts: 1L/1F
+src/ui/workflow-menu.ts: 11L/4F
+src/workflow/host.ts: 2L/1F
+src/workflow/json-schema.ts: 3L/0F
+src/workflow/meta.ts: 11L/1F
+src/workflow/runtime.ts: 12L/1F
+src/workflow/saved.ts: 2L/0F
+src/workflow/task.ts: 2L/0F
+src/worktree.ts: 1L/1F
