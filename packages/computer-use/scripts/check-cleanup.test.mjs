@@ -142,11 +142,18 @@ async function verifySpawnFailure() {
 	const { runCancellable } = await import("./setup-helper.mjs");
 	const signals = ["SIGTERM", "SIGINT", "SIGHUP", "exit"];
 	const before = signals.map((signal) => process.listenerCount(signal));
+	const calls = [];
 	await assert.rejects(
-		runCancellable("/nonexistent/pi-cleanup-tool", [], { kill: () => assert.fail("PID-less spawn must not signal") }),
+		runCancellable("/nonexistent/pi-cleanup-tool", [], {
+			kill: (pid, signal) => {
+				calls.push([pid, signal]);
+				throw Object.assign(new Error("invalid group"), { code: "ESRCH" });
+			},
+		}),
 		/not found on PATH/,
 	);
 	await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(calls, [], "PID-less close must not probe even when syscall errors would be swallowed");
 	assert.deepEqual(
 		signals.map((signal) => process.listenerCount(signal)),
 		before,
