@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Task } from "../tool/types.ts";
+import type { Task, TaskMutationParams, TaskOpAction } from "../tool/types.ts";
 import { isTransitionValid } from "./invariants.ts";
 import type { TaskState } from "./state.ts";
 import {
@@ -20,6 +20,39 @@ const stateWith = (...tasks: Task[]): TaskState => ({
 const task = (overrides: Partial<Task> & { id: number; subject: string }): Task => ({
 	status: "pending",
 	...overrides,
+});
+
+describe("applyTaskMutation — action fields", () => {
+	it.each<[TaskOpAction, TaskMutationParams, string]>([
+		["create", { subject: "new", status: "in_progress" }, "status"],
+		["create", { subject: "new", evidence: "tests passed" }, "evidence"],
+		["create", { subject: "new", reason: "later" }, "reason"],
+		["create", { subject: "new", addBlockedBy: [] }, "addBlockedBy"],
+		["update", { id: 1, status: "in_progress", blockedBy: [] }, "blockedBy"],
+		["update", { id: 1, owner: "worker", includeDeleted: false }, "includeDeleted"],
+		["list", { owner: "worker" }, "owner"],
+		["get", { id: 1, status: "in_progress" }, "status"],
+		["delete", { id: 1, reason: "later" }, "reason"],
+		["clear", { status: "completed" }, "status"],
+		["update", { id: 1, status: "in_progress", unknownField: true }, "unknownField"],
+	])("rejects ignored fields for %s: %j", (action, params, field) => {
+		const state = stateWith(task({ id: 1, subject: "original" }));
+		const result = applyTaskMutation(state, action, params);
+		expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining(field) });
+		expect(result.state).toBe(state);
+	});
+
+	it("rolls back provisional mutations when a read supplies an ignored field", () => {
+		const state = emptyState();
+		const result = applyTaskCall(state, {
+			ops: [
+				{ action: "create", subject: "temporary" },
+				{ action: "list", owner: "worker" },
+			],
+		});
+		expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining("ops[1]:") });
+		expect(result.state).toBe(state);
+	});
 });
 
 describe("applyTaskMutation — create", () => {

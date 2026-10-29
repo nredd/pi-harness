@@ -178,7 +178,7 @@ const OpFields = {
 	status: Type.Optional(
 		StringEnum(["pending", "in_progress", "completed", "deferred", "deleted"] as const, {
 			description:
-				"Set this task's status (update): one of pending, in_progress, completed, deferred, deleted. completed requires evidence; deferred requires reason. When action is list, filters returned tasks by this status.",
+				"Set this task's status (update only): one of pending, in_progress, completed, deferred, deleted. completed requires evidence; deferred requires reason. When action is list, filters returned tasks. Not accepted on create: new tasks always start pending; use update with their id.",
 		}),
 	),
 	evidence: Type.Optional(
@@ -212,7 +212,12 @@ const OpFields = {
 const OpSchema = Type.Object({ action: StringEnum(OP_ACTIONS), ...OpFields });
 
 export const TodoParamsSchema = Type.Object({
-	action: Type.Optional(StringEnum(OP_ACTIONS, { description: "The operation. Omit when passing ops." })),
+	action: Type.Optional(
+		StringEnum(OP_ACTIONS, {
+			description:
+				"The operation. Omit when passing ops. Only fields applicable to that action are accepted; create always starts pending (use update to change status).",
+		}),
+	),
 	...OpFields,
 	ops: Type.Optional(
 		Type.Array(OpSchema, {

@@ -55,6 +55,25 @@ describe("registerTodoTool — registration shape", () => {
 });
 
 describe("registerTodoTool — execute mutates module state", () => {
+	it("rejects a create status instead of silently leaving requested work pending", async () => {
+		const { tool, captured } = setup();
+		const result = await call(tool, { action: "create", subject: "audit", status: "in_progress" });
+		expect(result).toBeDefined();
+		expect((result!.details as TaskDetails).error).toContain("status");
+		expect(result!.content[0]).toMatchObject({ text: expect.stringContaining("status") });
+		expect((result!.details as TaskDetails).tasks).toEqual([]);
+		expect(captured.entries).toEqual([]);
+		const created = await call(tool, { action: "create", subject: "audit" });
+		expect((created!.details as TaskDetails).tasks).toEqual([{ id: 1, subject: "audit", status: "pending" }]);
+		await call(tool, { action: "update", id: 1, status: "in_progress", activeForm: "auditing" });
+		const listed = await call(tool, { action: "list" });
+		expect((listed!.details as TaskDetails).tasks[0]).toMatchObject({
+			status: "in_progress",
+			activeForm: "auditing",
+		});
+		expect(captured.entries).toHaveLength(2);
+	});
+
 	it("create → list returns the seeded row", async () => {
 		const { tool } = setup();
 		const r1 = await call(tool, { action: "create", subject: "first" });

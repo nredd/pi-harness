@@ -121,6 +121,28 @@ function taskChanged(before: Task, after: Task): boolean {
 	);
 }
 
+/** Action-specific fields must never disappear behind a successful response. */
+const ACTION_FIELDS: Record<TaskOpAction, ReadonlySet<string>> = {
+	create: new Set(["subject", "description", "activeForm", "blockedBy", "owner", "metadata"]),
+	update: new Set([
+		"id",
+		"subject",
+		"description",
+		"activeForm",
+		"status",
+		"evidence",
+		"reason",
+		"addBlockedBy",
+		"removeBlockedBy",
+		"owner",
+		"metadata",
+	]),
+	list: new Set(["status", "includeDeleted"]),
+	get: new Set(["id"]),
+	delete: new Set(["id"]),
+	clear: new Set(),
+};
+
 /**
  * Pure reducer: (state, action, params) → (state, op). The response envelope (`tool/response-envelope.ts`) owns
  * formatting, the store (`state/store.ts`) owns commit.
@@ -131,6 +153,16 @@ function taskChanged(before: Task, after: Task): boolean {
  * in-reducer.
  */
 export function applyTaskMutation(state: TaskState, action: TaskOpAction, params: TaskMutationParams): ApplyResult {
+	for (const [field, value] of Object.entries(params)) {
+		if (field === "action" || value === undefined || ACTION_FIELDS[action].has(field)) continue;
+		const hint =
+			action === "create" && field === "status"
+				? "; create always starts pending -- use update with the created id to change status"
+				: action === "update" && field === "blockedBy"
+					? "; use addBlockedBy/removeBlockedBy for updates"
+					: "";
+		return errorResult(state, `${field} is not supported for ${action}${hint}`);
+	}
 	switch (action) {
 		case "create": {
 			if (!params.subject?.trim()) {
