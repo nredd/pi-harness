@@ -157,3 +157,20 @@ existing hard reset passes (one focused test), while exact binary bytes remain u
 No production source, formatter rule, source-string assertion or runtime snapshot is relaxed.
 Full `make check-scripts` after the fix: 918 passed plus 8 import-audit tests. Hosted confirmation
 is still required; failed-run counters remain diagnostic only.
+
+Run `40872336251` at `fe48182` confirms the checkout fix: WSL owned/contracts/both stack cells
+pass, and its complete WSL artifact replays as a Linux-floor gate with 20 signals and no errors.
+Compared independently with WSL run `40865524633` on `dbcdb36d`, every signal's line/function
+counter is identical, including the explicitly advisory session-kit/Bun delta. No runner counters
+are combined. Native macOS and every other required context pass except native Ubuntu accounting.
+
+That native Ubuntu producer succeeds but misses `subagents/src/workflow/runtime.ts:976–977`:
+the paused-after-semaphore-admission guard. The existing test waits for first-child startup and
+sleeps, so another worker message can arrive only after pause and take the earlier gate instead.
+A deterministic test now waits for the third worker call before pausing/releasing the first child,
+proving the second already arrived at the host. One check-phase boundary drains same-thread
+permit microtasks before asserting that only the first child started. Resume must complete all
+three values without aborting a child. Disabling the post-admission pause guard fails this exact
+assertion (`[0, 1]` versus `[0]`); the source is restored. Full subagents lint/types/primary/native
+Bun/loader checks pass, and full `make check-scripts` remains 918 passed plus eight import-audit.
+The zero floor is retained, not widened to accommodate incidental timing.
