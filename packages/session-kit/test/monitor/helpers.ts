@@ -2,8 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { signalGroup, spawnMonitor } from "../../src/monitor/process.ts";
+import { STAY } from "./stay.ts";
 
-export const SLEEPER = ["node", "-e", "setInterval(() => {}, 1000)"];
+export const SLEEPER = ["node", "-e", STAY];
 
 export function tempDir(): { dir: string; cleanup: () => void } {
 	const dir = mkdtempSync(join(tmpdir(), "psk-monitor-test-"));

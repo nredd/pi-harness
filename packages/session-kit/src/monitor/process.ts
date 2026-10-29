@@ -6,7 +6,6 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 
 export const KILL_GRACE_MS = 2_000;
 /** After SIGKILL, how long to wait for the pipes to close before resolving anyway. */
@@ -22,8 +21,6 @@ export interface ExitInfo {
 export interface MonitorProcess {
 	pid: number;
 	startedAt: number;
-	/** Unique launch marker retained in `ps` for recovery authentication. */
-	identity: string;
 	/** Resolves once the leader exited and its output drained (or the grace ran out). Never rejects. */
 	exited: Promise<ExitInfo>;
 	/** SIGTERM the group, SIGKILL after `graceMs`. Idempotent. */
@@ -52,83 +49,28 @@ export function signalGroup(pgid: number, sig: NodeJS.Signals): void {
 	}
 }
 
-const SUPERVISOR_SOURCE = `
-const { spawn } = require("node:child_process");
-const { createWriteStream } = require("node:fs");
-const [, encoded] = process.argv.slice(1);
-const [cmd, ...args] = JSON.parse(encoded);
-const parent = process.ppid;
-let stopping = false;
-const stop = () => {
-	if (stopping) return;
-	stopping = true;
-	try { process.kill(-process.pid, "SIGKILL"); } catch { process.exit(1); }
-};
-process.stdin.once("end", stop);
-process.stdin.once("error", stop);
-process.stdin.resume();
-const status = createWriteStream(null, { fd: 3 });
-const report = (value, done) => status.end(JSON.stringify(value) + String.fromCharCode(10), done);
-const child = spawn(cmd, args, { stdio: ["ignore", "inherit", "inherit"] });
-let ready = false;
-let exit;
-const finish = () => {
-	if (!ready || !exit) return;
-	if (exit.signal) process.kill(process.pid, exit.signal);
-	else process.exit(exit.code ?? 1);
-};
-child.once("error", (error) => report({ ok: false, error: error.message }, () => process.exit(1)));
-child.once("spawn", () => report({ ok: true }, () => { ready = true; finish(); }));
-child.once("exit", (code, signal) => { exit = { code, signal }; finish(); });
-setInterval(() => { if (process.ppid !== parent) stop(); }, 100).unref();
-`;
-
-/** Spawn `argv` beneath an owning supervisor. Its parent-death guard kills the detached group if the host dies. */
+/** Spawn `argv`. Rejects with the spawn error (e.g. ENOENT) when the process never started. */
 export function spawnMonitor(argv: readonly string[], opts: SpawnOptions): Promise<MonitorProcess> {
-	const [cmd] = argv;
+	const [cmd, ...args] = argv;
 	if (cmd === undefined || cmd.trim() === "") return Promise.reject(new Error("argv[0] must be non-empty"));
-	const identity = randomUUID();
 	return new Promise((resolve, reject) => {
-		const child: ChildProcess = spawn(process.execPath, ["-e", SUPERVISOR_SOURCE, identity, JSON.stringify(argv)], {
+		const child: ChildProcess = spawn(cmd, args, {
 			cwd: opts.cwd,
-			stdio: ["pipe", "pipe", "pipe", "pipe"],
+			stdio: ["ignore", "pipe", "pipe"],
 			detached: true,
-			env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", BUN_BE_BUN: "1" },
 		});
-		let status = "";
-		let completed = false;
-		const complete = (fn: () => void) => {
-			if (completed) return;
-			completed = true;
+		child.once("error", (error) => reject(error));
+		child.once("spawn", () => {
 			child.removeAllListeners("error");
 			child.on("error", () => {
-				// post-start errors (kill failures) are non-fatal; `exit`/`close` still fire
+				// post-spawn errors (kill failures) are non-fatal; `exit`/`close` still fire
 			});
-			fn();
-		};
-		child.once("error", (error) => complete(() => reject(error)));
-		child.once("exit", () => complete(() => reject(new Error("monitor supervisor exited before target start"))));
-		const control = child.stdio[3];
-		if (!control) {
-			complete(() => reject(new Error("monitor supervisor control pipe is unavailable")));
-			return;
-		}
-		control.on("data", (chunk: Buffer) => {
-			status += chunk.toString("utf8");
-			const newline = status.indexOf("\n");
-			if (newline < 0) return;
-			try {
-				const message = JSON.parse(status.slice(0, newline)) as { ok?: boolean; error?: string };
-				if (message.ok) complete(() => resolve(wrap(child, opts, identity)));
-				else complete(() => reject(new Error(message.error ?? "monitor target failed to start")));
-			} catch {
-				complete(() => reject(new Error("monitor supervisor sent an invalid start response")));
-			}
+			resolve(wrap(child, opts));
 		});
 	});
 }
 
-function wrap(child: ChildProcess, opts: SpawnOptions, identity: string): MonitorProcess {
+function wrap(child: ChildProcess, opts: SpawnOptions): MonitorProcess {
 	const pid = child.pid as number;
 	const startedAt = Date.now();
 	let settled = false;
@@ -166,7 +108,6 @@ function wrap(child: ChildProcess, opts: SpawnOptions, identity: string): Monito
 	return {
 		pid,
 		startedAt,
-		identity,
 		exited,
 		terminate(graceMs = KILL_GRACE_MS) {
 			if (settled || termTimer) return;

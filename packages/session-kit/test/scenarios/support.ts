@@ -348,7 +348,6 @@ export class ControlledProcess implements MonitorProcess {
 		readonly pid: number,
 		readonly startedAt: number,
 		private readonly options: SpawnOptions,
-		readonly identity = `controlled-${pid}`,
 	) {
 		this.exited = this.exitGate.promise;
 	}

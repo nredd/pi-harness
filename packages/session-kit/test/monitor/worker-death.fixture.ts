@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { MonitorManager } from "../../src/monitor/manager.ts";
+import { STAY } from "./stay.ts";
 
 const readyPath = process.env.MONITOR_WORKER_READY;
 const token = process.env.MONITOR_WORKER_TOKEN;
@@ -8,18 +9,20 @@ const targetPath = process.env.MONITOR_WORKER_TARGET;
 if (!readyPath || !targetPath || !token)
 	throw new Error("worker fixture requires readiness and target paths plus ownership token");
 
-it("starts a monitor then waits to be killed", async () => {
-	const manager = new MonitorManager({
-		sessionId: "worker-killed",
-		root: process.env.MONITOR_WORKER_ROOT,
-		send() {},
-	});
+const manager = new MonitorManager({
+	sessionId: "worker-killed",
+	root: process.env.MONITOR_WORKER_ROOT,
+	send() {},
+});
+afterEach(() => manager.dispose());
+
+it("starts a monitor then fails or waits to be killed", async () => {
 	const monitor = await manager.start(
 		{
 			argv: [
 				process.execPath,
 				"-e",
-				`require("node:fs").writeFileSync(process.env.MONITOR_WORKER_TARGET, String(process.pid)); setInterval(() => {}, 1000); // ${token}`,
+				`require("node:fs").writeFileSync(process.env.MONITOR_WORKER_TARGET, String(process.pid)); ${STAY} // ${token}`,
 			],
 			name: "worker-killed",
 		},
@@ -35,5 +38,6 @@ it("starts a monitor then waits to be killed", async () => {
 		mode: 0o600,
 	});
 	renameSync(tmp, readyPath);
+	if (process.env.MONITOR_WORKER_FAIL === "1") expect("intentional failure").toBe("cleaned by afterEach");
 	await new Promise<void>(() => {});
 });

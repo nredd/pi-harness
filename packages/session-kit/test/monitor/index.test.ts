@@ -4,6 +4,9 @@ import { defaultConfig } from "../../src/config.ts";
 import { MESSAGE_TYPE, register, TOOL_NAMES } from "../../src/monitor/index.ts";
 import { psInfo, rootDir, writePidfile } from "../../src/monitor/pidfiles.ts";
 import { alive, cleanupProcs, deadPid, spawnSleeper, tempDir, waitFor } from "./helpers.ts";
+import { STAY } from "./stay.ts";
+
+const shutdowns: (() => Promise<void>)[] = [];
 
 // biome-ignore lint/suspicious/noExplicitAny: a fake pi only needs the surface the extension touches
 type Any = any;
@@ -35,6 +38,7 @@ function fakePi(sessionName?: string) {
 	const emit = async (e: string, ctx: Any, event: Any = { type: e }) => {
 		for (const h of handlers.get(e) ?? []) await h(event, ctx);
 	};
+	shutdowns.push(() => emit("session_shutdown", fakeCtx()));
 	return { pi: pi as Any, tools, commands, shortcuts, sendMessage, emit, entries, active: () => active };
 }
 
@@ -47,7 +51,6 @@ function fakeCtx(mode = "tui", sessionId = "sess-A", entries: Any[] = []) {
 	};
 }
 
-const STAY = "setInterval(() => {}, 1000);";
 let tmp: ReturnType<typeof tempDir>;
 let savedTmp: string | undefined;
 
@@ -56,11 +59,15 @@ beforeEach(() => {
 	savedTmp = process.env.TMPDIR;
 	process.env.TMPDIR = tmp.dir;
 });
-afterEach(() => {
-	if (savedTmp === undefined) delete process.env.TMPDIR;
-	else process.env.TMPDIR = savedTmp;
-	cleanupProcs();
-	tmp.cleanup();
+afterEach(async () => {
+	try {
+		await Promise.all(shutdowns.splice(0).map((shutdown) => shutdown()));
+	} finally {
+		if (savedTmp === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = savedTmp;
+		cleanupProcs();
+		tmp.cleanup();
+	}
 });
 
 describe("monitor extension", () => {

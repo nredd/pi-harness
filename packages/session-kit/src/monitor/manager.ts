@@ -171,7 +171,6 @@ export class MonitorManager {
 			startedAt: proc.startedAt,
 			name,
 			command: argv.join(" "),
-			identity: proc.identity,
 		};
 		try {
 			writePidfile(this.sessionDir, id, record);
