@@ -76,9 +76,8 @@ persistent cron is installed. Deferred-tool configurations need `goal_update` in
 - `monitor_read({id, since?})`: numbered output since a cursor. Ring buffers retain 2000 lines.
 - `monitor_stop({id})`, `/monitor list`, `/monitor stop <id|all>`: stop and inspect owned monitors.
 - Output batches every two seconds into the bounded ring buffer (with dropped-line reporting). Passive batches neither start turns nor create transcript/model-context entries; call `monitor_read` to fetch them. A regex match, natural exit, timeout or `wake: true` emits one compact visible wake with a cursor after the output the model last saw through a wake or read, not a replay of buffered output. A bounded batch preserves its first and latest dropped matching lines as wake evidence even if later output evicts them from the ring.
-- Children run under a per-monitor supervisor in their own process group: SIGTERM, then SIGKILL. Its closed-stdin
-  and parent-PID guards kill that owned group when an uncatchable host SIGKILL orphaned it; pidfiles retain later
-  recovery if the guard cannot run. Sweeps reauthenticate the leader after enumerating members;
+- Children run in process groups: SIGTERM, then SIGKILL. Exit cleanup and pidfiles cover orderly quit
+  and later recovery after SIGKILL. Sweeps reauthenticate the leader after enumerating members;
   uncertain identities or guards never authorize signaling. Reap checks are bounded to 20 polls
   after escalation; a timeout keeps authenticated recovery on disk rather than claiming cleanup.
   Spawn failures after child creation kill the child; matcher initialization failures also remove
@@ -246,6 +245,10 @@ tabs and exact provider totals remain covered at every width. Each stats-view bo
 and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
+Native `STAY` fixtures share a worker-death guard that kills only their own live process group
+when their parent changes; production commands and leader/descendant probes are not modified.
+Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
+Vitest regression SIGKILLs its worker and observes the detached `STAY` child disappearing.
 Native stop/dispose checks assert direct children are reaped when the operation resolves, then
 observe orphaned descendants disappearing with the existing bounded liveness check. Leader exit
 and pipe closure do not synchronize PID 1's reaping; on Linux, `kill(pid, 0)` can still succeed

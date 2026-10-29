@@ -14,8 +14,6 @@ class Child extends EventEmitter {
 	readonly pid = 900_001;
 	readonly stdout = new PassThrough();
 	readonly stderr = new PassThrough();
-	readonly control = new PassThrough();
-	readonly stdio = [undefined, this.stdout, this.stderr, this.control];
 	exitCode: number | null = null;
 	signalCode: NodeJS.Signals | null = null;
 }
@@ -57,7 +55,6 @@ it.each(["close", "error-close", "exit-close"] as const)(
 		const kill = vi.spyOn(process, "kill").mockReturnValue(true);
 		const starting = spawnMonitor(["fixture"], { cwd: "/fixture", onStdout: vi.fn(), onStderr: vi.fn() });
 		expect(() => child.emit("spawn")).not.toThrow();
-		child.control.write('{"ok":true}\n');
 		const monitor = await starting;
 		expect(await monitor.exited).toEqual({ exitCode: 7, signal: null });
 		expect(kill).toHaveBeenCalledExactlyOnceWith(-child.pid, "SIGKILL");
@@ -93,7 +90,6 @@ it("ignores post-spawn errors but still drains output, settles exit and reaps th
 	const stderr = vi.fn();
 	const starting = spawnMonitor(["fixture"], { cwd: "/fixture", onStdout: stdout, onStderr: stderr });
 	child.emit("spawn");
-	child.control.write('{"ok":true}\n');
 	const monitor = await starting;
 	expect(monitor.startedAt).toBe(Date.now());
 	expect(() => child.emit("error", new Error("post-spawn capability failure"))).not.toThrow();
