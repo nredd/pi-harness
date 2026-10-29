@@ -47,6 +47,8 @@ export interface PidRecord {
 	startedAt: number;
 	name: string;
 	command: string;
+	/** Unique supervisor launch marker, checked before signalling a live group. */
+	identity?: string;
 	/** Authenticated before TERM, retained for recovery if the leader exits first. */
 	members?: GroupMember[];
 }
@@ -211,6 +213,7 @@ function parseRecord(text: string): PidRecord | undefined {
 		const ints = [r.ownerPid, r.childPid, r.pgid, r.startedAt];
 		if (!ints.every((v) => typeof v === "number" && Number.isInteger(v) && v > 0)) return undefined;
 		if (typeof r.command !== "string" || typeof r.name !== "string") return undefined;
+		if (r.identity !== undefined && (typeof r.identity !== "string" || r.identity.length === 0)) return undefined;
 		if (
 			r.members !== undefined &&
 			(!Array.isArray(r.members) ||
@@ -381,9 +384,9 @@ async function looksLikeSame(record: PidRecord, d: SweepDeps): Promise<boolean> 
 	if (!info || info.pgid !== record.pgid || (info.sessionId !== undefined && info.sessionId !== record.childPid))
 		return false;
 	if (Math.abs(info.startedAt - record.startedAt) > START_TOLERANCE_MS) return false;
-	return (
-		info.command === record.command || info.command.endsWith(record.command) || record.command.endsWith(info.command)
-	);
+	return record.identity !== undefined
+		? info.command.includes(record.identity)
+		: info.command === record.command || info.command.endsWith(record.command) || record.command.endsWith(info.command);
 }
 
 function unlinkQuiet(path: string, result: SweepResult): boolean {
