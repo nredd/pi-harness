@@ -523,6 +523,7 @@ jobs:
             --log-cli-level=INFO --junitxml=artifacts/standalone-local.xml
       - name: Report coverage exclusions
         if: ${{ always() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' }}
+        shell: bash -e {0}
         run: |
           echo "Bun standalone: seven auth dispatch/refresh cases per stack NOT RUN: Node preload interception required (#14). Missing-preload refusal runs." >>"$GITHUB_STEP_SUMMARY"
           echo "linux-arm64, packed contracts under standalone, bench, live credentials and desktop helpers: NOT RUN." >>"$GITHUB_STEP_SUMMARY"

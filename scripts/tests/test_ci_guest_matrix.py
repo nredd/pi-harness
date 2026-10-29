@@ -141,7 +141,14 @@ def test_shared_guest_matrix(name: str) -> None:
     setup = next(i for i, step in enumerate(steps) if step.get("id") == "tools")
     assert steps[setup]["uses"] == "./.github/actions/setup-ci-tools"
     assert steps[setup]["with"]["guest"] == "${{ matrix.guest }}"
-    assert all("shell" not in step for step in steps[setup + 1 :] if "run" in step)
+    shell_overrides = [step for step in steps[setup + 1 :] if "run" in step and "shell" in step]
+    if name == "stack":
+        assert shell_overrides == [
+            next(step for step in steps if step.get("name") == "Report coverage exclusions")
+        ]
+        assert shell_overrides[0]["shell"] == "bash -e {0}"
+    else:
+        assert not shell_overrides
     assert "!= wsl2" in plan["run"]  # Retain old always-run WSL acceptance.
     assert any(step.get("with", {}).get("cleanup") == "cleanup" for step in steps)
     diagnostics = [
