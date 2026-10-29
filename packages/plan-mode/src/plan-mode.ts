@@ -149,6 +149,8 @@ interface PlanModeDependencies {
     options?: UpdatePlanModeSettingsOptions,
   ): ReturnType<typeof updatePlanModeSettings>;
   settingsPath?: string;
+  /** Home for policy-only tilde expansion in SDK hosts. */
+  homeDir?: string;
   loadInteractiveUi?(): Promise<InteractiveUi>;
   /** Test seam for `createHeadlessTurns`. */
   headlessTurnStartTimeoutMs?: number;
@@ -728,6 +730,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         ctx.cwd,
         process.platform,
         settings.trustedDirectories,
+        false,
+        dependencies.homeDir,
       );
       if (blocked !== undefined) {
         return {
@@ -751,6 +755,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         settings.safeSubcommands,
         ctx.cwd,
         settings.trustedDirectories,
+        dependencies.homeDir,
       );
       if (blocked !== undefined) {
         return {

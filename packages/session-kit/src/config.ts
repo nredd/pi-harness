@@ -78,8 +78,13 @@ export function resolveCollapseKey(raw: unknown): string {
 	return isValidKeySpec(key) ? key : DEFAULT_COLLAPSE_KEY;
 }
 
-export function configPath(agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent")): string {
-	return join(agentDir, "pi-session-kit.json");
+/** Resolve the agent configuration directory at call time; an injected home avoids runtime-global home lookup. */
+export function agentDir(homeDir = homedir()): string {
+	return process.env.PI_CODING_AGENT_DIR ?? join(homeDir, ".pi", "agent");
+}
+
+export function configPath(directory?: string, homeDir = homedir()): string {
+	return join(directory ?? agentDir(homeDir), "pi-session-kit.json");
 }
 
 export function defaultConfig(): KitConfig {

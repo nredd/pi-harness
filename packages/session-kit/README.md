@@ -42,8 +42,9 @@ Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
 ```
 
 Every module defaults on. Malformed config reports a diagnostic and uses defaults. SDK hosts can use
-`createSessionKit({ config, agentDir, monitorRoot })` from `src/index.ts`: explicit `config` avoids
-loading the config file, `agentDir` scopes config/rules/title aliases, and `monitorRoot` isolates
+`createSessionKit({ config, agentDir, homeDir, monitorRoot })` from `src/index.ts`: explicit `config` avoids
+loading the config file, `agentDir` scopes config/rules/title aliases, `homeDir` derives those paths and stats
+cache/session defaults when no agent directory is supplied, and `monitorRoot` isolates
 monitor pidfiles and orphan sweeps. Optional `clock` (`now`, cancellable `setTimeout`/`setInterval`)
 and `spawnMonitor` seams control scheduling and child lifetime in SDK tests; the real manager,
 ring, coalescer, regex worker and host follow-up queue still run. Controlled stdout callbacks resolve

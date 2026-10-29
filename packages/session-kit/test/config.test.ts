@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CHILD_ENTRY, isChildSession, isChildSessionName, registerChildIdentity } from "../src/child.ts";
 import {
+	agentDir,
 	configPath,
 	DEFAULT_COLLAPSE_KEY,
 	DEFAULT_MAX_WIDGET_LINES,
@@ -18,6 +19,10 @@ import { fakePi } from "./goal/fake-pi.ts";
 describe("parseConfig", () => {
 	it("builds the config path from an injected agent directory", () => {
 		expect(configPath("/isolated/agent")).toBe("/isolated/agent/pi-session-kit.json");
+	});
+	it("derives all default config paths from an injected home", () => {
+		expect(agentDir("/isolated/home")).toBe("/isolated/home/.pi/agent");
+		expect(configPath(undefined, "/isolated/home")).toBe("/isolated/home/.pi/agent/pi-session-kit.json");
 	});
 
 	it("defaults every feature on", () => {

@@ -1546,29 +1546,33 @@ function findBlockedSshExecCall(input, safeSubcommands = {}, platform = process.
 function findBlockedRemoteCommand(command, safeSubcommands, platform) {
   return findBlockedCommandSegment(command, safeSubcommands, void 0, platform, [], true);
 }
-function findBlockedCommandSegment(command, safeSubcommands = {}, workingDirectory, platform = process.platform, trustedDirectories = [], remote = false) {
+function findBlockedCommandSegment(command, safeSubcommands = {}, workingDirectory, platform = process.platform, trustedDirectories = [], remote = false, homeDir = homedir()) {
   const segments = splitShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
-  const roots = allowedRoots(remote ? void 0 : workingDirectory, remote ? [] : trustedDirectories);
+  const roots = allowedRoots(remote ? void 0 : workingDirectory, remote ? [] : trustedDirectories, homeDir);
   let base = remote ? void 0 : workingDirectory;
   for (const [index, segment] of segments.entries()) {
     if (segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), INTERPRETERS)) return segment.text;
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === void 0) {
-      const target = tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots) : void 0;
+      const target = tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots, homeDir) : void 0;
       if (target === void 0 || segments[index + 1]?.separator === "|") return segment.text;
       base = target;
       continue;
     }
-    const paths = { base, roots };
+    const paths = { base, roots, homeDir };
     if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) return segment.text;
   }
   return void 0;
 }
-function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, workingDirectory, trustedDirectories = []) {
+function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, workingDirectory, trustedDirectories = [], homeDir = homedir()) {
   const segments = splitPowerShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
-  const paths = { base: workingDirectory, roots: allowedRoots(workingDirectory, trustedDirectories) };
+  const paths = {
+    base: workingDirectory,
+    roots: allowedRoots(workingDirectory, trustedDirectories, homeDir),
+    homeDir
+  };
   return segments.find(
     (segment) => segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), POWERSHELL_INTERPRETERS) || !isSafePowerShellSegment(segment.text, safeSubcommands, paths)
   )?.text;
@@ -1633,16 +1637,16 @@ function matchConfiguredPrefix(segment, safeSubcommands) {
   }
   return void 0;
 }
-function expandTilde(path) {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return resolve2(homedir(), path.slice(2));
+function expandTilde(path, homeDir) {
+  if (path === "~") return homeDir;
+  if (path.startsWith("~/")) return resolve2(homeDir, path.slice(2));
   return path.startsWith("~") ? void 0 : path;
 }
-function allowedRoots(workingDirectory, trustedDirectories) {
+function allowedRoots(workingDirectory, trustedDirectories, homeDir) {
   const roots = [];
   if (workingDirectory) roots.push(resolve2(workingDirectory));
   for (const directory of trustedDirectories) {
-    const expanded = expandTilde(directory.trim());
+    const expanded = expandTilde(directory.trim(), homeDir);
     if (expanded && isAbsolute2(expanded)) roots.push(resolve2(expanded));
   }
   return roots;
@@ -1651,9 +1655,9 @@ function isUnder(path, root) {
   const difference = relative(root, path);
   return difference === "" || !difference.startsWith("..") && !isAbsolute2(difference);
 }
-function resolveDirectory(raw, base, roots) {
+function resolveDirectory(raw, base, roots, homeDir) {
   if (!raw || raw.startsWith("-") || raw.split(/[\\/]+/u).includes("..")) return void 0;
-  const expanded = expandTilde(raw);
+  const expanded = expandTilde(raw, homeDir);
   if (expanded === void 0) return void 0;
   if (!isAbsolute2(expanded) && base === void 0) return void 0;
   const resolved = resolve2(base ?? "/", expanded);
@@ -2160,7 +2164,7 @@ function parseGitGlobalOptions(args, paths) {
       continue;
     }
     if (argument !== "-C") break;
-    if (resolveDirectory(args[index + 1], paths.base, paths.roots) === void 0) return void 0;
+    if (resolveDirectory(args[index + 1], paths.base, paths.roots, paths.homeDir) === void 0) return void 0;
     index += 2;
   }
   return index;
@@ -2382,4 +2386,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-WIDWMEV5.ts.map
+//# sourceMappingURL=chunk-M2Y5UYMO.ts.map

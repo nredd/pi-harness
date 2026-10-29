@@ -216,22 +216,25 @@ export function findBlockedCommandSegment(
   platform: NodeJS.Platform = process.platform,
   trustedDirectories: readonly string[] = [],
   remote = false,
+  homeDir = homedir(),
 ): string | undefined {
   const segments = splitShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
-  const roots = allowedRoots(remote ? undefined : workingDirectory, remote ? [] : trustedDirectories);
+  const roots = allowedRoots(remote ? undefined : workingDirectory, remote ? [] : trustedDirectories, homeDir);
   let base = remote ? undefined : workingDirectory;
   for (const [index, segment] of segments.entries()) {
     if (segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), INTERPRETERS)) return segment.text;
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === undefined) {
       const target =
-        tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots) : undefined;
+        tokens.length === 2 && !hasShellExpansion(segment.text)
+          ? resolveDirectory(tokens[1], base, roots, homeDir)
+          : undefined;
       if (target === undefined || segments[index + 1]?.separator === "|") return segment.text;
       base = target;
       continue;
     }
-    const paths: PathPolicy = { base, roots };
+    const paths: PathPolicy = { base, roots, homeDir };
     if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) return segment.text;
   }
   return undefined;
@@ -243,9 +246,18 @@ export function isSafeCommand(
   workingDirectory?: string,
   platform: NodeJS.Platform = process.platform,
   trustedDirectories: readonly string[] = [],
+  homeDir = homedir(),
 ) {
   return (
-    findBlockedCommandSegment(command, safeSubcommands, workingDirectory, platform, trustedDirectories) === undefined
+    findBlockedCommandSegment(
+      command,
+      safeSubcommands,
+      workingDirectory,
+      platform,
+      trustedDirectories,
+      false,
+      homeDir,
+    ) === undefined
   );
 }
 
@@ -254,10 +266,15 @@ export function findBlockedPowerShellCommandSegment(
   safeSubcommands: SafeSubcommands = {},
   workingDirectory?: string,
   trustedDirectories: readonly string[] = [],
+  homeDir = homedir(),
 ): string | undefined {
   const segments = splitPowerShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
-  const paths: PathPolicy = { base: workingDirectory, roots: allowedRoots(workingDirectory, trustedDirectories) };
+  const paths: PathPolicy = {
+    base: workingDirectory,
+    roots: allowedRoots(workingDirectory, trustedDirectories, homeDir),
+    homeDir,
+  };
   return segments.find(
     (segment) =>
       (segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), POWERSHELL_INTERPRETERS)) ||
@@ -270,9 +287,11 @@ export function isSafePowerShellCommand(
   safeSubcommands: SafeSubcommands = {},
   workingDirectory?: string,
   trustedDirectories: readonly string[] = [],
+  homeDir = homedir(),
 ) {
   return (
-    findBlockedPowerShellCommandSegment(command, safeSubcommands, workingDirectory, trustedDirectories) === undefined
+    findBlockedPowerShellCommandSegment(command, safeSubcommands, workingDirectory, trustedDirectories, homeDir) ===
+    undefined
   );
 }
 
@@ -287,6 +306,7 @@ interface ShellSegment {
 interface PathPolicy {
   base: string | undefined;
   roots: readonly string[];
+  homeDir: string;
 }
 
 const INTERPRETERS = new Set([
@@ -359,17 +379,17 @@ function matchConfiguredPrefix(segment: string, safeSubcommands: SafeSubcommands
   return undefined;
 }
 
-function expandTilde(path: string): string | undefined {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return resolve(homedir(), path.slice(2));
+function expandTilde(path: string, homeDir: string): string | undefined {
+  if (path === "~") return homeDir;
+  if (path.startsWith("~/")) return resolve(homeDir, path.slice(2));
   return path.startsWith("~") ? undefined : path;
 }
 
-function allowedRoots(workingDirectory: string | undefined, trustedDirectories: readonly string[]) {
+function allowedRoots(workingDirectory: string | undefined, trustedDirectories: readonly string[], homeDir: string) {
   const roots: string[] = [];
   if (workingDirectory) roots.push(resolve(workingDirectory));
   for (const directory of trustedDirectories) {
-    const expanded = expandTilde(directory.trim());
+    const expanded = expandTilde(directory.trim(), homeDir);
     if (expanded && isAbsolute(expanded)) roots.push(resolve(expanded));
   }
   return roots;
@@ -384,9 +404,14 @@ function isUnder(path: string, root: string) {
  * Resolves a directory argument of `cd`/`git -C`: no flags, no `..`, only a leading `~` expanded,
  * and the result must sit under the working directory or a trusted directory.
  */
-function resolveDirectory(raw: string | undefined, base: string | undefined, roots: readonly string[]) {
+function resolveDirectory(
+  raw: string | undefined,
+  base: string | undefined,
+  roots: readonly string[],
+  homeDir: string,
+) {
   if (!raw || raw.startsWith("-") || raw.split(/[\\/]+/u).includes("..")) return undefined;
-  const expanded = expandTilde(raw);
+  const expanded = expandTilde(raw, homeDir);
   if (expanded === undefined) return undefined;
   if (!isAbsolute(expanded) && base === undefined) return undefined;
   const resolved = resolve(base ?? "/", expanded);
@@ -979,7 +1004,7 @@ function parseGitGlobalOptions(args: string[], paths: PathPolicy) {
       continue;
     }
     if (argument !== "-C") break;
-    if (resolveDirectory(args[index + 1], paths.base, paths.roots) === undefined) return undefined;
+    if (resolveDirectory(args[index + 1], paths.base, paths.roots, paths.homeDir) === undefined) return undefined;
     index += 2;
   }
   return index;

@@ -95,9 +95,13 @@ const realClock: FooterClock = {
 /**
  * Mount the expanded footer; omitted options preserve the real clock and timers.
  * `timeZone` (IANA) only pins the quota reset labels; default is the process-local zone.
+ * `homeDir` pins cwd presentation for SDK hosts without mutating process environment.
  */
-export function createExpandedFooter(options: { clock?: FooterClock; timeZone?: string } = {}): ExtensionFactory {
+export function createExpandedFooter(
+	options: { clock?: FooterClock; timeZone?: string; homeDir?: string } = {},
+): ExtensionFactory {
 	const clock = options.clock ?? realClock;
+	const homeDir = options.homeDir ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
 	return (pi: ExtensionAPI) => {
 		let stopQuota: (() => void) | undefined;
 		const stopPoller = () => {
@@ -153,7 +157,7 @@ export function createExpandedFooter(options: { clock?: FooterClock; timeZone?: 
 					invalidate() {},
 					render(width: number): string[] {
 						// --- Line 1: cwd / branch / session name (unchanged from stock) ---
-						let pwd = formatCwd(ctx.cwd, process.env.HOME || process.env.USERPROFILE || homedir());
+						let pwd = formatCwd(ctx.cwd, homeDir);
 						const branch = footerData.getGitBranch();
 						if (branch) pwd = `${pwd} (${branch})`;
 						const sessionName = ctx.sessionManager.getSessionName();
