@@ -422,6 +422,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/version-home" "$RUNNER_TEMP/version-agent"
           HOME="$RUNNER_TEMP/version-home" PI_CODING_AGENT_DIR="$RUNNER_TEMP/version-agent" "$PI_BIN" --version
           git -C forks/pi describe --tags --exact-match
+      - name: Replay source-selected installer runtime locks without lifecycle scripts
+        if: steps.plan.outputs.run == 'true' && matrix.stack == 'personal'
+        working-directory: integration
+        run: uv run --locked python -m harness.runtime_lock --stack stacks/personal.json --replay stacks/runtime-locks.json
       - name: Assembled D and E boundaries (explicit stack, no machine config)
         if: steps.plan.outputs.run == 'true'
         working-directory: integration

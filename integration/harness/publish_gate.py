@@ -145,7 +145,7 @@ def _tag_refs(repo: str, tag: str) -> list[dict[str, object]]:
 
 
 def prepare_release(
-    repo: str, source_sha: str, rebuilt: Path, existing_dir: Path
+    repo: str, source_sha: str, rebuilt: Path, existing_dir: Path, dependency_graph: Path | None = None
 ) -> Literal["create", "resume"]:
     """Validate an existing tag before any new attestation or release is created.
 
@@ -162,6 +162,8 @@ def prepare_release(
         PublishError: GitHub could not answer, or the tag exists without a snapshot release asset.
         ValueError: an existing tag is annotated or points at another commit, or its asset differs.
     """
+    if dependency_graph is not None and not dependency_graph.is_file():
+        raise PublishError("Required candidate dependency-graph.json is missing; publication refused")
     tag = f"stack/{source_sha}"
     exact = _tag_refs(repo, tag)
     if not exact:
@@ -181,7 +183,30 @@ def prepare_release(
         "--dir", str(existing_dir),
         "--clobber",
     )  # fmt: skip
-    return release_state(existing_dir / "stack-snapshot.json", rebuilt)
+    state = release_state(existing_dir / "stack-snapshot.json", rebuilt)
+    if dependency_graph is not None:
+        if not any(
+            isinstance(asset, dict) and asset.get("name") == "dependency-graph.json" for asset in assets
+        ):
+            raise PublishError(
+                f"Tag '{tag}' lacks dependency-graph.json; legacy promotions cannot be upgraded"
+            )
+        _command(
+            "gh",
+            "release",
+            "download",
+            tag,
+            "--repo",
+            repo,
+            "--pattern",
+            "dependency-graph.json",
+            "--dir",
+            str(existing_dir),
+            "--clobber",
+        )
+        if release_state(existing_dir / "dependency-graph.json", dependency_graph) != "resume":
+            raise PublishError("Existing dependency graph was not downloaded")
+    return state
 
 
 def confirm_tag(repo: str, source_sha: str) -> None:
@@ -217,6 +242,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--source-sha", required=True)
     prepare.add_argument("--rebuilt", type=Path, required=True)
     prepare.add_argument("--existing-dir", type=Path, required=True)
+    prepare.add_argument("--dependency-graph", type=Path, required=True)
     prepare.add_argument("--github-output", type=Path, required=True)
     return parser
 
@@ -235,7 +261,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "tag-target":
             confirm_tag(args.repo, args.source_sha)
         else:
-            state = prepare_release(args.repo, args.source_sha, args.rebuilt, args.existing_dir)
+            state = prepare_release(
+                args.repo, args.source_sha, args.rebuilt, args.existing_dir, args.dependency_graph
+            )
             args.github_output.write_text(f"state={state}\n")
     except (ValueError, OSError, PublishError, json.JSONDecodeError) as error:
         sys.stderr.write(f"FAILED: {error}\n")

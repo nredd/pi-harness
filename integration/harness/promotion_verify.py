@@ -39,6 +39,7 @@ from harness.promotion import (
     verify_core,
     verify_required_checks,
 )
+from harness.runtime_lock import ASSET, SOURCE_LOCK, DependencyGraph, RuntimeLocks, acquire
 from harness.stack import Stack
 
 if TYPE_CHECKING:
@@ -224,6 +225,28 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
     owned = collect_owned_evidence(stack, ctx.workspace, ctx.temp / "packages")
     gates: GateEvidence = build_gates(stack, checks, stack_runs, owned, core)
     snapshot = build_snapshot(stack_path, source_sha, gates)
+    runtime = RuntimeLocks.model_validate_json(
+        run_command(promotion.GIT_BIN, "-C", str(ctx.workspace), "show", f"{source_sha}:{SOURCE_LOCK}").stdout
+    )
+    runtime.bind(stack)
+    for target, graphs in runtime.platforms.items():
+        for owned_package in owned:
+            name, version = owned_package.package.rsplit("@", 1)
+            entry = graphs["agent"].lock["packages"].get(f"node_modules/{name}", {})
+            if entry.get("version") != version or entry.get("integrity") != owned_package.integrity:
+                raise EvidenceError(f"Runtime '{target}' lock differs from owned provenance for '{name}'")
+        for kind, graph in graphs.items():
+            acquire(
+                graph,
+                ctx.temp / "runtime" / target / kind,
+                {
+                    promotion.release_asset_url(stack.core.tag, name): digest
+                    for name, digest in stack.core.integrity.items()
+                },
+            )
+    (ctx.promo / ASSET).write_text(
+        DependencyGraph(schema_version=1, source_sha=source_sha, runtime=runtime).model_dump_json()
+    )
     (ctx.promo / SNAPSHOT_FILE).write_bytes(
         json.dumps(snapshot.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
     )
