@@ -22,6 +22,7 @@
     { "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Non-shipped readiness and bounded subprocess helpers used only by verification check harnesses." },
     { "path": "packages/computer-use/scripts/check-async.test.mjs", "reason": "Non-shipped assertions for verification subprocess readiness, deadlines and process cleanup; not runtime source." },
     { "path": "scripts/run-vitest.ts", "reason": "Verification-only launcher creates disposable test homes and forwards runner arguments; never shipped as a product entrypoint." },
+    { "path": "scripts/check-biome-paths.mjs", "reason": "Verification-only lint-path preflight for workspace development commands; package tarballs contain only each package's declared files." },
     { "path": "integration/inprocess/verification/home-guard.ts", "reason": "Verification-only assertion checks worker home boundaries; imported only by test setup and guard regressions, never shipped." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest-only lifecycle setup installs home-boundary assertions; never shipped or invoked by production." },
     { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
