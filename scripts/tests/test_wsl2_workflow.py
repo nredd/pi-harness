@@ -182,6 +182,54 @@ def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     assert "PI_BIN" in workflow
 
 
+def test_wsl2_capture_mirrors_only_coverage_reports_and_clears_stale_files(tmp_path: Path) -> None:
+    """Export independent guest LCOV/summary reports without copying source or stale evidence.
+
+    Parameters:
+        tmp_path (Path): Disposable guest home and Windows-visible workspace.
+    Returns:
+        None: Only declared reports cross the boundary; a second empty capture removes them.
+    Raises:
+        AssertionError: Reports disappear, unrelated content leaks or stale reports survive.
+        subprocess.CalledProcessError: The real capture script fails.
+    """
+    home = tmp_path / "home"
+    guest = home / "pi-harness-ci"
+    host = tmp_path / "host"
+    temporary = tmp_path / "temporary"
+    host.mkdir()
+    temporary.mkdir()
+    (guest / ".ci-temp").mkdir(parents=True)
+    (guest / ".ci-temp/tool-path").write_text(os.environ["PATH"])
+    reports = [
+        "packages/example/coverage/primary/lcov.info",
+        "packages/example/coverage/bun/lcov.info",
+        "integration/inprocess/coverage/primary/lcov.info",
+        "integration/probes/coverage/primary/lcov.info",
+        "scripts/coverage/primary/lcov.info",
+        "coverage/summary.json",
+    ]
+    for relative in reports:
+        path = guest / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"fixture {relative}\n")
+    (guest / "coverage/unexpected.txt").write_text("not a report")
+    capture = ROOT / "scripts/wsl2_capture.sh"
+    env = os.environ | {
+        "HOME": str(home),
+        "WSL_HOST_WORKSPACE": str(host),
+        "WSL_HOST_TEMP": str(temporary),
+        "PI_BIN": "",
+    }
+    subprocess.run(["/bin/bash", str(capture)], env=env, check=True, capture_output=True)
+    assert {path.relative_to(host).as_posix() for path in host.rglob("*") if path.is_file()} == set(reports)
+    for relative in reports:
+        assert (host / relative).read_text() == f"fixture {relative}\n"
+        (guest / relative).unlink()
+    subprocess.run(["/bin/bash", str(capture)], env=env, check=True, capture_output=True)
+    assert not any(path.is_file() for path in host.rglob("*"))
+
+
 def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     """Require actual Pi startup, RPC, extension, and stack process coverage."""
     workflow = workflow_text()

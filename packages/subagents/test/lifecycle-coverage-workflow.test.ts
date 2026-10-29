@@ -1,4 +1,5 @@
 /** Real worker protocol failures and cancellation without timer-based orchestration. */
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { assertBoundarySafe, runWorkflow, type WorkflowControl, type WorkflowHost, type WorkflowSpawnResult } from "../src/workflow/runtime.js";
 
@@ -71,6 +72,42 @@ describe("workflow lifecycle boundaries", () => {
     expect(result).toMatchObject({ status: "completed", value: ["first", null, "last"] });
     expect(vi.mocked(adapter.spawnAgent).mock.calls.map(([request]) => request.index)).toEqual([0, 2]);
     expect(result.progress).toContainEqual(expect.objectContaining({ index: 1, skipped: true, error: "Skipped by user." }));
+  });
+
+  it("returns a queued permit when paused before releasing the running child", async () => {
+    const first = deferred<WorkflowSpawnResult>();
+    const queued = deferred<void>();
+    const adapter = host();
+    adapter.spawnAgent = vi.fn(request => request.index === 0 ? first.promise : Promise.resolve({ ok: true, text: request.prompt }));
+    let control: WorkflowControl | undefined;
+    const abort = new AbortController();
+    const done = runWorkflow({
+      script: HEAD + 'return await Promise.all([agent("first"), agent("queued"), agent("last")]);',
+      host: adapter, concurrency: 1, signal: abort.signal,
+      onControl: value => { control = value; },
+      onProgress: entries => {
+        // The third worker call proves the second call already reached the host, rather
+        // than guessing from first-child startup when another worker message will arrive.
+        if (entries.some(entry => entry.type === "workflow_agent" && entry.index === 2 && entry.startedAt === undefined)) {
+          control?.pause();
+          queued.resolve();
+        }
+      },
+    });
+    try {
+      await queued.promise;
+      expect(control?.isPaused()).toBe(true);
+      expect(adapter.spawnAgent).toHaveBeenCalledTimes(1);
+      first.resolve({ ok: true, text: "first" });
+      // A check-phase boundary drains the released permit's promise continuations. Unlike
+      // a wall-clock sleep, it cannot expire before those same-thread microtasks execute.
+      await setImmediate();
+      expect(vi.mocked(adapter.spawnAgent).mock.calls.map(([request]) => request.index)).toEqual([0]);
+      control?.resume();
+      expect(await done).toMatchObject({ status: "completed", value: ["first", "queued", "last"] });
+      expect(adapter.spawnAgent).toHaveBeenCalledTimes(3);
+      expect(adapter.abortAgent).not.toHaveBeenCalled();
+    } finally { abort.abort(); await done; }
   });
 
   it("drains already queued permits when cancelled and never starts queued children", async () => {

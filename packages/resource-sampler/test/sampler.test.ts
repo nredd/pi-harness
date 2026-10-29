@@ -567,6 +567,29 @@ describe("platform dispatch", () => {
 			await sampler.dispose();
 		}
 	});
+	it("retains valid Darwin metadata and stops at the PID cap on either host OS", async () => {
+		// An absent signed-int32 PID prevents native enrichment from borrowing a real host process.
+		const spawn = helper(
+			"2147483647 1 Sat Oct  3 01:49:05 2026 0:01.25 42 fixture\n" +
+				"2147483646 1 Sat Oct  3 01:49:05 2026 0:02.00 84 extra\n",
+		);
+		const sampler = await samplerFor("darwin", spawn);
+		try {
+			const snapshot = await sampler.sample();
+			expect(snapshot.processes).toEqual([
+				expect.objectContaining({ pid: 2147483647, parentPid: 1, name: "fixture", rssBytes: 43008 }),
+			]);
+			expect(snapshot.coverage).toMatchObject({ complete: false, enumerated: 1, sampled: 1, skipped: 0 });
+			expect(snapshot.coverage.reasons).toContain("pid-limit");
+			expect(spawn).toHaveBeenCalledWith(
+				"/bin/ps",
+				["-A", "-o", "pid=,ppid=,lstart=,time=,rss=,ucomm="],
+				expect.any(Object),
+			);
+		} finally {
+			await sampler.dispose();
+		}
+	});
 	it("records malformed Darwin ps metadata without inventing a process row", async () => {
 		const sampler = await samplerFor("darwin", helper("malformed helper output\n"));
 		try {
