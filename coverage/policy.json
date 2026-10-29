@@ -49,7 +49,7 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [{ "path": "src/core/index.ts", "kind": "non-executable-facade", "reason": "Only static named ESM re-exports; no executable statements or functions. Strict facade validation rejects executable additions; every target module remains owned and instrumented." }],
       "status": "measured",
-      "note": "Primary Istanbul follows the reviewed #195 provider decision; complete hosted measurements are required to establish per-OS floors.",
+      "note": "Primary Istanbul follows #195. Floors/references come from complete hosted runs 40852918834 and 40857829296; see coverage/receipts/final-closure.md.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -74,7 +74,7 @@
         { "path": "src/interactive-ui.ts", "kind": "non-executable-facade", "reason": "Only static ESM re-exports of UI menu bindings; Istanbul source/emitted-ESM maps contain zero statements/functions. Target implementations remain owned. Strict source-shape validation rejects executable additions." }
       ],
       "status": "measured",
-      "note": "Per-OS floors measured from hosted run 40441614924. Local receipts remain advisory; no source paths or assertions were excluded.",
+      "note": "Zero primary floors and independent Bun references verified in complete hosted runs 40852918834 and 40857829296; no source paths or assertions were excluded.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -130,17 +130,17 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [{ "path": "src/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
-      "note": "",
+      "note": "Hosted run 40857829296: primary Darwin 0/0; Linux 47 lines/8 functions only in native Darwin FFI paths (src/darwin.ts). collect.ts is fully covered on both OSes. Source stays owned; this is a measured per-OS floor, not an exclusion. See coverage/receipts/final-closure.md.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 52, "functions": 8 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 47, "functions": 8 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 8, "functions": 4 }, "linux": { "lines": 52, "functions": 8 } },
+          "max_uncovered": { "darwin": { "lines": 8, "functions": 4 }, "linux": { "lines": 47, "functions": 8 } },
           "enforcement": "report-only",
           "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
@@ -155,11 +155,11 @@
         { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
       ],
       "status": "measured",
-      "note": "Hosted run 40852918834 measures one uncovered sort comparator on both OSes. A deterministic multi-match formatter regression now removes the coalescing/teardown dependency; subsequent clean hosted reports must establish the zero-function floor.",
+      "note": "Hosted run 40857829296 establishes zero primary misses on both OSes after a deterministic multi-match formatter test removes the incidental coalescing/teardown comparator hit observed in 40852918834; independent Bun references are stable across both runs.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 1 }, "linux": { "lines": 0, "functions": 1 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {

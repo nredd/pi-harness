@@ -66,7 +66,38 @@ pre-main budgets are not a second ratchet base: the CLI still enforces all budge
 ratchets against the actual PR base, which has no policy yet. The historical membership test
 still rejects every missing classification receipt, including dev-tools' newly validated barrel.
 
-Global enforcement remains disabled pending final evidence. Independent Bun signals remain
+## Final hosted floors
+
+Run [40857829296](https://github.com/nredd/pi-harness/actions/runs/40857829296), commit `9193280`,
+is green, with complete validated artifacts for both OSes. All primary packages match the full
+local table, except Linux sampler covers 324/371 lines and 47/55 functions: the entire 47-line,
+eight-function remainder is native Darwin FFI, not `collect.ts`. The new collector test closes
+exactly five Linux lines in both primary and Bun signals. Session-kit is now 3541/3541 lines,
+824/824 functions on both OSes. Its reversed-sort mutation fails exactly the new test (1 failed,
+8 passed); the source is restored.
+
+Independent two-commit comparison, per signal and OS:
+- Every signal is stable except the explained test closures: Linux sampler primary/Bun lines
+  decrease 52 -> 47; session-kit primary functions decrease 1 -> 0 on both OSes.
+- No platform is averaged and no runtime counter is combined. Final policy uses the second
+  clean run for those deterministic reductions, not the obsolete misses from the first run.
+- Independent native Bun references remain advisory. Dev-tools and session-kit have stable
+  per-OS function differences; sampler Bun on Darwin retains eight lines/four Node-FFI functions.
+- Both complete second-run artifacts replay as gates against `origin/main`; `measurement_only`
+  is false. The same reports validate in measurement mode before the manual floor edit.
+
+Reproduction (repository root, matching production source/inventory):
+
+```sh
+gh run download 40857829296 -R nredd/pi-harness -n coverage-ubuntu-24.04 -D /tmp/cov162-second-linux
+gh run download 40857829296 -R nredd/pi-harness -n coverage-macos-14 -D /tmp/cov162-second-darwin
+uv run --locked --project integration python scripts/coverage_accounting.py --os linux --reports-root /tmp/cov162-second-linux --base origin/main --summary /tmp/replay-linux.json
+uv run --locked --project integration python scripts/coverage_accounting.py --os darwin --reports-root /tmp/cov162-second-darwin --base origin/main --summary /tmp/replay-darwin.json
+```
+
+Global enforcement remains disabled: a blanket zero target rejects the approved Linux native
+Darwin floor and the explicitly eligible measurement-pending tooling/examples. Do not remove
+those inventories, falsify their goal or change global accounting semantics just to flip a flag. Independent Bun signals remain
 report-only even when they have zero misses. Eligible runtime tooling/examples remain explicit
 measurement-pending blockers; a global flip must not silently exempt them. Linux's Darwin-native
 per-OS floor is not a claim that those paths execute on Linux.

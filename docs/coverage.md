@@ -14,8 +14,13 @@ The initial integration checkpoint is recorded [here](../coverage/receipts/main-
 Facade validation and the actual hosted producer failure diagnosis are recorded
 [here](../coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
 #155 -> #195 dev-tools dependency decision are recorded [here](../coverage/receipts/git-isolation.md).
-`enforce_target` remains false. Local closure integration and the pending hosted verification are
-recorded [here](../coverage/receipts/final-closure.md). No hosted 100% claim. The conflict-resolution decisions and exact
+Final hosted closure and per-OS receipts are recorded [here](../coverage/receipts/final-closure.md).
+All eight primary packages have zero uncovered lines/functions on macOS. Linux has zero misses
+except resource-sampler's native `darwin.ts` paths: **47 lines / 8 functions**. `collect.ts` is
+fully covered on both OSes. Those Darwin-only paths remain owned and measured, not excluded.
+`enforce_target` stays false: the global zero target would reject that approved per-OS floor,
+and eligible runtime tooling/examples still have explicit pending inventories. The measured
+per-OS primary floors are enforced now; branches and all independent Bun signals stay report-only. The conflict-resolution decisions and exact
 base-relative facade ledger regression for the `b51e177` main merge are recorded
 [here](../coverage/receipts/tier-main-merge.md).
 
@@ -123,7 +128,8 @@ Production exclusions are limited to generated artifacts, genuine type-only decl
 validated non-executable ESM facades. Every exclusion has a path (a glob is permitted for generated
 hashed artifacts), a `generated`, `type-only`, `non-executable-facade` or genuine `test-helper` kind
 and a substantive reason. No UI, platform, error-path,
-CLI or "hard to test" exemptions. Runtime enums/constants are executable source.
+CLI or "hard to test" exemptions. A measured per-OS budget is not a source exemption: Linux
+resource-sampler retains Darwin-native code in both its inventory and LCOV report. Runtime enums/constants are executable source.
 Review exclusions as carefully as code; the script cannot prove every human justification.
 
 `non-executable-facade` requires an exact package-relative `.ts` path already matched by `owned`.
