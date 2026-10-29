@@ -110,7 +110,8 @@ and `createInteractiveHarness`/`VirtualTerminal`, real child sessions and git, o
 clock, promise-held tools/streams and raw SGR mouse input. Homes, settings and provider credentials
 are fixtures; no installed pi, tmux or real-clock sleeps are needed. Existing old-host strict-mode
 coverage explicitly removes the optional SDK export; the shared faux runtime uses the host's real
-`withBeforeProviderRequest` facade. The full older suite remains Vitest-only.
+`withBeforeProviderRequest` facade. The full older suite remains Vitest-only. Maintainer guidance on public index callback
+coverage and retained safety guards is [here](../../docs/subagents-index-continuation.md).
 
 ### Other hosts
 
