@@ -33,9 +33,19 @@ export interface SessionKitOptions {
 type Register = (pi: ExtensionAPI, config: KitConfig, options: SessionKitOptions) => void;
 
 const MODULES: Record<Feature, Register> = {
-	titles: (pi, config, options) => registerTitles(pi, config, options.agentDir ?? agentDir(options.homeDir)),
+	titles: (pi, config, options) =>
+		registerTitles(
+			pi,
+			config,
+			options.agentDir ?? (options.homeDir === undefined ? undefined : agentDir(options.homeDir)),
+		),
 	rules: (pi, config, options) =>
-		registerRules(pi, config, options.agentDir ?? agentDir(options.homeDir), options.homeDir),
+		registerRules(
+			pi,
+			config,
+			options.agentDir ?? (options.homeDir === undefined ? undefined : agentDir(options.homeDir)),
+			options.homeDir,
+		),
 	goal: (pi, config, options) => registerGoal(pi, config, options.clock),
 	loop: (pi, config, options) => registerLoop(pi, config, options.clock),
 	monitor: (pi, config, options) =>
