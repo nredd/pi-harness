@@ -495,6 +495,7 @@ const CHILD_SHUTDOWN_TIMEOUT_MS = 3_000;
  * `assertActive()` from a bare timer callback — an uncaughtException that kills pi (#242).
  */
 async function shutdownChildSession(session: AgentSession | undefined): Promise<void> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     const runner = session?.extensionRunner;
     // Optional all the way down: on a pi without the getter, or a stubbed session from a
@@ -505,10 +506,17 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
       // already torn down — one hung handler would leave a dead terminal.
       await Promise.race([
         runner.emit({ type: "session_shutdown", reason: "quit" }),
-        new Promise<void>(resolve => setTimeout(resolve, CHILD_SHUTDOWN_TIMEOUT_MS).unref()),
+        new Promise<void>(resolve => {
+          deadline = setTimeout(resolve, CHILD_SHUTDOWN_TIMEOUT_MS);
+          deadline.unref();
+        }),
       ]);
     }
   } catch { /* a partial session must degrade, not take the teardown down with it */ }
+  finally {
+    // Promise.race does not cancel its loser, even when a handler rejects.
+    if (deadline !== undefined) clearTimeout(deadline);
+  }
   // Always, even on timeout: disposal is what this function ultimately exists to do.
   try { session?.dispose?.(); } catch { /* ignore */ }
 }
