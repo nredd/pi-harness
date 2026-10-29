@@ -30,11 +30,19 @@ class AnchoredStore:
     """
 
     def __init__(self) -> None:
-        """Start with no open descriptors."""
+        """Start with no open descriptors.
+
+        Returns:
+            None: an empty directory-descriptor owner is initialized.
+        """
         self.directories: dict[Path, int] = {}
 
     def __enter__(self) -> AnchoredStore:
-        """Return the descriptor owner."""
+        """Return the descriptor owner.
+
+        Returns:
+            AnchoredStore: this owner, retaining descriptors until context exit.
+        """
         return self
 
     def __exit__(
@@ -90,6 +98,9 @@ class AnchoredStore:
     def check(self) -> None:
         """Refuse a namespace no longer naming any of the held directory identities.
 
+        Returns:
+            None: every held ancestor still has its original directory identity.
+
         Raises:
             OSError: an ancestor disappeared, changed identity or is no longer a real directory.
         """
@@ -126,6 +137,9 @@ class AnchoredStore:
             source (Path): entry to move.
             target (Path): replacement destination.
 
+        Returns:
+            None: the source entry has replaced the target through held parents.
+
         Raises:
             OSError: either parent cannot be anchored or the rename fails.
         """
@@ -138,6 +152,12 @@ class AnchoredStore:
 
         Parameters:
             path (Path): removed subtree.
+
+        Returns:
+            None: descriptors in the deliberately retired subtree are closed and forgotten.
+
+        Raises:
+            OSError: a held descriptor cannot be closed.
         """
         for directory in reversed(tuple(self.directories)):
             if directory == path or directory.is_relative_to(path):
@@ -148,6 +168,9 @@ class AnchoredStore:
 
         Parameters:
             path (Path): file, symlink or tree to remove if present.
+
+        Returns:
+            None: the entry is absent and its retired directory descriptors are forgotten.
 
         Raises:
             OSError: safe tree removal is unavailable or an entry cannot be removed.

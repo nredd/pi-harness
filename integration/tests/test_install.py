@@ -5628,16 +5628,17 @@ def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
     [
         "test_install.py",
         "test_install_ancestors.py",
+        "../harness/install_paths.py",
         "test_release.py",
         "test_installer_process.py",
         "test_promotion.py",
     ],
 )
 def test_test_helpers_have_typed_contracts(module: str) -> None:
-    """Keep helper and nested callback contracts consistent across all installer test modules.
+    """Keep installer test helpers and the descriptor owner's typed contracts consistent.
 
     Parameters:
-        module (str): test module to inspect independently of production code.
+        module (str): test/helper module path relative to the installer test directory.
 
     Returns:
         None: every helper documents typed inputs and its result or failure contract.
