@@ -41,8 +41,8 @@ export function detectCycle(taskList: readonly Task[], taskId: number, newBlocke
 
 /**
  * Build the inverse adjacency map: for each task `T`, which other tasks list
- * `T` in their `blockedBy`. Consumed by `selectShowTaskIds` (overlay gating)
- * and the `get` action's "blocks: #x, #y" suffix line.
+ * `T` in their `blockedBy`. Consumed by the `get` action's
+ * "blocks: #x, #y" suffix line.
  */
 export function deriveBlocks(taskList: readonly Task[]): Map<number, number[]> {
 	const blocks = new Map<number, number[]>();
