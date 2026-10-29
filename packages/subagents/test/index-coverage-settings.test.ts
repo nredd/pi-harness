@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentsExtension } from "../src/index.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
 import { FakeClock } from "./helpers/fake-clock.js";
+import { barrier } from "./helpers/scenario-session.js";
 
 type Component = { render(width: number): string[]; invalidate(): void; handleInput(data: string): void };
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Component;
@@ -71,6 +72,27 @@ afterEach(async () => {
 });
 
 describe("settings callbacks", () => {
+  it.each(["schedulingEnabled", "workflowsEnabled"])("preserves state when overlapping dialogs both disable %s", async key => {
+    const ready = barrier();
+    const dialogs: { component: Component; close(): void }[] = [];
+    let menus = 0;
+    context.ui.select = vi.fn(async () => menus++ < 2 ? "Settings" : undefined);
+    context.ui.custom = vi.fn((factory: Factory) => new Promise<string | undefined>(resolve => {
+      const component = factory({}, {}, {}, resolve);
+      dialogs.push({ component, close: () => component.handleInput("\u001b") });
+      if (dialogs.length === 2) ready.resolve();
+    }));
+    const first = command(); const second = command(); await ready.promise;
+    for (const dialog of dialogs) {
+      for (let i = 0; i < rows.indexOf(key); i++) dialog.component.handleInput("\u001b[B");
+      dialog.component.handleInput("\r");
+    }
+    expect(notify).toHaveBeenLastCalledWith(`${key === "schedulingEnabled" ? "Scheduling" : "Workflows"} already disabled.`, "info");
+    expect(saved()[key]).toBe(false);
+    expect(boot.pi.events.emit.mock.calls.filter(([event]: [string]) => event === "subagents:settings_changed")).toHaveLength(1);
+    for (const dialog of dialogs) dialog.close();
+    await Promise.all([first, second]);
+  });
   it.each([
     ["defaultJoinMode", "group"], ["backgroundByDefault", false], ["schedulingEnabled", false],
     ["workflowsEnabled", false], ["packageAgents", false], ["packageWorkflows", true],
