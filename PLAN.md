@@ -23,7 +23,7 @@ Repos, verified with GitHub branch heads (upstream/default branches are NOT the 
 - `nredd/pi-harness` main `1b2332d` (before this docs change): owned packages, fork Gitlinks, native suites, contracts, assembled stack, release tooling. Local checkout `~/code/pi-harness`.
 - `nredd/dotfiles` main `10ca8dd` (before this docs change): machine configuration, activation and doctor. Local checkout `~/code/dotfiles`; chezmoi source `~/.local/share/chezmoi`.
 - `nredd/homebrew-tap` main `66e9289`: core nredd.6 formula, #1.
-- `nredd/pi` main `bd6444a`; released selection is `v1.3.0-nredd.7` at `2bfb8e7` on `nredd/v1.3.0`.
+- `nredd/pi` main `bd6444a`; released selection is `v1.3.0-nredd.8` at `4af3d54` on `nredd/v1.3.0` (first attested, non-legacy core release).
 - `@nredd/pi-subagents@0.22.0-nredd.6` is the selected npm package, the first CI release with SLSA provenance after the owner's `0.22.0-nredd.5` bootstrap.
 - `nredd/pi-plan-mode` main `cb9b7c1`; default branch remains `nredd/v0.59.2` at `d91bb2b`. Released selection is `v0.59.3-nredd.1` at `4c2bfc3` on `nredd/v0.59.3`.
 - `nredd/rpiv-todo` main `0f46ed9`; released selection is `v2.13.9-nredd.2` at `9a4e2e8` (nredd/rpiv-todo#2: standalone suite, live-row refresh).
