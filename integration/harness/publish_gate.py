@@ -154,6 +154,8 @@ def prepare_release(
         source_sha (str): selected commit.
         rebuilt (Path): rebuilt candidate snapshot.
         existing_dir (Path): destination for a retained release asset.
+        dependency_graph (Path | None): required supplemental candidate for new-format publication;
+            `None` retains the library's snapshot-only comparison for historical evidence callers.
 
     Returns:
         Literal["create", "resume"]: whether publication creates or resumes the immutable release.

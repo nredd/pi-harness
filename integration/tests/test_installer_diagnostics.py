@@ -502,7 +502,13 @@ def test_new_test_classes_fixtures_and_nested_helpers_have_contracts(module: str
         (
             install,
             "node_version verify_snapshot verify_release install_packages stage apply post_check "
-            "checked_version run_preflighted main",
+            "checked_version run_preflighted run_verified main",
+        ),
+        (
+            runtime_lock,
+            "validate_graph validate_platforms bind validate_entry root_manifest npm_env run_npm check_sri "
+            "acquire validate_archive stream_digest audit_archive native_bin_targets audit_install "
+            "install_graph selected_graphs generate replay_source main",
         ),
     ],
 )

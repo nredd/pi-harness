@@ -56,7 +56,9 @@ entry kinds, more than 100,000 members or more than 512 MiB expanded bytes per a
 Historical single-prefix npm archives are supported using npm/pacote's strip-one layout.
 Bundled dependencies are authenticated by their parent's archive. After replay, all installed
 archive files/links are compared with authenticated bytes; unexpected files are refused.
-The same actual-byte audit precedes a rerun's installed executable check. Missing optional
+The verification directory holding authenticated archives stays alive through planning, staging
+and executable checks, including plan-only and no-op reruns. The same actual-byte audit precedes
+a rerun's installed executable check. Missing optional
 packages cannot execute and may be omitted by native npm; present optional packages receive
 the same byte audit.
 

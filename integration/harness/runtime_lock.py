@@ -57,15 +57,20 @@ class RuntimeLockError(ValueError):
 
 
 class NpmGraph(BaseModel):
-    """One native npm root manifest and its complete v3 package lock."""
-
     model_config = STRICT
     manifest: dict[str, Any] = Field(description="Exact npm root package.json")
     lock: dict[str, Any] = Field(description="Native npm v3 lock including optional packages")
 
     @model_validator(mode="after")
     def validate_graph(self) -> Self:
-        """Refuse unpinned roots, unsupported sources and unauthenticated entries."""
+        """Refuse unpinned roots, unsupported sources and unauthenticated entries.
+
+        Returns:
+            Self: the validated native npm graph.
+
+        Raises:
+            RuntimeLockError: graph shape or package authentication metadata is unsupported.
+        """
         if self.lock.get("lockfileVersion") != 3:
             raise RuntimeLockError("Runtime lock must use native npm `lockfileVersion` 3")
         entries = self.lock.get("packages")
@@ -86,8 +91,6 @@ class NpmGraph(BaseModel):
 
 
 class RuntimeLocks(BaseModel):
-    """Source-selected complete runtime graphs, bound to one canonical stack."""
-
     model_config = STRICT
     schema_version: Literal[1] = Field(description="Runtime lock format version")
     stack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", description="Canonical selected stack digest")
@@ -95,7 +98,14 @@ class RuntimeLocks(BaseModel):
 
     @model_validator(mode="after")
     def validate_platforms(self) -> Self:
-        """Require both supported platforms and both installation roots."""
+        """Require both supported platforms and both installation roots.
+
+        Returns:
+            Self: the validated source-selected runtime graph set.
+
+        Raises:
+            RuntimeLockError: a platform or root is missing or unexpected.
+        """
         if set(self.platforms) != PLATFORMS:
             raise RuntimeLockError("Runtime locks must cover exactly darwin-arm64 and linux-x64")
         if any(set(graphs) != {"core", "agent"} for graphs in self.platforms.values()):
@@ -103,7 +113,17 @@ class RuntimeLocks(BaseModel):
         return self
 
     def bind(self, stack: Stack) -> None:
-        """Require the graphs' roots and digest to equal the exact selected stack."""
+        """Require the graphs' roots and digest to equal the exact selected stack.
+
+        Parameters:
+            stack (Stack): authoritative selected stack.
+
+        Returns:
+            None: graph roots and canonical digest match the selection.
+
+        Raises:
+            RuntimeLockError: a stack digest, root manifest or exact dependency differs.
+        """
         if self.stack_sha256 != hashlib.sha256(canonical_stack_bytes(stack)).hexdigest():
             raise RuntimeLockError("Runtime locks do not match the selected canonical stack")
         for graphs in self.platforms.values():
@@ -118,8 +138,6 @@ class RuntimeLocks(BaseModel):
 
 
 class DependencyGraph(BaseModel):
-    """Supplemental promotion-attested asset; v1 snapshots alone are insufficient."""
-
     model_config = STRICT
     schema_version: Literal[1] = Field(description="Supplemental asset format version")
     source_sha: str = Field(pattern=r"^[0-9a-f]{40}$", description="Exact promoted source commit")
@@ -609,6 +627,19 @@ def replay_source(runtime: RuntimeLocks, stack: Stack, scratch: Path, npm: str) 
 
     This is source-lock compatibility evidence, NOT verification of a published graph attestation.
     No package code runs until both complete graphs have passed their installed-byte audits.
+
+    Parameters:
+        runtime (RuntimeLocks): reviewed source-selected graphs.
+        stack (Stack): authoritative stack selection.
+        scratch (Path): private native replay directory.
+        npm (str): absolute selected native npm executable.
+
+    Returns:
+        None: both graph audits and the isolated version smoke check pass.
+
+    Raises:
+        OSError | ValueError: binding, acquisition, native replay or byte auditing fails.
+        RuntimeLockError: the authenticated source runtime cannot start.
     """
     runtime.bind(stack)
     checksums = {
@@ -648,7 +679,15 @@ def replay_source(runtime: RuntimeLocks, stack: Stack, scratch: Path, npm: str) 
 
 
 def main() -> None:
-    """Generate initial reviewed locks, or explicitly replay them for native CI compatibility."""
+    """Generate initial reviewed locks, or explicitly replay them for native CI compatibility.
+
+    Returns:
+        None: selected source locks were written or replayed successfully.
+
+    Raises:
+        SystemExit: arguments or native npm selection are invalid.
+        OSError | ValueError: stack inputs, generation or native replay fail.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--stack", type=Path, required=True)
