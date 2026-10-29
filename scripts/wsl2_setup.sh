@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Bootstrap tools only. The ordinary ci.yml steps own every gate and scenario.
 set -euo pipefail
+if [ "$(id -u)" -eq 0 ]; then
+  echo 'WSL gates require an unprivileged Linux user' >&2
+  exit 1
+fi
 source_checkout=$WSL_HOST_WORKSPACE
 case "$source_checkout" in /mnt/*) ;; *) echo 'Expected Windows source below /mnt' >&2; exit 1 ;; esac
 worktree="$HOME/pi-harness-ci"
@@ -40,5 +44,5 @@ fi
 export PATH="$tool_dir/gh/bin:$PATH"
 mkdir -p "$worktree/.ci-temp"
 printf '%s\n' "$PATH" > "$worktree/.ci-temp/tool-path"
-printf 'WSL2 Ubuntu-24.04, Linux filesystem: %s\nNode: %s\nBun: %s\n' "$filesystem" "$(node --version)" "$(bun --version)" > "$WSL_HOST_TEMP/wsl2-diagnostics/identity.txt"
+printf 'WSL2 Ubuntu-24.04, Linux filesystem: %s\nUser: %s (uid %s)\nNode: %s\nBun: %s\n' "$filesystem" "$(id -un)" "$(id -u)" "$(node --version)" "$(bun --version)" > "$WSL_HOST_TEMP/wsl2-diagnostics/identity.txt"
 printf 'Guest setup complete; ordinary CI steps follow.\n' > "$WSL_HOST_TEMP/wsl2-diagnostics/capture-status.txt"

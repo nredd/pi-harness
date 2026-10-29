@@ -96,7 +96,11 @@ describe("run", () => {
 
 	it("reports a missing binary as a spawn error", async () => {
 		const r = await run({ cmd: "definitely-not-a-binary-zz", args: [] });
-		expect(r.spawnError).toMatch(/ENOENT/);
+		expect(r.exitCode).toBeNull();
+		expect(r.timedOut).toBe(false);
+		expect(r.spawnError).toMatch(
+			process.versions.bun ? /^Executable not found in \$PATH: "definitely-not-a-binary-zz"$/ : /ENOENT/,
+		);
 	});
 
 	it("caps each stream and counts dropped bytes", async () => {

@@ -307,6 +307,8 @@ export class FleetList {
      */
     private detachedSource: () => readonly RunningDetached[] = () => [],
     private readonly clock: Clock = realClock,
+    /** @internal Host/test session lookup; a session can disappear after roster construction. */
+    private readonly options: { sessionFor?: (record: AgentRecord) => AgentRecord["session"] } = {},
   ) {}
 
   /** UI-only disclosure; never claims a dialog's key or touches running work. */
@@ -701,7 +703,8 @@ export class FleetList {
     }
     const record = entry.record;
     if (!this.ui) return;
-    if (!record.session) {
+    const session = this.options.sessionFor ? this.options.sessionFor(record) : record.session;
+    if (!session) {
       if (isOutstandingFailure(record)) {
         this.ui.notify(record.error ?? `${record.type}: ${record.description} (${record.status}).`, "error");
         markConsumed(record, this.clock.now());
@@ -712,7 +715,6 @@ export class FleetList {
       this.ui.notify(`Agent is ${record.status} — no session available.`, "info");
       return;
     }
-    const session = record.session;
     const activity = this.activityFor(record.id);
     const orphan = this.detachedFor(record.id);
     this.viewingAgentId = record.id;

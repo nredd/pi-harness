@@ -32,6 +32,11 @@ for name in artifacts artifacts-node artifacts-personal; do
     cp -a "$worktree/integration/$name/." "$WSL_HOST_WORKSPACE/integration/$name/"
   fi
 done
+# Published atomically by the startup collector only after its allowlist/credential scan.
+if [ -d "$RUNNER_TEMP/standalone-startup-diagnostics" ]; then
+  mkdir -p "$WSL_HOST_TEMP/standalone-startup-diagnostics"
+  cp -a "$RUNNER_TEMP/standalone-startup-diagnostics/." "$WSL_HOST_TEMP/standalone-startup-diagnostics/"
+fi
 shopt -s nullglob
 for report in "$RUNNER_TEMP/"*contracts*.json; do
   cp "$report" "$WSL_HOST_TEMP/"

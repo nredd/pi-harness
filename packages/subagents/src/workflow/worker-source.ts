@@ -26,10 +26,11 @@
  *
  * That said: our injected globals are themselves host closures, so
  * `agent.constructor` is still the host `Function`. The hygiene shrinks the
- * surface; it does not close the hole. **`codeGeneration: { strings: false }` is
- * the load-bearing defense** — it makes `Function("…")` and `eval("…")` throw
- * `EvalError`, so a captured host `Function` cannot compile anything. Treat this
- * as a determinism boundary, not a security boundary against a hostile script.
+ * surface; it does not close the hole. `codeGeneration: { strings: false }`
+ * makes realm-local `Function` and `eval` throw `EvalError`, but does not stop a
+ * captured host `Function`. The stack formatter stays realm-native rather than
+ * adding another host callback. Treat this as a determinism boundary, not a
+ * security boundary against a hostile script.
  *
  * ## Why determinism is a prelude and not a stub
  *
@@ -48,9 +49,8 @@
 /**
  * Runs inside the realm, ahead of the script body, on a single line.
  *
- * One line matters: the body is compiled at `\n` + line 1, and the host passes
- * `lineOffset: -1` so reported line numbers match the file the author wrote. Any
- * newline in here shifts every stack frame in every workflow script.
+ * The shared compiler puts this and the wrapper on the body's first line.
+ * No lineOffset is needed (Bun ignores it); only first-line columns need mapping.
  */
 const DETERMINISM_PRELUDE =
   "const Date = (function () {" +
@@ -718,19 +718,7 @@ async function workflowIn(scope, nameOrRef, args) {
   child.ambientPhaseIndex = definePhaseIn(child, undefined);
   child.ambientPhaseTitle = scopedTitle(child, undefined);
 
-  let run;
-  try {
-    const compiled = new vm.Script(
-      // \`meta\` is deliberately not a parameter: the body still opens with its
-      // own \`const meta = { ... }\` (extractMeta strips only the \`export\`), so a
-      // parameter of that name would collide with it.
-      "(async (agent, phase, log, workflow, console, args) => {" + PRELUDE + "\\n" + loaded.body + "\\n})",
-      { filename: "workflow:" + loaded.name + ".js", lineOffset: -1 }
-    );
-    run = compiled.runInContext(realmContext);
-  } catch (error) {
-    throw new Error('workflow("' + label + '"): ' + describe(error));
-  }
+  const run = compileWorkflow(loaded.body, "workflow:" + loaded.name + ".js");
 
   const value = await run(child.agent, child.phase, child.log, child.workflow, child.console, args);
   checkBoundary(value, 'the result of workflow("' + label + '")');
@@ -762,6 +750,73 @@ function makeBudget() {
       return Infinity;
     },
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Authored source locations
+ * ------------------------------------------------------------------ */
+
+// Neither lineOffset nor columnOffset is implemented by Bun 1.3/1.4. Keep
+// authored lines intact and map only the prefix on line 1. Both entry points
+// compile the same function; calling it outside the VM adds no synthetic frame.
+const WORKFLOW_PREFIX = "(async (agent, phase, log, workflow, console, args) => {" + PRELUDE;
+let registerWorkflowFile = null;
+
+// Compiled from source in the realm, not installed as a host callback. Only
+// primitive prefix length and filenames cross into its private realm-native Set.
+function installAuthoredStacks(prefixLength) {
+  const workflowFiles = new Set();
+  function authoredFrame(frame) {
+    const text = String(frame);
+    const file = frame.getFileName();
+    if (!workflowFiles.has(file) || frame.getLineNumber() !== 1) return text;
+    const location = file + ":1:";
+    const at = text.lastIndexOf(location);
+    if (at === -1) return text;
+    const start = at + location.length;
+    // Bun 1.3's getColumnNumber() is zero-based, but CallSite.toString()
+    // is one-based on all supported engines.
+    const column = Number.parseInt(text.slice(start), 10);
+    if (column <= prefixLength) return text;
+    const digits = String(column).length;
+    return text.slice(0, start) + (column - prefixLength) + text.slice(start + digits);
+  }
+  Error.prepareStackTrace = function (error, frames) {
+    return Error.prototype.toString.call(error) + frames.map(function (frame) {
+      return "\\n    at " + authoredFrame(frame);
+    }).join("");
+  };
+  return function (filename) { workflowFiles.add(filename); };
+}
+
+function compileWorkflow(body, filename) {
+  registerWorkflowFile(filename);
+  try {
+    return new vm.Script(WORKFLOW_PREFIX + body + "\\n})", { filename: filename }).runInContext(realmContext);
+  } catch (error) {
+    // Parser errors are created outside the realm. Retain the actual error,
+    // but remove the generated prefix from a first-line source/caret excerpt.
+    if (error && typeof error.stack === "string") {
+      if (error.stack.startsWith(filename + ":1\\n")) {
+        const lines = error.stack.split("\\n");
+        if (lines[1]?.startsWith(WORKFLOW_PREFIX)) {
+          lines[1] = lines[1].slice(WORKFLOW_PREFIX.length);
+          if (lines[2] !== undefined) lines[2] = lines[2].slice(WORKFLOW_PREFIX.length);
+          error.stack = lines.join("\\n");
+        }
+      } else if (error.sourceURL === filename && error.stack.startsWith("[native code]:0\\n")) {
+        // Bun 1.3 defers parsing until runInContext and loses the source
+        // excerpt/column. It still supplies the authored line; don't invent
+        // a caret for a column the engine did not report.
+        const line = error.line;
+        const sourceLines = body.split(/\\r\\n|[\\n\\r\\u2028\\u2029]/);
+        if (Number.isInteger(line) && line > 0 && line <= sourceLines.length) {
+          error.stack = filename + ":" + line + "\\n" + sourceLines[line - 1] + "\\n" + error.stack.slice(error.stack.indexOf("\\n") + 1);
+        }
+      }
+    }
+    throw error;
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -797,14 +852,15 @@ async function main() {
   sandbox.meta = realmParse(workerData.metaJson);
   sandbox.args = workerData.argsJson === undefined ? undefined : realmParse(workerData.argsJson);
 
-  const script = new vm.Script("(async () => {" + PRELUDE + "\\n" + workerData.body + "\\n})()", {
-    filename: "workflow.js",
-    // The wrapper adds exactly one line above the body; undo it so a thrown
-    // error points at the line the author wrote.
-    lineOffset: -1,
-  });
-
-  const value = await script.runInContext(context);
+  // Structured CallSites retain constructor-expression columns on both V8 and
+  // JSC. Formatting changes no Error constructor, prototype, identity or cause.
+  registerWorkflowFile = vm.runInContext(
+    "(" + installAuthoredStacks.toString() + ")(" + WORKFLOW_PREFIX.length + ")",
+    context,
+    { filename: "workflow-stack.js" }
+  );
+  const run = compileWorkflow(workerData.body, "workflow.js");
+  const value = await run(rootScope.agent, rootScope.phase, rootScope.log, rootScope.workflow, rootScope.console, sandbox.args);
   checkBoundary(value, "the workflow result");
   flushProgress();
   port.postMessage({
@@ -813,12 +869,31 @@ async function main() {
   });
 }
 
+/** Serialize diagnostics only: keep realm errors untouched and bound cause traversal/output. */
+function failureDetails(error) {
+  const limit = 16384;
+  let message = "Workflow threw an unreadable error.";
+  let stack = "";
+  const seen = new Set();
+  try {
+    message = String(error && error.message ? error.message : error).slice(0, 4096);
+    let current = error;
+    for (let depth = 0; depth < 8 && stack.length < limit; depth++) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      const text = current && typeof current.stack === "string" ? current.stack : String(current);
+      stack += (depth === 0 ? "" : "\\nCaused by: ") + text.slice(0, limit - stack.length);
+      if (!current || current.cause === undefined) break;
+      current = current.cause;
+    }
+  } catch {
+    // A diagnostic getter must not prevent the failed run from settling.
+  }
+  return { type: "error", message: message, stack: stack.slice(0, limit) || undefined };
+}
+
 main().catch(function (error) {
   flushProgress();
-  port.postMessage({
-    type: "error",
-    message: error && error.message ? String(error.message) : String(error),
-    stack: error && error.stack ? String(error.stack) : undefined,
-  });
+  port.postMessage(failureDetails(error));
 });
 `;

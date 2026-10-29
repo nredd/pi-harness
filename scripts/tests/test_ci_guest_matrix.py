@@ -127,7 +127,21 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     assert "stacks/personal.json --runtime bun-standalone" in scenarios[1]["run"]
     assert "stacks/local.json --runtime bun-standalone" in scenarios[2]["run"]
     uploads = [step for step in stack["steps"] if "upload-artifact@" in step.get("uses", "")]
-    assert all("always()" in step["if"] for step in uploads)
+    startup = next(
+        step for step in uploads if step.get("name") == "Upload scanned standalone startup failure evidence"
+    )
+    assert startup["if"] == (
+        "${{ !cancelled() && steps.startup.outcome == 'failure' "
+        "&& steps.startup.outputs.artifact_ready == 'true' }}"
+    )
+    assert all("always()" in step["if"] for step in uploads if step is not startup)
+    assert startup["with"]["name"] == (
+        "${{ matrix.os == 'wsl2' && 'standalone-startup-wsl2-linux-x64' || 'standalone-startup-linux-x64' }}"
+    )
+    capture = stack["steps"][stack["steps"].index(startup) - 1]
+    assert capture["uses"] == "./.github/actions/capture-ci-wsl"
+    assert "matrix.os == 'wsl2'" in capture["if"]
+    assert "steps.startup.outputs.artifact_ready == 'true'" in capture["if"]
     standalone = next(step for step in uploads if "standalone-wsl2" in step["with"]["name"])
     assert (
         standalone["with"]["name"]
@@ -236,6 +250,9 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     (ti / "first-failure").write_text("47\n")
     (ti / "package-contracts.json").write_text("{}\n")
     (ti / "secret.txt").write_text("must not upload")
+    startup = ti / "standalone-startup-diagnostics"
+    startup.mkdir()
+    (startup / "SHA256SUMS").write_text("synthetic scanned manifest\n")
     artifacts = worktree / "integration/artifacts"
     artifacts.mkdir()
     (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n")
@@ -265,6 +282,7 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     assert (host / "integration/artifacts/wsl2-personal.xml").is_file() is not export_failure
     assert (host_temp / "package-contracts.json").is_file() is not export_failure
     assert not (host_temp / "secret.txt").exists()
+    assert (host_temp / "standalone-startup-diagnostics/SHA256SUMS").is_file() is not export_failure
     assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
 
 
@@ -395,6 +413,9 @@ def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
         assert "--exec wslpath -u" in boundary
         assert "--exec bash -euo pipefail" in boundary
         assert " -c " not in boundary
+        assert "--user pi-ci --exec bash -euo pipefail" in boundary
+    setup = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
+    assert "--user root --exec useradd --create-home --shell /bin/bash pi-ci" in setup
 
 
 def test_guest_preflight_failure_is_recorded(tmp_path: Path) -> None:
@@ -410,6 +431,35 @@ def test_guest_preflight_failure_is_recorded(tmp_path: Path) -> None:
     )
     assert result.returncode == 1
     assert (worktree / ".ci-temp/first-failure").read_text() == "1\n"
+
+
+@pytest.mark.parametrize("script", ["wsl2_setup.sh", "wsl2_run.sh"])
+def test_guest_refuses_root_before_copy_or_gate(tmp_path: Path, script: str) -> None:
+    """Reject privileged execution rather than skipping permission-error tests.
+
+    Parameters:
+        tmp_path (Path): Disposable fixture directory.
+        script (str): Guest bootstrap or ordinary execution boundary.
+    """
+    worktree, env = guest_fixture(tmp_path)
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "id").write_text("#!/bin/sh\nprintf '0\\n'\n")
+    (commands / "id").chmod(0o755)
+    env["PATH"] = f"{commands}{os.pathsep}{env['PATH']}"
+    (worktree / ".ci-temp/tool-path").write_text(env["PATH"])
+    Path(env["WSL_STEP_SCRIPT"]).write_text("echo unexpected-gate\n")
+    env["WSL_HOST_WORKSPACE"] = "/mnt/c/synthetic-checkout"
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts" / script)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "unprivileged Linux user" in result.stderr
+    assert "unexpected-gate" not in result.stdout
 
 
 @pytest.mark.parametrize("filesystem", ["drvfs", ""])

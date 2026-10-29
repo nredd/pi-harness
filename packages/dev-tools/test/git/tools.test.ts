@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -216,6 +216,7 @@ describe("git_commit", () => {
 
 	it("relays a failing hook and flags hook-modified files", async () => {
 		const hooks = join(repo, ".git", "hooks");
+		mkdirSync(hooks, { recursive: true });
 		writeFileSync(
 			join(hooks, "pre-commit"),
 			"#!/bin/sh\necho 'nope check...Failed' >&2\necho '- files were modified by this hook' >&2\nexit 1\n",

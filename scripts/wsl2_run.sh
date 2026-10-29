@@ -16,6 +16,10 @@ record_status() {
   return "$status"
 }
 trap record_status EXIT
+if [ "$(id -u)" -eq 0 ]; then
+  echo 'WSL gates require an unprivileged Linux user' >&2
+  exit 1
+fi
 test -s "$RUNNER_TEMP/tool-path"
 export PATH
 PATH=$(< "$RUNNER_TEMP/tool-path")
