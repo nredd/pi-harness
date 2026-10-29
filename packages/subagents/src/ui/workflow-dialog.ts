@@ -650,9 +650,12 @@ function agentRow(options: {
   // then let the shared flag degrade rather than clipping it to `[fal…`.
   if (options.compact && flag) {
     const flagWidth = Math.max(0, width - lineWidth(prefix));
+    const compact = withLeadingFlag("", flag, entry.label, flagWidth);
+    const label = compact.startsWith(`${flag} `) ? compact.slice(flag.length + 1) : "";
     return [
       ...prefix,
-      { text: withLeadingFlag("", flag, "", flagWidth), color: hasFallback(entry) ? "warning" : "dim" },
+      { text: label ? flag : compact, color: hasFallback(entry) ? "warning" : "dim" },
+      ...(label ? [{ text: ` ${label}`, color: selected ? "accent" as const : undefined }] : []),
     ];
   }
   const head: WorkflowCardLine = [
