@@ -6,8 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+	finishCheckCleanup,
 	SIGNAL_READINESS_POLL_MS as POLL_INTERVAL_MS,
 	PARENT_READINESS_TIMEOUT_MS as READINESS_TIMEOUT_MS,
+	stopCheckChild,
 	within,
 	writeSignalReadinessObserver,
 } from "./check-async.mjs";
@@ -245,6 +247,18 @@ if (process.platform !== "win32") {
 	});
 	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"], "compiler cleanup must escalate to group SIGKILL");
 	assert.equal(fakeAlive, false);
+
+	// A successful SIGKILL syscall is not proof that the group became empty. Keep every final
+	// probe positive to prove cleanup rejects rather than marking the group reaped.
+	const persistentSignals = [];
+	await assert.rejects(
+		fakeReap(424243, (_pid, signal) => {
+			if (signal !== 0) persistentSignals.push(signal);
+			return true;
+		}),
+		/remained non-empty after SIGKILL cleanup/,
+	);
+	assert.deepEqual(persistentSignals, ["SIGTERM", "SIGKILL"]);
 	const groupDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-cancel-"));
 	const setupUrl = pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href;
 
@@ -328,7 +342,7 @@ if (role === "leader" && behavior !== "reaped") spawn(process.execPath, [fileURL
 fs.writeFileSync(base + "." + role, String(process.pid));
 const deadline = Date.now() + ${FIXTURE_LIFETIME_MS};
 setInterval(/** @returns {void} Polls release and enforces fixture lifetime. @throws {Error} On filesystem probe failure. */ () => {
-  if (role === "leader" && behavior === "exits-first" && fs.existsSync(base + ".release")) process.exit(0);
+  if (role === "leader" && (behavior === "exits-first" || behavior === "failed-quiescence" || behavior === "failed-quiescence-error") && fs.existsSync(base + ".release")) process.exit(behavior === "failed-quiescence-error" ? 7 : 0);
   if (Date.now() > deadline) process.exit(99);
 }, ${POLL_INTERVAL_MS});
 `,
@@ -339,6 +353,7 @@ setInterval(/** @returns {void} Polls release and enforces fixture lifetime. @th
 import { runCancellable } from ${JSON.stringify(setupUrl)};
 const [fixture, base, behavior] = process.argv.slice(2);
 const trace = [];
+let suppressFirstKill = behavior === "failed-quiescence" || behavior === "failed-quiescence-error";
 /**
  * Trace an actual signal attempt, timestamping only after successful delivery.
  * @param {number} pid Owned process/group target.
@@ -347,6 +362,11 @@ const trace = [];
  * @throws {Error} Preserves syscall failures after recording their codes.
  */
 const kill = (pid, signal) => {
+  if (pid < 0 && signal === "SIGKILL" && suppressFirstKill) {
+    suppressFirstKill = false;
+    trace.push({ pid, signal, suppressed: true, at: performance.now() });
+    return true;
+  }
   let result;
   try { result = process.kill(pid, signal); }
   catch (error) { trace.push({ pid, signal, error: error.code }); throw error; }
@@ -394,8 +414,7 @@ await running;
 		);
 	};
 	const children = [];
-	const pids = new Set();
-	const groups = new Set();
+	let fixtureFailure;
 	try {
 		await within(
 			assert.rejects(
@@ -412,22 +431,42 @@ await running;
 			"missing build tool to reject with its install hint",
 			SETUP_COMPLETION_TIMEOUT_MS,
 		);
-		// Preserve today's EPERM policy without claiming it proves PGID reuse (follow-up #167).
-		// This pure injected syscall case has no process/trap to handshake with.
+		// EPERM from a probe is inconclusive: no group signal is safe without confirmed ownership.
+		// This injected syscall case exercises that policy without a privileged credential transition.
 		const calls = [];
-		await reapProcessGroup(424242, (pid, signal) => {
-			calls.push([pid, signal]);
-			throw Object.assign(new Error("EPERM"), { code: "EPERM" });
-		});
+		await assert.rejects(
+			reapProcessGroup(424242, (pid, signal) => {
+				calls.push([pid, signal]);
+				throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+			}),
+			(error) => error.code === "EPERM",
+			"permission-denied group probes must surface cleanup uncertainty",
+		);
 		assert.deepEqual(
 			calls,
 			[[-424242, 0]],
-			"the current EPERM policy must only probe without signalling",
+			"permission-denied probes must not signal a potentially foreign group",
+		);
+		const unexpectedCalls = [];
+		await assert.rejects(
+			reapProcessGroup(424243, (pid, signal) => {
+				unexpectedCalls.push([pid, signal]);
+				throw Object.assign(new Error("EIO"), { code: "EIO" });
+			}),
+			(error) => error.code === "EIO",
+			"unexpected group probe errors must surface cleanup uncertainty",
+		);
+		assert.deepEqual(
+			unexpectedCalls,
+			[[-424243, 0]],
+			"unexpected probes must not signal a potentially foreign group",
 		);
 
 		for (const [name, behavior] of [
 			["term-leader-waits", "waits"],
 			["leader-exits-first", "exits-first"],
+			["failed-quiescence", "failed-quiescence"],
+			["failed-quiescence-preserves-command-error", "failed-quiescence-error"],
 			["reaped-guard", "reaped"],
 			["negative-control", "responsive"],
 		]) {
@@ -440,7 +479,6 @@ await running;
 				["--import", observer, wrapper, fixture, base, behavior],
 				{ stdio: ["ignore", "pipe", "pipe"] },
 			);
-			children.push(child);
 			let output = "";
 			child.stdout.on("data", (chunk) => {
 				output += chunk;
@@ -459,17 +497,15 @@ await running;
 					);
 				},
 			);
+			children.push({ child, closed, name });
 			let leader;
 			let descendant;
 			try {
 				leader = await waitForReady(`${base}.leader`);
-				pids.add(leader);
-				groups.add(leader);
 				descendant =
 					behavior === "reaped"
 						? undefined
 						: await waitForReady(`${base}.desc`);
-				if (descendant) pids.add(descendant);
 				assert.equal(
 					await waitForReady(wrapperReady),
 					child.pid,
@@ -489,7 +525,7 @@ await running;
 			 * @throws {Error} On release-file, signal-delivery or child-process failure.
 			 */
 			const completion = (async () => {
-				if (behavior === "exits-first")
+				if (behavior === "exits-first" || behavior === "failed-quiescence" || behavior === "failed-quiescence-error")
 					await fs.writeFile(`${base}.release`, "go");
 				else
 					assert.ok(
@@ -505,13 +541,24 @@ await running;
 			);
 			assert.equal(
 				result.code,
-				behavior === "exits-first" ? 0 : 143,
+				behavior === "exits-first" ? 0 : behavior === "failed-quiescence" || behavior === "failed-quiescence-error" ? 1 : 143,
 				`${name}: ${JSON.stringify(result)} ${output}`,
 			);
 			const trace = JSON.parse(await fs.readFile(`${base}.trace`, "utf8"));
 			if (behavior === "waits" || behavior === "exits-first")
 				assertEscalated(name, trace, leader);
-			else {
+			else if (behavior === "failed-quiescence" || behavior === "failed-quiescence-error") {
+				const signals = trace.filter((event) => event.signal !== 0);
+				assert.deepEqual(
+					signals.map((event) => [event.pid, event.signal]),
+					[[-leader, "SIGTERM"], [-leader, "SIGKILL"], [-leader, "SIGKILL"]],
+					"failed cleanup must retain the exit-hook KILL fallback",
+				);
+				assert.equal(signals[1].suppressed, true, "the regression must keep the final probe positive");
+				assert.match(output, /remained non-empty after SIGKILL cleanup/);
+				if (behavior === "failed-quiescence-error")
+					assert.match(output, /Command failed \(7\):/);
+			} else {
 				assert.deepEqual(
 					trace
 						.filter(
@@ -539,45 +586,35 @@ await running;
 					true,
 					`${name}: descendant ${descendant} survived the wrapper`,
 				);
-				pids.delete(descendant);
 			}
 			assert.equal(
 				await settled(leader),
 				true,
 				`${name}: leader ${leader} survived`,
 			);
-			pids.delete(leader);
 			assert.equal(
 				alive(-leader),
 				false,
 				`${name}: process group ${leader} still has members`,
 			);
-			groups.delete(leader);
 		}
+	} catch (error) {
+		fixtureFailure = error;
+		throw error;
 	} finally {
-		for (const child of children) {
-			try {
-				child.kill("SIGKILL");
-			} catch {
-				/* already gone */
-			}
-		}
-		// Forget verified-empty groups and dead PIDs before cleanup: their IDs may be reused.
-		for (const pgid of groups) {
-			try {
-				process.kill(-pgid, "SIGKILL");
-			} catch {
-				/* already gone */
-			}
-		}
-		for (const pid of pids) {
-			try {
-				process.kill(pid, "SIGKILL");
-			} catch {
-				/* already gone */
-			}
-		}
-		await fs.rm(groupDir, { recursive: true, force: true });
+		await finishCheckCleanup(
+			"Linux build-script fixture cleanup",
+			[
+				...children.map(
+					({ child, closed, name }) =>
+						/** @returns {Promise<void>} Stops only a still-owned wrapper, which reaps its own live group. @throws {Error} On bounded cleanup failure. */
+						() => stopCheckChild(child, closed, `failed ${name} fixture`),
+				),
+				/** @returns {Promise<void>} Removes disposable fixture state. @throws {Error} On removal failure. */
+				() => fs.rm(groupDir, { recursive: true, force: true }),
+			],
+			fixtureFailure,
+		);
 	}
 }
 console.log("Linux build/setup script checks passed");

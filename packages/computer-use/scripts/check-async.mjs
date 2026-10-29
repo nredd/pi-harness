@@ -137,21 +137,21 @@ async function waitForCheckGroup(pgid, label, timeoutMs) {
  * @param {string} label Operation name included in cleanup failures.
  * @param {boolean} [group=false] Signal the owned detached POSIX group, or only probe it if its leader already exited.
  * @returns {Promise<void>} Resolves once streams close and, if requested, the group is empty.
- * @throws {Error} If a completed leader's streams/group remain observable past their probe-only caps.
+ * @throws {Error} If a completed child's streams or detached group remain observable past their probe-only caps.
  * @throws {AggregateError} If both bounded termination attempts fail.
  */
 export async function stopCheckChild(child, closed, label, group = false) {
-	// A completed leader no longer proves PGID ownership. Never signal its numeric ID:
-	// even a successful probe could refer to a recycled group. Observe only, and fail
-	// contextually if it does not disappear within the cap.
-	if (group && (child.exitCode != null || child.signalCode != null)) {
+	// A completed child no longer proves ownership of its numeric PID or, for a
+	// detached child, PGID. Never signal either after exit: it may be recycled.
+	// A detached group is probe-only; direct children need only stream cleanup.
+	if (child.exitCode != null || child.signalCode != null) {
 		try {
 			await within(
 				closed,
-				`${label} completed leader streams`,
+				`${label} completed child streams`,
 				COMMAND_KILL_WAIT_MS,
 			);
-			if (child.pid !== undefined)
+			if (group && child.pid !== undefined)
 				await waitForCheckGroup(
 					child.pid,
 					`${label} completed group`,
