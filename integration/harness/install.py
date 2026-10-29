@@ -1180,6 +1180,8 @@ class Journal:
         self.steps[-1]["replacement"] = asdict(identity) if identity is not None else None
         self.persist()
         if source is not None:
+            # The source subtree is intentionally retired; its parent remains anchored.
+            self.anchors.discard(source)
             self.anchors.rename(source, target)
         self.check_store()
 
@@ -2246,12 +2248,17 @@ def stage(
             failure = None
         if failure is not None:
             raise failure from failure.__cause__
+        anchors.directory(staged_core)
         anchors.check()
-        # The whole core is the source leaf that moves; retain `staging`, not an opened
-        # `staging/core` pathname that our own rename will intentionally retire.
+        # Cleanup and the marker share the transaction's original staging/core parent.
+        # Journal.place retires this subtree's descriptors before its intentional move.
         for leftover in ("fetch-home", "npm-cache", "tui-resource"):
-            remove(staged_core / leftover)
-        write_atomic(staged_core / CORE_MARKER, json.dumps(stack.core.model_dump(mode="json"), indent=2))
+            remove(staged_core / leftover, anchors=anchors)
+        write_atomic(
+            staged_core / CORE_MARKER,
+            json.dumps(stack.core.model_dump(mode="json"), indent=2),
+            anchors=anchors,
+        )
         anchors.check()
         prefix = staged_core
     return (

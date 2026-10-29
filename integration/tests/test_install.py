@@ -2119,6 +2119,82 @@ def test_plan_reports_a_pending_journal_without_planning(
     assert tree(harness.home) == before
 
 
+@pytest.mark.parametrize("moment", ["cleanup", "marker"])
+def test_core_staging_mutations_keep_transaction_ancestors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moment: str
+) -> None:
+    """Swapping a real staging ancestor cannot delete or overwrite a substitute's contents."""
+    harness = Harness(tmp_path, monkeypatch)
+    staging, held, victim = tmp_path / "run", tmp_path / "held", tmp_path / "victim"
+    (victim / "core" / "fetch-home").mkdir(parents=True)
+    valuable = victim / "core" / "fetch-home" / "valuable"
+    valuable.write_bytes(b"preserve cleanup victim")
+    marker = victim / "core" / install.CORE_MARKER
+    marker.write_bytes(b"preserve marker victim")
+    original_remove, original_write = install.remove, install.write_atomic
+    swapped = False
+
+    def swap() -> None:
+        """Replace an admitted staging ancestor with a different real directory.
+
+        Returns:
+            None: the original namespace is held aside and the substitute occupies its name.
+
+        Raises:
+            OSError: fixture renames fail.
+        """
+        nonlocal swapped
+        assert not swapped
+        staging.rename(held)
+        victim.rename(staging)
+        swapped = True
+
+    def remove(path: Path, **kwargs: Any) -> None:
+        """Swap immediately before installer-owned core cleanup uses its parent.
+
+        Parameters:
+            path (Path): cleanup entry.
+            kwargs (Any): forwarded descriptor owner.
+
+        Returns:
+            None: the underlying cleanup completes unless the namespace is refused.
+
+        Raises:
+            OSError: fixture setup or cleanup fails.
+        """
+        if moment == "cleanup" and not swapped and path == staging / "core" / "fetch-home":
+            swap()
+        original_remove(path, **kwargs)
+
+    def write(path: Path, text: str, mode: int | None = None, **kwargs: Any) -> None:
+        """Swap immediately before the installer-owned core marker write.
+
+        Parameters:
+            path (Path): marker destination.
+            text (str): marker JSON.
+            mode (int | None): requested file mode.
+            kwargs (Any): forwarded descriptor owner.
+
+        Returns:
+            None: the underlying write completes unless the namespace is refused.
+
+        Raises:
+            OSError: fixture setup or atomic writing fails.
+        """
+        if moment == "marker" and not swapped and path == staging / "core" / install.CORE_MARKER:
+            swap()
+        original_write(path, text, mode, **kwargs)
+
+    monkeypatch.setattr(install, "remove", remove)
+    monkeypatch.setattr(install, "write_atomic", write)
+    with pytest.raises(OSError, match="changed during"):
+        install.stage(harness.layout, harness.verified, install.Plan(install_core=True), staging)
+    assert swapped
+    assert (staging / "core" / "fetch-home" / "valuable").read_bytes() == b"preserve cleanup victim"
+    assert (staging / "core" / install.CORE_MARKER).read_bytes() == b"preserve marker victim"
+    assert (held / "core" / "bin" / "pi").is_file()
+
+
 def test_staged_source_parent_swap_is_refused_before_switch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
