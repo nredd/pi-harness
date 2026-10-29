@@ -11,6 +11,11 @@ The extension packages are imported workspaces in `packages/` and are selected f
 `integration/stacks/personal.json`. Their source histories, licenses, native gates and release
 contracts live with the imported package; they are not submodules and have no fork CI jobs.
 
+Computer-use tracks upstream main `67e9e2f77643f84605b738a3198048a88e92190e` plus the
+explicit carried set in [its sync runbook](../packages/computer-use/UPSTREAM.md). That runbook records
+exact worktree/diff commands, per-patch drop checks, signing continuity and rollback. All tools and
+the Linux locked-source build remain; local signing is unchanged. Source sync is not activation.
+
 A normal clone has the core fork as `origin`; add the upstream remote explicitly when maintaining a
 patch queue. Follow its contributor instructions before making changes.
 

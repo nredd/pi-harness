@@ -68,7 +68,8 @@ What each package must satisfy:
   `docs/mon-dashboard.md` (session-kit, all required: the README links both docs, see
   `test_session_kit_readme_links_only_packed_files`) and
   `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`). computer-use is
-  also pinned by exact `packed_files` (56 paths).
+  also pinned by exact `packed_files`, including upstream's moved `docs/content/docs` pages and
+  `activity_glow.swift` alongside the cursor/helper sources.
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
   none of the tarballs had a `LICENSE` and all shipped `test/` plus dev config
 - Packed `LICENSE` is byte-identical to the root `LICENSE`, except imported packages marked `own_license`,
@@ -208,7 +209,13 @@ match the release `verify` run; CI's `contracts` job runs it on every non-docs P
 
 `COMPUTER_USE_CONTRACT` (`@nredd/pi-computer-use`) is also outside the standalone three (it declares
 `own_license` and no runtime dependencies, but a `files`/`allowed` set for the macOS-only helpers:
-`prebuilt/macos/{arm64,x64}/bridge`, plus the locked Linux crate source `native/linux/bridge-rs/{Cargo.toml,Cargo.lock,src/*.rs}` and `docs/linux.md`; no `target/` or `tests/`, no linux/windows prebuilts, no Windows crate).
+`prebuilt/macos/{arm64,x64}/bridge`, plus the locked Linux crate source `native/linux/bridge-rs/{Cargo.toml,Cargo.lock,src/*.rs}` and `docs/content/docs/how-to-guides/linux.mdx`; no `target/` or `tests/`, no linux/windows prebuilts, no Windows crate).
+Upstream sync provenance is packed in `UPSTREAM.md`; `activity_glow.swift` is required by both
+build-source lists and the tarball audit. The release descriptor is unchanged: locally rebuilt
+per-architecture macOS payloads, locally signed at install, and no upstream-signed app substitution.
+Computer-use remains outside the coverage gate. `test:sync-reverts` supplies deterministic negative
+controls for the carried patches, without running GUI tools.
+
 `scenario_computer_use` is platform-aware because `extensions/computer-use.ts` registers
 `desktop_screenshot` and `desktop_input` on darwin only: exactly 13 tools on darwin, exactly the other 11
 elsewhere (a desktop tool on non-darwin fails). It also parses each packed helper's Mach-O header in

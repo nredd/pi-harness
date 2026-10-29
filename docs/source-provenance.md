@@ -19,6 +19,17 @@ the source repositories is recorded here.
 `packages/session-kit/dist/pi-stats-export.mjs` is tracked in the source and imported as is;
 `npm run test` rebuilds it byte-identically (verified against the source commit).
 
+## Computer-use upstream sync
+
+`packages/computer-use` now uses `injaneity/pi-computer-use` main
+`67e9e2f77643f84605b738a3198048a88e92190e` as its upstream base, retaining only the declared
+behavior and packaging deltas. [The package runbook](../packages/computer-use/UPSTREAM.md) maps the
+original fork commits and harness import `988eb2f`, declares the remaining patches and explains
+mechanical re-sync, signing continuity, rollback and non-live validation. `sync-patches.json` is the
+exact upstream-relative file ledger; `test:upstream-sync` rejects undeclared drift. Imported upstream
+workflows remain dormant under the workspace. Local builds, not upstream CI-signed bundles, produce
+the macOS payloads; this sync does not install them or alter TCC identity.
+
 ## Deliberate modifications
 
 Everything else is byte-identical to the source commit. Verified with `diff -r` against a fresh

@@ -7,7 +7,9 @@ References:
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -15,6 +17,10 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from test_coverage_round2 import commit_base
+
+from coverage_accounting import git_read
+from tests.test_coverage_accounting import policy
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -60,6 +66,53 @@ def test_github_generated_step_header_breaks_only_the_old_boundary(
         assert result.returncode == 0
         assert marker.read_text() == "success"
     assert step.read_text() == generated
+
+
+def test_guest_commit_gate_receives_event_payload(tmp_path: Path) -> None:
+    """Run the actual commit gate through the adapter's declared environment boundary.
+
+    Parameters:
+        tmp_path (Path): Disposable guest repository and host-visible event/control files.
+    Returns:
+        None: The real gate reads a full PR range, not a local fallback or missing payload.
+    """
+    node = shutil.which("node")
+    assert node
+    guest = tmp_path / "home/pi-harness-ci"
+    guest.mkdir(parents=True)
+    marker = guest / "marker"
+    marker.write_text("base")
+    commit_base(guest, policy())
+    base = git_read(guest, ["rev-parse", "HEAD"]).strip()
+    marker.write_text("head")
+    commit_base(guest, policy())
+    head = git_read(guest, ["rev-parse", "HEAD"]).strip()
+    (guest / ".ci-temp").mkdir()
+    (guest / ".ci-temp/tool-path").write_text(os.environ["PATH"])
+    payload = tmp_path / "host event.json"
+    payload.write_text(json.dumps({"pull_request": {"base": {"sha": base}, "head": {"sha": head}}}))
+    step = tmp_path / "step.sh"
+    gate = ROOT / "packages/computer-use/scripts/check-commit-messages.mjs"
+    step.write_text(f'"{node}" "{gate}"\n')
+    wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
+    declaration = next(line for line in wrapper.splitlines() if line.startswith("$env:WSLENV = "))
+    entries = declaration.split("'", 2)[1].split(":")
+    host = {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(payload)}
+    forwarded = {entry.split("/")[0] for entry in entries}
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GITHUB_")}
+    env.pop("COMMIT_RANGE", None)
+    env |= {key: value for key, value in host.items() if key in forwarded}
+    env |= {
+        "HOME": str(tmp_path / "home"),
+        "WSL_STEP_DIRECTORY": ".",
+        "WSL_STEP_SCRIPT": str(step),
+    }
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/wsl2_run.sh")], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"Checked 1 commit message(s) in {base}..{head}." in result.stdout
+    assert "GITHUB_EVENT_PATH/p" in entries  # Windows paths require WSL's path translation.
 
 
 def test_native_shell_preserves_implicit_baseline_pipeline_behavior(tmp_path: Path) -> None:

@@ -97,13 +97,13 @@ assert.deepEqual(
 	crateFiles.sort(),
 	"package.json `files` must list exactly the crate sources (no target/ or tests/)",
 );
-assert.ok(pkg.files.includes("docs/linux.md"));
+assert.ok(pkg.files.includes("docs/content/docs"));
 
 // Rust and TypeScript must agree on the wire protocol and shared architecture contract.
 const [protocolRs, architectureTs, linuxDoc] = await Promise.all([
 	fs.readFile(path.join(crateDir, "src", "protocol.rs"), "utf8"),
 	fs.readFile(path.join(rootDir, "src", "platform", "architecture.ts"), "utf8"),
-	fs.readFile(path.join(rootDir, "docs", "linux.md"), "utf8"),
+	fs.readFile(path.join(rootDir, "docs", "content", "docs", "how-to-guides", "linux.mdx"), "utf8"),
 ]);
 assert.equal(
 	protocolRs.match(/PROTOCOL_VERSION: u32 = (\d+)/)?.[1],
@@ -230,12 +230,24 @@ try {
 
 // ---- runCancellable reaps its whole process group, even descendants that ignore SIGTERM (POSIX) ----
 if (process.platform !== "win32") {
-	const groupDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "pi-computer-use-cancel-"),
-	);
-	const setupUrl = pathToFileURL(
-		path.join(scriptsDir, "setup-helper.mjs"),
-	).href;
+	// Prove escalation with an injected group before spawning any real descendants. The negative
+	// control can remove SIGKILL without orphaning a process or waiting on inherited stdout pipes.
+	const { reapProcessGroup: fakeReap } = await import(pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href);
+	const signals = [];
+	let fakeAlive = true;
+	await fakeReap(424242, (_pid, signal) => {
+		if (signal === 0) {
+			if (!fakeAlive) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+			return;
+		}
+		signals.push(signal);
+		if (signal === "SIGKILL") fakeAlive = false;
+	});
+	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"], "compiler cleanup must escalate to group SIGKILL");
+	assert.equal(fakeAlive, false);
+	const groupDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-cancel-"));
+	const setupUrl = pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href;
+
 	const {
 		GROUP_TERM_GRACE_MS,
 		GROUP_KILL_WAIT_MS,

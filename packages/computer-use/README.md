@@ -1,35 +1,8 @@
 # pi-computer-use
 
-<p align="center">
-  <img src="./assets/logo/logo3.png" width="50%" alt="pi-computer-use">
-</p>
-
-`pi-computer-use` lets AI agents use desktop apps on macOS. The package source also carries a Windows backend that is not shipped as a helper; Linux ships its Rust helper as locked source for an opt-in build.
-
-The macOS helper requires macOS 14 or newer. The npm package ships the macOS helper prebuilts and the Linux helper crate source (build with `PI_COMPUTER_USE_ALLOW_BUILD=1`, see [Linux support](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/docs/linux.md)); the Windows helper is not packed. `desktop_screenshot`/`desktop_input` are registered on macOS only.
-
-An agent can look at an app window, understand the buttons and text inside it, and perform actions like clicking, typing, scrolling, and waiting for something to change. This is useful when the agent needs to work with a normal desktop app instead of an API, a terminal command, or a file.
-
-New to computer use? Start with: [Wait, what exactly is Computer Use?](https://zanechee.dev/what-exactly-is-computer-use/)
-
-## What this package does
-
-This is a Pi extension. After installation, Pi agents get tools for:
-
-- finding open apps and windows
-- observing what is visible in a window
-- searching the visible interface for text, buttons, and controls
-- inspecting parts of the interface in more detail
-- clicking, typing, scrolling, and pressing UI controls
-- waiting for UI changes
-
-In short: it gives an agent a controlled way to operate desktop software.
-
-## What this package is not
-
-`pi-computer-use` is not a replacement for app APIs or MCP servers. If an app has a reliable direct integration, use that first.
-
-Computer use is most helpful when the only available interface is the app on screen.
+`@nredd/pi-computer-use` lets Pi agents observe and control desktop apps and CDP browser pages.
+This workspace tracks upstream `injaneity/pi-computer-use` with the carried patches and exact sync
+procedure recorded in [UPSTREAM.md](./UPSTREAM.md).
 
 ## Install
 
@@ -37,57 +10,55 @@ Computer use is most helpful when the only available interface is the app on scr
 pi install npm:@nredd/pi-computer-use
 ```
 
-Start Pi and complete the platform setup flow.
+macOS 14+ ships per-architecture helpers. Setup installs at `~/Applications/pi-computer-use.app`
+(or preserves an existing writable `/Applications/pi-computer-use.app`) and signs locally with the
+existing stable keychain identity. Grant Accessibility and Screen Recording to that app. We do not
+switch to upstream's CI self-signed bundle: changing signer would require a TCC re-grant.
 
-On macOS, the helper is installed per user by default. Grant permissions to:
+Linux ships its locked Rust crate source, not a binary. Run inside the graphical user's AT-SPI2
+session. Source builds are opt-in with `PI_COMPUTER_USE_ALLOW_BUILD=1`, use the user's cache rather
+than the npm install directory, and need Cargo plus a C linker. See the
+[Linux guide](./docs/content/docs/how-to-guides/linux.mdx). Windows source remains in the repository;
+Windows helpers and crate sources are not packed.
 
-```text
-~/Applications/pi-computer-use.app
-```
+## Tools
 
-Existing writable system-wide installs remain at `/Applications/pi-computer-use.app`.
+All platforms retain `find_roots`, `observe_ui`, `search_ui`, `expand_ui`, `inspect_ui`, `act_ui`,
+`read_text`, `wait_for`, `launch_browser`, `navigate_browser`, and `evaluate_browser`.
+macOS additionally registers `desktop_screenshot` and `desktop_input` (including app activation and
+plain-text clipboard access). Desktop tools require `desktop_control: true` and `headless: false`.
+They share a scoped physical-input lock with `act_ui`; background semantic work stays independent.
 
-Required macOS permissions:
-
-- Accessibility
-- Screen Recording, shown as Screen and System Audio Recording on newer macOS versions
-
-The macOS setup flow registers the helper first, so it should already appear in both Settings panes. Enable the toggles and choose Recheck.
-
-On Windows, use an interactive desktop session. Windows support uses the platform accessibility APIs and does not use the macOS helper app or TCC permission flow.
-
-On Linux, run Pi inside the target user's graphical session with a working AT-SPI2 accessibility bus. AT-SPI semantic operations remain background-first. X11 additionally supports EWMH window metadata/focus, window capture, and policy-gated XTEST physical input; strict headless/background policies never use focus or XTEST. Native Wayland remains semantic-only; diagnostics reads portal capability properties without creating a session, and interactive portal use is disabled. See [Linux support](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/docs/linux.md) for the exact capability matrix and portal status.
-
-Use `/computer-use` inside Pi to show the active configuration and where it came from.
-
-## Main tools
-
-- `find_roots`
-- `observe_ui`
-- `search_ui`
-- `expand_ui`
-- `inspect_ui`
-- `act_ui`
-- `read_text`
-- `wait_for`
-
-See [docs/usage.md](./docs/usage.md) for the full tool reference.
+The normal loop is find a root, observe it, then query or act from the returned immutable `stateId`.
+`observe_ui` now defaults to compact controls; `detail: "outline"` returns the structural view.
+Upstream's opt-in `activity_glow` is retained and defaults to false.
 
 ## Documentation
 
-- [macOS root targeting](docs/macos-root-targeting.md)
-- [Usage](./docs/usage.md)
-- [Architecture](./docs/architecture.md)
-- [Configuration](./docs/configuration.md)
-- [Development](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/docs/development.md)
-- [Troubleshooting](./docs/troubleshooting.md)
-- [Linux support](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/docs/linux.md)
+- [Getting started](./docs/content/docs/tutorials/getting-started.mdx)
+- [Architecture](./docs/content/docs/explanation/architecture.mdx)
+- [Configuration](./docs/content/docs/reference/configuration.mdx)
+- [Agent contract](./docs/content/docs/reference/agent/contract.mdx)
+- [Tool reference](./docs/content/docs/reference/agent/tools.mdx)
+- [Troubleshooting](./docs/content/docs/how-to-guides/troubleshooting.mdx)
+- [macOS targeting and carried behavior](./docs/macos-root-targeting.md)
+- [Development](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/docs/content/docs/how-to-guides/develop-and-validate.mdx)
 - [Contributing](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/CONTRIBUTING.md)
 
-## Development status
+The upstream documentation site source is retained in `docs/`; it is not a root npm workspace and
+its build dependencies are not installed by the harness. `npm run docs:generate` refreshes the
+source-bound references, and `npm run docs:check` validates them without building the site.
 
-The architecture is centered on immutable, state-scoped observations. Desktop surfaces and CDP pages form one multi-root forest; progressive outline queries remain cached, while live work is ordered per physical resource so independent roots can run in parallel. `act_ui` accepts one or more intent steps, preserves focus across dependent input, verifies delivery, recovers safely, stores one complete successor state, and returns a compact diff when identity confidence allows. Older direct tools such as `screenshot`, `click`, `set_text`, and `computer_actions` are no longer part of the public extension surface.
+## Checks and release
+
+`npm run check` runs the owned deterministic package checks. Native and live platform skips print
+`NOT RUN`; this package remains outside the coverage gate. Never run `test:macos-live` on an occupied
+desktop: it restarts the shared helper and manipulates fixture windows, apps, and the clipboard.
+Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
+
+The harness root `publish.yml` owns releases; nested upstream workflows are dormant reference source.
+Local helper builds and local signing remain unchanged. Source preparation is not activation.
 
 ## License
 
-MIT
+MIT, retaining upstream's copyright in `LICENSE`.

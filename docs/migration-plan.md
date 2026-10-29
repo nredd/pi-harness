@@ -10,6 +10,9 @@
   section 5's three-platform standalone Bun acceptance. CI runs the stack D/E scenarios on a Bun standalone
   built from the Gitlinked core on darwin-arm64 and linux-x64, minus seven auth-interception skips; linux-arm64
   is NOT RUN.
+- Current ownership supersedes section 1's five-submodule layout: only `forks/pi` is a Gitlink;
+  subagents, plan-mode, todo and computer-use are imported npm workspaces. Computer-use's upstream
+  base, carried patches and re-sync commands live [here](../packages/computer-use/UPSTREAM.md).
 - Owned packages ship via `publish.yml`, core via the Homebrew tap, and dotfiles activates pins with
   `chezmoi update --upgrade` plus `pi-profile doctor`. Historical REA requirements below
   are marked retired inline; the original adoption research remains in `integration/docs/`.

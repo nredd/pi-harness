@@ -1,0 +1,123 @@
+---
+title: 'Develop and validate changes'
+description: 'Repository layout, validation, native helper development, and release signing.'
+---
+
+Run package-relative commands below from `packages/computer-use`, not the harness root.
+Use `npm run check` for the complete owned package gate (`npm test` below is its upstream test portion).
+
+## Repository layout
+
+```text
+extensions/computer-use.ts       Public Pi tool registration
+src/bridge.ts                    TypeScript runtime and tool implementation
+src/actions.ts                   Action preparation and result reconciliation
+src/runtime.ts                   Immutable state store and resource scheduler
+src/state.ts                     Saved UI state ownership and restoration
+src/view.ts                      Stable refs and resulting-state change views
+src/outline.ts                   Outline parsing, folding, control lists, search, and ref mapping
+src/note.ts                      Disposable running-note generation
+native/macos/bridge.swift        macOS helper for AX, capture, permissions, and input
+native/macos/activity_glow.swift macOS activity indicator windows and client ownership
+native/windows/                 Windows backend/helper code when developing on Windows
+native/linux/bridge-rs/         Linux AT-SPI2 helper (Rust)
+scripts/build-native.mjs         macOS helper build script
+scripts/setup-helper.mjs         macOS helper install script
+scripts/check-invariants.mjs     Architecture invariant checks
+scripts/check-runtime-concurrency.mjs Scheduler/state concurrency checks
+scripts/pi-cubench-agent.mjs     Cubench gateway adapter using registered Pi tools
+```
+
+The public tool surface lives in `extensions/computer-use.ts`. Keep it small. Internal complexity belongs in `src/bridge.ts`, `src/outline.ts`, `src/note.ts`, and the native helper.
+
+## Checks
+
+Run all static checks:
+
+```bash
+npm test
+```
+
+This runs TypeScript, generated documentation checks, tool-schema compatibility checks, architecture invariants, and native helper checks available on the current platform. After changing a tool definition or a source-owned `PI_DOCS_REFERENCE` block, run `npm run docs:generate` and commit the regenerated pages.
+
+On macOS, rebuild the native helper after Swift changes:
+
+```bash
+npm run build:native
+```
+
+## Architecture rules
+
+The runtime is state-scoped and outline-first:
+
+- `observe_ui` returns a compact control list and running note; `detail: "outline"` returns the folded outline.
+- `search_ui`, `expand_ui`, and `inspect_ui` provide progressive disclosure.
+- `act_ui` is the state-scoped desktop action entrypoint. The carried macOS `desktop_input` tool is a separately gated physical fallback with a shared transaction lock.
+- UI observations are immutable records; request-local hydration replaces global current state.
+- Cached queries bypass scheduling; live work is ordered per physical resource.
+- Browser pages and desktop surfaces share the `@r` root forest and `@e` outline contract.
+- The helper owns grounding, preflight, execution, and verification.
+- Removed direct tools such as `screenshot`, `click`, `set_text`, and `computer_actions` should not reappear as public extension tools.
+
+Run invariants after architecture changes:
+
+```bash
+npm run test:invariants
+```
+
+Set `PI_CU_LIVE=1` only when you want live helper checks in addition to static checks.
+
+## Cubench
+
+`scripts/pi-cubench-agent.mjs` drives a headed Cubench Chromium window through the same registered Pi tools used by the extension. Cubench must launch its web driver headed (the current development tree accepts `CUBENCH_HEADLESS=0`):
+
+```bash
+CUBENCH_HEADLESS=0 node ../cubench/bin/cubench.mjs suite run \
+  --suite ../cubench/suites/core.json \
+  --agent "node --experimental-transform-types $PWD/scripts/pi-cubench-agent.mjs" \
+  --driver web \
+  --trials 3 \
+  --label picu
+```
+
+The adapter uses Cubench only for the instruction and final oracle; UI observation and action go through `pi-computer-use`. Gateway action/observation counters therefore do not trigger Cubench interference hooks, so stale/reorder cases need a native-driver integration before their interference timing can be treated as benchmark evidence.
+
+## Native platform helpers
+
+On macOS, the helper installed for permissions is normally:
+
+```text
+~/Applications/pi-computer-use.app
+```
+
+Existing writable system-wide installs remain at `/Applications/pi-computer-use.app`. The macOS helper targets macOS 14 and links ApplicationServices, AppKit, ScreenCaptureKit, Foundation, SwiftUI, Vision, and ImageIO through the Swift sources and build scripts. The [macOS implementation reference](../reference/platforms/macos/implementation.mdx) records the exact platform behavior and Apple API citations; update it whenever the helper changes.
+
+Local setup chooses a Developer ID identity when one is available, otherwise its managed local signing identity, and finally ad-hoc signing. The installer refuses to replace an existing helper with an ad-hoc rebuild unless `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1` is set. This is project safety policy, not a guarantee about permission retention ([setup-helper.mjs](https://github.com/injaneity/pi-computer-use/blob/main/scripts/setup-helper.mjs#L427)).
+
+On Windows, development uses the Windows platform backend/helper and the active desktop session rather than the macOS app bundle.
+
+On Linux, install Rust/Cargo and run `npm run build:linux`, `npm run test:linux`, and `npm run test:linux-scripts`. Live checks must run inside the target user's graphical D-Bus session. The helper installs to `~/.pi/agent/helpers/pi-computer-use/linux-bridge`.
+
+For an isolated X11 acceptance run, install Xvfb, xfwm4, the AT-SPI2 runtime, xfce4-appfinder, and xfce4-terminal, then build and install the helper before running the explicitly gated live suite:
+
+```bash
+npm run build:linux
+node scripts/setup-helper.mjs --platform linux
+npm run test:linux-live
+```
+
+The harness creates its own D-Bus and Xvfb session. It fails rather than silently passing when the live flag, helper, accessibility bridge, or required X11 applications are unavailable.
+
+## macOS release signing
+
+The harness root `.github/workflows/publish.yml` owns releases of `@nredd/pi-computer-use`.
+Committed per-architecture macOS helpers are built locally; setup retains local signing with the
+existing keychain identity. This sync does not switch to an upstream-signed universal bundle,
+release, promote or activate anything. See the [signing and rollback runbook](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/UPSTREAM.md#signing-decision-and-rollback)
+and the harness [release procedure](https://github.com/nredd/pi-harness/blob/main/docs/releases.md).
+
+The nested `.github/workflows/publish-npm.yml` is dormant upstream reference source, not the
+harness release path. Upstream's standalone workflow builds and signs a universal helper on
+`macos-14` with a `14.0` minimum system version; its optional `NOTARIZE` path submits and staples
+the app. Those upstream certificate/notarization secrets and artifact claims do not describe our
+retained local-signing path ([upstream workflow](https://github.com/injaneity/pi-computer-use/blob/main/.github/workflows/publish-npm.yml#L39)).
