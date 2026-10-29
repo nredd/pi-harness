@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, it, vi } from "vitest";
-import { createExpandedFooter } from "../extensions/expanded-footer.ts";
+import { createExpandedFooter, formatCwd } from "../extensions/expanded-footer.ts";
 import { FakeClock } from "./scenarios/support.ts";
 
 type Factory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
@@ -167,6 +167,13 @@ it("uses the injected home when formatting the cwd", async () => {
 	} finally {
 		f.component.dispose?.();
 	}
+});
+
+it("uses USERPROFILE then the OS home when HOME is empty", () => {
+	expect(formatCwd("/private/fixture/project", undefined, { HOME: "", USERPROFILE: "/private/fixture" })).toBe(
+		"~/project",
+	);
+	expect(formatCwd(join(homedir(), "project"), undefined, { HOME: "", USERPROFILE: "" })).toBe("~/project");
 });
 
 it("cwd branch session and sorted sanitized statuses preserve their rows", async () => {
