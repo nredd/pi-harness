@@ -1,11 +1,25 @@
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadDiff, loadStat, MAX_UNTRACKED_FILES, runGit, untrackedPatch } from "../../src/diff/git.ts";
 import { PER_FILE_BYTES } from "../../src/diff/parse.ts";
 import { alive, waitFor } from "../monitor/helpers.ts";
+
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 const saved: Record<string, string | undefined> = {};
 const ENV = {
@@ -40,7 +54,11 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "psk-diff-test-"));
 	git("init", "-q", "-b", "main");
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+	vi.useRealTimers();
+	vi.mocked(spawn).mockReset();
+	rmSync(dir, { recursive: true, force: true });
+});
 
 function commitAll(msg = "c") {
 	git("add", "-A");
@@ -249,20 +267,40 @@ describe("runGit / untrackedPatch", () => {
 			`#!/bin/sh\n/bin/sh -c 'trap "" TERM; exec >/dev/null 2>&1; echo $$ > "${pidfile}"; while :; do sleep 1; done' &\nwhile [ ! -s "${pidfile}" ]; do sleep 0.01; done\nprintf 'oversized output'\nwait\n`,
 		);
 		chmodSync(shim, 0o755);
+		// Admit timeout/cap clocks only after the real shim has created its resistant descendant.
+		// Its stdout is the readiness handshake, so host scheduling cannot race a 150ms deadline.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		let ready!: () => void;
+		const readiness = new Promise<void>((resolve) => {
+			ready = resolve;
+		});
+		const nativeSpawn = vi.mocked(spawn).getMockImplementation();
+		if (!nativeSpawn) throw new Error("Missing native spawn implementation");
+		vi.mocked(spawn).mockImplementationOnce((...args) => {
+			const child = nativeSpawn(...args);
+			child.stdout?.once("data", () => ready());
+			return child;
+		});
 		let pid = 0;
 		try {
-			await runGit([], {
+			const running = runGit([], {
 				cwd: dir,
 				cmd: shim,
 				timeoutMs: cause === "timeout" ? 150 : 5000,
 				maxBytes: cause === "cap" ? 1 : 4096,
 			});
+			await readiness;
 			pid = Number(readFileSync(pidfile, "utf8"));
+			expect(pid).toBeGreaterThan(0);
+			await vi.advanceTimersByTimeAsync(cause === "timeout" ? 2150 : 2000);
+			expect((await running).truncated).toBe(cause === "cap");
+			vi.useRealTimers();
 			await waitFor(() => !alive(pid));
 		} finally {
-			if (!pid) pid = Number(readFileSync(pidfile, "utf8"));
+			vi.useRealTimers();
+			if (!pid && existsSync(pidfile)) pid = Number(readFileSync(pidfile, "utf8"));
 			try {
-				process.kill(pid, "SIGKILL");
+				if (pid > 0) process.kill(pid, "SIGKILL");
 			} catch {
 				/* gone */
 			}

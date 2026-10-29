@@ -10,12 +10,14 @@ import { FakeClock } from "./scenarios/support.ts";
 type Factory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 
 /** Only fields read by the renderer are supplied; casts mark this isolated host boundary. */
-async function mount() {
+async function mount(useDefaultClock = false) {
 	const clock = new FakeClock();
 	let start: ((_event: unknown, ctx: ExtensionContext) => unknown) | undefined;
 	let factory: Factory | undefined;
 	const off = vi.fn();
 	const render = vi.fn();
+	const emit = vi.fn();
+	let quotaReply: ((data: unknown) => void) | undefined;
 	let branchChanged = () => {};
 	const usage = { input: 100, output: 20, cacheRead: 300, cacheWrite: 40, cost: { total: 0.125 } };
 	const entries: unknown[] = [];
@@ -38,9 +40,15 @@ async function mount() {
 		on: (name: string, handler: typeof start) => {
 			if (name === "session_start") start = handler;
 		},
-		events: { on: () => off, emit: () => {} },
+		events: {
+			on: (_channel: string, handler: (data: unknown) => void) => {
+				quotaReply = handler;
+				return off;
+			},
+			emit,
+		},
 	};
-	await createExpandedFooter({ clock })(pi as unknown as ExtensionAPI);
+	await createExpandedFooter(useDefaultClock ? {} : { clock })(pi as unknown as ExtensionAPI);
 	await start?.({}, ctx as unknown as ExtensionContext);
 	if (!factory) throw new Error("Footer not mounted");
 	const paint = vi.fn((_color: string, text: string) => text);
@@ -61,8 +69,58 @@ async function mount() {
 				]),
 		},
 	);
-	return { ctx, entries, usage, component, paint, clock, off, render, branchChanged };
+	return { ctx, entries, usage, component, paint, clock, off, render, emit, branchChanged, reply: () => quotaReply };
 }
+
+it("default clock polls on cadence and disposal cancels native timers", async () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(Date.parse("2026-10-19T12:00:00Z"));
+	let component: Awaited<ReturnType<typeof mount>>["component"] | undefined;
+	try {
+		const f = await mount(true);
+		component = f.component;
+		f.component.render(240);
+		expect(vi.getTimerCount()).toBe(1); // Deferred poller start.
+		expect(f.emit).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(f.emit).toHaveBeenCalledOnce();
+		expect(f.emit).toHaveBeenLastCalledWith("router:rpc:usage", {
+			requestId: expect.any(String),
+			refresh: true,
+		});
+		expect(vi.getTimerCount()).toBe(2); // Reply deadline and cadence.
+		f.reply()?.({
+			success: true,
+			data: {
+				snapshots: [
+					{
+						provider: "anthropic",
+						status: "available",
+						expiresAt: Date.now() + 5_000,
+						windows: [{ name: "five_hour", scope: "provider", usedPercent: 24 }],
+					},
+				],
+			},
+		});
+		expect(f.component.render(240)[2]).toContain("Anthropic 5h 76%");
+		vi.advanceTimersByTime(5_000);
+		expect(f.component.render(240)[2]).toContain("Anthropic (stale) 5h 76%");
+		expect(vi.getTimerCount()).toBe(1);
+		vi.advanceTimersByTime(55_000);
+		expect(vi.getTimerCount()).toBe(2); // A second unanswered request.
+		expect(f.emit).toHaveBeenCalledTimes(2);
+		f.component.dispose?.();
+		expect(f.off).toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
+		const renders = f.render.mock.calls.length;
+		vi.advanceTimersByTime(120_000);
+		expect(f.emit).toHaveBeenCalledTimes(2);
+		expect(f.render).toHaveBeenCalledTimes(renders);
+	} finally {
+		component?.dispose?.();
+		vi.useRealTimers();
+	}
+});
 
 it("totals include every live usage entry type, not custom messages", async () => {
 	const f = await mount();

@@ -34,6 +34,15 @@ Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` onl
 - Owned packages: `scripts/npm_release.py stack-check` runs per `@nredd/` source against a worktree of its exact tag: registry presence, npm `audit signatures` (signature and attestation), and the SLSA provenance binding to `publish.yml`, the tag and the commit. The registry lookup (`npm view`) runs in a fresh empty directory with `NPM_CONFIG_USERCONFIG=/dev/null` and `--registry https://registry.npmjs.org`, so a `.npmrc` in the selected tag's tree cannot steer it.
 - Core: asset digests are compared with the release's `SHA256SUMS`. For non-legacy tags `SHA256SUMS` is a mutable release asset, so each recorded asset is also downloaded, hashed against the recorded digest, and verified read-only with `gh attestation verify --repo nredd/pi --signer-workflow nredd/pi/.github/workflows/fork-release.yml --source-ref refs/tags/<tag>`. Legacy tags `v1.3.0-nredd.3` through `.7` predate that workflow and rely on the frozen `LEGACY_CHECKSUMS` hashes.
 
+Core SSH signing keys are checked by the core release workflow, not by the promotion
+consumer's attestation verifier. The core allowlist uses principal `nredd` and namespace `git`:
+MacBook `SHA256:YHzjQXY3SPl20zOMMOoNz8o4dk+eOZEi8FA+vS6nwFY` (retained for historical tags)
+and Mac mini (`nick-mac`) `SHA256:+16+g7/7VKDJ2svgiuGIbfPnPF9pKKSU/h51+K9iHdk`.
+The latter is owner-approved for `.8` and future releases. No wildcard principal, skipped
+verification, new legacy exception, Gitlink move, or stack/pin change is implied.
+The [trust-location audit](source-provenance.md#core-release-signer-trust) records the separate
+core, harness, dotfiles and tap boundaries.
+
 The CI evidence is the only coupling to CI: run IDs are read with `gh run list/view`, the `actions: read` and `checks: read` permissions are granted, and an unreadable response fails with an explicit error.
 
 ## Required-check visibility

@@ -60,6 +60,12 @@ Remaining lifecycle-owned gaps:
 These nine lines/two functions remain intact. Reachability conclusions concern
 the current call graph, not permission to remove guards or lower denominators.
 
+Reconciliation with #204 preserves its bounded diagnostic serialization: an unreadable
+thrown-value message getter settles with `Workflow threw an unreadable error.` and no
+fabricated stack, rather than replacing the original failure with the getter's exception.
+The lifecycle regression still uses a real worker and asserts no child was spawned.
+The counts and gate receipts below describe the pre-reconciliation measurement.
+
 Fresh gate evidence is in `subagents-lifecycle-gates.txt`. Full Node/Istanbul,
 lint/types and pinned Bun native `31 + 10` pass. Full Bun compatibility remains
 NOT green: the unchanged #174 authored-stack-location assertion fails. Its

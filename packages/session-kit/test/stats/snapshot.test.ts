@@ -1,10 +1,21 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cachePath, dedupCalls, flatten, loadUsage, opaqueId, parseSession } from "../../src/stats/load.ts";
 import {
+	atomicJson,
 	coverageLabel,
 	exportStats,
 	importStats,
@@ -84,6 +95,19 @@ it("atomically enrolls one identity under concurrent first readers, and never re
 	writeFileSync(join(a, "pi-session-kit", "machine.json"), "{broken");
 	await expect(machineIdentity(a)).rejects.toThrow();
 	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toBe("{broken");
+	writeFileSync(
+		join(a, "pi-session-kit", "machine.json"),
+		JSON.stringify({ machineId: "not-a-uuid", label: "fixture" }),
+	);
+	await expect(machineIdentity(a)).rejects.toThrow("Invalid installation identity");
+	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toContain("not-a-uuid");
+});
+
+it("cleans temporary output when atomic publication cannot replace a directory", async () => {
+	const target = join(dir, "publication");
+	mkdirSync(target);
+	await expect(atomicJson(target, { value: true })).rejects.toThrow();
+	expect(readdirSync(dir)).toEqual(["publication"]);
 });
 
 it("exports only allowlisted metadata in monthly shards and persistent agent-local UUID", async () => {
@@ -210,11 +234,53 @@ it("validates schemas with strict keys, digest, counters, month, IDs and travers
 		{ ...shard, events: [{ ...event, cost: Infinity }] },
 		{ ...shard, events: [{ ...event, args: "secret" }] },
 		{ ...shard, events: [event, event] },
+		{
+			...shard,
+			sessions: [{ ...shard.sessions[0], endMs: (shard.sessions[0]?.startMs ?? 2) - 1 }],
+		},
 	])
 		expect(() => validateShard(malformed, manifest, ref.month)).toThrow();
 	writeFileSync(join(exported.snapshotDir, ref.file), JSON.stringify({ ...shard, events: [] }));
 	expect((await importStats(b, repo)).problems).toHaveLength(1);
 	expect(Object.keys((await readGlobal(b)).machines)).toHaveLength(0);
+});
+
+it("reports malformed persisted global caches without trusting them", async () => {
+	mkdirSync(join(a, "pi-session-kit"), { recursive: true });
+	writeFileSync(
+		join(a, "pi-session-kit", "stats-global.json"),
+		JSON.stringify({ version: 1, importedAt: 0, machines: [], problems: [] }),
+	);
+	expect((await readGlobal(a)).problems).toEqual(["Unreadable global cache"]);
+	seed(a);
+	const exported = await exportStats(a, repo);
+	const viewer = join(dir, "viewer");
+	await importStats(viewer, repo);
+	const cache = join(viewer, "pi-session-kit", "stats-global.json");
+	const document = JSON.parse(readFileSync(cache, "utf8"));
+	document.machines[exported.machineId].shards = [];
+	writeFileSync(cache, JSON.stringify(document));
+	expect((await readGlobal(viewer)).problems).toEqual(["Unreadable global cache"]);
+});
+
+it("rejects incomplete local scans, invalid machine directories, and older exports", async () => {
+	const malformed = join(a, "sessions", "bad.jsonl");
+	mkdirSync(join(a, "sessions"), { recursive: true });
+	writeFileSync(malformed, "{broken");
+	await expect(exportStats(a, repo)).rejects.toThrow("Incomplete local scan");
+	rmSync(malformed);
+	rmSync(cachePath(a));
+	const exported = await exportStats(a, repo);
+	const viewer = join(dir, "viewer");
+	await importStats(viewer, repo);
+	mkdirSync(join(repo, "machines", "not-a-machine"));
+	const invalid = await importStats(viewer, repo);
+	expect(invalid.problems).toContain("Invalid machine directory");
+	rmSync(join(repo, "machines", "not-a-machine"), { recursive: true });
+	const manifestPath = join(exported.snapshotDir, "manifest.json");
+	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+	writeFileSync(manifestPath, JSON.stringify({ ...manifest, exportedAt: 1 }));
+	expect((await importStats(viewer, repo)).problems).toContain(`Incomplete snapshot ${exported.machineId}`);
 });
 
 it("rejects unsupported snapshots and symlinks while retaining last-good", async () => {
@@ -261,33 +327,100 @@ it("pure allowlist projection hashes fixture paths and keeps raw attribution", (
 });
 
 describe("actual portable bundled CLI", () => {
-	function run(args: string[], env: NodeJS.ProcessEnv = {}) {
-		const artifact = join(dir, "portable.mjs");
-		copyFileSync(resolve("dist/pi-stats-export.mjs"), artifact);
+	/** Pack the workspace artifact, then return the tarball-extracted executable path. */
+	function packedArtifact(artifactDir: string): string {
+		const tarballs = join(artifactDir, "tarballs");
+		const extracted = join(artifactDir, "extracted");
+		mkdirSync(tarballs, { recursive: true });
+		mkdirSync(extracted, { recursive: true });
+		const packed = spawnSync("npm", ["pack", "--json", "--pack-destination", tarballs], {
+			cwd: resolve("."),
+			encoding: "utf8",
+		});
+		expect(packed.status, packed.stderr).toBe(0);
+		const [result] = JSON.parse(packed.stdout) as { filename: string }[];
+		if (!result) throw new Error("npm pack returned no tarball");
+		const unpacked = spawnSync("tar", ["-xzf", join(tarballs, result.filename), "-C", extracted], {
+			encoding: "utf8",
+		});
+		expect(unpacked.status, unpacked.stderr).toBe(0);
+		return join(extracted, "package", "dist", "pi-stats-export.mjs");
+	}
+
+	/** Run a packed standalone executable with a credential-free environment. */
+	function run(artifact: string, args: string[], env: NodeJS.ProcessEnv = {}) {
 		const clean = { ...process.env };
 		delete clean.PI_CODING_AGENT_DIR;
 		delete clean.PI_CODING_AGENT_SESSION_DIR;
-		return spawnSync(process.execPath, [artifact, ...args], { cwd: dir, env: { ...clean, ...env }, encoding: "utf8" });
+		// The packed CLI targets Node 22+, even when Vitest itself runs on Bun.
+		return spawnSync("node", [artifact, ...args], { cwd: dir, env: { ...clean, ...env }, encoding: "utf8" });
 	}
-	it("runs from a standalone artifact without kit, Pi or node_modules; stdout is one object", () => {
+
+	/** Import with the artifact's Node runtime and capture any accidental CLI output. */
+	function importArtifact(artifact: string, importerArgs: string[] = []) {
+		return spawnSync(
+			"node",
+			["--input-type=module", "--eval", `import(${JSON.stringify(pathToFileURL(artifact).href)})`, ...importerArgs],
+			{
+				cwd: dir,
+				encoding: "utf8",
+			},
+		);
+	}
+	it("runs from tarball-extracted bytes without kit, Pi or node_modules; stdout is one object", () => {
 		seed(a);
-		const exported = run(["export", "--agent-dir", a, "--output", repo]);
+		const artifact = packedArtifact(join(dir, "packed artifact é"));
+		const exported = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
 		expect(exported.status, exported.stderr).toBe(0);
 		expect(exported.stderr).toBe("");
 		expect(exported.stdout.trim().split("\n")).toHaveLength(1);
 		const value = JSON.parse(exported.stdout);
 		expect(value.machineId).toMatch(/^[a-f0-9-]{36}$/);
 		expect(value.snapshotDir).toBe(join(repo, "machines", value.machineId));
-		const imported = run(["import", "--agent-dir", b, "--input", repo]);
+		const imported = run(artifact, ["import", "--agent-dir", b, "--input", repo]);
 		expect(imported.status, imported.stderr).toBe(0);
 		expect(JSON.parse(imported.stdout).imported).toBe(1);
 		expect(readFileSync(join(b, "pi-session-kit", "stats-global.json"), "utf8")).toContain("wire-model");
 	});
+	it("runs directly but not on import from a packed path with portable characters", () => {
+		seed(a);
+		const artifact = packedArtifact(join(dir, "packed artifact é"));
+		const exported = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
+		expect(exported.status, exported.stderr).toBe(0);
+		expect(JSON.parse(exported.stdout).snapshotDir).toContain("machines");
+		for (const importerArgs of [[], [join(dir, "nonexistent-importer")]]) {
+			const imported = importArtifact(artifact, importerArgs);
+			expect(imported.status, imported.stderr).toBe(0);
+			expect(imported.stdout).toBe("");
+			expect(imported.stderr).toBe("");
+		}
+	});
+
+	it.runIf(process.platform !== "win32")("rejects a faulty URL guard and follows symlinks on POSIX", () => {
+		seed(a);
+		const artifact = packedArtifact(join(dir, "packed#artifact?"));
+		const link = join(dir, "stats link.mjs");
+		symlinkSync(artifact, link);
+		expect(run(link, ["export", "--agent-dir", a, "--output", repo]).status).toBe(0);
+		const faulty = join(dir, "faulty#artifact?.mjs");
+		const interpolation = String.fromCharCode(36, 123);
+		const faultyGuard = `new URL(\`file://${interpolation}process.argv[1]}\`).href`;
+		const bytes = readFileSync(artifact, "utf8").replace(
+			"pathToFileURL(realpathSync(process.argv[1])).href",
+			faultyGuard,
+		);
+		writeFileSync(faulty, bytes);
+		const result = run(faulty, ["export", "--agent-dir", a, "--output", repo]);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe("");
+	});
+
 	it("respects the sessions environment override and explicit option precedence", () => {
 		seed(a, [usage("excluded", at("2026-10-01"), 99)]);
+		const artifact = packedArtifact(join(dir, "packed"));
 		const external = join(dir, "external");
 		seed(external, [usage("included", at("2026-10-01"), 7)]);
-		const result = run(["export", "--agent-dir", a, "--output", repo], {
+		const result = run(artifact, ["export", "--agent-dir", a, "--output", repo], {
 			PI_CODING_AGENT_SESSION_DIR: join(external, "sessions"),
 		});
 		expect(result.status, result.stderr).toBe(0);
@@ -298,9 +431,13 @@ describe("actual portable bundled CLI", () => {
 				.flatMap((s: { file: string }) => JSON.parse(readFileSync(join(snapshot, s.file), "utf8")).events)
 				.map((e: { input: number }) => e.input),
 		).toEqual([7]);
-		const explicit = run(["export", "--agent-dir", a, "--output", repo, "--sessions-dir", join(a, "sessions")], {
-			PI_CODING_AGENT_SESSION_DIR: join(external, "sessions"),
-		});
+		const explicit = run(
+			artifact,
+			["export", "--agent-dir", a, "--output", repo, "--sessions-dir", join(a, "sessions")],
+			{
+				PI_CODING_AGENT_SESSION_DIR: join(external, "sessions"),
+			},
+		);
 		expect(explicit.status, explicit.stderr).toBe(0);
 		snapshot = JSON.parse(explicit.stdout).snapshotDir;
 		m = JSON.parse(readFileSync(join(snapshot, "manifest.json"), "utf8"));
@@ -312,10 +449,11 @@ describe("actual portable bundled CLI", () => {
 	});
 	it("returns nonzero on partial import, preserving valid old data with JSON stdout", () => {
 		seed(a);
-		const exportResult = JSON.parse(run(["export", "--agent-dir", a, "--output", repo]).stdout);
-		expect(run(["import", "--agent-dir", b, "--input", repo]).status).toBe(0);
+		const artifact = packedArtifact(join(dir, "packed"));
+		const exportResult = JSON.parse(run(artifact, ["export", "--agent-dir", a, "--output", repo]).stdout);
+		expect(run(artifact, ["import", "--agent-dir", b, "--input", repo]).status).toBe(0);
 		writeFileSync(join(exportResult.snapshotDir, "manifest.json"), "{}");
-		const failed = run(["import", "--agent-dir", b, "--input", repo]);
+		const failed = run(artifact, ["import", "--agent-dir", b, "--input", repo]);
 		expect(failed.status).toBe(1);
 		expect(JSON.parse(failed.stdout).retained).toBe(1);
 		expect(failed.stderr).toContain("Incomplete snapshot");
@@ -324,12 +462,13 @@ describe("actual portable bundled CLI", () => {
 	});
 	it("fails malformed scans and arguments without publishing a manifest", () => {
 		seed(a, ["{broken"]);
-		const failed = run(["export", "--agent-dir", a, "--output", repo]);
+		const artifact = packedArtifact(join(dir, "packed"));
+		const failed = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
 		expect(failed.status).toBe(1);
 		expect(failed.stdout).toBe("");
 		expect(failed.stderr).toContain("Incomplete local scan");
-		expect(run(["export", "--output", repo, "--output", repo]).status).toBe(1);
-		expect(run(["unknown"]).status).toBe(1);
+		expect(run(artifact, ["export", "--output", repo, "--output", repo]).status).toBe(1);
+		expect(run(artifact, ["unknown"]).status).toBe(1);
 	});
 	it("build is byte reproducible and contains only Node builtin imports", () => {
 		const before = readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8");
