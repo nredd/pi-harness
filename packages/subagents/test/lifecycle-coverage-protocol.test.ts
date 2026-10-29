@@ -13,6 +13,25 @@ vi.mock("node:worker_threads", async original => {
 });
 
 describe("worker protocol boundary", () => {
+  it.each([new Error("worker boundary failure"), "worker boundary failure"])("settles a worker error and aborts its held child (%s)", async error => {
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    let stop!: (result: WorkflowSpawnResult) => void;
+    const held = new Promise<WorkflowSpawnResult>(resolve => { stop = resolve; });
+    const host: WorkflowHost = {
+      spawnAgent: vi.fn(() => { started(); return held; }),
+      abortAgent: vi.fn(() => stop({ ok: false, error: "cancelled" })),
+    };
+    const controller = new AbortController();
+    const run = runWorkflow({ script: 'export const meta = {name:"worker-error", description:"d"};\nreturn await agent("held");', host, signal: controller.signal });
+    try {
+      await ready;
+      if (!captured.worker) throw new Error("real worker was not created");
+      captured.worker.emit("error", error);
+      expect(await run).toMatchObject({ status: "failed", error: "worker boundary failure" });
+      expect(host.abortAgent).toHaveBeenCalledExactlyOnceWith("wf-agent-0");
+    } finally { controller.abort(); await run; }
+  });
   it("returns a fatal unknown-method envelope without starting another child", async () => {
     let started!: () => void;
     const ready = new Promise<void>(resolve => { started = resolve; });

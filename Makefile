@@ -1,4 +1,4 @@
-.PHONY: help verify-root-overrides install check check-ts check-scripts check-integration check-probes check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
+.PHONY: help verify-root-overrides install check check-ts check-scripts check-coverage check-integration check-probes check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
@@ -15,6 +15,7 @@ install: verify-root-overrides  ## Verify root core overrides, then install owne
 	cd benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
 
 check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
+	$(MAKE) check-coverage
 
 check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace
 	npm run check
@@ -24,6 +25,9 @@ check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repo
 	uv run --locked --project integration pytest scripts -c scripts/pyproject.toml -p no:cacheprovider
 	$(MAKE) check-import-audit
 
+check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE
+	uv run --locked --project integration python scripts/coverage_accounting.py --base "$(or $(BASE),origin/main)"
+
 check-integration:  ## integration units; requires initialized `forks/pi` Gitlink (no pi, tmux, or scenarios)
 	cd integration && $(PY_CHECK)
 	cd integration && uv run --locked pytest tests -p no:cacheprovider
@@ -32,13 +36,13 @@ check-integration:  ## integration units; requires initialized `forks/pi` Gitlin
 check-probes:  ## Probes (process-lifecycle, stack-resources) Biome + strict tsc against real sources, then explicit node --test files (no glob)
 	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/process-lifecycle.test.ts integration/probes/stack-resources.ts
 	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
-	node --test integration/probes/transcript-types.test.ts integration/probes/process-lifecycle.test.ts
+	cd integration/probes && ../../node_modules/.bin/c8 --all --include=stack-resources.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test transcript-types.test.ts process-lifecycle.test.ts
 
 check-import-audit:  ## Import-audit helper Biome + strict tsc, then node --test against the real TypeScript parser
 	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs scripts/run-vitest.ts
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
-	node --test scripts/import_audit.test.ts
+	cd scripts && ../node_modules/.bin/c8 --all --include=import_audit.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test import_audit.test.ts
 
 check-benchmark:  ## benchmarks/comparison unit gate with coverage threshold
 	cd benchmarks/comparison && $(PY_CHECK)

@@ -8,3 +8,7 @@ __pycache__/
 .tox/
 .coverage
 .DS_Store
+packages/**/coverage/
+integration/**/coverage/
+scripts/coverage/
+/coverage/summary.json

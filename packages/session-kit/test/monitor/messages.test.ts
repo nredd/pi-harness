@@ -51,6 +51,22 @@ describe("formatMessage", () => {
 		}
 	});
 
+	it("sorts retained and dropped matches by line number without mutating the batch", () => {
+		const batch = {
+			items: [line(8, "last", true), line(9, "quiet")],
+			dropped: 2,
+			droppedMatched: true,
+			droppedMatches: [line(4, "middle", true), line(2, "first", true)],
+		};
+		const before = structuredClone(batch);
+		const message = formatMessage(info({ lines: 9 }), batch, { final: false, wake: true, since: 1 });
+		expect(message.text).toBe(
+			'[monitor m1 "build"]\nmatched lines 2: first; 8: last\nmonitor_read {"id":"m1","since":1}',
+		);
+		expect(message.details.matched).toEqual([2, 4, 8]);
+		expect(batch).toEqual(before);
+	});
+
 	it("keeps dropped matched-line evidence in the wake", () => {
 		const message = formatMessage(
 			info({ lines: 250 }),

@@ -112,6 +112,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.plan.outputs.run == 'true'
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-ci-tools
         id: tools
@@ -119,6 +120,20 @@ jobs:
         with:
           guest: ${{ matrix.guest }}
           owned: 'true'
+      # Real reviewer reads need system binaries, not Pi's live latest-release download fallback.
+      - name: Install reviewer read dependencies (Ubuntu)
+        if: steps.plan.outputs.run == 'true' && matrix.os == 'ubuntu-24.04'
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep fd-find
+      - name: Install reviewer read dependencies (macOS)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'
+        with:
+          tool: ripgrep@14.1.1,fd-find@10.2.0
+      - name: Verify reviewer read dependencies
+        if: steps.plan.outputs.run == 'true'
+        run: |
+          rg --version
+          if command -v fd >/dev/null; then fd --version; else fdfind --version; fi
       - name: Initialize the core fork at its Gitlink
         if: steps.plan.outputs.run == 'true'
         run: git submodule update --init forks/pi
@@ -138,6 +153,26 @@ jobs:
       - name: Owned gates (biome, tsc, Vitest on Node and Bun, scripts, integration units)
         if: steps.plan.outputs.run == 'true'
         run: make check-ts check-scripts check-integration
+      - name: Coverage accounting (existing reports, including test failures)
+        if: always() && steps.plan.outputs.run == 'true'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: make check-coverage BASE="$BASE"
+      # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
+      - uses: ./.github/actions/capture-ci-wsl
+        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+      - name: Preserve independent coverage reports and summary
+        if: always() && steps.plan.outputs.run == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ matrix.os }}
+          path: |
+            packages/*/coverage/**/lcov.info
+            integration/inprocess/coverage/**/lcov.info
+            integration/probes/coverage/**/lcov.info
+            scripts/coverage/**/lcov.info
+            coverage/summary.json
+          if-no-files-found: error
       - name: Packages without a Bun run (not run)
         if: steps.plan.outputs.run == 'true'
         run: |

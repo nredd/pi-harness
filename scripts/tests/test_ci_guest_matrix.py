@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,68 @@ PLATFORMS = {
     "macos-14": ("macos-14", "macos", "darwin-arm64"),
     "wsl2": ("windows-2022", "wsl2", "linux-x64"),
 }
+
+
+def test_wsl_setup_rewrites_clean_crlf_checkout_to_exact_lf(tmp_path: Path) -> None:
+    """Run setup's actual Git commands against a clean Windows-style checkout.
+
+    Parameters:
+        tmp_path (Path): Isolated repository, templates and configuration boundary.
+    Returns:
+        None: Tracked text matches blob bytes and binary assets are unchanged.
+    Raises:
+        AssertionError: Setup leaves CRLF in a clean index/worktree or modifies binary bytes.
+        subprocess.CalledProcessError: A real fixture Git command fails.
+    """
+    git = shutil.which("git")
+    assert git
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")} | {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+    }
+
+    def command(*args: str) -> bytes:
+        """Run fixture Git with isolated routing/configuration and no inherited hooks.
+
+        Parameters:
+            args (str): Literal Git arguments.
+        Returns:
+            bytes: Captured stdout.
+        """
+        return subprocess.check_output([git, *args], cwd=repo, env=env, stderr=subprocess.STDOUT)
+
+    command("init", "--quiet", f"--template={templates}")
+    command("config", "user.name", "Fixture")
+    command("config", "user.email", "fixture@example.invalid")
+    command("config", "core.autocrlf", "true")
+    command("config", "core.eol", "crlf")
+    (repo / ".git/info").mkdir(exist_ok=True)
+    (repo / ".git/info/attributes").write_text("*.swift text\n*.ts text\n")
+    expected = {
+        "helper.swift": b'if let pid {\n\t\t\tapps = [["pid": Int(pid)]]\n}\n',
+        "index.ts": b"export const value = 1;\n",
+        "native.bin": b"\x00binary\r\nbytes\n",
+    }
+    for name, content in expected.items():
+        (repo / name).write_bytes(content)
+    command("add", ".")
+    command("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Fixture")
+    for name in expected:
+        (repo / name).unlink()
+    command("checkout-index", "--all", "--force")
+    assert (repo / "helper.swift").read_bytes() == expected["helper.swift"].replace(b"\n", b"\r\n")
+    command("add", ".")
+    assert command("status", "--porcelain") == b""
+    setup = yaml.safe_load((ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text())
+    for line in setup["runs"]["steps"][0]["run"].splitlines():
+        if line.startswith("git "):
+            command(*shlex.split(line)[1:])
+    assert {name: (repo / name).read_bytes() for name in expected} == expected
 
 
 def jobs() -> dict[str, Any]:

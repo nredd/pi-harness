@@ -5,19 +5,43 @@
   "type": "module",
   "license": "MIT",
   "author": "nredd",
-  "publishConfig": { "access": "public" },
-  "engines": { "node": ">=22.14.0" },
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "types": "./dist/index.d.ts",
-  "files": ["dist", "LICENSE", "README.md"],
-  "repository": { "type": "git", "url": "git+https://github.com/nredd/pi-harness.git", "directory": "packages/resource-sampler" },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nredd/pi-harness.git",
+    "directory": "packages/resource-sampler"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "lint": "biome check src test",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --maxWorkers=1",
-    "test:bun": "node ../../scripts/run-vitest.ts bun --maxWorkers=1",
+    "test": "vitest run --coverage --maxWorkers=1",
+    "test:bun": "node ../../scripts/run-vitest.ts bun --maxWorkers=1 --coverage --coverage.provider=istanbul --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/bun",
     "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run test:bun"
   },
-  "devDependencies": { "@biomejs/biome": "2.5.15", "@types/node": "26.6.5", "typescript": "7.0.2", "vitest": "5.0.3" }
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "26.6.5",
+    "@vitest/coverage-istanbul": "5.0.3",
+    "@vitest/coverage-v8": "5.0.3",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
 }

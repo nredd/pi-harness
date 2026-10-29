@@ -32,6 +32,26 @@ for name in artifacts artifacts-node artifacts-personal; do
     cp -RP "$worktree/integration/$name/." "$WSL_HOST_WORKSPACE/integration/$name/"
   fi
 done
+# Owned coverage stays independent per runner. Mirror only the same exact report paths
+# uploaded by ci.yml; no guest source, dependency tree, HOME or environment crosses here.
+shopt -s nullglob
+for report in "$WSL_HOST_WORKSPACE"/packages/*/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/integration/inprocess/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/integration/probes/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/scripts/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/coverage/summary.json; do
+  rm -f "$report"
+done
+for report in "$worktree"/packages/*/coverage/*/lcov.info \
+  "$worktree"/integration/inprocess/coverage/*/lcov.info \
+  "$worktree"/integration/probes/coverage/*/lcov.info \
+  "$worktree"/scripts/coverage/*/lcov.info \
+  "$worktree"/coverage/summary.json; do
+  [ -f "$report" ] || continue
+  relative=${report#"$worktree/"}
+  mkdir -p "$WSL_HOST_WORKSPACE/$(dirname "$relative")"
+  cp -P "$report" "$WSL_HOST_WORKSPACE/$relative"
+done
 # Published atomically by the startup collector only after its allowlist/credential scan.
 if [ -d "$RUNNER_TEMP/standalone-startup-diagnostics" ]; then
   staging=$(mktemp -d "$WSL_HOST_TEMP/.standalone-startup.XXXXXX")

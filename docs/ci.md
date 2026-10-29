@@ -1,5 +1,10 @@
 # CI
 
+WSL bootstrap explicitly sets `core.autocrlf=false` and `core.eol=lf`, then rebuilds the
+**disposable host checkout's** index before resetting to HEAD. Disabling autocrlf or resetting
+alone can retain clean CRLF stat entries. The real-Git regression verifies exact tracked text
+and unchanged binary bytes; no source assertion or generated-runtime comparison is weakened.
+
 CI is the gate. Local runs are for development. Hosted runners only, no stored credentials or secrets.
 The publish job alone requests a short-lived npm OIDC identity.
 
@@ -13,6 +18,60 @@ The publish job alone requests a short-lived npm OIDC identity.
 | `bench (not run)` | a notice and a step summary | Same | Same | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
 
 On the `owned` job, `@nredd/pi-computer-use`'s macOS-only checks (`test:invariants` INV-8/INV-17, `test:macos-native`, `test:desktop`'s helper wire mapping and gating, `test:macos-live`) print `NOT RUN` lines on Linux and are not passes. Conversely, `test:linux-native` runs headless on the Ubuntu and WSL cells (`NOT RUN` on macOS): the crate's `cargo test --locked`, a source build from the *packed* tarball into a user-cache target dir, the built x64 helper's real `diagnostics` (protocol 4, shared architecture invariants), the cargo-missing hint and compiler cleanup on `SIGTERM`. The aarch64 target (`rustup target add`) is `cargo check --locked` compile-only; ARM64 runtime, desktop/display and live UI are NOT RUN. This is coverage inside the existing `owned` job, not a new required check (`test:linux-native` prints `Linux native checks passed` on Ubuntu, `NOT RUN` on macOS.)
+
+Phase 0 coverage runs inside the existing primary and declared Bun test invocations, never a
+second CI test pass. Each Vitest config explicitly includes owned source, uses text + LCOV and
+`reportOnFailure`; `subagents` retains Istanbul because V8 reload merging is incorrect. The
+existing Node helper gates use c8. An `always()` step after owned tests consumes those independent
+reports with `scripts/coverage_accounting.py`, selects `darwin` / `linux` integer uncovered-line/function
+floors using `sys.platform`, compares **every OS's enforced floors** with the PR base's `coverage/policy.json`,
+and fails closed on missing/invalid input or a missing OS floor. Hosted artifacts, not a local Mac,
+establish per-runner floors. `owned (wsl2)` runs inside Ubuntu with `sys.platform == "linux"`
+and explicitly enforces the same Linux floors as native Ubuntu. It exports independent LCOV and
+summary reports from the Linux filesystem before Windows uploads `coverage-wsl2`; no counters
+are combined across runners. Native Windows coverage is not measured. WSL contract/stack
+scenarios remain separate acceptance evidence, not owned-source coverage. To regenerate a review-only policy diff from an
+artifact, run `uv run --locked --project integration python scripts/coverage_accounting.py --measure
+--os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json` (use `darwin` and its
+artifact for macOS). The full download/replay and independent-two-run comparison procedure is
+[here](coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Branches
+are reported only: `Counts`, the accounting budget predicate and the base ratchet enforce only
+lines/functions. Darwin sampler branch variation (#164) changes no floor. Final hosted run
+`40857829296` establishes zero primary misses for all eight packages on macOS and all except
+resource-sampler on Linux. Linux retains 47 lines / 8 functions in native `darwin.ts` paths as
+an explicit per-OS floor, not an exclusion. Session-kit now has zero primary misses on both
+OSes after the deterministic formatter test removes the incidental comparator hit (#163).
+The earlier 110/32 transitional floor is historical only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
+on either outcome. All current Bun signals explicitly use `enforcement: "report-only"` with
+mandatory reasons linked to #160. They retain fail-closed LCOV parsing, expected-file checks,
+per-OS references, inventory ratcheting, and text+LCOV reporter checks. Counts and signed deltas
+from references are logged and included under JSON `signals`; budget excess alone cannot fail
+these advisory signals. Primary budgets stay enforced and define the 100% goal. Never merge
+Bun counters into primary coverage.
+
+The owner's roughly 1-7% small-subset description is not a measured source-coverage percentage:
+hosted run `40455349710` has plan-mode 8/539 Bun/primary tests (1.5%), subagents 22/3078 (0.7%)
+and todo 2/387 (0.5%); preset and in-process run their full test sets. The precise limitation is
+incomplete verified source scope. A strict Bun budget blocked main #153's primary-tested additions
+(subagents Bun 7728/512 -> 7763/515, primary unchanged at 500/68 on both OSes).
+
+A package flips to `enforced` only after its full suite runs under Bun on both OSes AND Bun's
+inventory covers every owned executable source file, including never-imported files, as specified
+by #160. Accounting rejects enforced partial Bun inventories. Any later enforced-to-report-only
+flip requires a new reasoned `enforcement_changes` entry relative to base; standing reasons or
+historical approvals cannot silently waive enforcement. Initial policy introduction is allowed.
+Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
+`computer-use` is not measured, tracked. `dev-tools` uses #195's primary Istanbul decision with
+all 22 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
+Its independent native Bun scenarios remain advisory. Python tooling/harness code, remaining boundary probes/providers,
+benchmark source and producer configurations are also explicitly inventoried as measurement-pending.
+The repository-wide TS/Python/JavaScript audit and the base-tree/current-tree inventory ratchet
+prevent silent source omission; reasoned reclassifications are required for membership losses.
+Verification-only scripts have exact per-file `verification_helpers` reasons; shipped runtime
+scripts remain owned production source, never blanket helper exclusions. The policy's eventual
+global-zero flip refuses pending packages.
+No job or required-check name changes. Definition, exclusions, receipts and ratcheting:
+[here](coverage.md).
 
 The resource sampler's package gate runs real host sampling and bounded helper cleanup in each
 `owned` OS cell. `check-package-contracts` also builds/audits/installs its exact ESM tarball and
