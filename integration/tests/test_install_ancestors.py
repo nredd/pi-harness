@@ -72,7 +72,19 @@ def test_restore_rename_does_not_follow_swapped_parent(
     swapped = False
 
     def swap(src: str | Path, dst: str | Path, **kwargs: int) -> None:
-        """Inject the replacement immediately before the restore syscall."""
+        """Inject the replacement immediately before the restore syscall.
+
+        Parameters:
+            src (str | Path): rename source operand.
+            dst (str | Path): rename destination operand.
+            kwargs (int): source and destination directory descriptors.
+
+        Returns:
+            None: the injected swap and anchored rename complete.
+
+        Raises:
+            OSError: fixture setup or the underlying rename fails.
+        """
         nonlocal swapped
         if Path(src).name == target.name and kwargs.get("src_dir_fd") is not None and not swapped:
             swapped = True
@@ -125,7 +137,19 @@ def test_save_syscall_anchors_both_parents(
     swapped = False
 
     def swap(src: str | Path, dst: str | Path, **kwargs: int) -> None:
-        """Substitute the ancestor after both descriptors were selected."""
+        """Substitute the ancestor after both descriptors were selected.
+
+        Parameters:
+            src (str | Path): rename source operand.
+            dst (str | Path): rename destination operand.
+            kwargs (int): source and destination directory descriptors.
+
+        Returns:
+            None: the injected swap and anchored rename complete.
+
+        Raises:
+            OSError: fixture setup or the underlying rename fails.
+        """
         nonlocal swapped
         if Path(src).name == target.name and kwargs.get("dst_dir_fd") == journal.backup_fd:
             swapped = True
@@ -137,7 +161,14 @@ def test_save_syscall_anchors_both_parents(
     backup_path = journal.backups / journaled_path(layout, target)[0]
 
     def save() -> None:
-        """Run the transaction with the syscall-boundary swap armed."""
+        """Run the transaction with the syscall-boundary swap armed.
+
+        Returns:
+            None: the original is saved unless the swapped namespace is detected.
+
+        Raises:
+            OSError: the injected ancestor swap is detected.
+        """
         with journal.open_backups():
             backup = journal.record(target, backup_path.name)
             assert backup is not None
@@ -161,7 +192,19 @@ def test_atomic_parent_swap_cannot_redirect_write(tmp_path: Path, monkeypatch: p
     original = os.replace
 
     def swap(src: str | Path, dst: str | Path, **kwargs: int) -> None:
-        """Replace the directory after the temporary was fully written."""
+        """Replace the directory after the temporary was fully written.
+
+        Parameters:
+            src (str | Path): atomic replacement source operand.
+            dst (str | Path): atomic replacement destination operand.
+            kwargs (int): source and destination directory descriptors.
+
+        Returns:
+            None: the injected swap and anchored rename complete.
+
+        Raises:
+            OSError: fixture setup or the underlying rename fails.
+        """
         parent.rename(held)
         parent.symlink_to(victim)
         original(src, dst, **kwargs)

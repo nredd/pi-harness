@@ -5624,7 +5624,14 @@ def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
 
 
 @pytest.mark.parametrize(
-    "module", ["test_install.py", "test_release.py", "test_installer_process.py", "test_promotion.py"]
+    "module",
+    [
+        "test_install.py",
+        "test_install_ancestors.py",
+        "test_release.py",
+        "test_installer_process.py",
+        "test_promotion.py",
+    ],
 )
 def test_test_helpers_have_typed_contracts(module: str) -> None:
     """Keep helper and nested callback contracts consistent across all installer test modules.
