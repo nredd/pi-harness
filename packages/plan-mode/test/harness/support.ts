@@ -404,6 +404,7 @@ export function createCustomSelectorHarness(
     factory as (...args: unknown[]) => {
       render(width: number): string[];
       handleInput(data: string): void;
+      handleMouse?(event: { type: string; button: string; x: number; y: number }): unknown;
     }
   )(
     { terminal, requestRender() {} },
@@ -458,6 +459,9 @@ export function createCustomSelectorHarness(
       };
       component.handleInput(inputData[data] ?? data);
       return component.render(width);
+    },
+    handleMouse(event: { type: string; button: string; x: number; y: number }) {
+      return component.handleMouse?.(event);
     },
     render(renderWidth = width) {
       return component.render(renderWidth);
