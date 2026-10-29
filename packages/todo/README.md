@@ -61,7 +61,7 @@ npm run check
 `check` runs Biome, strict TypeScript, and all 408 Vitest tests (including every
 upstream test) on both Node and Bun. The two real interactive settled-row regressions
 run inside that same suite on both engines. The test host
-pins core `v1.3.0-nredd.6` release tarballs. Unpublished upstream mock helpers
+pins core `v1.3.0-nredd.8` release tarballs. Unpublished upstream mock helpers
 are vendored under `.test-support/`; provenance and test counts are documented
 [here](.test-support/README.md). Tests inject temporary homes and use faux providers, never
 a pi process or credentials. The measured line/function coverage and mutation receipts

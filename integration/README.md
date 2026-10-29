@@ -12,7 +12,7 @@ Inputs and installation:
 cd integration
 uv sync --locked
 uv run --locked python -m harness.release --gitlink ../forks/pi --prefix /tmp/pi-candidate
-# Or: --tag v1.3.0-nredd.7. Prefix must be empty, never a live install.
+# Or: --tag v1.3.0-nredd.8. Prefix must be empty, never a live install.
 export PI_BIN=/tmp/pi-candidate/bin/pi
 uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
   --stack stacks/personal.json -m stack -n 2 --dist loadfile --log-cli-level=INFO

@@ -1,7 +1,9 @@
 {
   "name": "@nredd/pi-preset",
-  "version": "0.2.0",
-  "publishConfig": {"access": "public"},
+  "version": "0.3.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Optional, opinionated Pi preset: specialist agents, reusable workflow skills, expanded footer, themes, and public-safe settings defaults.",
   "author": "nredd",
   "license": "MIT AND Apache-2.0 AND CC-BY-SA-4.0",
@@ -40,8 +42,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.7/earendil-works-pi-coding-agent-1.3.0.tgz",
-    "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.7/earendil-works-pi-tui-1.3.0.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.8/earendil-works-pi-coding-agent-1.3.0.tgz",
+    "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.8/earendil-works-pi-tui-1.3.0.tgz",
     "@types/node": "26.6.5",
     "@vitest/coverage-istanbul": "5.0.3",
     "@xterm/headless": "5.5.0",
