@@ -94,12 +94,14 @@ describe("selectModel", () => {
     expect(select(undefined, "selection-unavailable/unavailable-pin")).toContain("Model not found");
   });
 
-  it("advertises only models from the dispatch scope when an explicit model does not resolve", () => {
+  it("uses dispatch scope only for an unresolved explicit-model diagnostic", () => {
     let scopeContext: { cwd: string; homeDir?: string } | undefined;
     setModelScopeProvider((_registry, context) => {
       scopeContext = context;
-      return new Set([ref("parent")]);
+      return context ? new Set([ref("parent")]) : new Set([ref("gpt-6-test")]);
     });
+    const selected = select(undefined, "gpt");
+    expect(selected).toMatchObject({ model: { id: "gpt-6-test" } });
     const result = select(undefined, "missing-model");
     expect(scopeContext).toEqual({ cwd: dir, homeDir: undefined });
     expect(result).toContain(`  ${ref("parent")}`);

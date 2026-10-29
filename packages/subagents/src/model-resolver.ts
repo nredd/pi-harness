@@ -49,8 +49,8 @@ export function getAgentModels(): ReadonlyMap<string, string> {
 /**
  * Narrows fuzzy candidates to the models the user enabled (pi's `enabledModels`),
  * as lowercase `provider/id` keys. Injected rather than imported so this module
- * stays free of settings I/O; `undefined` means no scope is configured. Dispatch
- * callers pass their config root so project-local settings match scope validation.
+ * stays free of settings I/O; `undefined` means no scope is configured. An
+ * unresolved dispatch passes its config root only for its diagnostic.
  */
 export type ModelScopeProvider = (
   registry: ModelRegistry,
@@ -219,12 +219,8 @@ function scopedCandidates<T extends { entry: ModelEntry }>(
   return scoped.length > 0 ? scoped : candidates;
 }
 
-function rankFuzzy(
-  matches: { entry: ModelEntry; score: number }[],
-  registry: ModelRegistry,
-  context?: { cwd: string; homeDir?: string },
-): ModelEntry | undefined {
-  const ranked = scopedCandidates(matches, registry, context)
+function rankFuzzy(matches: { entry: ModelEntry; score: number }[], registry: ModelRegistry): ModelEntry | undefined {
+  const ranked = scopedCandidates(matches, registry)
     .map(c => ({ ...c, version: parseModelVersion(c.entry.id) }))
     .sort((a, b) => compareVersionsDesc(a.version, b.version) || b.score - a.score);
   return ranked[0]?.entry;
@@ -289,7 +285,7 @@ function resolveCanonicalModel(
   // An exact id (or provider/id) is the caller naming a model, not describing
   // one: it wins outright, whatever the scope or any newer sibling.
   const exact = matches.find(c => c.score === 100);
-  const bestMatch = exact?.entry ?? rankFuzzy(matches, registry, context);
+  const bestMatch = exact?.entry ?? rankFuzzy(matches, registry);
   if (bestMatch) {
     const found = registry.find(bestMatch.provider, bestMatch.id);
     if (found) return found;
