@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import test from "node:test";
 import { promisify } from "node:util";
-import { reapProcessGroup } from "./setup-helper.mjs";
+import { listGroupStates, reapProcessGroup } from "./setup-helper.mjs";
 
 const execute = promisify(execFile);
 const setupUrl = new URL("./setup-helper.mjs", import.meta.url).href;
@@ -160,6 +160,141 @@ async function verifySpawnFailure() {
 	);
 }
 
+/**
+ * @param {Array<[string, string]>} script Ordered `[code, op]` outcomes; `"ok"` returns, any other code throws it.
+ * @returns {{kill: (pid: number, signal: number|string) => boolean, calls: Array<[number, number|string]>}} Scripted syscall seam.
+ * @throws {never} Construction cannot fail.
+ */
+function scriptedKill(script) {
+	const calls = [];
+	const kill = (pid, signal) => {
+		calls.push([pid, signal]);
+		const [code] = script[Math.min(calls.length, script.length) - 1];
+		if (code !== "ok") throw Object.assign(new Error(code), { code });
+		return true;
+	};
+	return { kill, calls };
+}
+
+/** @returns {Promise<void>} Verifies a zombie-only EPERM group is waited on until ESRCH, probe or signal side. @throws {Error} On assertion failure. */
+async function verifyDrainingZombieGroup() {
+	const zombies = () => ["Z", "Z+"];
+	for (const script of [
+		[["EPERM"], ["EPERM"], ["ESRCH"]],
+		[["ok"], ["EPERM"], ["EPERM"], ["ESRCH"]],
+		[["ok"], ["ok"], ["EPERM"], ["EPERM"], ["ESRCH"]],
+	]) {
+		const { kill, calls } = scriptedKill(script.map(([code]) => [code, ""]));
+		await reapProcessGroup(424242, kill, zombies);
+		assert.equal(calls.at(-1)[1], 0, "the final observation is the ESRCH probe");
+		assert.equal(calls.length, script.length);
+	}
+	// Members seen at the start that vanish before `ps` runs were reaped mid-probe: keep probing, to ESRCH.
+	const listings = [["Z"], []];
+	const vanished = scriptedKill([["EPERM", ""], ["ESRCH", ""]]);
+	await reapProcessGroup(424242, vanished.kill, () => listings.shift() ?? []);
+	assert.equal(vanished.calls.length, 2);
+	const persistent = scriptedKill([["EPERM", ""]]);
+	await assert.rejects(reapProcessGroup(424242, persistent.kill, zombies), /remained non-empty after SIGKILL/);
+	const { kill, calls } = scriptedKill([["EPERM", ""]]);
+	await assert.rejects(reapProcessGroup(424242, kill, zombies), /remained non-empty after SIGKILL/);
+	assert.ok(calls.length > 2, "a persistent zombie-only group keeps being probed");
+	assert.ok(calls.some(([, signal]) => signal === "SIGKILL"), "the budget escalates to SIGKILL before giving up");
+}
+
+/** @returns {Promise<void>} Verifies EPERM stays fatal unless the listing proves a non-empty all-zombie group. @throws {Error} On assertion failure. */
+async function verifyRealPermissionFailure() {
+	const failing = () => {
+		throw new Error("ps unavailable");
+	};
+	for (const listStates of [() => ["Z", "S"], () => ["S"], () => [], failing]) {
+		const error = Object.assign(new Error("EPERM"), { code: "EPERM" });
+		const calls = [];
+		await assert.rejects(
+			reapProcessGroup(424242, (pid, signal) => {
+				calls.push([pid, signal]);
+				throw error;
+			}, listStates),
+			(actual) => actual === error,
+		);
+		assert.deepEqual(calls, [[-424242, 0]], "no signal follows an EPERM that is not a draining group");
+	}
+	const error = Object.assign(new Error("EPERM"), { code: "EPERM" });
+	let calls = 0;
+	await assert.rejects(
+		reapProcessGroup(424242, () => {
+			if (calls++ === 1) throw error;
+			return true;
+		}, () => ["S"]),
+		(actual) => actual === error,
+	);
+	assert.equal(calls, 2, "a signal-time EPERM with a live member is a permission failure");
+}
+
+/** @returns {Promise<void>} Verifies the real `ps` listing: live members, zombies and absence. @throws {Error} On assertion failure. */
+async function verifyListGroupStates() {
+	const child = spawn("/bin/sleep", ["30"], { detached: true, stdio: "ignore" });
+	try {
+		const states = listGroupStates(child.pid);
+		assert.equal(states.length, 1);
+		assert.doesNotMatch(states[0], /^Z/);
+	} finally {
+		child.kill("SIGKILL");
+		await new Promise((resolve) => child.once("close", resolve));
+	}
+	assert.deepEqual(listGroupStates(child.pid), [], "a reaped group has no members");
+}
+
+/**
+ * Start a group holding only a zombie whose parent has not waited yet.
+ * @returns {Promise<{pgid: number, holder: import('node:child_process').ChildProcess, reaped: Promise<void>}>} Group and its reap trigger.
+ * @throws {Error} When the holder never reports its group.
+ */
+async function zombieOnlyGroup() {
+	// perl forks a setpgrp'd leader that exits at once, then waits on stdin before reaping it.
+	const script = '$|=1; my $p=fork(); if(!$p){setpgrp(0,0); exit 0} print "$p\\n"; <STDIN>; waitpid($p,0);';
+	const holder = spawn("/usr/bin/perl", ["-e", script], { stdio: ["pipe", "pipe", "inherit"] });
+	const pgid = await new Promise((resolve, reject) => {
+		holder.once("error", reject);
+		holder.stdout.once("data", (chunk) => resolve(Number(String(chunk).trim())));
+	});
+	const reaped = new Promise((resolve) => holder.once("close", resolve));
+	// The leader is a zombie only after its exit; wait on the kernel's own view, not on a timer.
+	while (listGroupStates(pgid).join() !== "Z") await new Promise((resolve) => setImmediate(resolve));
+	return { pgid, holder, reaped };
+}
+
+/** @returns {Promise<void>} Reproduces Darwin's EPERM for a real zombie-only group and requires it to drain to ESRCH. @throws {Error} On assertion failure. */
+async function verifyRealDarwinZombieGroup() {
+	const { pgid, holder, reaped } = await zombieOnlyGroup();
+	assert.throws(() => process.kill(-pgid, 0), { code: "EPERM" }, "premise: Darwin refuses to signal a zombie-only group");
+	let released = false;
+	await reapProcessGroup(pgid, (pid, signal) => {
+		try {
+			return process.kill(pid, signal);
+		} finally {
+			// Let the parent reap right after the first EPERM observation, so draining is real.
+			if (!released) {
+				released = true;
+				holder.stdin.end("go\n");
+			}
+		}
+	});
+	await reaped;
+	assert.throws(() => process.kill(-pgid, 0), { code: "ESRCH" });
+}
+
+/** @returns {Promise<void>} A zombie-only group that never drains is reported unreaped, never resolved. @throws {Error} On assertion failure. */
+async function verifyRealPersistentZombieGroup() {
+	const { pgid, holder, reaped } = await zombieOnlyGroup();
+	try {
+		await assert.rejects(reapProcessGroup(pgid), /remained non-empty after SIGKILL/);
+	} finally {
+		holder.stdin.end("go\n");
+		await reaped;
+	}
+}
+
 test("ESRCH is terminal, including signal-time disappearance", verifyTerminalAbsence);
 test("EPERM and EIO preserve probe and delivery failures", verifySyscallErrors);
 test("invalid group IDs never reach kill", verifyInvalidGroups);
@@ -167,3 +302,8 @@ test("wrapper errors revoke fallback ownership; ESRCH proves reaped", verifyWrap
 test("persistent positive probes preserve primary error and guarded fallback", verifyPersistentGroup);
 test("cancellation handles cleanup rejection without a foreign exit KILL", verifyCancelledCleanup);
 test("PID-less spawn failure releases listeners without group syscalls", verifySpawnFailure);
+test("a zombie-only EPERM group is waited on until ESRCH", verifyDrainingZombieGroup);
+test("EPERM without a proven zombie-only group stays a permission failure", verifyRealPermissionFailure);
+test("listGroupStates reads live, reaped and absent members from ps", verifyListGroupStates);
+test("real Darwin zombie-only group drains to ESRCH", { skip: process.platform !== "darwin" && "only Darwin answers EPERM for a zombie-only group" }, verifyRealDarwinZombieGroup);
+test("real Darwin zombie-only group that never drains is not reaped", { skip: process.platform !== "darwin" && "only Darwin answers EPERM for a zombie-only group" }, verifyRealPersistentZombieGroup);
