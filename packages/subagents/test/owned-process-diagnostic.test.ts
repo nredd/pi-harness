@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { captureOwnedProcess, diagnoseOwnedProcess, type OwnedProcessCapture, type OwnedProcessIdentity } from "./helpers/owned-process-diagnostic.ts";
+import { captureOwnedProcess, createOwnedProcessProbe, diagnoseOwnedProcess, type OwnedProcessCapture, type OwnedProcessIdentity } from "./helpers/owned-process-diagnostic.ts";
 
 const children: ReturnType<typeof spawn>[] = [];
 const unavailableReasons = ["timeout", "spawn_error", "unparseable", "start_identity_unavailable"] as const;
@@ -48,6 +52,16 @@ describe("owned process diagnostics", () => {
     });
   });
 
+  it("reports a real empty process selection as missing", async () => {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 1_000)"], { stdio: "ignore" });
+    const closed = once(child, "close");
+    const capture = await captureOwnedProcess(child.pid ?? -1);
+    await closed;
+
+    expect(capture.status).toBe("captured");
+    await expect(diagnoseOwnedProcess(capture)).resolves.toMatchObject({ state: "missing" });
+  });
+
   it("reports an uncaptured fixture as unavailable", async () => {
     await expect(diagnoseOwnedProcess(undefined)).resolves.toEqual({ identity: undefined, state: "unknown", reason: "capture_not_recorded" });
   });
@@ -60,6 +74,20 @@ describe("owned process diagnostics", () => {
   it("reports only an explicit absent probe as missing", async () => {
     const identity = identityFor(process.pid);
     await expect(diagnoseOwnedProcess(captured(identity), async () => ({ status: "absent" }))).resolves.toEqual({ identity, state: "missing" });
+  });
+
+  it("reports an exit-one stderr failure as unavailable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "owned-process-probe-"));
+    const probePath = join(dir, "ps");
+    writeFileSync(probePath, "#!/bin/sh\nprintf '%s\\n' 'probe failed' >&2\nexit 1\n", { mode: 0o755 });
+    try {
+      const capture = await captureOwnedProcess(process.pid);
+      const probe = createOwnedProcessProbe(probePath);
+      await expect(captureOwnedProcess(process.pid, probe)).resolves.toEqual({ status: "unavailable", reason: "probe_error" });
+      await expect(diagnoseOwnedProcess(capture, probe)).resolves.toMatchObject({ state: "unknown", reason: "probe_probe_error" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it.each(unavailableReasons)("preserves an unavailable %s initial capture", async (reason) => {

@@ -112,8 +112,9 @@ a hostile fixture home with an unavailable `@default` tier and checks the existi
 assertions. Its nested process-cleanup regression uses the shared async `@nredd/pi-dev-tools` runner.
 When its unchanged post-return descendant `ESRCH` assertion fails, it logs only the fixture's captured
 PID/group/start identity plus bounded kernel state and elapsed/CPU counters. CI distinguishes a
-present process, a zombie and PID reuse; a failed or unparseable probe reports explicit unavailable
-evidence rather than claiming the fixture is absent. It never inspects unowned processes. Operator
+present process, a zombie and PID reuse; a failed, stderr-producing or unparseable probe reports
+explicit unavailable evidence rather than claiming the fixture is absent. It never inspects unowned
+processes. Operator
 `agentModels`/model-tier policy must not affect fixture dispatch; runtime tier defaults and operator
 files remain unchanged.
 `test:watch` and `test:e2e` retain their operator environment. The explicit live smoke command
