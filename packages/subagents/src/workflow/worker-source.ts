@@ -863,10 +863,14 @@ async function main() {
   const value = await run(rootScope.agent, rootScope.phase, rootScope.log, rootScope.workflow, rootScope.console, sandbox.args);
   checkBoundary(value, "the workflow result");
   flushProgress();
-  port.postMessage({
+  const result = {
     type: "complete",
     resultJson: value === undefined ? undefined : JSON.stringify(value),
-  });
+  };
+  if (workerData.collectCoverage) {
+    result.coverage = vm.runInContext("globalThis.__coverage__", context);
+  }
+  port.postMessage(result);
 }
 
 /** Serialize diagnostics only: keep realm errors untouched and bound cause traversal/output. */

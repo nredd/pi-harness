@@ -1,7 +1,7 @@
 {
   "version": 2,
   "target": { "lines": 0, "functions": 0 },
-  "enforce_target": false,
+  "enforce_target": true,
   "reclassifications": [
     { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
@@ -159,7 +159,16 @@
           "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
           "reporters": ["text", "lcov"]
         }
-      }
+      },
+      "target_allowances": [
+        {
+          "owner": "resource-sampler",
+          "os": "linux",
+          "files": ["src/darwin.ts"],
+          "max_uncovered": { "lines": 47, "functions": 8 },
+          "reason": "Linux cannot execute owned Darwin FFI paths; source remains in the complete primary report."
+        }
+      ]
     },
     "session-kit": {
       "root": "packages/session-kit",
@@ -300,17 +309,29 @@
       "root": "packages/plan-mode",
       "owned": ["scripts/*.mjs"],
       "exclusions": [],
-      "status": "pending",
-      "note": "Runtime builder scripts produce the shipped plan-mode runtime. Existing output contract tests are not source-complete LCOV accounting; build-tooling instrumentation and clean receipts are follow-up work.",
-      "signals": {}
+      "status": "measured",
+      "note": "`test:dist` emits a complete primary report for both runtime builder scripts; required CI records fresh macOS and Linux final-HEAD receipts.",
+      "signals": {
+        "primary": {
+          "report": "coverage/runtime-build-tooling/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "workflow-examples": {
       "root": "packages/subagents",
       "owned": ["examples/**/*.js"],
       "exclusions": [],
-      "status": "pending",
-      "note": "Runnable workflow example programs and their library helper are executable source, not verification harnesses. Establish source-complete example coverage and clean LCOV receipts in follow-up work.",
-      "signals": {}
+      "status": "measured",
+      "note": "`test:workflow-examples` emits a complete primary report for all six example scripts; required CI records fresh macOS and Linux final-HEAD receipts.",
+      "signals": {
+        "primary": {
+          "report": "coverage/workflow-examples/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "python-scripts": {
       "root": "scripts",
@@ -367,7 +388,7 @@
     },
     "coverage-configurations": {
       "root": ".",
-      "owned": ["packages/*/vitest.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts"],
+      "owned": ["packages/*/vitest*.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts"],
       "exclusions": [],
       "status": "pending",
       "goal": "report-only",
