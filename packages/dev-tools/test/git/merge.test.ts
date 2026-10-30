@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
+import { prepareMerge } from "../../src/git/merge.ts";
 import { createMockPi } from "../support.ts";
 
 const ENV = {
@@ -313,5 +314,38 @@ describe("git_commit merge approval", () => {
 		expect(result.isError).toBe(true);
 		expect(mock.text(result)).toContain("hook refusal");
 		expect(parents(repo)).toHaveLength(1);
+	});
+
+	it("rejects a merge whose identity changes between approval and the index check", async () => {
+		const { repo } = mergeFixture();
+		const merge = await prepareMerge(["shared.txt"], { cwd: repo });
+		expect(merge).toBeDefined();
+		try {
+			writeFileSync(join(repo, ".git", "MERGE_HEAD"), `${git(repo, ["rev-parse", "HEAD"])}\n`);
+			await expect(merge?.check()).rejects.toThrow("Merge identity changed; review the merge again");
+		} finally {
+			merge?.cleanup();
+		}
+	});
+
+	it("reports an unreadable MERGE_HEAD instead of treating it as no merge", async () => {
+		const { repo } = mergeFixture();
+		rmSync(join(repo, ".git", "MERGE_HEAD"));
+		mkdirSync(join(repo, ".git", "MERGE_HEAD"));
+		await expect(prepareMerge(["shared.txt"], { cwd: repo })).rejects.toThrow(/EISDIR/);
+	});
+
+	it("rejects a malformed MERGE_HEAD", async () => {
+		const { repo } = mergeFixture();
+		writeFileSync(join(repo, ".git", "MERGE_HEAD"), "not-a-sha\n");
+		await expect(prepareMerge(["shared.txt"], { cwd: repo })).rejects.toThrow("Invalid MERGE_HEAD");
+	});
+
+	it("rejects approved paths outside the worktree", async () => {
+		const { repo } = mergeFixture();
+		for (const path of ["../outside.txt", "..", "."])
+			await expect(prepareMerge([path], { cwd: repo })).rejects.toThrow(
+				"Merge paths must name complete files inside the worktree",
+			);
 	});
 });
