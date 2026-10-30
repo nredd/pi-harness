@@ -40,7 +40,7 @@ import sys
 import tarfile
 import tempfile
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import IntEnum
@@ -56,6 +56,7 @@ except ModuleNotFoundError:
 
 from harness.files import NonRegularFileError, entry_kind
 from harness.files import read_regular as read_regular_file
+from harness.install_paths import AnchoredStore
 from harness.paths import is_wsl
 from harness.promotion import (
     SHA_PATTERN,
@@ -1081,12 +1082,13 @@ def consent(plan: Plan, assume_yes: bool, ask: Callable[[str], str] | None) -> N
 class Journal:
     """Durable list of switch-over steps, so an interrupted switch can be restored exactly."""
 
-    def __init__(self, layout: Layout, backups: Path) -> None:
+    def __init__(self, layout: Layout, backups: Path, *, anchors: AnchoredStore | None = None) -> None:
         """Start an empty journal.
 
         Parameters:
             layout (Layout): installer paths.
             backups (Path): directory receiving the replaced state.
+            anchors (AnchoredStore | None): parents retained by the surrounding installer lock.
         """
         self.layout = layout
         self.path = layout.journal
@@ -1094,6 +1096,8 @@ class Journal:
         self.steps: list[dict[str, Any]] = []
         self.backup_fd: int | None = None
         self.directory_identities: dict[Path, tuple[int, int]] = {}
+        self.owns_anchors = anchors is None
+        self.anchors = anchors if anchors is not None else AnchoredStore()
 
     @contextmanager
     def open_backups(self, *, create: bool = True) -> Iterator[None]:
@@ -1105,30 +1109,37 @@ class Journal:
         Yields:
             None: directory descriptors remain open for the operation.
         """
-        if create:
-            self.layout.backups.mkdir(parents=True, exist_ok=True)
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
-        store_fd = os.open(self.layout.backups, flags)
-        try:
-            info = os.fstat(store_fd)
-            self.directory_identities[self.layout.backups] = (info.st_dev, info.st_ino)
+        with self.anchors if self.owns_anchors else nullcontext(self.anchors):
+            self.anchors.check()
+            store_fd = self.anchors.directory(self.layout.backups, create=create)
             if create:
                 os.mkdir(self.backups.name, mode=0o700, dir_fd=store_fd)
-            self.backup_fd = os.open(self.backups.name, flags, dir_fd=store_fd)
+            self.backup_fd = self.anchors.directory(self.backups)
             try:
-                info = os.fstat(self.backup_fd)
-                self.directory_identities[self.backups] = (info.st_dev, info.st_ino)
+                # Hold live parents across record/save and every recovery transition. Missing
+                # roots in legacy recovery need not be created until a target requires them.
+                for parent in (
+                    self.layout.root,
+                    self.layout.agent_dir,
+                    self.layout.bin_dir,
+                    self.layout.root / "core",
+                ):
+                    if create or parent.exists(follow_symlinks=False):
+                        self.anchors.directory(parent, create=create)
                 self.check_store()
                 yield
                 self.check_store()
             finally:
-                os.close(self.backup_fd)
+                self.directory_identities = {
+                    path: (info.st_dev, info.st_ino)
+                    for path, descriptor in self.anchors.directories.items()
+                    for info in (os.fstat(descriptor),)
+                }
                 self.backup_fd = None
-        finally:
-            os.close(store_fd)
 
     def check_store(self) -> None:
         """Fail closed if the backup store path no longer names the opened directory."""
+        self.anchors.check()
         for path, identity in self.directory_identities.items():
             info = path.lstat()
             if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != identity:
@@ -1146,7 +1157,7 @@ class Journal:
         if not self.steps or self.steps[-1]["target"] != str(live):
             raise OSError(f"No pending journal entry for '{live}'")
         self.check_store()
-        os.replace(live, backup.name, dst_dir_fd=self.backup_fd)
+        self.anchors.rename(live, backup)
         self.check_store()
         self.steps[-1]["pending"] = False
         self.persist()
@@ -1161,11 +1172,17 @@ class Journal:
         if not self.steps or self.steps[-1]["target"] != str(target):
             raise OSError(f"No journal entry for replacement '{target}'")
         self.check_store()
-        identity = RestoreHasher().identity(source) if source is not None else None
+        identity = (
+            RestoreHasher().identity(source.name, dir_fd=self.anchors.directory(source.parent))
+            if source is not None
+            else None
+        )
         self.steps[-1]["replacement"] = asdict(identity) if identity is not None else None
         self.persist()
         if source is not None:
-            source.replace(target)
+            # The source subtree is intentionally retired; its parent remains anchored.
+            self.anchors.discard(source)
+            self.anchors.rename(source, target)
         self.check_store()
 
     def persist(self) -> None:
@@ -1181,7 +1198,12 @@ class Journal:
         text = json.dumps(document, indent=2)
         if len(text.encode()) > MAX_JOURNAL_BYTES:
             raise OSError("Recovery journal exceeds the byte limit; restore by hand")
-        write_atomic(self.path, text, mode=JOURNAL_MODE)
+        write_atomic(
+            self.path,
+            text,
+            mode=JOURNAL_MODE,
+            anchors=self.anchors if self.backup_fd is not None else None,
+        )
 
     def record(self, target: Path, name: str) -> Path | None:
         """Durably record a step before it runs.
@@ -1198,6 +1220,8 @@ class Journal:
                 refuse; it is not recorded, so the journal stays restorable and the switch
                 rolls back the steps before it.
         """
+        if self.backup_fd is not None and target.parent.exists(follow_symlinks=False):
+            self.anchors.directory(target.parent)
         self.check_store()
         require_restorable_kind(self.layout, target, "the steps before it are rolled back")
         existed = target.exists() or target.is_symlink()
@@ -1212,42 +1236,60 @@ class Journal:
 
     def commit(self) -> None:
         """Mark the switch complete; nothing will be rolled back."""
-        self.check_store()
-        self.path.unlink()
+        with AnchoredStore() as anchors:
+            anchors.directory(self.path.parent)
+            self.check_store()
+            remove(self.path, anchors=anchors)
+            anchors.check()
 
 
-def write_atomic(path: Path, text: str, mode: int | None = None) -> None:
+def write_atomic(
+    path: Path, text: str, mode: int | None = None, *, anchors: AnchoredStore | None = None
+) -> None:
     """Replace a file atomically, fsyncing the new contents first.
 
     Parameters:
         path (Path): destination.
         text (str): new contents.
         mode (int | None): permission bits; default keeps the existing file's, or 0o644.
+        anchors (AnchoredStore | None): transaction parents, or a new operation-local owner.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    keep = mode if mode is not None else (path.stat().st_mode & 0o777 if path.exists() else 0o644)
+    if anchors is None:
+        with AnchoredStore() as opened:
+            write_atomic(path, text, mode=mode, anchors=opened)
+        return
+    parent = anchors.directory(path.parent, create=True)
+    anchors.check()
+    info = anchors.info(path)
+    keep = mode if mode is not None else (info.st_mode & 0o777 if info is not None else 0o644)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    # Created owner-only whatever the umask, and given its final mode before any data: the
-    # journal names every path a restore deletes, so it is never readable by others.
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "w") as handle:
-        os.fchmod(descriptor, keep)
-        handle.write(text)
-        handle.flush()
-        os.fsync(descriptor)
-    temporary.replace(path)
+    descriptor = os.open(
+        temporary.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent
+    )
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            os.fchmod(descriptor, keep)
+            handle.write(text)
+            handle.flush()
+            os.fsync(descriptor)
+        anchors.rename(temporary, path)
+        anchors.check()
+    finally:
+        anchors.remove(temporary)
 
 
-def remove(path: Path) -> None:
+def remove(path: Path, *, anchors: AnchoredStore | None = None) -> None:
     """Remove a file, link or directory if present.
 
     Parameters:
         path (Path): entry to remove.
+        anchors (AnchoredStore | None): transaction parents, or a new operation-local owner.
     """
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
+    if anchors is None:
+        with AnchoredStore() as opened:
+            remove(path, anchors=opened)
+        return
+    anchors.remove(path)
 
 
 @dataclass(frozen=True)
@@ -1939,7 +1981,7 @@ def finish_aside(journal: Journal, step: Step, index: int) -> None:
         cleaning = replace(step, aside=replace(step.aside, cleaning=True, manifest=manifest))
         journal.steps[index] = cleaning.record()
         journal.persist()
-        remove(step.aside.path)
+        remove(step.aside.path, anchors=journal.anchors)
 
 
 def rename_restore(journal: Journal, step: Step) -> None:
@@ -1951,13 +1993,13 @@ def rename_restore(journal: Journal, step: Step) -> None:
     """
     assert step.backup is not None
     if step.aside is not None and not step.aside.path.exists(follow_symlinks=False):
-        step.target.replace(step.aside.path)
+        journal.anchors.rename(step.target, step.aside.path)
     try:
-        os.replace(step.backup.name, step.target, src_dir_fd=journal.backup_fd)
+        journal.anchors.rename(step.backup, step.target)
     except BaseException:
         # If the rename completed before an interrupt, retain the original and its recorded aside.
         if step.aside is not None and not step.target.exists(follow_symlinks=False):
-            step.aside.path.replace(step.target)
+            journal.anchors.rename(step.aside.path, step.target)
         raise
 
 
@@ -1973,7 +2015,7 @@ def restore_backup(journal: Journal, step: Step, index: int) -> RestoreIdentity 
         RestoreIdentity | None: restored content identity, or original absence.
     """
     if step.backup is None:
-        remove(step.target)
+        remove(step.target, anchors=journal.anchors)
         return None
     identity = step.restoring or RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd)
     aside = step.aside
@@ -1985,16 +2027,17 @@ def restore_backup(journal: Journal, step: Step, index: int) -> RestoreIdentity 
     intent = replace(step, pending=False, restoring=identity, aside=aside)
     journal.steps[index] = intent.record()
     journal.persist()
-    # Hardening only: concurrent same-user swaps after this check remain outside #157's scope.
+    # Content checks do not isolate arbitrary same-user leaf edits; parents stay anchored.
     if RestoreHasher().identity(step.backup.name, dir_fd=journal.backup_fd) != identity:
         raise OSError(f"Backup '{step.backup}' content identity changed; restore by hand")
     rename_restore(journal, intent)
+    journal.check_store()
     finish_aside(journal, intent, index)
     journal.check_store()
     return identity
 
 
-def rollback(layout: Layout) -> list[str]:
+def rollback(layout: Layout, *, anchors: AnchoredStore | None = None) -> list[str]:
     """Restore every journaled step of an interrupted switch, newest first.
 
     Every step is validated before the first one is restored, so an untrusted journal changes
@@ -2002,6 +2045,7 @@ def rollback(layout: Layout) -> list[str]:
 
     Parameters:
         layout (Layout): installer paths.
+        anchors (AnchoredStore | None): parents held by the surrounding installer lock.
 
     Returns:
         list[str]: restored targets.
@@ -2012,15 +2056,35 @@ def rollback(layout: Layout) -> list[str]:
     """
     if not layout.journal.exists(follow_symlinks=False):
         return []
+    if anchors is None:
+        with AnchoredStore() as opened:
+            try:
+                for parent in (
+                    layout.root,
+                    layout.agent_dir,
+                    layout.bin_dir,
+                    layout.root / "core",
+                    layout.backups,
+                ):
+                    if entry_kind(parent) in {None, "directory"}:
+                        with suppress(FileNotFoundError):
+                            opened.directory(parent)
+                return rollback(layout, anchors=opened)
+            except OSError as error:
+                raise RollbackError(
+                    f"Could not anchor interrupted install parents: {error}; "
+                    f"journal kept at '{layout.journal}'"
+                ) from error
     backups, steps = load_journal(layout)
-    journal = Journal(layout, backups)
+    journal = Journal(layout, backups, anchors=anchors)
     journal.steps = [step.record() for step in steps]
     restored = []
     not_started: set[Path] = set()
     try:
+        anchors.check()
         # An empty step list durably marks a completed rollback, even if unlink failed.
         if not steps:
-            journal.path.unlink()
+            remove(journal.path, anchors=anchors)
             return []
         with journal.open_backups(create=False):
             # Check the ENTIRE transaction before any rename, deletion or journal rewrite.
@@ -2047,7 +2111,7 @@ def rollback(layout: Layout) -> list[str]:
                 journal.persist()
             journal.steps = []
             journal.persist()
-        journal.path.unlink()
+            remove(journal.path, anchors=journal.anchors)
     except OSError as error:
         raise RollbackError(
             f"Could not restore an interrupted install: {error}; journal kept at '{layout.journal}'"
@@ -2055,13 +2119,16 @@ def rollback(layout: Layout) -> list[str]:
     return restored
 
 
-def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
+def install_packages(
+    verified: Verified, pi_bin: Path, staging: Path, *, anchors: AnchoredStore | None = None
+) -> Path:
     """Install every source in stack order into a staging agent tree with a clean npm config.
 
     Parameters:
         verified (Verified): verified installation input.
         pi_bin (Path): installed core executable.
         staging (Path): private staging directory.
+        anchors (AnchoredStore | None): shared source-parent descriptors retained through switch.
 
     Returns:
         Path: the staged agent tree.
@@ -2069,12 +2136,18 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
     Raises:
         InstallError: `pi install` failed, or an installed version or owned integrity differs.
     """
+    if anchors is None:
+        with AnchoredStore() as opened:
+            return install_packages(verified, pi_bin, staging, anchors=opened)
     stack = verified.stack
     agent, home = staging / "agent", staging / "home"
-    agent.mkdir(parents=True)
-    home.mkdir()
+    parent = anchors.directory(staging, create=True)
+    os.mkdir(agent.name, dir_fd=parent)
+    anchors.directory(agent)
+    os.mkdir(home.name, dir_fd=parent)
     for name in ("npmrc-user", "npmrc-global"):
-        (staging / name).touch()
+        descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+        os.close(descriptor)
     env = {
         "PATH": os.environ.get("PATH", os.defpath),
         "HOME": str(home),
@@ -2088,6 +2161,7 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
         "npm_config_registry": "https://registry.npmjs.org/",
     }
     for package, source in zip(stack.sources, verified.sources, strict=True):
+        anchors.check()
         LOGGER.info(f"pi install '{source}'")
         try:
             subprocess.check_output(
@@ -2110,6 +2184,7 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
                 InstallError(f"`pi install` could not complete for '{source}': {error}"), error
             )
         else:
+            anchors.check()
             continue
         raise failure from failure.__cause__
     try:
@@ -2117,6 +2192,7 @@ def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
     except (OSError, ValueError) as error:
         raise InstallError(f"Staged packages do not match the snapshot: {error}") from error
     verify_owned_integrity(verified.snapshot, agent)
+    anchors.check()
     return agent
 
 
@@ -2127,6 +2203,7 @@ def stage(
     staging: Path,
     *,
     tools: Mapping[str, str] | None = None,
+    anchors: AnchoredStore | None = None,
 ) -> Path | None:
     """Install the core and packages outside the live tree.
 
@@ -2136,6 +2213,7 @@ def stage(
         plan (Plan): planned changes.
         staging (Path): private staging directory.
         tools (Mapping[str, str] | None): preflight-selected absolute dispatcher paths.
+        anchors (AnchoredStore | None): shared source-parent descriptors retained through switch.
 
     Returns:
         Path | None: the staged agent tree, `None` when packages are already installed.
@@ -2143,6 +2221,11 @@ def stage(
     Raises:
         InstallError: the core or a package failed to install or verify.
     """
+    if anchors is None:
+        with AnchoredStore() as opened:
+            return stage(layout, verified, plan, staging, tools=tools, anchors=opened)
+    anchors.directory(staging, create=True)
+    anchors.check()
     stack = verified.stack
     prefix = layout.core(stack.core.tag)
     if plan.install_core:
@@ -2165,11 +2248,24 @@ def stage(
             failure = None
         if failure is not None:
             raise failure from failure.__cause__
+        anchors.directory(staged_core)
+        anchors.check()
+        # Cleanup and the marker share the transaction's original staging/core parent.
+        # Journal.place retires this subtree's descriptors before its intentional move.
         for leftover in ("fetch-home", "npm-cache", "tui-resource"):
-            remove(staged_core / leftover)
-        write_atomic(staged_core / CORE_MARKER, json.dumps(stack.core.model_dump(mode="json"), indent=2))
+            remove(staged_core / leftover, anchors=anchors)
+        write_atomic(
+            staged_core / CORE_MARKER,
+            json.dumps(stack.core.model_dump(mode="json"), indent=2),
+            anchors=anchors,
+        )
+        anchors.check()
         prefix = staged_core
-    return install_packages(verified, prefix / "bin" / "pi", staging) if plan.install_packages else None
+    return (
+        install_packages(verified, prefix / "bin" / "pi", staging, anchors=anchors)
+        if plan.install_packages
+        else None
+    )
 
 
 def switch(
@@ -2214,13 +2310,13 @@ def switch_anchored(
         journal (Journal): journal with an open backup directory.
         staged_core (Path | None): staged core prefix.
     """
-    layout.agent_dir.mkdir(parents=True, exist_ok=True)
+    journal.anchors.directory(layout.agent_dir, create=True)
     if staged_core is not None:
         prefix = layout.core(verified.stack.core.tag)
         backup = journal.record(prefix, f"core-{verified.stack.core.tag}")
         if backup is not None:
             journal.save(prefix, backup)
-        prefix.parent.mkdir(parents=True, exist_ok=True)
+        journal.anchors.directory(prefix.parent, create=True)
         journal.place(staged_core, prefix)
     if staged_agent is not None:
         # Every existing tree is replaced, as planned, even when the stack stages none of it: a
@@ -2237,16 +2333,16 @@ def switch_anchored(
         if desired is not None:
             replace_file(journal, layout.agent_dir / name, name, json.dumps(desired, indent=2) + "\n")
     if plan.link is not None:
-        layout.bin_dir.mkdir(parents=True, exist_ok=True)
+        journal.anchors.directory(layout.bin_dir, create=True)
         backup = journal.record(layout.link, LINK_BACKUP)
         if backup is not None:
             journal.save(layout.link, backup)
         temporary = layout.link.with_name(f".pi.{uuid.uuid4().hex}.replacement")
         try:
-            temporary.symlink_to(plan.link)
+            os.symlink(plan.link, temporary.name, dir_fd=journal.anchors.directory(temporary.parent))
             journal.place(temporary, layout.link)
         finally:
-            remove(temporary)
+            remove(temporary, anchors=journal.anchors)
     state = {
         "source_sha": verified.snapshot.source_sha,
         "stack_sha256": verified.snapshot.stack_sha256,
@@ -2273,14 +2369,19 @@ def replace_file(journal: Journal, live: Path, name: str, text: str) -> None:
         journal.save(live, backup)
     temporary = live.with_name(f".{live.name}.{uuid.uuid4().hex}.replacement")
     try:
-        write_atomic(temporary, text, mode=mode)
+        write_atomic(temporary, text, mode=mode, anchors=journal.anchors)
         journal.place(temporary, live)
     finally:
-        remove(temporary)
+        remove(temporary, anchors=journal.anchors)
 
 
 def apply(
-    layout: Layout, verified: Verified, plan: Plan, *, tools: Mapping[str, str] | None = None
+    layout: Layout,
+    verified: Verified,
+    plan: Plan,
+    *,
+    tools: Mapping[str, str] | None = None,
+    anchors: AnchoredStore | None = None,
 ) -> tuple[Path, str]:
     """Stage, switch under a journal and run the post-check; any failure restores the previous state.
 
@@ -2292,6 +2393,7 @@ def apply(
         verified (Verified): verified installation input.
         plan (Plan): planned changes.
         tools (Mapping[str, str] | None): preflight-selected absolute dispatcher paths.
+        anchors (AnchoredStore | None): parents held by the surrounding installer lock.
 
     Returns:
         tuple[Path, str]: backup directory holding everything that was replaced, and the
@@ -2303,15 +2405,25 @@ def apply(
             (previous state restored).
         RollbackError: the switch failed and could not be fully restored.
     """
+    if anchors is None:
+        with AnchoredStore() as opened:
+            return apply(layout, verified, plan, tools=tools, anchors=opened)
+    for parent in (layout.root, layout.agent_dir, layout.bin_dir, layout.root / "core", layout.backups):
+        # Do not create permanent directories during staging: a refused package must leave
+        # a fresh home fresh. Pin each existing chain, then create missing tails at switch time.
+        with suppress(FileNotFoundError):
+            anchors.directory(parent)
+    anchors.check()
     staging = layout.root / "staging" / uuid.uuid4().hex
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     backups = layout.backups / f"{stamp}-{verified.snapshot.source_sha[:12]}-{uuid.uuid4().hex[:6]}"
-    staging.mkdir(parents=True)
+    os.mkdir(staging.name, dir_fd=anchors.directory(staging.parent, create=True))
     try:
-        staged_agent = stage(layout, verified, plan, staging, tools=tools)
+        staged_agent = stage(layout, verified, plan, staging, tools=tools, anchors=anchors)
         # Staging is slow: check the store again just before the first journaled step.
         require_backup_store(layout)
-        journal = Journal(layout, backups)
+        anchors.check()
+        journal = Journal(layout, backups, anchors=anchors)
         failure: InstallError | None = None
         try:
             switch(
@@ -2326,7 +2438,7 @@ def apply(
                 layout, None if plan.install_core else layout.core(verified.stack.core.tag)
             )
         except BaseException as error:
-            restored = rollback(layout)
+            restored = rollback(layout, anchors=anchors)
             failure = detached_exception(
                 InstallError(f"Switch failed and was rolled back ({len(restored)} steps restored): {error}"),
                 error,
@@ -2335,9 +2447,10 @@ def apply(
             raise failure from failure.__cause__
         journal.commit()
     finally:
-        remove(staging)
+        remove(staging, anchors=anchors)
     if backups.exists() and not any(backups.iterdir()):
-        backups.rmdir()
+        os.rmdir(backups.name, dir_fd=anchors.directory(backups.parent))
+        anchors.discard(backups)
     return backups, version
 
 
@@ -2406,14 +2519,15 @@ def checked_version(layout: Layout, kept_core: Path | None) -> str:
 
 
 @contextmanager
-def locked(layout: Layout) -> Iterator[None]:
+def locked(layout: Layout, *, anchors: AnchoredStore | None = None) -> Iterator[AnchoredStore]:
     """Hold the installer lock, creating the installer root if needed.
 
     Parameters:
         layout (Layout): installer paths.
+        anchors (AnchoredStore | None): parent descriptors held through lock release.
 
     Yields:
-        None: while the lock is held.
+        AnchoredStore: parent descriptors retained until the lock is released.
 
     Raises:
         InstallError: another installer holds the lock.
@@ -2424,8 +2538,18 @@ def locked(layout: Layout) -> Iterator[None]:
             f"platform '{platform.system()}/{platform.machine()}' is not supported: "
             "Unix file locking is unavailable, nothing changed"
         )
+    if anchors is None:
+        with AnchoredStore() as opened, locked(layout, anchors=opened):
+            yield opened
+        return
     try:
-        layout.root.mkdir(parents=True, exist_ok=True)
+        root_fd = anchors.directory(layout.root, create=True)
+        for parent in (layout.agent_dir, layout.bin_dir, layout.root / "core", layout.backups):
+            # Dedicated layout/journal validators own diagnostics for refused leaf kinds.
+            if entry_kind(parent) in {None, "directory"}:
+                with suppress(FileNotFoundError):
+                    anchors.directory(parent)
+        anchors.check()
     except OSError as error:
         raise UnsupportedError(
             f"Cannot create installer root '{layout.root}'; nothing changed: {error}"
@@ -2436,7 +2560,10 @@ def locked(layout: Layout) -> Iterator[None]:
         raise UnsupportedError(f"Lock '{path}' is a {kind}; move it aside yourself, nothing changed")
     try:
         descriptor = os.open(
-            path, os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_NOCTTY, 0o600
+            path.name,
+            os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_NOCTTY,
+            0o600,
+            dir_fd=root_fd,
         )
     except OSError as error:
         raise UnsupportedError(f"Cannot safely open lock '{path}'; nothing changed: {error}") from error
@@ -2450,16 +2577,32 @@ def locked(layout: Layout) -> Iterator[None]:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise InstallError(f"Another installer holds '{path}'") from error
-        yield
+        try:
+            yield anchors
+            anchors.check()
+        except OSError as error:
+            failure = detached_exception(
+                InstallError(f"Install directory changed or operation failed while locked: {error}"), error
+            )
+        else:
+            return
+        raise failure from failure.__cause__
 
 
-def recover(layout: Layout, assume_yes: bool, ask: Callable[[str], str] | None) -> None:
+def recover(
+    layout: Layout,
+    assume_yes: bool,
+    ask: Callable[[str], str] | None,
+    *,
+    anchors: AnchoredStore | None = None,
+) -> None:
     """Restore an interrupted switch, with consent, before anything else runs.
 
     Parameters:
         layout (Layout): installer paths, with the lock held.
         assume_yes (bool): `--yes` was passed.
         ask (Callable[[str], str] | None): interactive prompt, `None` without a terminal.
+        anchors (AnchoredStore | None): parents held by the surrounding installer lock.
 
     Raises:
         ConsentError: the restore was not agreed to.
@@ -2469,7 +2612,7 @@ def recover(layout: Layout, assume_yes: bool, ask: Callable[[str], str] | None) 
         return
     report_pending(layout, restoring=True)
     consent(Plan(overwrites=["restore the state replaced by the interrupted install"]), assume_yes, ask)
-    LOGGER.info(f"Restored {', '.join(rollback(layout)) or 'nothing'}")
+    LOGGER.info(f"Restored {', '.join(rollback(layout, anchors=anchors)) or 'nothing'}")
 
 
 def report_pending(layout: Layout, restoring: bool) -> None:
@@ -2536,8 +2679,8 @@ def run(opts: Options, env: Mapping[str, str], ask: Callable[[str], str] | None)
             report_pending(layout, restoring=False)
             return ExitCode.OK
         # Restoring needs only the journal and its backups: no network, no tools, no snapshot.
-        with locked(layout):
-            recover(layout, opts.assume_yes, ask)
+        with locked(layout) as anchors:
+            recover(layout, opts.assume_yes, ask, anchors=anchors)
     tools = preflight(platform.system(), platform.machine())
     with pinned_child_path(tools["node"]):
         return run_preflighted(opts, env, ask, layout, tools, missing_before_lock=missing_before_lock)
@@ -2580,10 +2723,10 @@ def run_preflighted(
     if opts.plan_only:
         report_plan(plan_install(layout, verified, missing_before_lock=missing_before_lock), verified)
         return ExitCode.OK
-    with locked(layout):
+    with locked(layout) as anchors:
         # Another run may have been interrupted while this one verified.
-        recover(layout, opts.assume_yes, ask)
-        remove(layout.root / "staging")
+        recover(layout, opts.assume_yes, ask, anchors=anchors)
+        remove(layout.root / "staging", anchors=anchors)
         plan = plan_install(layout, verified, missing_before_lock=missing_before_lock)
         report_plan(plan, verified)
         if plan.empty:
@@ -2603,7 +2746,7 @@ def run_preflighted(
                 return ExitCode.OK
             raise failure from failure.__cause__
         consent(plan, opts.assume_yes, ask)
-        backups, version = apply(layout, verified, plan, tools=tools)
+        backups, version = apply(layout, verified, plan, tools=tools, anchors=anchors)
     LOGGER.info(f"Installed `stack/{opts.source_sha}`: {version} at '{layout.link}'")
     if backups.exists():
         LOGGER.info(f"Replaced state is kept in '{backups}'")
