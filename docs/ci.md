@@ -254,9 +254,9 @@ The allowed docs-only paths are Markdown under `docs/`, root Markdown, `PLAN.md`
 
 The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s, p95 queue waits of 22m37s on macOS and 19m56s on Ubuntu, and four macOS jobs in each full run against five hosted macOS slots. A docs-only `PLAN.md` PR alone consumed 100.25 runner-minutes across 18 stack executions. Bypassing that work reduces real contention without leaving a protected check pending.
 
-`main` still validates the merged result: all `owned` and `contracts` OS cells, both WSL stack cells and `stack (ubuntu-24.04, personal)` run. The other three stack cells report the selective smoke rather than repeating work that a strict PR head already ran. This keeps one end-to-end merged-tree check while removing the most redundant post-merge macOS demand. The same measurement found six explicit update-branch CI runs plus one Forks run used 180.07 assigned runner-minutes; full main-push workflows used 599.13 assigned runner-minutes, including 334.02 macOS minutes. Those are upper bounds, not promised savings, and this policy preserves the higher-value merged-result coverage.
+`main` still validates the merged result: all `owned` and `contracts` OS cells, both WSL stack cells and `stack (ubuntu-24.04, personal)` run. The other three stack cells report the selective smoke rather than repeating every stack cell on every merge. This keeps one end-to-end merged-tree check while removing the most redundant post-merge macOS demand. The same measurement found six explicit update-branch CI runs plus one Forks run used 180.07 assigned runner-minutes; full main-push workflows used 599.13 assigned runner-minutes, including 334.02 macOS minutes. Those are upper bounds, not promised savings, and this policy preserves the higher-value merged-result coverage.
 
-The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), which remains `strict`. Strict means that advancing `main` invalidates a PR's previous green result and requires an update-branch rerun before merge. That cost is intentional for combined-result safety; docs-only bypasses make documentation updates cheaper without weakening it.
+The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), with the owner-authorized non-strict policy. Unrelated main advancement does not invalidate an unchanged reviewed PR HEAD. Combined-result release safety comes from the explicit full frozen-candidate dispatch, not repeated update-branch matrices; selective main-push smoke is not release evidence.
 
 WSL2 is `matrix.os: wsl2` in the same `owned`, `contracts`, and `stack` jobs in `.github/workflows/ci.yml`. `matrix.runner: windows-2022` selects the host; `matrix.guest: wsl2` selects the explicit PowerShell -> WSL shell boundary, with Ubuntu-24.04 verified as version 2 and a non-`drvfs` guest checkout. The stack platform is `linux-x64`, never a fictitious GitHub runner label or native Windows execution. There is no separate WSL workflow or duplicated WSL test job.
 
@@ -273,7 +273,7 @@ commit gate reads the translated original PR/push payload rather than falling ba
 A host-allowlist/real-guest-adapter regression runs the actual commit gate over a disposable PR range;
 removing the payload entry fails closed with the same missing-event error as hosted WSL.
 
-WSL cells retain no docs-only or main-push bypass. Unavailable WSL, wrong distribution version/filesystem, bootstrap or gate failure fails the cell. Before ordinary artifact uploads, `capture-ci-wsl` exports only explicit synthetic artifact directories and contract JSON reports to the host. WSL Node artifacts survive standalone runs separately as `artifacts-node` in the final upload. Native upload contents stay at the previous two standalone directories; their Node reports already have the preceding `stack-*` upload. Native names remain `standalone-linux-x64` and `standalone-darwin-arm64`; WSL alone uses `standalone-wsl2-linux-x64` to avoid collision. The merged startup diagnostic gate likewise exports only its scanned directory through an atomic host-side staging rename, gates WSL upload on successful capture and names WSL evidence `standalone-startup-wsl2-linux-x64`, preserving the native `standalone-startup-linux-x64` name. The promotion consumer still reads `stack-ubuntu-24.04-personal` (`harness.promotion.PERSONAL_STACK_ARTIFACT`), unchanged; it does not consume standalone uploads. Final cleanup preserves the first guest-step failure status and bounded diagnostics. Early host diagnostics survive setup failures. No arbitrary worktree files, command logs, environment or HOME are uploaded.
+WSL cells retain no docs-only or main-push bypass. Unavailable WSL, wrong distribution version/filesystem, bootstrap or gate failure fails the cell. Before ordinary artifact uploads, `capture-ci-wsl` exports only explicit synthetic artifact directories and contract JSON reports to the host. WSL Node artifacts survive standalone runs separately as `artifacts-node` in the final upload. Native upload contents stay at the previous two standalone directories; their Node reports already have the preceding `stack-*` upload. Native names remain `standalone-linux-x64` and `standalone-darwin-arm64`; WSL alone uses `standalone-wsl2-linux-x64` to avoid collision. The merged startup diagnostic gate likewise exports only its scanned directory through an atomic host-side staging rename, gates WSL upload on successful capture and names WSL evidence `standalone-startup-wsl2-linux-x64`, preserving the native `standalone-startup-linux-x64` name. The full release barrier now requires all per-cell stack artifacts and standalone uploads, with actual execution steps bound to the selected source SHA. The legacy single-artifact predicate remains available for historical tests; it is not the promotion barrier. Final cleanup preserves the first guest-step failure status and bounded diagnostics. Early host diagnostics survive setup failures. No arbitrary worktree files, command logs, environment or HOME are uploaded.
 
 Owned guest tools reuse the exact native `taiki-e/install-action` SHA from `setup-ci-tools/action.yml`: `install_wsl_owned_tools.sh` runs its documented `main.sh`/`INPUT_*` interface with Linux/X64 metadata, checksum verification and `fallback: none`. Its manifest pins nextest to the same action-selected version as Ubuntu; no unversioned source compilation remains. Guest Rust follows the action's documented floating stable policy with rustfmt/clippy components; native Rust comes from the runner image, so each logs actual `rustc`, `cargo`, and `cargo nextest` identities rather than claiming identical compiler versions. References: [here](https://github.com/taiki-e/install-action/tree/8cca0918f8471c33515202b73f56ab27f2bed283#security-on-installation-from-github-releases).
 
@@ -281,7 +281,7 @@ Run `40747213391` at `0d2bfb0` rejected every WSL cell in the pre-plan assertion
 
 Run `40742019252` at `45689e3` reached release installation in both WSL stack jobs, but their `PI_BIN` conversion caused failures before D/E could pass. Contracts failed earlier with HTTP403 in the action's unconditional Windows-2022 kernel `wsl --update`; `update: true` independently controls apt distribution updates, so setting it false would NOT fix that endpoint. No update bypass, scenario skip or blind rerun is introduced. A future existing-kernel/cache bypass would need explicit supported-version and actual-guest checks; these failures are not passes.
 
-Reproduce guest execution on a Windows machine with WSL2 Ubuntu-24.04 using the same setup action and `scripts/wsl2_shell.ps1 <step-script>`; run the ordinary Make targets and pytest entrypoints above. A local macOS shell test proves adapter behavior, not WSL execution. Acceptance requires all four exact-HEAD hosted WSL cells and their normal artifacts, plus the unchanged native cells; local tests are not a hosted receipt. CI triggers remain every pull request and main push, without workflow_call/dispatch or path filters; permissions stay contents-read and concurrency remains `ci-${{ github.ref }}` with cancellation.
+Reproduce guest execution on a Windows machine with WSL2 Ubuntu-24.04 using the same setup action and `scripts/wsl2_shell.ps1 <step-script>`; run the ordinary Make targets and pytest entrypoints above. A local macOS shell test proves adapter behavior, not WSL execution. Acceptance requires all four exact-HEAD hosted WSL cells and their normal artifacts, plus the unchanged native cells; local tests are not a hosted receipt. CI triggers on every pull request and main push, plus explicit full-verification manual dispatch, without path filters. Permissions stay contents-read; concurrency is `ci-${{ github.event_name }}-${{ github.ref }}` with cancellation, so unrelated main pushes cannot cancel a full dispatch. The full dispatch calls the reusable fork workflow.
 REA is retired, not pending WSL acceptance.
 
 `.github/workflows/installer.yml`, PRs and `main` pushes that change the installer or the harness modules it reuses, plus manual dispatch with a `stack_sha`:
@@ -372,19 +372,26 @@ bootstrap exception. Istanbul consolidation is phase 3, not part of this produce
 Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-version`, uv `0.13.1`
 (Python from `.python-version` via uv). Every action is pinned to a commit SHA.
 
+PR freshness and release verification follow [the frozen-candidate policy](release-verification.md).
+Do not update-branch solely because main advanced. Keep exact final-HEAD checks and both reviews.
+Manual `ci.yml` dispatch runs the complete matrix and core fork gate without docs/smoke shortcuts;
+push/main smoke is not release evidence.
+
 Required checks on `main`:
 
 - `owned (ubuntu-24.04)` and `owned (macos-14)`
 - `contracts (ubuntu-24.04)` and `contracts (macos-14)`
 - `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
+- `owned (wsl2)`, `contracts (wsl2)`, `stack (wsl2, personal)` and `stack (wsl2, local)`
 
-Migration required, not applied by this PR:
+The owner-authorized migration now configures all twelve contexts in active ruleset
+`main required checks` (`25524267`, `integration_id` 15368 each), with
+`strict_required_status_checks_policy=false` and no bypass actors. Do not re-enable strictness,
+disable checks or bypass protection. This PR edits no remote rules. The historical nine-context
+receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged; its synthetic matrix
+extensions are not hosted execution evidence.
 
-- Remove the retired `wsl2 (windows-2022)` context and add `owned (wsl2)`, `contracts (wsl2)`, `stack (wsl2, personal)` and `stack (wsl2, local)` only after their hosted runs pass.
-- Preserve the existing eight native contexts. Until an authorized orchestrator updates the ruleset, the old WSL context stays pending and merge/promotion must remain blocked. No remote protection change is authorized here.
-- The historical nine-context receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged. Tests explicitly add synthetic replacement matrix records; they are not hosted execution evidence.
-
-The historical nine jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
+Those twelve jobs are the configured required checks; `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
@@ -437,7 +444,7 @@ The historical nine jobs are the configured required checks of ruleset `main req
     <gate-history-file> nredd/pi-harness
   ```
   This uses real green checks and the same receipt/expected-head enforcement, not a bypass.
-  Any update for strict base freshness invalidates both reviews. Refresh the distribution copy
+  Any actual conflict resolution or other HEAD change invalidates both reviews; unrelated base advancement does not. Refresh the distribution copy
   only after that reviewed merge. This procedure does not authorize merging router PR135,
   publishing packages, or activating live configuration
 - `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging

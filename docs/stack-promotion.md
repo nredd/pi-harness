@@ -2,6 +2,11 @@
 
 `integration/stacks/personal.json` is the only editable personal package list. A promotion turns one exact, already-gated `main` commit into an attested `stack/<sha>` release. Flow: verify -> attest -> `stack/<sha>` release -> dotfiles pins the sha. There is no moving pointer: consumers pin an exact `source_sha`, never `main`. This is the trust root for adoption, so every gate fails closed.
 
+Full [frozen-candidate verification](release-verification.md) is mandatory before snapshot
+construction. It requires actual full matrix/core execution and retained artifacts for the exact
+combined source SHA, not the selective push/main smoke or old PR checks. Unrelated later main
+advancement does not invalidate a frozen verified candidate. No operation waives this barrier.
+
 ## Snapshot format
 
 `stack-snapshot.json` is compact, sorted JSON with this strict schema (`integration/harness/promotion.py`):
@@ -12,7 +17,7 @@
 - `stack_sha256`: SHA-256 of compact sorted UTF-8 JSON for `stack`, not of the surrounding snapshot.
 - `gates`:
   - `required_checks`: the configured `main` check names, all successful on `source_sha`.
-  - `stack_run_ids`: the earliest qualifying push/`main` CI run (see below).
+  - `stack_run_ids`: the qualifying full-dispatch CI run for this exact frozen candidate.
   - `owned_packages`: one `{package, integrity}` per `npm:@nredd/` source, with the registry's real SHA-512 integrity from `scripts/npm_release.py stack-check`.
   - `core`: the core release tag and asset SHA-256 digests, which must equal the stack's `core` and the release's `SHA256SUMS`.
 
@@ -22,15 +27,15 @@ The module rejects unknown fields, malformed SHAs, non-personal stacks, digest m
 
 ## What gets verified
 
-Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` only). The workflow concurrency group is `operation` plus the selected SHA, so a `verify-only` dispatch never replaces a pending `promote` of the same commit and two promotions of one SHA run one at a time. With 3+ duplicate same-SHA, same-operation dispatches GitHub keeps one pending run and cancels older pending ones, so duplicate pending dispatches coalesce. That is harmless: `stack/<sha>` creation is idempotent and fails closed on mismatch. Different SHAs are independent: each writes only its own `stack/<sha>` tag and release. Every job has `if: github.ref == 'refs/heads/main'`. All gate logic lives in Python with fixture tests, and every `run:` is one Python (or one `gh`/action) call with inputs passed through `env:` only. The read-only `verify` job runs a single `python -m harness.promotion_verify`, which fetches the evidence itself (`gh`/`git` through `promotion.run_command`) and calls `select_source_sha`, `descends_from`, `verify_required_checks`, `registry_stack_runs`, `verify_core`, `collect_owned_evidence` (worktree per owned tag plus `stack-check`), `build_gates` and `build_snapshot`. The write-privileged `attest-and-publish` job runs stdlib-only `python3 -m harness.publish_gate` subcommands `prepare-release` and `tag-target` (the complete set), plus `gh attestation verify`, `actions/attest-build-provenance` and `gh release create`. `harness.promotion` is a library with no CLI. Evidence failures and Git failures print `FAILED: ...`, never a traceback.
+Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` only). The workflow concurrency group is `operation` plus the selected SHA, so a `verify-only` dispatch never replaces a pending `promote` of the same commit and two promotions of one SHA run one at a time. With 3+ duplicate same-SHA, same-operation dispatches GitHub keeps one pending run and cancels older pending ones, so duplicate pending dispatches coalesce. That is harmless: `stack/<sha>` creation is idempotent and fails closed on mismatch. Different SHAs are independent: each writes only its own `stack/<sha>` tag and release. Every job has `if: github.ref == 'refs/heads/main'`. All gate logic lives in Python with fixture tests, and every `run:` is one Python (or one `gh`/action) call with inputs passed through `env:` only. The read-only `verify` job runs `harness.release_gate` followed by `python -m harness.promotion_verify`, which repeats the full barrier before candidate construction and fetches the remaining evidence itself (`gh`/`git` through `promotion.run_command`) and calls `select_source_sha`, `descends_from`, `verify_required_checks`, `registry_stack_runs`, `verify_core`, `collect_owned_evidence` (worktree per owned tag plus `stack-check`), `build_gates` and `build_snapshot`. The write-privileged `attest-and-publish` job runs stdlib-only `python3 -m harness.publish_gate` subcommands `prepare-release` and `tag-target` (the complete set), plus `gh attestation verify`, `actions/attest-build-provenance` and `gh release create`. `harness.promotion` is a library with no CLI. Evidence failures and Git failures print `FAILED: ...`, never a traceback.
 
 - Inputs: `select_source_sha` (called by `promotion_verify`) requires `operation` to be `verify-only` or `promote` and `source_sha` to match `^[0-9a-f]{40}$`. The commit must be an ancestor of `origin/main`. The `fetch origin main` that gets `origin/main` carries no credentials (`persist-credentials: false`), which is fine because the repository is public.
 - Required checks: every context from `GET /repos/nredd/pi-harness/rules/branches/main` (ruleset `main required checks`, readable by `GITHUB_TOKEN`) must be `completed`/`success` on that exact SHA, reported by the rule's `integration_id` app (`app.id`, 15368 for every configured context). No checks from the rules API fails closed. Review statuses are not required checks.
 - Deferred, review statuses (`migration-review/standards`, `migration-review/spec`): they are no longer required checks and the merge flow posts no commit statuses (`docs/ci.md`), so there is nothing to read; reviews stay a process step.
 - Deferred, tap readiness when core changes: not implemented; the core release's asset digests and attestation are the only core gate, and a tap bump is gated by its own green CI.
-- Registry-stack evidence: a CI run on that SHA with `event=push`, `branch=main`, conclusion `success`, and a non-expired `stack-ubuntu-24.04-personal` artifact (from `actions/runs/<id>/artifacts`) whose `workflow_run` id and `head_sha` equal the run's and the selected SHA. The artifact is the machine evidence; job names are not consulted, so renaming a matrix cell cannot break or spoof promotion. The stack job installs the explicit personal sources from the registry and the core release into a disposable tree.
+- Registry-stack evidence: the exact full `workflow_dispatch` run validated by `harness.release_gate`. Every native matrix cell and the core gate must actually execute, with retained nonempty per-cell artifacts whose `workflow_run` id and `head_sha` match. Both step names and artifact templates are bounded producer contracts guarded by tests; update the verifier alongside producer renames. The personal stack installs the explicit sources from the registry and the core release into a disposable tree.
 - Why the artifact: a skipped cell still reports its job as `success` (recorded run `39545048647` shows `stack (macos-14, personal)` green on a main push though it ran nothing). `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`, so docs-only and main-push smoke cells never produce it. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
-- Docs-only SHAs cannot be promoted: CI skips the native Ubuntu personal cell for them, so its required registry-stack artifact does not exist. WSL cells still run but their differently named artifacts are not promotion substitutes. Promote the nearest commit where the stack job ran, or a later one. Artifacts expire with CI retention, so an old SHA must be re-run through CI before it can be promoted.
+- Docs-only pushes do not supply release evidence. A manual full dispatch can verify their exact candidate without the docs bypass. Artifacts expire with CI retention; rerun the exact frozen candidate when its evidence expires.
 - Owned packages: `scripts/npm_release.py stack-check` runs per `@nredd/` source against a worktree of its exact tag: registry presence, npm `audit signatures` (signature and attestation), and the SLSA provenance binding to `publish.yml`, the tag and the commit. The registry lookup (`npm view`) runs in a fresh empty directory with `NPM_CONFIG_USERCONFIG=/dev/null` and `--registry https://registry.npmjs.org`, so a `.npmrc` in the selected tag's tree cannot steer it.
 - Core: asset digests are compared with the release's `SHA256SUMS`. For non-legacy tags `SHA256SUMS` is a mutable release asset, so each recorded asset is also downloaded, hashed against the recorded digest, and verified read-only with `gh attestation verify --repo nredd/pi --signer-workflow nredd/pi/.github/workflows/fork-release.yml --source-ref refs/tags/<tag>`. Legacy tags `v1.3.0-nredd.3` through `.7` predate that workflow and rely on the frozen `LEGACY_CHECKSUMS` hashes.
 
@@ -47,7 +52,10 @@ The CI evidence is the only coupling to CI: run IDs are read with `gh run list/v
 
 ## Required-check visibility
 
-The historically configured nine required checks live in ruleset `main required checks` (id `25524267`, strict): eight native matrix contexts plus the retired `wsl2 (windows-2022)` context. The new CI produces twelve matrix contexts; an authorized migration must preserve the eight native contexts and replace that obsolete WSL context with `owned (wsl2)`, `contracts (wsl2)`, `stack (wsl2, personal)` and `stack (wsl2, local)` after all twelve are green. No protection edit is part of this change. Until migration the missing old context blocks promotion. The verifier discovers the live contexts rather than hard-coding eight, nine or twelve, so `GET /repos/nredd/pi-harness/rules/branches/main` returns them to `GITHUB_TOKEN` with no extra token. Classic branch protection is not read: if the rules API yields no check, `verify_required_checks` fails closed.
+All twelve matrix contexts are configured in active ruleset `main required checks`
+(id `25524267`, app `15368`), including the four replacement WSL matrix contexts. The owner
+authorized `strict_required_status_checks_policy=false`; checks and protections remain active,
+with no bypass actors. No protection edit is part of this change. The verifier discovers the live contexts rather than hard-coding eight, nine or twelve, so `GET /repos/nredd/pi-harness/rules/branches/main` returns them to `GITHUB_TOKEN` with no extra token. Classic branch protection is not read: if the rules API yields no check, `verify_required_checks` fails closed.
 
 ## Operations
 
@@ -72,7 +80,7 @@ Resume: `prepare-release` runs before any attestation. It asks `git/matching-ref
 
 Created 2026-10-20 via `gh api`; the workflow does not create or change any of them:
 
-- Ruleset `25524267` `main required checks`: the historically configured nine contexts (`integration_id` 15368, strict), pending the authorized twelve-context migration described above.
+- Ruleset `25524267` `main required checks`: twelve active contexts (`integration_id` 15368, non-strict), with no bypass actors. Preserve that policy.
 - Environment `stack-promotion`: required reviewer the owner, deployment branches `main` only. The only job in it is `attest-and-publish`.
 - Ruleset `25524298` `stack snapshot tags` on `refs/tags/stack/**`: blocks tag update and deletion; bypass is admin. It does not protect release assets, but consumers verify the attestation, so a tampered asset is rejected. Creation stays open: an unattested tag is unconsumable because consumers verify attestation, and `GITHUB_TOKEN` creates the tag through the release.
 - One-time cleanup after this PR merges (the owner/orchestrator does it, the workflow does not): delete ruleset `25524297` and deploy key `167140535`, and remove the `STACK_CHANNEL_DEPLOY_KEY` env secret from `stack-promotion`. All three belonged to the retired `stack-channel` pointer.

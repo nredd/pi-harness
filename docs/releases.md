@@ -1,5 +1,11 @@
 # Releases
 
+Before publishing, require [full frozen-candidate verification](release-verification.md).
+PR HEAD checks need not be rerun solely because main advanced. Release verification does:
+`publish.yml` now refuses missing exact-candidate full CI execution evidence before both its
+verification and privileged publication stages. Keep prepublication package verification separate
+from the postpublication registry-stack candidate; do not pin unpublished packages to break the cycle.
+
 - Generate `releases/<release-id>.json` with `make release-manifest ARGS='<release-id> ...'` after the exact core Gitlink, package manifests, artifacts, and evidence are available.
 - The schema-versioned manifest records the monorepo commit, core Gitlink provenance, owned package versions, existing root lockfile digests, supplied artifact digests/URLs, and free-form verification evidence. Core tags cut after `nredd/pi` adopts `fork-release.yml` publish a release `SHA256SUMS` covering the coding-agent, tui, `pi-agent-core` and `pi-ai` tarballs; the stack fetcher verifies every one of them against that release file and GitHub provenance from `nredd/pi/.github/workflows/fork-release.yml` at the exact tag. The trust decision authenticates CI-built bytes by that provenance, not by rebuilding: dry-run [39502658787](https://github.com/nredd/pi/actions/runs/39502658787) showed `v1.3.0-nredd.7` is not byte-reproducible, and rebuilds will differ. Reproducibility is tracked in [nredd/pi-harness#84](https://github.com/nredd/pi-harness/issues/84). `v1.3.0-nredd.3` through `.7` are explicit legacy exceptions: `integration.harness.release.LEGACY_CHECKSUMS` hard-codes their verified release SHA-256 values (`.4`-`.6` include `pi-agent-core` and `pi-ai`; `.3` and `.7` shipped only coding-agent and tui), but they have no provenance because the release workflow did not exist. Do not backfill them with a newer workflow, which would attest a different build definition.
 
