@@ -61,6 +61,13 @@ describe("registerTodoTool — execute mutates module state", () => {
 		expect(result).toBeDefined();
 		expect((result!.details as TaskDetails).error).toContain("status");
 		expect(result!.content[0]).toMatchObject({ text: expect.stringContaining("status") });
+		const rejectedNode = tool.renderResult?.(
+			result as never,
+			{} as never,
+			theme,
+			undefined as never,
+		) as unknown as Text;
+		expect((rejectedNode as unknown as { text: string }).text).toContain("status");
 		expect((result!.details as TaskDetails).tasks).toEqual([]);
 		expect(captured.entries).toEqual([]);
 		const created = await call(tool, { action: "create", subject: "audit" });
