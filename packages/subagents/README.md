@@ -103,14 +103,17 @@ holds, workflow execution timers, child-shutdown watchdogs, detached-spool filen
 auto-hide and schedule-store lock retries retain native time. Queued result waits use the manager's
 start gate when present; legacy queued resumes retain the clock-driven fallback.
 
-`npm test` and `test:coverage` launch Vitest through the shared
-`scripts/run-vitest.ts` launcher. It gives the child a temporary `HOME`, `USERPROFILE`,
-`XDG_CONFIG_HOME`, `PI_CODING_AGENT_DIR` and `PI_SUBAGENTS_CONFIG_DIR` before imports,
-then removes that home on exit. Operator `agentModels`/model-tier policy must not affect
-fixture dispatch; runtime tier defaults and operator files remain unchanged. The command-level
-regression runs the real `npm test` against a hostile fixture home with an unavailable
-`@default` tier and checks the existing Agent boundary assertions. `test:watch` and
-`test:e2e` retain their operator environment. The explicit live smoke command
+`npm test` and `test:coverage` invoke Vitest directly. `test:bun` alone uses the shared
+`scripts/run-vitest.ts` launcher for `resource-loader-home.test.ts`; it gives that child a temporary
+`HOME`, `USERPROFILE` and `XDG_CONFIG_HOME` before imports, then removes the home on exit.
+The command-level regression runs the real direct `npm test` against a hostile fixture home with
+an unavailable `@default` tier and checks the existing Agent boundary assertions. Its nested
+process-cleanup regression uses the shared async `@nredd/pi-dev-tools` runner. When its unchanged
+post-return descendant `ESRCH` assertion fails, it logs only the fixture's captured PID/group/start
+identity plus bounded kernel state and elapsed/CPU counters, so CI can distinguish a present process,
+a zombie and PID reuse without inspecting unowned processes. Operator `agentModels`/model-tier policy
+must not affect fixture dispatch; runtime tier defaults and operator files remain unchanged.
+`test:watch` and `test:e2e` retain their operator environment. The explicit live smoke command
 `PI_E2E_LIVE=1 npm run test:e2e` needs the operator's configured Pi login; it is not a
 hermetic verification gate. Without that opt-in, `test:e2e` runs the scripted faux suite.
 

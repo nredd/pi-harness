@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 // Test-only reuse: this does not add a runtime dependency between the packages.
 import { run } from "../../dev-tools/src/core/process.ts";
+import { captureOwnedProcess, diagnoseOwnedProcess } from "./helpers/owned-process-diagnostic.ts";
 
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 const CHILD_TIMEOUT_MS = 60_000;
@@ -53,12 +54,17 @@ it("npm test cannot inherit operator model tiers through HOME or explicit config
 }, CHILD_TIMEOUT_MS + 10_000);
 
 it("the test command runner kills TERM-resistant descendants holding inherited pipes before returning", async () => {
+  let captured: ReturnType<typeof captureOwnedProcess> | undefined;
   const result = await run({
     cmd: "sh",
     // The descendant inherits both ignored TERM and stdout/stderr. A direct-child
     // timeout would leave it alive with the pipes open until the 30s sleep ends.
-    args: ["-c", "trap '' TERM; sleep 30 & echo $!; echo ready >&2; wait"],
+    args: ["-c", "trap '' TERM; sleep 30 & descendant=$!; echo $descendant; echo owned-descendant:$descendant >&2; echo ready >&2; wait"],
     timeoutMs: 500,
+    onStderrLine: (line) => {
+      const match = /^owned-descendant:(\d+)$/.exec(line);
+      if (match) captured = captureOwnedProcess(Number(match[1]));
+    },
   });
   expect(result.stderr).toContain("ready");
   expect(result.timedOut).toBe(true);
@@ -67,5 +73,11 @@ it("the test command runner kills TERM-resistant descendants holding inherited p
   const descendant = Number(result.stdout.trim());
   expect(descendant).toBeGreaterThan(0);
   // Unlike checking only the leader's exit or closed pipes, this detects orphans.
-  expect(() => process.kill(descendant, 0)).toThrow(/ESRCH/);
+  try {
+    expect(() => process.kill(descendant, 0)).toThrow(/ESRCH/);
+  } catch (error) {
+    const diagnostic = await captured?.then(diagnoseOwnedProcess).catch(() => undefined);
+    console.error("owned descendant cleanup diagnostic", JSON.stringify(diagnostic));
+    throw error;
+  }
 }, 10_000);
