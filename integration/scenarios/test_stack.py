@@ -18,7 +18,7 @@ from harness.golden import assert_golden
 from harness.headless import run_headless
 from harness.paths import FAUX_EXTENSION, REPO_ROOT, pi_command
 from harness.rpc import RpcProcess
-from harness.stack import find_package
+from harness.stack import find_package, load_stack, source_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -130,8 +130,9 @@ def test_preset_resource_selection(sandbox: Sandbox) -> None:
     else:
         assert name == "personal", name
         packages = sandbox.settings()["packages"]
-        assert len(packages) == 13
-        assert packages[0] == {"source": "npm:@nredd/pi-preset@0.2.0", **expected}
+        declared = load_stack(REPO_ROOT / "stacks" / f"{name}.json")
+        assert len(packages) == len(declared.sources) == 13
+        assert packages[0] == {"source": source_string(declared.sources[0]), **expected}
         assert json.loads((sandbox.agent_dir / "subagents.json").read_text())["packageAgents"] is False
     assert receipt["resources"] == expected
     description = receipt["agentParameters"]["properties"]["subagent_type"]["description"]
