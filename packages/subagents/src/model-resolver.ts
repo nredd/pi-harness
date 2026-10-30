@@ -219,8 +219,12 @@ function scopedCandidates<T extends { entry: ModelEntry }>(
   return scoped.length > 0 ? scoped : candidates;
 }
 
-function rankFuzzy(matches: { entry: ModelEntry; score: number }[], registry: ModelRegistry): ModelEntry | undefined {
-  const ranked = scopedCandidates(matches, registry)
+function rankFuzzy(
+  matches: { entry: ModelEntry; score: number }[],
+  registry: ModelRegistry,
+  context?: { cwd: string; homeDir?: string },
+): ModelEntry | undefined {
+  const ranked = scopedCandidates(matches, registry, context)
     .map(c => ({ ...c, version: parseModelVersion(c.entry.id) }))
     .sort((a, b) => compareVersionsDesc(a.version, b.version) || b.score - a.score);
   return ranked[0]?.entry;
@@ -285,7 +289,7 @@ function resolveCanonicalModel(
   // An exact id (or provider/id) is the caller naming a model, not describing
   // one: it wins outright, whatever the scope or any newer sibling.
   const exact = matches.find(c => c.score === 100);
-  const bestMatch = exact?.entry ?? rankFuzzy(matches, registry);
+  const bestMatch = exact?.entry ?? rankFuzzy(matches, registry, context);
   if (bestMatch) {
     const found = registry.find(bestMatch.provider, bestMatch.id);
     if (found) return found;
