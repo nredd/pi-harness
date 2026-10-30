@@ -119,6 +119,7 @@ describe("bounded wrapped control text", () => {
     expect(boundedWrappedRows("first\nsecond\nthird\nfourth\nlast", 80, 4, "…")).toEqual([
       "first", "… 2 more lines", "fourth", "last",
     ]);
+    expect(boundedWrappedRows("first\nsecond\nlast", 80, 2, "…")).toEqual(["first", "last"]);
     expect(boundedWrappedRows("first\nlast", 80, 1, "…")).toEqual(["…"]);
   });
 });
