@@ -147,6 +147,9 @@ describe("scheduler at fire time", () => {
     expect(record).toBeUndefined();
     expect(runAgent).not.toHaveBeenCalled();
     expect(scheduler.list()[0].lastStatus).toBe("error");
+    expect(emit).toHaveBeenCalledWith("subagents:scheduled", {
+      type: "error", jobId: scheduler.list()[0].id, error: expect.stringContaining("Model not found: \"claude-haiku-4-5\""),
+    });
   });
 
   it("a job on an agent whose definition `model:` does not resolve says so, from the runner", async () => {
