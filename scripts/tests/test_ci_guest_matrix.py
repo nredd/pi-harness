@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 PLATFORMS = {
     "ubuntu-24.04": ("ubuntu-24.04", "linux", "linux-x64"),
-    "macos-14": ("macos-14", "macos", "darwin-arm64"),
+    "macos-14": ("xcode-27", "macos", "darwin-arm64"),
     "wsl2": ("windows-2022", "wsl2", "linux-x64"),
 }
 
