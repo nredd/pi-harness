@@ -205,7 +205,10 @@ const drivesWholeList = (policy: string): boolean => {
 		/gh pr merge <N> --auto --<method> --match-head-commit <full-sha>/.test(drive) &&
 		drive.includes("monitor_start") &&
 		/Arming auto-merge merges IMMEDIATELY when the base branch has no effective required checks/.test(drive) &&
-		/A 403, plan-gated error, or unknown is NOT protected/.test(drive) &&
+		/A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected/.test(drive) &&
+		/readable applicable rulesets and classic branch protection establish effective required checks for this base \*and\* that the merging caller cannot bypass them/.test(
+			drive,
+		) &&
 		/Backend not proven protected: keep auto-merge OFF[^\n]*gh pr merge <N> --<method> --match-head-commit <full-sha>/.test(
 			drive,
 		) &&
@@ -233,7 +236,11 @@ test("shipping resources require exact-HEAD review, parent monitoring, and no fo
 	assert.match(ship, /separate Standards \+ Spec `code-reviewer` agents/);
 	assert.match(ship, /Every change to HEAD invalidates the critic and both review axes/);
 	assert.match(ship, /Delegated worker: keep auto-merge off/);
-	assert.match(ship, /only if effective required-check protection is proven \(a 403 or unknown is NOT protected\)/);
+	assert.match(
+		ship,
+		/every readable applicable ruleset\/classic branch protection establishes effective required checks/,
+	);
+	assert.match(ship, /merging caller cannot bypass them/);
 	assert.match(ship, /Parent driver: consume its independent final critic/);
 	assert.match(ship, /native session-kit monitor/);
 	assert.match(merge, /Do not require a latest-main rebase solely because the base advanced/);
@@ -279,7 +286,12 @@ test("get-it-merged parent drives the whole list; negative controls", () => {
 	assert.ok(!drivesWholeList(mutate("--match-head-commit <full-sha>", "")));
 	assert.ok(!drivesWholeList(mutate("return to step 3 for the next unblocked PR", "stop")));
 	assert.ok(!drivesWholeList(mutate("monitor_start", "poll")));
-	assert.ok(!drivesWholeList(mutate("A 403, plan-gated error, or unknown is NOT protected", "A 403 is fine")));
+	assert.ok(
+		!drivesWholeList(
+			mutate("A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected", "A 403 is fine"),
+		),
+	);
+	assert.ok(!drivesWholeList(mutate("the merging caller cannot bypass them", "the merging caller can bypass them")));
 	assert.ok(
 		!drivesWholeList(
 			mutate("Backend not proven protected: keep auto-merge OFF", "Backend not proven protected: arm it"),
@@ -479,6 +491,39 @@ test("footer code imports only node built-ins, declared peers, and its own sibli
 	assert.equal(packedFiles().filter((f) => f.startsWith("lib/")).length, 2);
 });
 
+test("code-review binds both axes to an immutable HEAD and supports nested blocking calls", () => {
+	const review = readText("skills/code-review/SKILL.md");
+	assert.match(review, /git rev-parse HEAD/);
+	assert.match(
+		review,
+		/git merge-base <pr-base> HEAD.*record its full SHA as `<reviewed-base>`, and preserve it across every later HEAD change/,
+	);
+	assert.match(review, /git diff <reviewed-base>\.\.\.<reviewed-head>/);
+	assert.match(review, /with the preserved `<reviewed-base>`/);
+	assert.match(review, /A corrective-delta review is supplemental only/);
+	assert.match(review, /A top-level parent spawns/);
+	assert.match(review, /A delegated session omits `run_in_background`/);
+	assert.match(
+		review,
+		/The full original reviewed-base SHA, full reviewed HEAD SHA, and immutable whole-PR diff command/,
+	);
+	assert.doesNotMatch(
+		review.replace("with the preserved `<reviewed-base>`", "with a new `<reviewed-base>`"),
+		/with the preserved `<reviewed-base>`/,
+	);
+	assert.doesNotMatch(
+		review.replace("A corrective-delta review is supplemental only", "A corrective-delta review replaces the axes"),
+		/A corrective-delta review is supplemental only/,
+	);
+	assert.doesNotMatch(
+		review.replace(
+			"A delegated session omits `run_in_background`",
+			"A delegated session uses `run_in_background: true`",
+		),
+		/omits `run_in_background`/,
+	);
+});
+
 test("single-issue parents retain terminal ownership and nested reviews use blocking calls", () => {
 	const ship = readText("skills/ship-issue/SKILL.md");
 	const reviews = section(ship, "7. Review round -- exact final HEAD");
@@ -491,6 +536,8 @@ test("single-issue parents retain terminal ownership and nested reviews use bloc
 	};
 	assert.match(reviews, /Parent sessions can dispatch/);
 	assert.match(reviews, /omit `run_in_background` and consume the blocking results/);
+	assert.match(reviews, /original PR merge-base before the first review/);
+	assert.match(reviews, /not merely the corrective delta/);
 	assert.ok(retainsOwner(ship));
 	assert.ok(!retainsOwner(ship.replace(/^- Parent completion:[^\n]*\n/m, "")));
 });

@@ -22,7 +22,7 @@ the Survey is the parent's.
 One pass, before touching anything. Scope is the full requested set, not the first PR:
 
 - Open PRs: `gh pr list --json number,title,headRefName,baseRefName,autoMergeRequest,mergeStateStatus,mergeable`
-- Protection: list rulesets with `gh api repos/{owner}/{repo}/rulesets`, then read the applicable enforced ruleset details or classic branch protection for the target base. A list of names alone does not prove required checks. Record the effective checks, merge method and strictness; a 403, plan-gated or unreadable response is UNKNOWN, never "protected"
+- Protection: list rulesets with `gh api repos/{owner}/{repo}/rulesets`, then read every applicable enforced ruleset detail and classic branch protection for the target base. Establish the effective required checks, merge method, strictness, enforcement and whether the merging caller can bypass each applicable protection. A list of names or readable required-status listing alone does not prove protection. A 403, plan-gated, unreadable or uncertain bypass response is UNKNOWN, never "protected"
 - Exact-HEAD review receipts: Standards + Spec `code-reviewer` reports and the dedicated critic for each candidate. A critic receipt preserves its original invocation's full SHA (or a recorded short-ref -> full-SHA resolution) and tool-routing metadata
 - Functional dependencies and overlapping paths: `gh pr view`, commit ancestry, and diffs
 - Live CI: record concrete run IDs and states
@@ -51,7 +51,7 @@ For the next unblocked PR in the order:
 
 ## 4. Merge and advance (parent)
 
-- Verify effective protection FIRST. Arming auto-merge merges IMMEDIATELY when the base branch has no effective required checks. Protection is proven only by a readable ruleset or branch protection that lists the required checks for this base. A 403, plan-gated error, or unknown is NOT protected. Never change protections or upgrade the account to find out
+- Verify effective protection FIRST. Arming auto-merge merges IMMEDIATELY when the base branch has no effective required checks. Protection is proven only when readable applicable rulesets and classic branch protection establish effective required checks for this base *and* that the merging caller cannot bypass them. A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected. Never change protections or upgrade the account to find out
 - Backend not proven protected: keep auto-merge OFF. Wait with a native monitor for every applicable exact-HEAD CI run to COMPLETE successfully and for all reviews and the parent's critic, then merge explicitly with `gh pr merge <N> --<method> --match-head-commit <full-sha>`. Never use `--admin` or any bypass
 - Backend proven protected: arm protected auto-merge with the repository's configured method and head pinning: `gh pr merge <N> --auto --<method> --match-head-commit <full-sha>`. Never merge past failing or missing required checks, and never bypass protection
 - Start `monitor_start` to watch complete exact-HEAD workflow runs around `gh run watch <run-id> --exit-status`. Early check rollups may contain only classification jobs and are not terminal workflow evidence. Use a native bounded-interval poller around `gh pr view <N> --json state,mergedAt,mergeCommit` until the PR is `MERGED`, closed, or has a failed required check; one status query is not a watcher

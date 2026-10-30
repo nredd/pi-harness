@@ -18,9 +18,9 @@ The issue tracker should have been provided to you. If `docs/agents/issue-tracke
 
 Whatever the user said is the fixed point (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.). If they didn't specify one, ask for it.
 
-Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+Resolve the fixed point and capture the final full reviewed HEAD SHA before dispatch: `git rev-parse <fixed-point>` and `git rev-parse HEAD`. For a PR, run `git merge-base <pr-base> HEAD` once, record its full SHA as `<reviewed-base>`, and preserve it across every later HEAD change. Bind the diff command to those immutable values: `git diff <reviewed-base>...<reviewed-head>` (three-dot, so the comparison is against the original merge-base). Also note the matching commits via `git log <reviewed-base>..<reviewed-head> --oneline`.
 
-Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here, not inside two parallel sub-agents.
+Before going further, confirm the fixed point resolves and the diff is non-empty. A bad ref or empty diff should fail here, not inside two parallel sub-agents. Before aggregating, resolve `HEAD` again; if it differs from `<reviewed-head>`, discard both reports and restart from this step with the preserved `<reviewed-base>`. A corrective-delta review is supplemental only and never replaces either required whole-PR axis.
 
 ### 2. Identify the spec source
 
@@ -57,16 +57,16 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn both sub-agents in parallel
 
-Spawn two `Agent` calls in one message, both `subagent_type: "code-reviewer"`, `run_in_background: true`, and no `model` unless the user named one. The configured `agentModels` route selects the reviewer model. The agent is read-only and already carries the output template, the hard/judgement rule and the word cap: do NOT restate them. Each prompt names its axis and supplies only the axis material. If the review route is quota-parked, wait; do not silently substitute a model.
+A top-level parent spawns two `Agent` calls in one message, both `subagent_type: "code-reviewer"`, `run_in_background: true`, and no `model` unless the user named one. A delegated session omits `run_in_background`, uses the supported blocking calls, and consumes both inline results before returning. The configured `agentModels` route selects the reviewer model. The agent is read-only and already carries the output template, the hard/judgement rule and the word cap: do NOT restate them. Each prompt names its axis and supplies only the axis material. If the review route is quota-parked, wait; do not silently substitute a model.
 
 **Standards prompt** (`Axis: Standards`) includes:
 
-- The full diff command and commit list.
+- The full original reviewed-base SHA, full reviewed HEAD SHA, and immutable whole-PR diff command and commit list bound to both.
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full (the sub-agent has no other access to it).
 
 **Spec prompt** (`Axis: Spec`) includes:
 
-- The diff command and commit list.
+- The full original reviewed-base SHA, full reviewed HEAD SHA, and immutable whole-PR diff command and commit list bound to both.
 - The path or fetched contents of the spec, with line numbers so findings can quote them.
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.

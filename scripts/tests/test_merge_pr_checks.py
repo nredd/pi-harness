@@ -27,6 +27,8 @@ import merge_pr_checks as checks
 
 FIXTURE = Path(__file__).parent / "fixtures" / "merge-pr-135.json"
 REPO = "nredd/pi-harness"
+REVIEWER_SKELETON_PATTERN = re.compile(r"```text\n(Axis: .*?)```", re.S)
+REVIEWER_CHECKED_LINE_PATTERN = re.compile(r"^- <rule.*$", re.M)
 
 
 class Replay(checks.GitHub):
@@ -508,12 +510,12 @@ def reviewer_template_report(axis: str, sha: str, *, inline_none: bool) -> str:
         str: A final report derived from the shipped template, not a hand-written fixture.
     """
     agent = Path(__file__).resolve().parents[2] / "packages" / "preset" / "agents" / "code-reviewer.md"
-    match = re.search(r"```text\n(Axis: .*?)```", agent.read_text(), re.S)
+    match = REVIEWER_SKELETON_PATTERN.search(agent.read_text())
     assert match, "code-reviewer.md lost its report skeleton"
     lines = match.group(1).splitlines()
     report = "\n".join(lines[: lines.index("Findings:") + 1])
     report = report.replace("<Standards|Spec>", axis).replace("<full-40-character-sha>", sha)
-    report = re.sub(r"^- <rule.*$", "- Exact diff -- git_diff -- ok", report, flags=re.M)
+    report = REVIEWER_CHECKED_LINE_PATTERN.sub("- Exact diff -- git_diff -- ok", report)
     return report + (" None." if inline_none else "\nNone.")
 
 
