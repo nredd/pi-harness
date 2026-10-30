@@ -63,6 +63,10 @@ it("configured unavailable title model does not stream through a registered defa
 			requested.push(model.id);
 			return fauxAssistantMessage("MAIN TURN FINISHED");
 		},
+		(_ctx, _opts, _state, model) => {
+			requested.push(model.id);
+			return fauxAssistantMessage("Unexpected Fallback Title");
+		},
 	]);
 	const settled = nextEvent(host.harness, "agent_settled");
 	await terminal.key("Inspect the title fallback");
