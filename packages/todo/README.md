@@ -114,6 +114,16 @@ the full list grouped by status.
 - **The overlay never eats your terminal.** Past the row budget it becomes a
   window over the whole list: scroll it with the mouse wheel, and `↑ N above` /
   `↓ N below` hints say what is out of view. Nothing is ever hidden.
+- **Task status reflects actual work.** Mark every started task `in_progress`,
+  including parallel work; assign `owner` to identify each worker. Complete each
+  verified task immediately. Atomic batches may record independently verified
+  results together, but must not delay individual completions. There is no
+  global single-active-task limit. Plan text, completion evidence, and deferral
+  reasons remain protected.
+- **Requested changes cannot silently disappear.** Action-inapplicable fields
+  reject the call, including an entire `ops` batch. `create` always starts
+  `pending`; use an explicit `update` with its id to change status. Dependency
+  updates use `addBlockedBy` / `removeBlockedBy`, never `blockedBy`.
 - **The agent can sequence work, not just list it.** `blockedBy` dependencies are
   validated before anything is written — dangling ids, deleted dependencies,
   self-blocks, and cycles are all rejected.

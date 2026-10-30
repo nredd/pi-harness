@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Task } from "../tool/types.ts";
+import type { Task, TaskMutationParams, TaskOpAction } from "../tool/types.ts";
 import { isTransitionValid } from "./invariants.ts";
 import type { TaskState } from "./state.ts";
 import {
@@ -20,6 +20,47 @@ const stateWith = (...tasks: Task[]): TaskState => ({
 const task = (overrides: Partial<Task> & { id: number; subject: string }): Task => ({
 	status: "pending",
 	...overrides,
+});
+
+describe("applyTaskMutation — action fields", () => {
+	it.each<[TaskOpAction, TaskMutationParams, string]>([
+		["create", { subject: "new", status: "in_progress" }, "status"],
+		["create", { subject: "new", evidence: "tests passed" }, "evidence"],
+		["create", { subject: "new", reason: "later" }, "reason"],
+		["create", { subject: "new", addBlockedBy: [] }, "addBlockedBy"],
+		["update", { id: 1, status: "in_progress", blockedBy: [] }, "blockedBy"],
+		["update", { id: 1, owner: "worker", includeDeleted: false }, "includeDeleted"],
+		["list", { owner: "worker" }, "owner"],
+		["get", { id: 1, status: "in_progress" }, "status"],
+		["delete", { id: 1, reason: "later" }, "reason"],
+		["clear", { status: "completed" }, "status"],
+		["update", { id: 1, status: "in_progress", unknownField: true }, "unknownField"],
+	])("rejects ignored fields for %s: %j", (action, params, field) => {
+		const state = stateWith(task({ id: 1, subject: "original" }));
+		const result = applyTaskMutation(state, action, params);
+		expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining(field) });
+		expect(result.state).toBe(state);
+	});
+
+	it("rejects an explicit null for an ignored field (only undefined is treated as absent)", () => {
+		const state = stateWith(task({ id: 1, subject: "original" }));
+		const params = { id: 1, owner: null } as unknown as TaskMutationParams;
+		const result = applyTaskMutation(state, "get", params);
+		expect(result.op).toMatchObject({ kind: "error", message: "owner is not supported for get" });
+		expect(result.state).toBe(state);
+	});
+
+	it("rolls back provisional mutations when a read supplies an ignored field", () => {
+		const state = emptyState();
+		const result = applyTaskCall(state, {
+			ops: [
+				{ action: "create", subject: "temporary" },
+				{ action: "list", owner: "worker" },
+			],
+		});
+		expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining("ops[1]:") });
+		expect(result.state).toBe(state);
+	});
 });
 
 describe("applyTaskMutation — create", () => {
@@ -138,6 +179,34 @@ describe("applyTaskMutation — update", () => {
 		const state = stateWith(task({ id: 1, subject: "x", description: "d" }));
 		const result = applyTaskMutation(state, "update", { id: 1, subject: "x", description: "d" });
 		expect(result.op).toMatchObject({ kind: "update", changed: false });
+	});
+
+	it("flags re-sent addBlockedBy entries already present as changed:false", () => {
+		const state = stateWith(task({ id: 1, subject: "a", blockedBy: [2] }), task({ id: 2, subject: "b" }));
+		const result = applyTaskMutation(state, "update", { id: 1, addBlockedBy: [2] });
+		expect(result.op).toMatchObject({ kind: "update", changed: false, task: { blockedBy: [2] } });
+	});
+
+	it("flags removeBlockedBy of an absent dependency as changed:false", () => {
+		const state = stateWith(task({ id: 1, subject: "a" }), task({ id: 2, subject: "b" }));
+		const result = applyTaskMutation(state, "update", { id: 1, removeBlockedBy: [2] });
+		expect(result.op).toMatchObject({ kind: "update", changed: false });
+	});
+
+	it("flags re-sent identical evidence as changed:false and new evidence as changed:true", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "completed", evidence: "tests passed" }));
+		const same = applyTaskMutation(state, "update", { id: 1, status: "completed", evidence: "tests passed" });
+		expect(same.op).toMatchObject({ kind: "update", changed: false });
+		const revised = applyTaskMutation(state, "update", { id: 1, status: "completed", evidence: "ran e2e" });
+		expect(revised.op).toMatchObject({ kind: "update", changed: true, task: { evidence: "ran e2e" } });
+	});
+
+	it("flags re-sent identical reason as changed:false and new reason as changed:true", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "deferred", reason: "blocked upstream" }));
+		const same = applyTaskMutation(state, "update", { id: 1, status: "deferred", reason: "blocked upstream" });
+		expect(same.op).toMatchObject({ kind: "update", changed: false });
+		const revised = applyTaskMutation(state, "update", { id: 1, status: "deferred", reason: "waiting on review" });
+		expect(revised.op).toMatchObject({ kind: "update", changed: true, task: { reason: "waiting on review" } });
 	});
 
 	it("flags a blockedBy-only update as changed:true even when status is unchanged", () => {

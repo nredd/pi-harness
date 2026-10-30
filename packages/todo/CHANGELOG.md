@@ -21,6 +21,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Align default agent guidance with parallel owned work: mark every started task in progress, complete verified work immediately, and allow atomic batches of already verified independent results without a global active-task cap.
+- Reject action-inapplicable fields before mutation instead of silently ignoring requested status or dependency changes. `create` remains pending-only; `update` requires additive dependency fields. A rejected field inside `ops` rolls back the batch.
 - Invalidate cached settled update/delete rows when their live-store fallback changes. Foreground mutation, replay, eviction and pointer changes notify weak renderer subscriptions; probes do not subscribe and valid historical result snapshots stay immutable. Real core interactive regressions fail before the fix and pass after it under Vitest and Bun.
 - Preserve evidence only across unambiguous, unchanged Plan work with versioned heading scope and provenance. Preserve prose, code-only work, shared context, and fence boundaries.
 - Render settled rows from validated historical snapshots after reload and resize; report batch mutations from their own immutable outcomes.

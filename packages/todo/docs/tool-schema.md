@@ -15,6 +15,13 @@ for the `todo` tool registered by
 | `delete` | `id` | Tombstones the task (`status: "deleted"`); it is not removed. Plan items can't be deleted. |
 | `clear` | — | Drops every agent-created task. Plan items stay; the id counter resets to `1` only when nothing is kept. |
 
+Only fields applicable to the selected action are accepted, in flat calls and
+inside `ops`. An unsupported field rejects the whole call before committing
+anything; it is never silently ignored. In particular, `create` always starts
+`pending` and rejects `status`, `evidence`, and `reason`. Use the returned id in
+an explicit `update` to start, complete, or defer the task. `update` rejects
+`blockedBy`; use `addBlockedBy` / `removeBlockedBy` instead.
+
 ## Batching with `ops`
 
 Pass `ops` instead of a top-level `action` and fields to open or close many todos
@@ -59,10 +66,10 @@ todo({
   action: "create" | "update" | "list" | "get" | "delete" | "clear",
 
   // create-only
-  subject?: string,                   // required for create
   blockedBy?: number[],               // initial dependency ids
 
   // create + update
+  subject?: string,                   // required for create; editable for non-plan tasks
   description?: string,               // long-form detail
   activeForm?: string,                // present-continuous label shown while in_progress
   owner?: string,                     // agent/owner assigned to this task
@@ -263,11 +270,13 @@ carries the bare message. Task state is unchanged.
 
 ## Prompt guidance
 
-The tool ships a `promptSnippet` and ten `promptGuidelines` bullets telling the
-model when to open a list, to keep exactly one task `in_progress`, to mark work
-completed immediately rather than in batches, never to complete a task with
-failing tests, the literal `update {id, status}` call shape for changing a
-task's status, that `completed` needs `evidence`, and that plan items are
-completed with evidence or deferred with a reason, never reported done while
-open. Both are overridable — see
+The tool ships a `promptSnippet` and `promptGuidelines` bullets telling the
+model when to open a list, to mark every started task `in_progress`, including
+parallel work, and use `owner` to identify each worker. Each verified task is
+completed immediately; atomic batches record only independently verified outcomes
+together and never delay an individual completion. The guidance also
+covers failing tests, the literal `update {id, status}` call shape for changing
+a task's status, `completed` evidence, and plan items, whose text stays locked
+and which must be completed with evidence or deferred with a reason before
+work is reported done. Both are overridable — see
 [configuration.md](./configuration.md#guidance).

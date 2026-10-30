@@ -56,6 +56,16 @@ describe("atomic batch persistence", () => {
 		const { captured, call, replay } = setup();
 		await call({ action: "create", subject: "Original" });
 		const stable = replay();
+		const ignoredField = await call({
+			ops: [
+				{ action: "update", id: 1, status: "in_progress" },
+				{ action: "create", subject: "Must not silently start pending", status: "in_progress" },
+			],
+		});
+		expect(ignoredField.error).toContain("ops[1]: status is not supported for create");
+		expect(ignoredField.tasks).toEqual(stable.tasks);
+		expect(captured.entries).toHaveLength(1);
+		expect(replay()).toEqual(stable);
 		const failed = await call({
 			ops: [
 				{ action: "update", id: 1, subject: "Provisional" },
