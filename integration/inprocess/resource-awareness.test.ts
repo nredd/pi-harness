@@ -5,8 +5,29 @@ import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-ag
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
 import { runTools } from "../../packages/dev-tools/test/scenarios/support.ts";
+import { createSubscriptionRouter, type RouterUsage } from "../../packages/subscription-router/src/index.ts";
 import { agentStack, ask, closeAgentStack, jsonFile } from "./agents-support.ts";
 import { isolateStackHome, loadThirdParty } from "./support.ts";
+
+const ROUTER_USAGE: RouterUsage = {
+	get: async () => ({
+		provider: "anthropic",
+		status: "available",
+		windows: [],
+		retrievedAt: 0,
+		expiresAt: Number.MAX_SAFE_INTEGER,
+	}),
+	peek: () => ({
+		provider: "anthropic",
+		status: "available",
+		windows: [],
+		retrievedAt: 0,
+		expiresAt: Number.MAX_SAFE_INTEGER,
+	}),
+	decisionFor: () => ({ block: false }),
+	format: () => "available",
+	formatForPrompt: () => "available",
+};
 
 let home: Awaited<ReturnType<typeof isolateStackHome>>;
 let h: Harness;
@@ -16,7 +37,19 @@ beforeAll(async () => {
 		promotionLifetime: "session",
 		alwaysActive: ["search_tools", "Agent"],
 	});
-	h = await agentStack(home.root, { factories: [createDevTools(), await loadThirdParty("deferred")] });
+	h = await agentStack(home.root, {
+		factories: [
+			createDevTools(),
+			await loadThirdParty("deferred"),
+			createSubscriptionRouter({
+				config: {
+					ok: true,
+					profiles: [{ id: "test", name: "test", strategy: "ordered", chain: [{ provider: "anthropic", id: "test" }] }],
+				},
+				usage: ROUTER_USAGE,
+			}),
+		],
+	});
 });
 afterAll(async () => {
 	try {
@@ -47,14 +80,41 @@ it("guides the parent while deferred, then discovers and executes the real obser
 	expect(snapshot.text).toContain("no process-to-agent attribution");
 });
 
-it("puts resource guidance in a genuine child provider request", async () => {
-	const result = await ask(h, "general-purpose", [
+it("composes resource and router guidance as independent prompt sections", async () => {
+	h.setResponses([
 		(ctx) => {
-			const prompt = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
-			expect(prompt).toContain("Before knowingly starting a large test or compile");
-			expect(prompt).toContain("OS process metadata cannot identify agents");
-			return fauxAssistantMessage("CHILD GUIDANCE OBSERVED");
+			const system = ctx.messages.find((message) => message.role === "system");
+			expect(system).toMatchObject({
+				content: "",
+				sections: expect.objectContaining({
+					resource_awareness: expect.stringContaining("Before knowingly starting a large test or compile"),
+					subscription_usage: expect.stringContaining("anthropic: available"),
+				}),
+			});
+			return fauxAssistantMessage("COMPOSED");
 		},
 	]);
-	expect(result).toContain("CHILD GUIDANCE OBSERVED");
+	await h.session.prompt("compose resource guidance");
+});
+
+it("keeps append-mode guidance singular and omits it from a restricted replace-mode child", async () => {
+	const appendResult = await ask(h, "general-purpose", [
+		(ctx) => {
+			const prompt = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
+			expect(prompt.match(/Before knowingly starting a large test or compile/gu)).toHaveLength(1);
+			return fauxAssistantMessage("APPEND GUIDANCE OBSERVED");
+		},
+	]);
+	expect(appendResult).toContain("APPEND GUIDANCE OBSERVED");
+
+	const replaceResult = await ask(h, "code-reviewer", [
+		(ctx) => {
+			const prompt = JSON.stringify(ctx.messages.filter((m) => m.role === "system"));
+			expect(prompt).not.toContain("Before knowingly starting a large test or compile");
+			expect(getCurrentTools(ctx.messages).map((tool) => tool.name)).not.toContain("resource_snapshot");
+			expect(getCurrentTools(ctx.messages).map((tool) => tool.name)).not.toContain("search_tools");
+			return fauxAssistantMessage("RESTRICTED CHILD OBSERVED");
+		},
+	]);
+	expect(replaceResult).toContain("RESTRICTED CHILD OBSERVED");
 });
