@@ -16,9 +16,18 @@ selection ran. The scheduler now reads only the injected `FakeClock`, so the 50m
 deadline advances solely under test control and the fixture reaches the public
 model-not-found path regardless of host load.
 
-The same fixture checks no execution before its deadline, one-shot completion,
-a valid explicit model, and cancellation through public `removeJob` and `stop`.
-Production scheduling, model-admission policy and timeout values are unchanged.
+The controlled-time regression is the first pair of tests in that file. One builds
+a 50ms ISO deadline, advances the `FakeClock` 51ms, and asserts `addJob` throws
+`Scheduled time ... is in the past` before any model selection or timer is
+created. The other advances the clock, then asserts the job's `createdAt` equals
+the `FakeClock` time. Pointing `addJob` back at `Date.now()` fails `createdAt`
+and every fire-path test (the fake epoch is 2020, so the deadline is long past on
+the wall clock); dropping the past-timestamp check fails the first test.
+
+The fire-path fixture additionally checks no execution before its deadline,
+one-shot completion, a valid explicit model, and cancellation through public
+`removeJob` and `stop`. Production scheduling, model-admission policy and timeout
+values are unchanged.
 
 From `packages/subagents`, run both engines through the hermetic launcher:
 

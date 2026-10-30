@@ -67,7 +67,7 @@ Other guidelines:
   discovery even when the OS temp directory contains symlinks (macOS `/var`).
 - Use the injected `FakeClock` for scheduler deadlines and dispatch instead of
   short wall-time budgets. See [scheduler fixture clocks](docs/scheduler-fixtures.md)
-  for the controlled-time regression and both-engine focused commands.
+  for the controlled-time regression tests and both-engine focused commands.
 - Match the surrounding code style (enforced by biome).
 - Do not edit `CHANGELOG.md`. Changelog entries are added by the maintainer.
 - Update the README when you add or change user-facing behavior.

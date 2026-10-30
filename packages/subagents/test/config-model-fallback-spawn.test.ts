@@ -113,6 +113,32 @@ describe("scheduler at fire time", () => {
     return manager.listAgents()[0]!;
   }
 
+  it("rejects a deadline that the injected clock has already passed, before model selection", () => {
+    registerAgents(new Map([agent("scout")]));
+    const schedule = new Date(clock.now() + 50).toISOString();
+    clock.advance(51);
+
+    expect(() => scheduler.addJob({
+      name: "late", description: "late", schedule, subagent_type: "scout", prompt: "go", model: "claude-haiku-4-5",
+    })).toThrow(/Scheduled time .* is in the past/);
+    expect(scheduler.list()).toEqual([]);
+    expect(clock.pending).toBe(0);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it("stamps createdAt from the injected clock, not the wall clock", () => {
+    registerAgents(new Map([agent("scout")]));
+    clock.advance(7);
+
+    const job = scheduler.addJob({
+      name: "stamped", description: "stamped", schedule: new Date(clock.now() + 50).toISOString(),
+      subagent_type: "scout", prompt: "go",
+    });
+
+    expect(job.createdAt).toBe(new Date(clock.now()).toISOString());
+    expect(scheduler.list()[0]?.createdAt).toBe(job.createdAt);
+  });
+
   it("refuses a job whose explicit stored model no longer resolves", async () => {
     registerAgents(new Map([agent("scout")]));
 
