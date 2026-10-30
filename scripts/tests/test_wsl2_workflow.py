@@ -8,11 +8,15 @@ References:
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+
+import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -230,12 +234,98 @@ def test_wsl2_capture_mirrors_only_coverage_reports_and_clears_stale_files(tmp_p
     assert not any(path.is_file() for path in host.rglob("*"))
 
 
-def test_wsl2_coverage_summary_runs_on_the_host_with_native_bash_semantics() -> None:
-    """Keep the summary-only report outside the WSL guest adapter."""
-    workflow = workflow_text()
-    step = workflow.split("      - name: Report coverage exclusions\n", 1)[1].split("      - uses:", 1)[0]
-    assert "shell: bash -e {0}" in step
-    assert "Bun standalone: seven auth dispatch/refresh cases" in step
+def coverage_summary_step() -> dict[str, str]:
+    """Return the unique production summary step, independent of YAML formatting.
+
+    Returns:
+        dict[str, str]: The actual workflow step's scalar settings and Bash body.
+    """
+    workflow = yaml.safe_load(workflow_text())
+    steps = [
+        step
+        for job in workflow["jobs"].values()
+        for step in job["steps"]
+        if step.get("name") == "Report coverage exclusions"
+    ]
+    assert len(steps) == 1
+    return steps[0]
+
+
+def run_host_summary(step: dict[str, str], tmp_path: Path) -> str:
+    """Execute the real host Bash body and return its summary, failing on guest dispatch.
+
+    Parameters:
+        step (dict[str, str]): Summary step settings and actual Bash body.
+        tmp_path (Path): Empty host directory with no guest worktree or tooling.
+    Returns:
+        str: UTF-8 summary written by the real step.
+    Raises:
+        AssertionError: The step selects a different shell or working directory.
+        subprocess.CalledProcessError: The summary body fails under Bash.
+        FileNotFoundError: The summary body does not write its declared output.
+    """
+    assert step["shell"] == "bash -e {0}"
+    assert "working-directory" not in step
+    summary = tmp_path / "summary.txt"
+    script = tmp_path / "summary.sh"
+    script.write_text(step["run"], encoding="utf-8")
+    subprocess.run(
+        ["/bin/bash", "-e", str(script)],
+        cwd=tmp_path,
+        env={"GITHUB_STEP_SUMMARY": str(summary)},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return summary.read_text(encoding="utf-8")
+
+
+def test_wsl2_coverage_summary_runs_on_the_host_with_native_bash_semantics(tmp_path: Path) -> None:
+    """Write the host summary without guest tools, worktree or inherited environment."""
+    summary = run_host_summary(coverage_summary_step(), tmp_path)
+    assert summary.strip()
+
+
+@pytest.mark.parametrize("shell", ["pwsh", "wsl-bash {0}", "bash {0}"])
+def test_wsl2_coverage_summary_rejects_non_native_shell(shell: str, tmp_path: Path) -> None:
+    """Reject guest dispatch and loss of the explicit Bash failure semantics."""
+    step = coverage_summary_step() | {"shell": shell}
+    with pytest.raises(AssertionError):
+        run_host_summary(step, tmp_path)
+
+
+def test_wsl2_coverage_summary_preserves_bash_failure_status(tmp_path: Path) -> None:
+    """A failing summary command must not be masked by a later successful write."""
+    step = coverage_summary_step() | {"run": '/bin/bash -c "exit 47"\necho masked >>"$GITHUB_STEP_SUMMARY"'}
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        run_host_summary(step, tmp_path)
+    assert error.value.returncode == 47
+
+
+@pytest.mark.parametrize(
+    ("scope", "disclosure"),
+    [
+        ("Bun standalone", r"default D/E.*seven auth skips.*#14"),
+        ("candidate compiled-core auth adapter", r"outcome and JUnit.*not this notice"),
+        *[
+            (scope, "NOT RUN")
+            for scope in (
+                "linux-arm64",
+                "packed contracts under standalone",
+                "bench",
+                "live credentials",
+                "desktop helpers",
+            )
+        ],
+    ],
+)
+def test_coverage_summary_discloses_scope(scope: str, disclosure: str, tmp_path: Path) -> None:
+    """Check scoped runtime limitations, not a complete friendly-prose sentence."""
+    summary = run_host_summary(coverage_summary_step(), tmp_path)
+    assert any(scope in line and re.search(disclosure, line) for line in summary.splitlines())
+    # Each disclosure must fail closed if either its scope or its limitation disappears.
+    for mutated in (summary.replace(scope, "omitted"), re.sub(disclosure, "omitted", summary)):
+        assert not any(scope in line and re.search(disclosure, line) for line in mutated.splitlines())
 
 
 def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
