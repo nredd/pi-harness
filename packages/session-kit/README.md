@@ -248,7 +248,8 @@ workers/processes, and process-group kill/orphan recovery stays in the assembled
 Native `STAY` fixtures share a worker-death guard that kills only their own live process group
 when their parent changes; production commands and leader/descendant probes are not modified.
 Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
-Vitest regression SIGKILLs its worker and observes the detached `STAY` child disappearing.
+Vitest regression covers both a SIGKILLed worker and a failed assertion (via the fixture's own
+`afterEach` dispose) and observes the detached `STAY` child disappearing.
 Native stop/dispose checks assert direct children are reaped when the operation resolves, then
 observe orphaned descendants disappearing with the existing bounded liveness check. Leader exit
 and pipe closure do not synchronize PID 1's reaping; on Linux, `kill(pid, 0)` can still succeed

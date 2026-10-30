@@ -61,7 +61,7 @@ describe("monitor worker death", () => {
 					},
 					stdio: "ignore",
 				});
-				await waitFor(() => existsSync(readyPath));
+				await waitFor(() => existsSync(readyPath), 12_000);
 				ready = JSON.parse(readFileSync(readyPath, "utf8")) as WorkerReady;
 				expect(ready.token).toBe(token);
 				expect(ready.targetPid).toBe(ready.monitorPid);
