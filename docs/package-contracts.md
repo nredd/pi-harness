@@ -293,11 +293,14 @@ resolution tests and the package-contract lock assertions fail if it does.
 
 ## Packed preset audit (no standalone Pi behavior)
 
-`@nredd/pi-preset` ships agents and themes only, so there is nothing to execute through stock Pi alone.
-`make check-package-contracts` additionally runs `package_contracts.py --audit-preset`
-(`run_audit_gate`; with `REPORT=/abs/x.json` the preset report goes to `/abs/x-preset.json`): pack, the full tarball audit against `PRESET_CONTRACT`, then `install_alone` into a
-fresh project. The release `verify` stage runs the same function for the preset (descriptor gate
-`audit`), on the supplied bytes, never a repack.
+`@nredd/pi-preset` ships agents, skills, themes and a footer, so its standalone contract cannot
+exercise a complete managed profile. `make check-package-contracts` additionally runs
+`package_contracts.py --audit-preset` (`run_audit_gate`; with `REPORT=/abs/x.json` the preset
+report goes to `/abs/x-preset.json`): pack, full tarball audit against `PRESET_CONTRACT`, then
+`install_alone` into a fresh project. The normal preset native gate separately packs the preset,
+installs that tarball into a fresh npm consumer, and requires Pi's resource loader to load the
+installed footer and all packaged skills from that installed path. The release `verify` stage runs
+the audit function for the preset (descriptor gate `audit`), on supplied bytes, never a repack.
 
 The former `fork_package_contracts.py` gate (packed preset + dev-tools driving a real child through the
 Gitlinked `pi-subagents`) is removed. `packages/subagents` is now imported and loaded from source by

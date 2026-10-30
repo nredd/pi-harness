@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel read-only `code-reviewer` sub-agents (GPT 6.1 Sol by default) and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
+description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel read-only `code-reviewer` sub-agents through the configured review route and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
 ---
 
 Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
@@ -57,7 +57,7 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn both sub-agents in parallel
 
-Spawn two `Agent` calls in one message, both `subagent_type: "code-reviewer"`, `run_in_background: true`, and `model: "openai-codex/gpt-6.1-sol"` unless the user named another model. The agent is read-only and already carries the output template, the hard/judgement rule and the word cap: do NOT restate them. Each prompt names its axis and supplies only the axis material. If Sol is quota-parked, wait for it; do not silently swap models.
+Spawn two `Agent` calls in one message, both `subagent_type: "code-reviewer"`, `run_in_background: true`, and no `model` unless the user named one. The configured `agentModels` route selects the reviewer model. The agent is read-only and already carries the output template, the hard/judgement rule and the word cap: do NOT restate them. Each prompt names its axis and supplies only the axis material. If the review route is quota-parked, wait; do not silently substitute a model.
 
 **Standards prompt** (`Axis: Standards`) includes:
 
@@ -71,7 +71,7 @@ Spawn two `Agent` calls in one message, both `subagent_type: "code-reviewer"`, `
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 
-If a sub-agent returns something that does not match the template, report it verbatim under its axis and say so; do not reformat or re-derive findings.
+If a sub-agent returns something that does not match the template (including a bare verdict with no `Checked:` list), report it verbatim under its axis, say so, and re-run that axis; do not reformat or re-derive findings.
 
 ### 5. Aggregate
 

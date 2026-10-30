@@ -179,17 +179,24 @@ test("exactly the four owned skills ship, each a single valid SKILL.md", () => {
 	}
 });
 
-test("ship-issue is generalized and keeps its workflow and reviewer model requirements", () => {
-	const text = readText("skills/ship-issue/SKILL.md");
-	assert.ok(!text.includes("redd/issue-"), "personal branch prefix");
-	assert.ok(text.includes("<prefix>/issue-<N>"));
-	assert.ok(text.includes('subagent_type: "critic", model: "sonnet"'));
-	assert.ok(text.includes('subagent_type: "critic", model: "opus"'));
-	for (const heading of ["## 2. Worktree", "## 5. Gate", "## 7. Review round", "## 9. Merge and clean up"]) {
-		assert.ok(text.includes(heading), heading);
+test("shipping resources require exact-HEAD review, parent monitoring, and no forced model or auto-merge", () => {
+	const review = readText("skills/code-review/SKILL.md");
+	const ship = readText("skills/ship-issue/SKILL.md");
+	const merge = readText("skills/get-it-merged/SKILL.md");
+	const reviewer = readText("agents/code-reviewer.md");
+	for (const text of [review, ship, merge]) {
+		assert.doesNotMatch(text, /model:\s*"/);
+		assert.doesNotMatch(text, /gh pr merge --.*--auto/);
 	}
-	assert.ok(text.includes("`gh pr merge --squash --auto --delete-branch`"));
-	assert.ok(readText("skills/code-review/SKILL.md").includes('model: "openai-codex/gpt-6.1-sol"'));
+	assert.match(review, /no `model` unless the user named one/);
+	assert.match(ship, /separate Standards \+ Spec `code-reviewer` agents/);
+	assert.match(ship, /Every change to HEAD invalidates the critic and both review axes/);
+	assert.match(ship, /Keep auto-merge off/);
+	assert.match(ship, /native session-kit monitor/);
+	assert.match(merge, /Do not require a latest-main rebase solely because the base advanced/);
+	assert.match(merge, /frozen combined gate immediately before\npublish\/deploy/);
+	assert.match(reviewer, /`Checked:` one line per standard rule or spec requirement/);
+	assert.match(reviewer, /A clean review still lists what it checked/);
 });
 
 test("themes validate against Pi's theme schema and carry no extra metadata", () => {

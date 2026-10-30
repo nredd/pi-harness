@@ -1,13 +1,13 @@
 ---
 name: ship-issue
-description: Address a GitHub issue end-to-end in a dedicated git worktree -- implement, run the repo's full gate, adversarially review, open a PR, and queue an auto-merge. Use when the user names an issue URL or number and wants it shipped.
+description: Address a GitHub issue in a dedicated git worktree -- implement, gate, obtain exact-HEAD reviews, open a PR, and hand protected merge ownership to the parent. Use when the user names an issue URL or number and wants it shipped.
 argument-hint: <issue-url-or-number> [extra instructions]
 ---
 
 # ship-issue
 
-Take a GitHub issue from "here is the URL" to "PR is queued to merge on green", in an isolated
-worktree, with a real review round in between.
+Take a GitHub issue from "here is the URL" to a reviewed PR in an isolated worktree. The parent
+owns the final critic, native CI monitoring, and protected merge outcome.
 
 The repo's own `CLAUDE.md` / `AGENTS.md` OVERRIDES everything below. Read it first (step 3) and
 let it win on gate commands, coverage bars, layout, and style. This file is the procedure, not
@@ -98,34 +98,22 @@ ship on a gate you did not actually run -- "the imports resolved" is not evidenc
 - Never `git push --force` to the default branch. Force-push only your own issue branch, and
   only with `--force-with-lease`
 
-## 7. Review round -- three passes
+## 7. Review round -- exact final HEAD
 
-Two adversarial subagents plus one structured pass. Spawn the two subagents in a SINGLE message
-so they run concurrently, then do the third pass yourself while they work.
+After the gate, run one dedicated `critic` and separate Standards + Spec `code-reviewer` agents.
+Spawn the Standards and Spec reviewers in one message with `subagent_type: "code-reviewer"`,
+`run_in_background: true`, and no `model` override. Use `/skill:code-review`, not the ambiguous
+`/code-review` workflow command. Give every reviewer the exact `origin/<default>...HEAD` range,
+full final HEAD SHA, issue/spec, and repo rules.
 
-Subagent 1: `Agent(subagent_type: "critic", model: "sonnet")`
-Subagent 2: `Agent(subagent_type: "critic", model: "opus")`
+The critic is supplementary, never a substitute for either axis. It is read-only and already
+carries the refute-before-report rule, so name the final diff and issue only. The parent performs
+an independent final critic after this handoff; do not claim that a delegated critic completes it.
 
-`critic` is read-only (it can run `py_test`/`cargo_test`, not edit or shell out) and already
-carries the refute-before-report rule and output format, so the prompt only supplies the change.
-Give both the same prompt shape, filled in with real values:
-
-```
-Review the diff `origin/<default>...HEAD` in the git worktree at `<path>`.
-
-Context: this branch addresses <owner>/<repo> issue #<N>: "<title>".
-The repo's rules are in `<path>/CLAUDE.md`.
-Issue body: <paste or path>.
-```
-
-Third pass: invoke `/code-review high` yourself against the branch.
-
-Then triage all three:
-
-- Fix everything real. Push a follow-up commit and RE-RUN the gate
-- Reject the rest explicitly, with the reason. This is the most valuable part of the PR body --
-  a reader learns more from "reviewer flagged X, refuted because Y" than from a clean report
-- When two reviewers converge on the same bug from different angles, say so. That is signal
+- Fix every real blocking finding, rerun the affected gate, and push the follow-up
+- Every change to HEAD invalidates the critic and both review axes. Re-run all three on the final SHA
+- Record the reviewer identities/models, reviewed SHA, `Checked:`/`Findings:` reports, and each finding disposition
+- Document a concrete rationale for any retained judgement finding
 
 ## 8. Open the PR
 
@@ -139,7 +127,8 @@ Body, in order:
   dotted module path
 - `Verification:` plus prose bullets carrying REAL command output. Fence it when long. Test
   counts, coverage numbers, and actual failure transcripts, not "tests pass"
-- The review round: what each reviewer found, what was fixed, what was rejected and why
+- Exact-HEAD Standards, Spec, and critic receipts, including reviewer identities/models and finding dispositions
+- The parent-monitor handoff: PR URL, final SHA, concrete CI run IDs or commands, and the remaining final-critic/merge owner
 - The `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer
 
 Never: `## Summary`, `## Test plan`, `## Root cause`, checkbox lists, or an invented body for a
@@ -149,15 +138,14 @@ genuinely routine -- but a shipped issue almost always earns a body.
 Mark it draft (`--draft`) only when the branch genuinely depends on unmerged work, and say what
 it is waiting on.
 
-## 9. Merge and clean up
+## 9. Parent handoff and cleanup
 
-- `gh pr merge --squash --auto --delete-branch`
-- Do NOT poll CI to completion. Queue the auto-merge and hand back -- a big matrix takes long
-  enough that holding the session is waste
-- Do NOT remove the worktree. Its PR has not landed yet. Tell the user the follow-up is
-  `git worktree remove <path> && git -C <repo> worktree prune` once it merges
-- If auto-merge is not enabled on the repo, `gh pr merge --squash --delete-branch` fails
-  loudly -- say so and leave the PR open rather than merging past red checks
+- Before changing the PR HEAD, disable any armed auto-merge with `gh pr merge --disable-auto <N>` and verify it is off
+- Keep auto-merge off through the implementation, gate, exact-HEAD reviews, and child handoff. Do not merge or arm it
+- Return the PR URL, final SHA, exact review handles, and concrete CI run IDs or native-monitor command to the continuing parent
+- The parent owns its independent final critic, native session-kit monitor, required-check outcome, and any later protected merge. Never delegate passive watching or waiting to a watcher agent
+- Do not require a rebase merely because the base advanced. Update only for a functional dependency or actual conflict; release/deploy work separately requires the frozen combined gate
+- Do NOT remove the worktree. Its PR has not landed yet. Tell the parent the follow-up is `git worktree remove <path> && git -C <repo> worktree prune` once it merges
 
 ## 10. Report
 

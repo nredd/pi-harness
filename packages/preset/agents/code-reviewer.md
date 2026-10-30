@@ -19,7 +19,15 @@ Your prompt names ONE axis and gives you the diff command, the commit list, and 
 
 Use `git_diff` / `git_show` / `git_log` to read the change and `read` / `grep` / `find` for surrounding code. Do not review code outside the diff except to judge it.
 
-Output ONLY findings, one per line, in exactly this form:
+Output two sections, in this order.
+
+`Checked:` one line per standard rule or spec requirement you verified against the change:
+
+`- rule or requirement -- where you verified it (path:line, commit, or the read you ran) -- ok | see finding`
+
+Cover every changed file and every supplied rule or requirement that applies to it.
+
+`Findings:` one per line, in exactly this form, or `None.`:
 
 `[hard|judgement] path:line -- finding -- cited standard (file + rule) or quoted spec line`
 
@@ -28,6 +36,6 @@ Rules:
 - `hard` only for a documented-standard breach or a spec requirement that is missing or wrong. Everything else is `judgement`.
 - Every finding cites its source. No citation, no finding.
 - `path:line` points at the changed code. Use `path` alone only for a whole-file or whole-diff finding.
-- No praise, no summary, no restating the diff. Under 400 words.
-- No findings: output exactly `No findings.`
+- No praise, no summary, no restating the diff. Under 600 words.
+- A clean review still lists what it checked. `Findings: None.` without a `Checked:` list is not a review.
 - Spec axis with no spec supplied: output exactly `No spec available.`
