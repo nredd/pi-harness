@@ -15,9 +15,9 @@
 
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type TUI, type TuiMouseEvent, truncateToWidth } from "@earendil-works/pi-tui";
-import { COLLAPSE_KEY_OFF, getMaxWidgetLines, resolveCollapseKey } from "./config.ts";
+import { getMaxWidgetLines } from "./config.ts";
 import { formatProgress, t } from "./state/i18n-bridge.ts";
-import { selectHasActive, selectShowTaskIds, selectVisibleTasks } from "./state/selectors.ts";
+import { selectHasActive, selectVisibleTasks } from "./state/selectors.ts";
 import { getRenderState } from "./state/store.ts";
 import { formatOverlayTaskLine } from "./view/format.ts";
 
@@ -27,8 +27,6 @@ const WIDGET_KEY = "rpiv-todos";
 const OVERLAY_HEADING = "Todos";
 const OVERLAY_ABOVE = "above";
 const OVERLAY_BELOW = "below";
-const OVERLAY_EXPAND_HINT = "{key} to expand";
-const OVERLAY_COLLAPSED = "collapsed";
 
 /** A slice of the todo list: `[start, end)` plus which edge hints take a row. */
 interface TodoWindow {
@@ -159,7 +157,6 @@ export class TodoOverlay {
 
 		const truncate = (line: string): string => truncateToWidth(line, width, "…");
 		const hasActive = selectHasActive(state);
-		const showIds = selectShowTaskIds(state);
 
 		const headingColor = hasActive ? "accent" : "dim";
 		const headingIcon = hasActive ? "●" : "○";
@@ -175,20 +172,8 @@ export class TodoOverlay {
 		const disclosure = this.collapsed ? "▸" : "▾";
 		const heading = truncate(`${theme.fg("dim", disclosure)} ${theme.fg(headingColor, headingIcon)} ${headingText}`);
 
-		// Collapsed view: just the heading + a dim "└─" expand hint, then the
-		// trailing spacer. The hint splices the resolved key into the {key}
-		// placeholder (per-render); a config edit needs /reload to re-bind the actual
-		// shortcut. The "off" sentinel is reachable here mid-session (config edited
-		// after the shortcut was bound and the overlay collapsed) — render a static
-		// collapsed label instead of splicing the sentinel into the placeholder.
-		if (this.collapsed) {
-			const key = resolveCollapseKey(this.homeDir);
-			const hint =
-				key === COLLAPSE_KEY_OFF
-					? t("overlay.collapsed", OVERLAY_COLLAPSED)
-					: t("overlay.expandHint", OVERLAY_EXPAND_HINT).replace("{key}", key);
-			return this.withTrailingSpacer([heading, truncate(`${theme.fg("dim", "└─")} ${theme.fg("dim", hint)}`)]);
-		}
+		// Collapsed view keeps only the clickable heading and the trailing spacer.
+		if (this.collapsed) return this.withTrailingSpacer([heading]);
 
 		// Budget for content rows (heading + tasks). The rendered widget is one line
 		// taller — withTrailingSpacer() appends a blank row below the panel. Pi's
@@ -203,7 +188,7 @@ export class TodoOverlay {
 		if (win.above) {
 			rows.push(theme.fg("dim", `↑ ${win.start} ${t("overlay.above", OVERLAY_ABOVE)}`));
 		}
-		for (const task of tasks.slice(win.start, win.end)) rows.push(formatOverlayTaskLine(task, theme, showIds));
+		for (const task of tasks.slice(win.start, win.end)) rows.push(formatOverlayTaskLine(task, theme, true));
 		if (win.below) {
 			rows.push(theme.fg("dim", `↓ ${tasks.length - win.end} ${t("overlay.below", OVERLAY_BELOW)}`));
 		}

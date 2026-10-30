@@ -7,10 +7,10 @@ const EXPANDED = /^\s*▾ [●○] Todos \(2 open\)/;
 const COLLAPSED = /^\s*▸ [●○] Todos \(2 open\)/;
 const HEADING = /^\s*▾ [●○] Todos \(3 done, 25 open\)/;
 
-/** Transcript subjects do not count: require each task's tree connector under the widget heading. */
+/** Transcript subjects do not count: require each task's tree connector and stable ID under the widget heading. */
 function tasksListed(screen: string, listed: boolean): void {
-	for (const subject of SUBJECTS) {
-		expect(new RegExp(`[├└]─ .*${subject}`).test(screen), screen).toBe(listed);
+	for (const [index, subject] of SUBJECTS.entries()) {
+		expect(new RegExp(`[├└]─ .*#${index + 1} .*${subject}`).test(screen), screen).toBe(listed);
 	}
 }
 
@@ -26,10 +26,12 @@ it("heading click hides and restores tasks", async () => {
 		tasksListed(host.viewport().join("\n"), true);
 
 		await click(host, 6, rowOf(host, EXPANDED));
-		expect(rowOf(host, COLLAPSED)).toBeGreaterThanOrEqual(0);
+		const collapsedRow = rowOf(host, COLLAPSED);
 		const collapsed = host.viewport().join("\n");
 		tasksListed(collapsed, false);
-		expect(collapsed).toMatch(/└─ .*(to expand|collapsed)/);
+		// The widget's only row after its heading is its existing blank spacer.
+		expect(host.viewport()[collapsedRow + 1]?.trim()).toBe("");
+		expect(collapsed).not.toMatch(/(?:to expand|collapsed)/);
 
 		await click(host, 6, rowOf(host, COLLAPSED));
 		expect(rowOf(host, EXPANDED)).toBeGreaterThanOrEqual(0);

@@ -8,8 +8,6 @@
   "overlay.heading": "Todos",
   "overlay.above": "above",
   "overlay.below": "below",
-  "overlay.expandHint": "{key} to expand",
-  "overlay.collapsed": "collapsed",
   "overlay.done": "done",
   "overlay.open": "open",
   "overlay.planOpen": "{open}/{total} plan items open",
