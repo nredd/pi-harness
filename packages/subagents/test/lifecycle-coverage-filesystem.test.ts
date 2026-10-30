@@ -7,7 +7,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionTaskDir } from "../src/output-file.js";
 import { resolveDeclaredPaths } from "../src/package-resources.js";
-import { preloadSkills } from "../src/skill-loader.js";
 import { listSavedWorkflows } from "../src/workflow/saved.js";
 import { createWorktree } from "../src/worktree.js";
 
@@ -62,17 +61,6 @@ describe("resource filesystem races", () => {
     fs.writeFileSync(path, "agent");
     faults.removeAfterExists = path;
     expect(resolveDeclaredPaths(root, ["./removed.md"], "agents")).toMatchObject({ dirs: [], files: [] });
-    expect(fs.existsSync(path)).toBe(false);
-  });
-
-  it("continues user skill search when a root disappears before realpath", () => {
-    const path = join(root, "agent", "skills");
-    fs.mkdirSync(path, { recursive: true });
-    const fallback = join(root, ".agents", "skills");
-    fs.mkdirSync(fallback, { recursive: true });
-    fs.writeFileSync(join(fallback, "review.md"), "surviving skill");
-    faults.removeAfterExists = path;
-    expect(preloadSkills(["review"], join(root, "project"), root)).toEqual([{ name: "review", content: "surviving skill" }]);
     expect(fs.existsSync(path)).toBe(false);
   });
 

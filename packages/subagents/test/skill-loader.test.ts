@@ -1,330 +1,455 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { preloadSkills as preloadSkillsAtHome } from "../src/skill-loader.js";
+import { DefaultPackageManager, type ResolvedResource, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { isAmbientUserAgentsSkill, preloadSkills } from "../src/skill-loader.js";
+
+const presetRoot = join(import.meta.dirname, "../../preset");
+
+interface Sandbox {
+  root: string;
+  cwd: string;
+  agentDir: string;
+  homeDir: string;
+  settingsManager: SettingsManager;
+}
+
+function createSandbox(projectTrusted: boolean): Sandbox {
+  const root = mkdtempSync(join(tmpdir(), "pi-preloaded-skill-"));
+  const cwd = join(root, "project");
+  const agentDir = join(root, "agent");
+  mkdirSync(cwd, { recursive: true });
+  const homeDir = join(root, "home");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(homeDir, { recursive: true });
+  return { root, cwd, agentDir, homeDir, settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted }) };
+}
+
+function writeSkill(root: string, name: string, content: string): void {
+  const dir = join(root, name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n${content}\n`);
+}
 
 describe("preloadSkills", () => {
-  let tmpDir: string;
-  let originalAgentDir: string | undefined;
-  const preloadSkills: typeof preloadSkillsAtHome = (names, cwd, homeDir = join(tmpDir, "home")) =>
-    preloadSkillsAtHome(names, cwd, homeDir);
-
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "pi-skill-test-"));
-    originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = join(tmpDir, "user-agent-dir");
-  });
+  const roots: string[] = [];
 
   afterEach(() => {
-    if (originalAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("does not let an untrusted project shadow a trusted global skill", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    writeSkill(join(box.cwd, ".pi", "skills"), "review", "HOSTILE");
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("GLOBAL");
+    expect(skill?.content).not.toContain("HOSTILE");
+  });
+
+  it("gives a trusted project skill precedence over a global skill", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    writeSkill(join(box.cwd, ".pi", "skills"), "review", "PROJECT");
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("PROJECT");
+  });
+
+  it("does not let a project filter re-enable a globally disabled native resource", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const review = join(box.agentDir, "skills", "review");
+    writeSkill(join(box.agentDir, "skills"), "review", "DISABLED GLOBAL");
+    box.settingsManager.setProjectSkillPaths([review, `-${review}`]);
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("not found");
+    expect(skill?.content).not.toContain("DISABLED GLOBAL");
+  });
+
+  it("does not let a project exclusion resurrect through compatibility lookup", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    writeSkill(join(box.cwd, ".pi", "skills"), "review", "DISABLED PROJECT");
+    box.settingsManager.setProjectSkillPaths(["-skills/review"]);
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("not found");
+    expect(skill?.content).not.toContain("DISABLED PROJECT");
+  });
+
+  it("recovers a global skill hidden by a rejected project symlink alias", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const global = join(box.agentDir, "skills", "review");
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
+    symlinkSync(global, join(box.cwd, ".pi", "skills", "review"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("GLOBAL");
+  });
+
+  it("refuses a project symlink without hiding a package skill alias", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const packageRoot = join(box.root, "package");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
+    writeSkill(join(packageRoot, "skills"), "review", "PACKAGED");
+    box.settingsManager.setPackages([packageRoot]);
+    mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
+    symlinkSync(join(packageRoot, "skills", "review"), join(box.cwd, ".pi", "skills", "review"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("PACKAGED");
+  });
+
+  it.each([
+    ["resolved-identity exclusion", "../../package", [], false],
+    ["explicit allowlist", "absolute", ["skills/review"], true],
+  ] as const)("honors a package %s behind a rejected project alias", async (_label, source, skills, allowed) => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const packageRoot = join(box.root, "package");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
+    writeSkill(join(packageRoot, "skills"), "review", "FILTERED-PACKAGE-REVIEW");
+    box.settingsManager.setPackages([packageRoot]);
+    box.settingsManager.setProjectPackages([{ source: source === "absolute" ? packageRoot : source, skills: [...skills] }]);
+    // Native package discovery has the right decision until the unsafe alias
+    // wins canonical deduplication. Keep that control at the real SDK boundary.
+    const native = await new DefaultPackageManager({ cwd: box.cwd, agentDir: box.agentDir, settingsManager: box.settingsManager }).resolve(async () => "skip");
+    const candidate = native.skills.find(resource => resource.metadata.origin === "package" && resource.path === join(packageRoot, "skills", "review", "SKILL.md"));
+    expect(candidate?.enabled).toBe(allowed);
+    mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
+    symlinkSync(join(packageRoot, "skills", "review"), join(box.cwd, ".pi", "skills", "review"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    if (allowed) {
+      expect(skill?.content).toContain("FILTERED-PACKAGE-REVIEW");
+      expect(skill?.content).not.toContain("not found");
     } else {
-      process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-    }
-    rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  const projectRoot = () => join(tmpDir, ".pi", "skills");
-  const globalRoot = () => join(process.env.PI_CODING_AGENT_DIR!, "skills");
-
-  function writeFlat(root: string, name: string, content: string, ext = ".md") {
-    mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, name + ext), content);
-  }
-
-  function writeSkillDir(root: string, name: string, content: string) {
-    const dir = join(root, name);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "SKILL.md"), content);
-  }
-
-  it("returns empty array for empty skill list", () => {
-    expect(preloadSkills([], tmpDir)).toEqual([]);
-  });
-
-  it("loads a top-level flat .md skill from project", () => {
-    writeFlat(projectRoot(), "api-conventions", "# API Conventions");
-    const result = preloadSkills(["api-conventions"], tmpDir);
-    expect(result[0].content).toContain("API Conventions");
-  });
-
-  it("ignores .txt files (only .md is supported)", () => {
-    writeFlat(projectRoot(), "error-handling", "should not load", ".txt");
-    expect(preloadSkills(["error-handling"], tmpDir)[0].content).toContain("not found");
-  });
-
-  it("ignores extensionless files (only .md is supported)", () => {
-    writeFlat(projectRoot(), "bare-skill", "should not load", "");
-    expect(preloadSkills(["bare-skill"], tmpDir)[0].content).toContain("not found");
-  });
-
-  it("loads a top-level <name>/SKILL.md from project", () => {
-    writeSkillDir(projectRoot(), "writing-go", "# Writing Go");
-    expect(preloadSkills(["writing-go"], tmpDir)[0].content).toContain("Writing Go");
-  });
-
-  it("loads a top-level <name>/SKILL.md from getAgentDir()/skills", () => {
-    writeSkillDir(globalRoot(), "writing-python", "# Writing Python");
-    expect(preloadSkills(["writing-python"], tmpDir)[0].content).toContain("Writing Python");
-  });
-
-  it("loads a flat .md from getAgentDir()/skills", () => {
-    writeFlat(globalRoot(), "shell-tips", "use rg");
-    expect(preloadSkills(["shell-tips"], tmpDir)[0].content).toBe("use rg");
-  });
-
-  it("finds nested <subdir>/<name>/SKILL.md in getAgentDir()/skills", () => {
-    writeSkillDir(join(globalRoot(), "dev-tools"), "using-modern-cli", "# Modern CLI");
-    expect(preloadSkills(["using-modern-cli"], tmpDir)[0].content).toContain("Modern CLI");
-  });
-
-  it("loads <name>/SKILL.md from project .agents/skills (Agent Skills spec)", () => {
-    writeSkillDir(join(tmpDir, ".agents", "skills"), "writing-rust", "# Writing Rust");
-    expect(preloadSkills(["writing-rust"], tmpDir)[0].content).toContain("Writing Rust");
-  });
-
-  it("prefers .pi/skills over .agents/skills in the same project", () => {
-    writeSkillDir(projectRoot(), "shared", "from-pi");
-    writeSkillDir(join(tmpDir, ".agents", "skills"), "shared", "from-agents");
-    expect(preloadSkills(["shared"], tmpDir)[0].content).toBe("from-pi");
-  });
-
-  it("finds nested <subdir>/<name>/SKILL.md", () => {
-    writeSkillDir(join(projectRoot(), "dev-tools"), "using-modern-cli", "# Modern CLI");
-    expect(preloadSkills(["using-modern-cli"], tmpDir)[0].content).toContain("Modern CLI");
-  });
-
-  it("prefers project over global", () => {
-    writeSkillDir(projectRoot(), "shared", "from-project");
-    writeSkillDir(globalRoot(), "shared", "from-global");
-    expect(preloadSkills(["shared"], tmpDir)[0].content).toBe("from-project");
-  });
-
-  it("prefers shallower match (lex tie-break)", () => {
-    // Different depths — shallower wins.
-    writeSkillDir(join(projectRoot(), "z-deep", "nested"), "collide", "deep");
-    writeSkillDir(join(projectRoot(), "a-shallow"), "collide", "shallow");
-    expect(preloadSkills(["collide"], tmpDir)[0].content).toBe("shallow");
-
-    // Same depth — alphabetical wins.
-    writeSkillDir(join(projectRoot(), "b-sibling"), "tie", "b");
-    writeSkillDir(join(projectRoot(), "a-sibling"), "tie", "a");
-    expect(preloadSkills(["tie"], tmpDir)[0].content).toBe("a");
-  });
-
-  it("descends past a same-named dir that lacks SKILL.md to find a deeper match", () => {
-    // .pi/skills/foo exists empty; .pi/skills/foo/inner/foo/SKILL.md is the real skill.
-    mkdirSync(join(projectRoot(), "foo"), { recursive: true });
-    writeSkillDir(join(projectRoot(), "foo", "inner"), "foo", "deeper");
-    expect(preloadSkills(["foo"], tmpDir)[0].content).toBe("deeper");
-  });
-
-  it("does not descend into a sibling skill directory (skills don't nest)", () => {
-    // .pi/skills/outer is itself a skill; .pi/skills/outer/target/SKILL.md must NOT be found.
-    writeSkillDir(projectRoot(), "outer", "outer-skill");
-    writeSkillDir(join(projectRoot(), "outer"), "target", "hidden");
-    expect(preloadSkills(["target"], tmpDir)[0].content).toContain("not found");
-  });
-
-  it("skips node_modules during recursion", () => {
-    writeSkillDir(join(projectRoot(), "node_modules", "some-pkg"), "leaked", "should not load");
-    expect(preloadSkills(["leaked"], tmpDir)[0].content).toContain("not found");
-  });
-
-  it("skips dotfile directories during recursion", () => {
-    writeSkillDir(join(projectRoot(), ".hidden-tree"), "buried", "should not load");
-    expect(preloadSkills(["buried"], tmpDir)[0].content).toContain("not found");
-  });
-
-  it("returns fallback for missing skills", () => {
-    const result = preloadSkills(["nonexistent"], tmpDir);
-    expect(result[0].name).toBe("nonexistent");
-    expect(result[0].content).toContain("not found");
-  });
-
-  it("loads multiple skills", () => {
-    writeFlat(projectRoot(), "a", "Content A");
-    writeSkillDir(projectRoot(), "b", "Content B");
-    const result = preloadSkills(["a", "b"], tmpDir);
-    expect(result.map((r) => r.content)).toEqual(["Content A", expect.stringContaining("Content B")]);
-  });
-
-  it("skips skill names with path traversal (..)", () => {
-    expect(preloadSkills(["../../etc/passwd"], tmpDir)[0].content).toContain("path traversal");
-  });
-
-  it("skips skill names with forward slash", () => {
-    expect(preloadSkills(["sub/dir"], tmpDir)[0].content).toContain("path traversal");
-  });
-
-  it("skips skill names with backslash", () => {
-    expect(preloadSkills(["sub\\dir"], tmpDir)[0].content).toContain("path traversal");
-  });
-
-  it("skips skill names with spaces", () => {
-    expect(preloadSkills(["my skill"], tmpDir)[0].content).toContain("path traversal");
-  });
-
-  it("skips skill names starting with a dot", () => {
-    expect(preloadSkills([".hidden"], tmpDir)[0].content).toContain("path traversal");
-  });
-
-  it("skips empty skill names", () => {
-    expect(preloadSkills([""], tmpDir)[0].content).toContain("path traversal");
-  });
-
-  it("skips skill names exceeding 128 characters", () => {
-    const longName = "a".repeat(129);
-    expect(preloadSkills([longName], tmpDir)[0].content).toContain("path traversal");
-  });
-
-  it("loads valid skills alongside skipped unsafe ones", () => {
-    writeFlat(projectRoot(), "legit", "Good content");
-    const result = preloadSkills(["../evil", "legit"], tmpDir);
-    expect(result[0].content).toContain("path traversal");
-    expect(result[1].content).toBe("Good content");
-  });
-
-  it("rejects symlinked flat .md files", () => {
-    mkdirSync(projectRoot(), { recursive: true });
-    const secret = join(tmpDir, "secret.md");
-    writeFileSync(secret, "TOP SECRET");
-    symlinkSync(secret, join(projectRoot(), "evil.md"));
-    const result = preloadSkills(["evil"], tmpDir);
-    expect(result[0].content).toContain("not found");
-    expect(result[0].content).not.toContain("TOP SECRET");
-  });
-
-  it("rejects symlinked skill directories", () => {
-    mkdirSync(projectRoot(), { recursive: true });
-    const realDir = join(tmpDir, "real-skill");
-    mkdirSync(realDir, { recursive: true });
-    writeFileSync(join(realDir, "SKILL.md"), "TOP SECRET");
-    symlinkSync(realDir, join(projectRoot(), "evil-dir"));
-    const result = preloadSkills(["evil-dir"], tmpDir);
-    expect(result[0].content).toContain("not found");
-    expect(result[0].content).not.toContain("TOP SECRET");
-  });
-
-  it("rejects symlinked skill root", () => {
-    // <cwd>/.pi/skills → symlink to a directory that holds real-looking skills.
-    const realRoot = join(tmpDir, "elsewhere");
-    mkdirSync(realRoot, { recursive: true });
-    writeFileSync(join(realRoot, "leaked-flat.md"), "TOP SECRET FLAT");
-    mkdirSync(join(realRoot, "leaked-dir"), { recursive: true });
-    writeFileSync(join(realRoot, "leaked-dir", "SKILL.md"), "TOP SECRET DIR");
-    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-    symlinkSync(realRoot, projectRoot());
-
-    const flatResult = preloadSkills(["leaked-flat"], tmpDir)[0].content;
-    expect(flatResult).toContain("not found");
-    expect(flatResult).not.toContain("TOP SECRET");
-
-    const dirResult = preloadSkills(["leaked-dir"], tmpDir)[0].content;
-    expect(dirResult).toContain("not found");
-    expect(dirResult).not.toContain("TOP SECRET");
-  });
-
-  it.each([".pi", ".agents"])("rejects a project root reached through a symlinked %s", (dir) => {
-    // <cwd>/<dir> \u2192 a directory outside the project holding a real `skills/` tree.
-    const outside = join(tmpDir, "outside");
-    writeFlat(join(outside, "skills"), "leaked-flat", "TOP SECRET FLAT");
-    writeSkillDir(join(outside, "skills"), "leaked-dir", "TOP SECRET DIR");
-    const project = join(tmpDir, "project");
-    mkdirSync(project, { recursive: true });
-    symlinkSync(outside, join(project, dir));
-
-    for (const name of ["leaked-flat", "leaked-dir"]) {
-      const content = preloadSkills([name], project)[0].content;
-      expect(content).toContain("not found");
-      expect(content).not.toContain("TOP SECRET");
+      expect(skill?.content).toContain("not found");
+      expect(skill?.content).not.toContain("FILTERED-PACKAGE-REVIEW");
     }
   });
 
-  it("rejects symlinked SKILL.md inside a real skill directory", () => {
-    const skillDir = join(projectRoot(), "evil-inner");
-    mkdirSync(skillDir, { recursive: true });
-    const secret = join(tmpDir, "secret.md");
-    writeFileSync(secret, "TOP SECRET");
-    symlinkSync(secret, join(skillDir, "SKILL.md"));
-    const result = preloadSkills(["evil-inner"], tmpDir);
-    expect(result[0].content).toContain("not found");
-    expect(result[0].content).not.toContain("TOP SECRET");
+  it("recovers a package behind a rejected project alias with string sources and install roots", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const packageRoot = join(box.root, "package");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
+    writeSkill(join(packageRoot, "skills"), "review", "STRING-SOURCE-REVIEW");
+    box.settingsManager.setPackages([packageRoot]);
+    box.settingsManager.setProjectPackages(["../../package"]);
+    mkdirSync(join(box.cwd, ".pi", "npm"), { recursive: true });
+    mkdirSync(join(box.cwd, ".pi", "git"), { recursive: true });
+    mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
+    symlinkSync(join(packageRoot, "skills", "review"), join(box.cwd, ".pi", "skills", "review"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("STRING-SOURCE-REVIEW");
   });
 
-  describe("user roots follow symlinks like Pi", () => {
-    const home = () => join(tmpDir, "home");
-    const userAgentsRoot = () => join(home(), ".agents", "skills");
-    /** A real skill dir outside every root, the way installers keep vendored skills. */
-    const vendor = (name: string, content: string) => {
-      writeSkillDir(join(tmpDir, "vendor"), name, content);
-      return join(tmpDir, "vendor", name);
+  it("keeps a project package exclusion over the global fallback", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const packageRoot = join(box.root, "package");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
+    writeSkill(join(packageRoot, "skills"), "review", "PACKAGED");
+    box.settingsManager.setPackages([packageRoot]);
+    box.settingsManager.setProjectPackages([{ source: packageRoot, skills: [] }]);
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("not found");
+  });
+
+  it("does not restore a package excluded by the project behind a rejected alias", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const packageRoot = join(box.root, "package");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
+    writeSkill(join(packageRoot, "skills"), "review", "PACKAGED");
+    box.settingsManager.setPackages([packageRoot]);
+    box.settingsManager.setProjectPackages([{ source: packageRoot, skills: ["-skills/review"] }]);
+    mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
+    symlinkSync(join(packageRoot, "skills", "review"), join(box.cwd, ".pi", "skills", "review"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("not found");
+    expect(skill?.content).not.toContain("PACKAGED");
+  });
+
+  it("refuses a symlinked project skill root before it can shadow a global skill", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    const external = join(box.root, "external");
+    writeSkill(external, "review", "SYMLINKED PROJECT");
+    mkdirSync(join(box.cwd, ".pi"), { recursive: true });
+    symlinkSync(external, join(box.cwd, ".pi", "skills"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("GLOBAL");
+    expect(skill?.content).not.toContain("SYMLINKED PROJECT");
+  });
+
+  it("refuses a symlinked project skill file before it can shadow a global skill", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    const external = join(box.root, "external.md");
+    writeFileSync(external, "---\nname: review\ndescription: review\n---\nSYMLINKED PROJECT\n");
+    mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
+    symlinkSync(external, join(box.cwd, ".pi", "skills", "review.md"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("GLOBAL");
+    expect(skill?.content).not.toContain("SYMLINKED PROJECT");
+  });
+
+  it("refuses a symlinked .pi parent before it can shadow a global skill", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    const external = join(box.root, "external");
+    writeSkill(join(external, "skills"), "review", "SYMLINKED PROJECT");
+    symlinkSync(external, join(box.cwd, ".pi"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("GLOBAL");
+    expect(skill?.content).not.toContain("SYMLINKED PROJECT");
+  });
+
+  it("refuses a symlinked ancestor .agents parent before it can shadow a global skill", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const workspace = join(box.root, "workspace");
+    const cwd = join(workspace, "nested");
+    mkdirSync(join(workspace, ".git"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    const external = join(box.root, "external");
+    writeSkill(join(external, "skills"), "review", "SYMLINKED PROJECT");
+    symlinkSync(external, join(workspace, ".agents"));
+    const settingsManager = SettingsManager.create(cwd, box.agentDir, { projectTrusted: true });
+
+    const [skill] = await preloadSkills(["review"], cwd, { ...box, settingsManager });
+
+    expect(skill?.content).toContain("GLOBAL");
+    expect(skill?.content).not.toContain("SYMLINKED PROJECT");
+  });
+
+  it("refuses a symlinked ancestor .agents skill root before it can shadow a global skill", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const workspace = join(box.root, "workspace");
+    const cwd = join(workspace, "nested");
+    mkdirSync(join(workspace, ".git"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    const external = join(box.root, "external");
+    writeSkill(external, "review", "SYMLINKED PROJECT");
+    mkdirSync(join(workspace, ".agents"), { recursive: true });
+    symlinkSync(external, join(workspace, ".agents", "skills"));
+    const settingsManager = SettingsManager.create(cwd, box.agentDir, { projectTrusted: true });
+
+    const [skill] = await preloadSkills(["review"], cwd, { ...box, settingsManager });
+
+    expect(skill?.content).toContain("GLOBAL");
+    expect(skill?.content).not.toContain("SYMLINKED PROJECT");
+  });
+
+  it.each([
+    ["SKILL.md file", "review/SKILL.md"],
+    ["directory", "review"],
+  ])("refuses a symlinked ancestor .agents skill %s before it can shadow a global skill", async (_kind, entry) => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const workspace = join(box.root, "workspace");
+    const cwd = join(workspace, "nested");
+    mkdirSync(join(workspace, ".git"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    const external = join(box.root, "external");
+    writeSkill(external, "review", "SYMLINKED PROJECT");
+    mkdirSync(join(workspace, ".agents", "skills", "review"), { recursive: true });
+    if (entry === "review") rmSync(join(workspace, ".agents", "skills", "review"), { recursive: true });
+    symlinkSync(join(external, entry), join(workspace, ".agents", "skills", entry));
+    const settingsManager = SettingsManager.create(cwd, box.agentDir, { projectTrusted: true });
+
+    const [skill] = await preloadSkills(["review"], cwd, { ...box, settingsManager });
+
+    expect(skill?.content).toContain("GLOBAL");
+    expect(skill?.content).not.toContain("SYMLINKED PROJECT");
+  });
+
+  it("ignores an ancestor .agents that is a plain file", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const workspace = join(box.root, "workspace");
+    const cwd = join(workspace, "nested");
+    mkdirSync(join(workspace, ".git"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    writeFileSync(join(workspace, ".agents"), "not a directory");
+    const settingsManager = SettingsManager.create(cwd, box.agentDir, { projectTrusted: true });
+
+    const [skill] = await preloadSkills(["review"], cwd, { ...box, settingsManager });
+
+    expect(skill?.content).toContain("GLOBAL");
+  });
+
+  it.each(["..", "../escape", "a/b", "a\\b", "has space", ".hidden", "", "x".repeat(129)])("never matches the traversal-shaped name %j", async (name) => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+    writeFileSync(join(box.root, "escape.md"), "---\nname: escape\ndescription: escape\n---\nESCAPED\n");
+
+    const [skill] = await preloadSkills([name], box.cwd, box);
+
+    expect(skill?.content).toContain("not found");
+    expect(skill?.content).not.toContain("ESCAPED");
+  });
+
+  it("follows a symlinked user skills root like Pi", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const external = join(box.root, "external");
+    writeSkill(external, "review", "LINKED ROOT");
+    symlinkSync(external, join(box.agentDir, "skills"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("LINKED ROOT");
+  });
+
+  it("follows a symlinked user skill directory like Pi", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const external = join(box.root, "external");
+    writeSkill(external, "review", "LINKED USER");
+    mkdirSync(join(box.agentDir, "skills"), { recursive: true });
+    symlinkSync(join(external, "review"), join(box.agentDir, "skills", "review"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("LINKED USER");
+  });
+
+  it("follows a symlinked legacy user flat file", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const external = join(box.root, "review.md");
+    writeFileSync(external, "LINKED LEGACY FLAT");
+    mkdirSync(join(box.homeDir, ".pi", "skills"), { recursive: true });
+    symlinkSync(external, join(box.homeDir, ".pi", "skills", "review.md"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, { ...box, homeDir: box.homeDir });
+
+    expect(skill?.content).toBe("LINKED LEGACY FLAT");
+  });
+
+  it("preserves an injected home's .agents skill root", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    writeSkill(join(box.homeDir, ".agents", "skills"), "review", "INJECTED AGENTS");
+
+    const [skill] = await preloadSkills(["review"], box.cwd, { ...box, homeDir: box.homeDir });
+
+    expect(skill?.content).toContain("INJECTED AGENTS");
+  });
+
+  it("preserves legacy user roots and explicit flat-file lookup", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    mkdirSync(join(box.homeDir, ".pi", "skills"), { recursive: true });
+    writeFileSync(join(box.homeDir, ".pi", "skills", "review.md"), "LEGACY FLAT");
+
+    const [skill] = await preloadSkills(["review"], box.cwd, { ...box, homeDir: box.homeDir });
+
+    expect(skill?.content).toBe("LEGACY FLAT");
+  });
+
+  it("finds a preset-packaged skill with an injected home", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    const home = box.homeDir;
+    box.settingsManager.setPackages([presetRoot]);
+
+    const [skill] = await preloadSkills(["coding-like-redd"], box.cwd, { ...box, homeDir: home });
+
+    expect(skill?.content).toContain("## Python Development");
+  });
+
+  it("does not install a missing configured package while discovering skills", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    box.settingsManager.setPackages(["npm:preload-install-probe-missing"]);
+    let installAttempted = false;
+    const manager = DefaultPackageManager.prototype as unknown as {
+      installParsedSource: () => Promise<void>;
     };
-
-    it("loads a symlinked skill directory from getAgentDir()/skills", () => {
-      mkdirSync(globalRoot(), { recursive: true });
-      symlinkSync(vendor("linked", "LINKED"), join(globalRoot(), "linked"));
-      expect(preloadSkills(["linked"], tmpDir)[0].content).toBe("LINKED");
+    const install = vi.spyOn(manager, "installParsedSource").mockImplementation(async () => {
+      installAttempted = true;
+      throw new Error("INSTALL ATTEMPT");
     });
+    vi.stubEnv("PI_OFFLINE", "");
+    delete process.env.PI_OFFLINE;
 
-    it("loads a symlinked skill directory from ~/.agents/skills, also when cwd is home", () => {
-      mkdirSync(userAgentsRoot(), { recursive: true });
-      symlinkSync(vendor("codebase-design", "VOCAB"), join(userAgentsRoot(), "codebase-design"));
-      expect(preloadSkills(["codebase-design"], tmpDir, home())[0].content).toBe("VOCAB");
-      // cwd == home makes <cwd>/.agents/skills the same directory: the strict project pass
-      // refuses the link, the user pass still loads it.
-      expect(preloadSkills(["codebase-design"], home(), home())[0].content).toBe("VOCAB");
+    try {
+      const [skill] = await preloadSkills(["missing"], box.cwd, box);
+      expect(skill).toEqual({ name: "missing", content: "(Skill \"missing\" not found in Pi's configured skill resources)" });
+      expect(installAttempted).toBe(false);
+    } finally {
+      install.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("treats only the runtime home's auto-discovered user .agents skills as ambient", () => {
+    const skill = (path: string, scope: "user" | "project", source: string): ResolvedResource => ({
+      path,
+      enabled: true,
+      metadata: { source, scope, origin: "top-level" },
     });
+    const ambientPath = "/runtime/.agents/skills/review/SKILL.md";
+    expect(isAmbientUserAgentsSkill(skill(ambientPath, "user", "auto"), "/injected", "/runtime")).toBe(true);
+    expect(isAmbientUserAgentsSkill(skill(ambientPath, "user", "auto"), undefined, "/runtime")).toBe(false);
+    expect(isAmbientUserAgentsSkill(skill(ambientPath, "user", "auto"), "/runtime", "/runtime")).toBe(false);
+    expect(isAmbientUserAgentsSkill(skill(ambientPath, "user", "npm:pkg"), "/injected", "/runtime")).toBe(false);
+    expect(isAmbientUserAgentsSkill(skill(ambientPath, "project", "auto"), "/injected", "/runtime")).toBe(false);
+    expect(isAmbientUserAgentsSkill(skill("/injected/.agents/skills/a/SKILL.md", "user", "auto"), "/injected", "/runtime")).toBe(false);
+  });
 
-    it("follows a symlinked user root, symlinked intermediate dirs and symlinked files", () => {
-      const realRoot = join(tmpDir, "dotfiles-skills");
-      writeFlat(realRoot, "flat-real", "FLAT");
-      writeSkillDir(join(realRoot, "group"), "nested", "NESTED");
-      mkdirSync(join(home(), ".agents"), { recursive: true });
-      symlinkSync(realRoot, userAgentsRoot());
-      mkdirSync(globalRoot(), { recursive: true });
-      symlinkSync(join(realRoot, "flat-real.md"), join(globalRoot(), "flat-link.md"));
-      symlinkSync(join(realRoot, "group"), join(globalRoot(), "linked-group"));
-      const inner = vendor("inner", "unused");
-      rmSync(join(inner, "SKILL.md"));
-      symlinkSync(join(realRoot, "flat-real.md"), join(inner, "SKILL.md"));
-      symlinkSync(inner, join(globalRoot(), "inner"));
+  it("reports a missing named skill without reading a path", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
 
-      const [flat, nested, flatLink, inSkill] = preloadSkills(["flat-real", "nested", "flat-link", "inner"], tmpDir, home());
-      expect(flat.content).toBe("FLAT");
-      expect(nested.content).toBe("NESTED");
-      expect(flatLink.content).toBe("FLAT");
-      expect(inSkill.content).toBe("FLAT");
-    });
+    const [skill] = await preloadSkills(["missing"], box.cwd, box);
 
-    it("skips broken links and directory cycles, still finding real skills", () => {
-      mkdirSync(globalRoot(), { recursive: true });
-      // Two links back to the root: unguarded BFS would double its queue on every level.
-      symlinkSync(globalRoot(), join(globalRoot(), "loop-a"));
-      symlinkSync(globalRoot(), join(globalRoot(), "loop-b"));
-      symlinkSync(join(tmpDir, "nowhere"), join(globalRoot(), "broken"));
-      symlinkSync(join(tmpDir, "nowhere.md"), join(globalRoot(), "broken-flat.md"));
-      writeSkillDir(join(globalRoot(), "zz"), "deep", "DEEP");
-
-      const [missing, broken, brokenFlat, deep] = preloadSkills(["missing", "broken", "broken-flat", "deep"], tmpDir, home());
-      expect(missing.content).toContain("not found");
-      expect(broken.content).toContain("not found");
-      expect(brokenFlat.content).toContain("not found");
-      expect(deep.content).toBe("DEEP");
-    });
-
-    it("keeps project roots strict when the same name is linked there", () => {
-      mkdirSync(projectRoot(), { recursive: true });
-      const secret = join(tmpDir, "secret-skill");
-      mkdirSync(secret, { recursive: true });
-      writeFileSync(join(secret, "SKILL.md"), "TOP SECRET");
-      symlinkSync(secret, join(projectRoot(), "shared"));
-      mkdirSync(globalRoot(), { recursive: true });
-      symlinkSync(vendor("shared", "USER COPY"), join(globalRoot(), "shared"));
-      const content = preloadSkills(["shared"], tmpDir)[0].content;
-      expect(content).toBe("USER COPY");
-      expect(content).not.toContain("TOP SECRET");
-    });
+    expect(skill).toEqual({ name: "missing", content: "(Skill \"missing\" not found in Pi's configured skill resources)" });
   });
 });
