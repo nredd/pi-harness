@@ -70,6 +70,9 @@ Extension-by-extension coverage and headless/live limits are recorded [here](../
 `inprocess/memory-deferred-kit.test.ts` additionally drives real memory/context-engine/kit
 factories: system-context refresh, session-lifetime tool promotion and successful controlled
 monitor start/read through faux model calls, with an invalid-date error and no fetches.
+`inprocess/monitor-promotion-lifecycle.test.ts` drives the real engine, kit and subagents through
+multiple parent turns plus a delivered child notification, then proves monitor promotion remains
+callable after the lifecycle and can be demoted and re-promoted without pinning monitor tools.
 
 Infrastructure:
 
