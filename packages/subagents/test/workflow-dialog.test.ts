@@ -423,6 +423,17 @@ describe("per-agent detail", () => {
     expect(rightRows(rows).map(bare).join("\n")).toContain("did not resolve");
   });
 
+  it("bounds multiline fallback notes by physical rows without losing their diagnosis", () => {
+    const modelNote = `Note: configured model "bad${"\n".repeat(30)}id" did not resolve; running on parent model anthropic/x.`;
+    for (const width of [40, 80]) {
+      const rows = cells(detail({ progress: [agentEntry({ index: 0, state: "done", modelNote })], width }));
+      const noteRows = rows.slice(1, 5).map(row => row.right);
+      expect(noteRows, `width=${width}`).toHaveLength(4);
+      expect(noteRows.join("\n"), `width=${width}`).toContain("Note:");
+      expect(noteRows.join("\n"), `width=${width}`).toContain("anthropic/x");
+    }
+  });
+
   it("shows the thinking level and discloses one that was clamped", () => {
     const rows = detail({
       progress: [agentEntry({ index: 0, state: "done", thinking: "low", requestedThinking: "max" })],
