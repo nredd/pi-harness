@@ -357,9 +357,11 @@ wait`,
 		const {
 			child: setupChild,
 			done,
+			closed,
 			capture,
 		} = startSetup(packageDir, env, ["--allow-build"], observer);
 		let compilerReaped = false;
+		let fixtureFailure;
 		try {
 			const [compilerPid, , wrapperPid] = await Promise.all([
 				waitForReadyPid(pidFile),
@@ -421,29 +423,25 @@ wait`,
 				"SIGTERM to setup must reap the compiler process group",
 			);
 			compilerReaped = true;
+		} catch (error) {
+			fixtureFailure = error;
+			throw error;
 		} finally {
-			setupChild.kill("SIGKILL");
-			// Successful cancellation releases PID ownership; cleanup only a failed fixture.
-			for (const file of compilerReaped ? [] : [leaderFile, pidFile]) {
-				const pid = Number(
-					await fs.readFile(file, "utf8").catch(
-						/** @returns {string} Missing failed-fixture markers have no owned PID. @throws {never} No errors. */
-						() => "",
-					),
-				);
-				if (pid > 0) {
-					try {
-						if (file === leaderFile) process.kill(-pid, "SIGKILL");
-					} catch {
-						/* already gone */
-					}
-					try {
-						process.kill(pid, "SIGKILL");
-					} catch {
-						/* already gone */
-					}
-				}
-			}
+			await finishCheckCleanup(
+				"packed setup fixture cleanup",
+				[
+					/** @returns {Promise<void>} Stops only the still-owned setup wrapper, which reaps its live compiler children. @throws {Error} On bounded cleanup failure. */
+					() =>
+						stopCheckChild(
+							setupChild,
+							closed,
+							compilerReaped
+								? "completed packed setup fixture"
+								: "failed packed setup fixture",
+						),
+				],
+				fixtureFailure,
+			);
 		}
 	}
 
