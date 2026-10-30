@@ -60,9 +60,13 @@ describe("toolDescriptionMode", () => {
     process.env.PI_CODING_AGENT_DIR = hermeticAgentDir;
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-    if (settings) {
-      writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify(settings));
-    }
+    // Package agents are installation-dependent and make the compact type list
+    // vary by runner. This fixture verifies the built-in description contract,
+    // so exclude ambient package agents while retaining explicit local fixtures.
+    writeFileSync(
+      join(tmpDir, ".pi", "subagents.json"),
+      JSON.stringify({ packageAgents: false, ...settings }),
+    );
     beforeInstantiate?.();
     process.chdir(tmpDir);
 
