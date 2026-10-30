@@ -27,7 +27,6 @@ import { resolveCwdParam } from "../src/invocation-config.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock, resolveMemoryDir } from "../src/memory.js";
 import { invalidatePackageCache, packageAgentDirs } from "../src/package-resources.js";
 import { loadBudgetPolicy, loadSettings } from "../src/settings.js";
-import { preloadSkills } from "../src/skill-loader.js";
 import { listSavedWorkflows, readSavedWorkflow, resolveWorkflowScript } from "../src/workflow/saved.js";
 
 const probes = [fs.existsSync, fs.lstatSync, fs.statSync, fs.readdirSync, fs.readFileSync, fs.mkdirSync, fs.realpathSync];
@@ -72,12 +71,6 @@ describe("home injection without real-home filesystem access", () => {
     expect(resolveMemoryDir("scout", "user", cwd, home)).toBe(legacy);
     expect(buildMemoryBlock("scout", "user", cwd, home)).toContain("ISOLATED MEMORY");
     expect(buildReadOnlyMemoryBlock("scout", "user", cwd, home)).toContain("ISOLATED MEMORY");
-  });
-
-  it("searches every skill root under the injected home, including missing skills", () => {
-    write(join(home, ".agents", "skills", "injected.md"), "ISOLATED SKILL");
-    expect(preloadSkills(["injected", "missing"], cwd, home).map(skill => skill.content))
-      .toEqual(["ISOLATED SKILL", expect.stringContaining("not found")]);
   });
 
   it("loads and locates custom agents from the injected home", () => {

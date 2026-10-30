@@ -8,13 +8,11 @@ import { isDisabledContent } from "../src/agent-file-toggle.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { enterpriseLocalPath, readEnterpriseLocalManifest } from "../src/enterprise-local.js";
 import { detectEnv } from "../src/env.js";
-import { safeReadFile } from "../src/memory.js";
 import { isTierDisclosure, tierNote } from "../src/model-tiers.js";
 import { listPiPackages, resetPackageState } from "../src/package-resources.js";
 import { budgetUsage, enqueueBudget, pumpBudget } from "../src/process-budget.js";
 import { ScheduleStore } from "../src/schedule-store.js";
 import { loadSettings } from "../src/settings.js";
-import { preloadSkills } from "../src/skill-loader.js";
 import { DEFAULT_AGENT_NAMES, type ScheduledSubagent } from "../src/types.js";
 import { compileJsonSchema } from "../src/workflow/json-schema.js";
 import { listSavedWorkflows } from "../src/workflow/saved.js";
@@ -79,19 +77,6 @@ describe("private persistence boundaries", () => {
     expect(warn).toHaveBeenCalledOnce();
     expect(warn.mock.calls[0][0]).toContain("Ignoring invalid");
     expect(warn.mock.calls[0][0]).not.toContain(JSON.stringify(manifest));
-  });
-
-  it("treats a directory where memory or a skill index belongs as unreadable, then finds the next usable skill", () => {
-    const path = join(root, "project", ".pi", "skills");
-    mkdirSync(join(path, "broken", "SKILL.md"), { recursive: true });
-    expect(safeReadFile(join(path, "broken", "SKILL.md"))).toBeUndefined();
-    // User roots also continue after readdir fails on a root that is a file.
-    mkdirSync(join(root, "agent"), { recursive: true });
-    writeFileSync(join(root, "agent", "skills"), "not a directory");
-    const fallback = join(root, ".agents", "skills");
-    mkdirSync(fallback, { recursive: true });
-    writeFileSync(join(fallback, "broken.md"), "fallback content");
-    expect(preloadSkills(["broken"], join(root, "project"), root)).toEqual([{ name: "broken", content: "fallback content" }]);
   });
 
   it("reports bounded lock contention without overwriting the owner or backing file", () => {

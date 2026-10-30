@@ -182,6 +182,12 @@ describe("memory", () => {
       expect(safeReadFile(link)).toBeUndefined();
     });
 
+    it("returns undefined for a directory where a file belongs", () => {
+      const dir = join(tmpDir, "directory.txt");
+      mkdirSync(dir);
+      expect(safeReadFile(dir)).toBeUndefined();
+    });
+
     it("returns undefined for nonexistent files", () => {
       expect(safeReadFile(join(tmpDir, "nope.txt"))).toBeUndefined();
     });
