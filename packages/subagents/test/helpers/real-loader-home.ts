@@ -6,13 +6,17 @@ import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Context } from "@earendil-works/pi-ai";
+import { type ExtensionAPI, type ExtensionContext, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runAgent } from "../../src/agent-runner.js";
 import { registerAgents } from "../../src/agent-types.js";
+import { createSubagentsExtension } from "../../src/index.js";
 import { runMentionClone } from "../../src/mention-clone.js";
+import { preloadSkills } from "../../src/skill-loader.js";
 import type { AgentConfig } from "../../src/types.js";
 import { type AmbientAccessBypass, exerciseAmbientAccessBypass } from "./ambient-access-bypass.js";
+import { agentCall, type FauxReply, runPrintMode } from "./print-mode-runner.js";
 
 type TracedFunction = (...args: never[]) => unknown;
 
@@ -21,7 +25,7 @@ async function main(): Promise<void> {
   const mode = process.env.PI_HOME_FIXTURE_MODE;
   const scope = process.env.PI_HOME_FIXTURE_SCOPE;
   const bypass = process.env.PI_HOME_FIXTURE_BYPASS as AmbientAccessBypass | undefined;
-  if (!root || !mode || !scope) throw new Error("Expected root, runner|clone and global|project");
+  if (!root || !mode || !scope) throw new Error("Expected root, runner|clone|preload|child and global|project");
   const ambient = join(root, "ambient");
   if (process.env.HOME !== ambient) throw new Error("Probe must start with disposable HOME");
   const home = join(root, "injected");
@@ -108,6 +112,54 @@ async function main(): Promise<void> {
   }
 
   if (bypass) await exerciseAmbientAccessBypass(ambient, bypass);
+
+  if (mode === "preload") {
+    write(join(agentDir, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: injected\n---\nINJECTED-SKILL\n");
+    write(join(ambientSkillsDir, "ambient-only", "SKILL.md"), "---\nname: ambient-only\ndescription: ambient\n---\nAMBIENT-SKILL\n");
+    const [skill] = await preloadSkills(["ambient-only"], cwd, {
+      agentDir,
+      settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted: false }),
+      homeDir: home,
+    });
+    fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", content: skill?.content }));
+    return;
+  }
+
+  if (mode === "child" || mode === "child-disabled" || mode === "child-package-disabled" || mode === "child-package-allowed") {
+    // A real parent session, factory-injected home, and real child session.
+    const packageRoot = join(home, "private-package");
+    write(join(packageRoot, "package.json"), JSON.stringify({ name: "private-skills", pi: { skills: ["./skills"] } }));
+    write(join(packageRoot, "skills", "packaged", "SKILL.md"), "---\nname: packaged\ndescription: packaged\n---\nPACKAGED-PRIVATE-SKILL\n");
+    write(join(agentDir, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: review\n---\nDISABLED-GLOBAL-SKILL\n");
+    write(join(ambientSkillsDir, "ambient-only", "SKILL.md"), "---\nname: ambient-only\ndescription: ambient\n---\nAMBIENT-SKILL\n");
+    write(join(home, ".agents", "skills", "injected-agents", "SKILL.md"), "---\nname: injected-agents\ndescription: injected\n---\nINJECTED-AGENTS-SKILL\n");
+    const packageAlias = mode === "child-package-disabled" || mode === "child-package-allowed";
+    if (packageAlias) {
+      const source = mode === "child-package-disabled" ? relative(join(cwd, ".pi"), packageRoot) : packageRoot;
+      write(join(cwd, ".pi", "settings.json"), JSON.stringify({ packages: [{ source, skills: mode === "child-package-disabled" ? [] : ["skills/packaged"] }] }));
+      fs.mkdirSync(join(cwd, ".pi", "skills"), { recursive: true });
+      fs.symlinkSync(join(packageRoot, "skills", "packaged"), join(cwd, ".pi", "skills", "packaged"));
+    }
+    write(join(agentDir, "settings.json"), JSON.stringify({ packages: [packageRoot], ...(mode === "child-disabled" ? { skills: ["-skills/review"] } : {}) }));
+    write(join(agentDir, "agents", "scout.md"), "---\nname: scout\ndescription: scout\ntools: read\nskills: packaged, review, injected-agents, ambient-only\nextensions: false\n---\nScout.\n");
+    let childPrompt = "";
+    const respond = (context: Context): FauxReply => {
+      const transcript = JSON.stringify([context.systemPrompt, context.messages]);
+      if (transcript.includes('active_agent name=\\"scout\\"')) {
+        childPrompt = transcript;
+        return "child done";
+      }
+      if (context.messages.some((message) => message.role === "toolResult")) return "parent done";
+      return agentCall({ subagent_type: "scout", description: "check", prompt: "check", run_in_background: false });
+    };
+    const run = await runPrintMode({
+      prompt: "check", cwd, live: false, isolateGlobals: false, projectTrusted: packageAlias,
+      respond, subagentsFactory: createSubagentsExtension({ homeDir: home }),
+    });
+    await run.dispose();
+    fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", childPrompt }));
+    return;
+  }
 
   const ctx = {
     cwd, model: undefined, modelRegistry: {},

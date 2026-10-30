@@ -995,6 +995,14 @@ export async function runAgent(
 
   // Get parent system prompt for append-mode agents
   const parentSystemPrompt = ctx.getSystemPrompt();
+  const agentDir = resolveAgentDir(options.homeDir);
+  // The child inherits the parent's project-trust decision. Pi otherwise defaults
+  // SettingsManager to trusted, which could load project MCP configuration; resolve
+  // it before resource loading so untrusted skills cannot shadow trusted resources.
+  const projectTrusted = options.configCwd !== undefined && options.configProjectTrusted !== undefined
+    ? options.configProjectTrusted
+    : ctx.isProjectTrusted();
+  const settingsManager = SettingsManager.create(configCwd, agentDir, { projectTrusted });
 
   // Build prompt extras (memory, skill preloading)
   const extras: PromptExtras = {};
@@ -1013,7 +1021,7 @@ export async function runAgent(
 
   // Skill preloading: when skills is string[], preload their content into prompt
   if (Array.isArray(skills)) {
-    const loaded = preloadSkills(skills, configCwd, options.homeDir);
+    const loaded = await preloadSkills(skills, configCwd, { agentDir, settingsManager, homeDir: options.homeDir });
     if (loaded.length > 0) {
       extras.skillBlocks = loaded;
     }
@@ -1074,8 +1082,6 @@ export async function runAgent(
   // Still pass noSkills: true since we don't need the skill loader to load them again.
   const noSkills = skills === false || Array.isArray(skills);
 
-  const agentDir = resolveAgentDir(options.homeDir);
-
   // Extension loading:
   // - true  → all default-discovered extensions
   // - false → none (noExtensions)
@@ -1133,14 +1139,6 @@ export async function runAgent(
           };
         };
 
-  // The child inherits the parent's project-trust decision. pi's SettingsManager
-  // defaults to trusted, so without this a subagent in a project the user declined
-  // to trust would load its `.pi` extensions and settings, and pi's built-in MCP
-  // would start the stdio servers in its `.pi/mcp.json`.
-  const projectTrusted = options.configCwd !== undefined && options.configProjectTrusted !== undefined
-    ? options.configProjectTrusted
-    : ctx.isProjectTrusted();
-  const settingsManager = SettingsManager.create(configCwd, agentDir, { projectTrusted });
   // That trust covers the parent's project (`configCwd`), not a directory a spawn
   // was sent into. The session answers `ctx.isProjectTrusted()` for its own cwd,
   // which pi's MCP uses to read `<cwd>/.pi/mcp.json` — so a cross-directory session

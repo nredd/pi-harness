@@ -3331,7 +3331,9 @@ describe("agent-runner injected home forwarding", () => {
   it("forwards the home to skill preloading", async () => {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ skills: ["injected"] }));
     await runAgent(ctx, "Explore", "go", { pi, homeDir });
-    expect(preloadSkills).toHaveBeenLastCalledWith(["injected"], ctx.cwd, homeDir);
+    expect(preloadSkills).toHaveBeenLastCalledWith(["injected"], ctx.cwd, expect.objectContaining({
+      agentDir: join(homeDir, ".pi", "agent"), homeDir,
+    }));
   });
 
   it.each([true, false])("forwards the home to memory with write=%s", async write => {
