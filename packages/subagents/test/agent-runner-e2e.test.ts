@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extensionCanonicalName } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
+import { DEFAULT_AGENTS } from "../src/default-agents.js";
 import type { AgentConfig } from "../src/types.js";
 import { registerFauxProvider } from "./helpers/pi-ai.js";
 import { runAgent } from "./helpers/run-selected-agent.js";
@@ -143,6 +144,14 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     const active = await activeToolsFor({ extensions: false });
     expect(active).not.toContain(EXT_TOOL);
     for (const b of BUILTINS) expect(active).toContain(b);
+  });
+
+  it.each(["Explore", "Plan"])("%s admits only shell-less built-ins and does not load a mutating extension", async (type) => {
+    const config = DEFAULT_AGENTS.get(type);
+    if (!config) throw new Error(`Missing default ${type}`);
+    const active = await activeToolsFor(config);
+    expect(active).toEqual(["read", "grep", "find", "ls"]);
+    expect(registered).not.toContain(EXT_TOOL);
   });
 
   it("disallowedTools removes a real extension tool from the live session", async () => {

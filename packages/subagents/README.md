@@ -558,6 +558,8 @@ tools: "*, ext:mcp/search"
 isolated: true                    # hermetic: built-ins only, no extensions/skills/context
 ```
 
+The embedded `Explore` and `Plan` definitions use only `read`, `grep`, `find`, and `ls`, with `extensions: false`. They deliberately omit `bash`: a prompt cannot make an unrestricted shell read-only. Their tool restriction is an enforced child-tool surface, not an operating-system or filesystem sandbox; custom overrides must choose any extension selectors deliberately.
+
 A few rules the examples don't make obvious:
 
 - `extensions:` is the sole loading authority. `ext:foo` in `tools:` narrows what surfaces; it can't load `foo` on its own. Mismatches fire `extension-error:…` warnings.
