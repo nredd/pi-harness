@@ -12,7 +12,6 @@ Environment:
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sys
 import tempfile
@@ -46,9 +45,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 SNAPSHOT_FILE = "stack-snapshot.json"
-
-
-LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -152,40 +148,6 @@ def fetch_stack_runs(ctx: VerifyContext, source_sha: str) -> list[int]:
     return registry_stack_runs(entries, artifacts, source_sha)
 
 
-def override_stack_runs(ctx: VerifyContext, source_sha: str) -> list[int]:
-    """List every push/main CI run of the commit, whatever its conclusion, for an owner override.
-
-    Parameters:
-        ctx (VerifyContext): runner context.
-        source_sha (str): selected commit.
-
-    Returns:
-        list[int]: sorted run IDs recorded as (waived) stack evidence.
-
-    Raises:
-        ValueError: no CI run exists for the commit at all.
-    """
-    listed = run_command(
-        "gh", "run", "list",
-        "--repo", ctx.repo,
-        "--workflow", "ci.yml",
-        "--commit", source_sha,
-        "--limit", "100",
-        "--json", "databaseId,event,headBranch,headSha,conclusion",
-    )  # fmt: skip
-    runs = [
-        run for run in json.loads(listed.stdout)
-        if run.get("event") == "push" and run.get("headBranch") == "main" and run.get("headSha") == source_sha
-    ]  # fmt: skip
-    if not runs:
-        raise ValueError(f"OWNER OVERRIDE still needs a push/main CI run for '{source_sha}'")
-    for run in runs:
-        LOGGER.warning(
-            f"OWNER OVERRIDE records CI run {run['databaseId']} with conclusion {run.get('conclusion')!r}"
-        )
-    return sorted(int(run["databaseId"]) for run in runs)
-
-
 def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
     """Verify every gate for the commit and write the candidate snapshot.
 
@@ -201,17 +163,8 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
     rules = gh_json(f"repos/{ctx.repo}/rules/branches/main")
     pages = gh_json(f"repos/{ctx.repo}/commits/{source_sha}/check-runs?per_page=100")
     required = required_checks(flatten_pages(rules))
-    if ctx.operation == "owner-override":
-        checks = sorted(check.context for check in required)
-        try:
-            verify_required_checks(required, flatten_pages(pages), source_sha)
-        except ValueError as waived:
-            LOGGER.warning(f"OWNER OVERRIDE waives required checks: {waived}")
-        stack_runs = override_stack_runs(ctx, source_sha)
-    else:
-        checks = verify_required_checks(required, flatten_pages(pages), source_sha)
-        # Record the actual full dispatch, not the selective push/main smoke.
-        stack_runs = [full_run]
+    checks = verify_required_checks(required, flatten_pages(pages), source_sha)
+    stack_runs = fetch_stack_runs(ctx, source_sha)
     stack_path = ctx.promo / "personal.json"
     stack_path.write_text(
         run_command(

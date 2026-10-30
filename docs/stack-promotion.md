@@ -102,9 +102,6 @@ Then validate it with `StackSnapshot` (`integration/harness/promotion.py`) and r
 
 After this PR merges, run `verify-only` on a `main` SHA whose CI ran the stack job, then `promote` with the same SHA and approve the `stack-promotion` environment. This PR dispatches nothing and creates no tag, release, ruleset or environment.
 
-## Retiring owner override
+## Historical waived record
 
-The historical `owner-override` operation is being removed separately by the combined recovery
-change. Do not use it. The new full release barrier is unconditional, including for that legacy
-input; it cannot waive missing full execution evidence. This PR neither restores nor authorizes
-an override, and must be integrated without reverting its separate removal.
+`stack/17236539759ccc8858e605ed3f07531cacf2d9e0` is an immutable historical owner-waived record, not green-CI evidence. Do not alter its tag or release, and do not treat retrospective review as satisfying its pre-release gates. The `owner-override` operation no longer exists; recovery requires an ordinary reviewed, green-CI `verify-only` then `promote` flow.
