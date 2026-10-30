@@ -442,4 +442,27 @@ describe("git_commit merge approval", () => {
 		expect((result.structuredContent as { stage: string }).stage).toBe("validate");
 		expect(mock.text(result)).toContain("Invalid MERGE_HEAD");
 	});
+
+	it("rethrows an aborted repository query instead of treating it as no merge", async () => {
+		const { repo } = mergeFixture();
+		const controller = new AbortController();
+		controller.abort();
+		await expect(prepareMerge(["shared.txt"], { cwd: repo, signal: controller.signal })).rejects.toThrow(
+			/git merge approval/,
+		);
+	});
+
+	it("skips a directory named like a hook, as Git does", async () => {
+		const { root, repo } = mergeFixture();
+		const hooks = join(root, "hooks");
+		mkdirSync(join(hooks, "pre-commit"), { recursive: true });
+		git(repo, ["config", "core.hooksPath", hooks]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Skip hook directory", paths: ["shared.txt"], push: false },
+			repo,
+		);
+		expect(result.isError, mock.text(result)).toBe(false);
+		expect(parents(repo)).toHaveLength(2);
+	});
 });

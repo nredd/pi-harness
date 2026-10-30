@@ -58,7 +58,7 @@ function proxiedHooks(hooksDir: string): string[] {
 		if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
 	}
 	const names = new Set(["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "reference-transaction"]);
-	for (const name of present) if (name !== "run.mjs" && /^[A-Za-z0-9_-]+$/.test(name)) names.add(name);
+	for (const name of present) if (/^[A-Za-z0-9_-]+$/.test(name)) names.add(name);
 	return [...names];
 }
 
@@ -87,7 +87,7 @@ function writeHookProxy(directory: string, approval: Approval): void {
 	const runner = join(directory, "run.mjs");
 	writeFileSync(
 		runner,
-		`import { accessSync, constants, readFileSync } from "node:fs";
+		`import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 const approval = ${JSON.stringify(approval)};
@@ -109,6 +109,7 @@ try {
 	const original = join(approval.hooks, hook);
 	let executable = true;
 	try {
+		if (!statSync(original).isFile()) throw Object.assign(new Error("not a file"), { code: "ENOENT" });
 		accessSync(original, constants.X_OK);
 	} catch (error) {
 		if ((error)?.code !== "ENOENT" && (error)?.code !== "ENOTDIR" && (error)?.code !== "EACCES") throw error;
@@ -153,9 +154,11 @@ export async function prepareMerge(
 	let mergePath: string;
 	try {
 		mergePath = await query(["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"]);
-	} catch {
-		// No usable repository state: not a merge. The ordinary `add`/`commit` path reports the real failure.
-		return undefined;
+	} catch (error) {
+		// Not a repository means not a merge: the ordinary `add` path reports it. Timeouts, aborts and
+		// anything else must surface as themselves.
+		if (/^git merge approval: not a git repository/.test((error as Error).message)) return undefined;
+		throw error;
 	}
 	let mergeHead: string;
 	try {

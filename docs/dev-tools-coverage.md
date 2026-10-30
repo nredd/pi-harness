@@ -20,10 +20,15 @@ Initial providers agree exactly on lines/functions:
 | V8 | 1410/1503 (93.81%) | 247/261 (94.63%) | 1650/1860 (88.70%) | 1210/1557 (77.71%) |
 | Istanbul (primary) | 1410/1503 (93.81%) | 247/261 (94.63%) | 1650/1860 (88.70%) | 1198/1557 (76.94%) |
 
-Final primary Node result: **1502/1502 lines (100%), 260/260 functions (100%)**,
-1771/1859 statements (95.26%), 1319/1557 branches (84.71%). All 23 executable modules
+Final primary Node result at #195 (22 modules, historical receipt): **1502/1502 lines (100%), 260/260 functions (100%)**,
+1771/1859 statements (95.26%), 1319/1557 branches (84.71%). All 22 executable modules
 have zero missing lines/functions. Node and Bun Vitest each pass 411 tests in 29 files;
 Bun's native scenario gate passes four tests. Biome and TypeScript checks pass.
+
+Current primary Node result after #286 (23 modules; `src/git/merge.ts` added), from
+`vitest run --coverage` on the final PR head: **1586/1586 lines (100%), 275/275 functions
+(100%)**, 1867/1957 statements (95.40%), 1374/1616 branches (85.02%); **441 tests in 31 files**.
+Bun native scenarios: 5 passed.
 
 The line/function denominator decreases by one only because the unreachable mutex initializer
 is removed (explained below), not because any executable source file is excluded.
@@ -182,7 +187,7 @@ The checked-in parameterization remains only `[false, true]`. Full final gates w
 
 - Biome and TypeScript: clean.
 - Node Vitest + Istanbul: **412 passed**, 29 files; **1502/1502 lines, 260/260 functions**,
-  1772/1859 statements (95.32%), 1320/1557 branches (84.77%); all 23 executable modules included.
+  1772/1859 statements (95.32%), 1320/1557 branches (84.77%); all 22 executable modules included (#195 receipt; see the current result above).
 - Bun Vitest: **412 passed**, 29 files; Bun native scenarios: **4 passed**.
 
 Use `coverage-istanbul-macosfix` for this final primary run, preserving both original provider
