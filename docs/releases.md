@@ -19,9 +19,8 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 - Legacy tags use the frozen `LEGACY_CHECKSUMS` (no new legacy exceptions). Every other tag needs a published `SHA256SUMS` covering all four assets plus `gh attestation verify` for each at the exact workflow and `refs/tags/<tag>`, denying self-hosted runners.
 - The tag comes only from `package.json`, never from a Gitlink or an unpublished tag. Any failure exits nonzero before `npm ci`; nothing is skipped.
 - `release.py` and `paths.py` are standard library only, so this runs with `PYTHONPATH=integration python3` and no `uv sync`.
-- Non-legacy tags need `gh` >= 2.49 with a read-only `GH_TOKEN` (or `gh auth login`). `make install` hides `GH_TOKEN` from `npm ci` and `uv sync`; only the preflight sees it. Today's `.7`/`.6` pins are legacy and need no `gh`. The preflight still downloads the selected assets; unavailable network access fails closed.
-- Stage 1 (this change) keeps the legacy pins and the offline guard `test_root_overrides_stay_tied_to_verified_legacy_releases` unchanged: that guard still requires each override to be a legacy tag matching the frozen sha256 values.
-- Stage 2 (the later `.8` pin PR) must migrate that guard to the attested preflight contract and exercise the actual new release bytes and provenance, without expanding the legacy exception set. A new pin needs that migration plus a published `SHA256SUMS` and attestations, not just the bump.
+- Non-legacy tags need `gh` >= 2.49 with a read-only `GH_TOKEN` (or `gh auth login`). `make install` hides `GH_TOKEN` from `npm ci` and `uv sync`; only the preflight sees it. The current four overrides select non-legacy `.8`, so authenticated attestation verification is required. The preflight downloads the selected assets; unavailable network access fails closed.
+- `test_root_overrides_stay_tied_to_the_attested_core_release` binds the current `.8` URLs, published SHA-256 values and lockfile SHA-512 values to that preflight contract. The legacy exception set remains unchanged. A new pin needs published `SHA256SUMS`, attestations and the matching guard update, not just a version bump.
 - Callers: `make install`, the `owned` and `contracts` CI jobs, the `stack` job (before `npm ci`), `publish.yml` verify, including the WSL2 cells of the shared CI matrices. The `forks.yml`/`stack` fork-local `npm ci` run in `forks/pi` with the fork's own lock and are not root installs.
 
 Historical release receipts follow. They preserve their dated Gitlink and `forks.yml` provenance; current package selection uses the imported workspaces and published npm packages.
@@ -60,15 +59,50 @@ owner's policy decision. Publication is not live-provider acceptance or activati
 
 ## Combined stack selection
 
-`integration/stacks/personal.json` selects the published `@nredd/pi-dev-tools@0.6.0`,
-`@nredd/pi-subagents@0.22.0-nredd.7`, `@nredd/pi-session-kit@0.8.0` and
-`@nredd/pi-subscription-router@0.4.1` releases. Each passed
-`scripts/npm_release.py stack-check` against its tagged source: real npm SHA-512 integrity,
-registry signature, attestation and SLSA binding to `publish.yml`, the tag and the source
-commit. Router verification binds to `99cff464c48eca012f5028aba928419972c3b1db`.
-Core and the other package selections are unchanged. No unpublished version or placeholder
-integrity belongs in the stack or a release manifest. This selection is not a promotion or
-live activation. The matching assembled-stack CI and promotion gates still apply.
+The 2026-10-29 selection in `integration/stacks/personal.json` uses core
+`v1.3.0-nredd.8` at `4af3d547ef0f78ed077ce7a373cdeebfc9e5cd6e` and the published
+packages below. The sampler is an exact `0.2.0` registry dependency of dev-tools and
+session-kit, not another Pi extension. The footer-only preset filters and unchanged
+third-party sources remain in the stack manifest.
+
+| Package | Version | Publication source | Successful `publish.yml` run |
+| --- | --- | --- | --- |
+| `@nredd/pi-resource-sampler` | `0.2.0` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933174011) |
+| `@nredd/pi-subscription-router` | `0.5.0` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933183332) |
+| `@nredd/pi-subagents` | `0.22.0-nredd.8` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933213063) |
+| `@nredd/pi-plan-mode` | `0.59.3-nredd.3` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933224906) |
+| `@nredd/pi-todo` | `2.13.11` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933238149) |
+| `@nredd/pi-preset` | `0.3.0` | `1e9ba623be8554561b7d37052028b584e71f0c22` | [here](https://github.com/nredd/pi-harness/actions/runs/40934758956) |
+| `@nredd/pi-computer-use` | `0.6.0` | `1e9ba623be8554561b7d37052028b584e71f0c22` | [here](https://github.com/nredd/pi-harness/actions/runs/40934774694) |
+| `@nredd/pi-session-kit` | `0.9.0` | `d85b4adca767df81fc28a59ee3860cf03ec1da6e` | [here](https://github.com/nredd/pi-harness/actions/runs/40937192908) |
+| `@nredd/pi-dev-tools` | `0.7.0` | `d85b4adca767df81fc28a59ee3860cf03ec1da6e` | [here](https://github.com/nredd/pi-harness/actions/runs/40937207217) |
+
+Those publication runs verified the packed bytes and their npm provenance. During recovery,
+all nine release `identity.json` files were downloaded again: their source commits match the
+table and each recorded SHA-512 integrity equals the exact version's current npm
+`dist.integrity`. That comparison is not a new independent cryptographic verification.
+Publication does not prove full combined-stack CI or desktop/live-provider acceptance.
+Failed earlier tag attempts are not publication receipts; the table identifies the
+successful source and run.
+
+The generated core receipt is [here](../releases/2026-10-29-core-undici-8.12.3.json).
+It was generated retrospectively from clean harness commit
+`17236539759ccc8858e605ed3f07531cacf2d9e0`, not before publication. All four original
+core tarballs were downloaded again and passed `SHA256SUMS` plus `gh attestation verify`
+against `fork-release.yml` and `refs/tags/v1.3.0-nredd.8`. Its schema-v1 `owned_packages`
+field still inventories the generator's original four packages; the table above records
+all nine publications. It is an artifact/source record, NOT pre-release approval or a
+claim that all gates passed.
+
+Release PRs #222-#226 merged under an owner-authorized CI waiver. The final `main` run
+[here](https://github.com/nredd/pi-harness/actions/runs/40939747151) failed on
+`17236539759ccc8858e605ed3f07531cacf2d9e0`. The promotion
+[here](https://github.com/nredd/pi-harness/actions/runs/40939792010) used `owner-override`
+to publish `stack/17236539759ccc8858e605ed3f07531cacf2d9e0`. That historical snapshot
+has no durable waiver marker and must not be treated as green-CI evidence. Do not rewrite
+its tag, asset or attestation. Recovery is tracked in #227: reviewed fixes, successful
+exact-main registry-stack evidence, then a new ordinary `promote`. Publication, promotion
+and live activation remain separate facts.
 
 ## Owned npm packages
 
@@ -100,14 +134,16 @@ its full lockfile closure is verified.
 
 `@nredd/pi-computer-use` ships prebuilt helpers for macOS only. For Linux, `files` lists the locked crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`) and `docs/content/docs/how-to-guides/linux.mdx`, built on opt-in by `setup-helper.mjs`; no `prebuilt/linux` ships, and no `prebuilt/windows` or Windows crate. It declares the two source-controlled per-architecture macOS helper payloads: `prebuilt/macos/arm64/bridge` and `prebuilt/macos/x64/bridge`. The committed macOS payloads remain historical development fixtures, not release inputs. For new releases, `publish.yml` selects `macos-15` and the release descriptor compiles both architectures from the exact tagged Swift sources in a disposable package copy. It deletes both imported payloads before invoking `build-native.mjs --platform darwin --arch all --no-sign`, refuses missing outputs, and requires the pack-once tarball's native bytes to equal those compiler outputs. The stock contract then checks those same bytes. This is source-to-binary trust through an attested workflow, NOT a bit-reproducibility claim. Its stock contract proves packing, auditing, standalone install, extension loading, and the platform-aware model-visible tool surface (exactly 13 on darwin, 11 elsewhere: `desktop_screenshot`/`desktop_input` register on darwin only) and that each packed `prebuilt/macos/{arm64,x64}/bridge` is a Mach-O of the right arch with mode 0755, while recording the `postinstall` (`setup-helper.mjs`, helper app install and codesign; the stock install uses `--ignore-scripts`) and native desktop behavior as `NOT RUN`: CI cannot supply an interactive desktop or Accessibility/Screen Recording TCC grants. `npm run check` runs the fork's portable suite, including macOS Swift pure checks and the packed-payload check; `npm run build:native` remains a separately invoked macOS build gate, and the live helper script remains opt-in.
 
-Computer-use `0.6.0` is prepared from upstream main `67e9e2f77643f84605b738a3198048a88e92190e`.
-See [its sync record](../packages/computer-use/UPSTREAM.md) for the carried patch queue, drop checks,
-rollback and owner-only validation. Local builds/signing stay in place. CI builds only loose payloads, not an upstream-signed app.
-`--no-sign` skips the explicit codesign step (the Apple toolchain may emit an ad-hoc linker signature);
-no signing identity or private key enters CI. Existing setup constructs the app at its unchanged resolved
-path and re-signs with the existing local keychain identity. CI compilation authorizes no installed
-helper action, new signer/TCC identity, grant reset, registration or private-key export. A different
-installed signer remains an owner decision. This source sync is not a release or promotion.
+Computer-use `0.6.0` was synced from upstream main `67e9e2f77643f84605b738a3198048a88e92190e`
+and published in the batch above. See [its sync record](../packages/computer-use/UPSTREAM.md)
+for the carried patch queue, drop checks, rollback and owner-only validation. Local builds/signing
+stay in place. CI builds only loose payloads, not an upstream-signed app: `--no-sign` skips the
+explicit codesign step (the Apple toolchain may emit an ad-hoc linker signature), and no signing
+identity or private key enters CI. Existing setup constructs the app at its unchanged resolved path
+and re-signs with the existing local keychain identity. CI compilation authorizes no installed helper
+action, new signer/TCC identity, grant reset, registration or private-key export. Adopting upstream's
+CI signer remains an owner decision because it changes TCC identity. Publication does not establish
+desktop/TCC acceptance.
 
 Computer-use platform notes:
 
