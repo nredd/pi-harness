@@ -509,6 +509,13 @@ jobs:
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
             --stack stacks/personal.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-personal.xml
+      - name: Candidate compiled-core auth adapter (personal)
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
+        working-directory: integration
+        run: |
+          uv run --locked pytest scenarios/test_auth_transport.py \
+            --stack stacks/personal.json --runtime bun-standalone --bun-auth-adapter -m stack \
+            --log-cli-level=INFO --junitxml=artifacts/standalone-auth-personal.xml
       - name: Preserve personal failure artifacts before local runs
         if: ${{ always() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' }}
         working-directory: integration
@@ -521,11 +528,18 @@ jobs:
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
             --stack stacks/local.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-local.xml
+      - name: Candidate compiled-core auth adapter (local)
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
+        working-directory: integration
+        run: |
+          uv run --locked pytest scenarios/test_auth_transport.py \
+            --stack stacks/local.json --runtime bun-standalone --bun-auth-adapter -m stack \
+            --log-cli-level=INFO --junitxml=artifacts/standalone-auth-local.xml
       - name: Report coverage exclusions
         if: ${{ always() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' }}
         shell: bash -e {0}
         run: |
-          echo "Bun standalone: seven auth dispatch/refresh cases per stack NOT RUN: Node preload interception required (#14). Missing-preload refusal runs." >>"$GITHUB_STEP_SUMMARY"
+          echo "Bun standalone: default D/E retains seven auth skips (#14). Separate candidate compiled-core auth adapter steps execute the unchanged assertions; consult their outcome and JUnit, not this notice, for evidence." >>"$GITHUB_STEP_SUMMARY"
           echo "linux-arm64, packed contracts under standalone, bench, live credentials and desktop helpers: NOT RUN." >>"$GITHUB_STEP_SUMMARY"
       - uses: ./.github/actions/capture-ci-wsl
         if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'

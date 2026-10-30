@@ -315,11 +315,12 @@ def anthropic_env(mock: AnthropicMock, box: Sandbox) -> dict[str, str]:
         box (Sandbox): sandbox whose `shim_log` receives blocked `claude` / `security` launches.
 
     Returns:
-        dict[str, str]: mock URL, blocked-call log, and a `NODE_OPTIONS` that preloads the redirect.
+        dict[str, str]: mock URL, blocked-call log, and explicit Node/Bun runtime redirect hooks.
     """
     return {
         MOCK_ENV: mock.url,
         "HARNESS_AUTH_NONCE": secrets.token_hex(16),
         "HARNESS_BLOCKED_LOG": str(shim_log(box)),
         "NODE_OPTIONS": f"--import {REDIRECT_PRELOAD}",
+        "BUN_OPTIONS": f"--preload {REDIRECT_PRELOAD}",
     }

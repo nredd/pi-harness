@@ -188,7 +188,19 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         assert any(command.startswith(f"make {target} REPORT=") for command in contracts)
     stack = cfg["stack"]
     assert stack["strategy"]["matrix"]["stack"] == ["personal", "local"]
-    scenarios = [step for step in stack["steps"] if "pytest scenarios/" in step.get("run", "")]
+    runs = [step for step in stack["steps"] if "pytest scenarios/" in step.get("run", "")]
+    assert len(runs) == 5
+    candidates = [step for step in runs if "--bun-auth-adapter" in step["run"]]
+    assert len(candidates) == 2
+    for step, name in zip(candidates, ("personal", "local"), strict=True):
+        assert "pytest scenarios/test_auth_transport.py" in step["run"]
+        assert (
+            f"--stack stacks/{name}.json --runtime bun-standalone --bun-auth-adapter -m stack" in step["run"]
+        )
+        assert f"--junitxml=artifacts/standalone-auth-{name}.xml" in step["run"]
+        assert "steps.build.outcome == 'success'" in step["if"]
+        assert "matrix.os" not in step["if"]
+    scenarios = [step for step in runs if step not in candidates]
     assert len(scenarios) == 3
     for step in scenarios:
         assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in step["run"]
