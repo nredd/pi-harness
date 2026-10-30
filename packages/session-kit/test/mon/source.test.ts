@@ -65,6 +65,9 @@ function watchNextChild(): { spawned: Promise<ChildProcess>; stop: () => void } 
 	return { spawned, stop: () => unsubscribe("child_process", onChild) };
 }
 
+/** Upper bound on `ps` polls after SIGKILL, so a helper that never exits fails instead of hanging. */
+const MAX_EXIT_POLLS = 1000;
+
 /**
  * Kill a helper and park the event loop until the kernel reports it exited, so it is an unreaped zombie
  * whatever the host load. Condition-based: no duration can pass with the helper still running.
@@ -72,7 +75,7 @@ function watchNextChild(): { spawned: Promise<ChildProcess>; stop: () => void } 
  */
 function parkUntilExited(child: ChildProcess): void {
 	child.kill("SIGKILL");
-	for (let i = 0; i < 1000; i++) {
+	for (let i = 0; i < MAX_EXIT_POLLS; i++) {
 		const ps = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(child.pid)], { encoding: "utf8" });
 		if (ps.stdout.trim().startsWith("Z")) return;
 	}
@@ -182,30 +185,34 @@ describe("published sampler source on this host", () => {
 				};
 			};
 			const { spawned, stop } = watchNextChild();
-			const pid = spawned.then((child) => {
-				if (parkLoop) parkUntilExited(child);
-				return child.pid;
-			});
-			const update = vi.fn();
-			const poll = new MonPoll(createSamplerSource(create), update);
-			poll.start();
-			expect(inFlight).toBeDefined();
-			const outcome = inFlight?.then(
-				() => "resolved",
-				(error: unknown) => (error instanceof Error ? error.name : "non-error"),
-			);
-			// The first helper, not any later instant: helpers run in turn and leave gaps with no child at all.
-			const helper = await Promise.race([pid, outcome?.then(() => undefined)]).finally(stop);
-			expect(helper, "the sample finished without spawning a helper").toBeDefined();
-			// macOS: `vm_stat`, listed even once exited because nothing has reaped it yet.
-			if (platform() === "darwin") expect(children()).toContain(helper);
-			// Linux reads /proc in-process and spawns only `getconf`, so the child listing stays darwin-only;
-			// the AbortError below is the provider's own cancellation evidence.
-			await poll.dispose();
-			expect(await outcome).toBe("AbortError");
-			expect(update).not.toHaveBeenCalled();
-			expect(children()).toEqual([]);
-			expect(timers()).toBeLessThanOrEqual(baseline);
+			try {
+				const pid = spawned.then((child) => {
+					if (parkLoop) parkUntilExited(child);
+					return child.pid;
+				});
+				const update = vi.fn();
+				const poll = new MonPoll(createSamplerSource(create), update);
+				poll.start();
+				expect(inFlight).toBeDefined();
+				const outcome = inFlight?.then(
+					() => "resolved",
+					(error: unknown) => (error instanceof Error ? error.name : "non-error"),
+				);
+				// The first helper, not any later instant: helpers run in turn and leave gaps with no child at all.
+				const helper = await Promise.race([pid, outcome?.then(() => undefined)]);
+				expect(helper, "the sample finished without spawning a helper").toBeDefined();
+				// macOS: `vm_stat`, listed even once exited because nothing has reaped it yet.
+				if (platform() === "darwin") expect(children()).toContain(helper);
+				// Linux reads /proc in-process and spawns only `getconf`, so the child listing stays darwin-only;
+				// the AbortError below is the provider's own cancellation evidence.
+				await poll.dispose();
+				expect(await outcome).toBe("AbortError");
+				expect(update).not.toHaveBeenCalled();
+				expect(children()).toEqual([]);
+				expect(timers()).toBeLessThanOrEqual(baseline);
+			} finally {
+				stop();
+			}
 		},
 	);
 
