@@ -5,6 +5,7 @@ import {
   classifyPlanModeTool,
   isAnnotatedReadOnlyTool,
   isBuiltinTool,
+  isPlanSshExecTool,
   SAFE_BUILTIN_PLAN_TOOLS,
 } from "./tool-policy.js";
 
@@ -99,11 +100,14 @@ export function filterAvailableSelectedToolNames(
 /**
  * The names Plan mode admits when the user has not curated a selection: the configured
  * `defaultPlanTools` (or the safe built-ins when unset), plus every extension tool that declares
- * `annotations.readOnlyHint`. The annotation is author-asserted, so it only ever adds tools the
- * extension itself vouches for; mutating tools must stay unannotated.
+ * `annotations.readOnlyHint`. `ssh_exec` is the narrow exception: Plan admits the trusted tool by
+ * name and separately re-validates every host and remote command at execution. Annotations are
+ * author assertions, not an operating-system sandbox; mutating tools otherwise stay unannotated.
  */
 export function defaultPlanModeToolNames(tools: ToolInfo[], configuredNames: string[] | undefined) {
-  const annotated = tools.filter(isAnnotatedReadOnlyTool).map((tool) => tool.name);
+  const annotated = tools
+    .filter((tool) => isAnnotatedReadOnlyTool(tool) || isPlanSshExecTool(tool))
+    .map((tool) => tool.name);
   if (configuredNames !== undefined) return unique([...configuredNames, ...annotated]);
   return unique([
     ...tools.filter((tool) => isBuiltinTool(tool) && SAFE_BUILTIN_PLAN_TOOLS.has(tool.name)).map((tool) => tool.name),

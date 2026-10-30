@@ -19,9 +19,9 @@ beforeAll(() => {
 });
 
 describe("ssh_exec", () => {
-	it("is annotated read-only; pull is too; push is not", () => {
-		expect(mock.tools.get("ssh_exec")?.annotations?.readOnlyHint).toBe(true);
-		expect(mock.tools.get("ssh_pull")?.annotations?.readOnlyHint).toBe(true);
+	it("marks remote commands and transfers as mutating", () => {
+		expect(mock.tools.get("ssh_exec")?.annotations?.readOnlyHint).toBe(false);
+		expect(mock.tools.get("ssh_pull")?.annotations?.readOnlyHint).toBe(false);
 		expect(mock.tools.get("ssh_push")?.annotations?.readOnlyHint).toBe(false);
 	});
 
