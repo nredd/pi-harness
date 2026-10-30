@@ -290,6 +290,15 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
     }
   });
 
+  it("separates a compact-pane flag from its label with exactly one space", () => {
+    for (const width of [100, 120]) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ label: "ZZ" })], "agent")));
+      const listRow = lines.find(l => l.includes("ZZ") && /\[fallback|\[fb\]|!/.test(l));
+      expect(listRow, lines.join("\n")).toBeDefined();
+      expect(listRow).not.toMatch(/(?:\[fallback\]|\[fb\]) {2}ZZ/);
+    }
+  });
+
   it("middle-elides a long workflow-dialog note without losing its ending", () => {
     const ending = "ENDING-SENTINEL";
     const longNote = `Note: ${"Q".repeat(2000)} ${ending}`;
