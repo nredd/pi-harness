@@ -29,8 +29,9 @@ describe("parseConfig", () => {
 		expect(c.features.loop).toBe(true);
 		expect(c.titleModel).toBe("a/b");
 	});
-	it("rejects a titles.model without a provider", () => {
-		expect(parseConfig({ titles: { model: "nope" } }).titleModel).toBeUndefined();
+	it("preserves malformed titles.model values for fail-closed resolution", () => {
+		expect(parseConfig({ titles: { model: "nope" } }).titleModel).toBe("nope");
+		expect(parseConfig({ titles: { model: "" } }).titleModel).toBe("");
 	});
 	it("returns defaults for non-objects and a missing file", () => {
 		expect(parseConfig(null)).toEqual(defaultConfig());

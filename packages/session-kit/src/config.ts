@@ -14,7 +14,7 @@ export type Feature = (typeof FEATURES)[number];
 
 export interface KitConfig {
 	features: Record<Feature, boolean>;
-	/** Overrides the auto-title model, as `provider/id`. */
+	/** Explicit auto-title model selection; malformed values intentionally fail closed. */
 	titleModel?: string;
 	monitor: MonitorWidgetConfig;
 }
@@ -112,7 +112,7 @@ export function parseConfig(raw: unknown): KitConfig {
 	const titles = doc.titles;
 	if (typeof titles === "object" && titles !== null) {
 		const model = (titles as Record<string, unknown>).model;
-		if (typeof model === "string" && model.includes("/")) config.titleModel = model;
+		if (typeof model === "string") config.titleModel = model;
 	}
 	return config;
 }

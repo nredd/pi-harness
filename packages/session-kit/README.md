@@ -193,10 +193,11 @@ each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
 
 ## Titles and rules
 
-- Titles: one attempt after the first eligible TUI run of an unnamed persisted session. Default
-  candidates are Haiku 5.5, validated enterprise alias candidates (including the legacy Haiku 4.5
-  logical key), then GPT 6 Luna. `titles.model` overrides the preferred candidate. No silent retry
-  after provider failure; explicit names and session switches win races. Children, headless runs,
+- Titles: one attempt after the first eligible TUI run of an unnamed persisted session. Without
+  `titles.model`, candidates are Haiku 5.5, validated enterprise alias candidates (including the
+  legacy Haiku 4.5 logical key), then GPT 6 Luna. `titles.model` is an explicit, fail-closed
+  selection: an invalid, unavailable or unauthenticated configured model skips title generation;
+  it never walks aliases or defaults. No silent retry after provider failure; explicit names and session switches win races. Children, headless runs,
   no-session runs and active planning are skipped. Output is capped at six words/60 characters;
   shorter names are accepted.
 - Rules: Markdown files in `.pi/rules/` and the agent directory's `rules/`, with YAML frontmatter
