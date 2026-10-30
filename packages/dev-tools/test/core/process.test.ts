@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { run } from "../../src/core/process.ts";
 
 const pidAlive = (pid: number) => {
@@ -160,5 +160,61 @@ describe("run", () => {
 		});
 		expect(r.exitCode).toBe(0);
 		expect(lines).toEqual(["tail"]);
+	});
+
+	describe("group reaping before resolve", () => {
+		/** Make `kill(-pgid, 0)` report a live group for the first `liveProbes` probes (all when Infinity). */
+		const simulateAsyncReap = (liveProbes: number) => {
+			const real = process.kill.bind(process);
+			const probes: number[] = [];
+			const spy = vi.spyOn(process, "kill").mockImplementation(((pid: number, sig?: string | number) => {
+				if (sig === 0 && pid < 0) {
+					probes.push(pid);
+					if (probes.length <= liveProbes) return true;
+				}
+				return real(pid, sig as NodeJS.Signals);
+			}) as typeof process.kill);
+			return { probes, spy };
+		};
+
+		it("does not resolve while a killed group member still answers kill(-pgid, 0)", async () => {
+			const { probes, spy } = simulateAsyncReap(3);
+			try {
+				const r = await run({ cmd: "sh", args: ["-c", "exit 0"] });
+				expect(r.exitCode).toBe(0);
+				// Three live answers, then ESRCH: run() had to probe the group four times.
+				expect(probes).toHaveLength(4);
+				expect(new Set(probes).size).toBe(1);
+			} finally {
+				spy.mockRestore();
+			}
+		});
+
+		it("gives up after CLOSE_GRACE_MS when the group never disappears", async () => {
+			const { probes, spy } = simulateAsyncReap(Number.POSITIVE_INFINITY);
+			try {
+				const t0 = Date.now();
+				const r = await run({ cmd: "sh", args: ["-c", "exit 0"] });
+				expect(r.exitCode).toBe(0);
+				expect(Date.now() - t0).toBeGreaterThanOrEqual(900);
+				expect(probes.length).toBeGreaterThan(2);
+			} finally {
+				spy.mockRestore();
+			}
+		}, 10_000);
+
+		it("leaves no group member behind once run() returns", async () => {
+			const r = await run({
+				cmd: "sh",
+				args: ["-c", "trap '' TERM; sleep 30 & echo $$ $!; wait"],
+				timeoutMs: 300,
+			});
+			const [leader = 0, descendant = 0] = r.stdout.trim().split(" ").map(Number);
+			expect(leader).toBeGreaterThan(0);
+			expect(descendant).toBeGreaterThan(0);
+			expect(r.timedOut).toBe(true);
+			expect(() => process.kill(-leader, 0)).toThrow(/ESRCH/);
+			expect(() => process.kill(descendant, 0)).toThrow(/ESRCH/);
+		}, 20_000);
 	});
 });
