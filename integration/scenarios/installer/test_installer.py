@@ -45,8 +45,17 @@ from harness.stack import package_declarations, source_string
 
 pytestmark = pytest.mark.installer
 INSTALL_TIMEOUT = 1200
-KILL_AFTER = "pi install 'npm:pi-web-access"
+KILL_AFTER = "Stage authenticated package 'npm:pi-web-access"
 EXIT_UNSUPPORTED, EXIT_VERIFICATION, EXIT_CONSENT = 2, 3, 4
+# This retained historical release has snapshot-v1 evidence but no authenticated runtime graph.
+LEGACY_PROMOTION = "24889f7896be7157bf9077a41465a3b29620879f"
+
+
+@pytest.fixture
+def authenticated_promotion(stack_sha: str) -> None:
+    """Do not claim successful-install acceptance against known evidence-only legacy releases."""
+    if stack_sha == LEGACY_PROMOTION:
+        pytest.skip("Legacy promotion has no dependency-graph.json; successful-install acceptance NOT RUN")
 
 
 @pytest.fixture(scope="module")
@@ -302,6 +311,16 @@ def test_unpromoted_sha_is_refused(spec: str, uv_cache: Path, home: Path) -> Non
     assert not (home / ".local" / "share" / "pi-stack").exists()
 
 
+def test_legacy_snapshot_without_a_graph_is_refused(spec: str, uv_cache: Path, home: Path) -> None:
+    """Retained evidence-only promotions cannot silently regain unsafe npm installation."""
+    result = run(command(spec, LEGACY_PROMOTION), environment(home, uv_cache))
+    assert result.returncode == EXIT_VERIFICATION, result.stdout
+    assert "Authenticated runtime dependency graph required" in result.stdout
+    assert "dependency-graph.json" in result.stdout
+    assert not (home / ".pi").exists()
+    assert not (home / ".local" / "share" / "pi-stack").exists()
+
+
 def test_real_attestation_rejects_tampering_and_foreign_identities(stack_sha: str, tmp_path: Path) -> None:
     """Real `gh` accepts the published snapshot and rejects altered bytes, another signer or ref."""
     snapshot, bundle = published(stack_sha, tmp_path)
@@ -318,6 +337,7 @@ def test_real_attestation_rejects_tampering_and_foreign_identities(stack_sha: st
         verify_attestation(snapshot, SNAPSHOT_REPO, SNAPSHOT_SIGNER_WORKFLOW, "refs/heads/feature", bundle)
 
 
+@pytest.mark.usefixtures("authenticated_promotion")
 def test_fresh_install_matches_the_promotion_and_reruns_cleanly(
     spec: str, stack_sha: str, uv_cache: Path, home: Path, tmp_path: Path
 ) -> None:
@@ -372,6 +392,7 @@ def test_fresh_install_matches_the_promotion_and_reruns_cleanly(
     assert digest_tree(home) == before
 
 
+@pytest.mark.usefixtures("authenticated_promotion")
 def test_existing_config_needs_consent_and_survives(
     spec: str, stack_sha: str, uv_cache: Path, home: Path
 ) -> None:
@@ -511,6 +532,7 @@ def kill_at_marker(process: subprocess.Popen[str], marker: str, timeout: float) 
             raise
 
 
+@pytest.mark.usefixtures("authenticated_promotion")
 def test_killed_install_changes_nothing_and_rerun_completes(
     spec: str, stack_sha: str, uv_cache: Path, home: Path
 ) -> None:

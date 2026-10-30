@@ -36,7 +36,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 import yaml
 
-from harness import install, release
+from harness import install, release, runtime_lock
 from harness.install import (
     ConsentError,
     ExitCode,
@@ -64,7 +64,7 @@ from harness.promotion import (
     load_promoted_snapshot,
 )
 from harness.release import GITHUB_TOKEN_VARIABLES, release_asset_url
-from harness.stack import package_declarations, source_string
+from harness.stack import install_overrides, package_declarations, source_string
 from scenarios.installer import test_installer as acceptance
 
 if TYPE_CHECKING:
@@ -244,7 +244,79 @@ class Harness:
         monkeypatch.setattr(
             install, "verify_release", lambda snapshot, node, workdir, **kwargs: self.verified
         )
-        monkeypatch.setattr(install, "fetch_release", self.fetch_release)
+        # Transaction units deliberately fake authenticated acquisition/staging.
+        # Native no-script/offline bytes are exercised in test_runtime_lock.py.
+        monkeypatch.setattr(install, "runtime_ready", lambda *args: True)
+        monkeypatch.setattr(install, "audit_runtime", lambda *args: None)
+        monkeypatch.setattr(install, "install_core", self.stage_core)
+        monkeypatch.setattr(install, "install_packages", self.stage_packages)
+
+    def stage_core(self, verified: Verified, prefix: Path, staging: Path, npm: str) -> Path:
+        """Model authenticated core staging without downloading packages.
+
+        Parameters:
+            verified (Verified): modeled verified input.
+            prefix (Path): staged core destination.
+            staging (Path): transaction scratch.
+            npm (str): selected native npm path.
+
+        Returns:
+            Path: recording fixture executable.
+        """
+        return self.fetch_release(verified.stack.core.tag, prefix, checksums=verified.core_checksums)
+
+    def stage_packages(self, verified: Verified, npm: str, staging: Path) -> Path:
+        """Model package staging for transaction tests using only our recording fixture.
+
+        Parameters:
+            verified (Verified): modeled verified input.
+            npm (str): selected native npm path.
+            staging (Path): transaction scratch.
+
+        Returns:
+            Path: modeled staged agent tree.
+
+        Raises:
+            InstallError: modeled install or manifest verification failed.
+        """
+        agent, home = staging / "agent", staging / "home"
+        agent.mkdir(parents=True)
+        home.mkdir()
+        binary = staging / "fixture-recorder"
+        binary.write_text(
+            FAKE_PI.format(
+                python=sys.executable,
+                log=str(self.log),
+                fail=self.fail,
+                integrity=self.integrity,
+                tokens=sorted(GITHUB_TOKEN_VARIABLES),
+                env_keys=CHILD_ENV_PROBE_KEYS,
+            )
+        )
+        binary.chmod(0o755)
+        for package, source in zip(verified.stack.sources, verified.sources, strict=True):
+            install.LOGGER.info(f"Stage authenticated package '{source}' (scripts disabled)")
+            env = release.child_environment(
+                os.environ,
+                overrides={
+                    "HOME": str(home),
+                    "PI_CODING_AGENT_DIR": str(agent),
+                    "npm_config_registry": "https://registry.npmjs.org/",
+                }
+                | install_overrides(verified.stack, package),
+            )
+            try:
+                subprocess.check_output(
+                    [str(binary), "install", source], cwd=home, env=env, text=True, stderr=subprocess.STDOUT
+                )
+            except subprocess.CalledProcessError as error:
+                raise InstallError(f"Fixture package staging failed for '{source}'") from error
+        try:
+            install.installed_identities(verified.stack, verified.sources, agent)
+        except ValueError as error:
+            raise InstallError(f"Staged packages do not match the snapshot: {error}") from error
+        install.verify_owned_integrity(verified.snapshot, agent)
+        return agent
 
     @property
     def layout(self) -> Layout:
@@ -1376,7 +1448,7 @@ def test_acceptance_plan_staging_and_rerun_text_contracts(
     assert "OVERWRITE stop loading packages not in the stack: npm:pi-mine@1.0.0" in caplog.messages
     caplog.clear()
     assert harness.run(yes=True) == ExitCode.OK
-    assert "pi install 'npm:pi-web-access@0.43.0'" in caplog.messages
+    assert "Stage authenticated package 'npm:pi-web-access@0.43.0' (scripts disabled)" in caplog.messages
     assert any(message.startswith(acceptance.KILL_AFTER) for message in caplog.messages)
     assert install.post_check(harness.layout) == "1.3.0"
     caplog.clear()
@@ -1632,6 +1704,7 @@ def test_verify_release_binds_staged_core_to_the_snapshot(
     monkeypatch.setattr(install, "release_checksums", lambda release_tag: recorded | extra)
     monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
     monkeypatch.setattr(install, "node_version", lambda node: (22, 19, 0))
+    monkeypatch.setattr(install, "verify_runtime", lambda *args, **kwargs: (None, {}))
     verified = verify_release(snapshot, "node", tmp_path / "work")
     assert verified.core_checksums == recorded | extra
     monkeypatch.setattr(install, "verify_release", lambda snapshot, node, workdir, **kwargs: verified)
@@ -2837,7 +2910,7 @@ def test_failed_package_staging_preserves_existing_core(
     harness.fail.append(harness.verified.sources[0])
     (harness.layout.agent_dir / "npm" / "node_modules").rename(tmp_path / "old-packages")
     before = tree(harness.home)
-    with pytest.raises(InstallError, match=r"pi install.*failed"):
+    with pytest.raises(InstallError, match=r"package staging failed"):
         harness.run(yes=True)
     assert tree(harness.home) == before
 
@@ -5541,7 +5614,15 @@ def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
 
 
 @pytest.mark.parametrize(
-    "module", ["test_install.py", "test_release.py", "test_installer_process.py", "test_promotion.py"]
+    "module",
+    [
+        "test_install.py",
+        "test_release.py",
+        "test_installer_process.py",
+        "test_promotion.py",
+        "test_runtime_lock.py",
+        "test_runtime_promotion.py",
+    ],
 )
 def test_test_helpers_have_typed_contracts(module: str) -> None:
     """Keep helper and nested callback contracts consistent across all installer test modules.
@@ -5812,6 +5893,28 @@ def configure_tool_interpreters(
         monkeypatch.setenv("PATH", f"{decoy}{os.pathsep}./bin{os.pathsep}{os.defpath}")
 
 
+def shim_stage_core(verified: Verified, prefix: Path, staging: Path, npm: str) -> Path:
+    """Exercise the real runtime npm child boundary with a recording executable.
+
+    Parameters:
+        verified (Verified): modeled authenticated input.
+        prefix (Path): staged core destination.
+        staging (Path): scratch config/cache location.
+        npm (str): preflight-selected native npm dispatcher.
+
+    Returns:
+        Path: modeled staged core executable.
+    """
+    prefix.mkdir(parents=True)
+    runtime_lock.run_npm(
+        npm,
+        ["ci", "--offline", "--ignore-scripts", "--prefix", str(prefix)],
+        prefix,
+        runtime_lock.npm_env(staging / "runtime-npm"),
+    )
+    return prefix / "bin" / "pi"
+
+
 def relative_tool_install(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5864,7 +5967,8 @@ def relative_tool_install(
 
     monkeypatch.setattr(install, "preflight", selected)
     monkeypatch.setattr(install, "verify_snapshot", verify_snapshot)
-    monkeypatch.setattr(install, "fetch_release", release.fetch_release)
+
+    monkeypatch.setattr(install, "install_core", shim_stage_core)
     monkeypatch.setattr(install, "fetch_bytes", lambda request: FIXTURE.read_bytes())
 
     def bundle(repo: str, path: Path, destination: Path) -> Path:
@@ -6258,7 +6362,7 @@ def test_proxy_redaction_before_tail_truncation(monkeypatch: pytest.MonkeyPatch,
     assert release._error_tail(error) == (expected + "x" * 5995)[-6000:]
 
 
-@pytest.mark.parametrize("tool", ["node", "pi", "pi-install", "npm", "gh"])
+@pytest.mark.parametrize("tool", ["node", "pi", "runtime-npm", "npm", "gh"])
 def test_child_diagnostics_redact_proxy_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
 ) -> None:
@@ -6291,10 +6395,14 @@ def test_child_diagnostics_redact_proxy_credentials(
         text = install.post_check(harness.layout)
     else:
         child.write_text(child.read_text() + "raise SystemExit(1)\n")
-        if tool == "pi-install":
-            harness = Harness(tmp_path, monkeypatch)
-            with pytest.raises(InstallError) as caught:
-                install.install_packages(harness.verified, child, tmp_path / "staging")
+        if tool == "runtime-npm":
+            with pytest.raises(runtime_lock.RuntimeLockError) as caught:
+                runtime_lock.run_npm(
+                    str(child),
+                    ["ci", "--offline", "--ignore-scripts"],
+                    tmp_path,
+                    runtime_lock.npm_env(tmp_path / "npm-config"),
+                )
         elif tool == "gh":
             with pytest.raises(RuntimeError) as caught:
                 release.verify_attestation(
@@ -6315,8 +6423,6 @@ def test_child_diagnostics_redact_proxy_credentials(
     assert "echo-user" not in text
     assert "echo-password" not in text
     assert "http://proxy.invalid:8080" in text
-    if tool == "pi-install":
-        assert harness.verified.sources[0] in text
 
 
 @pytest.mark.parametrize("proxy", ["http://@host", "http://a@host"])

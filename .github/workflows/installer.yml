@@ -8,6 +8,9 @@ name: Installer
 'on':
   pull_request:
     paths:
+      - integration/harness/runtime_lock.py
+      - integration/stacks/runtime-locks.json
+      - integration/tests/test_runtime_lock.py
       - integration/harness/credentials.py
       - integration/harness/files.py
       - .github/workflows/installer.yml
@@ -31,6 +34,9 @@ name: Installer
   push:
     branches: [main]
     paths:
+      - integration/harness/runtime_lock.py
+      - integration/stacks/runtime-locks.json
+      - integration/tests/test_runtime_lock.py
       - integration/harness/credentials.py
       - integration/harness/files.py
       - .github/workflows/installer.yml

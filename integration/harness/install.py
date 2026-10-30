@@ -74,7 +74,6 @@ from harness.release import (
     child_environment,
     detached_exception,
     fetch_bytes,
-    fetch_release,
     pinned_child_path,
     redact_diagnostic,
     release_asset_url,
@@ -84,11 +83,19 @@ from harness.release import (
     verify_provenance_anonymously,
     verify_public_attestation,
 )
+from harness.runtime_lock import ASSET as DEPENDENCY_ASSET
+from harness.runtime_lock import (
+    DependencyGraph,
+    RuntimeLockError,
+    acquire,
+    audit_install,
+    install_graph,
+    selected_graphs,
+)
 from harness.sandbox import deep_merge
 from harness.stack import (
     CORE_TAG,
     SHA256_HEX,
-    install_overrides,
     installed_identities,
     package_agents_policy,
     package_declarations,
@@ -283,6 +290,8 @@ class Verified:
     # Release URL -> SHA-256 the staged core download must match. Every asset the snapshot
     # records carries the snapshot's digest, so the installed bytes are the verified ones.
     core_checksums: dict[str, str]
+    dependency_graph: DependencyGraph | None = None
+    archives: dict[str, dict[str, Path]] = field(default_factory=dict)
 
     @property
     def stack(self) -> Stack:
@@ -580,7 +589,75 @@ def verify_release(
     LOGGER.info(
         f"Verified core '{stack.core.tag}' assets; Node.js {'.'.join(map(str, installed))} is supported"
     )
-    return Verified(snapshot, [source_string(package) for package in stack.sources], core_checksums)
+    graph, archives = verify_runtime(snapshot, workdir, core_checksums, gh_bin=gh_bin)
+    return Verified(
+        snapshot, [source_string(package) for package in stack.sources], core_checksums, graph, archives
+    )
+
+
+def verify_runtime(
+    snapshot: StackSnapshot, workdir: Path, core_checksums: dict[str, str], *, gh_bin: str | None = None
+) -> tuple[DependencyGraph, dict[str, dict[str, Path]]]:
+    """Require the separately attested source-selected graph and authenticate every runtime tarball.
+
+    Legacy snapshots remain valid evidence, but missing graphs are never an install fallback.
+
+    Parameters:
+        snapshot (StackSnapshot): authenticated source selection.
+        workdir (Path): private verification directory.
+        core_checksums (dict[str, str]): authenticated core URL-to-SHA-256 map.
+        gh_bin (str | None): preflight-selected GitHub CLI.
+
+    Returns:
+        tuple[DependencyGraph, dict[str, dict[str, Path]]]: authenticated graph and verified archives.
+
+    Raises:
+        VerificationError: required graph identity, bindings or runtime bytes fail verification.
+    """
+    try:
+        path = download(
+            snapshot_url(snapshot.source_sha).removesuffix(SNAPSHOT_ASSET) + DEPENDENCY_ASSET,
+            workdir / DEPENDENCY_ASSET,
+        )
+        verify_public_attestation(
+            path, SNAPSHOT_REPO, SNAPSHOT_SIGNER_WORKFLOW, SNAPSHOT_SOURCE_REF, gh_bin=gh_bin
+        )
+        graph = DependencyGraph.model_validate_json(path.read_bytes())
+        if graph.source_sha != snapshot.source_sha:
+            raise RuntimeLockError("Dependency graph source SHA differs from the pinned promotion")
+        graph.runtime.bind(snapshot.stack)
+        graphs = selected_graphs(graph.runtime)
+        for owned in snapshot.gates.owned_packages:
+            name, version = owned.package.rsplit("@", 1)
+            entry = graphs["agent"].lock["packages"].get(f"node_modules/{name}", {})
+            if entry.get("version") != version or entry.get("integrity") != owned.integrity:
+                raise RuntimeLockError(f"Runtime lock differs from owned provenance for '{name}'")
+        archives = {
+            kind: acquire(item, workdir / "runtime" / kind, core_checksums) for kind, item in graphs.items()
+        }
+        return graph, archives
+    except (OSError, ValueError, RuntimeError, VerificationError) as error:
+        failure = detached_exception(
+            VerificationError(f"Authenticated runtime dependency graph required: {error}"), error
+        )
+    raise failure from failure.__cause__
+
+
+def require_runtime(verified: Verified) -> DependencyGraph:
+    """Refuse installation or executable health checks without the authenticated graph.
+
+    Parameters:
+        verified (Verified): installer verification result.
+
+    Returns:
+        DependencyGraph: the separately authenticated complete runtime graph.
+
+    Raises:
+        VerificationError: only legacy evidence is available.
+    """
+    if verified.dependency_graph is None:
+        raise VerificationError("Authenticated runtime dependency graph required; legacy install refused")
+    return verified.dependency_graph
 
 
 def device(path: Path) -> int:
@@ -782,6 +859,7 @@ def packages_ready(layout: Layout, verified: Verified) -> bool:
     try:
         installed_identities(verified.stack, verified.sources, layout.agent_dir)
         verify_owned_integrity(verified.snapshot, layout.agent_dir)
+        audit_runtime(verified, "agent", layout.agent_dir / "npm")
     except (OSError, ValueError, InstallError):
         return False
     return True
@@ -805,7 +883,7 @@ def plan_install(
     """
     stack, plan = verified.stack, Plan()
     prefix = layout.core(stack.core.tag)
-    if not core_ready(layout, stack):
+    if not core_ready(layout, stack) or not runtime_ready(verified, "core", prefix):
         require_restorable_kind(layout, prefix)
         plan.install_core = True
         # A dangling link is still replaced, so it counts as existing state (consent required).
@@ -2055,65 +2133,104 @@ def rollback(layout: Layout) -> list[str]:
     return restored
 
 
-def install_packages(verified: Verified, pi_bin: Path, staging: Path) -> Path:
-    """Install every source in stack order into a staging agent tree with a clean npm config.
+def audit_runtime(verified: Verified, kind: str, root: Path) -> None:
+    """Audit existing/staged runtime bytes against the authenticated archives.
 
     Parameters:
-        verified (Verified): verified installation input.
-        pi_bin (Path): installed core executable.
-        staging (Path): private staging directory.
+        verified (Verified): authenticated graph and archive inventory.
+        kind (str): core or agent root.
+        root (Path): installed/staged prefix.
 
     Returns:
-        Path: the staged agent tree.
+        None: all installed archive bytes and inventory match.
 
     Raises:
-        InstallError: `pi install` failed, or an installed version or owned integrity differs.
+        VerificationError: graph evidence is absent.
+        OSError | ValueError: runtime inventory, installed files or bytes differ.
     """
-    stack = verified.stack
-    agent, home = staging / "agent", staging / "home"
-    agent.mkdir(parents=True)
-    home.mkdir()
-    for name in ("npmrc-user", "npmrc-global"):
-        (staging / name).touch()
-    env = {
-        "PATH": os.environ.get("PATH", os.defpath),
-        "HOME": str(home),
-        "PI_CODING_AGENT_DIR": str(agent),
-        "PI_SKIP_VERSION_CHECK": "1",
-        "PI_TELEMETRY": "0",
-        "NO_UPDATE_NOTIFIER": "1",
-        "npm_config_userconfig": str(staging / "npmrc-user"),
-        "npm_config_globalconfig": str(staging / "npmrc-global"),
-        "npm_config_cache": str(staging / "npm-cache"),
-        "npm_config_registry": "https://registry.npmjs.org/",
-    }
-    for package, source in zip(stack.sources, verified.sources, strict=True):
-        LOGGER.info(f"pi install '{source}'")
-        try:
-            subprocess.check_output(
-                [str(pi_bin), "install", source],
-                cwd=home,
-                env=child_environment(os.environ, overrides=env | install_overrides(stack, package)),
-                text=True,
-                stderr=subprocess.STDOUT,
-                timeout=INSTALL_TIMEOUT,
-            )
-        except subprocess.CalledProcessError as error:
-            failure = detached_exception(
-                InstallError(
-                    f"`pi install` failed for '{source}': {redact_diagnostic(error.output)[-4000:]}"
-                ),
-                error,
-            )
-        except (OSError, subprocess.SubprocessError) as error:
-            failure = detached_exception(
-                InstallError(f"`pi install` could not complete for '{source}': {error}"), error
-            )
-        else:
-            continue
+    graph = selected_graphs(require_runtime(verified).runtime)[kind]
+    audit_install(graph, root, verified.archives[kind])
+
+
+def runtime_ready(verified: Verified, kind: str, root: Path) -> bool:
+    """Require actual installed bytes, not an installer marker or lock metadata alone.
+
+    Parameters:
+        verified (Verified): authenticated graph and archive inventory.
+        kind (str): core or agent root.
+        root (Path): installed prefix.
+
+    Returns:
+        bool: whether launcher shape and installed bytes match.
+
+    Raises:
+        VerificationError: complete runtime evidence is absent.
+    """
+    try:
+        if kind == "core":
+            launcher = root / "bin" / "pi"
+            if not launcher.is_symlink() or str(launcher.readlink()) != "../node_modules/.bin/pi":
+                return False
+        audit_runtime(verified, kind, root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def install_core(verified: Verified, prefix: Path, staging: Path, npm: str) -> Path:
+    """Install the authenticated core graph without global resolution or package execution.
+
+    Parameters:
+        verified (Verified): authenticated graph and archive inventory.
+        prefix (Path): empty core destination.
+        staging (Path): private transaction scratch.
+        npm (str): absolute preflight-selected native npm executable.
+
+    Returns:
+        Path: staged core launcher.
+
+    Raises:
+        OSError | ValueError: offline replay, archive audit or launcher creation fails.
+        VerificationError: complete runtime evidence is absent.
+    """
+    graph = selected_graphs(require_runtime(verified).runtime)["core"]
+    install_graph(graph, prefix, staging / "core-npm", npm, verified.archives["core"])
+    binary = prefix / "bin" / "pi"
+    binary.parent.mkdir()
+    binary.symlink_to("../node_modules/.bin/pi")
+    return binary
+
+
+def install_packages(verified: Verified, npm: str, staging: Path) -> Path:
+    """Replay the complete authenticated agent graph offline; never execute `pi install`.
+
+    Parameters:
+        verified (Verified): authenticated graph and archive inventory.
+        npm (str): absolute preflight-selected native npm executable.
+        staging (Path): private transaction scratch.
+
+    Returns:
+        Path: staged agent tree, with scripts disabled for every package.
+
+    Raises:
+        InstallError: installed identities disagree with the selected stack.
+        OSError | ValueError: offline replay or actual-byte verification fails.
+        VerificationError: complete runtime evidence is absent.
+    """
+    agent = staging / "agent"
+    graph = selected_graphs(require_runtime(verified).runtime)["agent"]
+    for source in verified.sources:
+        LOGGER.info(f"Stage authenticated package '{source}' (scripts disabled)")
+    try:
+        install_graph(graph, agent / "npm", staging / "agent-npm", npm, verified.archives["agent"])
+    except (OSError, ValueError) as error:
+        failure = detached_exception(InstallError(f"Authenticated package staging failed: {error}"), error)
+    else:
+        failure = None
+    if failure is not None:
         raise failure from failure.__cause__
     try:
-        installed_identities(stack, verified.sources, agent)
+        installed_identities(verified.stack, verified.sources, agent)
     except (OSError, ValueError) as error:
         raise InstallError(f"Staged packages do not match the snapshot: {error}") from error
     verify_owned_integrity(verified.snapshot, agent)
@@ -2144,19 +2261,12 @@ def stage(
         InstallError: the core or a package failed to install or verify.
     """
     stack = verified.stack
-    prefix = layout.core(stack.core.tag)
     if plan.install_core:
         staged_core = staging / "core"
         try:
             # Bound to the snapshot's digests, not a re-read `SHA256SUMS`: the bytes installed
             # are the bytes `verify_release` accepted.
-            fetch_release(
-                stack.core.tag,
-                staged_core,
-                provenance=partial(verify_provenance_anonymously, gh_bin=(tools or {}).get("gh")),
-                checksums=verified.core_checksums,
-                npm_bin=(tools or {}).get("npm"),
-            )
+            install_core(verified, staged_core, staging, (tools or {}).get("npm", "npm"))
         except (OSError, ValueError, RuntimeError) as error:
             failure = detached_exception(
                 InstallError(f"Core '{stack.core.tag}' installation failed: {error}"), error
@@ -2168,8 +2278,11 @@ def stage(
         for leftover in ("fetch-home", "npm-cache", "tui-resource"):
             remove(staged_core / leftover)
         write_atomic(staged_core / CORE_MARKER, json.dumps(stack.core.model_dump(mode="json"), indent=2))
-        prefix = staged_core
-    return install_packages(verified, prefix / "bin" / "pi", staging) if plan.install_packages else None
+    return (
+        install_packages(verified, (tools or {}).get("npm", "npm"), staging)
+        if plan.install_packages
+        else None
+    )
 
 
 def switch(
@@ -2577,6 +2690,40 @@ def run_preflighted(
             workdir,
             gh_bin=tools.get("gh"),
         )
+        # Verified archives are paths under this directory, needed by planning,
+        # staging and the no-op audit. Keep them alive through the entire run.
+        return run_verified(
+            opts, env, ask, layout, tools=tools, verified=verified, missing_before_lock=missing_before_lock
+        )
+
+
+def run_verified(
+    opts: Options,
+    env: Mapping[str, str],
+    ask: Callable[[str], str] | None,
+    layout: Layout,
+    *,
+    tools: Mapping[str, str],
+    verified: Verified,
+    missing_before_lock: frozenset[Path],
+) -> ExitCode:
+    """Plan and apply while the caller retains authenticated archive storage.
+
+    Parameters:
+        opts (Options): requested operation.
+        env (Mapping[str, str]): original layout/search environment.
+        ask (Callable[[str], str] | None): consent prompt.
+        layout (Layout): admitted installation paths.
+        tools (Mapping[str, str]): preflight-selected absolute executables.
+        verified (Verified): authenticated graph and still-live archive paths.
+        missing_before_lock (frozenset[Path]): absent permanent directories before locking.
+
+    Returns:
+        ExitCode: successful install or unchanged plan.
+
+    Raises:
+        InstallError: planning, consent, staging, recovery or executable checks fail.
+    """
     if opts.plan_only:
         report_plan(plan_install(layout, verified, missing_before_lock=missing_before_lock), verified)
         return ExitCode.OK
