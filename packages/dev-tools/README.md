@@ -84,7 +84,9 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
   files and leave any other staged path in the index. During a real `MERGE_HEAD`, the tool stages
   the named paths then requires every changed index path to be named and every conflict to be
   resolved. Only then it commits the complete approved merge without pathspecs, preserving both
-  parents, signing and hooks. A rename needs both the old and the new path; a deletion (unstaged
+  parents, signing and hooks. Approval checks cover the entire index even from a subdirectory
+  with `diff.relative=true`; configured relative hook paths still resolve from the worktree root.
+  A rename needs both the old and the new path; a deletion (unstaged
   or already staged) is named like any other path. Nothing to commit is its own state
 - The subject must be a capitalized imperative, <= 72 chars, no trailing period, no
   conventional-commit prefix, no em or en dash. An `area:` prefix is fine

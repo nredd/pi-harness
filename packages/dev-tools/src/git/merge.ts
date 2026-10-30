@@ -28,7 +28,17 @@ async function checkMergeIndex(approval: Approval, opts: GitRunOptions): Promise
 		throw new Error("Merge identity changed; review the merge again");
 	if (await query(["ls-files", "--unmerged", "-z"])) throw new Error("Merge has unresolved conflicts");
 	const changed = (
-		await query(["diff", "--cached", "--no-renames", "--ignore-submodules=none", "--name-only", "-z", "HEAD", "--"])
+		await query([
+			"diff",
+			"--cached",
+			"--no-relative",
+			"--no-renames",
+			"--ignore-submodules=none",
+			"--name-only",
+			"-z",
+			"HEAD",
+			"--",
+		])
 	)
 		.split("\0")
 		.filter(Boolean);
@@ -57,7 +67,7 @@ function check() {
 	if (readFileSync(approval.mergePath, "utf8") !== approval.mergeHead || fact(["rev-parse", "HEAD"]).trim() !== approval.head)
 		throw new Error("Merge identity changed; review the merge again");
 	if (fact(["ls-files", "--unmerged", "-z"])) throw new Error("Merge has unresolved conflicts");
-	const changed = fact(["diff", "--cached", "--no-renames", "--ignore-submodules=none", "--name-only", "-z", "HEAD", "--"]).split("\\0").filter(Boolean);
+	const changed = fact(["diff", "--cached", "--no-relative", "--no-renames", "--ignore-submodules=none", "--name-only", "-z", "HEAD", "--"]).split("\\0").filter(Boolean);
 	const outside = changed.filter((path) => !approval.paths.includes(path));
 	if (outside.length) throw new Error(\`Merge index contains unapproved paths: \${outside.map((path) => JSON.stringify(path)).join(", ")}\`);
 }

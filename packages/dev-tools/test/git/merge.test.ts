@@ -77,6 +77,99 @@ describe("git_commit merge approval", () => {
 		expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(false);
 	});
 
+	it("approves the complete merge from a subdirectory with relative diffs enabled", async () => {
+		const { repo } = mergeFixture();
+		const sub = join(repo, "sub");
+		mkdirSync(sub);
+		writeFileSync(join(sub, "file"), "approved\n");
+		git(repo, ["config", "diff.relative", "true"]);
+		const before = git(repo, ["rev-parse", "HEAD"]);
+		const topic = git(repo, ["rev-parse", "topic"]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Merge from subdirectory", paths: [join(repo, "shared.txt"), "file"], push: false },
+			sub,
+		);
+		expect(result.isError, mock.text(result)).toBe(false);
+		expect(parents(repo)).toEqual([before, topic]);
+		expect(git(repo, ["show", "HEAD:shared.txt"])).toBe("resolved");
+		expect(git(repo, ["show", "HEAD:sub/file"])).toBe("approved");
+		expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(false);
+	});
+
+	it("rejects an unapproved staged path outside a subdirectory with relative diffs enabled", async () => {
+		const { repo } = mergeFixture();
+		const sub = join(repo, "sub");
+		mkdirSync(sub);
+		writeFileSync(join(sub, "file"), "approved\n");
+		writeFileSync(join(repo, "other.txt"), "unrelated\n");
+		git(repo, ["add", "other.txt"]);
+		git(repo, ["config", "diff.relative", "true"]);
+		const before = git(repo, ["rev-parse", "HEAD"]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Reject outside staged path", paths: [join(repo, "shared.txt"), "file"], push: false },
+			sub,
+		);
+		expect(result.isError, mock.text(result)).toBe(true);
+		expect(mock.text(result)).toContain('Merge index contains unapproved paths: "other.txt"');
+		expect(git(repo, ["rev-parse", "HEAD"])).toBe(before);
+		expect(git(repo, ["show", ":other.txt"])).toBe("unrelated");
+		expect(git(repo, ["show", "HEAD:other.txt"])).toBe("base");
+		expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(true);
+	});
+
+	it("preserves root-relative configured hooks when called from a subdirectory", async () => {
+		const { root, repo } = mergeFixture();
+		const sub = join(repo, "sub");
+		const hooks = join(repo, "hooks");
+		mkdirSync(sub);
+		mkdirSync(hooks);
+		const marker = join(root, "relative-hook-ran");
+		writeFileSync(join(hooks, "pre-commit"), `#!/bin/sh\nprintf ran > ${JSON.stringify(marker)}\n`, {
+			mode: 0o700,
+		});
+		git(repo, ["config", "core.hooksPath", "hooks"]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Preserve relative merge hook", paths: [join(repo, "shared.txt")], push: false },
+			sub,
+		);
+		expect(result.isError, mock.text(result)).toBe(false);
+		expect(parents(repo)).toHaveLength(2);
+		expect(existsSync(marker), "configured root-relative pre-commit hook must execute").toBe(true);
+		expect(readFileSync(marker, "utf8")).toBe("ran");
+	});
+
+	it("rejects root-relative hooks staging outside a subdirectory with relative diffs enabled", async () => {
+		const { root, repo } = mergeFixture();
+		const sub = join(repo, "sub");
+		const hooks = join(repo, "hooks");
+		mkdirSync(sub);
+		mkdirSync(hooks);
+		writeFileSync(join(sub, "file"), "approved\n");
+		writeFileSync(join(repo, "other.txt"), "unrelated\n");
+		const marker = join(root, "relative-commit-msg-ran");
+		writeFileSync(join(hooks, "commit-msg"), `#!/bin/sh\nprintf ran > ${JSON.stringify(marker)}\ngit add other.txt\n`, {
+			mode: 0o700,
+		});
+		git(repo, ["config", "core.hooksPath", "hooks"]);
+		git(repo, ["config", "diff.relative", "true"]);
+		const before = git(repo, ["rev-parse", "HEAD"]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Reject outside hook path", paths: [join(repo, "shared.txt"), "file"], push: false },
+			sub,
+		);
+		expect(result.isError, mock.text(result)).toBe(true);
+		expect(mock.text(result)).toContain('Merge index contains unapproved paths: "other.txt"');
+		expect(readFileSync(marker, "utf8")).toBe("ran");
+		expect(git(repo, ["rev-parse", "HEAD"])).toBe(before);
+		expect(git(repo, ["show", ":other.txt"])).toBe("unrelated");
+		expect(git(repo, ["show", "HEAD:other.txt"])).toBe("base");
+		expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(true);
+	});
+
 	it("rejects unresolved, partially approved, and unrelated staged merge indexes", async () => {
 		const { repo } = mergeFixture();
 		const unresolved = await mock.call(
