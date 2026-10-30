@@ -32,14 +32,20 @@ phase('Count')
 
 // An unknown name, an unreadable path, a file with no `meta`, or a child that
 // will not parse all throw into this script — so catch if you want to carry on.
-let count
+let countResult
 try {
-  count = await workflow('count-child', { root })
+  countResult = await workflow('count-child', { root })
 } catch (error) {
   log(`nested workflow failed: ${error.message}`)
   return { ok: false, reason: error.message }
 }
 
+if (!countResult.ok) {
+  log(`file discovery failed: ${countResult.reason}`)
+  return countResult
+}
+
+const { count } = countResult
 log(`the child counted ${count} files under ${root}`)
 
 phase('Summarize')

@@ -92,6 +92,12 @@ describe("the agent() contract it documents", () => {
     expect(RESUME_EXCLUSIONS.length).toBeGreaterThan(1);
   });
 
+  it("describes omitted model selection in its actual precedence order", () => {
+    expect(description).toContain(
+      "agentModels for the type, then agentModels[\"*\"], then the agent definition, then the parent model",
+    );
+  });
+
   it("offers every reasoning effort the runtime has, and no other", () => {
     const listed = description.match(/reasoning effort for this agent call \(([^)]*)\)/)?.[1] ?? "";
     const quoted = [...listed.matchAll(/'(\w+)'/g)].map(m => m[1]);

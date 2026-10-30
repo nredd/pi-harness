@@ -242,7 +242,7 @@ Spawns one subagent and resolves to its final text — or, with `schema`, to a v
 | `model` | string | `@tier`, exact `provider/modelId`, legacy alias, or explicit fuzzy input like `haiku` |
 | `effort` | string | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Overrides the agent definition's `thinking` for this child; omitted, the definition decides, then the parent's |
 | `isolation` | `"worktree"` | Run in a throwaway git worktree. Only when agents write files in parallel and would collide — it costs setup time and disk per agent. Only this option decides, as in Claude Code — an agent file's `isolation:` does not apply to workflow children |
-| `gate` | string | A shell command run after the agent finishes; a non-zero exit fails the agent and its output becomes the error |
+| `gate` | string | A shell command run after the agent finishes; a non-zero exit fails the agent, returns `null` to the script, and records command output on the workflow agent error |
 | `resume` | string | Continue the child that ran under that label instead of starting fresh |
 | `schema` | object | A JSON Schema with an object root. Resolves to the validated object instead of text |
 
@@ -356,9 +356,9 @@ See [`gated-fix.js`](../examples/workflows/gated-fix.js).
 
 ### Keep an agent's context instead of re-paying for it
 
-> *"if the tests still fail, tell the same agent what broke and let it try again"*
+> *"if the tests still fail, let the same agent diagnose and fix them"*
 
-Recognize it by `label: 'fix'` on the first call and `resume: 'fix'` on the second. A gate-rejected child stays resumable, which is what makes "here is what the tests said, fix it" a loop rather than a fresh start.
+Recognize it by `label: 'fix'` on the first call and `resume: 'fix'` on the second. A gate-rejected child stays resumable. The script receives `null`, not injected gate output, so ask the resumed child to run the command and inspect its own diagnostics.
 
 Also in [`gated-fix.js`](../examples/workflows/gated-fix.js).
 
@@ -487,7 +487,7 @@ Every file below is executed by `test/workflow-examples.test.ts` against a stub 
 |---|---|---|
 | [`fan-out-audit.js`](../examples/workflows/fan-out-audit.js) | Runtime fan-out, `pipeline`, `label`, per-stage `phase` | Yes — takes `args.root` |
 | [`structured-findings.js`](../examples/workflows/structured-findings.js) | `schema` on both stages, objects instead of prose | Yes |
-| [`gated-fix.js`](../examples/workflows/gated-fix.js) | `gate`, `isolation: "worktree"`, `resume` retry loop | Needs a real test command |
+| [`gated-fix.js`](../examples/workflows/gated-fix.js) | `gate`, `resume` retry loop | Needs a real test command |
 | [`review-panel.js`](../examples/workflows/review-panel.js) | An earned `parallel` barrier, `effort` tiering, `model` | Yes |
 | [`compose.js`](../examples/workflows/compose.js) | `workflow()` nesting and `args` plumbing | Needs `lib/count-child.js` saved |
 

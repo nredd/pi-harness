@@ -2,8 +2,8 @@
  * gated-fix.js — verify by running a command, not by asking a second opinion.
  *
  * Demonstrates: `gate` (a shell command that must pass, or the agent is failed
- * and its call returns null), and `resume` to hand the failure back to the same
- * child instead of re-paying for the context it already built.
+ * and its call returns null), and `resume` to give the same child another
+ * corrective pass without re-paying for the context it already built.
  *
  * Two constraints this example is shaped around, both worth knowing:
  *
@@ -38,12 +38,14 @@ phase('Fix')
 let fixed = await agent(task, { label: 'fix', gate: testCommand })
 
 if (fixed === null) {
-  log(`${testCommand} failed — handing the output back to the same child`)
+  log(`${testCommand} did not pass its gate — resuming the same child`)
 
   // Resume, not a fresh spawn: the child still has everything it learned on the
-  // first pass, so it is told what broke rather than rediscovering it.
+  // first pass. A failed agent() call supplies null to the script; gate output
+  // stays in the workflow record, so the resumed child must run the command to
+  // collect its own diagnostics.
   fixed = await agent(
-    `\`${testCommand}\` is still failing. Read the failure above, fix the cause, and stop.`,
+    `Run \`${testCommand}\` yourself and inspect its diagnostics. Fix the cause, then stop.`,
     { label: 'fix', resume: 'fix' },
   )
 
