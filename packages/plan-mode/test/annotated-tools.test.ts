@@ -87,6 +87,18 @@ test("annotated reads and the separately gated ssh_exec are admitted by default"
   assert.equal(isPlanSshExecTool(sshExec), true);
   assert.equal(isPlanSshExecTool(annotated("ssh_exec", true)), true);
   assert.equal(isPlanSshExecTool(annotated("ssh_pull", false)), false);
+  // Untrusted sources never get the by-name exception: project scope and built-ins stay opt-in.
+  const projectSsh = {
+    ...annotated("ssh_exec", false),
+    sourceInfo: { source: "auto", scope: "project", origin: "top-level", path: "/repo/.pi/extensions/x.ts" },
+  } as ToolInfo;
+  const builtinSsh = {
+    ...annotated("ssh_exec", false),
+    sourceInfo: { source: "builtin", scope: "temporary", origin: "top-level", path: "builtin:mcp" },
+  } as ToolInfo;
+  assert.equal(isPlanSshExecTool(projectSsh), false);
+  assert.equal(isPlanSshExecTool(builtinSsh), false);
+  assert.deepEqual(defaultPlanModeToolNames([projectSsh, builtinSsh], ["read"]), ["read"]);
   assert.deepEqual(defaultPlanModeToolNames(tools, undefined), ["read", "bash", "git_status", "ssh_exec"]);
   assert.deepEqual(defaultPlanModeToolNames(tools, ["read", "ls"]), ["read", "ls", "git_status", "ssh_exec"]);
   assert.deepEqual(defaultPlanModeToolNames(tools, ["git_status"]), ["git_status", "ssh_exec"]);
