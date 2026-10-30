@@ -339,6 +339,14 @@ def test_write_github_output_keeps_input_flags_independent(
         ".python-version",
         ".gitattributes",
         ".gitmodules",
+        "package-lock.json",
+        "integration/pyproject.toml",
+        "integration/uv.lock",
+        "integration/probes/stack-resources.ts",
+        "scripts/check-biome-paths.mjs",
+        "scripts/import_audit.ts",
+        "scripts/router_contract.mjs",
+        "scripts/run-vitest.ts",
     ],
 )
 def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> None:
@@ -360,7 +368,6 @@ def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> 
         "docs/ci.md",
         "PLAN.md",
         "packages/dev-tools/src/index.ts",
-        "package-lock.json",
         "integration/harness/stack.py",
         "scripts/merge_pr_checks.py",
         "scripts/tests/test_wsl2_workflow.py",

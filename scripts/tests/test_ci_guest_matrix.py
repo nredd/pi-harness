@@ -495,6 +495,23 @@ def test_pull_requests_cancel_and_main_runs_complete() -> None:
     assert evaluate(expression, {"github.event_name": "push"}) is False
 
 
+def test_main_pushes_never_share_a_concurrency_group() -> None:
+    """Keep a queued `main` run: GitHub drops older pending runs in the same group."""
+    group = yaml.safe_load(WORKFLOW.read_text())["concurrency"]["group"]
+    inner = group.removeprefix("ci-${{ ").removesuffix(" }}")
+    assert (
+        evaluate(
+            inner,
+            {"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge", "github.sha": "abc"},
+        )
+        == "refs/pull/1/merge"
+    )
+    assert (
+        evaluate(inner, {"github.event_name": "push", "github.ref": "refs/heads/main", "github.sha": "abc"})
+        == "abc"
+    )
+
+
 def test_bench_notice_moved_into_classify_summary(tmp_path: Path) -> None:
     """Run the real classify report and keep the NOT RUN disclosure without a job.
 
