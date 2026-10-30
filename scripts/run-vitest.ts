@@ -8,7 +8,7 @@ const FAILURE_EXIT_STATUS = 1;
 const MILLISECONDS_PER_SECOND = 1000;
 const TIMING_DECIMAL_PLACES = 2;
 
-// Bun caches os.homedir(): isolate HOME at spawn, never by mutating it in Bun.
+// Isolate before imports: Bun caches os.homedir(), and Pi can read global model policy.
 const [, , engine, ...vitestArgs] = process.argv;
 if (engine !== "bun" && engine !== "node") throw new Error("Expected engine: node or bun");
 const home = mkdtempSync(join(tmpdir(), "pi-bun-vitest-"));
@@ -25,7 +25,14 @@ try {
 		],
 		{
 			stdio: "inherit",
-			env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config") },
+			env: {
+				...process.env,
+				HOME: home,
+				USERPROFILE: home,
+				XDG_CONFIG_HOME: join(home, ".config"),
+				PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+				PI_SUBAGENTS_CONFIG_DIR: join(home, ".pi", "agent"),
+			},
 		},
 	);
 	if (result.error) throw result.error;
