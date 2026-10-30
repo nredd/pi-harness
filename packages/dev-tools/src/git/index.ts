@@ -11,6 +11,7 @@ import { type TSchema, Type } from "typebox";
 import { abnormalExit, bound, seconds, toolResult } from "../core/index.ts";
 import { buildCommitMessage, validateSubject } from "./commit-message.ts";
 import { findGuardViolation } from "./guard.ts";
+import { prepareMerge } from "./merge.ts";
 import { resolvePushRemote } from "./push-remote.ts";
 import { assertExplicitPaths, assertRef, git, gitFailure, gitState } from "./run.ts";
 import { formatStatus, parsePorcelainV2 } from "./status.ts";
@@ -246,7 +247,7 @@ export function registerGitTools(pi: ExtensionAPI): void {
 		name: "git_commit",
 		label: "git commit",
 		description:
-			"Stage the named paths, commit exactly those paths with a subject plus optional why and `Changes:` bullets (Claude attribution appended), then push the current branch. Never skips hooks or signing. Hook failures are relayed; a hook that modified files means re-stage and call again. A push failure leaves the commit in place and says so.",
+			"Stage the named paths, commit exactly those paths (a merge requires approval of every changed index path) with a subject plus optional why and `Changes:` bullets (Claude attribution appended), then push the current branch. Never skips hooks or signing. Hook failures are relayed; a hook that modified files means re-stage and call again. A push failure leaves the commit in place and says so.",
 		promptSnippet: "Commit named files in house style and push (never `bash git commit`)",
 		annotations: MUTATING,
 		parameters: Type.Object({
@@ -307,82 +308,101 @@ export function registerGitTools(pi: ExtensionAPI): void {
 				return fail("validate", (e as Error).message);
 			}
 
-			// A path whose deletion is already staged is unknown to the index and the worktree, so `git add`
-			// rejects it; `commit -- <path>` still resolves it against HEAD. Everything else goes through
-			// `add -A`, which also stages worktree deletions.
-			const toAdd: string[] = [];
-			for (const path of params.paths) {
-				if (!existsSync(resolve(cwd, path))) {
-					const inIndex = await git(["ls-files", "--", path], { cwd, signal, timeoutMs });
-					const inHead = await git(["ls-tree", "--name-only", "HEAD", "--", path], { cwd, signal, timeoutMs });
-					if (inIndex.exitCode === 0 && !inIndex.stdout.trim() && inHead.exitCode === 0 && inHead.stdout.trim())
-						continue;
+			let merge: Awaited<ReturnType<typeof prepareMerge>>;
+			try {
+				merge = await prepareMerge(params.paths, { cwd, signal, timeoutMs });
+			} catch (error) {
+				return fail("validate", (error as Error).message);
+			}
+			try {
+				// A path whose deletion is already staged is unknown to the index and the worktree, so `git add`
+				// rejects it; `commit -- <path>` still resolves it against HEAD. Everything else goes through
+				// `add -A`, which also stages worktree deletions.
+				const toAdd: string[] = [];
+				for (const path of params.paths) {
+					if (!existsSync(resolve(cwd, path))) {
+						const inIndex = await git(["ls-files", "--", path], { cwd, signal, timeoutMs });
+						const inHead = await git(["ls-tree", "--name-only", "HEAD", "--", path], { cwd, signal, timeoutMs });
+						if (inIndex.exitCode === 0 && !inIndex.stdout.trim() && inHead.exitCode === 0 && inHead.stdout.trim())
+							continue;
+					}
+					toAdd.push(path);
 				}
-				toAdd.push(path);
-			}
-			const add = toAdd.length ? await git(["add", "-A", "--", ...toAdd], { cwd, signal, timeoutMs }) : undefined;
-			const addFailure = add && gitFailure(add, "git add");
-			if (addFailure) return fail("add", addFailure);
+				const add = toAdd.length ? await git(["add", "-A", "--", ...toAdd], { cwd, signal, timeoutMs }) : undefined;
+				const addFailure = add && gitFailure(add, "git add");
+				if (addFailure) return fail("add", addFailure);
 
-			// `commit -- <paths>` commits exactly the named paths; anything else already in the index stays there.
-			const commit = await git(["commit", "-q", "-F", "-", "--", ...params.paths], {
-				cwd,
-				signal,
-				timeoutMs,
-				stdin: message,
-			});
-			const commitAbnormal = abnormalExit(commit, "git commit");
-			if (commit.exitCode !== 0 || commitAbnormal) {
-				const output = `${commit.stdout}\n${commit.stderr}`.trim();
-				const hookModified = /files were modified by this hook/i.test(output);
-				const nothing = /nothing to commit|no changes added to commit|nothing added to commit/i.test(output);
-				const head =
-					commitAbnormal ??
-					(nothing
-						? "git commit: nothing to commit for the named paths"
-						: `git commit: ${gitState(commit)} (hooks run before the commit; nothing was committed)`);
-				const hint = hookModified
-					? "\n\nA hook rewrote files. Review the changes, re-stage the same paths, and call git_commit again."
-					: "";
-				const shown = await bound(output, { keep: "tail", label: "git-commit" });
-				return fail("commit", `${head}\n${shown.text}${hint}`, { hookModifiedFiles: hookModified });
-			}
+				try {
+					merge?.check();
+				} catch (error) {
+					return fail("validate", (error as Error).message);
+				}
+				// A merge must commit the entire approved index, without partial-commit pathspecs.
+				// Ordinary commits keep exactly their previous named-path semantics.
+				const commit = await git(
+					[...(merge?.args ?? []), "commit", "-q", "-F", "-", ...(merge ? [] : ["--", ...params.paths])],
+					{
+						cwd,
+						signal,
+						timeoutMs,
+						stdin: message,
+					},
+				);
+				const commitAbnormal = abnormalExit(commit, "git commit");
+				if (commit.exitCode !== 0 || commitAbnormal) {
+					const output = `${commit.stdout}\n${commit.stderr}`.trim();
+					const hookModified = /files were modified by this hook/i.test(output);
+					const nothing = /nothing to commit|no changes added to commit|nothing added to commit/i.test(output);
+					const head =
+						commitAbnormal ??
+						(nothing
+							? "git commit: nothing to commit for the named paths"
+							: `git commit: ${gitState(commit)} (hooks run before the commit; nothing was committed)`);
+					const hint = hookModified
+						? "\n\nA hook rewrote files. Review the changes, re-stage the same paths, and call git_commit again."
+						: "";
+					const shown = await bound(output, { keep: "tail", label: "git-commit" });
+					return fail("commit", `${head}\n${shown.text}${hint}`, { hookModifiedFiles: hookModified });
+				}
 
-			const head = await git(["log", "-1", "--format=%H%x09%G?"], { cwd, signal, timeoutMs });
-			if (gitFailure(head, "git log"))
-				return fail("commit", `committed, but could not read HEAD: ${head.stderr.trim()}`);
-			const [sha = "", sig = "N"] = head.stdout.trim().split("\t");
-			// G good, U good but untrusted key, X/Y good but expired: all signed. N none, B bad, E unverifiable: not.
-			const signed = ["G", "U", "X", "Y"].includes(sig);
-			const short = sha.slice(0, 7);
+				const head = await git(["log", "-1", "--format=%H%x09%G?"], { cwd, signal, timeoutMs });
+				if (gitFailure(head, "git log"))
+					return fail("commit", `committed, but could not read HEAD: ${head.stderr.trim()}`);
+				const [sha = "", sig = "N"] = head.stdout.trim().split("\t");
+				// G good, U good but untrusted key, X/Y good but expired: all signed. N none, B bad, E unverifiable: not.
+				const signed = ["G", "U", "X", "Y"].includes(sig);
+				const short = sha.slice(0, 7);
 
-			if (params.push === false) {
+				if (params.push === false) {
+					return toolResult({
+						text: `committed ${short}${signed ? " (signed)" : ""}, not pushed`,
+						structured: { stage: "done", sha, signed, pushed: false, hookModifiedFiles: false },
+					});
+				}
+				// Push only the current branch, to the remote git itself would pick for it:
+				// branch.<n>.pushRemote, then remote.pushDefault, then branch.<n>.remote, then the sole remote.
+				// Several remotes and no setting is ambiguous: fail closed rather than guess `origin`.
+				const target = await resolvePushRemote((args) => git(args, { cwd, signal, timeoutMs }));
+				if ("error" in target) return fail("push", `committed ${short} but ${target.error}`, { sha, signed });
+				const pushArgs = target.setUpstream
+					? ["push", "-q", "-u", target.remote, "HEAD"]
+					: ["push", "-q", target.remote, "HEAD"];
+				const push = await git(pushArgs, { cwd, signal, timeoutMs });
+				const pushFailure = gitFailure(push, "git push");
+				if (pushFailure) {
+					const shown = await bound(pushFailure, { keep: "tail", label: "git-push" });
+					return fail("push", `committed ${short} but push failed; do NOT commit again, fix the push.\n${shown.text}`, {
+						sha,
+						signed,
+					});
+				}
 				return toolResult({
-					text: `committed ${short}${signed ? " (signed)" : ""}, not pushed`,
-					structured: { stage: "done", sha, signed, pushed: false, hookModifiedFiles: false },
+					text: `committed ${short}${signed ? " (signed)" : ""} and pushed in ${seconds((add?.durationMs ?? 0) + commit.durationMs + push.durationMs)}`,
+					structured: { stage: "done", sha, signed, pushed: true, hookModifiedFiles: false },
 				});
+			} finally {
+				merge?.cleanup();
 			}
-			// Push only the current branch, to the remote git itself would pick for it:
-			// branch.<n>.pushRemote, then remote.pushDefault, then branch.<n>.remote, then the sole remote.
-			// Several remotes and no setting is ambiguous: fail closed rather than guess `origin`.
-			const target = await resolvePushRemote((args) => git(args, { cwd, signal, timeoutMs }));
-			if ("error" in target) return fail("push", `committed ${short} but ${target.error}`, { sha, signed });
-			const pushArgs = target.setUpstream
-				? ["push", "-q", "-u", target.remote, "HEAD"]
-				: ["push", "-q", target.remote, "HEAD"];
-			const push = await git(pushArgs, { cwd, signal, timeoutMs });
-			const pushFailure = gitFailure(push, "git push");
-			if (pushFailure) {
-				const shown = await bound(pushFailure, { keep: "tail", label: "git-push" });
-				return fail("push", `committed ${short} but push failed; do NOT commit again, fix the push.\n${shown.text}`, {
-					sha,
-					signed,
-				});
-			}
-			return toolResult({
-				text: `committed ${short}${signed ? " (signed)" : ""} and pushed in ${seconds((add?.durationMs ?? 0) + commit.durationMs + push.durationMs)}`,
-				structured: { stage: "done", sha, signed, pushed: true, hookModifiedFiles: false },
-			});
 		},
 	});
 }
