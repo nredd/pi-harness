@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { spawn, execFile as execFileCallback } from "node:child_process";
+import { spawn, execFile as execFileCallback, execFileSync } from "node:child_process";
 import { constants as fsConstants, createWriteStream, realpathSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -132,18 +132,60 @@ async function run(command, commandArgs) {
 
 export const GROUP_TERM_GRACE_MS = 800;
 export const GROUP_KILL_WAIT_MS = 500;
+/** Bound on one `ps` listing; a timeout or kill throws and reads as inconclusive. */
+export const PS_TIMEOUT_MS = 250;
 
 /**
- * True while the group we spawned still has members. Only ESRCH proves it is empty. Permission and
- * unexpected probe failures are inconclusive, so preserve the error rather than risking a signal to
- * a group whose ownership we cannot establish.
+ * List the `ps` state of every member of `pgid`, zombies included.
+ * @param {number} pgid Process-group ID to inspect.
+ * @returns {string[]} One `ps` STAT string per member; empty when `ps` sees no member.
+ * @throws {Error} When `ps` cannot run, is killed, or exceeds `PS_TIMEOUT_MS`.
  */
-function processGroupAlive(pgid, kill) {
+export function listGroupStates(pgid) {
+	const table = execFileSync("/bin/ps", ["-axo", "pgid=,stat="], { encoding: "utf8", timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" });
+	return table.split("\n").flatMap((line) => {
+		const [group, state] = line.trim().split(/\s+/);
+		return Number(group) === pgid ? [state] : [];
+	});
+}
+
+/**
+ * Whether an `EPERM` from signalling `pgid` is a group that is only draining. Darwin refuses to signal a
+ * group whose every member is a zombie awaiting its parent's `wait`, so `EPERM` alone cannot tell that
+ * apart from a real credential boundary. A listing with at least one member, all of them zombies, proves
+ * nothing live can be signalled or is left to signal. A group whose listing at the start of cleanup
+ * showed members (`seen`; never refreshed, and never set by a syscall result) and now lists none was reaped
+ * between the syscall and `ps`; the caller only keeps probing, so this too is safe.
+ * Neither is proof of absence: only ESRCH is. A never-seen empty group, a live member or a failing `ps`
+ * stay inconclusive.
+ * @param {number} pgid Owned process-group ID.
+ * @param {(pgid: number) => string[]} listStates Member-state seam.
+ * @param {boolean} seen Whether the listing taken at the start of cleanup showed a member of this group.
+ * @returns {boolean} True when the group is only zombies, or was seen and has since vanished.
+ * @throws {never} `ps` failures are classified as inconclusive.
+ */
+function onlyZombies(pgid, listStates, seen) {
+	try {
+		const states = listStates(pgid);
+		return states.length === 0 ? seen : states.every((state) => state.startsWith("Z"));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * True while the group we spawned still has members. Only ESRCH proves it is empty. A zombie-only group
+ * (`EPERM` with every member a zombie) still counts as present: it drains once its parent reaps it, and
+ * the caller keeps probing to ESRCH. Other permission and unexpected probe failures are inconclusive, so
+ * preserve the error rather than risking a signal to a group whose ownership we cannot establish.
+ */
+function processGroupAlive(pgid, kill, listStates, owned = { seen: false }) {
 	try {
 		kill(-pgid, 0);
 		return true;
 	} catch (error) {
 		if (error?.code === "ESRCH") return false;
+		if (error?.code === "EPERM" && onlyZombies(pgid, listStates, owned.seen)) return true;
 		throw error;
 	}
 }
@@ -151,7 +193,9 @@ function processGroupAlive(pgid, kill) {
 /**
  * Drive the process group `pgid` (owned: it is the pid of the child we spawned detached) to empty:
  * SIGTERM, a bounded grace, then SIGKILL. Resolve only on ESRCH; a positive final probe rejects.
- * Positive probes include zombies: without platform-specific classification, report uncertainty.
+ * A positive probe that persists past the budget rejects, including a zombie-only group: it is never
+ * reported as reaped. Darwin answers `EPERM` for such a group, which `onlyZombies` tells apart from a
+ * real permission failure; any other `EPERM` rejects at once.
  * While any member lives the pgid cannot be reused, so ownership is held until quiescence. The total
  * (<= 1.3s) stays inside the caller's 2s SIGKILL backstop on this script's pid.
  *
@@ -160,25 +204,30 @@ function processGroupAlive(pgid, kill) {
  * id. The probe-then-signal gap is microseconds and a reuse needs a full pid wraparound inside it; no
  * signal is ever sent after the probe reports the group empty or cannot establish permission.
  */
-export async function reapProcessGroup(pgid, kill = process.kill.bind(process)) {
-	if (!Number.isInteger(pgid) || pgid <= 0) throw new Error("Cleanup requires an owned positive process-group ID.");
+export async function reapProcessGroup(pgid, kill = process.kill.bind(process), listStates = listGroupStates) {
+	// pgid 1 would become kill(-1, ...), a broadcast to every process we may signal.
+	if (!Number.isInteger(pgid) || pgid <= 1) throw new Error("Cleanup requires an owned positive process-group ID above 1.");
+	const owned = { seen: false };
+	try { owned.seen = listStates(pgid).length > 0; } catch { /* unknown membership stays strict */ }
 	const signalGroup = (signal) => {
 		try { kill(-pgid, signal); return true; }
 		catch (error) {
-			if (error?.code !== "ESRCH") throw error;
-			return false;
+			if (error?.code === "ESRCH") return false;
+			// Nothing signalable is left in a zombie-only group; the probes below wait for it to drain.
+			if (error?.code === "EPERM" && onlyZombies(pgid, listStates, owned.seen)) return true;
+			throw error;
 		}
 	};
 	const quiesce = async (timeoutMs) => {
 		const deadline = Date.now() + timeoutMs;
 		for (;;) {
 			// Stop at the first ESRCH: a later positive probe might observe a recycled group.
-			if (!processGroupAlive(pgid, kill)) return true;
+			if (!processGroupAlive(pgid, kill, listStates, owned)) return true;
 			if (Date.now() >= deadline) return false;
 			await delay(20);
 		}
 	};
-	if (!processGroupAlive(pgid, kill)) return;
+	if (!processGroupAlive(pgid, kill, listStates, owned)) return;
 	if (!signalGroup("SIGTERM")) return;
 	if (await quiesce(GROUP_TERM_GRACE_MS)) return;
 	if (!signalGroup("SIGKILL")) return;
@@ -197,7 +246,7 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 		const child = spawn(command, commandArgs, { stdio: "inherit", detached: true });
 		let reaping;
 		let reaped = false;
-		let maySignal = Number.isInteger(child.pid) && child.pid > 0;
+		let maySignal = Number.isInteger(child.pid) && child.pid > 1;
 		const ownedKill = (pid, signal) => {
 			try { return kill(pid, signal); }
 			catch (error) {
@@ -214,7 +263,7 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 		const onExit = () => {
 			if (reaped || !maySignal) return;
 			try {
-				if (processGroupAlive(child.pid, ownedKill)) ownedKill(-child.pid, "SIGKILL");
+				if (processGroupAlive(child.pid, ownedKill, listGroupStates)) ownedKill(-child.pid, "SIGKILL");
 			} catch { /* already reported by bounded cleanup, or exit-time ownership is inconclusive */ }
 		};
 		const onTerminate = (signal) => {
@@ -239,7 +288,7 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 		});
 		child.on("close", (code, signal) => {
 			// A failed spawn has no group; its error handler already rejected.
-			if (!Number.isInteger(child.pid) || child.pid <= 0) return;
+			if (!Number.isInteger(child.pid) || child.pid <= 1) return;
 			const commandError = code === 0
 				? undefined
 				: new Error(`Command failed (${code ?? signal}): ${command} ${commandArgs.join(" ")}`);
