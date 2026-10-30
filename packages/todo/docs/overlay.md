@@ -27,11 +27,11 @@ snapshots are saved.
 
 ```
 ▾ ● Todos (2 done, 3 open, 1 in progress)
-├─ ✓ Create DemoTodo domain entity
-├─ ✓ Create IDemoTodoRepository interface
-├─ ◐ Create DemoTodoRepository (creating the repository)
-├─ ○ Register DI bindings
-└─ ○ Add integration tests
+├─ ✓ #1 Create DemoTodo domain entity
+├─ ✓ #2 Create IDemoTodoRepository interface
+├─ ◐ #3 Create DemoTodoRepository (creating the repository)
+├─ ○ #4 Register DI bindings
+└─ ○ #5 Add integration tests
 ```
 
 - **Heading** — `▾ ● Todos (19 done, 1 deferred, 4 open, 2 in progress)` in the accent color while
@@ -47,9 +47,8 @@ snapshots are saved.
 - **activeForm** — appended dim in parentheses, only while the task is
   `in_progress`.
 - **Dependencies** — appended as `⛓ #1,#2` when the task has a `blockedBy` set.
-- **`#id` prefix** — shown on every row only when at least one visible task
-  carries a `blockedBy`. Without a `⛓ #N` anywhere, the per-row ids have nothing
-  to point at, so they are omitted.
+- **`#id` prefix** — shown on every task row. It is the stable todo identifier,
+  independent of any `#N` text in the task subject.
 - **Prefixes** — `├─` on each row, `└─` on the last one. A blank spacer line is
   always appended below the panel so it is not flush against the input box.
 
@@ -77,15 +76,13 @@ budget. See [configuration.md](./configuration.md#maxwidgetlines).
 
 ## Collapsing
 
-Click the heading to collapse the panel to two lines -- the heading plus a dim
-`└─ ctrl+shift+t to expand` hint -- and click it again to expand. The disclosure
-marker changes from `▾` to `▸`. The configured keyboard shortcut performs the
-same toggle, and the hint always shows that key.
+Click the heading to collapse the panel to one content line -- the heading. Click
+it again to expand. The disclosure marker changes from `▾` to `▸`; the configured
+keyboard shortcut performs the same toggle. A trailing blank spacer remains below
+the panel.
 
 Rebind or disable the shortcut with the `collapseKey` option; see
-[configuration.md](./configuration.md#collapsekey). If the shortcut is set to
-`"off"` while the panel is collapsed, the hint becomes a static `collapsed`
-label rather than advertising an unbindable key.
+[configuration.md](./configuration.md#collapsekey).
 
 ## `/todos`
 
@@ -114,8 +111,8 @@ tasks. Tombstoned tasks are never listed.
 
 ## Localization
 
-The overlay heading, the `+N more` summary, the collapse hint, the `/todos`
-section headers, and the status words all localize through
+The overlay heading, the `+N more` summary, the `/todos` section headers, and
+the status words all localize through
 [`@juicesharp/rpiv-i18n`](https://www.npmjs.com/package/@juicesharp/rpiv-i18n)
 when that package is installed. Bundled locales: `de`, `en`, `es`, `fr`, `pt`,
 `pt-BR`, `ru`, `uk`, `zh`.

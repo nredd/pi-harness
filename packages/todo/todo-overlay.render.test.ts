@@ -1,5 +1,3 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, createMockUI } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,16 +9,6 @@ import {
 } from "./.test-support/home-fixtures.ts";
 import { TEST_HOME } from "./.test-support/setup.ts";
 import { TodoOverlay } from "./todo-overlay.ts";
-
-const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
-
-function writeConfigFile(contents: string): void {
-	mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-	writeFileSync(CONFIG_PATH, contents, "utf-8");
-}
-function removeConfigFile(): void {
-	rmSync(CONFIG_PATH, { force: true });
-}
 
 const identityTheme = {
 	fg: (_c: string, s: string) => s,
@@ -57,11 +45,9 @@ async function setup(
 
 beforeEach(() => {
 	__resetState();
-	removeConfigFile();
 });
 afterEach(() => {
 	__resetState();
-	removeConfigFile();
 	vi.restoreAllMocks();
 });
 
@@ -148,25 +134,20 @@ describe("TodoOverlay — per-task formatting", () => {
 	});
 });
 
-describe("TodoOverlay — showIds gate", () => {
-	it("does NOT show #id prefix when no task has blockedBy", async () => {
-		const { widget } = await setup([
-			{ action: "create", subject: "a" },
-			{ action: "create", subject: "b" },
-		]);
-		const out = widget.render(200).join("\n");
-		expect(out).not.toMatch(/#\d/);
-	});
+describe("TodoOverlay — task IDs", () => {
+	it("renders every visible task's stable ID independently of its subject at normal and narrow widths", async () => {
+		const actions = Array.from({ length: 34 }, (_, i) => ({
+			action: "create" as const,
+			subject: i === 33 ? "subject #100" : `task ${i + 1}`,
+		}));
+		const { widget } = await setup(actions, { getToolsExpanded: () => true });
 
-	it("shows #id prefix and '⛓' dep suffix when any task has blockedBy", async () => {
-		const { widget } = await setup([
-			{ action: "create", subject: "base" },
-			{ action: "create", subject: "follow-up", blockedBy: [1] },
-		]);
-		const out = widget.render(200).join("\n");
-		expect(out).toContain("#1");
-		expect(out).toContain("#2");
-		expect(out).toContain("⛓");
+		const expanded = widget.render(200).join("\n");
+		expect(expanded).toContain("#34");
+		expect(expanded).toContain("subject #100");
+
+		const narrow = widget.render(20).join("\n");
+		expect(narrow).toContain("#34");
 	});
 });
 
@@ -361,78 +342,27 @@ describe("TodoOverlay — scrollable window", () => {
 });
 
 describe("TodoOverlay — collapse/expand render", () => {
-	it("collapsed view returns exactly three lines: heading with counts, expand hint, trailing spacer", async () => {
+	it("reclaims exactly one row when collapsed at normal and narrow widths", async () => {
 		const { widget, overlay } = await setup([
 			{ action: "create", subject: "a" },
 			{ action: "create", subject: "b" },
 			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
-		overlay.toggleCollapse(); // collapse
-		const lines = widget.render(200);
-		expect(lines).toHaveLength(3); // heading + hint + trailing spacer
-		expect(lines[0]).toContain("▸");
-		expect(lines[0]).toContain("Todos (1 done, 1 open)");
-		expect(lines[1]).toContain("└─");
-		expect(lines[1]).toContain("ctrl+shift+t to expand");
-		expect(lines[2]).toBe(""); // trailing spacer
-	});
 
-	it("uncollapsed (default) yields the unchanged full render (regression-safe)", async () => {
-		const { widget } = await setup([
-			{ action: "create", subject: "a" },
-			{ action: "create", subject: "b" },
-		]);
-		// Full render: heading + 2 tasks + trailing spacer = 4 lines
-		const lines = widget.render(200);
-		expect(lines).toHaveLength(4);
-		expect(lines.some((l) => l.includes("a"))).toBe(true);
-		expect(lines.some((l) => l.includes("b"))).toBe(true);
-	});
-});
+		const expanded = widget.render(200);
+		expect(expanded).toHaveLength(4); // heading + 2 tasks + trailing spacer
 
-describe("TodoOverlay — collapse hint resolves the key from config", () => {
-	// resolveCollapseKey() runs at render time (per-render, like the row budget), so
-	// the config MUST be written before widget.render(). setup() itself doesn't read
-	// the collapse key — it constructs the overlay directly.
+		overlay.toggleCollapse();
+		const collapsed = widget.render(200);
+		expect(collapsed).toHaveLength(2); // heading + trailing spacer
+		expect(collapsed[0]).toContain("▸");
+		expect(collapsed[0]).toContain("Todos (1 done, 1 open)");
+		expect(collapsed[1]).toBe("");
+		expect(collapsed).not.toContain("alt+t to expand");
 
-	it("renders the configured key in the collapsed hint (alt+o)", async () => {
-		writeConfigFile(JSON.stringify({ collapseKey: "alt+o" }));
-		const { widget, overlay } = await setup([{ action: "create", subject: "a" }]);
-		overlay.toggleCollapse(); // collapse
-		const lines = widget.render(200);
-		expect(lines[1]).toContain("alt+o to expand");
-		// The placeholder is always spliced — never leaks the raw {key} token.
-		expect(lines[1]).not.toContain("{key}");
-		expect(lines[1]).not.toContain("ctrl+shift+t");
-	});
-
-	it("renders the default key in the collapsed hint when config is missing", async () => {
-		const { widget, overlay } = await setup([{ action: "create", subject: "a" }]);
-		overlay.toggleCollapse(); // collapse
-		const lines = widget.render(200);
-		expect(lines[1]).toContain("ctrl+shift+t to expand");
-		expect(lines[1]).not.toContain("{key}");
-	});
-
-	it("renders the default key when the configured spec is invalid", async () => {
-		writeConfigFile(JSON.stringify({ collapseKey: "ctr+t" }));
-		const { widget, overlay } = await setup([{ action: "create", subject: "a" }]);
-		overlay.toggleCollapse(); // collapse
-		const lines = widget.render(200);
-		expect(lines[1]).toContain("ctrl+shift+t to expand");
-	});
-
-	it("renders a static collapsed label — not the sentinel — when the key resolves to off", async () => {
-		// Reachable mid-session: collapse with a bound key, then edit the config to
-		// "off" without /reload. The per-render resolver returns the sentinel; the
-		// hint must not splice it into the {key} placeholder ("off to expand").
-		const { widget, overlay } = await setup([{ action: "create", subject: "a" }]);
-		overlay.toggleCollapse(); // collapse
-		writeConfigFile(JSON.stringify({ collapseKey: "off" }));
-		const lines = widget.render(200);
-		expect(lines[1]).toContain("collapsed");
-		expect(lines[1]).not.toContain("off to expand");
-		expect(lines[1]).not.toContain("{key}");
+		const narrow = widget.render(1);
+		expect(narrow).toHaveLength(2);
+		expect(narrow[1]).toBe("");
 	});
 });
 
