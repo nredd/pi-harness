@@ -162,10 +162,13 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: [PROJECT_MUTATION_FIXTURE] }));
     try {
       const enabled = await activeToolsFor({ extensions: true });
+      expect(enabled).toContain("write");
       expect(enabled).toContain(EXT_TOOL);
       expect(enabled).toContain(PROJECT_MUTATION_TOOL);
       expect(registered).toContain(EXT_TOOL);
       expect(registered).toContain(PROJECT_MUTATION_TOOL);
+      // Admission is the subject: deliberately do not invoke the file-writing
+      // fixture or claim execution isolation from an unregistered tool.
 
       const config = DEFAULT_AGENTS.get(type);
       if (!config) throw new Error(`Missing default ${type}`);
