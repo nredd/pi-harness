@@ -116,8 +116,10 @@ no model tool, persists no history, sends no model messages and does no network 
   - `test/mon/source.test.ts`: two actual host observations (warming, then measured), a real poll's
     two updates, and mapping edge cases. In-flight close wraps the real sampler to hold its pending
     sample, then requires that sample to reject with `AbortError`, no update, no child and no timer.
-    On macOS it first requires the sampler's live `ps` child; Linux reads `/proc` in process, so
-    there the `AbortError` is the only provider evidence and no child is claimed.
+    The check is timed by Node's `child_process` diagnostics channel, in the microtask after the
+    first helper spawned, so it holds for a late spawn and for a helper that exits at once. On macOS
+    it requires that child (`vm_stat`, listed even if already exited, since nothing has reaped it); Linux reads `/proc` in process,
+    so there the `AbortError` is the only provider evidence and no child is claimed.
   - `test/mon/theme.test.ts`: actual built-in dark and light themes over an actual observation at
     40x12, 60x20, 80x24 and 120x40.
   - `test/scenarios/mon.test.ts` (Vitest and Bun): the real interactive Pi host, `createSessionKit`

@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { type ChildProcess, spawnSync } from "node:child_process";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { lstat, readFile } from "node:fs/promises";
 import { platform } from "node:os";
 import { dirname, join } from "node:path";
@@ -31,6 +32,27 @@ function children(): number[] {
 /** @returns Number of currently active timeout resources in this test worker. */
 function timers(): number {
 	return process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length;
+}
+
+/** @returns A promise for the next event loop check phase. */
+function tick(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Observe the next child this worker spawns through Node's documented `child_process` channel.
+ * The channel publishes from the `ChildProcess` constructor, so the promise settles in the microtask
+ * after a synchronous `spawn()` returned: the PID is set and the event loop cannot have reaped it yet.
+ * @returns The spawned child.
+ */
+function nextChild(): Promise<ChildProcess> {
+	return new Promise((resolve) => {
+		const onChild = (message: unknown): void => {
+			unsubscribe("child_process", onChild);
+			resolve((message as { process: ChildProcess }).process);
+		};
+		subscribe("child_process", onChild);
+	});
 }
 
 /**
@@ -112,20 +134,36 @@ describe("published sampler source on this host", () => {
 		await expect(source.sample(signal)).rejects.toThrow(/disposed/);
 	});
 
-	it("cancels an in-flight real sample on close, reaping its provider work", async () => {
-		const before = timers();
+	it.each([
+		["a spawn in the first turn", async () => {}, () => {}],
+		// Two ticks: one would still spawn before an immediate the caller scheduled in the same turn.
+		["a spawn two ticks late", () => tick().then(tick), () => {}],
+		// Parks the loop while the helper runs: its exit is then handled before the next immediate.
+		[
+			"a helper that exits at once",
+			async () => {},
+			() => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100),
+		],
+	])("cancels an in-flight real sample on close, reaping its provider work, given %s", async (_name, before, after) => {
+		// Start in a check phase, so a later immediate runs only after a full poll phase, as under load.
+		await tick();
+		const baseline = timers();
 		// Controlled seam: the real published sampler, wrapped only to observe the in-flight promise.
 		let inFlight: Promise<ResourceSnapshot> | undefined;
 		const create = (options?: SamplerOptions): ResourceSampler => {
 			const real = createResourceSampler(options);
 			return {
 				sample: (signal) => {
-					inFlight = real.sample(signal);
+					inFlight = before().then(() => real.sample(signal));
 					return inFlight;
 				},
 				dispose: () => real.dispose(),
 			};
 		};
+		const spawned = nextChild().then((child) => {
+			after();
+			return child.pid;
+		});
 		const update = vi.fn();
 		const poll = new MonPoll(createSamplerSource(create), update);
 		poll.start();
@@ -134,17 +172,17 @@ describe("published sampler source on this host", () => {
 			() => "resolved",
 			(error: unknown) => (error instanceof Error ? error.name : "non-error"),
 		);
-		// Let the sampler reach its provider: on macOS that is a spawned `ps` child.
-		await new Promise((resolve) => setImmediate(resolve));
-		const during = children();
-		if (platform() === "darwin") expect(during.length).toBeGreaterThan(0);
-		// Linux reads /proc in-process (one `getconf` child on the first sample, possibly already gone), so
-		// no child is asserted there; the AbortError below is the provider's own cancellation evidence.
+		// The first helper, not any later instant: helpers run in turn and leave gaps with no child at all.
+		const pid = await Promise.race([spawned, outcome?.then(() => undefined)]);
+		// macOS: `vm_stat`, listed even once exited because nothing has reaped it yet.
+		if (platform() === "darwin") expect(children()).toContain(pid);
+		// Linux reads /proc in-process (one `getconf` child on the first sample), so no child is asserted
+		// there; the AbortError below is the provider's own cancellation evidence.
 		await poll.dispose();
 		expect(await outcome).toBe("AbortError");
 		expect(update).not.toHaveBeenCalled();
 		expect(children()).toEqual([]);
-		expect(timers()).toBeLessThanOrEqual(before);
+		expect(timers()).toBeLessThanOrEqual(baseline);
 	});
 
 	it("drives a real poll for two updates, then closes cleanly", async () => {
