@@ -2,7 +2,7 @@
  * Prompt-composition regression (#237) -- real Pi loader and AgentSession, no
  * mocked tool registration. The assertion is at the same seam agents receive.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,9 @@ describe("todo SDK-composed prompt", () => {
 		process.env.XDG_CONFIG_HOME = join(home, ".config");
 		mkdirSync(join(home, "cwd"));
 		mkdirSync(join(home, "agent"));
+		const configDir = join(home, ".config", "rpiv-todo");
+		mkdirSync(configDir, { recursive: true });
+		writeFileSync(join(configDir, "config.json"), "{}");
 	});
 
 	afterEach(() => {
@@ -50,6 +53,8 @@ describe("todo SDK-composed prompt", () => {
 			expect(prompt).toContain("Multiple parallel tasks may be in_progress: use owner to identify each worker");
 			expect(prompt).toContain("Mark each verified task completed IMMEDIATELY");
 			expect(prompt).toContain("multiple independent results already verified together");
+			expect(prompt).toContain("without delaying individual completions");
+			expect(prompt).toContain("A batch is atomic: if any op is invalid nothing changes");
 			expect(prompt).not.toMatch(OLD_GUIDANCE);
 		} finally {
 			harness.cleanup();
