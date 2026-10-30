@@ -107,12 +107,15 @@ Spawn the Standards and Spec reviewers in one message with `subagent_type: "code
 full final HEAD SHA, issue/spec, and repo rules.
 
 The critic is supplementary, never a substitute for either axis. It is read-only and already
-carries the refute-before-report rule, so name the final diff and issue only. The parent performs
-an independent final critic after this handoff; do not claim that a delegated critic completes it.
+carries the refute-before-report rule, so name the final diff and issue only. Its receipt preserves
+the original invocation's full SHA (or a recorded short-ref -> full-SHA resolution), identity/model,
+and tool-routing metadata. Accept only the critic's native `No findings.` or structured finding
+output -- never manufacture `Checked:` evidence. The parent performs an independent final critic
+after this handoff; do not claim that a delegated critic completes it.
 
 - Fix every real blocking finding, rerun the affected gate, and push the follow-up
 - Every change to HEAD invalidates the critic and both review axes. Re-run all three on the final SHA
-- Record reviewer identities/models, reviewed SHA, `Checked:`/`Findings:` reports for the two axes, the critic `Findings:`, and each finding disposition
+- Record reviewer identities/models, reviewed SHA, and `Checked:`/`Findings:` reports for the two axes; record the critic's original SHA-bound invocation, tool-routing metadata, native output, and each finding disposition
 - Document a concrete rationale for any retained judgement finding
 
 ## 8. Open the PR
@@ -127,7 +130,7 @@ Body, in order:
   dotted module path
 - `Verification:` plus prose bullets carrying REAL command output. Fence it when long. Test
   counts, coverage numbers, and actual failure transcripts, not "tests pass"
-- Exact-HEAD Standards, Spec, and critic receipts, including reviewer identities/models and finding dispositions
+- Exact-HEAD Standards and Spec receipts with `Checked:`/`Findings:`, plus the critic's original SHA-bound invocation, tool-routing metadata, native output, and finding dispositions
 - The parent-monitor handoff: PR URL, final SHA, concrete CI run IDs or commands, and the remaining final-critic/merge owner
 - The `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer
 

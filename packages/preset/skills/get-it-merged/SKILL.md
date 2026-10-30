@@ -16,7 +16,7 @@ One pass, before touching anything:
 
 - Open PRs: `gh pr list --json number,title,headRefName,baseRefName,autoMergeRequest,mergeStateStatus,mergeable`
 - Ruleset: `gh api repos/{owner}/{repo}/rulesets` -- record required checks, merge method, and whether strictness is enabled; do not assume either
-- Exact-HEAD review receipts: Standards + Spec `code-reviewer` reports and the dedicated critic for each candidate
+- Exact-HEAD review receipts: Standards + Spec `code-reviewer` reports and the dedicated critic for each candidate. A critic receipt preserves its original invocation's full SHA (or a recorded short-ref -> full-SHA resolution) and tool-routing metadata
 - Functional dependencies and overlapping paths: `gh pr view`, commit ancestry, and diffs
 - Live CI: record concrete run IDs and states. The parent starts a native session-kit monitor when it needs to wait
 
@@ -35,7 +35,9 @@ as a substitute for the parent's monitor.
 For the selected PR:
 
 - Confirm its exact current HEAD has separate Standards + Spec reviews without model overrides and a dedicated critic
-- Confirm the Standards and Spec axes have `Checked:` evidence, every reviewer has a named identity/model, and neither the axes nor critic has an unresolved blocking finding
+- Confirm the Standards and Spec axes have `Checked:` evidence and every reviewer has a named identity/model
+- Confirm the critic receipt names `critic`, its identity/model, original SHA-bound invocation, and tool-routing metadata; accept only its native `No findings.` or structured finding output. Never synthesize `Checked:` evidence for the critic
+- Confirm neither axis nor the critic has an unresolved blocking finding
 - Confirm normal required checks are green on that exact HEAD. Do not rerun only failed jobs; use the repository's documented flake policy
 - Keep auto-merge off until the parent has consumed its independent final critic
 - Hand the parent the PR URL, head SHA, review handles, CI run IDs, and native-monitor command. The parent observes the outcome and performs any protected merge
