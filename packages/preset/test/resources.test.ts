@@ -202,22 +202,37 @@ test("shipping resources require exact-HEAD review, parent monitoring, and no fo
 	assert.match(ship, /original SHA-bound invocation, tool-routing metadata, native output/);
 });
 
-test("shipping resources admit native critic receipts without fabricated review evidence", () => {
-	const head = "16a037aae2f83626542070b19871a87610b8a8ac";
-	const receipt = [
-		"Agent: critic (anthropic/opus-5-5)",
-		`Invocation SHA: ${head}`,
-		"Tool routing: @deep -> router/deep -> anthropic/opus-5-5",
-		"No findings.",
-	].join("\n");
-	const output = receipt.split("\n").at(-1) ?? "";
-	assert.match(receipt, /^Agent: critic \(.+\)$/m);
-	assert.match(receipt, new RegExp(`^Invocation SHA: ${head}$`, "m"));
-	assert.match(receipt, /^Tool routing: .+$/m);
-	assert.match(output, /^(?:No findings\.|\[(?:high|medium|low)\] .+)/);
-	assert.doesNotMatch(receipt, /Checked:/);
-	assert.match(readText("skills/get-it-merged/SKILL.md"), /original invocation's full SHA/);
-	assert.match(readText("skills/ship-issue/SKILL.md"), /Accept only the critic's native `No findings\.`/);
+test("shipping resources admit the recorded critic receipt without fabricated review evidence", () => {
+	const head = "3dae0a9ae4dcb7e8bc9c11a31935b450696f3182";
+	const receipt = {
+		agent: "critic",
+		invocationSha: head,
+		routing: "@deep -> router/deep -> openai-codex/gpt-6.1-sol",
+		output: "[medium] private_dot_agents/skills/get-it-merged/SKILL.md:38 -- PR #74 rejects valid critic receipts",
+	};
+	const merge = readText("skills/get-it-merged/SKILL.md");
+	const ship = readText("skills/ship-issue/SKILL.md");
+	const admits = (policy: string) =>
+		policy.includes("original invocation's full SHA") &&
+		policy.includes("tool-routing metadata") &&
+		policy.includes("Never synthesize `Checked:` evidence for the critic") &&
+		!policy.includes("Confirm every review has `Checked:` evidence");
+	assert.equal(receipt.agent, "critic");
+	assert.match(receipt.invocationSha, /^[0-9a-f]{40}$/);
+	assert.match(receipt.routing, /^@deep -> router\/deep -> .+$/);
+	assert.match(receipt.output, /^\[(?:high|medium|low)\] .+/);
+	assert.doesNotMatch(receipt.output, /Checked:/);
+	assert.ok(admits(merge));
+	assert.ok(
+		!admits(
+			merge.replace(
+				"Confirm the Standards and Spec axes have `Checked:` evidence and every reviewer has a named identity/model",
+				"Confirm every review has `Checked:` evidence, named reviewer identity/model, and no unresolved blocking finding",
+			),
+		),
+	);
+	assert.match(ship, /Accept only the critic's native `No findings\.` or structured finding/);
+	assert.match(ship, /original SHA-bound invocation, tool-routing metadata, native output/);
 });
 
 test("themes validate against Pi's theme schema and carry no extra metadata", () => {
