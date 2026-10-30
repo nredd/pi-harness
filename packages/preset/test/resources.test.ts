@@ -233,8 +233,8 @@ test("shipping resources require exact-HEAD review, parent monitoring, and no fo
 		}
 	}
 	assert.match(review, /no `model` unless the user named one/);
-	assert.match(ship, /separate Standards \+ Spec `code-reviewer` agents/);
-	assert.match(ship, /Every change to HEAD invalidates the critic and both review axes/);
+	assert.match(ship, /use `\/skill:code-review` for the separate Standards/);
+	assert.match(ship, /shared skill selects parent background versus delegated blocking calls/);
 	assert.match(ship, /Delegated worker: keep auto-merge off/);
 	assert.match(ship, /follow `\/skill:get-it-merged` steps 3-4 as a one-PR train/);
 	assert.match(ship, /Do not duplicate or weaken it here/);
@@ -252,6 +252,7 @@ test("code-reviewer template is the literal skeleton the receipt parser accepts"
 	const reviewer = readText("agents/code-reviewer.md");
 	assert.match(reviewer, /`Checked:` has one `- ` line per standard rule or spec requirement/);
 	assert.match(reviewer, /A clean review still lists what it checked/);
+	assert.match(reviewer, /Spec axis with no spec supplied: use the skeleton/);
 	assert.match(reviewer, /^Axis: <Standards\|Spec>\nReviewed HEAD: <full-40-character-sha>\nChecked:\n- /m);
 	assert.match(reviewer, /\nFindings:\n\[hard\|judgement\]/);
 	assert.doesNotMatch(reviewer, /^Findings: \S/m);
@@ -503,10 +504,9 @@ test("code-review binds both axes to an immutable HEAD and supports nested block
 	assert.match(review, /A corrective-delta review is supplemental only/);
 	assert.match(review, /A top-level parent spawns/);
 	assert.match(review, /A delegated session omits `run_in_background`/);
-	assert.match(
-		review,
-		/The full original reviewed-base SHA, full reviewed HEAD SHA, and immutable whole-PR diff command/,
-	);
+	const promptBinding =
+		/The full original reviewed-base SHA, full reviewed HEAD SHA, and immutable whole-PR diff command/g;
+	assert.equal(review.match(promptBinding)?.length, 2, "both axis prompts carry the immutable range");
 	assert.doesNotMatch(
 		review.replace("with the preserved `<reviewed-base>`", "with a new `<reviewed-base>`"),
 		/with the preserved `<reviewed-base>`/,
@@ -539,10 +539,9 @@ test("single-issue parents retain terminal ownership and nested reviews use bloc
 			/genuine external blocker has a named owner and an armed continuation monitor/.test(handoff)
 		);
 	};
-	assert.match(reviews, /Parent sessions can dispatch/);
-	assert.match(reviews, /omit `run_in_background` and consume the blocking results/);
-	assert.match(reviews, /original PR merge-base before the first review/);
-	assert.match(reviews, /not merely the corrective delta/);
+	assert.match(reviews, /use `\/skill:code-review` for the separate Standards/);
+	assert.match(reviews, /shared skill selects parent background versus delegated blocking calls/);
+	assert.match(reviews, /both full SHAs and the original whole-PR range/);
 	assert.ok(retainsOwner(ship));
 	assert.ok(!retainsOwner(ship.replace(/^- Parent completion:[^\n]*\n/m, "")));
 });
