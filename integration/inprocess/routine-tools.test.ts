@@ -5,6 +5,7 @@ import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-ag
 import { Type } from "typebox";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
+import { defaultConfig } from "../../packages/session-kit/src/config.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
 import { configFor } from "../../packages/session-kit/test/scenarios/support.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";
@@ -58,18 +59,27 @@ afterAll(async () => {
 	}
 });
 
+type ProviderContext = { messages: Parameters<typeof getCurrentTools>[0] };
+
+/** Tool names in the schema the actual provider boundary received. */
+function toolNames(ctx: ProviderContext): string[] {
+	return getCurrentTools(ctx.messages).map((t) => t.name);
+}
+
 /** Observe the schemas sent to the actual provider boundary without calling discovery. */
-async function parentTools(): Promise<string[]> {
-	let tools: string[] = [];
-	h.setResponses([
+async function observeTools(harness: Harness, prompt: string): Promise<string[]> {
+	let names: string[] = [];
+	harness.setResponses([
 		(ctx) => {
-			tools = getCurrentTools(ctx.messages).map((tool) => tool.name);
+			names = toolNames(ctx);
 			return fauxAssistantMessage("OBSERVED");
 		},
 	]);
-	await h.session.prompt("inspect routine tools");
-	return tools;
+	await harness.session.prompt(prompt);
+	return names;
 }
+
+const parentTools = () => observeTools(h, "inspect routine tools");
 
 it("keeps routine tools available in a fresh parent session and after a real parent turn", async () => {
 	// This first provider request deliberately occurs before any `search_tools` call.
@@ -147,7 +157,7 @@ it("keeps routine tools active in the provider request triggered by a real child
 			fauxAssistantMessage("PARENT DONE"),
 			(ctx) => {
 				expect(ctx.messages.some((message) => JSON.stringify(message).includes("<task-notification>"))).toBe(true);
-				tools = getCurrentTools(ctx.messages).map((tool) => tool.name);
+				tools = toolNames(ctx);
 				return fauxAssistantMessage("OBSERVED AFTER NOTICE");
 			},
 		]);
@@ -167,6 +177,31 @@ it("keeps routine tools active in the provider request triggered by a real child
 	}
 });
 
+it.each([
+	["unmodified defaultConfig()", () => ({ config: defaultConfig() })],
+	["absent config file", () => ({})],
+])("registers every routine tool by default with %s", async (_label, options) => {
+	const defaults = await isolateStackHome();
+	let started: Harness | undefined;
+	try {
+		// Deliberately no deferred-tools pins: this proves registration, not DCE visibility.
+		started = await startStack({
+			cwd: defaults.root,
+			factories: [
+				createDevTools(),
+				createSessionKit({ ...options(), agentDir: join(defaults.root, "agent") }),
+				createSubscriptionRouter(),
+			],
+		});
+		const registered = started.session.getAllTools().map((t) => t.name);
+		expect(registered).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
+	} finally {
+		if (started) await started.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+		started?.cleanup();
+		await defaults.cleanup();
+	}
+});
+
 it("does not override an explicit SessionKit monitor disable", async () => {
 	const disabledHome = await isolateStackHome();
 	let disabled: Harness | undefined;
@@ -182,14 +217,7 @@ it("does not override an explicit SessionKit monitor disable", async () => {
 				await loadThirdParty("deferred"),
 			],
 		});
-		let tools: string[] = [];
-		disabled.setResponses([
-			(ctx) => {
-				tools = getCurrentTools(ctx.messages).map((tool) => tool.name);
-				return fauxAssistantMessage("OBSERVED");
-			},
-		]);
-		await disabled.session.prompt("inspect disabled monitor");
+		const tools = await observeTools(disabled, "inspect disabled monitor");
 		for (const name of ["monitor_start", "monitor_read", "monitor_stop"]) expect(tools).not.toContain(name);
 	} finally {
 		if (disabled) await disabled.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
@@ -216,8 +244,8 @@ it("keeps goal_update state-dependent under real SDK and deferred-tool pinning",
 			await loadThirdParty("deferred"),
 		]);
 		const offered: string[][] = [];
-		const observe = (ctx: { messages: Parameters<typeof getCurrentTools>[0] }) => {
-			offered.push(getCurrentTools(ctx.messages).map((t) => t.name));
+		const observe = (ctx: ProviderContext) => {
+			offered.push(toolNames(ctx));
 			return fauxAssistantMessage("OBSERVED");
 		};
 		const forced = [tool("goal_update", { status: "complete", evidence: "forged" }), fauxAssistantMessage("denied")];
@@ -241,7 +269,7 @@ it("keeps goal_update state-dependent under real SDK and deferred-tool pinning",
 		await goalHarness.session.prompt("/goal ship it");
 		goalHarness.setResponses([
 			async (ctx) => {
-				offered.push(getCurrentTools(ctx.messages).map((t) => t.name));
+				offered.push(toolNames(ctx));
 				expect(goalStates(goalHarness).at(-1)?.status).toBe("active");
 				await goalHarness.session.prompt("/goal pause");
 				return fauxAssistantMessage("OBSERVED");
@@ -264,7 +292,7 @@ it("keeps goal_update state-dependent under real SDK and deferred-tool pinning",
 		await goalHarness.session.prompt("/goal resume");
 		goalHarness.setResponses([
 			(ctx) => {
-				const resumed = getCurrentTools(ctx.messages).map((t) => t.name);
+				const resumed = toolNames(ctx);
 				expect(resumed).toEqual(expect.arrayContaining(["goal_update", ...ROUTINE_TOOLS]));
 				return complete();
 			},
