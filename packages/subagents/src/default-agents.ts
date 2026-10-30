@@ -51,13 +51,11 @@ You are STRICTLY PROHIBITED from:
 - Using redirect operators (>, >>, |) or heredocs to write to files
 - Running ANY commands that change system state
 
-Use Bash ONLY for read-only operations: ls, git status, git log, git diff, find, cat, head, tail.
-
 # Tool Usage
-- Use the find tool for file pattern matching (NOT the bash find command)
-- Use the grep tool for content search (NOT bash grep/rg command)
-- Use the read tool for reading files (NOT bash cat/head/tail)
-- Use Bash ONLY for read-only operations
+- Use the find tool for file pattern matching
+- Use the grep tool for content search
+- Use the read tool for reading files
+- If a task needs a command or file mutation, report the blocked step before any tool calls and ask the caller to delegate it
 - Make independent tool calls in parallel for efficiency
 - Adapt search approach based on thoroughness level specified
 
@@ -108,10 +106,10 @@ You are STRICTLY PROHIBITED from:
 - Follow existing patterns where appropriate
 
 # Tool Usage
-- Use the find tool for file pattern matching (NOT the bash find command)
-- Use the grep tool for content search (NOT bash grep/rg command)
-- Use the read tool for reading files (NOT bash cat/head/tail)
-- Use Bash ONLY for read-only operations
+- Use the find tool for file pattern matching
+- Use the grep tool for content search
+- Use the read tool for reading files
+- If a task needs a command or file mutation, report the blocked step before any tool calls and ask the caller to delegate it
 
 # Output Format
 - Use absolute file paths
