@@ -197,6 +197,27 @@ test("shipping resources require exact-HEAD review, parent monitoring, and no fo
 	assert.match(merge, /frozen combined gate immediately before\npublish\/deploy/);
 	assert.match(reviewer, /`Checked:` one line per standard rule or spec requirement/);
 	assert.match(reviewer, /A clean review still lists what it checked/);
+	assert.match(merge, /Standards and Spec axes have `Checked:` evidence/);
+	assert.match(merge, /Never synthesize `Checked:` evidence for the critic/);
+	assert.match(ship, /original SHA-bound invocation, tool-routing metadata, native output/);
+});
+
+test("shipping resources admit native critic receipts without fabricated review evidence", () => {
+	const head = "16a037aae2f83626542070b19871a87610b8a8ac";
+	const receipt = [
+		"Agent: critic (anthropic/opus-5-5)",
+		`Invocation SHA: ${head}`,
+		"Tool routing: @deep -> router/deep -> anthropic/opus-5-5",
+		"No findings.",
+	].join("\n");
+	const output = receipt.split("\n").at(-1) ?? "";
+	assert.match(receipt, /^Agent: critic \(.+\)$/m);
+	assert.match(receipt, new RegExp(`^Invocation SHA: ${head}$`, "m"));
+	assert.match(receipt, /^Tool routing: .+$/m);
+	assert.match(output, /^(?:No findings\.|\[(?:high|medium|low)\] .+)/);
+	assert.doesNotMatch(receipt, /Checked:/);
+	assert.match(readText("skills/get-it-merged/SKILL.md"), /original invocation's full SHA/);
+	assert.match(readText("skills/ship-issue/SKILL.md"), /Accept only the critic's native `No findings\.`/);
 });
 
 test("themes validate against Pi's theme schema and carry no extra metadata", () => {

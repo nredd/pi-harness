@@ -145,8 +145,10 @@ Local overrides shadow these packaged definitions; update their managed source s
 Agents and workflow skills carry no forced model. `code-review` launches separate Standards and
 Spec `code-reviewer` calls without a model override, so the configured review route selects the
 model. `ship-issue` uses one supplementary critic and requires the continuing parent to run its
-independent final critic after exact-HEAD review. A future configurable role is not permission to
-silently substitute reviewers.
+independent final critic after exact-HEAD review. Critic receipts retain the original SHA-bound
+invocation and tool-routing metadata, accepting its native findings-only output rather than a
+fabricated `Checked:` checklist. A future configurable role is not permission to silently
+substitute reviewers.
 
 No preset agent pins `thinking:`. With no `thinking` on the `Agent` call, pi-subagents passes no level
 to the child session, so pi picks it: the per-model setting, else `defaultThinkingLevel`, clamped to the
