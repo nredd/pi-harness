@@ -132,11 +132,27 @@ export function isBuiltinTool(tool: ToolInfo) {
  * built-in extensions including native MCP (`builtin:mcp`), whose hints come from third-party
  * servers, and project-scope extensions, which an untrusted repository could ship.
  */
-export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
+function isTrustedExtensionTool(tool: ToolInfo) {
   const source = tool.sourceInfo;
-  if (!source?.source || source.source === "builtin" || source.path?.startsWith("builtin:")) return false;
-  if (source.scope === "project") return false;
-  return tool.annotations?.readOnlyHint === true;
+  return (
+    !!source?.source &&
+    source.source !== "builtin" &&
+    !source.path?.startsWith("builtin:") &&
+    source.scope !== "project"
+  );
+}
+
+export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
+  return isTrustedExtensionTool(tool) && tool.annotations?.readOnlyHint === true;
+}
+
+/**
+ * `ssh_exec` is mutating outside Plan mode, so metadata cannot admit it. Plan instead admits this
+ * trusted tool by name and re-validates every host and remote command at the execution hook.
+ * This is risk reduction, not an operating-system sandbox for trusted extension code.
+ */
+export function isPlanSshExecTool(tool: ToolInfo) {
+  return tool.name === SSH_EXEC_TOOL_NAME && isTrustedExtensionTool(tool);
 }
 
 export function classifyPlanModeTool(tool: ToolInfo): PlanModeToolPolicy {

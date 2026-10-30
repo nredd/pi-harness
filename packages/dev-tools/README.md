@@ -188,17 +188,19 @@ overridden and nothing can prompt.
 - No ControlMaster: measured steady-state gain was ~70ms per call, not worth stale sockets
 - No `stdin` parameter (the plan had one): the script already owns stdin, a heredoc in `command`
   covers the need, and Plan mode's gate refuses the key anyway
-- Plan mode: the `pi-plan-mode` fork admits `ssh_exec` as annotated read-only and re-validates
-  `{host, command}` against `safeSubcommands.ssh` and the remote reviewed policy, so `rm`,
-  `cd`, redirects and pipes to interpreters are blocked there. Outside Plan mode the tool runs
-  whatever it is given, like `bash`
+- Plan mode: the `pi-plan-mode` fork explicitly admits `ssh_exec` and re-validates `{host, command}`
+  against `safeSubcommands.ssh` and the remote reviewed policy, so `rm`, `cd`, redirects and pipes
+  to interpreters are blocked there. `ssh_exec` remains mutating metadata because outside Plan
+  mode it runs whatever it is given, like `bash`; annotations and Plan policy are not an OS sandbox
 
 `ssh_pull {host, remote_path, local_path, overwrite?}` and `ssh_push {host, local_path,
 remote_path, overwrite?}` use `scp -O -q` with the same options and refuse to overwrite unless
 asked (`ssh_push` probes the remote path with `test -e` first; a small race remains between probe
 and copy). Legacy scp hands `remote_path` to the remote shell, so it is restricted to
-`[A-Za-z0-9._/+@%:=,-]`: no spaces, quotes, `~` or metacharacters. `ssh_pull` is read-only,
-`ssh_push` is not. Failures are named: `missing`, `permission denied`, `connection failed`.
+`[A-Za-z0-9._/+@%:=,-]`: no spaces, quotes, `~` or metacharacters. Both tools are mutating
+metadata: `ssh_pull` writes its local destination even when its overwrite guard refuses a
+replacement, and `ssh_push` writes the remote destination. Failures are named: `missing`,
+`permission denied`, `connection failed`.
 
 `~/.ssh/config` parsing follows OpenSSH: relative `Include` paths resolve against `~/.ssh`, not
 the including file; `Host=x`, quoted names, trailing comments and CRLF are handled.
@@ -288,7 +290,7 @@ on (level, code, primary span, message) because cargo emits one copy per target,
 - `cargo_bench {bench?, filter?, save_baseline?, baseline?}`: reads criterion's
   `new/estimates.json` (ns) and `change/estimates.json` (fraction) written since the run
   started; baseline flags imply `--benches` because libtest harnesses reject them
-- `cargo_add {crates, dev?, build?, features?, optional?, dry_run?}` reports `name@version`
+- `cargo_add {crates, dev?, build?, features?, optional?, dry_run?}` reports added `name@version` values; inspect the manifest separately for its diff
 
 Annotations: `cargo_check`, `cargo_test`, `cargo_doc` are read-only; `cargo_add` reaches the
 network; the rest write the tree or `target/`. All nine are deferred (found via `search_tools`).

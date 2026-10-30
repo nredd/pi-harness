@@ -11,6 +11,7 @@ import { ControlledProcesses, configFor, FakeClock } from "../../packages/sessio
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 
 const SSH = new URL("../../packages/dev-tools/test/fixtures/ssh/fake-ssh", import.meta.url).pathname;
+const SCP = new URL("../../packages/dev-tools/test/fixtures/ssh/fake-scp", import.meta.url).pathname;
 
 describe("Plan consumes stack annotations", () => {
 	let home: Awaited<ReturnType<typeof isolateStackHome>>;
@@ -43,7 +44,11 @@ describe("Plan consumes stack annotations", () => {
 		writeFileSync(join(cfg, "pi-plan-mode.json"), JSON.stringify({ safeSubcommands: { ssh: ["home"] } }));
 		h = await startStack({
 			cwd,
-			factories: [plan, createDevTools({ ssh: { knownHosts: () => new Set(["home"]), sshBin: SSH } }), ...extra],
+			factories: [
+				plan,
+				createDevTools({ ssh: { knownHosts: () => new Set(["home"]), sshBin: SSH, scpBin: SCP } }),
+				...extra,
+			],
 		});
 		return h;
 	}
@@ -67,6 +72,8 @@ describe("Plan consumes stack annotations", () => {
 		const h = await open();
 		const head = git(h.cwd, "rev-parse", "HEAD");
 		const missing = join(h.cwd, "nope");
+		const remote = join(h.cwd, "remote.txt");
+		writeFileSync(remote, "MUST NOT COPY\n");
 		await h.session.prompt("/plan start");
 		const results = await runTools(h, [
 			{ name: "git_commit", args: { subject: "Nope", paths: ["README.md"] } },
@@ -76,6 +83,7 @@ describe("Plan consumes stack annotations", () => {
 			{ name: "ssh_exec", args: { host: "home", command: "rm -rf ~" } },
 			{ name: "ssh_exec", args: { host: "home", command: "ls; rm x" } },
 			{ name: "ssh_exec", args: { host: "evil", command: "ls" } },
+			{ name: "ssh_pull", args: { host: "home", remote_path: remote, local_path: "README.md", overwrite: true } },
 		]);
 		for (const result of results) {
 			expect(result.isError, result.text).toBe(true);

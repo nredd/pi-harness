@@ -777,7 +777,7 @@ export function registerCargoTools(pi: ExtensionAPI, options: CargoToolOptions =
 	pi.registerTool({
 		name: "cargo_add",
 		label: "cargo add",
-		description: "Add crates with `cargo add` and return the `Cargo.toml` change. Reaches the network.",
+		description: "Add crates with `cargo add` and report the added crate names. Reaches the network.",
 		promptSnippet: "Add Rust dependencies (prefer over `bash cargo add`)",
 		annotations: NETWORK,
 		parameters: Type.Object({
