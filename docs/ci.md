@@ -405,7 +405,7 @@ The historical nine jobs are the configured required checks of ruleset `main req
   predicate. Invoke the helper from an exact reviewed checkout. It validates distinct reviewer IDs,
   exact final-report HEAD and axis, unresolved-revision errors, receipt posting and
   `--match-head-commit`. Each reviewer's **final assistant report** must begin with these literal
-  lines (use `Axis: Spec` for the other axis), then its normal `Checked:` and `Findings:` sections:
+  lines (use `Axis: Spec` for the other axis), then its normal `Checked:` and `Findings:` sections (`Findings:` alone on its line, then findings or `None.`; the inline `Findings: None.` refuses). `packages/preset/agents/code-reviewer.md` ships this exact skeleton and a test feeds it through `merge-pr.sh`:
   ```text
   Axis: Standards
   Reviewed HEAD: <full-40-character-reviewed-sha>

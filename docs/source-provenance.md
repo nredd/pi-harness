@@ -160,7 +160,7 @@ Deliberate modifications:
   convention, else the operator's GitHub login); the `/Users/redd/code/PLUGIN/...` example path -> a
   neutral `/work/plugins/...`; "their global `AGENTS.md`" -> "their configured writing style". Workflow
   steps, the `critic` `sonnet`/`opus` models, and the PR/merge procedure are unchanged
-- `skills/get-it-merged/SKILL.md`: "global `AGENTS.md`" -> "configured writing style", nothing else
+- `skills/get-it-merged/SKILL.md`: "global `AGENTS.md`" -> "configured writing style". Since then it is a parent-driven merge train: the parent arms head-pinned auto-merge, uses a native monitor and loops over the whole list, while a delegated worker only returns handles. `skills/ship-issue` splits parent vs worker handoff the same way, and `agents/code-reviewer.md` carries the literal `Axis:` / `Reviewed HEAD:` / `Checked:` / `Findings:` skeleton `scripts/merge-pr.sh` parses (tree hashes above are the original import)
 - `skills/code-review/SKILL.md`: the `~/.pi/agent/agents/code-reviewer.md` path -> "the `code-reviewer`
   agent". The explicit `openai-codex/gpt-6.1-sol` reviewer model is unchanged
 - `themes/*.json`: only `$schema` changed, to the published `https://pi.dev/schemas/theme.schema.json`
