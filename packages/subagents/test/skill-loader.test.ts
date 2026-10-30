@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DefaultPackageManager, type ResolvedResource, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -391,6 +391,43 @@ describe("preloadSkills", () => {
     const [skill] = await preloadSkills(["review"], box.cwd, { ...box, homeDir: box.homeDir });
 
     expect(skill?.content).toBe("LEGACY FLAT");
+  });
+
+  it("walks the legacy user tree through nested, symlinked, dangling and unreadable entries", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    const legacy = join(box.homeDir, ".pi", "skills");
+    // Bare files have no frontmatter, so Pi skips them and only the legacy walk can find them.
+    const bare = (dir: string, content: string): void => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), content);
+    };
+    bare(join(legacy, "aaa"), "SIBLING");
+    bare(join(legacy, "group", "nested"), "NESTED");
+    bare(join(box.root, "external"), "LINKED");
+    symlinkSync(join(box.root, "external"), join(legacy, "linked"), "dir");
+    symlinkSync(join(box.root, "nowhere"), join(legacy, "dangling"), "dir");
+    mkdirSync(join(legacy, "locked"));
+    chmodSync(join(legacy, "locked"), 0o000);
+
+    try {
+      const found = await preloadSkills(["nested", "linked", "absent"], box.cwd, { ...box, homeDir: box.homeDir });
+      expect(found.map(skill => skill.content)).toEqual(["NESTED", "LINKED", "(Skill \"absent\" not found in Pi's configured skill resources)"]);
+    } finally {
+      chmodSync(join(legacy, "locked"), 0o700);
+    }
+  });
+
+  it("ignores a dangling project skill symlink", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
+    symlinkSync(join(box.root, "nowhere"), join(box.cwd, ".pi", "skills", "ghost"), "dir");
+    writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("GLOBAL");
   });
 
   it("finds a preset-packaged skill with an injected home", async () => {

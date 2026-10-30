@@ -7,6 +7,9 @@ import { loadSkills, type ResolvedResource, SettingsManager, type SettingsManage
 import { isSymlink, isUnsafeName, safeReadFile } from "./memory.js";
 import { createHomePackageManager } from "./resource-loader.js";
 
+/** Discovery is inspect-only: missing sources are never installed or activated. */
+const skipMissingSource = async (): Promise<"skip"> => "skip";
+
 export interface PreloadedSkill {
   name: string;
   content: string;
@@ -31,11 +34,10 @@ export async function preloadSkills(
   options: SkillPreloadOptions,
 ): Promise<PreloadedSkill[]> {
   const primary = createHomePackageManager({ cwd, agentDir: options.agentDir, settingsManager: options.settingsManager }, options.homeDir);
-  // Discovery is inspect-only: missing sources are never installed or activated.
-  const primaryResources = await primary.resolve(async () => "skip");
+  const primaryResources = await primary.resolve(skipMissingSource);
   const fallbackSettings = SettingsManager.create(cwd, options.agentDir, { projectTrusted: false });
   const fallback = createHomePackageManager({ cwd, agentDir: options.agentDir, settingsManager: fallbackSettings }, options.homeDir);
-  const fallbackResources = await fallback.resolve(async () => "skip");
+  const fallbackResources = await fallback.resolve(skipMissingSource);
 
   const rejectedProjectPaths = new Set(primaryResources.skills
     .filter(resource => resource.metadata.origin === "top-level" && resource.metadata.scope === "project" && isSymlinkedProjectSkill(resource, cwd))
@@ -119,7 +121,7 @@ async function resolveAliasFreePackageSkills(cwd: string, options: SkillPreloadO
       },
     });
     const manager = createHomePackageManager({ cwd: scratch, agentDir: options.agentDir, settingsManager }, options.homeDir);
-    return (await manager.resolve(async () => "skip")).skills.filter(resource => resource.metadata.origin === "package");
+    return (await manager.resolve(skipMissingSource)).skills.filter(resource => resource.metadata.origin === "package");
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -166,13 +168,9 @@ function findInRoot(root: string, name: string, trusted: boolean): string | unde
     if (current === undefined) continue;
     if (!trusted && isPathThroughSymlink(dirname(root), current)) continue;
     if (trusted) {
-      try {
-        const canonical = realpathSync(current);
-        if (seen.has(canonical)) continue;
-        seen.add(canonical);
-      } catch {
-        continue;
-      }
+      const canonical = canonicalPath(current);
+      if (seen.has(canonical)) continue;
+      seen.add(canonical);
     }
     let entries: Dirent<string>[];
     try {
@@ -216,11 +214,7 @@ function isDirectoryTarget(path: string): boolean {
 
 /** Match Pi's realpath identity without importing its private path utility. */
 function canonicalPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
+  return realpathSync(path);
 }
 
 /** Exclude Pi's ambient user root when a caller supplies a distinct injected home. */
