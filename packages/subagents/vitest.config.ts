@@ -12,6 +12,7 @@ export default defineConfig({
   // subagent session the extension spawns. dedupe alone is insufficient (it only
   // affects modules Vite resolves; without inline the runtime stays externalized).
   test: {
+    maxWorkers: 2,
     setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
     server: { deps: { inline: [/@earendil-works\/pi-/] } },
     // `istanbul`, NOT the `v8` default. v8 under-reports badly on this suite:
