@@ -234,11 +234,11 @@ test("shipping resources require exact-HEAD review, parent monitoring, and no fo
 	assert.match(ship, /Every change to HEAD invalidates the critic and both review axes/);
 	assert.match(ship, /Delegated worker: keep auto-merge off/);
 	assert.match(ship, /only if effective required-check protection is proven \(a 403 or unknown is NOT protected\)/);
-	assert.match(ship, /Parent driver: run its independent final critic/);
+	assert.match(ship, /Parent driver: consume its independent final critic/);
 	assert.match(ship, /native session-kit monitor/);
 	assert.match(merge, /Do not require a latest-main rebase solely because the base advanced/);
 	assert.match(merge, /frozen combined gate immediately before\npublish\/deploy/);
-	assert.match(merge, /Never use a watcher agent/);
+	assert.match(merge, /Keep model turns and subagents for substantive work/);
 	assert.match(ship, /original SHA-bound invocation, tool-routing metadata, native output/);
 });
 
@@ -477,4 +477,20 @@ test("footer code imports only node built-ins, declared peers, and its own sibli
 		'from "../lib/footer-quota.ts"',
 	]);
 	assert.equal(packedFiles().filter((f) => f.startsWith("lib/")).length, 2);
+});
+
+test("single-issue parents retain terminal ownership and nested reviews use blocking calls", () => {
+	const ship = readText("skills/ship-issue/SKILL.md");
+	const reviews = section(ship, "7. Review round -- exact final HEAD");
+	const retainsOwner = (policy: string) => {
+		const handoff = section(policy, "9. Handoff and cleanup");
+		return (
+			/Parent completion: continue until this PR is `MERGED`/.test(handoff) &&
+			/genuine external blocker has a named owner and an armed continuation monitor/.test(handoff)
+		);
+	};
+	assert.match(reviews, /Parent sessions can dispatch/);
+	assert.match(reviews, /omit `run_in_background` and consume the blocking results/);
+	assert.ok(retainsOwner(ship));
+	assert.ok(!retainsOwner(ship.replace(/^- Parent completion:[^\n]*\n/m, "")));
 });

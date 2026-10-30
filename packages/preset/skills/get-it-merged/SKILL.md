@@ -22,14 +22,14 @@ the Survey is the parent's.
 One pass, before touching anything. Scope is the full requested set, not the first PR:
 
 - Open PRs: `gh pr list --json number,title,headRefName,baseRefName,autoMergeRequest,mergeStateStatus,mergeable`
-- Ruleset: `gh api repos/{owner}/{repo}/rulesets` -- record required checks, merge method, and whether strictness is enabled; do not assume either. A 403, plan-gated, or otherwise unreadable response is UNKNOWN, never "protected"
+- Protection: list rulesets with `gh api repos/{owner}/{repo}/rulesets`, then read the applicable enforced ruleset details or classic branch protection for the target base. A list of names alone does not prove required checks. Record the effective checks, merge method and strictness; a 403, plan-gated or unreadable response is UNKNOWN, never "protected"
 - Exact-HEAD review receipts: Standards + Spec `code-reviewer` reports and the dedicated critic for each candidate. A critic receipt preserves its original invocation's full SHA (or a recorded short-ref -> full-SHA resolution) and tool-routing metadata
 - Functional dependencies and overlapping paths: `gh pr view`, commit ancestry, and diffs
 - Live CI: record concrete run IDs and states
 
 Disable any armed auto-merge before a PR's HEAD changes, then renew every review on the new HEAD.
-Never use a watcher agent or polling loop to wait; passive watching is a native session-kit
-monitor (`monitor_start`).
+Use native session-kit monitors (`monitor_start`) for passive waiting, including bounded-interval
+pollers. Keep model turns and subagents for substantive work, not repeated status polling.
 
 ## 2. Order candidates
 
@@ -46,7 +46,7 @@ For the next unblocked PR in the order:
 - Confirm the Standards and Spec axes have `Checked:` evidence and every reviewer has a named identity/model
 - Confirm the critic receipt names `critic`, its identity/model, original SHA-bound invocation, and tool-routing metadata; accept only its native `No findings.` or structured finding output. Never synthesize `Checked:` evidence for the critic
 - Confirm neither axis nor the critic has an unresolved blocking finding
-- Confirm normal required checks are green or pending-and-healthy on that exact HEAD. Do not rerun only failed jobs; use the repository's documented flake policy
+- Confirm normal required checks are green or pending-and-healthy on that exact HEAD. Use the repository's documented flake policy for any rerun: preserve attempts and rerun the whole permitted job, never a selected failed-test subset or an until-green loop
 - Run the parent's own final critic on the exact HEAD. Auto-merge stays off until it is consumed
 
 ## 4. Merge and advance (parent)
@@ -54,7 +54,7 @@ For the next unblocked PR in the order:
 - Verify effective protection FIRST. Arming auto-merge merges IMMEDIATELY when the base branch has no effective required checks. Protection is proven only by a readable ruleset or branch protection that lists the required checks for this base. A 403, plan-gated error, or unknown is NOT protected. Never change protections or upgrade the account to find out
 - Backend not proven protected: keep auto-merge OFF. Wait with a native monitor for every applicable exact-HEAD CI run to COMPLETE successfully and for all reviews and the parent's critic, then merge explicitly with `gh pr merge <N> --<method> --match-head-commit <full-sha>`. Never use `--admin` or any bypass
 - Backend proven protected: arm protected auto-merge with the repository's configured method and head pinning: `gh pr merge <N> --auto --<method> --match-head-commit <full-sha>`. Never merge past failing or missing required checks, and never bypass protection
-- Start a native `monitor_start` on the PR (`gh pr view <N> --json state,mergedAt,mergeCommit`) and the exact-HEAD CI run IDs. Wait for the terminal outcome: `MERGED`, a failed required check, or a closed PR
+- Start `monitor_start` to watch complete exact-HEAD workflow runs around `gh run watch <run-id> --exit-status`. Early check rollups may contain only classification jobs and are not terminal workflow evidence. Use a native bounded-interval poller around `gh pr view <N> --json state,mergedAt,mergeCommit` until the PR is `MERGED`, closed, or has a failed required check; one status query is not a watcher
 - On `MERGED`: record the merge commit, then return to step 3 for the next unblocked PR. A PR that depended on it is now unblocked; update it only if there is a real conflict (disable auto-merge before any HEAD change and renew all reviews)
 - On failure: diagnose the real cause. Fix through a delegated worker or inline, renew reviews on the new HEAD, and continue. Rerun only per the repository's flake policy
 - Keep a heartbeat monitor while any PR remains so the loop continues unprompted

@@ -102,17 +102,19 @@ ship on a gate you did not actually run -- "the imports resolved" is not evidenc
 ## 7. Review round -- exact final HEAD
 
 After the gate, run one dedicated `critic` and separate Standards + Spec `code-reviewer` agents.
-Spawn the Standards and Spec reviewers in one message with `subagent_type: "code-reviewer"`,
-`run_in_background: true`, and no `model` override. Use `/skill:code-review`, not the ambiguous
-`/code-review` workflow command. Give every reviewer the exact `origin/<default>...HEAD` range,
+Run separate Standards and Spec calls with `subagent_type: "code-reviewer"` and no `model`
+override. Parent sessions can dispatch them together in the background. Inside a delegated
+worker, omit `run_in_background` and consume the blocking results; use concurrent tool calls
+when supported. Use `/skill:code-review`, not the ambiguous `/code-review` workflow command. Give every reviewer the exact `origin/<default>...HEAD` range,
 full final HEAD SHA, issue/spec, and repo rules.
 
 The critic is supplementary, never a substitute for either axis. It is read-only and already
 carries the refute-before-report rule, so name the final diff and issue only. Its receipt preserves
 the original invocation's full SHA (or a recorded short-ref -> full-SHA resolution), identity/model,
 and tool-routing metadata. Accept only the critic's native `No findings.` or structured finding
-output -- never manufacture `Checked:` evidence. The parent performs an independent final critic
-after this handoff; do not claim that a delegated critic completes it.
+output -- never manufacture `Checked:` evidence. A delegated worker's critic does not replace
+the parent-owned final critic. A parent driver consumes its own final-HEAD critic; it does not
+hand that responsibility to itself or repeat an unchanged review merely to change its label.
 
 - Fix every real blocking finding, rerun the affected gate, and push the follow-up
 - Every change to HEAD invalidates the critic and both review axes. Re-run all three on the final SHA
@@ -132,7 +134,7 @@ Body, in order:
 - `Verification:` plus prose bullets carrying REAL command output. Fence it when long. Test
   counts, coverage numbers, and actual failure transcripts, not "tests pass"
 - Exact-HEAD Standards and Spec receipts with `Checked:`/`Findings:`, plus the critic's original SHA-bound invocation, tool-routing metadata, native output, and finding dispositions
-- The parent-monitor handoff: PR URL, final SHA, concrete CI run IDs or commands, and the remaining final-critic/merge owner
+- The continuation record: PR URL, final SHA, concrete CI run IDs or commands, and its owner. A delegated worker names the parent; a parent driver keeps ownership
 - The `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer
 
 Never: `## Summary`, `## Test plan`, `## Root cause`, checkbox lists, or an invented body for a
@@ -150,7 +152,8 @@ spawned by a parent for this issue. Never hand off to yourself.
 - Before changing the PR HEAD, disable any armed auto-merge with `gh pr merge --disable-auto <N>` and verify it is off. Renew the critic and both axes after any HEAD change
 - Do not require a rebase merely because the base advanced. Update only for a functional dependency or actual conflict; release/deploy work separately requires the frozen combined gate
 - Never delegate passive watching or waiting to a watcher agent
-- Parent driver: run its independent final critic on the exact HEAD, then, only if effective required-check protection is proven (a 403 or unknown is NOT protected), arm protected auto-merge with `--match-head-commit <full-sha>` and the repo's merge method; otherwise keep auto-merge off, wait for complete exact-HEAD CI and reviews, and merge explicitly with `--match-head-commit`, and watch the terminal outcome with a native session-kit monitor (`monitor_start`). For several PRs, follow `/skill:get-it-merged` until all are merged or genuinely externally blocked
+- Parent driver: consume its independent final critic on the exact HEAD, then, only if effective required-check protection is proven (a 403 or unknown is NOT protected), arm protected auto-merge with `--match-head-commit <full-sha>` and the repo's merge method; otherwise keep auto-merge off, wait for complete exact-HEAD CI and reviews, and merge explicitly with `--match-head-commit`, and watch the terminal outcome with a native session-kit monitor (`monitor_start`). For several PRs, follow `/skill:get-it-merged` until all are merged or genuinely externally blocked
+- Parent completion: continue until this PR is `MERGED`, or a genuine external blocker has a named owner and an armed continuation monitor. Queued CI, ordinary setup, tests and review fixes are unfinished work, not successful completion
 - Delegated worker: keep auto-merge off, do not merge or arm it. Once the substantive work is done, return the PR URL, final SHA, exact review handles, and concrete CI run IDs or monitor command to the parent, once. Never declare the overall task done
 - Do NOT remove the worktree before the PR lands. The follow-up is `git worktree remove <path> && git -C <repo> worktree prune` once it merges
 
