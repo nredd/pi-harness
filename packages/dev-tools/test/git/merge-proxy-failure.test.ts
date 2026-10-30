@@ -30,6 +30,8 @@ const git = (cwd: string, args: string[]) =>
 
 it("removes the proxy directory when writing the hook proxy fails", async () => {
 	const repo = mkdtempSync(join(tmpdir(), "pi-dev-tools-merge-fail-"));
+	const scratch = mkdtempSync(join(tmpdir(), "pi-dev-tools-merge-scratch-"));
+	const originalTmp = process.env.TMPDIR;
 	try {
 		git(repo, ["init", "-q", "-b", "main"]);
 		writeFileSync(join(repo, "a.txt"), "base\n");
@@ -42,13 +44,16 @@ it("removes the proxy directory when writing the hook proxy fails", async () => 
 		writeFileSync(join(repo, "a.txt"), "main\n");
 		git(repo, ["commit", "-qam", "Main"]);
 		expect(() => git(repo, ["merge", "--no-commit", "topic"])).toThrow();
-		const before = readdirSync(tmpdir()).filter((name) => name.startsWith("pi-git-merge-"));
+		process.env.TMPDIR = scratch;
 		failing.on = true;
 		await expect(prepareMerge(["a.txt"], { cwd: repo })).rejects.toThrow("proxy write failed");
 		failing.on = false;
-		expect(readdirSync(tmpdir()).filter((name) => name.startsWith("pi-git-merge-"))).toEqual(before);
+		expect(readdirSync(scratch)).toEqual([]);
 	} finally {
 		failing.on = false;
+		if (originalTmp === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = originalTmp;
+		rmSync(scratch, { recursive: true, force: true });
 		rmSync(repo, { recursive: true, force: true });
 	}
 });

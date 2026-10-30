@@ -100,7 +100,7 @@ flip requires a new reasoned `enforcement_changes` entry relative to base; stand
 historical approvals cannot silently waive enforcement. Initial policy introduction is allowed.
 Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
 `computer-use` is not measured, tracked. `dev-tools` uses #195's primary Istanbul decision with
-all 22 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
+all 23 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
 Its independent native Bun scenarios remain advisory. Python tooling/harness code, remaining boundary probes/providers,
 benchmark source and producer configurations are also explicitly inventoried as measurement-pending.
 The repository-wide TS/Python/JavaScript audit and the base-tree/current-tree inventory ratchet

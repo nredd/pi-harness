@@ -1,7 +1,7 @@
 /** Complete-index approval for merge commits, including checks around the repository's own hooks. */
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type GitRunOptions, git, gitFailure } from "./run.ts";
 
 interface Approval {
@@ -15,8 +15,8 @@ interface Approval {
 
 /** Reject changed merge identity, unresolved entries and every unapproved index endpoint. */
 async function checkMergeIndex(approval: Approval, opts: GitRunOptions): Promise<void> {
-	const query = async (args: string[]) => {
-		const result = await git(args, opts);
+	const query = async (args: string[], cwd = opts.cwd) => {
+		const result = await git(args, { ...opts, cwd });
 		const failure = gitFailure(result, "git merge approval");
 		if (failure || result.stdoutDropped) throw new Error(failure ?? "Git merge approval output truncated");
 		return result.stdout;
@@ -26,7 +26,8 @@ async function checkMergeIndex(approval: Approval, opts: GitRunOptions): Promise
 		(await query(["rev-parse", "HEAD"])).trim() !== approval.head
 	)
 		throw new Error("Merge identity changed; review the merge again");
-	if (await query(["ls-files", "--unmerged", "-z"])) throw new Error("Merge has unresolved conflicts");
+	// Index-wide: from a subdirectory a bare `ls-files` would only list that subdirectory's conflicts.
+	if (await query(["ls-files", "--unmerged", "-z"], approval.root)) throw new Error("Merge has unresolved conflicts");
 	const changed = (
 		await query([
 			"diff",
@@ -45,6 +46,36 @@ async function checkMergeIndex(approval: Approval, opts: GitRunOptions): Promise
 	const outside = changed.filter((path) => !approval.paths.includes(path));
 	if (outside.length)
 		throw new Error(`Merge index contains unapproved paths: ${outside.map((path) => JSON.stringify(path)).join(", ")}`);
+}
+
+/** Hooks proxied even when absent (they carry the index checks), plus every entry of the real hooks directory. */
+function proxiedHooks(hooksDir: string): string[] {
+	let present: string[] = [];
+	try {
+		present = readdirSync(hooksDir);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+	}
+	const names = new Set(["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "reference-transaction"]);
+	for (const name of present) if (name !== "run.mjs" && /^[A-Za-z0-9_-]+$/.test(name)) names.add(name);
+	return [...names];
+}
+
+/** Resolve symlinks in the parent directory only: the file itself may be deleted by the merge or be a symlink. */
+function canonicalPath(path: string): string {
+	let parent = dirname(path);
+	const tail: string[] = [basename(path)];
+	for (;;) {
+		try {
+			return join(realpathSync(parent), ...tail);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+			tail.unshift(basename(parent));
+			parent = dirname(parent);
+		}
+	}
 }
 
 /**
@@ -73,7 +104,7 @@ function check() {
 }
 const hook = process.argv[2];
 try {
-	const commitTreeHook = hook !== "post-commit" && hook !== "reference-transaction";
+	const commitTreeHook = ["pre-commit", "prepare-commit-msg", "commit-msg"].includes(hook);
 	if (commitTreeHook) check();
 	const original = join(approval.hooks, hook);
 	let executable = true;
@@ -97,7 +128,7 @@ try {
 		{ mode: 0o600 },
 	);
 	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-	for (const hook of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "reference-transaction"]) {
+	for (const hook of proxiedHooks(approval.hooks)) {
 		writeFileSync(
 			join(directory, hook),
 			`#!/bin/sh\nexec env BUN_BE_BUN=1 ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(runner)} ${quote(hook)} "$@"\n`,
@@ -119,7 +150,13 @@ export async function prepareMerge(
 		if (failure || result.stdoutDropped) throw new Error(failure ?? "Git merge approval output truncated");
 		return result.stdout.trimEnd();
 	};
-	const mergePath = await query(["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"]);
+	let mergePath: string;
+	try {
+		mergePath = await query(["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"]);
+	} catch {
+		// No usable repository state: not a merge. The ordinary `add`/`commit` path reports the real failure.
+		return undefined;
+	}
 	let mergeHead: string;
 	try {
 		mergeHead = readFileSync(mergePath, "utf8");
@@ -135,7 +172,7 @@ export async function prepareMerge(
 	const root = realpathSync(await query(["rev-parse", "--show-toplevel"]));
 	const cwd = realpathSync(opts.cwd);
 	const approved = paths.map((path) => {
-		const name = relative(root, resolve(cwd, path));
+		const name = relative(root, canonicalPath(resolve(cwd, path)));
 		if (!name || name === ".." || name.startsWith(`..${sep}`) || isAbsolute(name))
 			throw new Error("Merge paths must name complete files inside the worktree");
 		return name.split(sep).join("/");

@@ -86,6 +86,11 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
   resolved. Only then it commits the complete approved merge without pathspecs, preserving both
   parents, signing and hooks. Approval checks cover the entire index even from a subdirectory
   with `diff.relative=true`; configured relative hook paths still resolve from the worktree root.
+  Every hook in the configured hooks directory (e.g. `post-index-change`) still runs during a
+  merge commit. Absolute paths are matched after resolving symlinks in their parent directory,
+  so `/var` and `/private/var` spellings agree and an escaping symlink is rejected. A rejected
+  merge leaves the named paths staged and `MERGE_HEAD` in place. Outside a usable repository an
+  ordinary commit still fails at `stage: "add"`
   A rename needs both the old and the new path; a deletion (unstaged
   or already staged) is named like any other path. Nothing to commit is its own state
 - The subject must be a capitalized imperative, <= 72 chars, no trailing period, no

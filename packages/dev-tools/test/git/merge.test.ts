@@ -348,4 +348,98 @@ describe("git_commit merge approval", () => {
 				"Merge paths must name complete files inside the worktree",
 			);
 	});
+
+	it("accepts an absolute path spelled through a symlinked cwd, including a deleted file", async () => {
+		const { root, repo } = mergeFixture();
+		const alias = join(root, "repo-alias");
+		symlinkSync(repo, alias);
+		const prepared = await prepareMerge(
+			[join(alias, "shared.txt"), join(alias, "gone.txt"), join(alias, "no", "such", "dir.txt")],
+			{ cwd: alias },
+		);
+		prepared?.cleanup();
+		expect(prepared).toBeDefined();
+	});
+
+	it("rejects absolute paths that escape the worktree, directly or through a symlink", async () => {
+		const { root, repo } = mergeFixture();
+		const outside = join(root, "outside");
+		mkdirSync(outside);
+		symlinkSync(outside, join(repo, "escape"));
+		for (const path of [join(outside, "x.txt"), join(repo, "escape", "x.txt"), "escape/x.txt"])
+			await expect(prepareMerge([path], { cwd: repo })).rejects.toThrow(
+				"Merge paths must name complete files inside the worktree",
+			);
+	});
+
+	it("reports a conflict outside the caller's subdirectory as unresolved", async () => {
+		const { repo } = mergeFixture();
+		const sub = join(repo, "sub");
+		mkdirSync(sub);
+		writeFileSync(join(sub, "file"), "approved\n");
+		git(repo, ["checkout", "-q", "--merge", "--", "shared.txt"]);
+		writeFileSync(join(repo, "shared.txt"), "still conflicted\n");
+		const conflicted = git(repo, ["ls-files", "--unmerged"]);
+		expect(conflicted).toContain("shared.txt");
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Reject hidden conflict", paths: ["file"], push: false },
+			sub,
+		);
+		expect(result.isError).toBe(true);
+		expect(mock.text(result)).toContain("Merge has unresolved conflicts");
+	});
+
+	it("keeps every hook in the configured hooks directory enabled for merges", async () => {
+		const { root, repo } = mergeFixture();
+		const hooks = join(root, "hooks");
+		mkdirSync(hooks);
+		const marker = join(root, "post-index-change-ran");
+		writeFileSync(join(hooks, "post-index-change"), `#!/bin/sh\nprintf x >> ${JSON.stringify(marker)}\n`, {
+			mode: 0o700,
+		});
+		git(repo, ["config", "core.hooksPath", hooks]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Preserve post-index-change", paths: ["shared.txt"], push: false },
+			repo,
+		);
+		expect(result.isError, mock.text(result)).toBe(false);
+		// Once for the staging `git add`, once more for the merge commit itself.
+		expect(readFileSync(marker, "utf8")).toBe("xx");
+	});
+
+	it("leaves the named paths staged when a merge is rejected", async () => {
+		const { repo } = mergeFixture();
+		writeFileSync(join(repo, "other.txt"), "unrelated\n");
+		git(repo, ["add", "other.txt"]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Reject staged leftovers", paths: ["shared.txt"], push: false },
+			repo,
+		);
+		expect(result.isError).toBe(true);
+		expect(git(repo, ["show", ":shared.txt"])).toBe("resolved");
+	});
+
+	it("keeps ordinary-commit failures at the add stage outside a repository", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-dev-tools-nogit-"));
+		roots.push(dir);
+		const result = await mock.call("git_commit", { subject: "Add nothing here", paths: ["a.txt"], push: false }, dir);
+		expect(result.isError).toBe(true);
+		expect((result.structuredContent as { stage: string }).stage).toBe("add");
+		expect(mock.text(result)).toContain("git add");
+	});
+
+	it("reports a malformed MERGE_HEAD at the validate stage", async () => {
+		const { repo } = mergeFixture();
+		writeFileSync(join(repo, ".git", "MERGE_HEAD"), "not-a-sha\n");
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Reject malformed merge", paths: ["shared.txt"], push: false },
+			repo,
+		);
+		expect((result.structuredContent as { stage: string }).stage).toBe("validate");
+		expect(mock.text(result)).toContain("Invalid MERGE_HEAD");
+	});
 });

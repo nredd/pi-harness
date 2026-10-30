@@ -73,7 +73,7 @@ The accounting script consumes LCOV, not runner APIs. Primary reports use Istanb
 Real Pi/Jiti reloads collide with Vitest-generated scripts at identical source URLs and corrupt
 V8 attribution. The preset and todo diagnoses demonstrate false misses and false hits; preserve
 real-loader tests rather than deleting assertions to repair counters. Istanbul credits instrumented
-Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, with all 22 executable modules explicitly included.
+Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, with all 23 executable modules explicitly included.
 Its static `src/core/index.ts` facade is validated by real source/emitted-ESM instrumentation.
 Other primary producers retain V8. The `node --test` import-audit and probe helpers retain c8 as
 report-only verification signals.
