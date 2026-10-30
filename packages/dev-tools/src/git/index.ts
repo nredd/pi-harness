@@ -335,7 +335,8 @@ export function registerGitTools(pi: ExtensionAPI): void {
 				try {
 					await merge?.check();
 				} catch (error) {
-					return fail("validate", (error as Error).message);
+					const shown = await bound((error as Error).message, { keep: "tail", label: "git-merge-approval" });
+					return fail("validate", shown.text);
 				}
 				// A merge must commit the entire approved index, without partial-commit pathspecs.
 				// Ordinary commits keep exactly their previous named-path semantics.
