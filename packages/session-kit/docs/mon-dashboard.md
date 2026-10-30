@@ -7,7 +7,7 @@ it only warns; it never samples there.
 ## Source
 
 `src/mon/source.ts` is a thin mapping over the published `@nredd/pi-resource-sampler`, declared
-as the exact runtime dependency `0.1.1` (`0.1.0` leaked argv-style process titles as macOS names
+as the exact runtime dependency `0.2.0` (`0.1.0` leaked argv-style process titles as macOS names
 and could fake Bun host CPU). No collector lives in session-kit. Each open view creates
 one sampler (its own CPU baseline) and disposes it on close; disposal aborts and awaits any active
 sample, including its `ps` child on macOS. Mapping rules:
@@ -33,12 +33,11 @@ sample, including its `ps` child on macOS. Mapping rules:
   `(unknown)` (Linux hides other users' `/proc/PID/exe` without ptrace access). macOS `p_comm` keeps
   16 bytes, so a macOS name of 16+ UTF-8 bytes ends in a dim `…` (`Google Chrome He…`): possibly cut,
   never claimed complete. Names stay untrusted text: sanitized, never interpreted.
-- Upcoming sampler source supplies macOS native interval CPU and footprint via builtin FFI and
-  libproc, with process-start absolute ticks plus microsecond identity. Inaccessible PIDs and
-  unsupported runtimes have unknown metrics. The existing published `0.1.1` remains entirely
-  unavailable for process CPU; `ps` whole-second start times alone never authenticate CPU. The
-  view orders by RSS only when every process CPU is unavailable, until the user picks a sort.
-  Linux first samples are warming, so CPU order stays stable.
+- Sampler `0.2.0` supplies macOS native interval CPU and footprint via builtin FFI and libproc,
+  with process-start absolute ticks plus microsecond identity. Inaccessible PIDs and unsupported
+  runtimes have unknown metrics; Node 22-25 lack the builtin FFI. `ps` whole-second start times
+  alone never authenticate CPU. The view orders by RSS only when every process CPU is unavailable,
+  until the user picks a sort. First samples are warming, so CPU order stays stable.
 - History spacing uses the sampler's monotonic `monotonicTimeMs`, so wall-clock steps (NTP, manual
   changes) cannot invent or hide gaps; the wall `wallTimeMs` is only displayed (header clock and
   last-success UTC).
@@ -81,12 +80,10 @@ sample, including its `ps` child on macOS. Mapping rules:
   executable names (`pi` runs as `node`), and decaying `ps %cpu` versus interval CPU.
   Load averages are not percentages. Process CPU is interval CPU, where 100% is one logical CPU and
   multithreaded processes can exceed 100%.
-- Release sequencing: the registry dependency remains `0.1.1`, which lacks native host-memory
-  metrics. This adapter accepts the new optional memory/footprint fields and tests them, but production
-  remains honestly labelled total-free with unavailable process CPU/footprint until a new sampler
-  is published, its common dependency pin
-  and nested registry lock entries are updated, and both consumer registry tests pass. Do NOT claim
-  the new native used/swap line is active with the old registry pin.
+- The registry dependency is `0.2.0`. On native-capable macOS it supplies used/swap memory,
+  footprint and interval process CPU; unsupported or inaccessible metrics remain `--`, never zero
+  or an invented total-free fallback. Both consumer registry-resolution tests require those
+  published bytes rather than a workspace link.
 - The process viewport preserves selection by sampler identity, not PID or sorted row.
   Exited identities choose a bounded neighboring row; PID reuse cannot inherit selection.
   Unknown/non-finite measurements sort last with deterministic PID/identity tie breaks.
@@ -113,7 +110,7 @@ no model tool, persists no history, sends no model messages and does no network 
 ## Verification
 
 - `npm run check` in `packages/session-kit`. The root lock pins a nested registry install
-  (`packages/session-kit/node_modules/@nredd/pi-resource-sampler`, exact `0.1.1` tarball and
+  (`packages/session-kit/node_modules/@nredd/pi-resource-sampler`, exact `0.2.0` tarball and
   integrity), so tests run the published bytes, not the same-version workspace that npm would
   otherwise link. `source.test.ts` fails if resolution ever reaches the workspace.
   - `test/mon/source.test.ts`: two actual host observations (warming, then measured), a real poll's

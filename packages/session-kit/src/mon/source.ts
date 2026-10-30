@@ -1,7 +1,6 @@
 /** Production /mon source: a thin mapping over the published shared sampler. No collector lives here. */
 import {
 	createResourceSampler,
-	type Metric,
 	type ResourceSampler,
 	type ResourceSnapshot,
 	type SamplerOptions,
@@ -27,15 +26,6 @@ const REASONS: Readonly<Record<string, string>> = {
 	"process-collection-unavailable": "process list unavailable",
 };
 const utf8 = new TextEncoder();
-
-/** Additive v1 fields for registry 0.1.1 compatibility; remove this shim at the owner-gated 0.2.0 pin. */
-type MemorySnapshot = Omit<ResourceSnapshot, "memory" | "processes"> & {
-	processes: (ResourceSnapshot["processes"][number] & { footprint?: Metric<number> })[];
-	memory: ResourceSnapshot["memory"] & {
-		usage?: Metric<{ usedBytes: number; availableBytes: number; basis: "app+wired+compressed" }>;
-		swap?: Metric<{ usedBytes: number; totalBytes: number }>;
-	};
-};
 
 /**
  * Convert nonfinite producer values to the view's unknown sentinel.
@@ -111,7 +101,7 @@ function hint(snapshot: ResourceSnapshot): string | undefined {
  * @param baseline Whether this is the source's first observation.
  * @returns View snapshot preserving unknown/failed metrics and measurement basis.
  */
-export function toMonSnapshot(snapshot: MemorySnapshot, baseline = true): MonSnapshot {
+export function toMonSnapshot(snapshot: ResourceSnapshot, baseline = true): MonSnapshot {
 	const total = finite(snapshot.memory.totalBytes);
 	const free = finite(snapshot.memory.freeBytes);
 	const usage = snapshot.memory.usage;
