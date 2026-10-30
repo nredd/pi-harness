@@ -230,6 +230,14 @@ def test_wsl2_capture_mirrors_only_coverage_reports_and_clears_stale_files(tmp_p
     assert not any(path.is_file() for path in host.rglob("*"))
 
 
+def test_wsl2_coverage_summary_runs_on_the_host_with_native_bash_semantics() -> None:
+    """Keep the summary-only report outside the WSL guest adapter."""
+    workflow = workflow_text()
+    step = workflow.split("      - name: Report coverage exclusions\n", 1)[1].split("      - uses:", 1)[0]
+    assert "shell: bash -e {0}" in step
+    assert "Bun standalone: seven auth dispatch/refresh cases" in step
+
+
 def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     """Require actual Pi startup, RPC, extension, and stack process coverage."""
     workflow = workflow_text()
