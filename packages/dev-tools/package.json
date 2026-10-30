@@ -34,7 +34,7 @@
     "format": "biome check --write src/ test/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
-    "test:bun": "bun test test/scenarios --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun",
+    "test:bun": "bun test test/scenarios --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && node ../../scripts/run-vitest.ts bun test/ssh/hosts.test.ts --coverage.enabled=false",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
