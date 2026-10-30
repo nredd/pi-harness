@@ -208,6 +208,10 @@ jobs:
       - name: Benchmark unit gate
         if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'
         run: |
+          # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
+          # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
+          # cold-cache gate sync the tests run, which inherit this interpreter). Pin the repo's interpreter.
+          export UV_PYTHON="$(tr -d '\n' < .python-version)"
           make install-benchmark
           # The native_runtime test runs the real Codex sandbox (Seatbelt); exact historical pin, no credentials.
           npm install --ignore-scripts --prefix "$RUNNER_TEMP/codex" @openai/codex@0.154.0
