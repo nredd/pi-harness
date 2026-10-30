@@ -32,7 +32,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Context inheritance** — optionally fork the parent conversation into a sub-agent so it knows what's been discussed
 - **Persistent agent memory** — three scopes (project, local, user) with automatic read-only fallback for agents without write tools
 - **Git worktree isolation** — run agents in isolated repo copies; changes auto-committed to branches on completion
-- **Skill preloading** — inject named skills into agent system prompts, discovered from `.pi/skills/`, `.agents/skills/`, and global locations (Pi-standard `<name>/SKILL.md` directory layout supported)
+- **Skill preloading** — inject named skills into agent system prompts through Pi's configured resource discovery, including installed package skills; project resources participate only after project trust and package/user precedence stays Pi-native
 - **Tool denylist** — block specific tools via `disallowed_tools` frontmatter
 - **Styled completion notifications** — background agent results render as themed, compact notification boxes (icon, stats, result preview) instead of raw XML. Expandable to show full output. Group completions render each agent individually
 - **Event bus** — lifecycle events (`subagents:created`, `started`, `completed`, `failed`, `steered`, `compacted`) and a per-message spend ledger (`subagents:usage`) emitted via `pi.events`, enabling other extensions to react to sub-agent activity
@@ -1245,25 +1245,9 @@ skills: api-conventions, error-handling
 ---
 ```
 
-**Discovery roots** (checked in this order, first match wins):
+Named preloads use Pi's configured-resource resolution and parser. Trusted project discovery, the configured agent directory, and installed package manifests use Pi's precedence; a trusted project's ancestor `.agents/skills` roots participate when Pi discovers them. Pi-disabled resources, including `skills: ["-skills/review"]`, remain disabled and cannot return through compatibility lookup. Compatibility lookup otherwise retains the historical user roots (`<home>/.agents/skills`, `<home>/.pi/skills`) and explicit top-level `<name>.md` files. A package skill hidden behind a rejected project symlink alias is recovered through a scratch-cwd Pi resolution, so the project's package filters (`skills` allowlists and exclusions, relative or absolute sources) still decide whether it loads. Package discovery remains inspect-only: unavailable configured npm or Git sources are skipped, never installed or lifecycle-executed.
 
-| Scope | Path | Source |
-|---|---|---|
-| Project | `<cwd>/.pi/skills/` | Pi-standard |
-| Project | `<cwd>/.agents/skills/` | [Agent Skills spec](https://agentskills.io/integrate-skills) |
-| User | `$PI_CODING_AGENT_DIR/skills/` (default `~/.pi/agent/skills/`) | Pi-standard |
-| User | `~/.agents/skills/` | [Agent Skills spec](https://agentskills.io/integrate-skills) |
-| User | `~/.pi/skills/` | Legacy (pre-Pi) |
-
-**Per root, a skill named `foo` resolves to the first of:**
-
-- `<root>/foo.md` — flat file at the top level
-- `<root>/foo/SKILL.md` — directory skill (top-level)
-- `<root>/*/.../foo/SKILL.md` — directory skill, found by recursive descent
-
-Recursion skips dotfile directories and `node_modules`. A directory that itself contains a `SKILL.md` is treated as a single skill — we don't descend into it. Traversal is byte-order sorted for deterministic resolution across filesystems.
-
-**Security:** project roots reject symlinks at every layer (the `.pi/` or `.agents/` directory, root, flat file, skill directory, `SKILL.md` inside a skill directory), so a cloned repository cannot point a skill at files outside it — intentional deviation from Pi. User roots belong to you and follow symlinks like Pi (linked roots, directories and files; broken links and directory cycles are skipped), so skills linked into `~/.agents/skills/` by an installer or dotfile manager load. Skill names with path-traversal characters (`..`, `/`, `\`, spaces, leading dot, >128 chars) are rejected.
+**Project links:** automatically discovered project roots reject symlinks at `<cwd>/.pi`, `.pi/skills`, each ancestor `.agents`, `.agents/skills`, and their skill entries. This filter runs before this extension accepts project candidates; a separate untrusted Pi resolution restores only a user or package candidate that Pi's realpath deduplication hid behind a rejected project alias, retaining Pi's package-identity precedence. User compatibility roots and installed package resources retain Pi's normal link handling. An explicit injected home excludes the runtime process's ambient `~/.agents/skills` result while preserving `<home>/.agents/skills`, so ambient content cannot enter a child prompt. The host still scans the ambient location; this extension filters returned resources rather than providing filesystem isolation.
 
 ## Tool Denylist
 
@@ -1337,7 +1321,7 @@ src/
   home-paths.ts       # Injected home normalization and Pi agent-directory defaults
   resource-loader.ts  # Fresh scoped settings paths for Pi's real resource/package loader
   memory.ts           # Persistent agent memory (resolve, read, build prompt blocks)
-  skill-loader.ts     # Preload skills (Pi-standard + Agent Skills spec layouts)
+  skill-loader.ts     # Preload named skills through Pi's configured resource discovery (trust-gated, inspect-only)
   output-file.ts      # Streaming output file transcripts for agent sessions
   worktree.ts         # Git worktree isolation (create, cleanup, prune)
   prompts.ts          # Config-driven system prompt builder
