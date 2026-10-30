@@ -130,6 +130,8 @@ make install
 npm run check --workspace @nredd/pi-subscription-router  # biome, tsc, vitest, bun scenarios
 ```
 
+The `lint` and `format` commands check that their configured `src/` and `test/` paths exist before invoking Biome. This avoids Biome's successful mixed valid/missing-path result hiding a stale path.
+
 `test/scenarios/` covers terminal/retry/unconfirmed recovery, partial-stream refusal, cancellation,
 bounded retries, direct `subscription_usage` execution and all six balanced cases through the real
 router factory and core session harness, under Vitest and Bun. The coverage/ownership matrix and

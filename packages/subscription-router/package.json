@@ -30,8 +30,8 @@
     "typebox": "*"
   },
   "scripts": {
-    "lint": "biome check src/ test/",
-    "format": "biome check --write src/ test/",
+    "lint": "node ../../scripts/check-biome-paths.mjs src/ test/",
+    "format": "node ../../scripts/check-biome-paths.mjs --write src/ test/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
     "test:bun": "node ../../scripts/run-vitest.ts bun --coverage --coverage.provider=istanbul --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/bun",
