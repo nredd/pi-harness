@@ -36,6 +36,84 @@ it("print binding skips preferred title model", async () => {
 	expect(readFileSync(sessionFile(harness), "utf8")).not.toContain("Skipme Title Words");
 });
 
+it("configured unavailable title model does not stream through a registered default", async () => {
+	terminal = new TerminalFixture();
+	const host = await terminal.startTerminal(
+		{ ...configFor("titles"), titleModel: "faux/missing" },
+		{
+			models: [{ id: "main" }, { id: "title" }],
+			extensionFactories: [
+				(pi) =>
+					pi.registerVirtualModel({
+						provider: "anthropic",
+						id: "claude-haiku-5-5",
+						name: "Fallback title model",
+						route: (request, ctx) => {
+							const model = ctx.modelRegistry.find("faux", "title");
+							if (!model) throw new Error("Missing faux title model");
+							return { model, thinkingLevel: request.thinkingLevel };
+						},
+					}),
+			],
+		},
+	);
+	const requested: string[] = [];
+	host.harness.setResponses([
+		(_ctx, _opts, _state, model) => {
+			requested.push(model.id);
+			return fauxAssistantMessage("MAIN TURN FINISHED");
+		},
+	]);
+	const settled = nextEvent(host.harness, "agent_settled");
+	await terminal.key("Inspect the title fallback");
+	await terminal.key("\r");
+	await settled;
+	await host.settle();
+	expect(requested).toEqual(["main"]);
+	expect(host.harness.session.sessionName).toBeUndefined();
+});
+
+it("streams through a configured virtual title model", async () => {
+	terminal = new TerminalFixture();
+	const host = await terminal.startTerminal(
+		{ ...configFor("titles"), titleModel: "router/cheap" },
+		{
+			models: [{ id: "main" }, { id: "title" }],
+			extensionFactories: [
+				(pi) =>
+					pi.registerVirtualModel({
+						provider: "router",
+						id: "cheap",
+						name: "Cheap title model",
+						route: (request, ctx) => {
+							const model = ctx.modelRegistry.find("faux", "title");
+							if (!model) throw new Error("Missing faux title model");
+							return { model, thinkingLevel: request.thinkingLevel };
+						},
+					}),
+			],
+		},
+	);
+	const requested: string[] = [];
+	host.harness.setResponses([
+		(_ctx, _opts, _state, model) => {
+			requested.push(model.id);
+			return fauxAssistantMessage(model.id === "title" ? "Virtual Title Works" : "MAIN TURN FINISHED");
+		},
+		(_ctx, _opts, _state, model) => {
+			requested.push(model.id);
+			return fauxAssistantMessage(model.id === "title" ? "Virtual Title Works" : "MAIN TURN FINISHED");
+		},
+	]);
+	const settled = nextEvent(host.harness, "agent_settled");
+	await terminal.key("Inspect the virtual title model");
+	await terminal.key("\r");
+	await settled;
+	await host.settle();
+	expect(requested).toEqual(["main", "title"]);
+	expect(host.harness.session.sessionName).toBe("Virtual Title Works");
+});
+
 it.each([undefined, "My Manual Review Name"])(
 	"interactive auto-title runs once and never replaces manual name %s",
 	async (manual) => {

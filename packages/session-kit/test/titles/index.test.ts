@@ -13,7 +13,8 @@ interface Setup {
 	sessionFile?: string | undefined;
 	branch?: unknown[];
 	reply?: { stopReason: string; content: unknown };
-	available?: string[];
+	available?: readonly string[];
+	authenticated?: readonly string[];
 	/** Mutable so a test can change what resolves between attempts. */
 	availableRef?: { current: string[] };
 	titleModel?: string;
@@ -66,7 +67,8 @@ function setup(options: Setup = {}) {
 		modelRegistry: {
 			find: (provider: string, id: string) =>
 				available.current.includes(`${provider}/${id}`) ? { provider, id } : undefined,
-			hasConfiguredAuth: () => true,
+			hasConfiguredAuth: (model: { provider: string; id: string }) =>
+				(options.authenticated ?? available.current).includes(`${model.provider}/${model.id}`),
 			streamSimple,
 		},
 	};
@@ -149,13 +151,26 @@ describe("titles agent_end", () => {
 		expect(t.setSessionName).not.toHaveBeenCalled();
 	});
 
-	it("prefers titleModel, else falls back to the second default", async () => {
+	it("uses an available configured titleModel", async () => {
 		const t = setup({ titleModel: "work/small", available: ["work/small", "openai-codex/gpt-6-luna"] });
 		await t.end();
 		expect(t.streamSimple.mock.calls[0]?.[0]).toMatchObject({ provider: "work", id: "small" });
-		const u = setup({ available: ["openai-codex/gpt-6-luna"] });
-		await u.end();
-		expect(u.streamSimple.mock.calls[0]?.[0]).toMatchObject({ provider: "openai-codex" });
+	});
+
+	it.each([
+		["invalid", ["openai-codex/gpt-6-luna"], undefined],
+		["unavailable", ["openai-codex/gpt-6-luna"], undefined],
+		["unauthenticated", ["work/small", "openai-codex/gpt-6-luna"], []],
+	] as const)("does not fall through when titleModel is %s", async (_case, available, authenticated) => {
+		const t = setup({ titleModel: _case === "invalid" ? "work/" : "work/small", available, authenticated });
+		await t.end();
+		expect(t.streamSimple).not.toHaveBeenCalled();
+	});
+
+	it("uses the second default when no titleModel is configured", async () => {
+		const t = setup({ available: ["openai-codex/gpt-6-luna"] });
+		await t.end();
+		expect(t.streamSimple.mock.calls[0]?.[0]).toMatchObject({ provider: "openai-codex" });
 	});
 
 	it("ignores an errored reply and tries only once", async () => {

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Make configured `titles.model` selection fail closed: invalid, unavailable and unauthenticated configured models now skip title generation rather than trying aliases or defaults
+
 - Make the portable stats CLI import-safe: importing `dist/pi-stats-export.mjs` no longer runs an operation; direct Node execution still runs it
 
 - Replace `/mon`'s ambiguous non-free label with `total-free` (`T-F` compact); accept additive native App+Wired+Compressed and swap metrics without silently substituting free-page subtraction

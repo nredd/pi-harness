@@ -12,15 +12,11 @@ import {
 } from "../../src/titles/logic.ts";
 
 describe("modelCandidates", () => {
-	it("puts the configured model first, then the defaults", () => {
-		expect(modelCandidates("work/alias-small").map((m) => `${m.provider}/${m.id}`)).toEqual([
-			"work/alias-small",
-			"anthropic/claude-haiku-5-5",
-			"openai-codex/gpt-6-luna",
-		]);
+	it("uses only the configured model", () => {
+		expect(modelCandidates("work/alias-small").map((m) => `${m.provider}/${m.id}`)).toEqual(["work/alias-small"]);
+		expect(modelCandidates("anthropic/claude-haiku-5-5")).toHaveLength(1);
 	});
-	it("deduplicates and uses only defaults when unset", () => {
-		expect(modelCandidates("anthropic/claude-haiku-5-5")).toHaveLength(2);
+	it("uses the default chain only when unset", () => {
 		expect(modelCandidates()).toHaveLength(2);
 	});
 	it("inserts alias candidates after the pinned default, haiku-5-5 before haiku-4-5", () => {
@@ -29,14 +25,14 @@ describe("modelCandidates", () => {
 			"claude-haiku-5-5": ["corp/h55", "corp/h55b"],
 			unrelated: ["x/y"],
 		};
-		expect(modelCandidates("work/t", aliases).map((m) => `${m.provider}/${m.id}`)).toEqual([
-			"work/t",
+		expect(modelCandidates(undefined, aliases).map((m) => `${m.provider}/${m.id}`)).toEqual([
 			"anthropic/claude-haiku-5-5",
 			"corp/h55",
 			"corp/h55b",
 			"corp/h45",
 			"openai-codex/gpt-6-luna",
 		]);
+		expect(modelCandidates("work/t", aliases).map((m) => `${m.provider}/${m.id}`)).toEqual(["work/t"]);
 	});
 	it("keeps slashes inside the id and rejects malformed refs", () => {
 		expect(parseModelRef("openrouter/a/b")).toEqual({ provider: "openrouter", id: "a/b" });

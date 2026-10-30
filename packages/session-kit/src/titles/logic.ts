@@ -67,12 +67,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Candidate models, best first: the configured one, the pinned default, the alias candidates for
- * each logical name, then the fallback default. Deduplicated.
+ * Candidate models, best first. A configured model is an explicit selection and therefore has no
+ * fallback. Without one, use the pinned default, aliases for each logical name, then the fallback.
  */
 export function modelCandidates(titleModel?: string, aliases: ModelAliases = {}): ModelRef[] {
 	const [primary, ...rest] = DEFAULT_TITLE_MODELS;
-	const refs = [titleModel, primary, ...TITLE_ALIAS_NAMES.flatMap((name) => aliases[name] ?? []), ...rest];
+	const refs =
+		titleModel === undefined
+			? [primary, ...TITLE_ALIAS_NAMES.flatMap((name) => aliases[name] ?? []), ...rest]
+			: [titleModel];
 	const seen = new Set<string>();
 	const out: ModelRef[] = [];
 	for (const ref of refs) {
