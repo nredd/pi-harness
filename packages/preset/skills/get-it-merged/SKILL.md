@@ -23,11 +23,11 @@ One pass, before touching anything. Scope is the full requested set, not the fir
 
 - Open PRs: `gh pr list --json number,title,headRefName,baseRefName,autoMergeRequest,mergeStateStatus,mergeable`
 - Protection: list rulesets with `gh api repos/{owner}/{repo}/rulesets`, then read every applicable enforced ruleset detail and classic branch protection for the target base. Establish the effective required checks, merge method, strictness, enforcement and whether the merging caller can bypass each applicable protection. A list of names or readable required-status listing alone does not prove protection. A 403, plan-gated, unreadable or uncertain bypass response is UNKNOWN, never "protected"
-- Exact-HEAD review receipts: Standards + Spec `code-reviewer` reports and the dedicated critic for each candidate. A critic receipt preserves its original invocation's full SHA (or a recorded short-ref -> full-SHA resolution) and tool-routing metadata
+- Whole-PR review receipts: record the original full merge-base and current full HEAD for each candidate. Standards + Spec `code-reviewer` reports must cover that immutable `<base>...<head>` range; the dedicated critic receipt preserves its original invocation's full SHA (or a recorded short-ref -> full-SHA resolution) and tool-routing metadata
 - Functional dependencies and overlapping paths: `gh pr view`, commit ancestry, and diffs
 - Live CI: record concrete run IDs and states
 
-Disable any armed auto-merge before a PR's HEAD changes, then renew every review on the new HEAD.
+Disable any armed auto-merge before a PR's HEAD changes, then renew every review from the preserved original merge-base through the new full HEAD; corrective-delta reviews are supplemental only.
 Use native session-kit monitors (`monitor_start`) for passive waiting, including bounded-interval
 pollers. Keep model turns and subagents for substantive work, not repeated status polling.
 
@@ -42,7 +42,7 @@ pollers. Keep model turns and subagents for substantive work, not repeated statu
 
 For the next unblocked PR in the order:
 
-- Confirm its exact current HEAD has separate Standards + Spec reviews without model overrides and a dedicated critic
+- Confirm its exact current HEAD has separate Standards + Spec reviews without model overrides and a dedicated critic; both axes name the preserved original full merge-base, current full HEAD, and whole-PR range
 - Confirm the Standards and Spec axes have `Checked:` evidence and every reviewer has a named identity/model
 - Confirm the critic receipt names `critic`, its identity/model, original SHA-bound invocation, and tool-routing metadata; accept only its native `No findings.` or structured finding output. Never synthesize `Checked:` evidence for the critic
 - Confirm neither axis nor the critic has an unresolved blocking finding
