@@ -590,7 +590,7 @@ When the effective built-in set lacks `bash` (including `disallowed_tools: bash`
 
 `Agent` has no per-call tool-override flag. Use a shell-capable type for command work; do not ask a restricted researcher to acquire `bash`.
 
-The last two rows are separate because zero built-ins is not zero tools: `tools: none` alongside `extensions:` still surfaces every extension tool, so calling it `none` would understate what the agent can do. Without the `+ extension tools` flag an agent that can search the web through an extension (e.g. `Plan`) read as web-less.
+The last two rows are separate because zero built-ins is not zero tools: `tools: none` alongside `extensions:` still surfaces every extension tool, so calling it `none` would understate what the agent can do. Without the `+ extension tools` flag, a custom agent configured to search the web through an extension would read as web-less.
 
 ### Shipping agents in a pi package
 
