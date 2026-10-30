@@ -652,7 +652,8 @@ function agentRow(options: {
   // then let the shared flag degrade rather than clipping it to `[fal…`.
   if (options.compact && flag) {
     const flagWidth = Math.max(0, width - lineWidth(prefix));
-    const compactFlag = withLeadingFlag("", flag, "", flagWidth);
+    // `withLeadingFlag` pads a fitting flag with a trailing space; the label row adds its own.
+    const compactFlag = withLeadingFlag("", flag, "", flagWidth).trimEnd();
     const labelWidth = Math.max(0, flagWidth - visibleWidth(compactFlag) - 1);
     const label = truncateToWidth(entry.label, labelWidth, "");
     return [
