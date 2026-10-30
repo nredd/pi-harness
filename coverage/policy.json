@@ -21,6 +21,7 @@
     { "path": "packages/computer-use/scripts/rust-coverage.test.mjs", "reason": "Non-shipped argument/path/missing-tool tests for optional report-only Rust coverage tooling." },
     { "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Non-shipped readiness and bounded subprocess helpers used only by verification check harnesses." },
     { "path": "packages/computer-use/scripts/check-async.test.mjs", "reason": "Non-shipped assertions for verification subprocess readiness, deadlines and process cleanup; not runtime source." },
+    { "path": "packages/computer-use/scripts/check-cleanup.test.mjs", "reason": "Non-shipped regression assertions for owned process-group cleanup, denied ownership, recycled IDs and listener teardown; not runtime source." },
     { "path": "scripts/run-vitest.ts", "reason": "Verification-only launcher creates disposable test homes and forwards runner arguments; never shipped as a product entrypoint." },
     { "path": "integration/inprocess/verification/home-guard.ts", "reason": "Verification-only assertion checks worker home boundaries; imported only by test setup and guard regressions, never shipped." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest-only lifecycle setup installs home-boundary assertions; never shipped or invoked by production." },
