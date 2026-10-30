@@ -93,7 +93,7 @@ export function selectModel(request: {
       const compatibilityPin = input.source === "definition" && request.agentType === "Explore"
         ? LEGACY_MODEL_PINS.get(requested) : undefined;
       const resolved = request.paramModel != null && typeof request.paramModel === "object"
-        ? request.paramModel : input.source === "param" ? resolveModel(requested, request.registry)
+        ? request.paramModel : input.source === "param" ? resolveModel(requested, request.registry, { cwd: request.cwd, homeDir: request.homeDir })
         : exactTierModel(compatibilityPin ?? requested, request.registry) ?? `Model not found: "${requested}".`;
       if (typeof resolved !== "string") selection = { ...input, model: resolved, outcome: "resolved" };
       else if (compatibilityPin) {

@@ -49,9 +49,13 @@ export function getAgentModels(): ReadonlyMap<string, string> {
 /**
  * Narrows fuzzy candidates to the models the user enabled (pi's `enabledModels`),
  * as lowercase `provider/id` keys. Injected rather than imported so this module
- * stays free of settings I/O; `undefined` means no scope is configured.
+ * stays free of settings I/O; `undefined` means no scope is configured. An
+ * unresolved dispatch passes its config root only for its diagnostic.
  */
-export type ModelScopeProvider = (registry: ModelRegistry) => ReadonlySet<string> | undefined;
+export type ModelScopeProvider = (
+  registry: ModelRegistry,
+  context?: { cwd: string; homeDir?: string },
+) => ReadonlySet<string> | undefined;
 
 let modelScopeProvider: ModelScopeProvider | undefined;
 
@@ -186,6 +190,7 @@ function compareVersionsDesc(a: ModelVersion | undefined, b: ModelVersion | unde
 export function resolveModel(
   input: string,
   registry: ModelRegistry,
+  context?: { cwd: string; homeDir?: string },
 ): any | string {
   const aliasCandidates = modelAliases.get(input.trim().toLowerCase());
   if (aliasCandidates) {
@@ -195,7 +200,7 @@ export function resolveModel(
     }
     return `Model alias "${input}" has no available candidate.\n\nCandidates:\n${aliasCandidates.map(candidate => `  ${candidate}`).join("\n")}`;
   }
-  return resolveCanonicalModel(input, registry);
+  return resolveCanonicalModel(input, registry, context);
 }
 
 /**
@@ -204,11 +209,22 @@ export function resolveModel(
  * match score. A bare family name like "opus" therefore means the newest opus
  * the user has enabled, not whichever id happens to be shortest.
  */
-function rankFuzzy(matches: { entry: ModelEntry; score: number }[], registry: ModelRegistry): ModelEntry | undefined {
-  const scope = modelScopeProvider?.(registry);
-  const scoped = scope ? matches.filter(c => scope.has(`${c.entry.provider}/${c.entry.id}`.toLowerCase())) : [];
-  const pool = scoped.length > 0 ? scoped : matches;
-  const ranked = pool
+function scopedCandidates<T extends { entry: ModelEntry }>(
+  candidates: T[],
+  registry: ModelRegistry,
+  context?: { cwd: string; homeDir?: string },
+): T[] {
+  const scope = modelScopeProvider?.(registry, context);
+  const scoped = scope ? candidates.filter(candidate => scope.has(`${candidate.entry.provider}/${candidate.entry.id}`.toLowerCase())) : [];
+  return scoped.length > 0 ? scoped : candidates;
+}
+
+function rankFuzzy(
+  matches: { entry: ModelEntry; score: number }[],
+  registry: ModelRegistry,
+  context?: { cwd: string; homeDir?: string },
+): ModelEntry | undefined {
+  const ranked = scopedCandidates(matches, registry, context)
     .map(c => ({ ...c, version: parseModelVersion(c.entry.id) }))
     .sort((a, b) => compareVersionsDesc(a.version, b.version) || b.score - a.score);
   return ranked[0]?.entry;
@@ -218,6 +234,7 @@ function rankFuzzy(matches: { entry: ModelEntry; score: number }[], registry: Mo
 function resolveCanonicalModel(
   input: string,
   registry: ModelRegistry,
+  context?: { cwd: string; homeDir?: string },
 ): any | string {
   // Available models (those with auth configured)
   const all = (registry.getAvailable?.() ?? registry.getAll()) as ModelEntry[];
@@ -272,7 +289,7 @@ function resolveCanonicalModel(
   // An exact id (or provider/id) is the caller naming a model, not describing
   // one: it wins outright, whatever the scope or any newer sibling.
   const exact = matches.find(c => c.score === 100);
-  const bestMatch = exact?.entry ?? rankFuzzy(matches, registry);
+  const bestMatch = exact?.entry ?? rankFuzzy(matches, registry, context);
   if (bestMatch) {
     const found = registry.find(bestMatch.provider, bestMatch.id);
     if (found) return found;
@@ -283,13 +300,13 @@ function resolveCanonicalModel(
   // named provider is preferred when present; this only kicks in when it isn't,
   // so the same model from another provider beats falling back to "inherit".
   if (slashIdx !== -1) {
-    const bare = resolveCanonicalModel(input.slice(slashIdx + 1), registry);
+    const bare = resolveCanonicalModel(input.slice(slashIdx + 1), registry, context);
     if (typeof bare !== "string") return bare;
   }
 
   // 4. No match — list available models
-  const modelList = all
-    .map(m => `  ${m.provider}/${m.id}`)
+  const modelList = scopedCandidates(all.map(entry => ({ entry })), registry, context)
+    .map(({ entry }) => `  ${entry.provider}/${entry.id}`)
     .sort()
     .join("\n");
   return `Model not found: "${input}".\n\nAvailable models:\n${modelList}`;

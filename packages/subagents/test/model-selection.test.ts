@@ -94,6 +94,20 @@ describe("selectModel", () => {
     expect(select(undefined, "selection-unavailable/unavailable-pin")).toContain("Model not found");
   });
 
+  it("uses dispatch scope for fuzzy resolution and unresolved explicit-model diagnostics", () => {
+    let scopeContext: { cwd: string; homeDir?: string } | undefined;
+    setModelScopeProvider((_registry, context) => {
+      scopeContext = context;
+      return context ? new Set([ref("parent"), ref("gpt-5-test")]) : new Set([ref("gpt-6-test")]);
+    });
+    const selected = select(undefined, "gpt");
+    expect(selected).toMatchObject({ model: { id: "gpt-5-test" } });
+    const result = select(undefined, "missing-model");
+    expect(scopeContext).toEqual({ cwd: dir, homeDir: undefined });
+    expect(result).toContain(`  ${ref("parent")}`);
+    expect(result).not.toContain(ref("explicit"));
+  });
+
   it("discloses an unresolved config without falling through to another config source", () => {
     setAgentModels({ scout: "does-not-exist", "*": ref("wildcard") });
     expect(select(ref("definition"))).toMatchObject({
