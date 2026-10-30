@@ -35,7 +35,7 @@ as a substitute for the parent's monitor.
 For the selected PR:
 
 - Confirm its exact current HEAD has separate Standards + Spec reviews without model overrides and a dedicated critic
-- Confirm every review has `Checked:` evidence, named reviewer identity/model, and no unresolved blocking finding
+- Confirm the Standards and Spec axes have `Checked:` evidence, every reviewer has a named identity/model, and neither the axes nor critic has an unresolved blocking finding
 - Confirm normal required checks are green on that exact HEAD. Do not rerun only failed jobs; use the repository's documented flake policy
 - Keep auto-merge off until the parent has consumed its independent final critic
 - Hand the parent the PR URL, head SHA, review handles, CI run IDs, and native-monitor command. The parent observes the outcome and performs any protected merge

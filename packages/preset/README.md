@@ -184,8 +184,9 @@ dependency tests, `npm pack` allowlist/license tests, and real Pi 1.3.0 resource
 `HOME`/agent dir with no live model calls or auth. Every test runs under Vitest and Bun.
 
 Packed-tarball evidence (`make check-package-contracts`, see
-[package contracts](../../docs/package-contracts.md)): the packed preset is audited, installed alone,
-and its installed skill/extension resources are loaded by Pi from the tarball path. Child behavior of the `code-reviewer` agent (tools exactly
+[package contracts](../../docs/package-contracts.md)): the packed preset is audited and installed alone.
+The native preset package gate separately loads its installed skill/extension resources through Pi
+from the tarball path. Child behavior of the `code-reviewer` agent (tools exactly
 the read-only allowlist, denied tools refused, global/project overrides, untrusted project agents
 ignored) is exercised against real children from these sources by
 `integration/inprocess/{reviewer,specialists}.test.ts`.
