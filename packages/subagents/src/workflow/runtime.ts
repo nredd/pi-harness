@@ -282,6 +282,19 @@ export interface RunWorkflowOptions {
   signal?: AbortSignal;
   /** Fired per batch, not per entry — see the worker's progress batching. */
   onProgress?(entries: readonly WorkflowEntry[]): void;
+  /**
+   * Receives optional Istanbul counters authored inside a workflow VM.
+   *
+   * The runtime itself never instruments scripts. Test producers may pass
+   * instrumented source and merge these counters into their own collector,
+   * retaining worker/VM execution rather than measuring a substitute runner.
+   */
+  onScriptCoverage?(coverage: unknown): void;
+  /**
+   * Trusted caller-side transform applied after the workflow's metadata has
+   * passed validation and before its body enters the worker VM.
+   */
+  transformScriptBody?(input: { script: string; body: string }): string;
   concurrency?: number;
   agentCap?: number;
   itemCap?: number;
@@ -457,7 +470,7 @@ interface AgentCallPayload {
 type WorkerMessage =
   | { type: "call"; callId: number; method: string; payload: AgentCallPayload }
   | { type: "progress"; entries: WorkflowEntry[] }
-  | { type: "complete"; resultJson?: string }
+  | { type: "complete"; resultJson?: string; coverage?: unknown }
   | { type: "error"; message: string; stack?: string };
 
 /** Everything below 0x20 except tab, newline and carriage return, plus DEL. */
@@ -595,7 +608,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
   assertBoundarySafe(options.args, "args");
 
-  const { meta, body } = validateScript(script);
+  const { meta, body: validatedBody } = validateScript(script);
+  const body = options.transformScriptBody?.({ script, body: validatedBody }) ?? validatedBody;
   const agentCap = options.agentCap ?? WORKFLOW_AGENT_CAP;
   const itemCap = options.itemCap ?? WORKFLOW_ITEM_CAP;
   const semaphore = new Semaphore(options.concurrency ?? workflowConcurrency());
@@ -732,6 +746,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       argsJson: options.args === undefined ? undefined : JSON.stringify(options.args),
       itemCap,
       nestedCap: options.nestedCap ?? WORKFLOW_NESTED_CAP,
+      collectCoverage: options.onScriptCoverage !== undefined,
     },
   });
 
@@ -1174,7 +1189,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         respond(callId, true, {
           name: child.meta.name,
           metaJson: JSON.stringify(child.meta),
-          body: child.body,
+          body: options.transformScriptBody?.({ script: source.script, body: child.body }) ?? child.body,
         });
       } catch (error) {
         respond(callId, false, undefined, error instanceof Error ? error.message : String(error));
@@ -1199,6 +1214,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           void handleAgent(message.callId, message.payload as AgentCallPayload);
           break;
         case "complete": {
+          if (message.coverage !== undefined) options.onScriptCoverage?.(message.coverage);
           // The script is done, so every launch it made should have been
           // answered by now — a response is sent before the worker can post
           // this, so anything still open was never awaited. finish() aborts
