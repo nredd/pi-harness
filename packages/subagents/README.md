@@ -110,11 +110,15 @@ each launched Vitest child a temporary `HOME`, `USERPROFILE` and `XDG_CONFIG_HOM
 then removes the home on exit. The command-level regression runs the real wrapped `npm test` against
 a hostile fixture home with an unavailable `@default` tier and checks the existing Agent boundary
 assertions. Its nested process-cleanup regression uses the shared async `@nredd/pi-dev-tools` runner.
-When its unchanged post-return descendant `ESRCH` assertion fails, it logs only the fixture's captured
-PID/group/start identity plus bounded kernel state and elapsed/CPU counters. CI distinguishes a
-present process, a zombie and PID reuse; a failed, stderr-producing or unparseable probe reports
-explicit unavailable evidence rather than claiming the fixture is absent. It never inspects unowned
-processes. Operator
+When its unchanged post-return descendant `ESRCH` assertion fails on Linux, its first failure-handler
+operation synchronously reads that fixture's `/proc/<pid>/stat`, comparing kernel start ticks with a
+readiness-time capture. The log explicitly labels this as **after the failed assertion**, not an
+exact-return observation, and records monotonic sampling offsets. It distinguishes an observed zombie,
+a changed start identity and mere presence; presence alone does not prove post-return execution.
+The existing asynchronous `ps` probe then records a later observation on macOS and Linux. A later
+`missing` sample cannot classify the earlier failed assertion. Failed or malformed probes report
+unavailable evidence rather than absence. Neither probe reads command arguments, environments or
+unowned process tables, and neither sends post-return termination signals. Operator
 `agentModels`/model-tier policy must not affect fixture dispatch; runtime tier defaults and operator
 files remain unchanged.
 `test:watch` and `test:e2e` retain their operator environment. The explicit live smoke command
