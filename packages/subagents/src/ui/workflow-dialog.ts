@@ -62,7 +62,7 @@ import {
   type WorkflowEntry,
 } from "../workflow/progress.js";
 import { SPINNER, type Theme } from "./agent-widget.js";
-import { fallbackFlagText, hasFallback, withLeadingFlag } from "./fallback-flag.js";
+import { boundedWrappedRows, fallbackFlagText, hasFallback, withLeadingFlag } from "./fallback-flag.js";
 import {
   ASCII_GLYPHS,
   clampLine,
@@ -627,26 +627,6 @@ function detailHeading(title: string, suffixes: readonly string[], width: number
 const detailBody = (text: string, width: number): WorkflowCardLine =>
   clampLine([{ text: `   ${text}`, color: "dim" }], width);
 
-/**
- * Keep a bounded detail excerpt after wrapping, because embedded newlines are
- * already physical rows and cannot be bounded by a character-width budget.
- */
-function boundedWrappedRows(text: string, width: number, glyphs: WorkflowDialogGlyphs): string[] {
-  const rows = wrapTextWithAnsi(text, width);
-  if (rows.length <= MODEL_NOTE_ROWS) return rows;
-
-  // Reserve one row for the omission marker and bias the surviving rows toward
-  // the end: a fallback's diagnosis is its final clause, while its prefix still
-  // makes clear what the excerpt describes.
-  const firstCount = Math.max(1, Math.floor((MODEL_NOTE_ROWS - 1) / 2));
-  const lastCount = MODEL_NOTE_ROWS - firstCount - 1;
-  const omitted = rows.length - firstCount - lastCount;
-  const marker = stripTerminalSequences(
-    truncateToWidth(`${glyphs.ellipsis} ${omitted} more line${omitted === 1 ? "" : "s"}`, width, ""),
-  );
-  return [...rows.slice(0, firstCount), marker, ...rows.slice(-lastCount)];
-}
-
 /** The row for one agent, as it appears in whichever pane is listing agents. */
 function agentRow(options: {
   entry: WorkflowAgentEntry;
@@ -841,7 +821,7 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
     // pane's fixed row budget.
     if (entry.modelNote) {
       const noteWidth = Math.max(1, rightWidth - 1);
-      for (const line of boundedWrappedRows(entry.modelNote, noteWidth, glyphs)) {
+      for (const line of boundedWrappedRows(entry.modelNote, noteWidth, MODEL_NOTE_ROWS, glyphs.ellipsis)) {
         detailRows.push(clampLine([{ text: ` ${line}`, color: "warning" }], rightWidth));
       }
     }

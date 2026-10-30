@@ -13,7 +13,7 @@ import type { AgentRecord, NotificationDetails } from "../src/types.js";
 import { AgentResultView } from "../src/ui/agent-row.js";
 import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
-import { hasFallback } from "../src/ui/fallback-flag.js";
+import { boundedWrappedRows, hasFallback } from "../src/ui/fallback-flag.js";
 import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.js";
 import { groupSummary, renderNotification } from "../src/ui/notification-view.js";
 import { layoutWorkflowCard, plainWorkflowCardLines, type WorkflowCardTask } from "../src/ui/workflow-card.js";
@@ -111,6 +111,16 @@ function dialogInput(width: number, progress: WorkflowAgentEntry[], level: "phas
 
 const notice = (over: Partial<NotificationDetails>): NotificationDetails => ({
   id: "a", description: "d", status: "completed", toolUses: 1, turnCount: 1, totalTokens: 1, durationMs: 1, resultPreview: "r", ...over,
+});
+
+describe("bounded wrapped control text", () => {
+  it("reserves physical rows for an omission marker while retaining both ends", () => {
+    expect(boundedWrappedRows("one", 80, 4, "…")).toEqual(["one"]);
+    expect(boundedWrappedRows("first\nsecond\nthird\nfourth\nlast", 80, 4, "…")).toEqual([
+      "first", "… 2 more lines", "fourth", "last",
+    ]);
+    expect(boundedWrappedRows("first\nlast", 80, 1, "…")).toEqual(["…"]);
+  });
 });
 
 const TIER_FLAGS: { modelTier: TierDisclosure; flag: string }[] = [
