@@ -106,21 +106,24 @@ start gate when present; legacy queued resumes retain the clock-driven fallback.
 `npm test` and `test:coverage` launch Node Vitest through the shared `scripts/run-vitest.ts`
 launcher; `test:bun` runs its four native scenario files through Bun, then uses that launcher for
 `resource-loader-home.test.ts`. The launcher is the outer synchronous `spawnSync` wrapper: it gives
-each launched Vitest child a temporary `HOME`, `USERPROFILE` and `XDG_CONFIG_HOME` before imports,
-then removes the home on exit. The command-level regression runs the real wrapped `npm test` against
-a hostile fixture home with an unavailable `@default` tier and checks the existing Agent boundary
+each launched Vitest child temporary `HOME`, `USERPROFILE`, `XDG_CONFIG_HOME`, `PI_CODING_AGENT_DIR`
+and `PI_SUBAGENTS_CONFIG_DIR` roots before imports, then removes the home on exit. The command-level
+regression runs the real wrapped `npm test` against a hostile fixture home with an unavailable `@default` tier and checks the existing Agent boundary
 assertions. Its nested process-cleanup regression uses the shared async `@nredd/pi-dev-tools` runner.
 When its unchanged post-return descendant `ESRCH` assertion fails on Linux, its first failure-handler
 operation synchronously reads that fixture's `/proc/<pid>/stat`, comparing kernel start ticks with a
 readiness-time capture. The log explicitly labels this as **after the failed assertion**, not an
-exact-return observation, and records monotonic sampling offsets. It distinguishes an observed zombie,
-a changed start identity and mere presence; presence alone does not prove post-return execution.
-The existing asynchronous `ps` probe then records a later observation on macOS and Linux. A later
-`missing` sample cannot classify the earlier failed assertion. Failed or malformed probes report
+exact-return observation, and records monotonic sampling offsets. The separate `runnerDurationMs`
+field retains the runner's wall-clock duration, not a monotonic boundary measurement. It distinguishes
+an observed zombie, a changed start identity and mere presence; presence alone does not prove
+post-return execution. The asynchronous `ps` probe inherited from PR #279 then records a later
+observation on macOS and Linux. A later `missing` sample cannot classify the earlier failed assertion. Failed or malformed probes report
 unavailable evidence rather than absence. Neither probe reads command arguments, environments or
 unowned process tables, and neither sends post-return termination signals. Operator
 `agentModels`/model-tier policy must not affect fixture dispatch; runtime tier defaults and operator
-files remain unchanged.
+files remain unchanged. A Linux-only controlled fixture uses its own Python parent and
+`waitid(WNOWAIT)` to retain one known zombie, then reap it. This validates the classifier, not a
+cause of the original cleanup failure; it is skipped, not passed, on macOS.
 `test:watch` and `test:e2e` retain their operator environment. The explicit live smoke command
 `PI_E2E_LIVE=1 npm run test:e2e` needs the operator's configured Pi login; it is not a
 hermetic verification gate. Without that opt-in, `test:e2e` runs the scripted faux suite.
