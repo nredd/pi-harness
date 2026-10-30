@@ -1,0 +1,43 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`FleetList layout at real terminal sizes (#144) > snapshots mixed states and activity cells at 80 columns 1`] = `
+[
+  "  ↑↓ select · enter view · esc back",
+  "",
+  "  ● main",
+  "  ○ Plan  Plan the migration        ▶ running · 60s ·  ↓ 13.1k tokens ·   ~$1.57",
+  "  ○ Agent  pr-1412: Spec review ... ▶ running · 50s · ↓ 250.0k tokens · ~$0.8078",
+  "  ○ Agent  pr-1413: Spec review ... ▶ running · 40s ·  ↓ 13.1k tokens · ~$0.0012",
+  "  ○ Agent  Waiting for a slot       ◦ queued  · 30s ·  ↓ 13.1k tokens · ~$0.0042",
+  "  ○ Agent  Finished fix             ✓ done    · 19s ·  ↓ 13.1k tokens ·   ~$0.05",
+  "",
+]
+`;
+
+exports[`FleetList layout at real terminal sizes (#144) > snapshots mixed states and activity cells at 120 columns 1`] = `
+[
+  "  ↑↓ select · enter view · esc back",
+  "",
+  "  ● main",
+  "  ○ Plan  Plan the migration ▶ running · gpt-5.6-terra · think:medium ·               · 60s ·  ↓ 13.1k tokens ·   ~$1.57",
+  "  ○ Agent  pr-1412: Spec ... ▶ running · gpt-5.6-terra · think:medium · thinking · 4s · 50s · ↓ 250.0k tokens · ~$0.8078",
+  "  ○ Agent  pr-1413: Spec ... ▶ running ·    gpt-6-luna · think:medium ·               · 40s ·  ↓ 13.1k tokens · ~$0.0012",
+  "  ○ Agent  Waiting for a ... ◦ queued  · gpt-5.6-terra · think:medium ·               · 30s ·  ↓ 13.1k tokens · ~$0.0042",
+  "  ○ Agent  Finished fix      ✓ done    · gpt-5.6-terra · think:medium ·               · 19s ·  ↓ 13.1k tokens ·   ~$0.05",
+  "",
+]
+`;
+
+exports[`FleetList layout at real terminal sizes (#144) > snapshots mixed states and activity cells at 200 columns 1`] = `
+[
+  "  ↑↓ select · enter view · esc back",
+  "",
+  "  ● main",
+  "  ○ Plan  Plan the migration                                                                                 ▶ running · gpt-5.6-terra · think:medium ·               · 60s ·  ↓ 13.1k tokens ·   ~$1.57",
+  "  ○ Agent  pr-1412: Spec review of the harness change                                                        ▶ running · gpt-5.6-terra · think:medium · thinking · 4s · 50s · ↓ 250.0k tokens · ~$0.8078",
+  "  ○ Agent  pr-1413: Spec review of the harness change                                                        ▶ running ·    gpt-6-luna · think:medium ·               · 40s ·  ↓ 13.1k tokens · ~$0.0012",
+  "  ○ Agent  Waiting for a slot                                                                                ◦ queued  · gpt-5.6-terra · think:medium ·               · 30s ·  ↓ 13.1k tokens · ~$0.0042",
+  "  ○ Agent  Finished fix                                                                                      ✓ done    · gpt-5.6-terra · think:medium ·               · 19s ·  ↓ 13.1k tokens ·   ~$0.05",
+  "",
+]
+`;
