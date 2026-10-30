@@ -132,13 +132,18 @@ faux `Agent` call). The package-native check and stock contract cover the import
 real `todo` tool through stock Pi; its two declared runtime dependencies are installed from the registry and
 its full lockfile closure is verified.
 
-`@nredd/pi-computer-use` ships prebuilt helpers for macOS only. For Linux, `files` lists the locked crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`) and `docs/content/docs/how-to-guides/linux.mdx`, built on opt-in by `setup-helper.mjs`; no `prebuilt/linux` ships, and no `prebuilt/windows` or Windows crate. It declares the two source-controlled per-architecture macOS helper payloads: `prebuilt/macos/arm64/bridge` and `prebuilt/macos/x64/bridge`. The macOS helper binaries were built on the owner's laptop and imported as committed prebuilts; CI checks and packs them, but npm provenance does not attest their native compilation or source-to-binary correspondence. Building them in CI is tracked in [#106](https://github.com/nredd/pi-harness/issues/106). Its stock contract proves packing, auditing, standalone install, extension loading, and the platform-aware model-visible tool surface (exactly 13 on darwin, 11 elsewhere: `desktop_screenshot`/`desktop_input` register on darwin only) and that each packed `prebuilt/macos/{arm64,x64}/bridge` is a Mach-O of the right arch with mode 0755, while recording the `postinstall` (`setup-helper.mjs`, helper app install and codesign; the stock install uses `--ignore-scripts`) and native desktop behavior as `NOT RUN`: CI cannot supply an interactive desktop or Accessibility/Screen Recording TCC grants. `npm run check` runs the fork's portable suite, including macOS Swift pure checks and the packed-payload check; `npm run build:native` remains a separately invoked macOS build gate, and the live helper script remains opt-in.
+`@nredd/pi-computer-use` ships prebuilt helpers for macOS only. For Linux, `files` lists the locked crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`) and `docs/content/docs/how-to-guides/linux.mdx`, built on opt-in by `setup-helper.mjs`; no `prebuilt/linux` ships, and no `prebuilt/windows` or Windows crate. It declares the two source-controlled per-architecture macOS helper payloads: `prebuilt/macos/arm64/bridge` and `prebuilt/macos/x64/bridge`. The committed macOS payloads remain historical development fixtures, not release inputs. For new releases, `publish.yml` selects `macos-15` and the release descriptor compiles both architectures from the exact tagged Swift sources in a disposable package copy. It deletes both imported payloads before invoking `build-native.mjs --platform darwin --arch all --no-sign`, refuses missing outputs, and requires the pack-once tarball's native bytes to equal those compiler outputs. The stock contract then checks those same bytes. This is source-to-binary trust through an attested workflow, NOT a bit-reproducibility claim. Its stock contract proves packing, auditing, standalone install, extension loading, and the platform-aware model-visible tool surface (exactly 13 on darwin, 11 elsewhere: `desktop_screenshot`/`desktop_input` register on darwin only) and that each packed `prebuilt/macos/{arm64,x64}/bridge` is a Mach-O of the right arch with mode 0755, while recording the `postinstall` (`setup-helper.mjs`, helper app install and codesign; the stock install uses `--ignore-scripts`) and native desktop behavior as `NOT RUN`: CI cannot supply an interactive desktop or Accessibility/Screen Recording TCC grants. `npm run check` runs the fork's portable suite, including macOS Swift pure checks and the packed-payload check; `npm run build:native` remains a separately invoked macOS build gate, and the live helper script remains opt-in.
 
 Computer-use `0.6.0` was synced from upstream main `67e9e2f77643f84605b738a3198048a88e92190e`
 and published in the batch above. See [its sync record](../packages/computer-use/UPSTREAM.md)
 for the carried patch queue, drop checks, rollback and owner-only validation. Local builds/signing
-stay in place; adopting upstream's CI signer is an owner decision because it changes TCC identity.
-Publication does not establish desktop/TCC acceptance.
+stay in place. CI builds only loose payloads, not an upstream-signed app: `--no-sign` skips the
+explicit codesign step (the Apple toolchain may emit an ad-hoc linker signature), and no signing
+identity or private key enters CI. Existing setup constructs the app at its unchanged resolved path
+and re-signs with the existing local keychain identity. CI compilation authorizes no installed helper
+action, new signer/TCC identity, grant reset, registration or private-key export. Adopting upstream's
+CI signer remains an owner decision because it changes TCC identity. Publication does not establish
+desktop/TCC acceptance.
 
 Computer-use platform notes:
 
@@ -152,7 +157,7 @@ or more segments. Requirements check both the source workspace and packed tarbal
 2. Select the merged `main` SHA whose package version equals the intended version. Create a signed tag:
    `git tag -s '@nredd/<pkg>@<v>' <main sha>` (e.g. `@nredd/pi-session-kit@0.3.1`).
 3. Push only that tag: `git push origin '@nredd/<pkg>@<v>'`.
-4. Watch the `Publish` workflow. It runs `verify -> publish -> release`, serially per tag with no
+4. Watch the `Publish` workflow. It runs `verify -> attest -> publish -> release`, serially per tag with no
    cancellation. Never publish locally or rebuild an accepted tarball.
 5. Promote the reviewed stack snapshot, then bump the dotfiles pin in a reviewed PR only after pi-harness CI's `stack` job is green for the candidate package set in `integration/stacks/personal.json` and matching core Gitlink release. Promotion verifies each owned npm source's registry integrity, signature and SLSA provenance; an owner-bootstrapped package without provenance cannot be promoted.
    Follow the dotfiles activation runbook; npm publication alone is not a promotion gate.
@@ -191,6 +196,18 @@ failed a one-minute poll and passed on a failed-jobs rerun that skipped re-publi
   `refs/tags/<tag>` ref, and path `.github/workflows/publish.yml`. The resolved build source must also
   name the tagged commit recorded in `identity.json`.
 
+Before npm publication, a separate `attest` job downloads the verified `.tgz` and creates GitHub
+build provenance for those exact bytes. It has no checkout or package execution, only the pinned
+download/attestation actions, `contents: read`, `id-token: write` and `attestations: write`. The
+build/verify job has only `contents: read`, no OIDC token, signing credential or npm secret. The
+publisher additionally requires `gh attestation verify` at `publish.yml`, the exact tag ref and source
+SHA, denying self-hosted runners. It downloads the same artifact; it never compiles or repacks.
+Attestations remain in GitHub's attestation service; the release `.tgz` is the attested subject.
+`native-helper.yml` exercises the same build-and-pack staging path on affected PRs without tags,
+attestation write access, npm publication, setup, or a live desktop. A staging pass is compilation
+and packed Mach-O evidence only, not TCC/AX/HID acceptance. Native local compilation and live desktop
+acceptance were NOT RUN for this pipeline change; hosted run evidence belongs in its PR receipt.
+
 Only after both cryptographic verification and source/subject binding pass can `release` create the
 GitHub release with `gh release create <tag> --verify-tag` and attach those same four files.
 The parser fixture is trimmed from the real public `vite@7.1.3` provenance bundle; it tests bindings,
@@ -210,7 +227,8 @@ External configuration, already configured (not managed by this repository):
   CI uses OIDC only. No npm secret or `NODE_AUTH_TOKEN` is configured.
 - GitHub environment `npm` permits deployments only from tags matching `@nredd/*@*`.
 - GitHub tag ruleset `npm release tags` makes `refs/tags/@nredd/**` admin-only.
-- Only `publish` gets `id-token: write`; only `release` gets `contents: write`.
+- Only `attest` and `publish` get `id-token: write`; only `attest` gets `attestations: write`;
+  only `release` gets `contents: write`.
 
 Recovery:
 

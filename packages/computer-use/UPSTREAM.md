@@ -122,9 +122,14 @@ installed path changes are part of this integration.
 
 ## Signing decision and rollback
 
-KEEP local builds and local signing for now. Upstream builds a CI self-signed bundle, not a
-notarized Developer ID bundle. Switching to its signer would change the designated requirement and
-force TCC re-grants. That remains an owner decision, not part of this sync.
+KEEP the existing local bundle path, setup and local signing. The harness release pipeline now
+compiles loose arm64/x64 payloads from tagged Swift source in CI with `--no-sign`, then packs and
+attests the actual compiler output. It does not build upstream's self-signed app or supply a new
+installed signer. Apple linking may add an ad-hoc signature, not an installed signing identity.
+Setup still re-signs the payload using the existing local identity. Switching that identity would
+change the designated requirement and force TCC re-grants; it remains an explicit owner decision.
+No installed helper, registration, TCC grants or private signing keys are changed by CI compilation.
+See the harness [release path](../../docs/releases.md).
 
 Committed macOS payloads retain ad-hoc signing and identifier `com.injaneity.pi-computer-use`.
 Setup still constructs the app at the same resolved path and signs using the existing local
