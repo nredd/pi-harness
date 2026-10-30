@@ -10,6 +10,14 @@ The publish job alone requests a short-lived npm OIDC identity.
 
 The WSL `Report coverage exclusions` summary is the one explicit host-shell step: it writes
 only `GITHUB_STEP_SUMMARY` text after the WSL scenario jobs and has no guest-side prerequisite.
+The workflow contract executes that step's actual body with the test runner's `/bin/bash` in
+an isolated directory without guest tooling, checks production output-failure propagation, and
+checks scoped exclusions separately from host-shell selection. On WSL the unit test runs in the
+guest: it asserts the host-shell declaration but does not execute Windows Git Bash. The actual
+host step remains a separate hosted-CI check.
+Default standalone D/E still skips seven auth cases (#14); candidate compiled-core auth adapter
+results require their own outcome and JUnit evidence, not the summary notice. Friendly-prose
+changes must preserve those disclosures and the remaining explicit `NOT RUN` scopes.
 All guest dispatch remains through the adapter, which labels a failing `pwsh`, `wslpath`, guest
 command, or generated guest step while preserving its original exit status and stderr.
 
