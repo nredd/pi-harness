@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { ChildProcess, spawnSync } from "node:child_process";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { lstat, readFile } from "node:fs/promises";
 import { platform } from "node:os";
 import { dirname, join } from "node:path";
@@ -31,6 +32,54 @@ function children(): number[] {
 /** @returns Number of currently active timeout resources in this test worker. */
 function timers(): number {
 	return process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length;
+}
+
+/** @returns A promise for the next event loop check phase. */
+function tick(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Narrow a `child_process` channel message without trusting its untyped payload.
+ * @param message Channel payload.
+ * @returns Whether it carries a child.
+ */
+function isChildMessage(message: unknown): message is { process: ChildProcess } {
+	return message instanceof Object && "process" in message && message.process instanceof ChildProcess;
+}
+
+/**
+ * Observe the next child this worker spawns through Node's documented `child_process` channel.
+ * The channel publishes from the `ChildProcess` constructor, so the promise settles in the microtask
+ * after a synchronous `spawn()` returned: the PID is set and the event loop cannot have reaped it yet.
+ * @returns The first child, and the disposer ending the subscription whether or not one spawned.
+ */
+function watchNextChild(): { spawned: Promise<ChildProcess>; stop: () => void } {
+	let onChild: (message: unknown) => void = () => {};
+	const spawned = new Promise<ChildProcess>((resolve) => {
+		onChild = (message) => {
+			if (isChildMessage(message)) resolve(message.process);
+		};
+	});
+	subscribe("child_process", onChild);
+	return { spawned, stop: () => unsubscribe("child_process", onChild) };
+}
+
+/** Upper bound on `ps` polls after SIGKILL, so a helper that never exits fails instead of hanging. */
+const MAX_EXIT_POLLS = 1000;
+
+/**
+ * Kill a helper and park the event loop until the kernel reports it exited, so it is an unreaped zombie
+ * whatever the host load. Condition-based: no duration can pass with the helper still running.
+ * @param child Helper to end.
+ */
+function parkUntilExited(child: ChildProcess): void {
+	child.kill("SIGKILL");
+	for (let i = 0; i < MAX_EXIT_POLLS; i++) {
+		const ps = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(child.pid)], { encoding: "utf8" });
+		if (ps.stdout.trim().startsWith("Z")) return;
+	}
+	throw new Error(`helper ${child.pid} never exited after SIGKILL`);
 }
 
 /**
@@ -112,40 +161,60 @@ describe("published sampler source on this host", () => {
 		await expect(source.sample(signal)).rejects.toThrow(/disposed/);
 	});
 
-	it("cancels an in-flight real sample on close, reaping its provider work", async () => {
-		const before = timers();
-		// Controlled seam: the real published sampler, wrapped only to observe the in-flight promise.
-		let inFlight: Promise<ResourceSnapshot> | undefined;
-		const create = (options?: SamplerOptions): ResourceSampler => {
-			const real = createResourceSampler(options);
-			return {
-				sample: (signal) => {
-					inFlight = real.sample(signal);
-					return inFlight;
-				},
-				dispose: () => real.dispose(),
+	it.each([
+		{ name: "a spawn in the first turn", delaySpawn: false, parkLoop: false },
+		{ name: "a spawn two ticks late", delaySpawn: true, parkLoop: false },
+		{ name: "a helper already exited", delaySpawn: false, parkLoop: true },
+	])(
+		"cancels an in-flight real sample on close, reaping its provider work, given $name",
+		async ({ delaySpawn, parkLoop }) => {
+			// Start in a check phase, so a later immediate runs only after a full poll phase, as under load.
+			await tick();
+			const baseline = timers();
+			// Controlled seam: the real published sampler, wrapped only to observe the in-flight promise.
+			let inFlight: Promise<ResourceSnapshot> | undefined;
+			const create = (options?: SamplerOptions): ResourceSampler => {
+				const real = createResourceSampler(options);
+				return {
+					sample: (signal) => {
+						// Two ticks: one would still spawn before an immediate the caller scheduled in the same turn.
+						inFlight = (delaySpawn ? tick().then(tick) : Promise.resolve()).then(() => real.sample(signal));
+						return inFlight;
+					},
+					dispose: () => real.dispose(),
+				};
 			};
-		};
-		const update = vi.fn();
-		const poll = new MonPoll(createSamplerSource(create), update);
-		poll.start();
-		expect(inFlight).toBeDefined();
-		const outcome = inFlight?.then(
-			() => "resolved",
-			(error: unknown) => (error instanceof Error ? error.name : "non-error"),
-		);
-		// Let the sampler reach its provider: on macOS that is a spawned `ps` child.
-		await new Promise((resolve) => setImmediate(resolve));
-		const during = children();
-		if (platform() === "darwin") expect(during.length).toBeGreaterThan(0);
-		// Linux reads /proc in-process (one `getconf` child on the first sample, possibly already gone), so
-		// no child is asserted there; the AbortError below is the provider's own cancellation evidence.
-		await poll.dispose();
-		expect(await outcome).toBe("AbortError");
-		expect(update).not.toHaveBeenCalled();
-		expect(children()).toEqual([]);
-		expect(timers()).toBeLessThanOrEqual(before);
-	});
+			const { spawned, stop } = watchNextChild();
+			try {
+				const pid = spawned.then((child) => {
+					if (parkLoop) parkUntilExited(child);
+					return child.pid;
+				});
+				const update = vi.fn();
+				const poll = new MonPoll(createSamplerSource(create), update);
+				poll.start();
+				expect(inFlight).toBeDefined();
+				const outcome = inFlight?.then(
+					() => "resolved",
+					(error: unknown) => (error instanceof Error ? error.name : "non-error"),
+				);
+				// The first helper, not any later instant: helpers run in turn and leave gaps with no child at all.
+				const helper = await Promise.race([pid, outcome?.then(() => undefined)]);
+				expect(helper, "the sample finished without spawning a helper").toBeDefined();
+				// macOS: `vm_stat`, listed even once exited because nothing has reaped it yet.
+				if (platform() === "darwin") expect(children()).toContain(helper);
+				// Linux reads /proc in-process and spawns only `getconf`, so the child listing stays darwin-only;
+				// the AbortError below is the provider's own cancellation evidence.
+				await poll.dispose();
+				expect(await outcome).toBe("AbortError");
+				expect(update).not.toHaveBeenCalled();
+				expect(children()).toEqual([]);
+				expect(timers()).toBeLessThanOrEqual(baseline);
+			} finally {
+				stop();
+			}
+		},
+	);
 
 	it("drives a real poll for two updates, then closes cleanly", async () => {
 		const updates: string[] = [];
