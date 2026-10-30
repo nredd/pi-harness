@@ -64,17 +64,22 @@ function check() {
 }
 const hook = process.argv[2];
 try {
-	if (hook !== "post-commit") check();
+	const commitTreeHook = hook !== "post-commit" && hook !== "reference-transaction";
+	if (commitTreeHook) check();
 	const original = \`${approval.hooks}/\${hook}\`;
+	let executable = true;
 	try {
 		accessSync(original, constants.X_OK);
+	} catch (error) {
+		if ((error)?.code !== "ENOENT" && (error)?.code !== "EACCES") throw error;
+		executable = false;
+	}
+	if (executable) {
 		const result = spawnSync(original, process.argv.slice(3), { cwd: approval.root, stdio: "inherit" });
 		if (result.error) throw result.error;
 		if (result.status !== 0) process.exit(result.status ?? 1);
-	} catch (error) {
-		if ((error)?.code !== "ENOENT" && (error)?.code !== "EACCES") throw error;
 	}
-	if (hook !== "post-commit") check();
+	if (commitTreeHook) check();
 } catch (error) {
 	console.error(\`git_commit merge approval: \${error.message}\`);
 	process.exitCode = 1;
@@ -83,7 +88,7 @@ try {
 		{ mode: 0o600 },
 	);
 	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-	for (const hook of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+	for (const hook of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "reference-transaction"]) {
 		writeFileSync(
 			join(directory, hook),
 			`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(runner)} ${quote(hook)} "$@"\n`,

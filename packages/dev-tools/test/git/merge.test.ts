@@ -152,6 +152,26 @@ describe("git_commit merge approval", () => {
 		expect(git(repo, ["cat-file", "-p", "HEAD"])).toContain("gpgsig -----BEGIN PGP SIGNATURE-----");
 	});
 
+	it("keeps reference-transaction hooks enabled for merges", async () => {
+		const { root, repo } = mergeFixture();
+		const hooks = join(root, "hooks");
+		mkdirSync(hooks);
+		writeFileSync(
+			join(hooks, "reference-transaction"),
+			'#!/bin/sh\nif [ "$1" = prepared ]; then echo reference refusal >&2; exit 1; fi\n',
+			{ mode: 0o700 },
+		);
+		git(repo, ["config", "core.hooksPath", hooks]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Relay reference hook failure", paths: ["shared.txt"], push: false },
+			repo,
+		);
+		expect(result.isError).toBe(true);
+		expect(mock.text(result)).toContain("reference refusal");
+		expect(parents(repo)).toHaveLength(1);
+	});
+
 	it("relays an actual merge hook failure without committing", async () => {
 		const { root, repo } = mergeFixture();
 		const hooks = join(root, "hooks");
