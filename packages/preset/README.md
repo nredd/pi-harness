@@ -142,11 +142,16 @@ Local overrides shadow these packaged definitions; update their managed source s
 
 ## Models and roles
 
-Agents and workflow skills carry no forced model. `code-review` launches separate Standards and
-Spec `code-reviewer` calls without a model override, so the configured review route selects the
-model. `ship-issue` uses one supplementary critic and requires the continuing parent to run its
-independent final critic after exact-HEAD review. Parent sessions keep ownership through the
-single PR's terminal outcome; delegated workers consume nested review calls before returning handles.
+Agents and workflow skills carry no forced model. `code-review` captures the original PR merge-base
+and one full reviewed HEAD, binds both axis diffs and prompts to that entire range, and discards both
+reports if HEAD changes. Renewed axes retain the original base through the new final HEAD; corrective
+deltas are supplemental only. Top-level parents
+launch the separate Standards and Spec `code-reviewer` calls without a model override; delegated
+workers use blocking calls and consume their inline results. `ship-issue` uses one supplementary
+critic and requires the continuing parent to run its independent final critic after exact-HEAD review.
+Parent sessions keep ownership through the single PR's terminal outcome; auto-merge is permitted
+only when applicable protection is readable, effective and not bypassable by the merging caller.
+Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a
 fabricated `Checked:` checklist. A future configurable role is not permission to silently

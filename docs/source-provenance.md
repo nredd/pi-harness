@@ -158,11 +158,13 @@ Deliberate modifications:
   "live next to its `SKILL.md`" (no personal path; the skill is an external dependency)
 - `skills/ship-issue/SKILL.md`: branch prefix `redd/issue-<N>` -> `<prefix>/issue-<N>` (repo
   convention, else the operator's GitHub login); the `/Users/redd/code/PLUGIN/...` example path -> a
-  neutral `/work/plugins/...`; "their global `AGENTS.md`" -> "their configured writing style". Workflow
-  steps, the `critic` `sonnet`/`opus` models, and the PR/merge procedure are unchanged
-- `skills/get-it-merged/SKILL.md`: "global `AGENTS.md`" -> "configured writing style". Since then it is a parent-driven merge train: the parent arms head-pinned auto-merge, uses a native monitor and loops over the whole list, while a delegated worker only returns handles. `skills/ship-issue` splits parent vs worker handoff the same way, and `agents/code-reviewer.md` carries the literal `Axis:` / `Reviewed HEAD:` / `Checked:` / `Findings:` skeleton `scripts/merge-pr.sh` parses (tree hashes above are the original import)
+  neutral `/work/plugins/...`; "their global `AGENTS.md`" -> "their configured writing style". Later
+  policy changes removed forced critic models and split the evolving parent/worker review and merge
+  procedure; consult the shipped skill rather than this historical import note
+- `skills/get-it-merged/SKILL.md`: "global `AGENTS.md`" -> "configured writing style". Later policy changes made it a parent-driven merge train: the parent uses native monitoring and loops over the whole list, while a delegated worker only returns handles. Auto-merge now also requires effective applicable protection and no caller bypass. `skills/ship-issue` shares that parent/worker split, and `agents/code-reviewer.md` carries the literal `Axis:` / `Reviewed HEAD:` / `Checked:` / `Findings:` skeleton `scripts/merge-pr.sh` parses (tree hashes above are the original import)
 - `skills/code-review/SKILL.md`: the `~/.pi/agent/agents/code-reviewer.md` path -> "the `code-reviewer`
-  agent". The explicit `openai-codex/gpt-6.1-sol` reviewer model is unchanged
+  agent". Later policy changes removed the explicit reviewer model; the configured review route now
+  selects it. The source records historical import differences, not the current workflow
 - `themes/*.json`: only `$schema` changed, to the published `https://pi.dev/schemas/theme.schema.json`
   (matches Pi 1.3.0's built-in themes). Theme color provenance, per-color origin, and the license
   situation are in `packages/preset/NOTICE.md`
