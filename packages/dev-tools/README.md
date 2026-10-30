@@ -198,8 +198,8 @@ remote_path, overwrite?}` use `scp -O -q` with the same options and refuse to ov
 asked (`ssh_push` probes the remote path with `test -e` first; a small race remains between probe
 and copy). Legacy scp hands `remote_path` to the remote shell, so it is restricted to
 `[A-Za-z0-9._/+@%:=,-]`: no spaces, quotes, `~` or metacharacters. Both tools are mutating
-metadata: `ssh_pull` writes its local destination even when its overwrite guard refuses a
-replacement, and `ssh_push` writes the remote destination. Failures are named: `missing`,
+metadata: a successful `ssh_pull` creates or overwrites its local destination, and `ssh_push`
+writes the remote destination. Failures are named: `missing`,
 `permission denied`, `connection failed`.
 
 `~/.ssh/config` parsing follows OpenSSH: relative `Include` paths resolve against `~/.ssh`, not

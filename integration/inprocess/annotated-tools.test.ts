@@ -60,12 +60,14 @@ describe("Plan consumes stack annotations", () => {
 			{ name: "git_status", args: {} },
 			{ name: "git_log", args: { max_count: 1 } },
 			{ name: "git_worktree_list", args: {} },
-			{ name: "ssh_exec", args: { host: "home", command: "ls /config" } },
+			{ name: "ssh_exec", args: { host: "home", command: "printf SAFE_SSH" } },
 		]);
 		for (const result of results) {
 			expect(result.text).not.toContain("Plan mode blocks");
-			if (result.name !== "ssh_exec") expect(result.isError, result.text).toBe(false);
+			expect(result.isError, result.text).toBe(false);
 		}
+		const ssh = results.find((result) => result.name === "ssh_exec");
+		expect(ssh?.text).toContain("SAFE_SSH");
 	});
 
 	it("Plan blocks mutating tools and unsafe typed ssh", async () => {
