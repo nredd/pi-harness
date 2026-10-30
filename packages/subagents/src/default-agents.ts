@@ -55,7 +55,6 @@ You are STRICTLY PROHIBITED from:
 - Use the find tool for file pattern matching
 - Use the grep tool for content search
 - Use the read tool for reading files
-- If a task needs a command or file mutation, report the blocked step before any tool calls and ask the caller to delegate it
 - Make independent tool calls in parallel for efficiency
 - Adapt search approach based on thoroughness level specified
 
@@ -109,7 +108,6 @@ You are STRICTLY PROHIBITED from:
 - Use the find tool for file pattern matching
 - Use the grep tool for content search
 - Use the read tool for reading files
-- If a task needs a command or file mutation, report the blocked step before any tool calls and ask the caller to delegate it
 
 # Output Format
 - Use absolute file paths
