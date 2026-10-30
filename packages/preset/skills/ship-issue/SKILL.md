@@ -101,11 +101,10 @@ ship on a gate you did not actually run -- "the imports resolved" is not evidenc
 
 ## 7. Review round -- exact final HEAD
 
-After the gate, run one dedicated `critic` and separate Standards + Spec `code-reviewer` agents.
-Run separate Standards and Spec calls with `subagent_type: "code-reviewer"` and no `model`
-override. Parent sessions can dispatch them together in the background. Inside a delegated
-worker, omit `run_in_background` and consume the blocking results; use concurrent tool calls
-when supported. Use `/skill:code-review`, not the ambiguous `/code-review` workflow command. Resolve and preserve the original PR merge-base before the first review; give every reviewer that full base SHA, the final full HEAD SHA, and the exact whole-PR `<base>...<final-head>` range, issue/spec, and repo rules. After a HEAD change, renewed axes must review that same original base through the new final HEAD, not merely the corrective delta; a delta review is supplemental only.
+After the gate, run one dedicated `critic` and use `/skill:code-review` for the separate Standards
+and Spec axes. The shared skill selects parent background versus delegated blocking calls, supplies
+both full SHAs and the original whole-PR range, and renews it after a HEAD change. Pass the issue/spec
+and repo rules; do not use the ambiguous `/code-review` workflow command.
 
 The critic is supplementary, never a substitute for either axis. It is read-only and already
 carries the refute-before-report rule, so name the final diff and issue only. Its receipt preserves

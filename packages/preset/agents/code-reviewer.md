@@ -41,4 +41,4 @@ Rules:
 - `path:line` points at the changed code. Use `path` alone only for a whole-file or whole-diff finding.
 - No praise, no summary, no restating the diff. Under 600 words.
 - A clean review still lists what it checked. `Findings:` / `None.` without a `Checked:` list is not a review.
-- Spec axis with no spec supplied: output exactly `No spec available.`
+- Spec axis with no spec supplied: use the skeleton with `Axis: Spec`, the supplied SHA, `Checked:` / `- No spec available.`, and `Findings:` / `None.`.
