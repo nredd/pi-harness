@@ -1,5 +1,4 @@
 /** Complete-index approval for merge commits, including checks around the repository's own hooks. */
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -14,24 +13,23 @@ interface Approval {
 	hooks: string;
 }
 
-/** Execute a compact, uncapped Git fact query. A failure must reject the merge. */
-function fact(approval: Approval, args: string[]): string {
-	return execFileSync("git", ["--no-pager", "--literal-pathspecs", ...args], {
-		cwd: approval.root,
-		encoding: "utf8",
-		timeout: 30_000,
-	});
-}
-
 /** Reject changed merge identity, unresolved entries and every unapproved index endpoint. */
-export function checkMergeIndex(approval: Approval): void {
+async function checkMergeIndex(approval: Approval, opts: GitRunOptions): Promise<void> {
+	const query = async (args: string[]) => {
+		const result = await git(args, opts);
+		const failure = gitFailure(result, "git merge approval");
+		if (failure || result.stdoutDropped) throw new Error(failure ?? "Git merge approval output truncated");
+		return result.stdout;
+	};
 	if (
 		readFileSync(approval.mergePath, "utf8") !== approval.mergeHead ||
-		fact(approval, ["rev-parse", "HEAD"]).trim() !== approval.head
+		(await query(["rev-parse", "HEAD"])).trim() !== approval.head
 	)
 		throw new Error("Merge identity changed; review the merge again");
-	if (fact(approval, ["ls-files", "--unmerged", "-z"])) throw new Error("Merge has unresolved conflicts");
-	const changed = fact(approval, ["diff", "--cached", "--no-renames", "--name-only", "-z", "HEAD", "--"])
+	if (await query(["ls-files", "--unmerged", "-z"])) throw new Error("Merge has unresolved conflicts");
+	const changed = (
+		await query(["diff", "--cached", "--no-renames", "--ignore-submodules=none", "--name-only", "-z", "HEAD", "--"])
+	)
 		.split("\0")
 		.filter(Boolean);
 	const outside = changed.filter((path) => !approval.paths.includes(path));
@@ -50,6 +48,7 @@ function writeHookProxy(directory: string, approval: Approval): void {
 		runner,
 		`import { accessSync, constants, readFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
+import { join } from "node:path";
 const approval = ${JSON.stringify(approval)};
 function fact(args) {
 	return execFileSync("git", ["--no-pager", "--literal-pathspecs", ...args], { cwd: approval.root, encoding: "utf8", timeout: 30000 });
@@ -58,7 +57,7 @@ function check() {
 	if (readFileSync(approval.mergePath, "utf8") !== approval.mergeHead || fact(["rev-parse", "HEAD"]).trim() !== approval.head)
 		throw new Error("Merge identity changed; review the merge again");
 	if (fact(["ls-files", "--unmerged", "-z"])) throw new Error("Merge has unresolved conflicts");
-	const changed = fact(["diff", "--cached", "--no-renames", "--name-only", "-z", "HEAD", "--"]).split("\\0").filter(Boolean);
+	const changed = fact(["diff", "--cached", "--no-renames", "--ignore-submodules=none", "--name-only", "-z", "HEAD", "--"]).split("\\0").filter(Boolean);
 	const outside = changed.filter((path) => !approval.paths.includes(path));
 	if (outside.length) throw new Error(\`Merge index contains unapproved paths: \${outside.map((path) => JSON.stringify(path)).join(", ")}\`);
 }
@@ -66,7 +65,7 @@ const hook = process.argv[2];
 try {
 	const commitTreeHook = hook !== "post-commit" && hook !== "reference-transaction";
 	if (commitTreeHook) check();
-	const original = \`${approval.hooks}/\${hook}\`;
+	const original = join(approval.hooks, hook);
 	let executable = true;
 	try {
 		accessSync(original, constants.X_OK);
@@ -91,7 +90,7 @@ try {
 	for (const hook of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "reference-transaction"]) {
 		writeFileSync(
 			join(directory, hook),
-			`#!/bin/sh\nexec ${quote(process.execPath)} ${quote(runner)} ${quote(hook)} "$@"\n`,
+			`#!/bin/sh\nexec env BUN_BE_BUN=1 ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(runner)} ${quote(hook)} "$@"\n`,
 			{
 				mode: 0o700,
 			},
@@ -103,7 +102,7 @@ try {
 export async function prepareMerge(
 	paths: string[],
 	opts: GitRunOptions,
-): Promise<{ check: () => void; args: string[]; cleanup: () => void } | undefined> {
+): Promise<{ check: () => Promise<void>; args: string[]; cleanup: () => void } | undefined> {
 	const query = async (args: string[]) => {
 		const result = await git(args, opts);
 		const failure = gitFailure(result, "git merge approval");
@@ -142,7 +141,7 @@ export async function prepareMerge(
 	try {
 		writeHookProxy(directory, approval);
 		return {
-			check: () => checkMergeIndex(approval),
+			check: () => checkMergeIndex(approval, opts),
 			args: ["-c", `core.hooksPath=${directory}`],
 			cleanup: () => rmSync(directory, { recursive: true, force: true }),
 		};

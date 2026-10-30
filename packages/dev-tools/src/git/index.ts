@@ -333,7 +333,7 @@ export function registerGitTools(pi: ExtensionAPI): void {
 				if (addFailure) return fail("add", addFailure);
 
 				try {
-					merge?.check();
+					await merge?.check();
 				} catch (error) {
 					return fail("validate", (error as Error).message);
 				}
