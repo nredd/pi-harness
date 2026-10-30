@@ -788,12 +788,37 @@ describe("resource_snapshot mapping", () => {
 		}
 	});
 
-	it("injects awareness guidance without forcing activation", () => {
+	it("adds structured awareness guidance only for observable or discoverable tool loadouts", () => {
 		const mock = createMockPi();
 		registerResourceTools(mock.pi);
 		const [hook] = mock.hooks.get("before_agent_start") ?? [];
-		const result = hook?.({ systemPrompt: "base" }, {}) as { systemPrompt: string };
-		expect(result.systemPrompt).toContain("Before knowingly starting a large test or compile");
-		expect(result.systemPrompt).toContain("not a lock, serialization rule, or fixed threshold");
+		const sections: Record<string, string> = {};
+		hook?.({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["search_tools"], sections } }, {});
+		expect(sections.resource_awareness).toContain("Before knowingly starting a large test or compile");
+		expect(sections.resource_awareness).toContain("not a lock, serialization rule, or fixed threshold");
+
+		const unavailable: Record<string, string> = {};
+		hook?.({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["read"], sections: unavailable } }, {});
+		expect(unavailable).not.toHaveProperty("resource_awareness");
+	});
+
+	it("does not duplicate awareness guidance inherited by an append-mode child", () => {
+		const mock = createMockPi();
+		registerResourceTools(mock.pi);
+		const [hook] = mock.hooks.get("before_agent_start") ?? [];
+		const parentSections: Record<string, string> = {};
+		hook?.(
+			{ systemPrompt: "base", systemPromptOptions: { selectedTools: ["resource_snapshot"], sections: parentSections } },
+			{},
+		);
+		const sections: Record<string, string> = {};
+		hook?.(
+			{
+				systemPrompt: parentSections.resource_awareness ?? "",
+				systemPromptOptions: { selectedTools: ["resource_snapshot"], sections },
+			},
+			{},
+		);
+		expect(sections).not.toHaveProperty("resource_awareness");
 	});
 });
