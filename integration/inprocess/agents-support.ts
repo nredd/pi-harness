@@ -26,6 +26,9 @@ export const MUTATIONS = [
 	"git_worktree_add",
 	"git_worktree_remove",
 	"git_worktree_prune",
+	"ssh_exec",
+	"ssh_pull",
+	"ssh_push",
 ];
 
 /** Persist fixture configuration, ensuring no global install output is ever consulted. */

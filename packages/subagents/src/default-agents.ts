@@ -6,7 +6,7 @@
 
 import type { AgentConfig } from "./types.js";
 
-const READ_ONLY_TOOLS = ["read", "bash", "grep", "find", "ls"];
+const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 
 export const DEFAULT_AGENTS: Map<string, AgentConfig> = new Map([
   [
@@ -32,7 +32,9 @@ export const DEFAULT_AGENTS: Map<string, AgentConfig> = new Map([
       displayName: "Explore",
       description: "Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis — it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions.",
       builtinToolNames: READ_ONLY_TOOLS,
-      extensions: true,
+      // Read-only built-ins only. Extension factories can run commands or mutate state,
+      // so this role must opt in to a reviewed selector rather than inherit them all.
+      extensions: false,
       skills: true,
       // Bind the role per machine, not to a provider or model generation.
       model: "@cheap",
@@ -75,7 +77,9 @@ Use Bash ONLY for read-only operations: ls, git status, git log, git diff, find,
       displayName: "Plan",
       description: "Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs.",
       builtinToolNames: READ_ONLY_TOOLS,
-      extensions: true,
+      // Read-only built-ins only. Extension factories can run commands or mutate state,
+      // so this role must opt in to a reviewed selector rather than inherit them all.
+      extensions: false,
       skills: true,
       systemPrompt: `# CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS
 You are a software architect and planning specialist.

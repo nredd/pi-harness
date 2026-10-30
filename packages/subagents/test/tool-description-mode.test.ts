@@ -363,7 +363,11 @@ describe("toolDescriptionMode", () => {
         expect(line).toContain("no shell/ssh: cannot run commands");
         expect(line).toContain("no built-in shell: cannot run bash commands");
       }
-      for (const name of ["general-purpose", "Explore", "Plan", "debugger", "verifier"]) {
+      for (const name of ["Explore", "Plan"]) {
+        const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
+        expect(line).toContain("no built-in shell: cannot run bash commands");
+      }
+      for (const name of ["general-purpose", "debugger", "verifier"]) {
         const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
         expect(line).toBeDefined();
         expect(line).not.toContain("no shell/ssh");
