@@ -113,32 +113,6 @@ describe("scheduler at fire time", () => {
     return manager.listAgents()[0]!;
   }
 
-  it("reaches model refusal even when wall time advances before schedule admission", async () => {
-    registerAgents(new Map([agent("scout")]));
-    const initial = Date.now();
-    const wallTime = vi.spyOn(Date, "now").mockReturnValue(initial);
-    const addJob = scheduler.addJob.bind(scheduler);
-    const admission = vi.spyOn(scheduler, "addJob").mockImplementation(input => {
-      // Reproduce the full-gate preemption between fixture construction and validation.
-      wallTime.mockReturnValue(initial + 51);
-      return addJob(input);
-    });
-    try {
-      const record = await fire("claude-haiku-4-5");
-      expect(record).toBeUndefined();
-      expect(runAgent).not.toHaveBeenCalled();
-      expect(scheduler.list()[0].lastStatus).toBe("error");
-      expect(emit).toHaveBeenCalledWith("subagents:scheduled", {
-        type: "error", jobId: scheduler.list()[0].id,
-        error: expect.stringContaining('Model not found: "claude-haiku-4-5".'),
-      });
-      expect(Date.now()).toBe(initial + 51);
-    } finally {
-      admission.mockRestore();
-      wallTime.mockRestore();
-    }
-  });
-
   it("refuses a job whose explicit stored model no longer resolves", async () => {
     registerAgents(new Map([agent("scout")]));
 

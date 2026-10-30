@@ -11,11 +11,10 @@ selection to the runner stand-in; this does not replace real-runner coverage in
 `config-model-fallback-real-runner.test.ts`.
 
 The former fixture computed `Date.now() + 50`, then called `addJob`. If wall time
-advanced 50ms before `buildJob` validated the schedule, `detectSchedule` correctly
-rejected it as past before model selection ran. The regression advances wall
-time by 51ms at the public `addJob` boundary, without sleeping or adding load.
-It must still reach the public model-not-found error event, not merely any error
-status. The 50ms fixture deadline is unchanged and advances only under test control.
+advanced 50ms first, `detectSchedule` rejected the schedule as past before model
+selection ran. The scheduler now reads only the injected `FakeClock`, so the 50ms
+deadline advances solely under test control and the fixture reaches the public
+model-not-found path regardless of host load.
 
 The same fixture checks no execution before its deadline, one-shot completion,
 a valid explicit model, and cancellation through public `removeJob` and `stop`.

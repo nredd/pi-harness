@@ -34,6 +34,7 @@ Read the file that covers a surface before changing its behavior; update it in t
 | `docs/rpc.md` | Calling this extension from another pi extension — `pi.events` lifecycle events (`subagents:completed`, `subagents:ready`, …), the `subagents:rpc:*` channels (`ping`, `spawn`, `stop`, `consume`), spawn options, error strings, and the `Symbol.for("pi-subagents:manager")` registry. Source: `src/cross-extension-rpc.ts`. |
 | `CONTRIBUTING.md` | Contributor guidelines and quality bar. |
 | `SECURITY.md` | Vulnerability reporting. |
+| `docs/scheduler-fixtures.md` | Scheduler fixture clocks: `FakeClock` usage, why no wall-time deadlines, and the focused both-engine test commands. |
 | `../../docs/subagents-lifecycle-coverage.md` | Lifecycle coverage measurement, complete source accounting, mutation receipts and retained guards; read when extending lifecycle coverage. |
 
 `README.md` holds the reference tables and links out; `docs/` holds the long-form guides. Each guide states its audience in its first three lines — read that before deciding it is the wrong file. Renaming an event, an RPC channel, a reply-envelope field, or a workflow global is a docs change too.
