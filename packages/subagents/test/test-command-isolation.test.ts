@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 // Test-only reuse: this does not add a runtime dependency between the packages.
 import { run } from "../../dev-tools/src/core/process.ts";
+import { captureLinuxProcess, classifyLinuxBoundary, type LinuxProcessSnapshot } from "./helpers/owned-linux-boundary.ts";
 import { captureOwnedProcess, diagnoseOwnedProcess } from "./helpers/owned-process-diagnostic.ts";
 
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
@@ -55,6 +56,8 @@ it("npm test cannot inherit operator model tiers through HOME or explicit config
 
 it("the test command runner kills TERM-resistant descendants holding inherited pipes before returning", async () => {
   let captured: ReturnType<typeof captureOwnedProcess> | undefined;
+  let initialLinux: LinuxProcessSnapshot | undefined;
+  const launchedAt = performance.now();
   const result = await run({
     cmd: "sh",
     // The descendant inherits both ignored TERM and stdout/stderr. A direct-child
@@ -63,9 +66,13 @@ it("the test command runner kills TERM-resistant descendants holding inherited p
     timeoutMs: 500,
     onStderrLine: (line) => {
       const match = /^owned-descendant:(\d+)$/.exec(line);
-      if (match) captured = captureOwnedProcess(Number(match[1]));
+      if (match) {
+        initialLinux = captureLinuxProcess(Number(match[1]));
+        captured = captureOwnedProcess(Number(match[1]));
+      }
     },
   });
+  const returnedAt = performance.now();
   expect(result.stderr).toContain("ready");
   expect(result.timedOut).toBe(true);
   expect(result.termSignal).toBe("SIGKILL");
@@ -76,6 +83,22 @@ it("the test command runner kills TERM-resistant descendants holding inherited p
   try {
     expect(() => process.kill(descendant, 0)).toThrow(/ESRCH/);
   } catch (error) {
+    // First operation on assertion failure: no await, ps spawn or logging before this sample.
+    const sampledAt = performance.now();
+    const observedLinux = captureLinuxProcess(descendant);
+    const linuxBoundary = {
+      sampleBoundary: "after_failed_assertion_not_exact_return",
+      afterReturnMs: sampledAt - returnedAt,
+      sampleDurationMs: performance.now() - sampledAt,
+      runElapsedMs: returnedAt - launchedAt,
+      runnerDurationMs: result.durationMs,
+      termSignal: result.termSignal,
+      timedOut: result.timedOut,
+      classification: classifyLinuxBoundary(initialLinux, observedLinux),
+      initial: initialLinux,
+      observed: observedLinux,
+    };
+    console.error("owned descendant synchronous Linux boundary", JSON.stringify(linuxBoundary));
     const diagnostic = await captured?.then(diagnoseOwnedProcess).catch(() => undefined);
     console.error("owned descendant cleanup diagnostic", JSON.stringify(diagnostic));
     throw error;
