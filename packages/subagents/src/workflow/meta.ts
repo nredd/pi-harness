@@ -38,6 +38,8 @@ export interface WorkflowMeta {
 
 export interface MetaExtraction {
   meta: WorkflowMeta;
+  /** Byte offset immediately after the validated meta object literal. */
+  metaEnd: number;
   /**
    * The script with the leading `export ` stripped, so `const meta = {...}`
    * compiles inside the vm. Byte offsets after the keyword are untouched, which
@@ -289,7 +291,7 @@ export function extractMeta(source: string): MetaExtraction {
   const exportAt = source.indexOf("export", declaration.index);
   const body = `${source.slice(0, exportAt)}${" ".repeat(6)}${source.slice(exportAt + 6)}`;
 
-  return { meta, body };
+  return { meta, metaEnd: close, body };
 }
 
 /**

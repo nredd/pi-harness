@@ -33,7 +33,14 @@ def test_primary_configs_match_policy_inventory() -> None:
         if not primary or package["root"] in {"scripts", "integration/probes"}:
             continue
         directory = ROOT / package["root"]
-        path = directory / (".vitest.config.ts" if directory.name == "todo" else "vitest.config.ts")
+        report_directory = Path(primary["report"]).parent.as_posix()
+        configs = [
+            candidate
+            for candidate in directory.glob("*vitest*.config.ts")
+            if f'reportsDirectory: "{report_directory}"' in candidate.read_text()
+        ]
+        assert len(configs) == 1, configs
+        path = configs[0]
         text = path.read_text()
         match = INCLUDE.search(text)
         assert match, path
@@ -48,7 +55,13 @@ def test_primary_configs_match_policy_inventory() -> None:
                 if source.is_file() and not source.name.endswith(".test.ts")
             }
             expected -= {item["path"] for item in package["exclusions"]}
-        assert set(includes) == set(expected), path
+        included = {
+            source.relative_to(directory).as_posix()
+            for pattern in includes
+            for source in directory.glob(pattern)
+            if source.is_file() and not source.name.endswith(".test.ts")
+        }
+        assert included == set(expected), path
         assert "reportOnFailure: true" in text
         assert '"lcov"' in text
         assert '"text"' in text

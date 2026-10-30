@@ -18,9 +18,22 @@ Final hosted closure and per-OS receipts are recorded [here](../coverage/receipt
 All eight primary packages have zero uncovered lines/functions on macOS. Linux has zero misses
 except resource-sampler's native `darwin.ts` paths: **47 lines / 8 functions**. `collect.ts` is
 fully covered on both OSes. Those Darwin-only paths remain owned and measured, not excluded.
-`enforce_target` stays false: the global zero target would reject that approved per-OS floor,
-and eligible runtime tooling/examples still have explicit pending inventories. The measured
-per-OS primary floors are enforced now; branches and all independent Bun signals stay report-only. The conflict-resolution decisions and exact
+`enforce_target` is enabled now that eligible runtime tooling/examples are measured with complete
+primary reports. `resource-sampler` declares its existing Linux-only Darwin FFI slice as a reviewed
+`target_allowances` entry: exact owned primary paths, package owner, OS, ceiling and reason.
+Accounting requires every uncovered line/function outside that slice to remain zero, and clamps the
+slice to the current declared primary floor; it stays in the complete report and cannot become a
+package waiver. Their source-complete
+producers now emit `packages/plan-mode/coverage/runtime-build-tooling/lcov.info` from `test:dist`
+and `packages/subagents/coverage/workflow-examples/lcov.info` from `test:workflow-examples`.
+Workflow examples are instrumented only after metadata validation, including their literal metadata
+initializers, then executed by the real worker/VM with nested scripts sharing counters. Collection is
+opt-in: ordinary workflows never inspect or transport `globalThis.__coverage__`. The dedicated producer
+merges VM counters into Vitest 5's `__VITEST_COVERAGE__` store; the ordinary primary suite keeps its
+`src`-only report separate. These source-complete reports can still contain uncovered paths, not an
+invented 100% result. Their local zero-floor measurement enables enforcement; clean hosted macOS and
+Linux final-HEAD receipts remain required acceptance evidence. The measured per-OS primary floors are enforced now; branches and
+all independent Bun signals stay report-only. The conflict-resolution decisions and exact
 base-relative facade ledger regression for the `b51e177` main merge are recorded
 [here](../coverage/receipts/tier-main-merge.md).
 
@@ -39,8 +52,12 @@ on WSL2 and is explicitly **Linux-like, enforced**: guest `sys.platform == "linu
 existing Linux floors. Native Windows coverage is not measured. WSL contract/stack scenarios
 remain separate acceptance evidence, not owned-source coverage. WSL reports are preserved as
 `coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
-fail closed, including when the global target is enabled. `enforce_target: false` is intentional; the final PR flips that field to
-`true`, without changing the accounting implementation. That flip applies to primary signals;
+fail closed, including when the global target is enabled. `enforce_target: true` applies after every
+eligible pending inventory is measured, together with the reviewed source-scoped `target_allowances`
+declaration for the existing foreign native slice. An allowance is valid only for a measured eligible
+enforced primary signal, has one exact scope per OS, must fit both the pre-target and current primary
+floors, and may never cover uncovered portable source. Once enabled, the ratchet rejects a new OS,
+path expansion or budget expansion. That flip applies to primary signals;
 independent runtime signals retain their declared enforcement modes. Primary signals of eligible packages always remain
 `enforced`; the 100% goal is measured by PRIMARY signals, not the Bun compatibility subset.
 Eligible pending packages then fail, too; owner-excluded/report-only domains do not.
