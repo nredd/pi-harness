@@ -32,7 +32,10 @@ Tool groups land one per PR. Current state is in the table below.
   grandchild holding the pipes cannot hang the caller. macOS and Linux only
 - When a command settles, including a normal leader exit, whatever is left of its process group
   is SIGKILLed, so a background descendant cannot outlive the tool call. Only the owned group is
-  signalled (never a bare pid). SSH is the exception: the local `ssh` is the group, so remote
+  signalled (never a bare pid). The runner then polls `kill(-pgid, 0)` until the group is gone
+  (ESRCH), for at most the same 1s grace, because delivery and reparent-to-init reaping are
+  asynchronous: the result is not returned while a killed member can still answer `kill(pid, 0)`.
+  SSH is the exception: the local `ssh` is the group, so remote
   processes it started can keep running after the local client exits
 - Output is capped at pi's `DEFAULT_MAX_BYTES` / `DEFAULT_MAX_LINES`, truncation notice
   included. When cut, the full text is written to `$TMPDIR/pi-dev-tools-*/<label>-N.txt` and
