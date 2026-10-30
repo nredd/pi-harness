@@ -1,7 +1,33 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const homeProbe = vi.hoisted(() => ({ home: "" }));
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	const rejectRealHomeProbe = (path: unknown): void => {
+		const home = homeProbe.home;
+		if (home && typeof path === "string" && (path === home || path.startsWith(`${home}/`)))
+			throw new Error(`probed real home: ${path}`);
+	};
+	return {
+		...fs,
+		existsSync: (path: Parameters<typeof fs.existsSync>[0]) => {
+			rejectRealHomeProbe(path);
+			return fs.existsSync(path);
+		},
+		globSync: (...args: Parameters<typeof fs.globSync>) => {
+			rejectRealHomeProbe(args[0]);
+			return fs.globSync(...args);
+		},
+		readFileSync: (...args: Parameters<typeof fs.readFileSync>) => {
+			rejectRealHomeProbe(args[0]);
+			return fs.readFileSync(...args);
+		},
+	};
+});
+
 import { readKnownHosts, sshConfigPath, validateHost } from "../../src/ssh/hosts.ts";
 
 const CONFIG = join(import.meta.dirname, "..", "fixtures", "ssh", "config");
@@ -40,25 +66,21 @@ describe("readKnownHosts", () => {
 		expect(readKnownHosts("/nonexistent/config").size).toBe(0);
 	});
 
-	it("uses the injected home for a tilde Include without probing the real home", () => {
+	it("uses the injected home for recursive tilde Includes without probing the real home", () => {
 		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
 		const config = join(home, ".ssh", "config");
-		const included = join(home, ".ssh", "included.conf");
+		const first = join(home, ".ssh", "first.conf");
+		const second = join(home, ".ssh", "second.conf");
+		homeProbe.home = homedir();
 		mkdirSync(join(home, ".ssh"), { recursive: true });
-		writeFileSync(
-			config,
-			`Include ~/.ssh/included.conf
-`,
-		);
-		writeFileSync(
-			included,
-			`Host isolated
-`,
-		);
+		writeFileSync(config, "Include ~/.ssh/first.conf\n");
+		writeFileSync(first, "Include ~/.ssh/second.conf\n");
+		writeFileSync(second, "Host isolated\n");
 		try {
 			expect(sshConfigPath(home)).toBe(config);
 			expect([...readKnownHosts(config, undefined, undefined, undefined, home)]).toEqual(["isolated"]);
 		} finally {
+			homeProbe.home = "";
 			rmSync(home, { recursive: true, force: true });
 		}
 	});
