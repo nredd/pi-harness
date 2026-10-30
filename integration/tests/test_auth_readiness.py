@@ -100,4 +100,6 @@ def test_each_auth_launch_requires_a_fresh_preload_nonce(tmp_path: Path) -> None
         assert first["HARNESS_AUTH_NONCE"] != second["HARNESS_AUTH_NONCE"]
         assert "--import" in first["NODE_OPTIONS"]
         assert "redirect_anthropic.mjs" in first["NODE_OPTIONS"]
+        assert first["BUN_OPTIONS"].startswith("--preload ")
+        assert "redirect_anthropic.mjs" in first["BUN_OPTIONS"]
         assert box.env(first)["HARNESS_AUTH_NONCE"] == first["HARNESS_AUTH_NONCE"]

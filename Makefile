@@ -34,7 +34,7 @@ check-integration:  ## integration units; requires initialized `forks/pi` Gitlin
 	$(MAKE) check-probes
 
 check-probes:  ## Probes (process-lifecycle, stack-resources) Biome + strict tsc against real sources, then explicit node --test files (no glob)
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/process-lifecycle.test.ts integration/probes/stack-resources.ts
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/process-lifecycle.test.ts integration/probes/stack-resources.ts integration/providers/auth_guard.mjs integration/providers/auth_transport.mjs integration/providers/auth_runtime_fixture.mjs integration/providers/redirect_anthropic.mjs
 	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
 	cd integration/probes && ../../node_modules/.bin/c8 --all --include=stack-resources.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test transcript-types.test.ts process-lifecycle.test.ts
 
