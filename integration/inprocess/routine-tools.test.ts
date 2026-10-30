@@ -237,15 +237,22 @@ it("keeps goal_update state-dependent under real SDK and deferred-tool pinning",
 		await denied(1, 0);
 
 		// Active goal: exposed despite no `alwaysActive` entry, and routine tools stay available.
+		// Run the actual slash command while the provider request is in flight, before settlement can nudge.
 		await goalHarness.session.prompt("/goal ship it");
-		goalHarness.setResponses([observe]);
+		goalHarness.setResponses([
+			async (ctx) => {
+				offered.push(getCurrentTools(ctx.messages).map((t) => t.name));
+				expect(goalStates(goalHarness).at(-1)?.status).toBe("active");
+				await goalHarness.session.prompt("/goal pause");
+				return fauxAssistantMessage("OBSERVED");
+			},
+		]);
 		await goalHarness.session.prompt("active");
 		expect(offered[1]).toEqual(expect.arrayContaining(["goal_update", ...ROUTINE_TOOLS]));
 
-		// Paused goal: hidden again; a forced call is denied and the paused snapshot is untouched.
-		await goalHarness.session.prompt("/goal pause");
+		// Paused goal: the real command transitions the active goal; a forced call is denied without a write.
 		const paused = goalStates(goalHarness);
-		expect(paused.at(-1)?.status).toBe("paused");
+		expect(paused.at(-1)).toMatchObject({ status: "paused", reason: "paused by user" });
 		goalHarness.setResponses([observe]);
 		await goalHarness.session.prompt("paused");
 		expect(offered[2]).not.toContain("goal_update");
@@ -253,9 +260,16 @@ it("keeps goal_update state-dependent under real SDK and deferred-tool pinning",
 		await denied(2, paused.length);
 		expect(goalStates(goalHarness).at(-1)?.status).toBe("paused");
 
-		// Resume then complete: the real call succeeds once, and the tool disappears again.
+		// Resume then complete: capture the actual provider schema before the real successful call.
 		await goalHarness.session.prompt("/goal resume");
-		goalHarness.setResponses([complete(), fauxAssistantMessage("done")]);
+		goalHarness.setResponses([
+			(ctx) => {
+				const resumed = getCurrentTools(ctx.messages).map((t) => t.name);
+				expect(resumed).toEqual(expect.arrayContaining(["goal_update", ...ROUTINE_TOOLS]));
+				return complete();
+			},
+			fauxAssistantMessage("done"),
+		]);
 		await goalHarness.session.prompt("go");
 		expect(outcomes(goalHarness, "goal_update").map((o) => o.isError)).toEqual([true, true, false]);
 		expect(goalStates(goalHarness).at(-1)?.status).toBe("complete");
