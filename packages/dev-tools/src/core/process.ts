@@ -6,7 +6,9 @@
  * - the child runs in its own process group so a timeout or abort kills the whole tree
  * - SIGTERM first, SIGKILL after a grace period, then a hard resolve so a grandchild that
  *   keeps the pipes open cannot hang the caller
- * - remaining group members are killed when the command settles, including normal leader exit
+ * - remaining group members are killed when the command settles, including normal leader exit,
+ *   and the result is withheld until the group is gone (bounded by CLOSE_GRACE_MS) because signal
+ *   delivery and reparent-to-init reaping are asynchronous
  * - stdout and stderr are kept separate, each capped in memory with a dropped-byte count
  *
  * macOS and Linux only: process-group kill relies on `detached` + `kill(-pid)`.
@@ -52,6 +54,8 @@ export const DEFAULT_MAX_STREAM_BYTES = 4 * 1024 * 1024;
 const KILL_GRACE_MS = 2_000;
 /** After SIGKILL, how long to wait for `close` before resolving with what we have. */
 const CLOSE_GRACE_MS = 1_000;
+/** Probe interval while waiting for a killed process group to disappear. */
+const GROUP_POLL_MS = 5;
 
 class StreamBuffer {
 	private readonly chunks: Buffer[] = [];
@@ -134,6 +138,28 @@ function killTree(pid: number, sig: NodeJS.Signals): void {
 	}
 }
 
+/** True once no member of the group exists, zombies included. Only ESRCH counts: EPERM means still there. */
+function groupGone(pgid: number): boolean {
+	try {
+		process.kill(-pgid, 0);
+		return false;
+	} catch (e) {
+		return (e as NodeJS.ErrnoException).code === "ESRCH";
+	}
+}
+
+/**
+ * After the final SIGKILL, delivery and init's reaping are asynchronous: a killed member can still
+ * answer kill(2) when we would otherwise return. Poll the group (never a bare pid) until it is gone
+ * or CLOSE_GRACE_MS passes.
+ */
+async function waitForGroupGone(pgid: number): Promise<void> {
+	const deadline = Date.now() + CLOSE_GRACE_MS;
+	while (!groupGone(pgid) && Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, GROUP_POLL_MS));
+	}
+}
+
 export function run(opts: RunOptions): Promise<RunResult> {
 	const start = Date.now();
 	const maxBytes = opts.maxBytes ?? DEFAULT_MAX_STREAM_BYTES;
@@ -147,12 +173,15 @@ export function run(opts: RunOptions): Promise<RunResult> {
 		let groupId: number | undefined;
 		const timers: NodeJS.Timeout[] = [];
 
-		const finish = (exitCode: number | null, termSignal: NodeJS.Signals | null, spawnError?: string) => {
+		const finish = async (exitCode: number | null, termSignal: NodeJS.Signals | null, spawnError?: string) => {
 			if (settled) return;
 			settled = true;
 			for (const t of timers) clearTimeout(t);
-			if (groupId !== undefined) killTree(groupId, "SIGKILL");
 			opts.signal?.removeEventListener("abort", onAbort);
+			if (groupId !== undefined) {
+				killTree(groupId, "SIGKILL");
+				await waitForGroupGone(groupId);
+			}
 			resolve({
 				exitCode,
 				termSignal,
@@ -169,7 +198,7 @@ export function run(opts: RunOptions): Promise<RunResult> {
 
 		if (opts.signal?.aborted) {
 			aborted = true;
-			finish(null, null);
+			void finish(null, null);
 			return;
 		}
 
@@ -196,7 +225,7 @@ export function run(opts: RunOptions): Promise<RunResult> {
 				setTimeout(() => {
 					if (child.pid === undefined || settled) return;
 					killTree(child.pid, "SIGKILL");
-					timers.push(setTimeout(() => finish(child.exitCode, child.signalCode), CLOSE_GRACE_MS));
+					timers.push(setTimeout(() => void finish(child.exitCode, child.signalCode), CLOSE_GRACE_MS));
 				}, KILL_GRACE_MS),
 			);
 			return wasAlive;
@@ -218,8 +247,8 @@ export function run(opts: RunOptions): Promise<RunResult> {
 
 		child.stdout?.on("data", (chunk: Buffer) => out.push(chunk));
 		child.stderr?.on("data", (chunk: Buffer) => err.push(chunk));
-		child.on("error", (e) => finish(null, null, e.message));
-		child.on("close", (code, sig) => finish(code, sig));
+		child.on("error", (e) => void finish(null, null, e.message));
+		child.on("close", (code, sig) => void finish(code, sig));
 
 		if (opts.stdin !== undefined && child.stdin) {
 			child.stdin.on("error", () => {
