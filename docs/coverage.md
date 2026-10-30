@@ -353,9 +353,12 @@ under the per-OS base ratchet after policy establishment. A deterministic multi-
 test is the real fix, tracked [here](https://github.com/nredd/pi-harness/issues/163).
 
 Darwin `resource-sampler/primary` diagnostic uncovered branches changed 53 -> 54 between those
-runs, while its gated uncovered lines/functions stayed 58/2. The late-stdout guard at
-`src/collect.ts:110` depends on stream delivery after cancellation, tracked
-[here](https://github.com/nredd/pi-harness/issues/164). **No branch floor is added or changed.**
+runs, while its gated uncovered lines/functions stayed 58/2. That branch was the late-stdout
+guard (`if (!complete) return` in the stdout `data` handler of `src/collect.ts`), which only ran
+when stream delivery raced cancellation. The controlled cancellation/data-event fixture in
+`packages/resource-sampler/test/sampler.test.ts` now forces that branch by emitting late stdout
+after cancellation. Whether hosted Darwin counts stay stable is not yet measured (issue
+[here](https://github.com/nredd/pi-harness/issues/164)). **No branch floor is added or changed.**
 `Counts` contains only `lines` and `functions`; both `account()`'s budget predicate and
 `check_ratchet()` compare only those two counters. Branch totals/misses remain JSON diagnostics,
 never enforced thresholds; the existing branch-only LCOV regression explicitly passes.
