@@ -32,6 +32,9 @@ class ReleaseDescriptor:
         native_artifacts (tuple[PurePosixPath, ...]): Required package-relative
             ``PurePosixPath.full_match`` glob patterns that must exist before packing and appear in the
             accepted tarball. ``*`` and ``?`` remain within one segment; ``**`` spans zero or more.
+        native_build_commands (tuple[tuple[str, ...], ...]): Build-only commands in a disposable
+            workspace after deleting imported payloads. Never installs or signs a local app.
+        native_build_platform (str | None): Required Python host platform for native compilation.
     """
 
     name: str
@@ -41,6 +44,8 @@ class ReleaseDescriptor:
     contract_gates: tuple[Literal["stock", "audit"], ...]
     stock_gate: Callable[[pc.Context], pc.ScenarioEvidence] | None = None
     native_artifacts: tuple[PurePosixPath, ...] = ()
+    native_build_commands: tuple[tuple[str, ...], ...] = ()
+    native_build_platform: str | None = None
 
 
 # These entries deliberately preserve the existing commands, paths and contract
@@ -66,6 +71,18 @@ DESCRIPTORS = (
         contract=pc.COMPUTER_USE_CONTRACT,
         contract_gates=("stock",),
         stock_gate=pc.scenario_computer_use,
+        native_build_platform="darwin",
+        native_build_commands=(
+            (
+                "node",
+                "scripts/build-native.mjs",
+                "--platform",
+                "darwin",
+                "--arch",
+                "all",
+                "--no-sign",
+            ),
+        ),
         native_artifacts=(
             PurePosixPath("prebuilt/macos/arm64/bridge"),
             PurePosixPath("prebuilt/macos/x64/bridge"),
