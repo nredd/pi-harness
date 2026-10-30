@@ -60,9 +60,13 @@ describe("toolDescriptionMode", () => {
     process.env.PI_CODING_AGENT_DIR = hermeticAgentDir;
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-    if (settings) {
-      writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify(settings));
-    }
+    // Package agents are installation-dependent and make the compact type list
+    // vary by runner. This fixture verifies the built-in description contract,
+    // so exclude ambient package agents while retaining explicit local fixtures.
+    writeFileSync(
+      join(tmpDir, ".pi", "subagents.json"),
+      JSON.stringify({ packageAgents: false, ...settings }),
+    );
     beforeInstantiate?.();
     process.chdir(tmpDir);
 
@@ -111,7 +115,9 @@ describe("toolDescriptionMode", () => {
     expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
     expect(desc).not.toContain("very thorough");
     // The point of the feature: materially smaller than the full version.
-    expect(desc.length).toBeLessThan(1600);
+    // The global agents dir is a per-runner temp path; measure with a fixed one
+    // so the budget does not depend on the runner's tmpdir length.
+    expect(desc.replaceAll(hermeticAgentDir, "/tmp/agent").length).toBeLessThan(1600);
   });
 
   it("invalid mode in the settings file is dropped — full description", () => {
@@ -363,7 +369,11 @@ describe("toolDescriptionMode", () => {
         expect(line).toContain("no shell/ssh: cannot run commands");
         expect(line).toContain("no built-in shell: cannot run bash commands");
       }
-      for (const name of ["general-purpose", "Explore", "Plan", "debugger", "verifier"]) {
+      for (const name of ["Explore", "Plan"]) {
+        const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
+        expect(line).toContain("no built-in shell: cannot run bash commands");
+      }
+      for (const name of ["general-purpose", "debugger", "verifier"]) {
         const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
         expect(line).toBeDefined();
         expect(line).not.toContain("no shell/ssh");

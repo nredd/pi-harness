@@ -30,7 +30,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extensionCanonicalName } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
+import { DEFAULT_AGENTS } from "../src/default-agents.js";
 import type { AgentConfig } from "../src/types.js";
+import { hermeticDir } from "./helpers/boot-extension.js";
 import { registerFauxProvider } from "./helpers/pi-ai.js";
 import { runAgent } from "./helpers/run-selected-agent.js";
 
@@ -43,8 +45,10 @@ vi.setConfig({ testTimeout: 30_000 });
 const FIXTURE = resolve(fileURLToPath(new URL("./fixtures/e2e-probe-ext.mjs", import.meta.url)));
 const EXPOSURE_FIXTURE = resolve(fileURLToPath(new URL("./fixtures/e2e-exposure-ext.mjs", import.meta.url)));
 const LAZY_MCP_FIXTURE = resolve(fileURLToPath(new URL("./fixtures/e2e-lazy-mcp-ext.mjs", import.meta.url)));
+const PROJECT_MUTATION_FIXTURE = resolve(fileURLToPath(new URL("./fixtures/e2e-project-mutation-ext.mjs", import.meta.url)));
 /** The fixture registers exactly this tool. */
 const EXT_TOOL = "e2e_probe";
+const PROJECT_MUTATION_TOOL = "project_git_mutation";
 const BUILTINS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 /** Minimal `pi` stub — `detectEnv` only needs `exec` (returns non-git). */
@@ -143,6 +147,39 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     const active = await activeToolsFor({ extensions: false });
     expect(active).not.toContain(EXT_TOOL);
     for (const b of BUILTINS) expect(active).toContain(b);
+  });
+
+  it.each(["Explore", "Plan"])("%s refuses a discoverable mutating extension while an enabled control admits it", async (type) => {
+    // Exercise ordinary global and trusted-project extension discovery, not an
+    // explicit `extensions: [FIXTURE]` path. The enabled control proves this
+    // fixture is discoverable under the exact settings the default uses.
+    const originalCwd = cwd;
+    const hermetic = hermeticDir();
+    cwd = hermetic.dir;
+    const agentDir = process.env.PI_CODING_AGENT_DIR;
+    if (!agentDir) throw new Error("hermeticDir must define PI_CODING_AGENT_DIR");
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [FIXTURE] }));
+    writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: [PROJECT_MUTATION_FIXTURE] }));
+    try {
+      const enabled = await activeToolsFor({ extensions: true });
+      expect(enabled).toContain("write");
+      expect(enabled).toContain(EXT_TOOL);
+      expect(enabled).toContain(PROJECT_MUTATION_TOOL);
+      expect(registered).toContain(EXT_TOOL);
+      expect(registered).toContain(PROJECT_MUTATION_TOOL);
+      // Admission is the subject: deliberately do not invoke the file-writing
+      // fixture or claim execution isolation from an unregistered tool.
+
+      const config = DEFAULT_AGENTS.get(type);
+      if (!config) throw new Error(`Missing default ${type}`);
+      const active = await activeToolsFor(config);
+      expect(active).toEqual(["read", "grep", "find", "ls"]);
+      expect(registered).not.toContain(EXT_TOOL);
+      expect(registered).not.toContain(PROJECT_MUTATION_TOOL);
+    } finally {
+      cwd = originalCwd;
+      hermetic.restore();
+    }
   });
 
   it("disallowedTools removes a real extension tool from the live session", async () => {

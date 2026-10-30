@@ -19,6 +19,7 @@ import {
 import { isolateResearchPackages, isolateStackHome, loadThirdParty } from "./support.ts";
 
 const SURFACES: Record<string, { required: string[]; forbidden: string[] }> = {
+	"code-reviewer": { required: [...READS, ...GIT_READS], forbidden: [...MUTATIONS, ...WEB] },
 	architect: { required: [...READS, ...GIT_READS], forbidden: [...MUTATIONS, ...WEB] },
 	critic: { required: [...READS, ...GIT_READS, "py_test", "cargo_test"], forbidden: [...MUTATIONS, ...WEB] },
 	researcher: { required: [...READS, ...WEB], forbidden: [...MUTATIONS, ...GIT_READS] },

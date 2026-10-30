@@ -91,9 +91,17 @@ describe("agent type registry", () => {
 
     it("Explore has read-only tools", () => {
       const config = getConfig("Explore");
-      expect(config.builtinToolNames).toEqual(["read", "bash", "grep", "find", "ls"]);
+      expect(config.builtinToolNames).toEqual(["read", "grep", "find", "ls"]);
+      expect(config.extensions).toBe(false);
+      expect(config.builtinToolNames).not.toContain("bash");
       expect(config.builtinToolNames).not.toContain("edit");
       expect(config.builtinToolNames).not.toContain("write");
+    });
+
+    it("Plan has the same shell-less extension-free read-only scope", () => {
+      const config = getConfig("Plan");
+      expect(config.builtinToolNames).toEqual(["read", "grep", "find", "ls"]);
+      expect(config.extensions).toBe(false);
     });
 
     it("Explore has the provider-neutral cheap tier in config", () => {

@@ -403,8 +403,8 @@ Expanded, a notice adds `↻3 · 3 tools · 12.4k token · 4.1s`, the result pre
 | Type | Tools | Model | Prompt Mode | Description |
 |------|-------|-------|-------------|-------------|
 | `general-purpose` | all 7 | inherit | `append` (parent twin) | Inherits the parent's full system prompt — same rules, CLAUDE.md, project conventions |
-| `Explore` | read, bash, grep, find, ls | `@cheap` | `replace` (standalone) | Fast codebase exploration (read-only); an unbound/unavailable tier visibly inherits the parent by default, or refuses under `modelResolution` `error` |
-| `Plan` | read, bash, grep, find, ls | inherit | `replace` (standalone) | Software architect for implementation planning (read-only) |
+| `Explore` | read, grep, find, ls | `@cheap` | `replace` (standalone) | Fast codebase exploration (read-only); an unbound/unavailable tier visibly inherits the parent by default, or refuses under `modelResolution` `error` |
+| `Plan` | read, grep, find, ls | inherit | `replace` (standalone) | Software architect for implementation planning (read-only) |
 
 The `general-purpose` agent is a **parent twin** — it receives the parent's entire system prompt plus a sub-agent context bridge, so it follows the same rules the parent does. Explore and Plan use standalone prompts tailored to their read-only roles.
 
@@ -558,6 +558,8 @@ tools: "*, ext:mcp/search"
 isolated: true                    # hermetic: built-ins only, no extensions/skills/context
 ```
 
+The embedded `Explore` and `Plan` definitions use only `read`, `grep`, `find`, and `ls`, with `extensions: false`. They deliberately omit `bash`: a prompt cannot make an unrestricted shell read-only. Their tool restriction is an enforced child-tool surface, not an operating-system or filesystem sandbox; custom overrides must choose any extension selectors deliberately.
+
 A few rules the examples don't make obvious:
 
 - `extensions:` is the sole loading authority. `ext:foo` in `tools:` narrows what surfaces; it can't load `foo` on its own. Mismatches fire `extension-error:…` warnings.
@@ -588,7 +590,7 @@ When the effective built-in set lacks `bash` (including `disallowed_tools: bash`
 
 `Agent` has no per-call tool-override flag. Use a shell-capable type for command work; do not ask a restricted researcher to acquire `bash`.
 
-The last two rows are separate because zero built-ins is not zero tools: `tools: none` alongside `extensions:` still surfaces every extension tool, so calling it `none` would understate what the agent can do. Without the `+ extension tools` flag an agent that can search the web through an extension (e.g. `Plan`) read as web-less.
+The last two rows are separate because zero built-ins is not zero tools: `tools: none` alongside `extensions:` still surfaces every extension tool, so calling it `none` would understate what the agent can do. Without the `+ extension tools` flag, a custom agent configured to search the web through an extension would read as web-less.
 
 ### Shipping agents in a pi package
 
