@@ -66,10 +66,13 @@ setup on both engines; fixtures inject disposable homes instead of mutating HOME
 Subagents retains its native-scenario subset plus the real-loader Vitest gate through the
 spawn-time-home launcher. `session-kit`, `plan-mode`, and `dev-tools` likewise retain their
 native subsets while their injected-home canaries run through `scripts/run-vitest.ts bun`;
-this is required for the mocked `node:fs` SSH probe and ensures Bun starts with a disposable
-home. Full Bun activation remains blocked by the unrelated workflow-runtime
-stack-line failure tracked in [#174](https://github.com/nredd/pi-harness/issues/174), not by home
-injection. The guard is active for its full Node suite and any Bun Vitest invocation, including
+`session-kit` runs its home-only factory canary separately through
+`scripts/run-vitest.ts node`; it is deliberately omitted from its ordinary Node Vitest run and
+native Bun scenario list. Both engines therefore install disposable `HOME`/`USERPROFILE` values
+before that canary imports the SDK. This is required for the mocked `node:fs` SSH probe and
+ensures Bun starts with a disposable home.
+Full Bun activation remains blocked by the unrelated workflow-runtime stack-line failure tracked in
+[#174](https://github.com/nredd/pi-harness/issues/174), not by home injection. The guard is active for its full Node suite and any Bun Vitest invocation, including
 the real-loader exact-equality ambient-access canary. No tests are skipped to accommodate the
 guard; native `bun test` scenarios do not consume Vitest setup files.
 

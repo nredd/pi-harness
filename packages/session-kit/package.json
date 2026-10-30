@@ -39,8 +39,8 @@
     "format": "biome check --write src/ test/",
     "typecheck": "tsc --noEmit",
     "build:stats-export": "esbuild src/stats/cli.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/pi-stats-export.mjs",
-    "test": "npm run build:stats-export && vitest run --coverage",
-    "test:bun": "bun test test/scenarios --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
+    "test": "npm run build:stats-export && vitest run --coverage --exclude test/scenarios/home-injection.test.ts && node ../../scripts/run-vitest.ts node test/scenarios/home-injection.test.ts --coverage.enabled=false",
+    "test:bun": "bun test test/scenarios --path-ignore-patterns=**/home-injection.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
