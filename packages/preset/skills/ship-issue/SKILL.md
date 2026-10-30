@@ -112,7 +112,7 @@ an independent final critic after this handoff; do not claim that a delegated cr
 
 - Fix every real blocking finding, rerun the affected gate, and push the follow-up
 - Every change to HEAD invalidates the critic and both review axes. Re-run all three on the final SHA
-- Record the reviewer identities/models, reviewed SHA, `Checked:`/`Findings:` reports, and each finding disposition
+- Record reviewer identities/models, reviewed SHA, `Checked:`/`Findings:` reports for the two axes, the critic `Findings:`, and each finding disposition
 - Document a concrete rationale for any retained judgement finding
 
 ## 8. Open the PR
