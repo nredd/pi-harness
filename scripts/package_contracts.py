@@ -3417,7 +3417,10 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
         f"resource_snapshot entries carry unexpected fields: {entries[:3]}",
     )
     ranking = processes.get("ranking")
-    expected = "interval-cpu" if sys.platform.startswith("linux") else "rss"
+    measured = any(
+        isinstance(entry.get("cpu"), dict) and entry["cpu"].get("state") == "available" for entry in entries
+    )
+    expected = "interval-cpu" if sys.platform.startswith("linux") or measured else "rss"
     require(
         ranking == expected, f"resource_snapshot ranking {ranking!r} is not {expected!r} on {sys.platform}"
     )
