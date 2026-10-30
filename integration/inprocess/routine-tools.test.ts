@@ -9,7 +9,7 @@ import { createSessionKit } from "../../packages/session-kit/src/index.ts";
 import { configFor } from "../../packages/session-kit/test/scenarios/support.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";
 import { call, jsonFile } from "./agents-support.ts";
-import { GoalStack } from "./goal-support.ts";
+import { complete, GoalStack, goalStates, outcomes, tool } from "./goal-support.ts";
 import { isolateStackHome, loadThirdParty, startStack } from "./support.ts";
 
 const ROUTINE_TOOLS = [
@@ -35,7 +35,7 @@ beforeAll(async () => {
 	jsonFile(join(home.root, "agent/deferred-tools.json"), {
 		promotionLifetime: "session",
 		alwaysActive: ["search_tools", ...ROUTINE_TOOLS],
-		// `goal_update` remains a state-dependent control: the kit exposes it only while a goal is active.
+		// `goal_update` is pinned here but must stay state-dependent: see the goal lifetime test below.
 		neverDefer: ["search_tools", "goal_update", ...ROUTINE_TOOLS],
 	});
 	h = await startStack({
@@ -195,5 +195,74 @@ it("does not override an explicit SessionKit monitor disable", async () => {
 		if (disabled) await disabled.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		disabled?.cleanup();
 		await disabledHome.cleanup();
+	}
+});
+
+it("keeps goal_update state-dependent under real SDK and deferred-tool pinning", async () => {
+	const stack = await GoalStack.create();
+	try {
+		jsonFile(join(stack.home.root, "agent/deferred-tools.json"), {
+			alwaysActive: ["search_tools", ...ROUTINE_TOOLS],
+			neverDefer: ["search_tools", "goal_update", ...ROUTINE_TOOLS],
+		});
+		const goalHarness = await stack.start([
+			createDevTools(),
+			createSessionKit({
+				config: configFor("goal", "monitor"),
+				agentDir: join(stack.home.root, "agent"),
+				clock: stack.clock,
+			}),
+			createSubscriptionRouter(),
+			await loadThirdParty("deferred"),
+		]);
+		const offered: string[][] = [];
+		const observe = (ctx: { messages: Parameters<typeof getCurrentTools>[0] }) => {
+			offered.push(getCurrentTools(ctx.messages).map((t) => t.name));
+			return fauxAssistantMessage("OBSERVED");
+		};
+		const forced = [tool("goal_update", { status: "complete", evidence: "forged" }), fauxAssistantMessage("denied")];
+		const denied = async (expected: number, snapshots: number) => {
+			goalHarness.setResponses(forced);
+			await goalHarness.session.prompt("force goal_update");
+			const results = outcomes(goalHarness, "goal_update");
+			expect(results).toHaveLength(expected);
+			expect(results.at(-1)?.isError).toBe(true);
+			expect(goalStates(goalHarness)).toHaveLength(snapshots);
+		};
+
+		// No goal: hidden from the provider schema, and a forced call is denied with no state written.
+		goalHarness.setResponses([observe]);
+		await goalHarness.session.prompt("inactive");
+		expect(offered[0]).not.toContain("goal_update");
+		await denied(1, 0);
+
+		// Active goal: exposed despite no `alwaysActive` entry, and routine tools stay available.
+		await goalHarness.session.prompt("/goal ship it");
+		goalHarness.setResponses([observe]);
+		await goalHarness.session.prompt("active");
+		expect(offered[1]).toEqual(expect.arrayContaining(["goal_update", ...ROUTINE_TOOLS]));
+
+		// Paused goal: hidden again; a forced call is denied and the paused snapshot is untouched.
+		await goalHarness.session.prompt("/goal pause");
+		const paused = goalStates(goalHarness);
+		expect(paused.at(-1)?.status).toBe("paused");
+		goalHarness.setResponses([observe]);
+		await goalHarness.session.prompt("paused");
+		expect(offered[2]).not.toContain("goal_update");
+		expect(offered[2]).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
+		await denied(2, paused.length);
+		expect(goalStates(goalHarness).at(-1)?.status).toBe("paused");
+
+		// Resume then complete: the real call succeeds once, and the tool disappears again.
+		await goalHarness.session.prompt("/goal resume");
+		goalHarness.setResponses([complete(), fauxAssistantMessage("done")]);
+		await goalHarness.session.prompt("go");
+		expect(outcomes(goalHarness, "goal_update").map((o) => o.isError)).toEqual([true, true, false]);
+		expect(goalStates(goalHarness).at(-1)?.status).toBe("complete");
+		goalHarness.setResponses([observe]);
+		await goalHarness.session.prompt("after");
+		expect(offered[3]).not.toContain("goal_update");
+	} finally {
+		await stack.cleanup();
 	}
 });
