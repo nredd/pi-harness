@@ -236,13 +236,12 @@ test("shipping resources require exact-HEAD review, parent monitoring, and no fo
 	assert.match(ship, /separate Standards \+ Spec `code-reviewer` agents/);
 	assert.match(ship, /Every change to HEAD invalidates the critic and both review axes/);
 	assert.match(ship, /Delegated worker: keep auto-merge off/);
-	assert.match(
-		ship,
-		/every readable applicable ruleset\/classic branch protection establishes effective required checks/,
-	);
-	assert.match(ship, /merging caller cannot bypass them/);
-	assert.match(ship, /Parent driver: consume its independent final critic/);
-	assert.match(ship, /native session-kit monitor/);
+	assert.match(ship, /follow `\/skill:get-it-merged` steps 3-4 as a one-PR train/);
+	assert.match(ship, /Do not duplicate or weaken it here/);
+	assert.match(merge, /Whole-PR review receipts: record the original full merge-base and current full HEAD/);
+	assert.match(merge, /corrective-delta reviews are supplemental only/);
+	assert.match(merge, /Run the parent's own final critic on the exact HEAD/);
+	assert.match(merge, /native session-kit monitors/);
 	assert.match(merge, /Do not require a latest-main rebase solely because the base advanced/);
 	assert.match(merge, /frozen combined gate immediately before\npublish\/deploy/);
 	assert.match(merge, /Keep model turns and subagents for substantive work/);
@@ -494,6 +493,7 @@ test("footer code imports only node built-ins, declared peers, and its own sibli
 test("code-review binds both axes to an immutable HEAD and supports nested blocking calls", () => {
 	const review = readText("skills/code-review/SKILL.md");
 	assert.match(review, /git rev-parse HEAD/);
+	assert.match(review, /For a non-PR review, use the resolved fixed point as `<reviewed-base>`/);
 	assert.match(
 		review,
 		/git merge-base <pr-base> HEAD.*record its full SHA as `<reviewed-base>`, and preserve it across every later HEAD change/,
@@ -514,6 +514,11 @@ test("code-review binds both axes to an immutable HEAD and supports nested block
 	assert.doesNotMatch(
 		review.replace("A corrective-delta review is supplemental only", "A corrective-delta review replaces the axes"),
 		/A corrective-delta review is supplemental only/,
+	);
+	const merge = readText("skills/get-it-merged/SKILL.md");
+	assert.doesNotMatch(
+		merge.replace("corrective-delta reviews are supplemental only", "corrective-delta reviews replace both axes"),
+		/corrective-delta reviews are supplemental only/,
 	);
 	assert.doesNotMatch(
 		review.replace(
