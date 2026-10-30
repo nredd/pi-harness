@@ -4,8 +4,8 @@ Pi-independent, dependency-free ESM library for passive host resource dashboards
 `@nredd/pi-resource-sampler` is not a Pi extension. No tools, timers, hooks, output or policy are
 registered. Runs on Node >=22.14 and Bun.
 
-Unreleased source (planned `0.2.0`): native Darwin interval CPU/footprint and host used/swap metrics.
-Published `0.1.1` still lacks them; release and consumer-pin steps remain owner-gated.
+Sampler `0.2.0` adds native Darwin interval CPU/footprint and host used/swap metrics. Its
+consumer pins are exact registry dependencies, never workspace links.
 
 Upgrade from `0.1.0`, which is unsafe: on Darwin it reported `ps -c -o comm`, the basename of argv[0],
 so a launcher-chosen argv[0] or Node `process.title` (e.g. `npm exec <package> mcp`) leaked into
