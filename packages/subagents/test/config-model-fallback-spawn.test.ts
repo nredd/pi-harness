@@ -31,6 +31,7 @@ import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
 import type { AgentConfig } from "../src/types.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
+import { FakeClock } from "./helpers/fake-clock.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 
 const PARENT = { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };
@@ -72,27 +73,71 @@ describe("scheduler at fire time", () => {
   let tmp: string;
   let scheduler: SubagentScheduler;
   let manager: AgentManager;
+  let clock: FakeClock;
+  const emit = vi.fn();
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "config-model-fallback-sched-"));
-    scheduler = new SubagentScheduler();
+    clock = new FakeClock();
+    scheduler = new SubagentScheduler({ clock });
     manager = new AgentManager();
-    scheduler.start({ events: { emit: vi.fn() } } as any, ctx(), manager, new ScheduleStore(join(tmp, "s.json")));
+    emit.mockClear();
+    scheduler.start({ events: { emit } } as any, ctx(), manager, new ScheduleStore(join(tmp, "s.json")));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     scheduler.stop();
+    await manager.dispose();
     rmSync(tmp, { recursive: true, force: true });
   });
 
   async function fire(model?: string) {
-    scheduler.addJob({
-      name: "job", description: "job", schedule: new Date(Date.now() + 50).toISOString(),
+    const job = scheduler.addJob({
+      name: "job", description: "job", schedule: new Date(clock.now() + 50).toISOString(),
       subagent_type: "scout", prompt: "go", ...(model ? { model } : {}),
     });
-    await vi.waitFor(() => expect(scheduler.list()[0]?.lastStatus).toMatch(/success|error/), { timeout: 2000 });
+    expect(clock.pending).toBe(1);
+    clock.advance(49);
+    expect(scheduler.list()[0].lastStatus).toBeUndefined();
+    expect(manager.listAgents()).toEqual([]);
+    expect(runAgent).not.toHaveBeenCalled();
+    clock.advance(1);
+    // Drain runner/manager/scheduler promises, not a wall-time polling deadline.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(scheduler.list()[0]).toMatchObject({
+      id: job.id, enabled: false, lastStatus: expect.stringMatching(/success|error/),
+      lastRun: new Date(clock.now()).toISOString(),
+    });
+    expect(clock.pending).toBe(0);
+    clock.advance(50);
     return manager.listAgents()[0]!;
   }
+
+  it("rejects a deadline that the injected clock has already passed, before model selection", () => {
+    registerAgents(new Map([agent("scout")]));
+    const schedule = new Date(clock.now() + 50).toISOString();
+    clock.advance(51);
+
+    expect(() => scheduler.addJob({
+      name: "late", description: "late", schedule, subagent_type: "scout", prompt: "go", model: "claude-haiku-4-5",
+    })).toThrow(/Scheduled time .* is in the past/);
+    expect(scheduler.list()).toEqual([]);
+    expect(clock.pending).toBe(0);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it("stamps createdAt from the injected clock, not the wall clock", () => {
+    registerAgents(new Map([agent("scout")]));
+    clock.advance(7);
+
+    const job = scheduler.addJob({
+      name: "stamped", description: "stamped", schedule: new Date(clock.now() + 50).toISOString(),
+      subagent_type: "scout", prompt: "go",
+    });
+
+    expect(job.createdAt).toBe(new Date(clock.now()).toISOString());
+    expect(scheduler.list()[0]?.createdAt).toBe(job.createdAt);
+  });
 
   it("refuses a job whose explicit stored model no longer resolves", async () => {
     registerAgents(new Map([agent("scout")]));
@@ -102,6 +147,9 @@ describe("scheduler at fire time", () => {
     expect(record).toBeUndefined();
     expect(runAgent).not.toHaveBeenCalled();
     expect(scheduler.list()[0].lastStatus).toBe("error");
+    expect(emit).toHaveBeenCalledWith("subagents:scheduled", {
+      type: "error", jobId: scheduler.list()[0].id, error: expect.stringContaining("Model not found: \"claude-haiku-4-5\""),
+    });
   });
 
   it("a job on an agent whose definition `model:` does not resolve says so, from the runner", async () => {
@@ -110,6 +158,40 @@ describe("scheduler at fire time", () => {
     const record = await fire();
 
     expect(record.modelFallback).toEqual({ input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5" });
+  });
+
+  it("executes a resolved explicit model once at the injected deadline", async () => {
+    registerAgents(new Map([agent("scout")]));
+
+    const record = await fire("anthropic/claude-sonnet-5-5");
+
+    expect(record.status).toBe("completed");
+    expect(record.modelFallback).toBeUndefined();
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0][3]).toMatchObject({ model: PARENT });
+    expect(scheduler.list()[0]).toMatchObject({ lastStatus: "success", runCount: 1 });
+    expect(emit).toHaveBeenCalledWith("subagents:scheduled", {
+      type: "fired", jobId: scheduler.list()[0].id, agentId: record.id, name: "job",
+    });
+  });
+
+  it.each(["remove", "stop"])("cancels a pending model job on %s without resolving or executing it", action => {
+    registerAgents(new Map([agent("scout")]));
+    const job = scheduler.addJob({
+      name: "cancelled", description: "cancelled", schedule: new Date(clock.now() + 50).toISOString(),
+      subagent_type: "scout", prompt: "go", model: "claude-haiku-4-5",
+    });
+    clock.advance(49);
+    expect(clock.pending).toBe(1);
+    expect(runAgent).not.toHaveBeenCalled();
+    emit.mockClear();
+    if (action === "remove") expect(scheduler.removeJob(job.id)).toBe(true);
+    else scheduler.stop();
+    expect(clock.pending).toBe(0);
+    clock.advance(51);
+    expect(manager.listAgents()).toEqual([]);
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(emit.mock.calls.filter(([, event]) => event.type === "error" || event.type === "fired")).toEqual([]);
   });
 
   it("does not replace an unresolved explicit job model with the definition's model", async () => {
