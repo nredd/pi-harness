@@ -211,6 +211,8 @@ A session-selected list from **Choose tools, then start…** or `/plan tools` st
 The hint is author-asserted and unverified, so it only covers user-scope extensions and packages and explicit `-e` files; native MCP tools (`builtin:mcp`), other built-in extensions, and project-scope extensions keep needing explicit opt-in even when they declare the hint. A user-installed package that proxies an MCP server is trusted as that package.
 A tool with a mutating mode must not declare the hint.
 
+`ssh_exec` is mutating outside Plan mode, so it carries no `readOnlyHint`; Plan admits a trusted-source tool named `ssh_exec` by name (same source rules as above) and gates every call as follows. `ssh_pull` and `ssh_push` get no such exception. This is risk reduction, not an OS sandbox.
+
 `ssh_exec` calls (`{ host, command }`) are validated like `ssh <host> <command>`: `host` must be a configured `ssh` prefix in `safeSubcommands` and `command` must pass the remote reviewed policy, so `cd`, `git -C`, redirects and mutations are rejected; `cwd` must be a plain path and parameters other than `host`, `command`, `cwd` and `timeout` (notably `stdin`) are refused.
 
 ### Trusted directories
