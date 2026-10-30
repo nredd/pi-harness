@@ -59,6 +59,11 @@ Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 The harness root `publish.yml` owns releases; nested upstream workflows are dormant reference source.
 Local helper builds and local signing remain unchanged. Source preparation is not activation.
 
+Linux source-build cleanup gives its detached compiler group a bounded TERM/KILL budget. A successful
+KILL syscall alone is not treated as success: setup fails if the group cannot be confirmed empty, and
+keeps a fresh-probe-guarded exit-time KILL backstop while ownership remains signalable. Only ESRCH
+proves quiescence; permission or unexpected syscall errors surface uncertainty and revoke signalling.
+
 ## License
 
 MIT, retaining upstream's copyright in `LICENSE`.

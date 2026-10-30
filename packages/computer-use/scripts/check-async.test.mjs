@@ -376,6 +376,46 @@ setInterval(/** @returns {void} Retains leader liveness. @throws {never} No erro
 }
 
 /**
+ * @param {number} exitCode Completed fixture exit code.
+ * @returns {Promise<void>} Verifies completed fixture cleanup never signals a former PID.
+ * @throws {Error} On a forbidden signal or missing handle release.
+ */
+async function assertCompletedChildCleanup(exitCode) {
+	let killed = false;
+	let unreferenced = false;
+	await stopCheckChild(
+		{
+			pid: 424242,
+			exitCode,
+			signalCode: null,
+			/** @returns {never} A completed fixture must never receive another signal. @throws {Error} Always rejects a forbidden signal. */
+			kill: () => {
+				killed = true;
+				throw new Error("must not signal completed fixture");
+			},
+			/** @returns {void} Records handle release. @throws {never} No errors. */
+			unref: () => {
+				unreferenced = true;
+			},
+		},
+		Promise.resolve(),
+		"completed fixture control",
+	);
+	assert.equal(killed, false);
+	assert.equal(unreferenced, true);
+}
+
+/** @returns {Promise<void>} Verifies successful fixture cleanup never signals a former PID. @throws {Error} On assertion failure. */
+async function verifyCompletedChildCleanup() {
+	await assertCompletedChildCleanup(0);
+}
+
+/** @returns {Promise<void>} Verifies failed fixture cleanup never signals a former PID. @throws {Error} On assertion failure. */
+async function verifyFailedChildCleanup() {
+	await assertCompletedChildCleanup(1);
+}
+
+/**
  * @param {import('node:test').TestContext} context Scoped syscall mocks.
  * @returns {Promise<void>} Verifies probe-only cleanup despite an observable former PGID.
  * @throws {Error} On any non-probe signal.
@@ -457,7 +497,7 @@ async function verifyCompletedStreamLifetime(context) {
 			"completed stream control",
 			true,
 		),
-		/Timed out waiting for completed stream control completed leader streams/,
+		/Timed out waiting for completed stream control completed child streams/,
 	);
 	assert.equal(destroyed, 2);
 	assert.equal(unreferenced, true);
@@ -624,6 +664,14 @@ test(
 			COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
 	},
 	verifyRedirectedDescendant,
+);
+test(
+	"completed fixtures never signal their former PID",
+	verifyCompletedChildCleanup,
+);
+test(
+	"failed fixtures never signal their former PID",
+	verifyFailedChildCleanup,
 );
 test(
 	"completed detached sessions only probe their former group",
