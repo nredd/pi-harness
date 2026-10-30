@@ -9,7 +9,7 @@
  * building their own marker; `test/fallback-flag-renderers.test.ts` walks every
  * renderer and fails the ones that do not.
  */
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { TierDisclosure } from "../model-tiers.js";
 
 /** Minimal theme surface, so this module has no dependency on the widgets that use it. */
@@ -55,6 +55,31 @@ export function fallbackFlag(theme: FlagTheme, carrier: FallbackCarrier | undefi
 
 /** What a flag degrades to when even it does not fit; plain so it cannot depend on a theme. */
 const MINIMAL_FLAGS = ["[fb]", "!"] as const;
+
+/**
+ * Wrap control text into a fixed row budget while preserving both its opening
+ * and final diagnosis around an explicit omitted-rows marker.
+ */
+export function boundedWrappedRows(text: string, width: number, maxRows: number, marker: string): string[] {
+  const rows = wrapTextWithAnsi(text, width);
+  const budget = Math.max(1, Math.trunc(maxRows));
+  if (rows.length <= budget) return rows;
+  if (budget === 1) return [stripTerminalSequences(truncateToWidth(marker, width, ""))];
+  // Two rows have no room for a truthful omission marker, so retain the control
+  // text's opening and diagnosis rather than exceeding the caller's budget.
+  if (budget === 2) return [rows[0]!, rows.at(-1)!];
+
+  // Reserve a row for the omission marker and favor the final rows: fallback
+  // diagnoses live at the end, while the first row still names the control text.
+  // budget >= 3 here, so at least two rows are omitted.
+  const firstCount = Math.max(1, Math.floor((budget - 1) / 2));
+  const lastCount = budget - firstCount - 1;
+  const omitted = rows.length - firstCount - lastCount;
+  const omission = stripTerminalSequences(
+    truncateToWidth(`${marker} ${omitted} more lines`, width, ""),
+  );
+  return [...rows.slice(0, firstCount), omission, ...rows.slice(-lastCount)];
+}
 
 /**
  * `prefix + flag + rest`, never wider than `width`, and the flag is never cut.

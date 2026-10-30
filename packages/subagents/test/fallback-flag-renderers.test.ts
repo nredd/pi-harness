@@ -13,7 +13,7 @@ import type { AgentRecord, NotificationDetails } from "../src/types.js";
 import { AgentResultView } from "../src/ui/agent-row.js";
 import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
-import { hasFallback } from "../src/ui/fallback-flag.js";
+import { boundedWrappedRows, hasFallback } from "../src/ui/fallback-flag.js";
 import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.js";
 import { groupSummary, renderNotification } from "../src/ui/notification-view.js";
 import { layoutWorkflowCard, plainWorkflowCardLines, type WorkflowCardTask } from "../src/ui/workflow-card.js";
@@ -111,6 +111,17 @@ function dialogInput(width: number, progress: WorkflowAgentEntry[], level: "phas
 
 const notice = (over: Partial<NotificationDetails>): NotificationDetails => ({
   id: "a", description: "d", status: "completed", toolUses: 1, turnCount: 1, totalTokens: 1, durationMs: 1, resultPreview: "r", ...over,
+});
+
+describe("bounded wrapped control text", () => {
+  it("reserves physical rows for an omission marker while retaining both ends", () => {
+    expect(boundedWrappedRows("one", 80, 4, "…")).toEqual(["one"]);
+    expect(boundedWrappedRows("first\nsecond\nthird\nfourth\nlast", 80, 4, "…")).toEqual([
+      "first", "… 2 more lines", "fourth", "last",
+    ]);
+    expect(boundedWrappedRows("first\nsecond\nlast", 80, 2, "…")).toEqual(["first", "last"]);
+    expect(boundedWrappedRows("first\nlast", 80, 1, "…")).toEqual(["…"]);
+  });
 });
 
 const TIER_FLAGS: { modelTier: TierDisclosure; flag: string }[] = [
@@ -221,12 +232,9 @@ const CASES: Case[] = [
     render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })]))).find(l => l.includes("[fallback")) ?? "",
   },
   {
-    // At 40 columns the agent-level list pane is ~10 columns wide, so the flag is
-    // clipped to a fragment there; that KNOWN LIMIT is asserted below (and in the
-    // README), not in this matrix.
     name: "workflow dialog agent list row (agent level)",
-    widths: [80, 120],
-    render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })], "agent"))).find(l => l.includes("[fallback")) ?? "",
+    compactFlagAt: 40,
+    render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })], "agent"))).find(l => /\[fallback|\[fb\]|!/.test(l)) ?? "",
   },
   {
     name: "conversation viewer invocation row",
@@ -263,29 +271,41 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
     }
   }
 
-  it("the workflow dialog detail pane WRAPS the note instead of clamping it", () => {
-    const longNote = `Note: configured model "${"Q".repeat(120)}" did not resolve; running on parent model anthropic/x.`;
+  it("the workflow dialog detail pane wraps a note that fits", () => {
+    const longNote = `Note: configured model "${"Q".repeat(60)}" did not resolve; running on parent model anthropic/x.`;
     const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(70, [agentEntry({ modelNote: longNote })], "agent")));
     const joined = lines.map(l => l.replace(/[^A-Za-z]/g, "")).join("");
-    expect(joined).toContain("Q".repeat(120));
+    expect(joined).toContain("Q".repeat(60));
     for (const l of lines) expect(visibleWidth(l)).toBeLessThanOrEqual(70);
   });
 
-  describe("known limits: the workflow dialog at narrow widths (tracked in nredd/pi-harness issue, see README)", () => {
-    it("at 40 columns the agent-level list pane is narrow and shows only a fragment of the flag", () => {
-      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(40, [agentEntry({ label: UGLY.ascii })], "agent")));
-      const listRow = lines.find(l => l.includes("✔ [fal"));
-      expect(listRow, lines.join("\n")).toBeDefined();
-      expect(listRow).not.toContain("[fallback]");
-      for (const l of lines) expect(visibleWidth(l)).toBeLessThanOrEqual(40);
-    });
+  it("keeps the workflow-dialog fallback disclosure intact at narrow render widths", () => {
+    for (const width of [40, 46, 60, 80]) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ label: UGLY.ascii })], "agent")));
+      const listRow = lines.find(l => /\[fallback|\[fb\]|!/.test(l));
+      expect(listRow, `${width} columns:\n${lines.join("\n")}`).toBeDefined();
+      expect(listRow).toMatch(/\[fallback\]|\[fb\]|!/);
+      if (width === 46) expect(listRow).toContain("[fb] ZZ");
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
 
-    it("a very long note in the detail pane is clamped to the pane capacity, not shown in full", () => {
-      const longNote = `Note: ${"Q".repeat(2000)}`;
-      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(40, [agentEntry({ modelNote: longNote })], "agent")));
-      const shown = lines.join("").replace(/[^Q]/g, "").length;
-      expect(shown).toBeGreaterThan(0);
-      expect(shown).toBeLessThan(2000);
-    });
+  it("separates a compact-pane flag from its label with exactly one space", () => {
+    for (const width of [100, 120]) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ label: "ZZ" })], "agent")));
+      const listRow = lines.find(l => l.includes("ZZ") && /\[fallback|\[fb\]|!/.test(l));
+      expect(listRow, lines.join("\n")).toBeDefined();
+      expect(listRow).not.toMatch(/(?:\[fallback\]|\[fb\]) {2}ZZ/);
+    }
+  });
+
+  it("middle-elides a long workflow-dialog note without losing its ending", () => {
+    const ending = "ENDING-SENTINEL";
+    const longNote = `Note: ${"Q".repeat(2000)} ${ending}`;
+    for (const width of [40, 60, 80]) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ modelNote: longNote })], "agent")));
+      expect(lines.join("\n"), `${width} columns`).toContain(ending);
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
   });
 });
