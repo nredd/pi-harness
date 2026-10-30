@@ -258,6 +258,40 @@ describe("Darwin host memory", () => {
 });
 
 describe("bounded child lifecycle", () => {
+	it("ignores late stdout after cancellation and removes the abort listener", async () => {
+		const controller = new AbortController();
+		const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
+		const child = new EventEmitter();
+		const stdout = new EventEmitter();
+		const kill = vi.fn(() => {
+			queueMicrotask(() => {
+				stdout.emit("data", Buffer.from("late data\n"));
+				child.emit("close", 1);
+			});
+			return true;
+		});
+		Object.assign(child, { kill, stderr: new EventEmitter(), stdout });
+		const spawn = vi.fn(() => child);
+		vi.resetModules();
+		vi.doMock("node:child_process", () => ({ spawn }));
+		try {
+			const { Budget: FixtureBudget, command: fixtureCommand } = await import("../src/collect.js");
+			const budget = new FixtureBudget(performance.now() + 1000, 4, 1, controller.signal);
+			const pending = fixtureCommand("fixture", [], budget);
+			controller.abort();
+			await expect(pending).resolves.toEqual({ complete: false, text: "" });
+			expect(budget.bytesRead).toBe(0);
+			expect([...budget.reasons]).toEqual(["cancelled"]);
+			expect(spawn).toHaveBeenCalledExactlyOnceWith("fixture", [], expect.any(Object));
+			expect(kill).toHaveBeenCalledOnce();
+			expect(removeAbortListener).toHaveBeenCalledOnce();
+			expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
+		} finally {
+			vi.doUnmock("node:child_process");
+			vi.resetModules();
+		}
+	});
+
 	it("reaps the child on cancellation before returning", async () => {
 		const controller = new AbortController();
 		const budget = new Budget(performance.now() + 3000, 4096, 10, controller.signal);
