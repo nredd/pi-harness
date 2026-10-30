@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      wsl_inputs: ${{ steps.classify.outputs.wsl_inputs }}
+      stack_inputs: ${{ steps.classify.outputs.stack_inputs }}
       changed_files: ${{ steps.classify.outputs.changed_files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,18 +37,28 @@ jobs:
       - name: Report classification
         env:
           DOCS_ONLY: ${{ steps.classify.outputs.docs_only }}
+          WSL_INPUTS: ${{ steps.classify.outputs.wsl_inputs }}
+          STACK_INPUTS: ${{ steps.classify.outputs.stack_inputs }}
           CHANGED_FILES: ${{ steps.classify.outputs.changed_files }}
         run: |
-          echo "Changed-path classification: docs-only=$DOCS_ONLY"
+          echo "Changed-path classification: docs-only=$DOCS_ONLY wsl-inputs=$WSL_INPUTS stack-inputs=$STACK_INPUTS"
+          echo "::notice title=bench not run::No quiet self-hosted runner yet; hosted runners cannot meet the bench admission policy"
           {
             echo "### CI path classification"
             echo
             echo "Docs-only: \`$DOCS_ONLY\`"
             echo
+            echo "WSL inputs: \`$WSL_INPUTS\`"
+            echo
+            echo "Stack inputs: \`$STACK_INPUTS\`"
+            echo
             echo "Changed files:"
             echo '```text'
             printf '%s\n' "$CHANGED_FILES"
             echo '```'
+            echo
+            echo "### bench: NOT RUN"
+            echo "No quiet self-hosted runner exists yet (migration plan section 7). This is not a pass."
           } >>"$GITHUB_STEP_SUMMARY"
 
   owned:
@@ -60,20 +72,25 @@ jobs:
           - os: ubuntu-24.04
             runner: ubuntu-24.04
             guest: linux
+            gates: check-ts check-scripts check-integration
           - os: macos-14
             runner: xcode-27
             guest: macos
+            gates: check-ts check-scripts check-integration
           - os: wsl2
-            runner: windows-2022
+            runner: windows-2025
             guest: wsl2
-    runs-on: ${{ matrix.runner }}
+            # Only LCOV producers: `pytest scripts` and `pytest tests` duplicate Ubuntu here.
+            gates: check-ts check-probes check-import-audit
+    # WSL has no required-check bypass of its own: a PR without WSL inputs reports from a cheap Ubuntu job.
+    runs-on: ${{ matrix.os == 'wsl2' && github.event_name == 'pull_request' && needs.classify.outputs.wsl_inputs == 'false' && 'ubuntu-24.04' || matrix.runner }}
     defaults:
       run:
         shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps:
       - name: Select and verify Git Bash on the Windows host
-        if: matrix.os == 'wsl2'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $gitBin = Join-Path $env:ProgramFiles 'Git\bin'
@@ -95,7 +112,15 @@ jobs:
           DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
           CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
         run: |
-          if [ "$DOCS_ONLY" = true ] && [ "${{ matrix.os }}" != wsl2 ]; then
+          if [ "${{ matrix.os }}" = wsl2 ] && [ "$RUNNER_OS" != Windows ]; then
+            why="This pull request changes no CI or WSL inputs; owned (wsl2) runs for real on main pushes and on PRs that change them."
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            echo "::notice title=owned (wsl2) NOT RUN::$why"
+            {
+              echo "### owned (wsl2): NOT RUN"
+              echo "$why This is not a pass."
+            } >>"$GITHUB_STEP_SUMMARY"
+          elif [ "$DOCS_ONLY" = true ] && [ "${{ matrix.os }}" != wsl2 ]; then
             echo "run=false" >>"$GITHUB_OUTPUT"
             echo "::notice title=docs-only CI bypass::Skipping expensive owned checks because this change is docs-only"
             {
@@ -142,7 +167,7 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: make install
+        run: make install-owned
       # computer-use's Linux helper checks (cargo tests, packed-source build, diagnostics) run inside `check-ts` on
       # Ubuntu and print NOT RUN on macOS. ARM64 is compile-only (`cargo check`, no linker): never a runtime claim.
       - name: Add the aarch64 Linux compile target
@@ -152,7 +177,7 @@ jobs:
           echo "PI_CU_LINUX_ARM64_CHECK=1" >>"$GITHUB_ENV"
       - name: Owned gates (biome, tsc, Vitest on Node and Bun, scripts, integration units)
         if: steps.plan.outputs.run == 'true'
-        run: make check-ts check-scripts check-integration
+        run: make ${{ matrix.gates }}
       - name: Coverage accounting (existing reports, including test failures)
         if: always() && steps.plan.outputs.run == 'true'
         env:
@@ -183,6 +208,7 @@ jobs:
       - name: Benchmark unit gate
         if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'
         run: |
+          make install-benchmark
           # The native_runtime test runs the real Codex sandbox (Seatbelt); exact historical pin, no credentials.
           npm install --ignore-scripts --prefix "$RUNNER_TEMP/codex" @openai/codex@0.154.0
           mkdir -p "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-cache"
@@ -196,7 +222,7 @@ jobs:
         with:
           cleanup: cleanup
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && matrix.os == 'wsl2'
+        if: always() && runner.os == 'Windows'
         with:
           name: wsl2-diagnostics-owned
           path: ${{ runner.temp }}/wsl2-diagnostics/
@@ -217,16 +243,17 @@ jobs:
             runner: xcode-27
             guest: macos
           - os: wsl2
-            runner: windows-2022
+            runner: windows-2025
             guest: wsl2
-    runs-on: ${{ matrix.runner }}
+    # WSL has no required-check bypass of its own: a PR without WSL inputs reports from a cheap Ubuntu job.
+    runs-on: ${{ matrix.os == 'wsl2' && github.event_name == 'pull_request' && needs.classify.outputs.wsl_inputs == 'false' && 'ubuntu-24.04' || matrix.runner }}
     defaults:
       run:
         shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps:
       - name: Select and verify Git Bash on the Windows host
-        if: matrix.os == 'wsl2'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $gitBin = Join-Path $env:ProgramFiles 'Git\bin'
@@ -248,7 +275,15 @@ jobs:
           DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
           CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
         run: |
-          if [ "$DOCS_ONLY" = true ] && [ "${{ matrix.os }}" != wsl2 ]; then
+          if [ "${{ matrix.os }}" = wsl2 ] && [ "$RUNNER_OS" != Windows ]; then
+            why="This pull request changes no CI or WSL inputs; contracts (wsl2) runs for real on main pushes and on PRs that change them."
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            echo "::notice title=contracts (wsl2) NOT RUN::$why"
+            {
+              echo "### contracts (wsl2): NOT RUN"
+              echo "$why This is not a pass."
+            } >>"$GITHUB_STEP_SUMMARY"
+          elif [ "$DOCS_ONLY" = true ] && [ "${{ matrix.os }}" != wsl2 ]; then
             echo "run=false" >>"$GITHUB_OUTPUT"
             echo "::notice title=docs-only CI bypass::Skipping expensive contracts checks because this change is docs-only"
             {
@@ -276,7 +311,7 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: make install
+        run: make install-owned
       - name: Packed plugins alone on exact stock Pi, plus packed preset audit
         if: steps.plan.outputs.run == 'true'
         run: make check-package-contracts REPORT="$RUNNER_TEMP/package-contracts.json"
@@ -303,7 +338,7 @@ jobs:
           path: ${{ runner.temp }}/*contracts*.json
           if-no-files-found: ignore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && matrix.os == 'wsl2'
+        if: always() && runner.os == 'Windows'
         with:
           name: wsl2-diagnostics-contracts
           path: ${{ runner.temp }}/wsl2-diagnostics/
@@ -326,40 +361,40 @@ jobs:
             runner: xcode-27
             guest: macos
             platform: darwin-arm64
+          # Required check names with no work behind them, on Ubuntu so they hold no macOS or Windows slot.
+          - os: macos-14
+            stack: personal
+            runner: ubuntu-24.04
+            guest: linux
+            not_run: macOS runs only the local stack; ubuntu-24.04 carries the published personal stack.
           - os: wsl2
-            runner: windows-2022
-            guest: wsl2
+            runner: ubuntu-24.04
+            guest: linux
             platform: linux-x64
+            not_run: WSL runs no stack cell; owned (wsl2) and contracts (wsl2) are its only evidence.
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
-    timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 40 }}
+        shell: bash -e {0}
+    timeout-minutes: 40
     steps:
-      - name: Select and verify Git Bash on the Windows host
-        if: matrix.os == 'wsl2'
-        shell: pwsh
-        run: |
-          $gitBin = Join-Path $env:ProgramFiles 'Git\bin'
-          $bash = Join-Path $gitBin 'bash.exe'
-          if (!(Test-Path $bash)) { throw "Missing Git Bash: $bash" }
-          $env:PATH = "$gitBin;$env:PATH"
-          $resolved = (Get-Command bash.exe -All -CommandType Application | Select-Object -First 1).Source
-          Write-Output "Resolved Git Bash: $resolved; expected: $bash"
-          if ($resolved -ne $bash) { throw "Ambiguous Bash resolution: $resolved" }
-          & $bash --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $gitBin >> $env:GITHUB_PATH
-          "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
-          "Git Bash executable: $resolved" >> $env:GITHUB_STEP_SUMMARY
       - id: plan
         name: Report execution plan
         shell: bash -e {0}
         env:
           DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
+          STACK_INPUTS: ${{ needs.classify.outputs.stack_inputs }}
           CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
+          NOT_RUN: ${{ matrix.not_run }}
         run: |
-          if [ "$DOCS_ONLY" = true ] && [ "${{ matrix.os }}" != wsl2 ]; then
+          if [ -n "$NOT_RUN" ]; then
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            echo "::notice title=stack cell NOT RUN::$NOT_RUN"
+            {
+              echo "### stack: NOT RUN"
+              echo "$NOT_RUN This is not a pass."
+            } >>"$GITHUB_STEP_SUMMARY"
+          elif [ "$DOCS_ONLY" = true ]; then
             echo "run=false" >>"$GITHUB_OUTPUT"
             echo "::notice title=docs-only CI bypass::Skipping expensive stack scenario because this change is docs-only"
             {
@@ -369,13 +404,23 @@ jobs:
               printf '%s\n' "$CHANGED_FILES"
               echo '```'
             } >>"$GITHUB_STEP_SUMMARY"
-          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "${{ matrix.os }}" != wsl2 ] && { [ "${{ matrix.os }}" != ubuntu-24.04 ] || [ "${{ matrix.stack }}" != personal ]; }; then
+          elif [ "$GITHUB_EVENT_NAME" = push ] && { [ "${{ matrix.os }}" != ubuntu-24.04 ] || [ "${{ matrix.stack }}" != personal ]; }; then
             echo "run=false" >>"$GITHUB_OUTPUT"
             echo "::notice title=main CI smoke::Skipping this stack cell on main; ubuntu-24.04/personal remains the merged-result smoke"
             echo "### stack: main-push selective smoke" >>"$GITHUB_STEP_SUMMARY"
             echo "Skipped on a main push; \`stack (ubuntu-24.04, personal)\` validates the merged result." >>"$GITHUB_STEP_SUMMARY"
+          elif [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "${{ matrix.stack }}" = personal ] && [ "$STACK_INPUTS" = false ]; then
+            why="This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs."
+            echo "run=true" >>"$GITHUB_OUTPUT"
+            echo "scenarios=false" >>"$GITHUB_OUTPUT"
+            echo "::notice title=personal stack NOT RUN::$why"
+            {
+              echo "### stack: personal scenarios NOT RUN"
+              echo "$why This is not a pass."
+            } >>"$GITHUB_STEP_SUMMARY"
           else
             echo "run=true" >>"$GITHUB_OUTPUT"
+            echo "scenarios=true" >>"$GITHUB_OUTPUT"
             echo "stack scenario will run"
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -423,11 +468,11 @@ jobs:
           HOME="$RUNNER_TEMP/version-home" PI_CODING_AGENT_DIR="$RUNNER_TEMP/version-agent" "$PI_BIN" --version
           git -C forks/pi describe --tags --exact-match
       - name: Replay source-selected installer runtime locks without lifecycle scripts
-        if: steps.plan.outputs.run == 'true' && matrix.stack == 'personal'
+        if: steps.plan.outputs.scenarios == 'true' && matrix.stack == 'personal'
         working-directory: integration
         run: uv run --locked python -m harness.runtime_lock --stack stacks/personal.json --replay stacks/runtime-locks.json
       - name: Assembled D and E boundaries (explicit stack, no machine config)
-        if: steps.plan.outputs.run == 'true'
+        if: steps.plan.outputs.scenarios == 'true'
         working-directory: integration
         run: |
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
@@ -438,28 +483,25 @@ jobs:
         working-directory: integration
         run: |
           uv run --locked python -c 'from pathlib import Path; [print(p.read_text()) for p in sorted(Path("artifacts").glob("stack-*.json"))]'
-      - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.plan.outputs.run == 'true'
         with:
           name: stack-${{ matrix.os }}-${{ matrix.stack }}
           path: integration/artifacts/
           if-no-files-found: ignore
-      # Reuse the existing personal runner for BOTH standalone stacks. No extra jobs or
-      # artifact-transfer queue admissions, and no duplicate build in the local runner.
+      # Each cell builds the core and runs only its own stack, so macOS keeps standalone evidence in `local`.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' && steps.workspace.outcome == 'success' && matrix.os != 'wsl2' }}
+        if: ${{ !cancelled() && steps.plan.outputs.scenarios == 'true' && steps.workspace.outcome == 'success' }}
         with:
           bun-version-file: .bun-version
       - name: Preserve Node failure artifacts before standalone runs
-        if: ${{ always() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' }}
+        if: ${{ always() && steps.plan.outputs.scenarios == 'true' }}
         working-directory: integration
         run: |
           if [ -d artifacts ]; then mv artifacts artifacts-node; fi
-      - name: Build standalone once for both stacks
+      - name: Build standalone
         id: build
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' && steps.workspace.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.plan.outputs.scenarios == 'true' && steps.workspace.outcome == 'success' }}
         working-directory: forks/pi
         run: |
           npm ci --ignore-scripts
@@ -488,90 +530,58 @@ jobs:
           shasum -a 256 "$PI_BIN" "$RUNNER_TEMP/pi-standalone/pi-${{ matrix.platform }}.tar.gz"
       - name: Strict standalone startup with failure-only diagnostics
         id: startup
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.platform == 'linux-x64' }}
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.platform == 'linux-x64' && matrix.stack == 'personal' }}
         working-directory: integration
         run: |
           uv run --locked python -m harness.standalone_diagnostics startup \
             --binary "$PI_BIN" --core ../forks/pi \
             --build-evidence "$RUNNER_TEMP/pi-build-evidence" \
             --output "$RUNNER_TEMP/standalone-startup-diagnostics" --github-output "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/capture-ci-wsl
-        id: startup_capture
-        if: ${{ !cancelled() && matrix.os == 'wsl2' && steps.startup.outcome == 'failure' && steps.startup.outputs.artifact_ready == 'true' }}
       - name: Upload scanned standalone startup failure evidence
-        if: ${{ !cancelled() && steps.startup.outcome == 'failure' && steps.startup.outputs.artifact_ready == 'true' && (matrix.os != 'wsl2' || steps.startup_capture.outcome == 'success') }}
+        if: ${{ !cancelled() && steps.startup.outcome == 'failure' && steps.startup.outputs.artifact_ready == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.os == 'wsl2' && 'standalone-startup-wsl2-linux-x64' || 'standalone-startup-linux-x64' }}
+          name: standalone-startup-linux-x64
           path: ${{ runner.temp }}/standalone-startup-diagnostics/
           if-no-files-found: warn
           retention-days: 7
       - name: Standalone D and E (personal)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'personal' }}
         working-directory: integration
         run: |
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
             --stack stacks/personal.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-personal.xml
       - name: Candidate compiled-core auth adapter (personal)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'personal' }}
         working-directory: integration
         run: |
           uv run --locked pytest scenarios/test_auth_transport.py \
             --stack stacks/personal.json --runtime bun-standalone --bun-auth-adapter -m stack \
             --log-cli-level=INFO --junitxml=artifacts/standalone-auth-personal.xml
-      - name: Preserve personal failure artifacts before local runs
-        if: ${{ always() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' }}
-        working-directory: integration
-        run: |
-          if [ -d artifacts ]; then mv artifacts artifacts-personal; fi
       - name: Standalone D and E (local)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'local' }}
         working-directory: integration
         run: |
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
             --stack stacks/local.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-local.xml
       - name: Candidate compiled-core auth adapter (local)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'local' }}
         working-directory: integration
         run: |
           uv run --locked pytest scenarios/test_auth_transport.py \
             --stack stacks/local.json --runtime bun-standalone --bun-auth-adapter -m stack \
             --log-cli-level=INFO --junitxml=artifacts/standalone-auth-local.xml
       - name: Report coverage exclusions
-        if: ${{ always() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' }}
+        if: ${{ always() && steps.plan.outputs.scenarios == 'true' }}
         shell: bash -e {0}
         run: |
           echo "Bun standalone: default D/E retains seven auth skips (#14). Separate candidate compiled-core auth adapter steps execute the unchanged assertions; consult their outcome and JUnit, not this notice, for evidence." >>"$GITHUB_STEP_SUMMARY"
           echo "linux-arm64, packed contracts under standalone, bench, live credentials and desktop helpers: NOT RUN." >>"$GITHUB_STEP_SUMMARY"
-      - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
-        with:
-          cleanup: cleanup
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ always() && steps.plan.outputs.run == 'true' && matrix.stack == 'personal' }}
+        if: ${{ always() && steps.plan.outputs.scenarios == 'true' }}
         with:
-          name: ${{ matrix.os == 'wsl2' && 'standalone-wsl2' || 'standalone' }}-${{ matrix.platform }}
-          path: |
-            integration/artifacts/
-            integration/artifacts-personal/
-            ${{ matrix.os == 'wsl2' && 'integration/artifacts-node/' || '' }}
+          name: standalone-${{ matrix.platform }}-${{ matrix.stack }}
+          path: integration/artifacts/
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && matrix.os == 'wsl2'
-        with:
-          name: wsl2-diagnostics-stack-${{ matrix.stack }}
-          path: ${{ runner.temp }}/wsl2-diagnostics/
-          if-no-files-found: warn
-
-  bench:
-    name: bench (not run)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Report
-        run: |
-          echo "::notice title=bench not run::No quiet self-hosted runner yet; hosted runners cannot meet the bench admission policy"
-          echo "### bench: NOT RUN" >>"$GITHUB_STEP_SUMMARY"
-          echo "No quiet self-hosted runner exists yet (migration plan section 7). This is not a pass." >>"$GITHUB_STEP_SUMMARY"

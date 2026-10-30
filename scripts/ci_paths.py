@@ -20,6 +20,34 @@ LOGGER = logging.getLogger(__name__)
 GIT = "/usr/bin/git"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTED_DOCUMENTATION = frozenset({"README.md", "packages/preset/README.md"})
+# Tool pins and root manifests read by both the WSL bootstrap and the stack job.
+TOOLCHAIN_INPUTS = frozenset(
+    {"Makefile", "package.json", ".gitmodules", ".node-version", ".bun-version", ".python-version"}
+)
+WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
+    ".gitattributes",
+    "scripts/install_gh_linux.sh",
+    "scripts/install_wsl_owned_tools.sh",
+}
+WSL_INPUT_PREFIXES = (".github/", "scripts/wsl2_", "scripts/ci")
+STACK_INPUT_FILES = TOOLCHAIN_INPUTS | {
+    "package-lock.json",
+    "integration/conftest.py",
+    "integration/pyproject.toml",
+    "integration/uv.lock",
+}
+# `packages/` is absent on purpose: `harness.stack` maps those paths into `local` only.
+STACK_INPUT_PREFIXES = (
+    ".github/",
+    "forks/",
+    "integration/golden/",
+    "integration/harness/",
+    "integration/probes/",
+    "integration/providers/",
+    "integration/scenarios/",
+    "integration/stacks/",
+    "scripts/wsl2_",
+)
 
 
 class ClassificationError(RuntimeError):
@@ -33,10 +61,14 @@ class ChangeClassification:
     Parameters:
         paths (tuple[str, ...]): Changed paths relative to the repository root.
         docs_only (bool): Whether every changed path is safe documentation.
+        wsl_inputs (bool): Whether a change reaches the WSL path, so a PR must run it.
+        stack_inputs (bool): Whether a change reaches the personal stack scenarios.
     """
 
     paths: tuple[str, ...]
     docs_only: bool
+    wsl_inputs: bool
+    stack_inputs: bool
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -132,6 +164,30 @@ def is_documentation_path(path: str) -> bool:
     return len(parts) == 3 and parts[0] == "packages" and parts[2] in {"README.md", "CHANGELOG.md"}
 
 
+def is_wsl_input(path: str) -> bool:
+    """Return whether one changed path reaches the WSL setup, adapter or guest gates.
+
+    Parameters:
+        path (str): Git-relative path with POSIX separators.
+
+    Returns:
+        bool: Whether a PR changing the path must run the WSL cells for real.
+    """
+    return path in WSL_INPUT_FILES or path.startswith(WSL_INPUT_PREFIXES)
+
+
+def is_stack_input(path: str) -> bool:
+    """Return whether one changed path reaches the personal stack scenarios.
+
+    Parameters:
+        path (str): Git-relative path with POSIX separators.
+
+    Returns:
+        bool: Whether a PR changing the path must run the personal stack steps.
+    """
+    return path in STACK_INPUT_FILES or path.startswith(STACK_INPUT_PREFIXES)
+
+
 def classify(repo: Path, base: str, head: str) -> ChangeClassification:
     """Classify a real Git diff conservatively, failing closed on errors.
 
@@ -141,14 +197,20 @@ def classify(repo: Path, base: str, head: str) -> ChangeClassification:
         head (str): Later Git revision.
 
     Returns:
-        ChangeClassification: Changed paths and whether all are safe documentation paths.
+        ChangeClassification: Changed paths, whether all are safe documentation paths, and which
+            conditional work they reach. An unreadable or empty comparison reaches everything.
     """
     try:
         paths = changed_paths(repo, base, head)
     except ClassificationError as e:
         LOGGER.error(f"Failed to classify changed paths: {e}")
-        return ChangeClassification(paths=(), docs_only=False)
-    return ChangeClassification(paths=paths, docs_only=bool(paths) and all(map(is_documentation_path, paths)))
+        return ChangeClassification(paths=(), docs_only=False, wsl_inputs=True, stack_inputs=True)
+    return ChangeClassification(
+        paths=paths,
+        docs_only=bool(paths) and all(map(is_documentation_path, paths)),
+        wsl_inputs=not paths or any(map(is_wsl_input, paths)),
+        stack_inputs=not paths or any(map(is_stack_input, paths)),
+    )
 
 
 def write_github_output(path: Path, result: ChangeClassification) -> None:
@@ -164,7 +226,8 @@ def write_github_output(path: Path, result: ChangeClassification) -> None:
     delimiter = f"CI_PATHS_{uuid.uuid4().hex}"
     changed = "\n".join(result.paths)
     with path.open("a", encoding="utf-8") as output:
-        output.write(f"docs_only={'true' if result.docs_only else 'false'}\n")
+        for name in ("docs_only", "wsl_inputs", "stack_inputs"):
+            output.write(f"{name}={str(getattr(result, name)).lower()}\n")
         output.write(f"changed_files<<{delimiter}\n{changed}\n{delimiter}\n")
 
 

@@ -21,7 +21,7 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 - `release.py` and `paths.py` are standard library only, so this runs with `PYTHONPATH=integration python3` and no `uv sync`.
 - Non-legacy tags need `gh` >= 2.49 with a read-only `GH_TOKEN` (or `gh auth login`). `make install` hides `GH_TOKEN` from `npm ci` and `uv sync`; only the preflight sees it. The current four overrides select non-legacy `.8`, so authenticated attestation verification is required. The preflight downloads the selected assets; unavailable network access fails closed.
 - `test_root_overrides_stay_tied_to_the_attested_core_release` binds the current `.8` URLs, published SHA-256 values and lockfile SHA-512 values to that preflight contract. The legacy exception set remains unchanged. A new pin needs published `SHA256SUMS`, attestations and the matching guard update, not just a version bump.
-- Callers: `make install`, the `owned` and `contracts` CI jobs, the `stack` job (before `npm ci`), `publish.yml` verify, including the WSL2 cells of the shared CI matrices. The `forks.yml`/`stack` fork-local `npm ci` run in `forks/pi` with the fork's own lock and are not root installs.
+- Callers: `make install-owned` (so `make install`), the `owned` and `contracts` CI jobs, the `stack` job (before `npm ci`), `publish.yml` verify, including the WSL2 cells of the shared CI matrices. The `forks.yml`/`stack` fork-local `npm ci` run in `forks/pi` with the fork's own lock and are not root installs.
 
 Historical release receipts follow. They preserve their dated Gitlink and `forks.yml` provenance; current package selection uses the imported workspaces and published npm packages.
 

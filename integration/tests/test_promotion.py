@@ -299,13 +299,12 @@ def stack_job_block() -> str:
     """Return the `stack:` job text from `ci.yml`.
 
     Returns:
-        str: the job's lines up to the next top-level job.
+        str: the job's lines up to the next top-level job or the end of the workflow.
     """
     text = CI_WORKFLOW.read_text()
     start = text.index("\n  stack:\n")
     match = re.search(r"\n  [a-z-]+:\n", text[start + 1 :])
-    assert match
-    return text[start : start + 1 + match.start()]
+    return text[start : start + 1 + match.start()] if match else text[start:]
 
 
 def test_stack_signal_still_comes_from_ci() -> None:

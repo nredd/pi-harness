@@ -8,13 +8,10 @@ and unchanged binary bytes; no source assertion or generated-runtime comparison 
 CI is the gate. Local runs are for development. Hosted runners only, no stored credentials or secrets.
 The publish job alone requests a short-lived npm OIDC identity.
 
-The WSL `Report coverage exclusions` summary is the one explicit host-shell step: it writes
-only `GITHUB_STEP_SUMMARY` text after the WSL scenario jobs and has no guest-side prerequisite.
+The `stack` job's `Report coverage exclusions` summary writes only `GITHUB_STEP_SUMMARY` text.
 The workflow contract executes that step's actual body with the test runner's `/bin/bash` in
-an isolated directory without guest tooling, checks production output-failure propagation, and
-checks scoped exclusions separately from host-shell selection. On WSL the unit test runs in the
-guest: it asserts the host-shell declaration but does not execute Windows Git Bash. The actual
-host step remains a separate hosted-CI check.
+an isolated directory, checks production output-failure propagation, and checks scoped exclusions
+separately from shell selection. `stack` has no WSL guest any more, so this is an ordinary step.
 Default standalone D/E still skips seven auth cases (#14); candidate compiled-core auth adapter
 results require their own outcome and JUnit evidence, not the summary notice. Friendly-prose
 changes must preserve those disclosures and the remaining explicit `NOT RUN` scopes.
@@ -25,10 +22,38 @@ command, or generated guest step while preserving its original exit status and s
 
 | Job | Normal PR | `main` push | Docs-only PR or push | Proves |
 | --- | --- | --- | --- | --- |
-| `owned (ubuntu-24.04, macos-14, wsl2)` | `make install`, `make check-ts check-scripts check-integration`; `make check-benchmark` on macOS only. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Native cells report the bypass; WSL runs | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo and inprocess run FULL Vitest suites on both engines with the shared homedir guard; subagents retains native scenarios plus a guarded real-loader gate until #174, with its full Node suite guarded; the other packages retain native Bun subsets; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux/WSL reports it NOT RUN. See the computer-use note below. |
-| `contracts (ubuntu-24.04, macos-14, wsl2)` | `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract` | Same | Native cells report the bypass; WSL runs | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
-| `stack (ubuntu-24.04, macos-14, wsl2; personal, local)` | Node release-bundle D/E scenarios in each cell; each personal cell also builds the core Gitlink with Bun and runs standalone D/E for both stacks | `stack (ubuntu-24.04, personal)` and both WSL cells run, including standalone stacks in personal cells; the other three native job names log the selective smoke | Native cells report the bypass; WSL runs | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
-| `bench (not run)` | a notice and a step summary | Same | Same | Nothing. No quiet self-hosted runner exists yet (migration plan section 7) |
+| `owned (ubuntu-24.04, macos-14, wsl2)` | `make install-owned`, `make check-ts check-scripts check-integration`; `make install-benchmark` and `make check-benchmark` on macOS only. The WSL guest runs `make check-ts check-probes check-import-audit`, and on a PR only with WSL inputs. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo and inprocess run FULL Vitest suites on both engines with the shared homedir guard; subagents retains native scenarios plus a guarded real-loader gate until #174, with its full Node suite guarded; the other packages retain native Bun subsets; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux/WSL reports it NOT RUN. See the computer-use note below. |
+| `contracts (ubuntu-24.04, macos-14, wsl2)` | `make install-owned`, `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract`. WSL runs these on a PR only with WSL inputs | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
+| `stack (ubuntu-24.04, macos-14, wsl2; personal, local)` | `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` run Node release-bundle D/E and build the core Gitlink with Bun for standalone D/E of their own stack. A PR with no stack inputs skips the personal steps. The other three cells report NOT RUN | `stack (ubuntu-24.04, personal)` only; the other two running cells log the selective smoke and the three bypass cells report NOT RUN | Every cell reports a bypass or NOT RUN | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
+
+There is no `bench` job. `classify`'s step summary and a notice say bench is NOT RUN: no quiet self-hosted runner exists yet (migration plan section 7).
+
+Which cell does what. Every required check name reports, per the ruleset below. A *bypass cell* takes the job name on a cheap `ubuntu-24.04` runner, holds no macOS or Windows slot, runs only the `plan` step and emits a `::notice` plus a step summary saying NOT RUN, why, and that this is not a pass. A green bypass cell is a reported name, not evidence.
+
+| Check | PR | `main` push |
+| --- | --- | --- |
+| `owned` / `contracts (ubuntu-24.04, macos-14)` | Runs | Runs |
+| `owned` / `contracts (wsl2)` | Runs on `windows-2025` only with `wsl_inputs`, otherwise bypass cell | Runs on `windows-2025` |
+| `stack (ubuntu-24.04, personal)` | Runs; without `stack_inputs` only setup runs and the personal steps report NOT RUN | Runs, ignoring `stack_inputs` |
+| `stack (ubuntu-24.04, local)` | Runs | Selective smoke, not run |
+| `stack (macos-14, local)` | Runs | Selective smoke, not run |
+| `stack (macos-14, personal)` | Bypass cell | Bypass cell |
+| `stack (wsl2, personal)` | Bypass cell | Bypass cell |
+| `stack (wsl2, local)` | Bypass cell | Bypass cell |
+
+`scripts/ci_paths.py` publishes both inputs and fails closed: an unreadable comparison, an empty diff or a Gitlink change sets both true. A missing output is treated as true too, because the workflow only tests for `false`.
+
+- `wsl_inputs`: `.github/`, `scripts/wsl2_*`, `scripts/ci*`, the guest bootstrap's `scripts/install_gh_linux.sh` and `scripts/install_wsl_owned_tools.sh`, `Makefile`, root `package.json` (`packageManager`), `.gitattributes` (the LF checkout), `.gitmodules`, `.node-version`, `.bun-version`, `.python-version`
+- `stack_inputs`: `integration/{stacks,harness,scenarios,providers,golden,probes}`, `integration/conftest.py`, `integration/pyproject.toml`, `integration/uv.lock`, `Makefile`, `.github/`, `forks/`, root `package.json` and `package-lock.json`, `.gitmodules`, the same version pins, `scripts/wsl2_*`. `packages/` is not one: `harness.stack` maps those paths into `local`, the personal stack installs published bytes
+
+Evidence given up to cut queue time (issue #297):
+
+- No WSL stack acceptance at all, on any event. Node D/E, standalone D/E and the auth adapter no longer run in WSL
+- No macOS `personal` or published-stack run. macOS proves only `local`, on Node and standalone
+- WSL `owned` and `contracts` on PRs only with `wsl_inputs`. A `packages/` change that breaks only in WSL fails on the `main` push, after merge
+- The WSL guest no longer runs `pytest scripts`, `pytest tests`, or the ruff and ty steps of `check-scripts` / `check-integration`. Ubuntu runs them. `check-probes` and `check-import-audit` stay because `coverage-wsl2` needs their LCOV
+- `main` no longer runs standalone `local`: it moved into the `local` cells, which the selective smoke skips on a push. The non-strict ruleset means a merged tree can differ from the PR head that proved it
+- WSL distribution packages are no longer upgraded (`update: 'false'`); `additional-packages` still refreshes apt and installs the current packages
 
 On the `owned` job, `@nredd/pi-computer-use`'s macOS-only checks (`test:invariants` INV-8/INV-17, `test:macos-native`, `test:desktop`'s helper wire mapping and gating, `test:macos-live`) print `NOT RUN` lines on Linux and are not passes. Conversely, `test:linux-native` runs headless on the Ubuntu and WSL cells (`NOT RUN` on macOS): the crate's `cargo test --locked`, a source build from the *packed* tarball into a user-cache target dir, the built x64 helper's real `diagnostics` (protocol 4, shared architecture invariants), the cargo-missing hint and compiler cleanup on `SIGTERM`. The aarch64 target (`rustup target add`) is `cargo check --locked` compile-only; ARM64 runtime, desktop/display and live UI are NOT RUN. This is coverage inside the existing `owned` job, not a new required check (`test:linux-native` prints `Linux native checks passed` on Ubuntu, `NOT RUN` on macOS.)
 
@@ -42,7 +67,7 @@ and fails closed on missing/invalid input or a missing OS floor. Hosted artifact
 establish per-runner floors. `owned (wsl2)` runs inside Ubuntu with `sys.platform == "linux"`
 and explicitly enforces the same Linux floors as native Ubuntu. It exports independent LCOV and
 summary reports from the Linux filesystem before Windows uploads `coverage-wsl2`; no counters
-are combined across runners. Native Windows coverage is not measured. WSL contract/stack
+are combined across runners. Native Windows coverage is not measured. WSL contract
 scenarios remain separate acceptance evidence, not owned-source coverage. To regenerate a review-only policy diff from an
 artifact, run `uv run --locked --project integration python scripts/coverage_accounting.py --measure
 --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json` (use `darwin` and its
@@ -261,19 +286,21 @@ Blocker regression receipts:
 
 ## Capacity controls
 
-`classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all twelve matrix jobs start and report a terminal status. A docs-only change skips the native Linux/macOS expensive steps; WSL2 retains the old workflow's always-execute policy, and every skipped job writes a notice plus a step summary containing the changed-file list. Each job's `plan` step emits `run=true` or `run=false`, logs the changed files when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates.
+`classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all twelve matrix jobs start and report a terminal status. A docs-only change skips the native Linux/macOS expensive steps; a WSL cell on a PR is a bypass cell then anyway, and a real WSL cell on `main` still runs. Every skipped job writes a notice plus a step summary. Each job's `plan` step emits `run=true` or `run=false`, logs why when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `stack` also emits `scenarios`, which is false only for a personal cell on a PR with no stack inputs: setup still runs there, the `Replay`, Node D/E, build, startup, standalone and auth steps do not. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates. Windows-only steps gate on `runner.os == 'Windows'`, not `matrix.os`, because a WSL bypass cell keeps its matrix values on Ubuntu; `plan` tells the two apart with `RUNNER_OS`.
 
 The allowed docs-only paths are Markdown under `docs/`, root Markdown, `PLAN.md`, and a package-root `README.md` or `CHANGELOG.md`. The classifier is deliberately narrower than "all Markdown": workflow files, manifests, lockfiles, Gitlinks, `integration/**`, `scripts/**`, and `releases/*.json` are code because they do not match an allowed path. It also treats root `README.md` and `packages/preset/README.md` as code because repository tests read their text. A mixed change is code.
 
 The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s, p95 queue waits of 22m37s on macOS and 19m56s on Ubuntu, and four macOS jobs in each full run against five hosted macOS slots. A docs-only `PLAN.md` PR alone consumed 100.25 runner-minutes across 18 stack executions. Bypassing that work reduces real contention without leaving a protected check pending.
 
-`main` still validates the merged result: all `owned` and `contracts` OS cells, both WSL stack cells and `stack (ubuntu-24.04, personal)` run. The other three stack cells report the selective smoke rather than repeating work that a strict PR head already ran. This keeps one end-to-end merged-tree check while removing the most redundant post-merge macOS demand. The same measurement found six explicit update-branch CI runs plus one Forks run used 180.07 assigned runner-minutes; full main-push workflows used 599.13 assigned runner-minutes, including 334.02 macOS minutes. Those are upper bounds, not promised savings, and this policy preserves the higher-value merged-result coverage.
+`main` still validates the merged result: all `owned` and `contracts` OS cells including real WSL, and `stack (ubuntu-24.04, personal)`, which `harness.promotion` needs for its `stack-ubuntu-24.04-personal` artifact. `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` report the selective smoke. The same measurement found six explicit update-branch CI runs plus one Forks run used 180.07 assigned runner-minutes; full main-push workflows used 599.13 assigned runner-minutes, including 334.02 macOS minutes. Those are upper bounds, not promised savings.
 
-The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), which remains `strict`. Strict means that advancing `main` invalidates a PR's previous green result and requires an update-branch rerun before merge. That cost is intentional for combined-result safety; docs-only bypasses make documentation updates cheaper without weakening it.
+PR runs cancel each other per ref. `main` runs do not (`cancel-in-progress: ${{ github.event_name == 'pull_request' }}`), so a push cannot kill the run proving the previous merge. That covers runs in progress only: GitHub keeps one pending run per concurrency group, so with one `main` run in progress and a second pending, a third push still cancels the pending one.
 
-WSL2 is `matrix.os: wsl2` in the same `owned`, `contracts`, and `stack` jobs in `.github/workflows/ci.yml`. `matrix.runner: windows-2022` selects the host; `matrix.guest: wsl2` selects the explicit PowerShell -> WSL shell boundary, with Ubuntu-24.04 verified as version 2 and a non-`drvfs` guest checkout. The stack platform is `linux-x64`, never a fictitious GitHub runner label or native Windows execution. There is no separate WSL workflow or duplicated WSL test job.
+The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), with `strict_required_status_checks_policy: false`. It is not strict: advancing `main` does not invalidate a PR's previous green result, so the merged tree can differ from the tree CI saw. The `main` push run is what validates it.
 
-The old split was intentional: commit `cfb5542c` says "without expanding the existing OS and stack matrix"; it covered only personal-stack Node D/E. This change retains that entire entrypoint and adds local-stack Node D/E, both source-built standalone stacks, all applicable owned gates and all packed contracts through the ordinary shared steps. Mac-only Seatbelt, desktop/TCC, live credentials and ARM64 runtime remain NOT RUN. Linux helper checks and ARM64 compile-only checks now run inside the owned WSL guest, not on its Windows host.
+WSL2 is `matrix.os: wsl2` in the same `owned` and `contracts` jobs in `.github/workflows/ci.yml`; `stack` keeps the name only for its bypass cells. `matrix.runner: windows-2025` selects the host; `matrix.guest: wsl2` selects the explicit PowerShell -> WSL shell boundary, with Ubuntu-24.04 verified as version 2 and a non-`drvfs` guest checkout. Never a fictitious GitHub runner label or native Windows execution. There is no separate WSL workflow or duplicated WSL test job.
+
+WSL runs the owned gates that produce LCOV and all packed contracts through the ordinary shared steps. Mac-only Seatbelt, desktop/TCC, live credentials and ARM64 runtime remain NOT RUN. Linux helper checks and ARM64 compile-only checks now run inside the owned WSL guest, not on its Windows host.
 
 Shared setup lives in `.github/actions/setup-ci-tools`, with WSL-specific host setup in `setup-ci-wsl` and tool bootstrap in `scripts/wsl2_setup.sh`. Node, npm, Bun and Python read `.node-version`, `packageManager`, `.bun-version` and `.python-version`; uv stays at the existing CI pin. The pinned, checksum-verified `scripts/install_gh_linux.sh` supplies attestation-capable gh. Only owned cells need Rust/nextest. The contract graph is `Makefile` -> `stock_package_contract.py` / `npm_release.run_stock_contract` -> `package_contracts.run_gate`: npm pack/install use `--ignore-scripts`, computer-use audits its Rust source and Mach-O assets without running `postinstall`, and the resource-sampler build is `tsc`. No contract builds Rust; helper compilation remains owned coverage, not a skipped contract. Native setup-node's npm cache remains native-only; WSL uses its guest HOME tool cache, never Windows Node/Bun/cache paths. Frozen model-data tarballs, strict locks and release verification remain in the shared gate steps. Bun follows the repository's pinned `1.4.4` from merged #197 through `.bun-version`; #162 must preserve its future coverage producer/upload steps through this guest boundary when integrated.
 
@@ -286,15 +313,15 @@ commit gate reads the translated original PR/push payload rather than falling ba
 A host-allowlist/real-guest-adapter regression runs the actual commit gate over a disposable PR range;
 removing the payload entry fails closed with the same missing-event error as hosted WSL.
 
-WSL cells retain no docs-only or main-push bypass. Unavailable WSL, wrong distribution version/filesystem, bootstrap or gate failure fails the cell. Before ordinary artifact uploads, `capture-ci-wsl` exports only explicit synthetic artifact directories and contract JSON reports to the host. WSL Node artifacts survive standalone runs separately as `artifacts-node` in the final upload. Native upload contents stay at the previous two standalone directories; their Node reports already have the preceding `stack-*` upload. Native names remain `standalone-linux-x64` and `standalone-darwin-arm64`; WSL alone uses `standalone-wsl2-linux-x64` to avoid collision. The merged startup diagnostic gate likewise exports only its scanned directory through an atomic host-side staging rename, gates WSL upload on successful capture and names WSL evidence `standalone-startup-wsl2-linux-x64`, preserving the native `standalone-startup-linux-x64` name. The promotion consumer still reads `stack-ubuntu-24.04-personal` (`harness.promotion.PERSONAL_STACK_ARTIFACT`), unchanged; it does not consume standalone uploads. Final cleanup preserves the first guest-step failure status and bounded diagnostics. Early host diagnostics survive setup failures. No arbitrary worktree files, command logs, environment or HOME are uploaded.
+A real WSL cell retains no docs-only or main-push bypass. Unavailable WSL, wrong distribution version/filesystem, bootstrap or gate failure fails the cell. Before ordinary artifact uploads, `capture-ci-wsl` exports only explicit synthetic artifact directories and contract JSON reports to the host. `scripts/wsl2_capture.sh` still handles the former stack artifact directories; no CI job feeds them now. Native standalone artifacts are `standalone-<platform>-<stack>`, one per running stack cell, each holding only its own stack's reports. Native Node reports have the preceding `stack-*` upload. The startup diagnostic upload stays `standalone-startup-linux-x64`, personal cell only. The promotion consumer still reads `stack-ubuntu-24.04-personal` (`harness.promotion.PERSONAL_STACK_ARTIFACT`), unchanged; it does not consume standalone uploads. Final cleanup preserves the first guest-step failure status and bounded diagnostics. Early host diagnostics survive setup failures. No arbitrary worktree files, command logs, environment or HOME are uploaded.
 
 Owned guest tools reuse the exact native `taiki-e/install-action` SHA from `setup-ci-tools/action.yml`: `install_wsl_owned_tools.sh` runs its documented `main.sh`/`INPUT_*` interface with Linux/X64 metadata, checksum verification and `fallback: none`. Its manifest pins nextest to the same action-selected version as Ubuntu; no unversioned source compilation remains. Guest Rust follows the action's documented floating stable policy with rustfmt/clippy components; native Rust comes from the runner image, so each logs actual `rustc`, `cargo`, and `cargo nextest` identities rather than claiming identical compiler versions. References: [here](https://github.com/taiki-e/install-action/tree/8cca0918f8471c33515202b73f56ab27f2bed283#security-on-installation-from-github-releases).
 
 Run `40747213391` at `0d2bfb0` rejected every WSL cell in the pre-plan assertion: PowerShell returns an application collection, so comparing all `.Source` values to one expected path also compared later legacy candidates. A local real PowerShell 7.6.9 duplicate-application repro confirms that false rejection. Selection now takes only the first ordered application, logs actual/expected paths, and still rejects a legacy first candidate. This is not hosted acceptance; the previous run did not reach guest setup.
 
-Run `40742019252` at `45689e3` reached release installation in both WSL stack jobs, but their `PI_BIN` conversion caused failures before D/E could pass. Contracts failed earlier with HTTP403 in the action's unconditional Windows-2022 kernel `wsl --update`; `update: true` independently controls apt distribution updates, so setting it false would NOT fix that endpoint. No update bypass, scenario skip or blind rerun is introduced. A future existing-kernel/cache bypass would need explicit supported-version and actual-guest checks; these failures are not passes.
+Run `40742019252` at `45689e3` reached release installation in both WSL stack jobs, but their `PI_BIN` conversion caused failures before D/E could pass. Contracts failed earlier with HTTP403 in `setup-wsl`'s `wsl --update`. The action runs that only for `ImageOS == win22`, so `windows-2025` takes it out of the path entirely. `update` is independent: it only controls the apt `upgrade`, and `update: 'false'` drops that cost, while `additional-packages` still runs `apt-get update` first. Issue #297's PR must prove both on its own hosted WSL cells.
 
-Reproduce guest execution on a Windows machine with WSL2 Ubuntu-24.04 using the same setup action and `scripts/wsl2_shell.ps1 <step-script>`; run the ordinary Make targets and pytest entrypoints above. A local macOS shell test proves adapter behavior, not WSL execution. Acceptance requires all four exact-HEAD hosted WSL cells and their normal artifacts, plus the unchanged native cells; local tests are not a hosted receipt. CI triggers remain every pull request and main push, without workflow_call/dispatch or path filters; permissions stay contents-read and concurrency remains `ci-${{ github.ref }}` with cancellation.
+Reproduce guest execution on a Windows machine with WSL2 Ubuntu-24.04 using the same setup action and `scripts/wsl2_shell.ps1 <step-script>`; run the ordinary Make targets and pytest entrypoints above. A local macOS shell test proves adapter behavior, not WSL execution. Acceptance of a WSL change requires the exact-HEAD hosted `owned (wsl2)` and `contracts (wsl2)` cells and their normal artifacts, plus the native cells; local tests are not a hosted receipt. CI triggers remain every pull request and main push, without workflow_call/dispatch or path filters; permissions stay contents-read and the concurrency group remains `ci-${{ github.ref }}`.
 REA is retired, not pending WSL acceptance.
 
 `.github/workflows/installer.yml`, PRs and `main` pushes that change the installer or the harness modules it reuses, plus manual dispatch with a `stack_sha`:
@@ -385,21 +412,19 @@ bootstrap exception. Istanbul consolidation is phase 3, not part of this produce
 Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-version`, uv `0.13.1`
 (Python from `.python-version` via uv). Every action is pinned to a commit SHA.
 
-Required checks on `main`:
+Required checks on `main`, twelve contexts:
 
-- `owned (ubuntu-24.04)` and `owned (macos-14)`
-- `contracts (ubuntu-24.04)` and `contracts (macos-14)`
-- `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)` and `stack (macos-14, local)`
+- `owned (ubuntu-24.04)`, `owned (macos-14)` and `owned (wsl2)`
+- `contracts (ubuntu-24.04)`, `contracts (macos-14)` and `contracts (wsl2)`
+- `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)`, `stack (macos-14, local)`, `stack (wsl2, personal)` and `stack (wsl2, local)`
+
+Dropping a cell from a matrix would leave its context pending forever, which is why the cells that no longer test anything stay as bypass cells.
 
 The `macos-14` in these names is a stable check context, not the OS version: GitHub retired that image, so the cells run on `xcode-27` (macOS 27, GitHub names new images after the Xcode major) via `matrix.runner`. Renaming them would need a ruleset change.
 
-Migration required, not applied by this PR:
+The historical nine-context receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged. Tests explicitly add synthetic replacement matrix records; they are not hosted execution evidence.
 
-- Remove the retired `wsl2 (windows-2022)` context and add `owned (wsl2)`, `contracts (wsl2)`, `stack (wsl2, personal)` and `stack (wsl2, local)` only after their hosted runs pass.
-- Preserve the existing eight native contexts. Until an authorized orchestrator updates the ruleset, the old WSL context stays pending and merge/promotion must remain blocked. No remote protection change is authorized here.
-- The historical nine-context receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged. Tests explicitly add synthetic replacement matrix records; they are not hosted execution evidence.
-
-The historical nine jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
+The twelve jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
@@ -452,7 +477,7 @@ The historical nine jobs are the configured required checks of ruleset `main req
     <gate-history-file> nredd/pi-harness
   ```
   This uses real green checks and the same receipt/expected-head enforcement, not a bypass.
-  Any update for strict base freshness invalidates both reviews. Refresh the distribution copy
+  Any branch update invalidates both reviews. Refresh the distribution copy
   only after that reviewed merge. This procedure does not authorize merging router PR135,
   publishing packages, or activating live configuration
 - `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
@@ -494,7 +519,7 @@ absence/cleanup regressions in dotfiles' `tests/rea-retirement.test.mjs`. See
 Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
 A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
 `stack` still tests the released Homebrew-shaped Node bundle. Fork release `v1.3.0-nredd.8`
-publishes the coding-agent and pi-tui npm tarballs, no standalone assets. Each OS's existing `stack (..., personal)` job also builds the exact
+publishes the coding-agent and pi-tui npm tarballs, no standalone assets. Each running `stack` cell also builds the exact
 Gitlinked source using `.bun-version` (1.4.4), the official `scripts/build-binaries.sh`, and frozen
 release model data with `build:offline`. It does not depend on a future standalone release, commit
 binaries, or test a Node wrapper in place of the compiled executable.
@@ -502,7 +527,7 @@ binaries, or test a Node wrapper in place of the compiled executable.
 Bun scope:
 
 - Native execution on `xcode-27`, macOS 27 (darwin-arm64) and `ubuntu-24.04` (baseline linux-x64).
-  Each job reuses one extracted official archive for both stacks, with independent installations
+  Each running cell builds once for its own stack
 - `--runtime bun-standalone` skips only the seven marked auth dispatch/refresh cases from
   `integration/scenarios/test_auth_transport.py`: Bun ignores the `NODE_OPTIONS --import` redirect
   and egress/readiness preload in `harness/anthropic_mock.py`. The missing-preload refusal case runs
@@ -525,14 +550,7 @@ Bun scope:
   REA is retired, not an outstanding standalone acceptance requirement.
   Source-built D/E coverage is not published-binary acceptance or a completed Bun checklist
 
-Capacity: four WSL matrix cells replace one old WSL job, adding three Windows-hosted admissions and zero macOS jobs. Full CI still requests four macOS jobs,
-not six. The existing `stack (..., personal)` runner builds once and runs both standalone stacks
-serially with two pytest workers; `stack (..., local)` adds no work. No build producer, artifact
-transfer or extra queue admission. Budget an additional 7-12 minutes on macOS personal and 5-9 minutes
-on Ubuntu personal (12-21 added runner minutes total); local cells add zero. These are estimates until
-CI measurements, not promised runtimes. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid
-another build and two stack installs while establishing both current OS targets. The native required
-checks are unchanged; Bun failures fail their personal stack check. WSL required-check migration is described above.
+Capacity: full PR CI requests three macOS jobs (`owned`, `contracts`, `stack (macos-14, local)`) and two Windows jobs only with WSL inputs. It used to request four of each, every run. Ubuntu now builds the standalone twice, once per stack cell, where it used to build once and run both stacks serially. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid another build and two stack installs. Bun failures fail their own stack cell.
 
 `.github/workflows/publish.yml`, pushes of tags matching `@nredd/*@*`:
 

@@ -10,11 +10,11 @@ benchmarks, and exact-stack release tooling. The Pi core retains its upstream hi
   login: [install](docs/install.md). macOS arm64 and Linux x86-64 only. The hardened installer requires
   both attested snapshot and complete runtime graph assets; old snapshot-only promotions are unsupported.
   Source-selected npm locks replay offline with scripts disabled: [details](docs/runtime-locks.md).
-- CI builds the Bun standalone from the Gitlinked core and runs the stack D/E scenarios on it on darwin-arm64 and
-  linux-x64; seven auth-interception cases are explicit skips. linux-arm64 is NOT RUN. Details [here](docs/bun-prerequisite.md).
-- CI also runs the existing personal-stack Node D/E entrypoint once on a hosted `windows-2022` runner inside verified
-  Ubuntu WSL2, after copying the checkout from the mounted Windows drive to WSL's Linux filesystem. Coverage and exclusions:
-  [CI](docs/ci.md).
+- CI builds the Bun standalone from the Gitlinked core and runs the stack D/E scenarios on it on darwin-arm64 (`local`
+  only) and linux-x64; seven auth-interception cases are explicit skips. linux-arm64 is NOT RUN. Details [here](docs/bun-prerequisite.md).
+- CI also runs the owned gates and packed contracts on a hosted `windows-2025` runner inside verified Ubuntu WSL2, after
+  copying the checkout from the mounted Windows drive to WSL's Linux filesystem: on `main`, and on PRs that change CI or
+  WSL inputs. No stack runs in WSL. Coverage and exclusions: [CI](docs/ci.md).
 
 Current status is [here](PLAN.md); the original migration plan and its superseded requirements are
 [here](docs/migration-plan.md). Primary owned-source coverage enforcement is enabled through
@@ -70,7 +70,7 @@ Stock Pi compatibility is `make check-package-contracts`' job, not the unit gate
 Development (Node with npm workspaces, `uv`, Git, macOS or Linux; the benchmark is macOS-only):
 
 ```sh
-make install               # verify root core overrides (stdlib python3), then npm ci --ignore-scripts; uv sync --locked
+make install               # make install-owned (verify root core overrides with stdlib python3, npm ci --ignore-scripts, uv sync --locked), then make install-benchmark
 make check                 # owned-code gates, see below
 make check-package-contracts # explicit: real tarballs through stock Pi 1.3.0, see docs/package-contracts.md
 make check-todo-package-contract # explicit: packed todo tool through stock Pi 1.3.0

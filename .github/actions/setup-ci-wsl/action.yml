@@ -22,7 +22,7 @@ runs:
       with:
         distribution: Ubuntu-24.04
         wsl-version: '2'
-        update: 'true'
+        update: 'false'
         additional-packages: build-essential curl fd-find git jq libatomic1 libssl-dev pkg-config python3 ripgrep tmux unzip xz-utils
     - name: Assert WSL2 and prepare guest
       shell: pwsh
