@@ -8,7 +8,7 @@ those documents through `harness/sandbox.py::install_stack`, never a second scen
 This is a coverage audit, not a claim that each layer exhaustively tests each package.
 `A` = package-native, `B` = historical fork-native receipt, `A-stack` = real factories on core's harness,
 `C` = packed artifact on stock Pi, `D/E` = installed released binary. Native workspace suites run
-as each package's `npm run check` in `owned`; A-stack runs on Vitest and pinned Bun there too. D/E run only in CI on both OSes and both stacks.
+as each package's `npm run check` in `owned`; A-stack runs on Vitest and pinned Bun there too. D/E run only in CI: `personal` on Ubuntu, `local` on Ubuntu and macOS.
 
 Shared D evidence for every enabled source is
 `integration/scenarios/test_stack.py::test_extensions_load_without_warnings`: real

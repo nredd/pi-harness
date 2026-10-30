@@ -1,4 +1,4 @@
-.PHONY: help verify-root-overrides install check check-ts check-scripts check-coverage check-integration check-probes check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
+.PHONY: help verify-root-overrides install install-owned install-benchmark check check-ts check-scripts check-coverage check-integration check-probes check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
@@ -9,9 +9,13 @@ help:  ## List targets
 verify-root-overrides:  ## Verify root core overrides against the lockfile, SHA256SUMS/legacy pins and provenance
 	PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
 
-install: verify-root-overrides  ## Verify root core overrides, then install owned dependencies (npm ci --ignore-scripts, uv sync --locked). Never touches forks/
+install: install-owned install-benchmark  ## Install everything `make check` needs. Never touches forks/
+
+install-owned: verify-root-overrides  ## Verify root core overrides, then install owned dependencies (npm ci --ignore-scripts, uv sync --locked). Never touches forks/
 	env -u GH_TOKEN npm ci --ignore-scripts
 	cd integration && env -u GH_TOKEN uv sync --locked
+
+install-benchmark:  ## Install benchmarks/comparison, only `check-benchmark` reads it
 	cd benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
 
 check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
