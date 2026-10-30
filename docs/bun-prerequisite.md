@@ -9,7 +9,7 @@ Current CI scope (2026-10-29):
   (`v1.3.0-nredd.8`) using root `.bun-version` (1.4.4; upgrade evidence [here](bun-upgrade.md)); the core has no `.bun-version` file.
   They restore npm release model data, run the official `forks/pi/scripts/build-binaries.sh`
   with `--offline-model-data`, and execute the native archive on macOS ARM64 and Linux x64.
-  Each build is reused for both explicit stacks. No binaries are committed or published
+  Each running `stack` cell builds for its own explicit stack. No binaries are committed or published
 - Only seven auth dispatch/refresh cases are skipped per stack, with an explicit reason in the
   test markers/collection policy and JUnit: `NODE_OPTIONS --import` interception is unavailable.
   `test_request_uses_auth_json_token_with_claude_code_headers[missing-preload]` still exercises

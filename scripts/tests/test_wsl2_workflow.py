@@ -39,10 +39,10 @@ def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
     assert "    branches: [main]" in workflow
     assert not (WORKFLOW.parent / "wsl2.yml").exists()
     assert workflow.count("os: [ubuntu-24.04, macos-14, wsl2]") == 3
-    assert workflow.count("runner: windows-2022") == 3
+    assert workflow.count("runner: windows-2025") == 2
     assert "runs-on: wsl2" not in workflow
     assert "timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}" in workflow
-    assert "timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 40 }}" in workflow
+    assert "timeout-minutes: 40" in workflow
     assert "contents: read" in workflow
 
 
@@ -178,8 +178,8 @@ def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     assert "trap finish_capture EXIT" in capture
     assert capture.index("trap finish_capture EXIT") < capture.index("for name in")
     assert "cleanup_wsl2_worktree" in capture
-    assert workflow.count("cleanup: cleanup") == 3
-    assert workflow.count("path: ${{ runner.temp }}/wsl2-diagnostics/") == 3
+    assert workflow.count("cleanup: cleanup") == 2
+    assert workflow.count("path: ${{ runner.temp }}/wsl2-diagnostics/") == 2
     assert "if: always()" in workflow
     assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in workflow
     assert "if-no-files-found: warn" in workflow

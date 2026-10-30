@@ -169,7 +169,8 @@ def test_native_shell_preserves_implicit_baseline_pipeline_behavior(tmp_path: Pa
     assert baseline.stdout == "survived"
     assert changed.returncode == 1
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    assert workflow.count("github.workspace) || 'bash -e {0}' }}") == 3
+    assert workflow.count("github.workspace) || 'bash -e {0}' }}") == 2
+    assert "\n    defaults:\n      run:\n        shell: bash -e {0}\n" in workflow
 
 
 @pytest.mark.parametrize("references", [1, 0, 2])
