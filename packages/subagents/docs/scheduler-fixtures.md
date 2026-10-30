@@ -6,8 +6,9 @@ For contributors testing scheduled model selection.
 `SubagentScheduler({ clock })`. Construct ISO deadlines from `clock.now()` and
 advance that same clock to invoke the public timer path. Drain the mocked
 runner's promise chain with `setImmediate`, not a wall-time polling deadline.
-The runner stand-in still calls the real model selector; this does not replace
-real-runner coverage in `config-model-fallback-real-runner.test.ts`.
+The scheduler still calls the real model selector before passing its resolved
+selection to the runner stand-in; this does not replace real-runner coverage in
+`config-model-fallback-real-runner.test.ts`.
 
 The former fixture computed `Date.now() + 50`, then called `addJob`. If wall time
 advanced 50ms before `buildJob` validated the schedule, `detectSchedule` correctly
