@@ -8,6 +8,9 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { agentDir } from "./agent-dir.ts";
+
+export { agentDir };
 
 export const FEATURES = ["titles", "rules", "goal", "loop", "monitor", "diff", "stats", "mon"] as const;
 export type Feature = (typeof FEATURES)[number];
@@ -76,11 +79,6 @@ export function resolveCollapseKey(raw: unknown): string {
 	const key = typeof raw === "string" ? raw.trim().toLowerCase() : "";
 	if (key === COLLAPSE_KEY_OFF) return COLLAPSE_KEY_OFF;
 	return isValidKeySpec(key) ? key : DEFAULT_COLLAPSE_KEY;
-}
-
-/** Resolve the agent configuration directory at call time; an injected home avoids runtime-global home lookup. */
-export function agentDir(homeDir = homedir()): string {
-	return process.env.PI_CODING_AGENT_DIR ?? join(homeDir, ".pi", "agent");
 }
 
 export function configPath(directory?: string, homeDir = homedir()): string {

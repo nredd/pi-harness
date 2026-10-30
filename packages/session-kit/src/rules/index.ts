@@ -6,9 +6,9 @@
  */
 
 import { readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { agentDir } from "../agent-dir.ts";
 import type { KitConfig } from "../config.ts";
 import {
 	formatRules,
@@ -22,10 +22,6 @@ import {
 	relativeToCwd,
 	TOOLS_WITH_PATH,
 } from "./logic.ts";
-
-function agentDir(homeDir = homedir()): string {
-	return process.env.PI_CODING_AGENT_DIR ?? path.join(homeDir, ".pi", "agent");
-}
 
 /** Load every rule in a directory; a missing directory or unreadable file is skipped. */
 export function loadRuleDir(dir: string, source: "project" | "user"): Rule[] {
