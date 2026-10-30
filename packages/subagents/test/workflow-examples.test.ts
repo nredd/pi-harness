@@ -31,9 +31,16 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createCoverageMap } from "@vitest/istanbul-lib-coverage";
+import { createInstrumenter } from "@vitest/istanbul-lib-instrument";
 import { describe, expect, it } from "vitest";
 import { extractMeta, hasMetaDeclaration, WorkflowMetaError } from "../src/workflow/meta.js";
-import { runWorkflow, type WorkflowHost, type WorkflowSpawnRequest } from "../src/workflow/runtime.js";
+import {
+  type RunWorkflowOptions,
+  runWorkflow,
+  type WorkflowHost,
+  type WorkflowSpawnRequest,
+} from "../src/workflow/runtime.js";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../examples/workflows", import.meta.url));
 const LIB_DIR = join(EXAMPLES_DIR, "lib");
@@ -48,6 +55,32 @@ const childFiles = readdirSync(LIB_DIR)
   .sort();
 
 const readExample = (dir: string, name: string) => readFileSync(join(dir, name), "utf-8");
+const instrumenter = createInstrumenter({ coverageGlobalScope: "globalThis", coverageGlobalScopeFunc: false });
+const workflowCoverage = createCoverageMap({});
+// Vitest 5 uses a separate host-side store; VM instrumentation retains Istanbul's default.
+const coverageGlobal = globalThis as typeof globalThis & { __VITEST_COVERAGE__?: unknown };
+const workflowSourcePaths = new Map(
+  [
+    ...exampleFiles.map(name => [readExample(EXAMPLES_DIR, name), join(EXAMPLES_DIR, name)] as const),
+    ...childFiles.map(name => [readExample(LIB_DIR, name), join(LIB_DIR, name)] as const),
+  ],
+);
+
+const transformScriptBody: NonNullable<RunWorkflowOptions["transformScriptBody"]> = ({ script, body }) => {
+  const path = workflowSourcePaths.get(script);
+  if (path === undefined) throw new Error("Workflow coverage transform received an unknown source.");
+  return instrumenter.instrumentSync(body, path);
+};
+
+function collectCoverage(coverage: unknown): void {
+  workflowCoverage.merge(coverage as never);
+  // Do not add example records to the primary src-only report when this suite runs there.
+  if (process.env.PI_WORKFLOW_EXAMPLE_COVERAGE === "1") {
+    const map = createCoverageMap(coverageGlobal.__VITEST_COVERAGE__ as never);
+    map.merge(coverage as never);
+    coverageGlobal.__VITEST_COVERAGE__ = map.toJSON();
+  }
+}
 
 /**
  * Args for examples that need them. An example not listed here runs with
@@ -71,7 +104,7 @@ const SAMPLE_ARGS: Record<string, unknown> = {
  * The payloads still have to satisfy the real schemas — the runtime validates
  * them — so a wrong shape here fails the example rather than passing quietly.
  */
-function stubHost(options: { failsFor?: string[]; gateFailsFor?: string[] } = {}): {
+function stubHost(options: { failsFor?: string[]; gateFailsFor?: string[]; failsLoadingWorkflow?: string[] } = {}): {
   host: WorkflowHost;
   spawns: WorkflowSpawnRequest[];
   resumes: string[];
@@ -143,6 +176,9 @@ function stubHost(options: { failsFor?: string[]; gateFailsFor?: string[] } = {}
       // WorkflowScriptRef is { name?, scriptPath? } — never a bare string.
       const name = ref.name;
       if (name === undefined) return { ok: false, message: "only `name` refs are stubbed" };
+      if (options.failsLoadingWorkflow?.includes(name)) {
+        return { ok: false, message: `cannot load child workflow "${name}"` };
+      }
       const file = childFiles.find(child => child === `${name}.js`);
       if (file === undefined) return { ok: false, message: `no child workflow "${name}"` };
       return { ok: true, script: readExample(LIB_DIR, file) };
@@ -152,7 +188,13 @@ function stubHost(options: { failsFor?: string[]; gateFailsFor?: string[] } = {}
 }
 
 const runExample = (name: string, host: WorkflowHost) =>
-  runWorkflow({ script: readExample(EXAMPLES_DIR, name), host, args: SAMPLE_ARGS[name] });
+  runWorkflow({
+    script: readExample(EXAMPLES_DIR, name),
+    host,
+    args: SAMPLE_ARGS[name],
+    onScriptCoverage: collectCoverage,
+    transformScriptBody,
+  });
 
 describe("shipped example workflows", () => {
   it("ships at least the examples the guide links", () => {
@@ -198,7 +240,12 @@ describe("shipped example workflows", () => {
     it("tolerates being run with no args at all", async () => {
       // Every example documents `args?.x ?? default`; this is what pins it.
       const { host } = stubHost();
-      const result = await runWorkflow({ script: readExample(EXAMPLES_DIR, name), host });
+      const result = await runWorkflow({
+        script: readExample(EXAMPLES_DIR, name),
+        host,
+        onScriptCoverage: collectCoverage,
+        transformScriptBody,
+      });
 
       expect(result.error).toBeUndefined();
       expect(result.status).toBe("completed");
@@ -257,6 +304,29 @@ describe("shipped example workflows", () => {
       expect(spawns.map(spawn => spawn.label)).toEqual(["scan"]);
     });
 
+    it("compose returns a nested-workflow load failure", async () => {
+      const { host, spawns } = stubHost({ failsLoadingWorkflow: ["count-child"] });
+      const result = await runExample("compose.js", host);
+
+      expect(result.value).toEqual({
+        ok: false,
+        reason: 'workflow("count-child"): cannot load child workflow "count-child"',
+      });
+      expect(result.agentCount).toBe(0);
+      expect(spawns).toEqual([]);
+    });
+
+    it("review-panel returns a null verdict when every reviewer fails", async () => {
+      const { host, spawns } = stubHost({
+        failsFor: ["review:correctness", "review:security", "review:performance"],
+      });
+      const result = await runExample("review-panel.js", host);
+
+      expect(result.value).toEqual({ reviewed: 0, verdict: null });
+      expect(result.agentCount).toBe(3);
+      expect(spawns.map(spawn => spawn.label)).toEqual(["review:correctness", "review:security", "review:performance"]);
+    });
+
     it("gated-fix passes straight through when the gate is happy", async () => {
       const { host, spawns } = stubHost();
       const result = await runExample("gated-fix.js", host);
@@ -280,6 +350,56 @@ describe("shipped example workflows", () => {
       ]);
       expect(result.agentCount).toBe(3);
     });
+  });
+
+  it("collects counters from every executed workflow VM", () => {
+    const collected = workflowCoverage.toJSON();
+    const expected = [
+      ...exampleFiles.map(name => join(EXAMPLES_DIR, name)),
+      ...childFiles.map(name => join(LIB_DIR, name)),
+    ].sort();
+
+    const exampleCoverage = Object.fromEntries(
+      expected.map(path => [path, collected[path]]),
+    ) as Record<
+      string,
+      { s: Record<string, number>; statementMap: Record<string, { start: { line: number } }> }
+    >;
+
+    if (process.env.PI_WORKFLOW_EXAMPLE_COVERAGE !== "1") {
+      const primary = createCoverageMap(coverageGlobal.__VITEST_COVERAGE__ as never);
+      expect(primary.files().filter(path => expected.includes(path))).toEqual([]);
+    }
+    expect(Object.keys(exampleCoverage).sort()).toEqual(expected);
+    for (const [source, path] of workflowSourcePaths) {
+      const metaStartLine = source.slice(0, source.indexOf("export const meta")).split("\n").length;
+      const metaEndLine = source.slice(0, extractMeta(source).metaEnd).split("\n").length;
+      const file = exampleCoverage[path];
+      expect(file, `${path} worker VM must return coverage`).toBeDefined();
+      if (file === undefined) continue;
+      expect(Object.values(file.s).some(hit => hit > 0), `${path} must execute instrumented source`).toBe(true);
+      const metaStatement = Object.entries(file.statementMap).find(
+        ([, location]) => location.start.line >= metaStartLine && location.start.line <= metaEndLine,
+      );
+      expect(metaStatement, `${path} metadata initializer must be instrumented`).toBeDefined();
+      expect(file.s[metaStatement?.[0] ?? ""], `${path} metadata initializer must execute`).toBeGreaterThan(0);
+    }
+  });
+
+  it("does not inspect workflow coverage without an explicit collector", async () => {
+    const { host } = stubHost();
+    const result = await runWorkflow({
+      script: [
+        "export const meta = { name: 'coverage-isolation', description: 'assert the default path' };",
+        // Node's contextified global can swallow a throwing getter. An uncloneable
+        // return value detects both the getter read and accidental postMessage transport.
+        "Object.defineProperty(globalThis, '__coverage__', { get() { return () => 'must not transport coverage'; } });",
+        "return 1;",
+      ].join("\n"),
+      host,
+    });
+
+    expect(result).toMatchObject({ status: "completed", value: 1 });
   });
 
   // A negative case, rather than shipping a deliberately broken file.

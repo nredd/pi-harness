@@ -137,6 +137,126 @@ def test_base_os_floor_cannot_disappear(tmp_path: Path, runner_os: str) -> None:
         check_ratchet(current, base)
 
 
+def test_target_allowance_preserves_only_scoped_foreign_native_misses(tmp_path: Path) -> None:
+    """Allow the declared Linux native slice without weakening portable coverage.
+
+    Parameters:
+        tmp_path (Path): Disposable two-source LCOV/source root.
+    Returns:
+        None: Only the declared foreign native file receives its historical allowance.
+    Raises:
+        AssertionError: A target allowance becomes a package-wide budget.
+    """
+    setup_report(tmp_path)
+    package = tmp_path / "packages/example"
+    (package / "src/darwin.ts").write_text("export function foreign() { return 0; }\n")
+    report = package / "coverage/lcov.info"
+    foreign = "\n".join(
+        [
+            "SF:src/darwin.ts",
+            *[f"FN:{index},foreign{index}" for index in range(1, 9)],
+            *[f"FNDA:0,foreign{index}" for index in range(1, 9)],
+            "FNF:8",
+            "FNH:0",
+            *[f"DA:{index},0" for index in range(1, 48)],
+            "LF:47",
+            "LH:0",
+            "end_of_record",
+        ]
+    )
+    portable = "\n".join(
+        [
+            "SF:src/index.ts",
+            "FN:1,answer",
+            "FNDA:1,answer",
+            "FNF:1",
+            "FNH:1",
+            "DA:1,1",
+            "DA:2,1",
+            "LF:2",
+            "LH:2",
+            "end_of_record",
+        ]
+    )
+    report.write_text(f"TN:\n{foreign}\n{portable}\n")
+    data = policy().model_dump()
+    data["enforce_target"] = True
+    data["packages"]["example"]["signals"]["primary"]["files"] = None
+    data["packages"]["example"]["signals"]["primary"]["max_uncovered"]["linux"] = {
+        "lines": 47,
+        "functions": 8,
+    }
+    data["packages"]["example"]["target_allowances"] = [
+        {
+            "owner": "example",
+            "os": "linux",
+            "files": ["src/darwin.ts"],
+            "max_uncovered": {"lines": 47, "functions": 8},
+            "reason": "Linux cannot execute the owned Darwin FFI source.",
+        }
+    ]
+    cfg = Policy.model_validate(data)
+    assert not account(tmp_path, cfg, "linux")[1]
+    lower_declared_floor = cfg.model_copy(deep=True)
+    lower_declared_floor.packages["example"].signals["primary"].max_uncovered["linux"] = Counts(
+        lines=46, functions=7
+    )
+    assert account(tmp_path, lower_declared_floor, "linux")[1] == [
+        "example/primary: Budget exceeded: 47 lines, 8 functions"
+    ]
+    foreign_under_floor = foreign.replace("DA:47,0\n", "").replace("LF:47", "LF:46")
+    portable_miss = portable.replace("DA:2,1", "DA:2,0").replace("LH:2", "LH:1")
+    report.write_text(f"TN:\n{foreign_under_floor}\n{portable_miss}\n")
+    errors = account(tmp_path, cfg, "linux")[1]
+    assert errors == ["example/primary: Target allowance excludes uncovered source: 'src/index.ts'"]
+    assert "Budget exceeded" in account(tmp_path, cfg, "darwin")[1][0]
+    missing_data = cfg.model_dump()
+    missing_data["packages"]["example"]["target_allowances"][0]["files"] = ["src/missing.ts"]
+    missing = Policy.model_validate(missing_data)
+    assert account(tmp_path, missing, "linux")[1] == [
+        "example/primary: Target allowance files missing from primary report: '['src/missing.ts']'"
+    ]
+
+
+def test_target_allowance_ratchet_cannot_expand_scope_or_budget() -> None:
+    """Reject new target allowance OSes, paths and budgets after activation.
+
+    Parameters:
+        None.
+    Returns:
+        None: A base-enabled allowance can only be removed or tightened.
+    Raises:
+        AssertionError: A later policy expands the target exception.
+    """
+    data = policy().model_dump()
+    data["enforce_target"] = True
+    data["packages"]["example"]["target_allowances"] = [
+        {
+            "owner": "example",
+            "os": "linux",
+            "files": ["src/index.ts"],
+            "max_uncovered": {"lines": 1, "functions": 1},
+            "reason": "Fixture-only foreign source.",
+        }
+    ]
+    base = Policy.model_validate(data)
+    with pytest.raises(ValueError, match="Target allowance budget exceeds base floor"):
+        check_ratchet(base, policy())
+    disabled = base.model_dump()
+    disabled["enforce_target"] = False
+    with pytest.raises(ValidationError, match="Target allowances require the global target"):
+        Policy.model_validate(disabled)
+    for change, expected in [
+        (("os", "darwin"), "OS"),
+        (("files", ["src/index.ts", "src/extra.ts"]), "scope"),
+        (("max_uncovered", {"lines": 2, "functions": 1}), "budget"),
+    ]:
+        current_data = base.model_dump()
+        current_data["packages"]["example"]["target_allowances"][0][change[0]] = change[1]
+        with pytest.raises(ValueError, match=f"Target allowance {expected}"):
+            check_ratchet(Policy.model_validate(current_data), base)
+
+
 def test_enabled_global_target_cannot_be_disabled(tmp_path: Path) -> None:
     """Reject base-enabled/current-disabled even with passing real LCOV.
 

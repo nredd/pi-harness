@@ -139,6 +139,42 @@ class Signal(StrictModel):
         return self
 
 
+class TargetAllowance(StrictModel):
+    """A reviewed nonzero target budget for one owned foreign-source slice."""
+
+    owner: str = Field(min_length=1, description="Package name that owns this exception.")
+    os: Literal["darwin", "linux"] = Field(
+        description="Runner OS unable to execute the declared source slice."
+    )
+    files: list[str] = Field(min_length=1, description="Exact package-relative primary-source paths.")
+    max_uncovered: Counts = Field(
+        description="Historical uncovered-line/function ceiling for this source slice."
+    )
+    reason: str = Field(min_length=1, description="Why this runner cannot execute the owned source slice.")
+
+    @model_validator(mode="after")
+    def exact_nonzero_scope(self) -> TargetAllowance:
+        """Reject unowned-looking, broad or zero-budget target exceptions.
+
+        Parameters:
+            None.
+        Returns:
+            TargetAllowance: Validated exact source slice.
+        Raises:
+            ValueError: The owner/reason is blank, source scope is not exact or the budget is zero.
+        """
+        if not self.owner.strip() or not self.reason.strip():
+            raise ValueError("A target allowance requires nonblank owner and reason")
+        if len(set(self.files)) != len(self.files) or any(
+            Path(path).is_absolute() or ".." in Path(path).parts or any(c in path for c in "*?[")
+            for path in self.files
+        ):
+            raise ValueError("A target allowance requires unique exact package-relative source paths")
+        if not self.max_uncovered.lines and not self.max_uncovered.functions:
+            raise ValueError("A target allowance must preserve a nonzero historical budget")
+        return self
+
+
 class Package(StrictModel):
     root: str = Field(description="Repository-relative package source root.")
     owned: list[str] = Field(
@@ -155,6 +191,10 @@ class Package(StrictModel):
     )
     goal_reason: str = Field(default="", description="Required reason for domains outside the global goal.")
     signals: dict[str, Signal] = Field(description="Independent primary and compatibility coverage signals.")
+    target_allowances: list[TargetAllowance] = Field(
+        default_factory=list,
+        description="Reviewed per-OS foreign-source primary exceptions used only after target activation.",
+    )
 
     @model_validator(mode="after")
     def measurement_status(self) -> Package:
@@ -183,6 +223,15 @@ class Package(StrictModel):
             signal.enforcement != "report-only" for signal in self.signals.values()
         ):
             raise ValueError("Signals outside the global goal must remain report-only")
+        if self.target_allowances and (
+            self.status != "measured"
+            or self.goal != "100-percent"
+            or "primary" not in self.signals
+            or self.signals["primary"].enforcement != "enforced"
+        ):
+            raise ValueError("Target allowances require a measured eligible enforced primary signal")
+        if len({allowance.os for allowance in self.target_allowances}) != len(self.target_allowances):
+            raise ValueError("Target allowances require one exact source scope per OS")
         return self
 
 
@@ -271,6 +320,14 @@ class Policy(StrictModel):
         """
         if self.target.lines or self.target.functions:
             raise ValueError("The target must be zero uncovered lines and functions")
+        allowances = [
+            allowance for package in self.packages.values() for allowance in package.target_allowances
+        ]
+        if allowances and not self.enforce_target:
+            raise ValueError("Target allowances require the global target to be enabled")
+        for name, package in self.packages.items():
+            if any(allowance.owner != name for allowance in package.target_allowances):
+                raise ValueError(f"Target allowance owner must match package: '{name}'")
         return self
 
 
@@ -703,6 +760,52 @@ def check_enforcement_changes(current: Policy, base: Policy) -> None:
         )
 
 
+def check_target_allowance_ratchet(current: Policy, base: Policy) -> None:
+    """Restrict target allowances to existing floors and monotonic source slices.
+
+    Parameters:
+        current (Policy): Current reviewed policy.
+        base (Policy): Immutable base policy.
+    Returns:
+        None: Target allowances preserve the existing per-OS source and budget ratchet.
+    Raises:
+        ValueError: An allowance is introduced outside activation or expands source, OS or budget beyond base.
+    """
+    if not current.enforce_target:
+        return
+    for name, package in current.packages.items():
+        allowances = {allowance.os: allowance for allowance in package.target_allowances}
+        previous = base.packages.get(name)
+        if previous is None:
+            if allowances:
+                raise ValueError(f"Target allowance has no base package: '{name}'")
+            continue
+        prior_allowances = {allowance.os: allowance for allowance in previous.target_allowances}
+        if not base.enforce_target:
+            primary = previous.signals.get("primary")
+            for runner_os, allowance in allowances.items():
+                if primary is None or runner_os not in primary.max_uncovered:
+                    raise ValueError(f"Target allowance has no base primary floor: '{name}/{runner_os}'")
+                floor = primary.max_uncovered[runner_os]
+                if (
+                    allowance.max_uncovered.lines > floor.lines
+                    or allowance.max_uncovered.functions > floor.functions
+                ):
+                    raise ValueError(f"Target allowance budget exceeds base floor: '{name}/{runner_os}'")
+            continue
+        for runner_os, allowance in allowances.items():
+            if runner_os not in prior_allowances:
+                raise ValueError(f"Target allowance OS expansion: '{name}/{runner_os}'")
+            prior = prior_allowances[runner_os]
+            if not set(allowance.files).issubset(prior.files):
+                raise ValueError(f"Target allowance scope expansion: '{name}/{runner_os}'")
+            if (
+                allowance.max_uncovered.lines > prior.max_uncovered.lines
+                or allowance.max_uncovered.functions > prior.max_uncovered.functions
+            ):
+                raise ValueError(f"Target allowance budget expansion: '{name}/{runner_os}'")
+
+
 def check_ratchet(current: Policy, base: Policy) -> None:
     """Ratchet enforced budgets and require explicit declarations for enforcement downgrades.
 
@@ -717,6 +820,7 @@ def check_ratchet(current: Policy, base: Policy) -> None:
     if base.enforce_target and not current.enforce_target:
         raise ValueError("Cannot disable global target")
     check_enforcement_changes(current, base)
+    check_target_allowance_ratchet(current, base)
     for name, previous in base.packages.items():
         if name not in current.packages:
             raise ValueError(f"Removed package: '{name}'")
@@ -822,6 +926,43 @@ def validate_signal_inventory(owned: set[str], signal_name: str, signal: Signal)
         raise ValueError("Enforced Bun signal must measure every owned executable file")
 
 
+def target_budget(
+    policy: Policy,
+    package: Package,
+    runner_os: str,
+    records: dict[str, FileCoverage],
+) -> Counts:
+    """Select the zero target or validate one reviewed foreign-source allowance.
+
+    Parameters:
+        policy (Policy): Validated coverage policy.
+        package (Package): Package whose primary report was parsed.
+        runner_os (str): OS associated with the parsed report.
+        records (dict[str, FileCoverage]): Complete validated primary report records.
+    Returns:
+        Counts: The applicable budget, zero except for the declared foreign-source slice.
+    Raises:
+        ValueError: A declared source is missing or uncovered source falls outside the allowance.
+    """
+    allowance = next((item for item in package.target_allowances if item.os == runner_os), None)
+    if allowance is None:
+        return policy.target
+    missing = set(allowance.files) - records.keys()
+    if missing:
+        raise ValueError(f"Target allowance files missing from primary report: '{sorted(missing)}'")
+    allowed = set(allowance.files)
+    for path, counters in records.items():
+        if path not in allowed and (counters.uncovered_lines or counters.uncovered_functions):
+            raise ValueError(f"Target allowance excludes uncovered source: '{path}'")
+    declared = package.signals["primary"].max_uncovered.get(runner_os)
+    if declared is None:
+        raise ValueError(f"Target allowance has no declared primary floor: '{runner_os}'")
+    return Counts(
+        lines=min(allowance.max_uncovered.lines, declared.lines),
+        functions=min(allowance.max_uncovered.functions, declared.functions),
+    )
+
+
 def account(
     root: Path,
     policy: Policy,
@@ -883,7 +1024,7 @@ def account(
                 if measure:
                     continue
                 budget = (
-                    policy.target
+                    target_budget(policy, package, runner_os, records)
                     if policy.enforce_target and package.goal == "100-percent" and signal_name == "primary"
                     else signal.max_uncovered[runner_os]
                 )

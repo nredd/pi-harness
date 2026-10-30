@@ -44,7 +44,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
     "test:bun": "bun test ./test/confirmation-session.test.ts ./test/decline-session.test.ts ./test/policy-session.test.ts ./test/transcript-session.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun",
-    "test:dist": "vitest run ./test/build-runtime.test.ts",
+    "test:dist": "vitest run --config vitest.runtime-build.config.ts --coverage",
     "prepack": "npm run build"
   },
   "peerDependencies": {
