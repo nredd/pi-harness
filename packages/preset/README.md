@@ -142,10 +142,20 @@ Local overrides shadow these packaged definitions; update their managed source s
 
 ## Models and roles
 
-Agents carry no `model:` field. `code-review` keeps its explicit reviewer model,
-`openai-codex/gpt-6.1-sol`, and `ship-issue` keeps its explicit `critic` models (`sonnet`,
-`opus`). These stay as-is during the migration. The migration's own PR reviews continue to
-select Sol explicitly; a future configurable role is not permission to substitute reviewers.
+Agents and workflow skills carry no forced model. `code-review` captures the original PR merge-base
+and one full reviewed HEAD, binds both axis diffs and prompts to that entire range, and discards both
+reports if HEAD changes. Renewed axes retain the original base through the new final HEAD; corrective
+deltas are supplemental only. Top-level parents
+launch the separate Standards and Spec `code-reviewer` calls without a model override; delegated
+workers use blocking calls and consume their inline results. `ship-issue` uses one supplementary
+critic and requires the continuing parent to run its independent final critic after exact-HEAD review.
+Parent sessions keep ownership through the single PR's terminal outcome; auto-merge is permitted
+only when applicable protection is readable, effective and not bypassable by the merging caller.
+Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
+Critic receipts retain the original SHA-bound
+invocation and tool-routing metadata, accepting its native findings-only output rather than a
+fabricated `Checked:` checklist. A future configurable role is not permission to silently
+substitute reviewers.
 
 No preset agent pins `thinking:`. With no `thinking` on the `Agent` call, pi-subagents passes no level
 to the child session, so pi picks it: the per-model setting, else `defaultThinkingLevel`, clamped to the
@@ -183,8 +193,9 @@ dependency tests, `npm pack` allowlist/license tests, and real Pi 1.3.0 resource
 `HOME`/agent dir with no live model calls or auth. Every test runs under Vitest and Bun.
 
 Packed-tarball evidence (`make check-package-contracts`, see
-[package contracts](../../docs/package-contracts.md)): the packed preset is audited against its
-multi-license contract and installed alone. Child behavior of the `code-reviewer` agent (tools exactly
+[package contracts](../../docs/package-contracts.md)): the packed preset is audited and installed alone.
+The native preset package gate separately loads its installed skill/extension resources through Pi
+from the tarball path. Child behavior of the `code-reviewer` agent (tools exactly
 the read-only allowlist, denied tools refused, global/project overrides, untrusted project agents
 ignored) is exercised against real children from these sources by
 `integration/inprocess/{reviewer,specialists}.test.ts`.

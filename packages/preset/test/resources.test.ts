@@ -179,17 +179,128 @@ test("exactly the four owned skills ship, each a single valid SKILL.md", () => {
 	}
 });
 
-test("ship-issue is generalized and keeps its workflow and reviewer model requirements", () => {
-	const text = readText("skills/ship-issue/SKILL.md");
-	assert.ok(!text.includes("redd/issue-"), "personal branch prefix");
-	assert.ok(text.includes("<prefix>/issue-<N>"));
-	assert.ok(text.includes('subagent_type: "critic", model: "sonnet"'));
-	assert.ok(text.includes('subagent_type: "critic", model: "opus"'));
-	for (const heading of ["## 2. Worktree", "## 5. Gate", "## 7. Review round", "## 9. Merge and clean up"]) {
-		assert.ok(text.includes(heading), heading);
+const section = (text: string, heading: string): string => {
+	const start = text.indexOf(`## ${heading}`);
+	if (start < 0) return "";
+	const next = text.indexOf("\n## ", start + 3);
+	return text.slice(start, next < 0 ? undefined : next);
+};
+
+/** Every `Checked:` admission bullet must scope itself to the two axes or the critic. */
+const checkedBulletsScoped = (policy: string): boolean => {
+	const bullets = section(policy, "3. Admit one candidate")
+		.split("\n")
+		.filter((line) => line.startsWith("- ") && line.includes("`Checked:`"));
+	return (
+		bullets.length >= 2 &&
+		bullets.every((line) => /Standards and Spec axes|for the critic/.test(line)) &&
+		bullets.some((line) => line.includes("Never synthesize `Checked:` evidence for the critic"))
+	);
+};
+
+/** The parent must itself arm pinned auto-merge, monitor natively and loop, never hand off to itself. */
+const drivesWholeList = (policy: string): boolean => {
+	const drive = section(policy, "4. Merge and advance (parent)");
+	return (
+		/gh pr merge <N> --auto --<method> --match-head-commit <full-sha>/.test(drive) &&
+		drive.includes("monitor_start") &&
+		/Arming auto-merge merges IMMEDIATELY when the base branch has no effective required checks/.test(drive) &&
+		/A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected/.test(drive) &&
+		/readable applicable rulesets and classic branch protection establish effective required checks for this base \*and\* that the merging caller cannot bypass them/.test(
+			drive,
+		) &&
+		/Backend not proven protected: keep auto-merge OFF[^\n]*gh pr merge <N> --<method> --match-head-commit <full-sha>/.test(
+			drive,
+		) &&
+		/Never use `--admin` or any bypass/.test(drive) &&
+		drive.includes("return to step 3 for the next unblocked PR") &&
+		drive.includes("every requested PR is merged") &&
+		!/hand (?:the|it to the) parent/i.test(drive) &&
+		!/hand(?:s)? the parent/i.test(section(policy, "3. Admit one candidate")) &&
+		/PARENT driver[^\n]*never hands the merge to "the parent": it IS the parent/.test(policy) &&
+		/DELEGATED worker[^\n]*no merge authority/.test(policy)
+	);
+};
+
+test("shipping resources require exact-HEAD review, parent monitoring, and no forced model or unpinned auto-merge", () => {
+	const review = readText("skills/code-review/SKILL.md");
+	const ship = readText("skills/ship-issue/SKILL.md");
+	const merge = readText("skills/get-it-merged/SKILL.md");
+	for (const text of [review, ship, merge]) {
+		assert.doesNotMatch(text, /model:\s*"/);
+		for (const line of text.split("\n").filter((l) => /gh pr merge\b[^\n]*--auto\b/.test(l))) {
+			assert.match(line, /--match-head-commit/, `unpinned auto-merge: ${line}`);
+		}
 	}
-	assert.ok(text.includes("`gh pr merge --squash --auto --delete-branch`"));
-	assert.ok(readText("skills/code-review/SKILL.md").includes('model: "openai-codex/gpt-6.1-sol"'));
+	assert.match(review, /no `model` unless the user named one/);
+	assert.match(ship, /use `\/skill:code-review` for the separate Standards/);
+	assert.match(ship, /shared skill selects parent background versus delegated blocking calls/);
+	assert.match(ship, /Delegated worker: keep auto-merge off/);
+	assert.match(ship, /follow `\/skill:get-it-merged` steps 3-4 as a one-PR train/);
+	assert.match(ship, /Do not duplicate or weaken it here/);
+	assert.match(merge, /Whole-PR review receipts: record the original full merge-base and current full HEAD/);
+	assert.match(merge, /corrective-delta reviews are supplemental only/);
+	assert.match(merge, /Run the parent's own final critic on the exact HEAD/);
+	assert.match(merge, /native session-kit monitors/);
+	assert.match(merge, /Do not require a latest-main rebase solely because the base advanced/);
+	assert.match(merge, /frozen combined gate immediately before\npublish\/deploy/);
+	assert.match(merge, /Keep model turns and subagents for substantive work/);
+	assert.match(ship, /original SHA-bound invocation, tool-routing metadata, native output/);
+});
+
+test("code-reviewer template is the literal skeleton the receipt parser accepts", () => {
+	const reviewer = readText("agents/code-reviewer.md");
+	assert.match(reviewer, /`Checked:` has one `- ` line per standard rule or spec requirement/);
+	assert.match(reviewer, /A clean review still lists what it checked/);
+	assert.match(reviewer, /Spec axis with no spec supplied: use the skeleton/);
+	assert.match(reviewer, /^Axis: <Standards\|Spec>\nReviewed HEAD: <full-40-character-sha>\nChecked:\n- /m);
+	assert.match(reviewer, /\nFindings:\n\[hard\|judgement\]/);
+	assert.doesNotMatch(reviewer, /^Findings: \S/m);
+});
+
+test("get-it-merged admits critic receipts without fabricated review evidence", () => {
+	const merge = readText("skills/get-it-merged/SKILL.md");
+	const ship = readText("skills/ship-issue/SKILL.md");
+	assert.ok(checkedBulletsScoped(merge));
+	assert.ok(
+		!checkedBulletsScoped(
+			merge.replace(
+				"Confirm the Standards and Spec axes have `Checked:` evidence and every reviewer has a named identity/model",
+				"Confirm all three reviews have `Checked:` evidence and a named identity/model",
+			),
+		),
+	);
+	assert.match(merge, /original invocation's full SHA/);
+	assert.match(merge, /tool-routing metadata/);
+	assert.match(ship, /Accept only the critic's native `No findings\.` or structured finding/);
+});
+
+test("get-it-merged parent drives the whole list; negative controls", () => {
+	const merge = readText("skills/get-it-merged/SKILL.md");
+	assert.ok(drivesWholeList(merge));
+	const drive = section(merge, "4. Merge and advance (parent)");
+	const mutate = (from: string | RegExp, to: string) => {
+		assert.ok(typeof from === "string" ? merge.includes(from) : from.test(merge), `fixture drift: ${from}`);
+		return typeof from === "string" ? merge.split(from).join(to) : merge.replace(from, to);
+	};
+	assert.ok(!drivesWholeList(mutate("--match-head-commit <full-sha>", "")));
+	assert.ok(!drivesWholeList(mutate("return to step 3 for the next unblocked PR", "stop")));
+	assert.ok(!drivesWholeList(mutate("monitor_start", "poll")));
+	assert.ok(
+		!drivesWholeList(
+			mutate("A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected", "A 403 is fine"),
+		),
+	);
+	assert.ok(!drivesWholeList(mutate("the merging caller cannot bypass them", "the merging caller can bypass them")));
+	assert.ok(
+		!drivesWholeList(
+			mutate("Backend not proven protected: keep auto-merge OFF", "Backend not proven protected: arm it"),
+		),
+	);
+	assert.ok(!drivesWholeList(mutate("Never use `--admin` or any bypass", "")));
+	assert.ok(!drivesWholeList(mutate("every requested PR is merged", "one PR is merged")));
+	assert.ok(!drivesWholeList(mutate(drive, `${drive}\n- Hand the parent the PR URL and stop.`)));
+	assert.ok(!drivesWholeList(mutate(/## 4\. Merge and advance \(parent\)[\s\S]*?(?=\n## 5)/, "")));
 });
 
 test("themes validate against Pi's theme schema and carry no extra metadata", () => {
@@ -378,4 +489,59 @@ test("footer code imports only node built-ins, declared peers, and its own sibli
 		'from "../lib/footer-quota.ts"',
 	]);
 	assert.equal(packedFiles().filter((f) => f.startsWith("lib/")).length, 2);
+});
+
+test("code-review binds both axes to an immutable HEAD and supports nested blocking calls", () => {
+	const review = readText("skills/code-review/SKILL.md");
+	assert.match(review, /git rev-parse HEAD/);
+	assert.match(review, /For a non-PR review, use the resolved fixed point as `<reviewed-base>`/);
+	assert.match(
+		review,
+		/git merge-base <pr-base> HEAD.*record its full SHA as `<reviewed-base>`, and preserve it across every later HEAD change/,
+	);
+	assert.match(review, /git diff <reviewed-base>\.\.\.<reviewed-head>/);
+	assert.match(review, /with the preserved `<reviewed-base>`/);
+	assert.match(review, /A corrective-delta review is supplemental only/);
+	assert.match(review, /A top-level parent spawns/);
+	assert.match(review, /A delegated session omits `run_in_background`/);
+	const promptBinding =
+		/The full original reviewed-base SHA, full reviewed HEAD SHA, and immutable whole-PR diff command/g;
+	assert.equal(review.match(promptBinding)?.length, 2, "both axis prompts carry the immutable range");
+	assert.doesNotMatch(
+		review.replace("with the preserved `<reviewed-base>`", "with a new `<reviewed-base>`"),
+		/with the preserved `<reviewed-base>`/,
+	);
+	assert.doesNotMatch(
+		review.replace("A corrective-delta review is supplemental only", "A corrective-delta review replaces the axes"),
+		/A corrective-delta review is supplemental only/,
+	);
+	const merge = readText("skills/get-it-merged/SKILL.md");
+	assert.doesNotMatch(
+		merge.replace("corrective-delta reviews are supplemental only", "corrective-delta reviews replace both axes"),
+		/corrective-delta reviews are supplemental only/,
+	);
+	assert.doesNotMatch(
+		review.replace(
+			"A delegated session omits `run_in_background`",
+			"A delegated session uses `run_in_background: true`",
+		),
+		/omits `run_in_background`/,
+	);
+});
+
+test("single-issue parents retain terminal ownership and nested reviews use blocking calls", () => {
+	const ship = readText("skills/ship-issue/SKILL.md");
+	const reviews = section(ship, "7. Review round -- exact final HEAD");
+	const retainsOwner = (policy: string) => {
+		const handoff = section(policy, "9. Handoff and cleanup");
+		return (
+			/Parent completion: continue until this PR is `MERGED`/.test(handoff) &&
+			/genuine external blocker has a named owner and an armed continuation monitor/.test(handoff)
+		);
+	};
+	assert.match(reviews, /use `\/skill:code-review` for the separate Standards/);
+	assert.match(reviews, /shared skill selects parent background versus delegated blocking calls/);
+	assert.match(reviews, /both full SHAs and the original whole-PR range/);
+	assert.ok(retainsOwner(ship));
+	assert.ok(!retainsOwner(ship.replace(/^- Parent completion:[^\n]*\n/m, "")));
 });
