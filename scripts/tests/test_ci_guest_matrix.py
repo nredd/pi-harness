@@ -571,6 +571,9 @@ def test_benchmark_install_runs_only_where_check_benchmark_runs() -> None:
     gate = next(step for step in cfg["owned"]["steps"] if step.get("name") == "Benchmark unit gate")
     assert "runner.os == 'macOS'" in gate["if"]
     assert gate["run"].index("make install-benchmark") < gate["run"].index("make check-benchmark")
+    # No cp315 `pydantic-core` wheel: an unpinned interpreter makes uv compile it, per sync.
+    run = gate["run"]
+    assert run.index("export UV_PYTHON=") < run.index("make install-benchmark")
 
 
 def test_wsl_guest_gates_skip_duplicate_pytest_and_keep_lcov_producers() -> None:
