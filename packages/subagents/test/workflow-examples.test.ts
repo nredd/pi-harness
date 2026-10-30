@@ -71,11 +71,13 @@ const SAMPLE_ARGS: Record<string, unknown> = {
  * The payloads still have to satisfy the real schemas — the runtime validates
  * them — so a wrong shape here fails the example rather than passing quietly.
  */
-function stubHost(options: { gateFailsFor?: string[] } = {}): {
+function stubHost(options: { failsFor?: string[]; gateFailsFor?: string[] } = {}): {
   host: WorkflowHost;
   spawns: WorkflowSpawnRequest[];
+  resumes: string[];
 } {
   const spawns: WorkflowSpawnRequest[] = [];
+  const resumes: string[] = [];
   /** agentId → label, so `runGate` can tell which child it is gating. */
   const labels = new Map<string, string>();
 
@@ -84,6 +86,9 @@ function stubHost(options: { gateFailsFor?: string[] } = {}): {
       spawns.push(request);
       labels.set(request.agentId, request.label);
       const label = request.label;
+      if (options.failsFor?.includes(label)) {
+        return { ok: false, error: `${label} failed`, outputTokens: 10 };
+      }
 
       // Only a call that ASKED for a schema gets JSON. Keying on the label
       // alone would hand fan-out-audit's un-schema'd `verify:<file>` calls a
@@ -118,6 +123,7 @@ function stubHost(options: { gateFailsFor?: string[] } = {}): {
     },
     abortAgent() {},
     async resumeAgent(_agentId, prompt) {
+      resumes.push(prompt);
       return { ok: true, text: `resumed:${prompt.slice(0, 20)}`, outputTokens: 10 };
     },
     // Required, not optional: the runtime FAILS a gate it cannot run rather than
@@ -142,7 +148,7 @@ function stubHost(options: { gateFailsFor?: string[] } = {}): {
       return { ok: true, script: readExample(LIB_DIR, file) };
     },
   };
-  return { host, spawns };
+  return { host, spawns, resumes };
 }
 
 const runExample = (name: string, host: WorkflowHost) =>
@@ -239,6 +245,18 @@ describe("shipped example workflows", () => {
       expect(result.value).toMatchObject({ ok: true, count: 2 });
     });
 
+    it("compose reports discovery failure instead of treating it as zero files", async () => {
+      const { host, spawns } = stubHost({ failsFor: ["scan"] });
+      const result = await runExample("compose.js", host);
+
+      expect(result.value).toEqual({
+        ok: false,
+        reason: "The file-discovery agent returned no result.",
+      });
+      expect(result.agentCount).toBe(1);
+      expect(spawns.map(spawn => spawn.label)).toEqual(["scan"]);
+    });
+
     it("gated-fix passes straight through when the gate is happy", async () => {
       const { host, spawns } = stubHost();
       const result = await runExample("gated-fix.js", host);
@@ -250,13 +268,16 @@ describe("shipped example workflows", () => {
 
     it("gated-fix resumes the same child when the gate rejects the work", async () => {
       // The branch the example exists to demonstrate: fail the first gate only.
-      const { host, spawns } = stubHost({ gateFailsFor: ["fix"] });
+      const { host, spawns, resumes } = stubHost({ gateFailsFor: ["fix"] });
       const result = await runExample("gated-fix.js", host);
 
       expect(result.error).toBeUndefined();
       expect(result.value).toMatchObject({ passed: true });
       // fix (gated, fails) → resume → verify (gated, passes).
       expect(spawns.map(s => s.label)).toEqual(["fix", "verify"]);
+      expect(resumes).toEqual([
+        "Run `npm test` yourself and inspect its diagnostics. Fix the cause, then stop.",
+      ]);
       expect(result.agentCount).toBe(3);
     });
   });

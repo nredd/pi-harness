@@ -23,5 +23,8 @@ const found = await agent(`List every source file under ${root}. One path per li
   },
 })
 
-// A schema call can still return null if the child never complied.
-return found === null ? 0 : found.files.length
+// A schema call can still return null if the child never complied. Keep that
+// discovery failure distinct from a successful scan with zero files.
+return found === null
+  ? { ok: false, reason: 'The file-discovery agent returned no result.' }
+  : { ok: true, count: found.files.length }
