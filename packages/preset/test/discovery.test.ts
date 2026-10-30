@@ -2,6 +2,7 @@
 // No model calls, no auth: only the resource loader and package manager run, against a temporary
 // agent directory and project, so nothing under the real `~/.pi` is read or written.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -143,6 +144,52 @@ test("resource loader discovers the footer, skills, and themes without diagnosti
 		assert.deepEqual(themes.diagnostics, []);
 		const names = themes.themes.map((t) => t.name);
 		for (const name of THEMES) assert.ok(names.includes(name), `theme ${name} loaded`);
+	}));
+
+test("packed package resources load through Pi after an isolated npm install", () =>
+	withSandbox(async (box) => {
+		const tarballs = join(box.root, "tarballs");
+		const consumer = join(box.root, "consumer");
+		mkdirSync(tarballs);
+		mkdirSync(consumer);
+		const packed = JSON.parse(
+			execFileSync("npm", ["pack", pkgRoot, "--pack-destination", tarballs, "--json", "--ignore-scripts"], {
+				encoding: "utf8",
+			}),
+		) as Array<{ filename?: unknown }>;
+		const filename = packed[0]?.filename;
+		if (typeof filename !== "string") throw new Error("npm pack did not report a tarball filename");
+		writeFileSync(join(consumer, "package.json"), '{"name":"preset-resource-contract","private":true}\n');
+		execFileSync(
+			"npm",
+			[
+				"install",
+				"--ignore-scripts",
+				"--legacy-peer-deps",
+				"--offline",
+				"--no-audit",
+				"--no-fund",
+				join(tarballs, filename),
+			],
+			{ cwd: consumer, encoding: "utf8" },
+		);
+		const installed = join(consumer, "node_modules/@nredd/pi-preset");
+		box.settingsManager.setPackages([installed]);
+		const loader = await load(box);
+		assert.deepEqual(loader.getExtensions().errors, []);
+		assert.deepEqual(loader.getSkills().diagnostics, []);
+		assert.deepEqual(
+			loader.getExtensions().extensions.map((entry) => entry.path),
+			[join(installed, "extensions/expanded-footer.ts")],
+		);
+		assert.deepEqual(
+			loader
+				.getSkills()
+				.skills.map((entry) => entry.name)
+				.sort(),
+			SKILLS,
+		);
+		assert.ok(loader.getSkills().skills.every((entry) => entry.filePath.startsWith(`${installed}/`)));
 	}));
 
 test("footer-only source filters load the extension without skills, prompts or themes", () =>
