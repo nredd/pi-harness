@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSessionKit } from "../../src/index.ts";
 import { assistantLine } from "../stats/fixtures.ts";
 
@@ -61,8 +61,19 @@ function homeWith(feature: string): { home: string; agent: string } {
 }
 
 const homes: string[] = [];
+const PI_OVERRIDES = ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"] as const;
+let savedPiOverrides = new Map<string, string | undefined>();
+beforeEach(() => {
+	savedPiOverrides = new Map(PI_OVERRIDES.map((name) => [name, process.env[name]]));
+	for (const name of PI_OVERRIDES) delete process.env[name];
+});
 afterEach(() => {
 	vi.restoreAllMocks();
+	for (const name of PI_OVERRIDES) {
+		const value = savedPiOverrides.get(name);
+		if (value === undefined) delete process.env[name];
+		else process.env[name] = value;
+	}
 	for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
@@ -130,7 +141,7 @@ it("factory forwards the injected home to user rules and tilde paths", () => {
 	expect(result?.content?.[1]?.text).toContain("ISOLATED RULE");
 });
 
-it("factory forwards the injected home to stats session and cache loading", async () => {
+it("factory isolates stats sessions and cache writes under its injected home", async () => {
 	const { home, agent } = homeWith("stats");
 	homes.push(home);
 	const sessions = join(agent, "sessions");
@@ -139,11 +150,21 @@ it("factory forwards the injected home to stats session and cache loading", asyn
 		join(sessions, "isolated.jsonl"),
 		[
 			JSON.stringify({ type: "session", timestamp: "2026-10-01T00:00:00.000Z" }),
-			assistantLine({ ms: Date.parse("2026-10-01T12:00:00.000Z"), provider: "isolated", model: "stats", input: 123 }),
+			assistantLine({
+				ms: Date.parse("2026-10-01T12:00:00.000Z"),
+				provider: "isolated",
+				model: "stats",
+				input: 987_654_321,
+			}),
 		].join("\n"),
 	);
 	const current = probe();
 	createSessionKit({ homeDir: home })(current.pi as never);
 	await current.commands.get("stats")?.handler("", { mode: "json", ui: { notify: vi.fn(), setStatus: vi.fn() } });
-	expect(current.messages).toEqual([expect.objectContaining({ content: expect.stringContaining("123") })]);
+	expect(current.messages).toEqual([
+		expect.objectContaining({
+			content: expect.stringContaining("isolated  stats  987.7M"),
+		}),
+	]);
+	expect(existsSync(join(agent, "pi-session-kit", "stats-cache.json"))).toBe(true);
 });

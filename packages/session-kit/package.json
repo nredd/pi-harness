@@ -40,7 +40,7 @@
     "typecheck": "tsc --noEmit",
     "build:stats-export": "esbuild src/stats/cli.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/pi-stats-export.mjs",
     "test": "npm run build:stats-export && vitest run --coverage",
-    "test:bun": "bun test test/scenarios --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun",
+    "test:bun": "bun test test/scenarios --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
