@@ -73,11 +73,14 @@ export interface UsageSnapshot {
 	message?: string;
 }
 
+/** The part of `ExtensionContext` usage reads. Unlike the ctx itself, it stays valid after its session is disposed. */
+export type RegistryContext = Pick<ExtensionContext, "modelRegistry">;
+
 /** Side-effecting dependencies, injectable for tests. */
 export interface UsageTransport {
 	fetch(input: string, init: RequestInit): Promise<Response>;
 	now(): number;
-	getAccessToken(ctx: ExtensionContext, provider: string): Promise<string | undefined>;
+	getAccessToken(ctx: RegistryContext, provider: string): Promise<string | undefined>;
 }
 
 interface ParsedUsage {
@@ -319,7 +322,7 @@ export class UsageService {
 	 * backoff nothing touches the network: the last snapshot comes back `stale`,
 	 * or an `error` snapshot when there is none. Never rejects.
 	 */
-	async get(ctx: ExtensionContext, provider: string, options: UsageGetOptions = {}): Promise<UsageSnapshot> {
+	async get(ctx: RegistryContext, provider: string, options: UsageGetOptions = {}): Promise<UsageSnapshot> {
 		const now = this.transport.now();
 		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
 		const cached = this.cache.get(provider);
@@ -456,7 +459,7 @@ export class UsageService {
 		return { ...cached, status: "stale", expiresAt: now, message };
 	}
 
-	private refresh(ctx: ExtensionContext, provider: string, now: number, notBefore?: number): UsageRead {
+	private refresh(ctx: RegistryContext, provider: string, now: number, notBefore?: number): UsageRead {
 		const existing = this.inFlight.get(provider);
 		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing;
 		const refresh = this.fetchSnapshot(ctx, provider, now)
@@ -513,7 +516,7 @@ export class UsageService {
 		this.backoff.set(provider, { failures, until: this.transport.now() + delay });
 	}
 
-	private async fetchSnapshot(ctx: ExtensionContext, provider: string, now: number): Promise<FetchOutcome> {
+	private async fetchSnapshot(ctx: RegistryContext, provider: string, now: number): Promise<FetchOutcome> {
 		const unfetched = (status: "error" | "unavailable", message: string): FetchOutcome => ({
 			snapshot: errorSnapshot(provider, status, now, message),
 			failed: false,

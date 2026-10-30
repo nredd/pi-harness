@@ -21,7 +21,7 @@ afterEach(async () => {
 /** Flip to make routing die with the stale-ctx error without touching the real runner. */
 const routeBroken = { on: false };
 
-/** A real `router/*`-shaped virtual model: its route reads the host ctx, like subscription-router does. */
+/** A real virtual model whose route reads the host ctx, which any extension may do; `subscription-router` no longer does (#294). */
 function routedModel(getModel: () => unknown): ExtensionFactory {
   return pi => {
     pi.registerVirtualModel({
