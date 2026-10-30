@@ -71,11 +71,12 @@ export function boundedWrappedRows(text: string, width: number, maxRows: number,
 
   // Reserve a row for the omission marker and favor the final rows: fallback
   // diagnoses live at the end, while the first row still names the control text.
+  // budget >= 3 here, so at least two rows are omitted.
   const firstCount = Math.max(1, Math.floor((budget - 1) / 2));
   const lastCount = budget - firstCount - 1;
   const omitted = rows.length - firstCount - lastCount;
   const omission = stripTerminalSequences(
-    truncateToWidth(`${marker} ${omitted} more line${omitted === 1 ? "" : "s"}`, width, ""),
+    truncateToWidth(`${marker} ${omitted} more lines`, width, ""),
   );
   return [...rows.slice(0, firstCount), omission, ...rows.slice(-lastCount)];
 }
