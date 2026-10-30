@@ -29,7 +29,7 @@ import { refKey } from "./model-ref.js";
 import { SettleRecovery } from "./recovery.js";
 import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.js";
 import { formatScore } from "./selection.js";
-import { COLLECTED_PROVIDERS, UsageService } from "./usage.js";
+import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage.js";
 
 const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
 const RPC_ADMIT = "router:rpc:admit";
@@ -62,8 +62,8 @@ function shared(): Shared {
 	return host[SHARED_KEY];
 }
 
-/** `RouteEnv` backed by the live model registry and the shared usage cache. */
-function routeEnv(ctx: ExtensionContext, usage: RouterUsage): RouteEnv {
+/** `RouteEnv` backed by the model registry and the shared usage cache. */
+function routeEnv(ctx: RegistryContext, usage: RouterUsage): RouteEnv {
 	return {
 		resolve: (entry: ChainEntry) => {
 			const model = ctx.modelRegistry.find(entry.provider, entry.id);
@@ -140,7 +140,12 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		const config = options?.config ?? (await loadConfig(getAgentDir()));
 		const profiles = config.ok ? config.profiles : [];
 		const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
-		let currentCtx: ExtensionContext | undefined;
+		/**
+		 * Child sessions share their parent's model runtime and each re-registers `router/*` into it,
+		 * so a registered route can outlive this session and serve its siblings and parent. Its
+		 * extension ctx dies with this session; the registry fronts the shared runtime and does not.
+		 */
+		let registry: RegistryContext | undefined;
 
 		/** The router profile behind the current selection, if it is one of ours. */
 		const selectedProfile = (ctx: ExtensionContext): Profile | undefined =>
@@ -152,12 +157,13 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 				id: profile.id,
 				name: profile.name,
 				thinkingLevels: THINKING_LEVELS,
-				route: (request, ctx) => router.route(profile, request, routeEnv(ctx, usage)),
+				// `ctx` only serves the gap before session_start, when this session cannot have been disposed.
+				route: (request, ctx) => router.route(profile, request, routeEnv(registry ?? ctx, usage)),
 			});
 		}
 
 		pi.on("session_start", (_event, ctx) => {
-			currentCtx = ctx;
+			registry = { modelRegistry: ctx.modelRegistry };
 			// A new or resumed session has no durable decision yet; its first pick must persist.
 			persisted.clear();
 			if (!config.ok) ctx.ui.notify(`subscription-router: ignoring config. ${config.error}`, "error");
@@ -167,7 +173,6 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		// Cached data only: a slow usage endpoint must not delay the turn. Coarse
 		// buckets keep the section stable so the prompt-cache prefix survives.
 		pi.on("before_agent_start", (event, ctx) => {
-			currentCtx = ctx;
 			recovery.resetTurn();
 			const providers = sessionProviders(ctx, profiles);
 			warm(ctx, usage, providers);
@@ -263,13 +268,13 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		// `{ model: "provider/id" }` -> `Admission`. Before the first session_start
 		// there is no context to read usage through, so everything is admitted.
 		handleRpc(pi, RPC_ADMIT, (params) => {
-			const ctx = currentCtx;
+			const ctx = registry;
 			const ref = typeof params.model === "string" ? params.model : "";
 			return ctx ? router.admit(ref, profileById, routeEnv(ctx, usage)) : { ok: true };
 		});
 
 		handleRpc(pi, RPC_USAGE, async (params) => {
-			const ctx = currentCtx;
+			const ctx = registry;
 			if (params.refresh === true && ctx) {
 				await Promise.all(COLLECTED_PROVIDERS.map((provider) => usage.get(ctx, provider)));
 			}

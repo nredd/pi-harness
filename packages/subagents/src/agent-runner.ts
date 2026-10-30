@@ -822,6 +822,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * it to repeat side effects (a push, a PR). The continue prompt adds one user
  * turn and nothing else, so the tool batch is never replayed; a tool that did
  * run is in context as a result.
+ *
+ * Kept after #294 moved `subscription-router` off the registrant's ctx, so router
+ * sessions no longer reach it: core still hands every virtual model the ctx of
+ * whichever session registered last, so any other extension's `route` can go
+ * stale the same way, and only this turns that into a bounded retry and a report.
  */
 export async function retryStaleCtx(
   session: AgentSession,
