@@ -256,7 +256,7 @@ def run_host_summary(step: dict[str, str], tmp_path: Path) -> str:
 
     Parameters:
         step (dict[str, str]): Summary step settings and actual Bash body.
-        tmp_path (Path): Empty host directory with no guest worktree or tooling.
+        tmp_path (Path): Isolated directory with no guest worktree or tooling.
     Returns:
         str: UTF-8 summary written by the real step.
     Raises:
@@ -281,7 +281,7 @@ def run_host_summary(step: dict[str, str], tmp_path: Path) -> str:
 
 
 def test_wsl2_coverage_summary_runs_on_the_host_with_native_bash_semantics(tmp_path: Path) -> None:
-    """Write the host summary without guest tools, worktree or inherited environment."""
+    """Write the summary with the test runner's Bash, without guest tools or environment."""
     summary = run_host_summary(coverage_summary_step(), tmp_path)
     assert summary.strip()
 
@@ -295,11 +295,19 @@ def test_wsl2_coverage_summary_rejects_non_native_shell(shell: str, tmp_path: Pa
 
 
 def test_wsl2_coverage_summary_preserves_bash_failure_status(tmp_path: Path) -> None:
-    """A failing summary command must not be masked by a later successful write."""
+    """Control the runner's Bash semantics with a failure before a successful write."""
     step = coverage_summary_step() | {"run": '/bin/bash -c "exit 47"\necho masked >>"$GITHUB_STEP_SUMMARY"'}
     with pytest.raises(subprocess.CalledProcessError) as error:
         run_host_summary(step, tmp_path)
     assert error.value.returncode == 47
+
+
+def test_wsl2_coverage_summary_propagates_production_output_failure(tmp_path: Path) -> None:
+    """Require the actual production body to fail when its summary target is a directory."""
+    (tmp_path / "summary.txt").mkdir()
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        run_host_summary(coverage_summary_step(), tmp_path)
+    assert error.value.returncode != 0
 
 
 @pytest.mark.parametrize(
