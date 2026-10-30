@@ -8,6 +8,11 @@ and unchanged binary bytes; no source assertion or generated-runtime comparison 
 CI is the gate. Local runs are for development. Hosted runners only, no stored credentials or secrets.
 The publish job alone requests a short-lived npm OIDC identity.
 
+The WSL `Report coverage exclusions` summary is the one explicit host-shell step: it writes
+only `GITHUB_STEP_SUMMARY` text after the WSL scenario jobs and has no guest-side prerequisite.
+All guest dispatch remains through the adapter, which labels a failing `pwsh`, `wslpath`, guest
+command, or generated guest step while preserving its original exit status and stderr.
+
 `.github/workflows/ci.yml`, every PR and `main`:
 
 | Job | Normal PR | `main` push | Docs-only PR or push | Proves |
