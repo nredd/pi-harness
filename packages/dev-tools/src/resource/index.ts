@@ -23,6 +23,9 @@ const MAX_INTERVAL_MS = 5_000;
 const SAMPLE_BUDGET_MS = 1_000;
 const COMMAND_TIMEOUT_MS = 3_000;
 const COMMAND_MAX_BYTES = 128 * 1024;
+const RESOURCE_PROMPT_SECTION = "resource_awareness";
+const RESOURCE_GUIDANCE =
+	"Before knowingly starting a large test or compile, inspect host resources and concurrent work, including other agents, then choose sensible scope, workers, or timing. Use resource_snapshot when available; if deferred, discover the read-only host resource observer with the available tool-search facility first. OS process metadata cannot identify agents; consult actual agent/task information separately. This is awareness, not a lock, serialization rule, or fixed threshold.";
 
 type ProcessRun = (options: RunOptions) => Promise<RunResult>;
 type ReadText = (path: string) => Promise<string>;
@@ -263,12 +266,22 @@ const metricSchema = Type.Union([
 	Type.Object({ state: Type.Union([Type.Literal("warming"), Type.Literal("unavailable")]), reason: Type.String() }),
 ]);
 
+/** Return guidance only when this session can observe or discover the observer. */
+function resourceGuidance(selectedTools: readonly string[]): string | undefined {
+	if (selectedTools.includes("resource_snapshot") || selectedTools.includes("search_tools")) return RESOURCE_GUIDANCE;
+	return undefined;
+}
+
 /** Register the model-visible observer. */
 export function registerResourceTools(pi: ExtensionAPI, options: ResourceSnapshotOptions = {}): void {
-	// This hook also reaches child sessions and survives tool deferral. Never force tool activation.
-	pi.on("before_agent_start", (event) => ({
-		systemPrompt: `${event.systemPrompt}\n\nBefore knowingly starting a large test or compile, inspect host resources and concurrent work, including other agents, then choose sensible scope, workers, or timing. Use resource_snapshot when available; if deferred, discover the read-only host resource observer with the available tool-search facility first. OS process metadata cannot identify agents; consult actual agent/task information separately. This is awareness, not a lock, serialization rule, or fixed threshold.`,
-	}));
+	pi.on("before_agent_start", (event) => {
+		const guidance = resourceGuidance(event.systemPromptOptions.selectedTools);
+		// Append-mode children inherit this text through their parent custom prompt. Adding a second section would
+		// duplicate it; replace-mode children receive it only when their scoped tools make it actionable.
+		if (guidance && !event.systemPrompt.includes(guidance)) {
+			event.systemPromptOptions.sections[RESOURCE_PROMPT_SECTION] = guidance;
+		}
+	});
 	pi.registerTool({
 		name: "resource_snapshot",
 		label: "resource snapshot",
