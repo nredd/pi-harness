@@ -103,6 +103,17 @@ holds, workflow execution timers, child-shutdown watchdogs, detached-spool filen
 auto-hide and schedule-store lock retries retain native time. Queued result waits use the manager's
 start gate when present; legacy queued resumes retain the clock-driven fallback.
 
+`npm test` and `test:coverage` launch Vitest through the shared
+`scripts/run-vitest.ts` launcher. It gives the child a temporary `HOME`, `USERPROFILE`,
+`XDG_CONFIG_HOME`, `PI_CODING_AGENT_DIR` and `PI_SUBAGENTS_CONFIG_DIR` before imports,
+then removes that home on exit. Operator `agentModels`/model-tier policy must not affect
+fixture dispatch; runtime tier defaults and operator files remain unchanged. The command-level
+regression runs the real `npm test` against a hostile fixture home with an unavailable
+`@default` tier and checks the existing Agent boundary assertions. `test:watch` and
+`test:e2e` retain their operator environment. The explicit live smoke command
+`PI_E2E_LIVE=1 npm run test:e2e` needs the operator's configured Pi login; it is not a
+hermetic verification gate. Without that opt-in, `test:e2e` runs the scripted faux suite.
+
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `test:bun`. The four session scenario
 files (`test/{session-scenarios,fleet-session,viewer-session,worktree-isolation-e2e}.test.ts`) run under
 both Vitest and Bun 1.4.4 on core `v1.3.0-nredd.8` release tarballs. They use exported `createHarness`

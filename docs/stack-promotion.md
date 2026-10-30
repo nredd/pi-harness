@@ -96,6 +96,6 @@ Then validate it with `StackSnapshot` (`integration/harness/promotion.py`) and r
 
 After this PR merges, run `verify-only` on a `main` SHA whose CI ran the stack job, then `promote` with the same SHA and approve the `stack-promotion` environment. This PR dispatches nothing and creates no tag, release, ruleset or environment.
 
-## Owner override
+## Historical waived record
 
-`owner-override` promotes a main commit without green CI. It still verifies the core release and the published `@nredd/` package evidence, still requires the `stack-promotion` environment approval, and records every push/main CI run of the commit as stack evidence whatever its conclusion. Each waived required check and run conclusion is logged as `OWNER OVERRIDE` in the workflow run. Use it only when the owner accepts shipping ahead of CI.
+`stack/17236539759ccc8858e605ed3f07531cacf2d9e0` is an immutable historical owner-waived record, not green-CI evidence. Do not alter its tag or release, and do not treat retrospective review as satisfying its pre-release gates. The `owner-override` operation no longer exists; recovery requires an ordinary reviewed, green-CI `verify-only` then `promote` flow.
