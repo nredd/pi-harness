@@ -67,7 +67,9 @@ jobs:
         if: inputs.operation != 'verify-only'
         with:
           name: stack-snapshot-${{ steps.target.outputs.source_sha }}
-          path: promotion/stack-snapshot.json
+          path: |
+            promotion/stack-snapshot.json
+            promotion/dependency-graph.json
           if-no-files-found: error
 
   attest-and-publish:
@@ -94,22 +96,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate prepare-release --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --rebuilt promotion/stack-snapshot.json --existing-dir existing --github-output "$GITHUB_OUTPUT"
+        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate prepare-release --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --rebuilt promotion/stack-snapshot.json --dependency-graph promotion/dependency-graph.json --existing-dir existing --github-output "$GITHUB_OUTPUT"
       - name: Verify the existing snapshot attestation
         if: steps.release.outputs.state == 'resume'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh attestation verify existing/stack-snapshot.json --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
+      - name: Verify the existing dependency graph attestation
+        if: steps.release.outputs.state == 'resume'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify existing/dependency-graph.json --repo "$GITHUB_REPOSITORY" --signer-workflow "$ATTEST_WORKFLOW" --source-ref refs/heads/main --deny-self-hosted-runners
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         if: steps.release.outputs.state == 'create'
         with:
-          subject-path: promotion/stack-snapshot.json
+          subject-path: |
+            promotion/stack-snapshot.json
+            promotion/dependency-graph.json
       - name: Create the release
         if: steps.release.outputs.state == 'create'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: gh release create "stack/$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "stack/$SOURCE_SHA" --notes 'Verified promoted stack snapshot.' promotion/stack-snapshot.json
+        run: gh release create "stack/$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "stack/$SOURCE_SHA" --notes 'Verified promoted stack snapshot and runtime dependency graph.' promotion/stack-snapshot.json promotion/dependency-graph.json
       - name: Confirm the tag points at the selected commit
         env:
           GH_TOKEN: ${{ github.token }}
