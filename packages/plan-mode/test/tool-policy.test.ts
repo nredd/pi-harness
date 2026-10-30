@@ -26,6 +26,47 @@ test("injected homes govern trusted tilde roots for Bash and PowerShell", () => 
   assert.equal(isSafePowerShellCommand("git -C ~other/trusted status", {}, "/work", roots, home), false);
 });
 
+test("Plan registration forwards its injected home to Bash and PowerShell trusted roots", async () => {
+  const home = "/isolated/home";
+  const trusted = `${home}/trusted`;
+  const mock = createMockPi({
+    activeTools: ["bash", "powershell"],
+    allTools: [builtinTool("bash"), builtinTool("powershell")],
+  });
+  planMode(mock.pi, {
+    homeDir: home,
+    readSettings: async () => ({
+      kind: "loaded" as const,
+      settings: {
+        thinkingLevel: "inherit" as const,
+        defaultPlanTools: ["bash", "powershell"],
+        trustedDirectories: ["~/trusted"],
+      },
+    }),
+  });
+  const context = createMockContext();
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  const hook = mock.events.get("tool_call")?.[0];
+
+  for (const [toolName, command] of [
+    ["bash", `git -C ${trusted} status`],
+    ["powershell", `git -C ${trusted} status`],
+  ]) {
+    assert.equal(await hook?.({ toolName, input: { command } }, context.ctx), undefined, toolName);
+  }
+  for (const [toolName, command] of [
+    ["bash", `git -C ${home}/untrusted status`],
+    ["powershell", `git -C ${home}/untrusted status`],
+  ]) {
+    assert.equal(
+      ((await hook?.({ toolName, input: { command } }, context.ctx)) as { block?: boolean } | undefined)?.block,
+      true,
+      toolName,
+    );
+  }
+});
+
 test("tool selection allows safe built-ins and non-built-ins only", () => {
   type PlanTool = Parameters<typeof canSelectToolInPlanMode>[0];
   assert.equal(canSelectToolInPlanMode(builtinTool("read") as PlanTool), true);
