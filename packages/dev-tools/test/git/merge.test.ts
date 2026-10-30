@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -88,6 +97,31 @@ describe("git_commit merge approval", () => {
 		expect(partial.isError).toBe(true);
 		expect(mock.text(partial)).toContain('Merge index contains unapproved paths: "other.txt"');
 		expect(parents(repo)).toHaveLength(1);
+	});
+
+	it("accepts a symlinked worktree spelling", async () => {
+		const { root, repo } = mergeFixture();
+		const alias = join(root, "repo-alias");
+		symlinkSync(repo, alias);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Merge through symlink", paths: ["shared.txt"], push: false },
+			alias,
+		);
+		expect(result.isError, mock.text(result)).toBe(false);
+		expect(parents(repo)).toHaveLength(2);
+	});
+
+	it("accepts a configured no-hooks path", async () => {
+		const { repo } = mergeFixture();
+		git(repo, ["config", "core.hooksPath", "/dev/null"]);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Merge without hooks", paths: ["shared.txt"], push: false },
+			repo,
+		);
+		expect(result.isError, mock.text(result)).toBe(false);
+		expect(parents(repo)).toHaveLength(2);
 	});
 
 	it("uses the linked worktree git dir and configured hooks without bypassing them", async () => {

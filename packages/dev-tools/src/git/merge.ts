@@ -1,5 +1,5 @@
 /** Complete-index approval for merge commits, including checks around the repository's own hooks. */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type GitRunOptions, git, gitFailure } from "./run.ts";
@@ -70,7 +70,7 @@ try {
 	try {
 		accessSync(original, constants.X_OK);
 	} catch (error) {
-		if ((error)?.code !== "ENOENT" && (error)?.code !== "EACCES") throw error;
+		if ((error)?.code !== "ENOENT" && (error)?.code !== "ENOTDIR" && (error)?.code !== "EACCES") throw error;
 		executable = false;
 	}
 	if (executable) {
@@ -122,9 +122,10 @@ export async function prepareMerge(
 		throw new Error("Invalid MERGE_HEAD");
 	for (const parent of parents)
 		if ((await query(["cat-file", "-t", parent])) !== "commit") throw new Error("MERGE_HEAD must name commits");
-	const root = await query(["rev-parse", "--show-toplevel"]);
+	const root = realpathSync(await query(["rev-parse", "--show-toplevel"]));
+	const cwd = realpathSync(opts.cwd);
 	const approved = paths.map((path) => {
-		const name = relative(root, resolve(opts.cwd, path));
+		const name = relative(root, resolve(cwd, path));
 		if (!name || name === ".." || name.startsWith(`..${sep}`) || isAbsolute(name))
 			throw new Error("Merge paths must name complete files inside the worktree");
 		return name.split(sep).join("/");
