@@ -7,24 +7,29 @@ import { pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join as join2, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
+
+// src/agent-dir.ts
+import { homedir } from "node:os";
+import { join } from "node:path";
+function agentDir(homeDir = homedir()) {
+  return process.env.PI_CODING_AGENT_DIR ?? join(homeDir, ".pi", "agent");
+}
+
+// src/stats/load.ts
 var CACHE_VERSION = 2;
 var opaqueId = (value) => createHash("sha256").update(value).digest("hex");
 var EXCLUDED_PROVIDERS = /* @__PURE__ */ new Set(["faux", "faux-provider", "fake-provider", "router"]);
 var CHILD_NAME = /#[0-9a-f]{8}$/;
 var LEADING_TIMESTAMP = /^.{0,200}?"timestamp"\s*:\s*"([^"]+)"/;
 var YIELD_EVERY_LINES = 2e3;
-function agentDir() {
-  return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-}
 function sessionsDir(dir = agentDir()) {
-  return process.env.PI_CODING_AGENT_SESSION_DIR ?? join(dir, "sessions");
+  return process.env.PI_CODING_AGENT_SESSION_DIR ?? join2(dir, "sessions");
 }
 function cachePath(dir = agentDir()) {
-  return join(dir, "pi-session-kit", "stats-cache.json");
+  return join2(dir, "pi-session-kit", "stats-cache.json");
 }
 function num(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -176,7 +181,7 @@ async function listJsonl(root) {
       return;
     }
     for (const entry of entries) {
-      const path = join(dir, entry.name);
+      const path = join2(dir, entry.name);
       if (entry.isDirectory()) await walk(path);
       else if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(path);
     }
@@ -334,7 +339,7 @@ function flatten(files) {
 // src/stats/snapshot.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { link, lstat, mkdir as mkdir2, readdir as readdir2, readFile as readFile2, rename as rename2, unlink, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname2, join as join2 } from "node:path";
+import { dirname as dirname2, join as join3 } from "node:path";
 var SNAPSHOT_VERSION = 1;
 var UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 var HASH = /^[a-f0-9]{64}$/;
@@ -369,7 +374,7 @@ function validateIdentity(value) {
   return value;
 }
 async function machineIdentity(dir = agentDir()) {
-  const path = join2(dir, "pi-session-kit", "machine.json");
+  const path = join3(dir, "pi-session-kit", "machine.json");
   try {
     return validateIdentity(await jsonFile(path));
   } catch (error) {
@@ -526,20 +531,20 @@ async function exportStats(dir, output, root = sessionsDir(dir)) {
     throw new Error(`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`);
   const snapshot = makeSnapshot(loaded, identity);
   validateSnapshot(snapshot);
-  const snapshotDir = join2(output, "machines", identity.machineId);
+  const snapshotDir = join3(output, "machines", identity.machineId);
   await mkdir2(snapshotDir, { recursive: true });
   for (const s of snapshot.shards) {
     const text = JSON.stringify(s);
     const sha256 = opaqueId(text);
     const file = `${s.month}-${sha256}.json`;
     validateShard(s, snapshot.manifest, s.month);
-    await atomicJson(join2(snapshotDir, file), s);
+    await atomicJson(join3(snapshotDir, file), s);
     snapshot.manifest.shards.push({ month: s.month, file, sha256, bytes: Buffer.byteLength(text) });
   }
-  await atomicJson(join2(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
+  await atomicJson(join3(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
   return { machineId: identity.machineId, snapshotDir };
 }
-var globalPath = (dir) => join2(dir, "pi-session-kit", "stats-global.json");
+var globalPath = (dir) => join3(dir, "pi-session-kit", "stats-global.json");
 async function jsonFile(path) {
   const info = await lstat(path);
   if (!info.isFile() || info.size > MAX_BYTES) throw new Error("Not a bounded regular snapshot file");
@@ -578,7 +583,7 @@ async function importStats(dir, input) {
   let imported = 0;
   const present = /* @__PURE__ */ new Set();
   try {
-    for (const entry of await readdir2(join2(input, "machines"), { withFileTypes: true })) {
+    for (const entry of await readdir2(join3(input, "machines"), { withFileTypes: true })) {
       if (!entry.isDirectory() || !UUID.test(entry.name)) {
         problems.push("Invalid machine directory");
         continue;
@@ -586,12 +591,12 @@ async function importStats(dir, input) {
       const id = entry.name;
       present.add(id);
       try {
-        const base = join2(input, "machines", id);
-        const manifest = validateManifest(await jsonFile(join2(base, "manifest.json")));
+        const base = join3(input, "machines", id);
+        const manifest = validateManifest(await jsonFile(join3(base, "manifest.json")));
         if (manifest.machineId !== id) throw new Error("Machine identity mismatch");
         const shards = [];
         for (const ref of manifest.shards) {
-          const path = join2(base, ref.file);
+          const path = join3(base, ref.file);
           const info = await lstat(path);
           if (!info.isFile() || info.size !== ref.bytes || info.size > MAX_BYTES)
             throw new Error("Invalid shard size/type");

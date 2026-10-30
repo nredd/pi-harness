@@ -3,13 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	agentDir,
 	CACHE_VERSION,
+	cachePath,
 	flatten,
 	isFileStats,
 	loadUsage,
 	mergeSessionMetadata,
 	opaqueId,
 	parseSession,
+	sessionsDir,
 } from "../../src/stats/load.ts";
 import { assistantLine, at, sessionFile } from "./fixtures.ts";
 
@@ -25,6 +28,15 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 const opus = (day: string, input: number, output: number, extra = {}) =>
 	assistantLine({ ms: at(day), provider: "anthropic", model: "claude-opus-5-5", input, output, ...extra });
+
+describe("agent paths", () => {
+	it("derives session and cache defaults from an injected home", () => {
+		const agent = agentDir("/isolated/home");
+		expect(agent).toBe("/isolated/home/.pi/agent");
+		expect(sessionsDir(agent)).toBe("/isolated/home/.pi/agent/sessions");
+		expect(cachePath(agent)).toBe("/isolated/home/.pi/agent/pi-session-kit/stats-cache.json");
+	});
+});
 
 describe("parseSession", () => {
 	it("keeps real assistant usage and skips everything that is not a physical model call", () => {

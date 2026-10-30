@@ -8,6 +8,9 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { agentDir } from "./agent-dir.ts";
+
+export { agentDir };
 
 export const FEATURES = ["titles", "rules", "goal", "loop", "monitor", "diff", "stats", "mon"] as const;
 export type Feature = (typeof FEATURES)[number];
@@ -78,8 +81,8 @@ export function resolveCollapseKey(raw: unknown): string {
 	return isValidKeySpec(key) ? key : DEFAULT_COLLAPSE_KEY;
 }
 
-export function configPath(agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent")): string {
-	return join(agentDir, "pi-session-kit.json");
+export function configPath(directory?: string, homeDir = homedir()): string {
+	return join(directory ?? agentDir(homeDir), "pi-session-kit.json");
 }
 
 export function defaultConfig(): KitConfig {

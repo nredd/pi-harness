@@ -179,7 +179,7 @@
         "bun": {
           "report": "coverage/bun/lcov.info",
           "files": [
-            "src/child.ts", "src/clock.ts", "src/config.ts", "src/diff/component.ts", "src/diff/git.ts",
+            "src/agent-dir.ts", "src/child.ts", "src/clock.ts", "src/config.ts", "src/diff/component.ts", "src/diff/git.ts",
             "src/diff/index.ts", "src/diff/parse.ts", "src/diff/view.ts", "src/goal/index.ts",
             "src/goal/state.ts", "src/goal/subagents.ts", "src/index.ts", "src/loop/index.ts",
             "src/loop/state.ts", "src/mon/component.ts", "src/mon/index.ts", "src/mon/model.ts",

@@ -43,7 +43,7 @@
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
-    "test:bun": "bun test ./test/confirmation-session.test.ts ./test/decline-session.test.ts ./test/policy-session.test.ts ./test/transcript-session.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun",
+    "test:bun": "bun test ./test/confirmation-session.test.ts ./test/decline-session.test.ts ./test/policy-session.test.ts ./test/transcript-session.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && node ../../scripts/run-vitest.ts bun ./test/tool-policy.test.ts --coverage.enabled=false",
     "test:dist": "vitest run ./test/build-runtime.test.ts",
     "prepack": "npm run build"
   },

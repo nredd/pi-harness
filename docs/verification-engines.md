@@ -13,7 +13,7 @@ The separate approved D7 toolchain upgrade selects Bun 1.4.4; evidence and remai
 | `preset` | Full Vitest + guard | Full Vitest + guard |
 | `resource-sampler` | Full Vitest + guard, one worker | Full Vitest + guard, one worker |
 | `integration/inprocess` | Full Vitest + guard, spawn-time home | Full Vitest + guard, spawn-time home |
-| `session-kit`, `plan-mode`, `dev-tools` | Existing full Vitest | Existing native Bun subsets; full-suite fixes in phase 2 |
+| `session-kit`, `plan-mode`, `dev-tools` | Existing full Vitest | Existing native Bun subsets plus spawn-time-home Vitest home-forwarding canaries |
 | `todo` | Full Vitest + guard | Full Vitest + guard |
 | `subagents` | Full Vitest + guard | Native-scenario subset + guarded real-loader gate; full suite blocked by #174 |
 | `computer-use` | Existing check scripts | Not run |
@@ -64,9 +64,15 @@ setup on both engines; fixtures inject disposable homes instead of mutating HOME
 `test:bun` uses the full-suite launcher with `.vitest.config.ts` (390 tests).
 
 Subagents retains its native-scenario subset plus the real-loader Vitest gate through the
-spawn-time-home launcher. Full Bun activation remains blocked by the unrelated workflow-runtime
-stack-line failure tracked in [#174](https://github.com/nredd/pi-harness/issues/174), not by home
-injection. The guard is active for its full Node suite and any Bun Vitest invocation, including
+spawn-time-home launcher. `session-kit`, `plan-mode`, and `dev-tools` likewise retain their
+native subsets while their injected-home canaries run through `scripts/run-vitest.ts bun`;
+`session-kit` runs its home-only factory canary separately through
+`scripts/run-vitest.ts node`; it is deliberately omitted from its ordinary Node Vitest run and
+native Bun scenario list. Both engines therefore install disposable `HOME`/`USERPROFILE` values
+before that canary imports the SDK. This is required for the mocked `node:fs` SSH probe and
+ensures Bun starts with a disposable home.
+Full Bun activation remains blocked by the unrelated workflow-runtime stack-line failure tracked in
+[#174](https://github.com/nredd/pi-harness/issues/174), not by home injection. The guard is active for its full Node suite and any Bun Vitest invocation, including
 the real-loader exact-equality ambient-access canary. No tests are skipped to accommodate the
 guard; native `bun test` scenarios do not consume Vitest setup files.
 

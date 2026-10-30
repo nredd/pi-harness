@@ -4,13 +4,13 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, it, vi } from "vitest";
-import { createExpandedFooter } from "../extensions/expanded-footer.ts";
+import { createExpandedFooter, formatCwd } from "../extensions/expanded-footer.ts";
 import { FakeClock } from "./scenarios/support.ts";
 
 type Factory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 
 /** Only fields read by the renderer are supplied; casts mark this isolated host boundary. */
-async function mount(useDefaultClock = false) {
+async function mount(useDefaultClock = false, homeDir?: string) {
 	const clock = new FakeClock();
 	let start: ((_event: unknown, ctx: ExtensionContext) => unknown) | undefined;
 	let factory: Factory | undefined;
@@ -48,7 +48,7 @@ async function mount(useDefaultClock = false) {
 			emit,
 		},
 	};
-	await createExpandedFooter(useDefaultClock ? {} : { clock })(pi as unknown as ExtensionAPI);
+	await createExpandedFooter(useDefaultClock ? { homeDir } : { clock, homeDir })(pi as unknown as ExtensionAPI);
 	await start?.({}, ctx as unknown as ExtensionContext);
 	if (!factory) throw new Error("Footer not mounted");
 	const paint = vi.fn((_color: string, text: string) => text);
@@ -157,6 +157,23 @@ it.each([
 	} finally {
 		f.component.dispose?.();
 	}
+});
+
+it("uses the injected home when formatting the cwd", async () => {
+	const f = await mount(false, "/isolated/home");
+	try {
+		f.ctx.cwd = "/isolated/home/project";
+		expect(f.component.render(240)[0]).toBe("~/project (feature) • session");
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
+it("uses USERPROFILE then the OS home when HOME is empty", () => {
+	expect(formatCwd("/private/fixture/project", undefined, { HOME: "", USERPROFILE: "/private/fixture" })).toBe(
+		"~/project",
+	);
+	expect(formatCwd(join(homedir(), "project"), undefined, { HOME: "", USERPROFILE: "" })).toBe("~/project");
 });
 
 it("cwd branch session and sorted sanitized statuses preserve their rows", async () => {

@@ -9,6 +9,7 @@ export default defineConfig({
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
 			include: [
+				"src/agent-dir.ts",
 				"src/child.ts",
 				"src/clock.ts",
 				"src/config.ts",

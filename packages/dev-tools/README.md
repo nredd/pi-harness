@@ -198,7 +198,8 @@ and copy). Legacy scp hands `remote_path` to the remote shell, so it is restrict
 `ssh_push` is not. Failures are named: `missing`, `permission denied`, `connection failed`.
 
 `~/.ssh/config` parsing follows OpenSSH: relative `Include` paths resolve against `~/.ssh`, not
-the including file; `Host=x`, quoted names, trailing comments and CRLF are handled.
+the including file; `Host=x`, quoted names, trailing comments and CRLF are handled. SDK callers can
+inject a home into the exported host-reader helpers, including nested `~/` Includes.
 
 ## py
 
