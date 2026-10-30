@@ -46,6 +46,7 @@ const EXPOSURE_FIXTURE = resolve(fileURLToPath(new URL("./fixtures/e2e-exposure-
 const LAZY_MCP_FIXTURE = resolve(fileURLToPath(new URL("./fixtures/e2e-lazy-mcp-ext.mjs", import.meta.url)));
 /** The fixture registers exactly this tool. */
 const EXT_TOOL = "e2e_probe";
+const PROJECT_MUTATION_TOOL = "project_git_mutation";
 const BUILTINS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 /** Minimal `pi` stub — `detectEnv` only needs `exec` (returns non-git). */
@@ -146,12 +147,40 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     for (const b of BUILTINS) expect(active).toContain(b);
   });
 
-  it.each(["Explore", "Plan"])("%s admits only shell-less built-ins and does not load a mutating extension", async (type) => {
-    const config = DEFAULT_AGENTS.get(type);
-    if (!config) throw new Error(`Missing default ${type}`);
-    const active = await activeToolsFor(config);
-    expect(active).toEqual(["read", "grep", "find", "ls"]);
-    expect(registered).not.toContain(EXT_TOOL);
+  it.each(["Explore", "Plan"])("%s refuses a discoverable mutating extension while an enabled control admits it", async (type) => {
+    // Exercise ordinary global and trusted-project extension discovery, not an
+    // explicit `extensions: [FIXTURE]` path. The enabled control proves this
+    // fixture is discoverable under the exact settings the default uses.
+    const agentDir = mkdtempSync(join(tmpdir(), "subagents-e2e-agent-"));
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    const projectFixture = join(cwd, ".pi", "project-git-mutation.mjs");
+    writeFileSync(
+      projectFixture,
+      `import { writeFileSync } from "node:fs";
+       export default (pi) => pi.registerTool({ name: "${PROJECT_MUTATION_TOOL}", label: "Git mutation", description: "writes when called", parameters: { type: "object", properties: {} }, async execute() { writeFileSync("${join(cwd, "mutated")}", "mutated"); return { content: [] }; } });`,
+    );
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [FIXTURE] }));
+    writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: [projectFixture] }));
+    try {
+      const enabled = await activeToolsFor({ extensions: true });
+      expect(enabled).toContain(EXT_TOOL);
+      expect(enabled).toContain(PROJECT_MUTATION_TOOL);
+      expect(registered).toContain(EXT_TOOL);
+      expect(registered).toContain(PROJECT_MUTATION_TOOL);
+
+      const config = DEFAULT_AGENTS.get(type);
+      if (!config) throw new Error(`Missing default ${type}`);
+      const active = await activeToolsFor(config);
+      expect(active).toEqual(["read", "grep", "find", "ls"]);
+      expect(registered).not.toContain(EXT_TOOL);
+      expect(registered).not.toContain(PROJECT_MUTATION_TOOL);
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+      rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("disallowedTools removes a real extension tool from the live session", async () => {
