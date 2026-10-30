@@ -115,7 +115,9 @@ describe("toolDescriptionMode", () => {
     expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
     expect(desc).not.toContain("very thorough");
     // The point of the feature: materially smaller than the full version.
-    expect(desc.length).toBeLessThan(1600);
+    // The global agents dir is a per-runner temp path; measure with a fixed one
+    // so the budget does not depend on the runner's tmpdir length.
+    expect(desc.replaceAll(hermeticAgentDir, "/tmp/agent").length).toBeLessThan(1600);
   });
 
   it("invalid mode in the settings file is dropped — full description", () => {
