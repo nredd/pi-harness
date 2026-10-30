@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -495,6 +496,27 @@ def git_results(mode: str, source: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def reviewer_template_report(axis: str, sha: str, *, inline_none: bool) -> str:
+    """Render the packed `code-reviewer` skeleton the way a reviewer would, for the real parser.
+
+    Parameters:
+        axis (str): Review axis to substitute for the template placeholder.
+        sha (str): Full reviewed HEAD to substitute.
+        inline_none (bool): Collapse `Findings:` and `None.` onto one line, the rejected form.
+
+    Returns:
+        str: A final report derived from the shipped template, not a hand-written fixture.
+    """
+    agent = Path(__file__).resolve().parents[2] / "packages" / "preset" / "agents" / "code-reviewer.md"
+    match = re.search(r"```text\n(Axis: .*?)```", agent.read_text(), re.S)
+    assert match, "code-reviewer.md lost its report skeleton"
+    lines = match.group(1).splitlines()
+    report = "\n".join(lines[: lines.index("Findings:") + 1])
+    report = report.replace("<Standards|Spec>", axis).replace("<full-40-character-sha>", sha)
+    report = re.sub(r"^- <rule.*$", "- Exact diff -- git_diff -- ok", report, flags=re.M)
+    return report + (" None." if inline_none else "\nNone.")
+
+
 @pytest.mark.parametrize(
     "mode",
     [
@@ -519,6 +541,8 @@ def git_results(mode: str, source: Path) -> list[dict[str, Any]]:
         "dangling-transcript",
         "git-quoted-source",
         "read-quoted-source",
+        "template-skeleton",
+        "template-inline-none",
         "git-unknown-revision",
         "git-ambiguous-argument",
         "git-invalid-object",
@@ -554,6 +578,8 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
         elif mode == "conflicting-receipt":
             header += f"Reviewed HEAD: {'0' * 40}\n"
         report = header + "Checked:\n- Exact diff\nFindings:\nNone."
+        if mode.startswith("template-"):
+            report = reviewer_template_report(axis, sha, inline_none=mode == "template-inline-none")
         if mode == "incidental-sha":
             report += f"\nPrior request mentioned {sha}; this conclusion reviews {reviewed}."
         messages = [
@@ -656,7 +682,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
         check=False,
     )
     assert not poisoned.exists(), result.stderr
-    if mode in ("green", "poisoned-path", "git-quoted-source", "read-quoted-source"):
+    if mode in ("green", "poisoned-path", "git-quoted-source", "read-quoted-source", "template-skeleton"):
         assert result.returncode == 0, result.stderr
         assert f"Review receipt, final HEAD `{sha}`" in result.stdout
         assert "`review/fixture`" in result.stdout

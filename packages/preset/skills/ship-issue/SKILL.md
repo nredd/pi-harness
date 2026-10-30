@@ -7,7 +7,8 @@ argument-hint: <issue-url-or-number> [extra instructions]
 # ship-issue
 
 Take a GitHub issue from "here is the URL" to a reviewed PR in an isolated worktree. The parent
-owns the final critic, native CI monitoring, and protected merge outcome.
+owns the final critic, native CI monitoring, and protected merge outcome; a delegated
+worker hands those back with concrete handles.
 
 The repo's own `CLAUDE.md` / `AGENTS.md` OVERRIDES everything below. Read it first (step 3) and
 let it win on gate commands, coverage bars, layout, and style. This file is the procedure, not
@@ -141,14 +142,17 @@ genuinely routine -- but a shipped issue almost always earns a body.
 Mark it draft (`--draft`) only when the branch genuinely depends on unmerged work, and say what
 it is waiting on.
 
-## 9. Parent handoff and cleanup
+## 9. Handoff and cleanup
 
-- Before changing the PR HEAD, disable any armed auto-merge with `gh pr merge --disable-auto <N>` and verify it is off
-- Keep auto-merge off through the implementation, gate, exact-HEAD reviews, and child handoff. Do not merge or arm it
-- Return the PR URL, final SHA, exact review handles, and concrete CI run IDs or native-monitor command to the continuing parent
-- The parent owns its independent final critic, native session-kit monitor, required-check outcome, and any later protected merge. Never delegate passive watching or waiting to a watcher agent
+Which role are you? A PARENT driver is the agent the user asked directly; a DELEGATED worker was
+spawned by a parent for this issue. Never hand off to yourself.
+
+- Before changing the PR HEAD, disable any armed auto-merge with `gh pr merge --disable-auto <N>` and verify it is off. Renew the critic and both axes after any HEAD change
 - Do not require a rebase merely because the base advanced. Update only for a functional dependency or actual conflict; release/deploy work separately requires the frozen combined gate
-- Do NOT remove the worktree. Its PR has not landed yet. Tell the parent the follow-up is `git worktree remove <path> && git -C <repo> worktree prune` once it merges
+- Never delegate passive watching or waiting to a watcher agent
+- Parent driver: run its independent final critic on the exact HEAD, then, only if effective required-check protection is proven (a 403 or unknown is NOT protected), arm protected auto-merge with `--match-head-commit <full-sha>` and the repo's merge method; otherwise keep auto-merge off, wait for complete exact-HEAD CI and reviews, and merge explicitly with `--match-head-commit`, and watch the terminal outcome with a native session-kit monitor (`monitor_start`). For several PRs, follow `/skill:get-it-merged` until all are merged or genuinely externally blocked
+- Delegated worker: keep auto-merge off, do not merge or arm it. Once the substantive work is done, return the PR URL, final SHA, exact review handles, and concrete CI run IDs or monitor command to the parent, once. Never declare the overall task done
+- Do NOT remove the worktree before the PR lands. The follow-up is `git worktree remove <path> && git -C <repo> worktree prune` once it merges
 
 ## 10. Report
 
@@ -159,5 +163,5 @@ follow-up. No closing summary paragraph, no restating the plan back.
 
 - Gate cannot be made green: stop and report. Do not ship it
 - Never force-push the default branch; `--force-with-lease` on your own branch only
-- Never merge past failing checks by hand
+- Never merge past failing checks by hand or bypass protection
 - The repo's `CLAUDE.md` outranks this file on every conflict
