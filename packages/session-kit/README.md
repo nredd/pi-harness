@@ -249,7 +249,9 @@ Native `STAY` fixtures share a worker-death guard that kills only their own live
 when their parent changes; production commands and leader/descendant probes are not modified.
 Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
 Vitest regression covers both a SIGKILLed worker and a failed assertion (via the fixture's own
-`afterEach` dispose) and observes the detached `STAY` child disappearing.
+`afterEach` dispose) and observes both the detached `STAY` leader and an in-group descendant
+disappearing. Liveness there is read from process state, so an unreaped zombie (non-reaping PID 1)
+counts as dead.
 Native stop/dispose checks assert direct children are reaped when the operation resolves, then
 observe orphaned descendants disappearing with the existing bounded liveness check. Leader exit
 and pipe closure do not synchronize PID 1's reaping; on Linux, `kill(pid, 0)` can still succeed

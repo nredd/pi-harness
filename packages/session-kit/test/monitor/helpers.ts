@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { signalGroup, spawnMonitor } from "../../src/monitor/process.ts";
 import { STAY } from "./stay.ts";
 
@@ -15,6 +17,26 @@ export function alive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
 		return true;
+	} catch {
+		return false;
+	}
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Whether `pid` is a live (non-zombie) process. `kill(pid, 0)` also succeeds for zombies, which
+ * never get reaped on hosts whose PID 1 does not reap (some containers, WSL2).
+ */
+export async function running(pid: number): Promise<boolean> {
+	if (!alive(pid)) return false;
+	try {
+		const { stdout } = await execFileAsync("/bin/ps", ["-o", "stat=", "-p", String(pid)], {
+			env: { ...process.env, LC_ALL: "C" },
+			timeout: 5_000,
+		});
+		const stat = stdout.trim();
+		return stat !== "" && !stat.startsWith("Z");
 	} catch {
 		return false;
 	}
