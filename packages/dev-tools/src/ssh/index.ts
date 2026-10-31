@@ -23,7 +23,7 @@ const Failure = Type.Object({ error: Type.String() });
 const orFailure = (ok: TSchema) => Type.Union([ok, Failure]);
 const failed = (error: string) => toolResult({ text: error, structured: { error }, isError: true });
 
-const Host = Type.String({ description: "A `Host` alias from ~/.ssh/config, e.g. `home` or `nas`." });
+const Host = Type.String({ description: "A `Host` alias from ~/.ssh/config." });
 const Timeout = (def: number) =>
 	Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_S, description: `Seconds. Default ${def}.` }));
 

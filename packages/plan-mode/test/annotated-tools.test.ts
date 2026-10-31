@@ -96,9 +96,19 @@ test("annotated reads and the separately gated ssh_exec are admitted by default"
     ...annotated("ssh_exec", false),
     sourceInfo: { source: "builtin", scope: "temporary", origin: "top-level", path: "builtin:mcp" },
   } as ToolInfo;
+  // A project-source tool named `ssh_exec` cannot borrow the exception, even with a read-only hint.
+  const projectReadOnlySsh = { ...projectSsh, annotations: { readOnlyHint: true } } as ToolInfo;
+  assert.equal(isPlanSshExecTool(projectReadOnlySsh), false);
+  assert.equal(classifyPlanModeTool(projectReadOnlySsh), "user-opt-in");
+  assert.deepEqual(defaultPlanModeToolNames([projectReadOnlySsh], ["read"]), ["read"]);
   assert.equal(isPlanSshExecTool(projectSsh), false);
   assert.equal(isPlanSshExecTool(builtinSsh), false);
   assert.deepEqual(defaultPlanModeToolNames([projectSsh, builtinSsh], ["read"]), ["read"]);
+  // Admission and classification are one decision: a default-admitted `ssh_exec` is not "user opt-in".
+  assert.equal(classifyPlanModeTool(sshExec), "read-only");
+  assert.equal(toolPolicyLabel(sshExec), "read-only (gated ssh_exec)");
+  assert.equal(classifyPlanModeTool(annotated("ssh_pull", false)), "user-opt-in");
+  assert.equal(classifyPlanModeTool(projectSsh), "user-opt-in");
   assert.deepEqual(defaultPlanModeToolNames(tools, undefined), ["read", "bash", "git_status", "ssh_exec"]);
   assert.deepEqual(defaultPlanModeToolNames(tools, ["read", "ls"]), ["read", "ls", "git_status", "ssh_exec"]);
   assert.deepEqual(defaultPlanModeToolNames(tools, ["git_status"]), ["git_status", "ssh_exec"]);

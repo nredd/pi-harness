@@ -142,6 +142,9 @@ function isTrustedExtensionTool(tool: ToolInfo) {
   );
 }
 
+/** The typed remote-shell tool Plan mode re-validates like `ssh <host> <command>`. */
+export const SSH_EXEC_TOOL_NAME = "ssh_exec";
+
 export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
   return isTrustedExtensionTool(tool) && tool.annotations?.readOnlyHint === true;
 }
@@ -155,9 +158,14 @@ export function isPlanSshExecTool(tool: ToolInfo) {
   return tool.name === SSH_EXEC_TOOL_NAME && isTrustedExtensionTool(tool);
 }
 
+/** The single default-admission decision for extension tools: Plan mode's list and labels both use it. */
+export function isDefaultAdmittedExtensionTool(tool: ToolInfo) {
+  return isAnnotatedReadOnlyTool(tool) || isPlanSshExecTool(tool);
+}
+
 export function classifyPlanModeTool(tool: ToolInfo): PlanModeToolPolicy {
   if (!tool.sourceInfo?.source) return "blocked";
-  if (isAnnotatedReadOnlyTool(tool)) return "read-only";
+  if (isDefaultAdmittedExtensionTool(tool)) return "read-only";
   if (!isBuiltinTool(tool)) return "user-opt-in";
   if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "blocked";
   if (tool.name === "bash" || tool.name === "powershell") return "limited";
@@ -172,9 +180,6 @@ export function readCommand(input: unknown) {
   const command = input as { command?: unknown } | undefined;
   return typeof command?.command === "string" ? command.command : "";
 }
-
-/** The typed remote-shell tool Plan mode re-validates like `ssh <host> <command>`. */
-export const SSH_EXEC_TOOL_NAME = "ssh_exec";
 
 /** `ssh_exec` parameters Plan mode understands; anything else fails closed. `cwd` is a plain path. */
 const SSH_EXEC_ALLOWED_KEYS = new Set(["host", "command", "cwd", "timeout"]);

@@ -1508,15 +1508,19 @@ function isTrustedExtensionTool(tool) {
   const source = tool.sourceInfo;
   return !!source?.source && source.source !== "builtin" && !source.path?.startsWith("builtin:") && source.scope !== "project";
 }
+var SSH_EXEC_TOOL_NAME = "ssh_exec";
 function isAnnotatedReadOnlyTool(tool) {
   return isTrustedExtensionTool(tool) && tool.annotations?.readOnlyHint === true;
 }
 function isPlanSshExecTool(tool) {
   return tool.name === SSH_EXEC_TOOL_NAME && isTrustedExtensionTool(tool);
 }
+function isDefaultAdmittedExtensionTool(tool) {
+  return isAnnotatedReadOnlyTool(tool) || isPlanSshExecTool(tool);
+}
 function classifyPlanModeTool(tool) {
   if (!tool.sourceInfo?.source) return "blocked";
-  if (isAnnotatedReadOnlyTool(tool)) return "read-only";
+  if (isDefaultAdmittedExtensionTool(tool)) return "read-only";
   if (!isBuiltinTool(tool)) return "user-opt-in";
   if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "blocked";
   if (tool.name === "bash" || tool.name === "powershell") return "limited";
@@ -1529,7 +1533,6 @@ function readCommand(input) {
   const command = input;
   return typeof command?.command === "string" ? command.command : "";
 }
-var SSH_EXEC_TOOL_NAME = "ssh_exec";
 var SSH_EXEC_ALLOWED_KEYS = /* @__PURE__ */ new Set(["host", "command", "cwd", "timeout"]);
 function findBlockedSshExecCall(input, safeSubcommands = {}, platform = process.platform) {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return "input is not an object";
@@ -2252,7 +2255,10 @@ function compareTools(left, right) {
 }
 function toolPolicyLabel(tool) {
   const policy = classifyPlanModeTool(tool);
-  if (policy === "read-only") return isBuiltinTool(tool) ? "built-in read-only" : "read-only (annotated)";
+  if (policy === "read-only") {
+    if (isBuiltinTool(tool)) return "built-in read-only";
+    return isPlanSshExecTool(tool) ? "read-only (gated ssh_exec)" : "read-only (annotated)";
+  }
   if (policy === "limited") return "built-in limited";
   if (policy === "blocked") return tool.sourceInfo?.source ? "built-in blocked" : "policy metadata unavailable";
   return `user opt-in: ${toolSourceLabel(tool)}`;
@@ -2307,7 +2313,7 @@ function filterAvailableSelectedToolNames(names, tools, activeNames = new Set(to
   return unique(names.filter((name) => availableNames.has(name)));
 }
 function defaultPlanModeToolNames(tools, configuredNames) {
-  const annotated = tools.filter((tool) => isAnnotatedReadOnlyTool(tool) || isPlanSshExecTool(tool)).map((tool) => tool.name);
+  const annotated = tools.filter(isDefaultAdmittedExtensionTool).map((tool) => tool.name);
   if (configuredNames !== void 0) return unique([...configuredNames, ...annotated]);
   return unique([
     ...tools.filter((tool) => isBuiltinTool(tool) && SAFE_BUILTIN_PLAN_TOOLS.has(tool.name)).map((tool) => tool.name),
@@ -2373,10 +2379,10 @@ export {
   renderPlanModeQuestionCall,
   renderPlanModeQuestion,
   planModeToolAvailability,
+  SSH_EXEC_TOOL_NAME,
   classifyPlanModeTool,
   canSelectToolInPlanMode,
   readCommand,
-  SSH_EXEC_TOOL_NAME,
   findBlockedSshExecCall,
   findBlockedCommandSegment,
   findBlockedPowerShellCommandSegment,
@@ -2386,4 +2392,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-HNZIKAJ2.ts.map
+//# sourceMappingURL=chunk-QG2HEHS4.ts.map
