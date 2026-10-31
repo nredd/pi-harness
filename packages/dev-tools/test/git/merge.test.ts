@@ -452,17 +452,40 @@ describe("git_commit merge approval", () => {
 		);
 	});
 
-	it("skips a directory named like a hook, as Git does", async () => {
+	it.each([
+		["pre-commit", true],
+		["post-commit", false],
+	])("matches plain Git when %s is a directory (blocks: %s)", async (hook, blocks) => {
+		// Observed on Apple Git 2.54.0: a `pre-commit/` directory is `cannot exec ... Permission denied` and
+		// refuses the commit; a `post-commit/` directory prints the same error but the commit still lands.
+		const plain = mkdtempSync(join(tmpdir(), "pi-dev-tools-plain-"));
+		roots.push(plain);
+		git(plain, ["init", "-q", "-b", "main"]);
+		git(plain, ["config", "user.name", "fixture"]);
+		git(plain, ["config", "user.email", "fixture@example.invalid"]);
+		mkdirSync(join(plain, "hooks", hook), { recursive: true });
+		git(plain, ["config", "core.hooksPath", join(plain, "hooks")]);
+		writeFileSync(join(plain, "a.txt"), "a\n");
+		git(plain, ["add", "a.txt"]);
+		let plainFailed = false;
+		try {
+			git(plain, ["commit", "-qm", "Plain"]);
+		} catch {
+			plainFailed = true;
+		}
+		expect(plainFailed).toBe(blocks);
+
 		const { root, repo } = mergeFixture();
 		const hooks = join(root, "hooks");
-		mkdirSync(join(hooks, "pre-commit"), { recursive: true });
+		mkdirSync(join(hooks, hook), { recursive: true });
 		git(repo, ["config", "core.hooksPath", hooks]);
 		const result = await mock.call(
 			"git_commit",
-			{ subject: "Skip hook directory", paths: ["shared.txt"], push: false },
+			{ subject: "Match plain Git", paths: ["shared.txt"], push: false },
 			repo,
 		);
-		expect(result.isError, mock.text(result)).toBe(false);
-		expect(parents(repo)).toHaveLength(2);
+		expect(result.isError).toBe(blocks);
+		expect(parents(repo)).toHaveLength(blocks ? 1 : 2);
+		if (blocks) expect(mock.text(result)).toContain(join(hooks, hook));
 	});
 });

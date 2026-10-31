@@ -87,7 +87,7 @@ function writeHookProxy(directory: string, approval: Approval): void {
 	const runner = join(directory, "run.mjs");
 	writeFileSync(
 		runner,
-		`import { accessSync, constants, readFileSync, statSync } from "node:fs";
+		`import { accessSync, constants, readFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 const approval = ${JSON.stringify(approval)};
@@ -109,7 +109,6 @@ try {
 	const original = join(approval.hooks, hook);
 	let executable = true;
 	try {
-		if (!statSync(original).isFile()) throw Object.assign(new Error("not a file"), { code: "ENOENT" });
 		accessSync(original, constants.X_OK);
 	} catch (error) {
 		if ((error)?.code !== "ENOENT" && (error)?.code !== "ENOTDIR" && (error)?.code !== "EACCES") throw error;

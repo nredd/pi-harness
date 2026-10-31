@@ -89,8 +89,11 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
   Every hook in the configured hooks directory (e.g. `post-index-change`) still runs during a
   merge commit. Absolute paths are matched after resolving symlinks in their parent directory,
   so `/var` and `/private/var` spellings agree and an escaping symlink is rejected. A rejected
-  merge leaves the named paths staged and `MERGE_HEAD` in place. Outside a usable repository an
-  ordinary commit still fails at `stage: "add"`.
+  merge leaves the named paths staged and `MERGE_HEAD` in place. Only a "not a git repository"
+  answer from the merge probe falls through to an ordinary commit's `stage: "add"`; any other probe
+  failure (timeout, abort, dubious ownership, missing cwd) fails at `stage: "validate"`. A hook
+  path that is a directory behaves as in plain Git: a blocking hook such as `pre-commit` refuses
+  the commit, a `post-commit` one only prints the error.
   A rename needs both the old and the new path; a deletion (unstaged
   or already staged) is named like any other path. Nothing to commit is its own state
 - The subject must be a capitalized imperative, <= 72 chars, no trailing period, no
