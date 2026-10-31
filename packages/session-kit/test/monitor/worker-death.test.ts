@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { psInfo } from "../../src/monitor/pidfiles.ts";
@@ -55,6 +55,7 @@ describe("monitor worker death", () => {
 			const readyPath = join(tmp.dir, "ready.json");
 			const targetPath = join(tmp.dir, "target.pid");
 			const childPath = join(tmp.dir, "child.pid");
+			const ackPath = join(tmp.dir, "ack");
 			try {
 				runner = spawn(process.execPath, [vitest, "run", "--config", config, "--coverage.enabled=false"], {
 					cwd: join(import.meta.dirname, "../.."),
@@ -64,6 +65,7 @@ describe("monitor worker death", () => {
 						MONITOR_WORKER_ROOT: tmp.dir,
 						MONITOR_WORKER_TARGET: targetPath,
 						MONITOR_WORKER_CHILD: childPath,
+						MONITOR_WORKER_ACK: ackPath,
 						MONITOR_WORKER_TOKEN: token,
 						MONITOR_WORKER_FAIL: failure === "assertion failure" ? "1" : "0",
 					},
@@ -73,9 +75,10 @@ describe("monitor worker death", () => {
 				ready = JSON.parse(readFileSync(readyPath, "utf8")) as WorkerReady;
 				expect(ready.token).toBe(token);
 				expect(ready.targetPid).toBe(ready.monitorPid);
+				expect(await running(ready.monitorPid)).toBe(true);
+				expect(await running(ready.descendantPid)).toBe(true);
+				writeFileSync(ackPath, "");
 				if (failure === "SIGKILL") {
-					expect(await running(ready.monitorPid)).toBe(true);
-					expect(await running(ready.descendantPid)).toBe(true);
 					process.kill(ready.workerPid, "SIGKILL");
 				}
 				const { monitorPid, descendantPid } = ready;

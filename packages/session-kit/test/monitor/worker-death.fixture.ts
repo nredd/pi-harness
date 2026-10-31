@@ -8,8 +8,9 @@ const readyPath = process.env.MONITOR_WORKER_READY;
 const token = process.env.MONITOR_WORKER_TOKEN;
 const targetPath = process.env.MONITOR_WORKER_TARGET;
 const childPath = process.env.MONITOR_WORKER_CHILD;
-if (!readyPath || !targetPath || !childPath || !token)
-	throw new Error("worker fixture requires readiness, target and child paths plus ownership token");
+const ackPath = process.env.MONITOR_WORKER_ACK;
+if (!readyPath || !targetPath || !childPath || !ackPath || !token)
+	throw new Error("worker fixture requires readiness, target, child and ack paths plus ownership token");
 
 const manager = new MonitorManager({
 	sessionId: "worker-killed",
@@ -46,6 +47,8 @@ it("starts a monitor then fails or waits to be killed", async () => {
 		},
 	);
 	renameSync(tmp, readyPath);
+	// Hold until the test has observed the live monitor, so afterEach dispose cannot race it.
+	await waitFor(() => existsSync(ackPath));
 	if (process.env.MONITOR_WORKER_FAIL === "1") expect("intentional failure").toBe("cleaned by afterEach");
 	await new Promise<void>(() => {});
 });

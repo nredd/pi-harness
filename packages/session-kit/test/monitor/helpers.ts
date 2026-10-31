@@ -24,21 +24,34 @@ export function alive(pid: number): boolean {
 
 const execFileAsync = promisify(execFile);
 
+/** Test seams for `running`: the `ps` binary and its deadline. */
+export interface RunningOptions {
+	ps?: string;
+	timeoutMs?: number;
+}
+
 /**
  * Whether `pid` is a live (non-zombie) process. `kill(pid, 0)` also succeeds for zombies, which
- * never get reaped on hosts whose PID 1 does not reap (some containers, WSL2).
+ * never get reaped on hosts whose PID 1 does not reap (some containers, WSL2). `ps` exiting
+ * non-zero with no output means the pid is absent; a spawn failure or timeout rethrows, since a
+ * broken probe must not read as "dead".
  */
-export async function running(pid: number): Promise<boolean> {
+export async function running(
+	pid: number,
+	{ ps = "/bin/ps", timeoutMs = 5_000 }: RunningOptions = {},
+): Promise<boolean> {
 	if (!alive(pid)) return false;
 	try {
-		const { stdout } = await execFileAsync("/bin/ps", ["-o", "stat=", "-p", String(pid)], {
+		const { stdout } = await execFileAsync(ps, ["-o", "stat=", "-p", String(pid)], {
 			env: { ...process.env, LC_ALL: "C" },
-			timeout: 5_000,
+			timeout: timeoutMs,
 		});
 		const stat = stdout.trim();
 		return stat !== "" && !stat.startsWith("Z");
-	} catch {
-		return false;
+	} catch (error) {
+		const { code, killed, stdout } = error as { code?: unknown; killed?: boolean; stdout?: string };
+		if (typeof code === "number" && !killed && !stdout?.trim()) return false;
+		throw error;
 	}
 }
 
