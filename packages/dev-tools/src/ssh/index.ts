@@ -1,7 +1,7 @@
 /**
- * ssh tools: `ssh_exec` (annotated read-only; Plan mode re-validates the remote command through
- * the pi-plan-mode fork), `ssh_pull` (read-only) and `ssh_push` (mutating), all over the user's
- * own `ssh`/`scp` binaries and `~/.ssh/config`.
+ * ssh tools: `ssh_exec`, `ssh_pull`, and `ssh_push` mutate a remote or local environment. Plan
+ * mode gives `ssh_exec` a separately reviewed host and remote-command admission path. All use the
+ * user's own `ssh`/`scp` binaries and `~/.ssh/config`.
  */
 
 import { lstatSync } from "node:fs";
@@ -12,7 +12,6 @@ import { abnormalExit, bound, run, seconds, toolResult } from "../core/index.ts"
 import { redact, remoteScript, SCP_BASE_ARGS, shellQuote, splitSentinel, sshArgs, validateRemotePath } from "./exec.ts";
 import { readKnownHosts, validateHost } from "./hosts.ts";
 
-const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 const MUTATING = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true } as const;
 
 const DEFAULT_TIMEOUT_S = 30;
@@ -67,8 +66,8 @@ export function registerSshTools(pi: ExtensionAPI, options: SshToolOptions = {})
 		label: "ssh",
 		description:
 			"Run a command on a known host (a `Host` alias in ~/.ssh/config) over the user's own ssh: BatchMode, no agent or X11 forwarding, no TTY. The command runs under `sh` on the remote; multi-line scripts and heredocs work. The remote exit code is returned separately from ssh failures; a non-zero command exit is a normal result, not a tool error. Credential-shaped strings are redacted. A timeout kills the local ssh only; the remote command may keep running.",
-		promptSnippet: "Run a command on `home`, `nas` or another ~/.ssh/config host (prefer over `bash ssh ...`)",
-		annotations: READ_ONLY,
+		promptSnippet: "Run a command on a configured SSH host (prefer over `bash ssh ...`)",
+		annotations: MUTATING,
 		parameters: Type.Object({
 			host: Host,
 			command: Type.String({ description: "Shell command or script for `sh` on the remote." }),
@@ -193,7 +192,7 @@ export function registerSshTools(pi: ExtensionAPI, options: SshToolOptions = {})
 		description:
 			"Copy one file from a known host to a local path with scp. Refuses to overwrite unless `overwrite` is set. Remote paths are plain (no spaces, quotes, `~` or shell characters).",
 		promptSnippet: "Fetch a remote file (prefer over `bash scp`)",
-		annotations: READ_ONLY,
+		annotations: MUTATING,
 		parameters: Type.Object({
 			host: Host,
 			remote_path: Type.String(),

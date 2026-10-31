@@ -5,7 +5,12 @@ import { join } from "node:path";
 import type { ToolCallEventResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { classifyPlanModeTool, findBlockedSshExecCall, isAnnotatedReadOnlyTool } from "../src/tool-policy.js";
+import {
+  classifyPlanModeTool,
+  findBlockedSshExecCall,
+  isAnnotatedReadOnlyTool,
+  isPlanSshExecTool,
+} from "../src/tool-policy.js";
 import { defaultPlanModeToolNames, toolPolicyLabel } from "../src/tool-selection.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
@@ -70,16 +75,33 @@ test("extension tools that declare readOnlyHint classify as read-only", () => {
   assert.equal(classifyPlanModeTool({ name: "x", annotations: { readOnlyHint: true } } as ToolInfo), "blocked");
 });
 
-test("annotated read-only tools are admitted by default alongside configured defaultPlanTools", () => {
+test("annotated reads and the separately gated ssh_exec are admitted by default", () => {
+  const sshExec = annotated("ssh_exec", false);
   const tools = [
     builtinTool("read"),
     builtinTool("bash"),
     annotated("git_status", true),
     annotated("git_commit", false),
+    sshExec,
   ] as ToolInfo[];
-  assert.deepEqual(defaultPlanModeToolNames(tools, undefined), ["read", "bash", "git_status"]);
-  assert.deepEqual(defaultPlanModeToolNames(tools, ["read", "ls"]), ["read", "ls", "git_status"]);
-  assert.deepEqual(defaultPlanModeToolNames(tools, ["git_status"]), ["git_status"]);
+  assert.equal(isPlanSshExecTool(sshExec), true);
+  assert.equal(isPlanSshExecTool(annotated("ssh_exec", true)), true);
+  assert.equal(isPlanSshExecTool(annotated("ssh_pull", false)), false);
+  // Untrusted sources never get the by-name exception: project scope and built-ins stay opt-in.
+  const projectSsh = {
+    ...annotated("ssh_exec", false),
+    sourceInfo: { source: "auto", scope: "project", origin: "top-level", path: "/repo/.pi/extensions/x.ts" },
+  } as ToolInfo;
+  const builtinSsh = {
+    ...annotated("ssh_exec", false),
+    sourceInfo: { source: "builtin", scope: "temporary", origin: "top-level", path: "builtin:mcp" },
+  } as ToolInfo;
+  assert.equal(isPlanSshExecTool(projectSsh), false);
+  assert.equal(isPlanSshExecTool(builtinSsh), false);
+  assert.deepEqual(defaultPlanModeToolNames([projectSsh, builtinSsh], ["read"]), ["read"]);
+  assert.deepEqual(defaultPlanModeToolNames(tools, undefined), ["read", "bash", "git_status", "ssh_exec"]);
+  assert.deepEqual(defaultPlanModeToolNames(tools, ["read", "ls"]), ["read", "ls", "git_status", "ssh_exec"]);
+  assert.deepEqual(defaultPlanModeToolNames(tools, ["git_status"]), ["git_status", "ssh_exec"]);
 });
 
 test("ssh_exec is gated on a configured host and the remote reviewed policy", () => {
@@ -176,7 +198,7 @@ test("active Plan mode admits annotated tools and gates ssh_exec at the tool hoo
         builtinTool("read"),
         annotated("git_status", true),
         annotated("git_commit", false),
-        annotated("ssh_exec", true),
+        annotated("ssh_exec", false),
       ],
     });
     planMode(mock.pi);
