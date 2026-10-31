@@ -9,7 +9,7 @@ The PR records stack ordering and execution/review receipts [here](https://githu
 Cover the TypeScript wrappers, not cargo, git, ssh, scp, uv, Python, Rust, or the published
 resource sampler implementation. Both Node runs use Vitest 5.0.3, one fork worker, an explicit
 `src/**/*.ts` coverage include, and separate report directories. The JSON inventories contain
-all 23 executable source modules; `src/core/index.ts` is a re-export-only barrel. Neither the
+all executable source modules (22 when #195 measured them, 23 now that `src/git/merge.ts` is included); `src/core/index.ts` is a re-export-only barrel. Neither the
 Vitest configuration nor imports introduce a Pi/Jiti source alias. Fully covered modules
 (e.g. the default entrypoint) remain in the JSON even when omitted from the text table.
 
@@ -20,18 +20,22 @@ Initial providers agree exactly on lines/functions:
 | V8 | 1410/1503 (93.81%) | 247/261 (94.63%) | 1650/1860 (88.70%) | 1210/1557 (77.71%) |
 | Istanbul (primary) | 1410/1503 (93.81%) | 247/261 (94.63%) | 1650/1860 (88.70%) | 1198/1557 (76.94%) |
 
-Final primary Node result at #195 (22 modules, historical receipt): **1502/1502 lines (100%), 260/260 functions (100%)**,
+Historical receipt, #195 (merged 2026-10-29, `b6c2ccf7`, 22 modules). Final primary Node result: **1502/1502 lines (100%), 260/260 functions (100%)**,
 1771/1859 statements (95.26%), 1319/1557 branches (84.71%). All 22 executable modules
 have zero missing lines/functions. Node and Bun Vitest each pass 411 tests in 29 files;
 Bun's native scenario gate passes four tests. Biome and TypeScript checks pass.
 
-Current primary Node result after #286 (23 modules; `src/git/merge.ts` added), from
-`vitest run --coverage` on the final PR head: **1586/1586 lines (100%), 275/275 functions
-(100%)**, 1867/1957 statements (95.40%), 1374/1616 branches (85.02%); **441 tests in 31 files**.
-Bun native scenarios: 5 passed.
-
 The line/function denominator decreases by one only because the unreachable mutex initializer
 is removed (explained below), not because any executable source file is excluded.
+(#195 receipt.) The 411 tests / 1771 statements / 1319 branches above and the 412 / 1772 / 1320 in the
+final-gate list below are both recorded in the #195 commit with no per-run record separating them;
+they are kept as written, not reconciled.
+
+Current primary Node result after #286 (23 modules; `src/git/merge.ts` added): as of `ab6db560`
+(the last code commit; measured on that tree with `vitest run --coverage`, not on any later
+docs-only commit): **1596/1596 lines (100%), 278/278 functions (100%)**, 1877/1967 statements
+(95.42%), 1376/1618 branches (85.04%); **445 tests in 31 files**. Bun native scenarios
+(`npm run test:bun`): 5 passed.
 
 Choose Istanbul as primary: no alias inflation, source-complete inventory, and the same
 line/function denominator as V8. Branch coverage is reported, not treated as line coverage.
