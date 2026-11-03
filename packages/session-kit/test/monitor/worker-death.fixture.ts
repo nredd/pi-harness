@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
 import { MonitorManager } from "../../src/monitor/manager.ts";
 import { waitFor } from "./helpers.ts";
-import { STAY } from "./stay.ts";
+import { STAY_GROUP } from "./stay.ts";
 
 const readyPath = process.env.MONITOR_WORKER_READY;
 const token = process.env.MONITOR_WORKER_TOKEN;
@@ -26,7 +26,7 @@ it("starts a monitor then fails or waits to be killed", async () => {
 				process.execPath,
 				"-e",
 				// The target spawns an in-group descendant (published first) so group reaping is observable.
-				`const fs = require("node:fs"); const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000) // ${token}"], { stdio: "ignore" }); fs.writeFileSync(process.env.MONITOR_WORKER_CHILD, String(child.pid)); fs.writeFileSync(process.env.MONITOR_WORKER_TARGET, String(process.pid)); ${STAY} // ${token}`,
+				`const fs = require("node:fs"); const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000) // ${token}"], { stdio: "ignore" }); fs.writeFileSync(process.env.MONITOR_WORKER_CHILD, String(child.pid)); fs.writeFileSync(process.env.MONITOR_WORKER_TARGET, String(process.pid)); ${STAY_GROUP} // ${token}`,
 			],
 			name: "worker-killed",
 		},
