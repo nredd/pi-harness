@@ -123,9 +123,14 @@ no model tool, persists no history, sends no model messages and does no network 
     there the `AbortError` is the only provider evidence and no listed child is claimed.
   - `test/mon/theme.test.ts`: actual built-in dark and light themes over an actual observation at
     40x12, 60x20, 80x24 and 120x40.
-  - `test/scenarios/mon.test.ts` (Vitest and Bun): the real interactive Pi host, `createSessionKit`
-    and the real sampler; two observations, resize matrix, close/Escape/reopen, close before the
-    first sample and session shutdown all leave no kit timer or child process.
+  - `test/scenarios/mon.test.ts` (Vitest and Bun): the real interactive Pi host and the real sampler;
+    two observations, resize matrix, close/Escape/reopen, close before the first sample and session
+    shutdown all leave no kit timer or child process. Registration, shutdown and close-before-sample
+    go through `createSessionKit`. The observation cases call `registerMon` directly, with the real
+    sampler wrapped only to observe each resolved scan,
+    then check the frame against that scan: its exact process count, and its `time budget` notice
+    when a loaded host runs out of the 250ms scan budget. They never poll frames for a full scan,
+    which only a later fake-clock tick could bring.
   - `test/mon/{component,poll,index}.test.ts`: layout, identity, history, lifecycle interleavings
     with fakes; `resource-fixture.ts` is type-checked against the package's `ResourceSnapshot`.
 - `make check-package-contracts` packs session-kit, installs it alone (sampler from npm, exact

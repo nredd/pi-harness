@@ -2,9 +2,18 @@
 import { spawnSync } from "node:child_process";
 import { platform } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+	createResourceSampler,
+	type ResourceSampler,
+	type ResourceSnapshot,
+	type SamplerOptions,
+} from "@nredd/pi-resource-sampler";
 import { afterEach, expect, it } from "vitest";
-import { configFor, TerminalFixture } from "./support.ts";
+import { registerMon } from "../../src/mon/index.ts";
+import { createSamplerSource } from "../../src/mon/source.ts";
+import { configFor, deferred, TerminalFixture } from "./support.ts";
 
 const SIZES = [
 	[40, 12],
@@ -12,8 +21,6 @@ const SIZES = [
 	[80, 24],
 	[120, 40],
 ] as const;
-/** A real process sample arrived; the empty view also says "0 sampled". */
-const SAMPLED = / PROCESSES {2}[1-9]\d* sampled/;
 const nativeDarwinCpu =
 	platform() === "darwin" &&
 	(Boolean(process.versions.bun) ||
@@ -35,18 +42,58 @@ function children(): number[] {
 		.map(([pid]) => pid as number);
 }
 
-/** Wait on actual terminal frames; real sampling is asynchronous host work, bounded to 10s. */
-async function until(predicate: (screen: string) => boolean): Promise<string> {
-	const host = fixture?.requireHost();
-	if (!host) throw new Error("No host");
-	let screen = "";
-	for (let i = 0; i < 500; i++) {
-		await host.settle();
-		screen = host.viewport().join("\n");
-		if (predicate(screen)) return screen;
-		await sleep(20);
-	}
-	throw new Error(`Timed out waiting for /mon frame:\n${screen}`);
+/**
+ * The real published sampler behind the real `/mon` command, observed rather than replaced. Each
+ * resolved scan is the event a frame waits on: the scan's own 250ms budget is load dependent, so a
+ * loaded host can legitimately report `0 of 0 seen (time budget)`, and only a fake clock tick ever
+ * polls again. Frames are checked against the scan that produced them, never polled for a hoped one.
+ */
+function observedMon(): { factory: ExtensionFactory; next: () => Promise<ResourceSnapshot> } {
+	let scan = deferred<ResourceSnapshot>();
+	const create = (options?: SamplerOptions): ResourceSampler => {
+		const real = createResourceSampler(options);
+		return {
+			sample: async (signal) => {
+				const snapshot = await real.sample(signal);
+				scan.resolve(snapshot);
+				return snapshot;
+			},
+			dispose: () => real.dispose(),
+		};
+	};
+	return {
+		factory: (pi) => registerMon(pi, { createSource: () => createSamplerSource(create), clock: fixture?.clock }),
+		/** Resolve with the next completed scan once `/mon` rendered it and scheduled the next poll. */
+		next: async () => {
+			const snapshot = await scan.promise;
+			scan = deferred<ResourceSnapshot>();
+			// The poll consumes the scan in microtasks; one macrotask turn drains them all.
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(fixture?.clock.pending, "the poll consumed the scan and scheduled the next").toBe(1);
+			await fixture?.requireHost().settle();
+			return snapshot;
+		},
+	};
+}
+
+/** Start the terminal with the observed real `/mon` and open it on its first scan. */
+async function openObserved(): Promise<{ next: () => Promise<ResourceSnapshot> }> {
+	fixture = new TerminalFixture();
+	const mon = observedMon();
+	await fixture.startTerminal(configFor(), { extensionFactories: [mon.factory] });
+	return mon;
+}
+
+/** Assert the frame renders exactly this scan's process coverage, including a budget notice. */
+function rendersScan(screen: string, snapshot: ResourceSnapshot): void {
+	expect(screen).toContain("LIVE");
+	expect(screen).toContain(` PROCESSES  ${snapshot.processes.length} sampled`);
+	// Nonempty, or the sampler itself says why not: an empty complete scan would be a collector bug.
+	expect(snapshot.processes.length > 0 || snapshot.coverage.reasons.includes("deadline"), screen).toBe(true);
+	const { complete, enumerated, reasons, sampled } = snapshot.coverage;
+	if (complete) expect(screen).not.toContain("Partial list");
+	if (reasons.includes("deadline"))
+		expect(screen).toContain(`Partial list: ${sampled} of ${enumerated} seen (time budget`);
 }
 
 function layout(width: number, height: number): string[] {
@@ -63,23 +110,26 @@ function layout(width: number, height: number): string[] {
 }
 
 it("/mon shows two real observations, every size, then releases sampling on close", async () => {
-	fixture = new TerminalFixture();
-	const host = await fixture.startTerminal(configFor("mon"));
+	const mon = await openObserved();
+	const host = fixture?.requireHost();
+	if (!fixture || !host) throw new Error("No host");
 	await fixture.open("/mon");
-	await until((s) => s.includes("LIVE") && s.includes("-- warming") && SAMPLED.test(s));
-	expect(fixture.clock.pending).toBe(1);
+	const baseline = await mon.next();
+	const warming = host.viewport().join("\n");
+	expect(warming).toContain("-- warming");
+	rendersScan(warming, baseline);
+	// Real time, not a fake tick: host CPU counters must advance for the second scan to measure an interval.
 	await sleep(150);
 	fixture.clock.advance(2000);
 	// Sampler 0.2.0 copies Bun's lazy `os.cpus()` counters, so Node and Bun both measure the interval.
-	const live = await until((s) => s.includes("LIVE") && /\d+\.\d%/.test(s));
-	expect(live).toMatch(SAMPLED);
-	if (platform() === "darwin" && !nativeDarwinCpu) {
-		expect(live).toContain("RSS ↓");
-		expect(live).toContain("macOS: process CPU unavailable");
-	} else {
-		expect(live).toContain("CPU ↓");
-		if (platform() === "darwin") expect(live).not.toContain("macOS: process CPU unavailable");
-	}
+	const second = await mon.next();
+	const live = host.viewport().join("\n");
+	expect(live).toMatch(/\d+\.\d%/);
+	rendersScan(live, second);
+	// macOS without native counters has no process CPU, so the view sorts by RSS until the user sorts.
+	const cpuless = platform() === "darwin" && !nativeDarwinCpu && second.processes.length > 0;
+	expect(live).toContain(cpuless ? "RSS ↓" : "CPU ↓");
+	if (platform() === "darwin") expect(live.includes("macOS: process CPU unavailable")).toBe(cpuless);
 	for (const [width, height] of SIZES) {
 		host.resize(width, height);
 		await host.settle();
@@ -88,7 +138,7 @@ it("/mon shows two real observations, every size, then releases sampling on clos
 	await fixture.close();
 	expect(fixture.clock.pending).toBe(0);
 	expect(children()).toEqual([]);
-	expect(host.viewport().join("\n")).not.toMatch(SAMPLED);
+	expect(host.viewport().join("\n")).not.toContain(" PROCESSES ");
 });
 
 it("/mon releases an in-flight real sample on session shutdown", async () => {
@@ -110,11 +160,14 @@ it("/mon closed before its first real sample completes schedules nothing", async
 });
 
 it("/mon reopens after close with a fresh warming baseline", async () => {
-	fixture = new TerminalFixture();
-	await fixture.startTerminal(configFor("mon"));
+	const mon = await openObserved();
+	if (!fixture) throw new Error("No host");
 	for (let round = 0; round < 2; round++) {
 		await fixture.open("/mon");
-		await until((s) => s.includes("LIVE") && s.includes("-- warming") && SAMPLED.test(s));
+		const baseline = await mon.next();
+		const warming = fixture.requireHost().viewport().join("\n");
+		expect(warming).toContain("-- warming");
+		rendersScan(warming, baseline);
 		await fixture.close(round ? "\x1b" : "q");
 		expect(fixture.clock.pending).toBe(0);
 	}

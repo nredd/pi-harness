@@ -95,7 +95,7 @@ function sampleCalls(): Call[] {
 	return out.sort((a, b) => a.ms - b.ms);
 }
 
-function make(rows = 44, calls = sampleCalls()) {
+function make(rows = 44, calls = sampleCalls(), now?: number) {
 	const onClose = vi.fn();
 	const requestRender = vi.fn();
 	const sessions = [{ path: "/a", startMs: at(TODAY, 9), endMs: at(TODAY, 10) }];
@@ -107,14 +107,18 @@ function make(rows = 44, calls = sampleCalls()) {
 		requestRender,
 		onClose,
 		today: TODAY,
+		now,
 		badLines: 2,
 	});
 	return { view, onClose, requestRender };
 }
 
 describe("StatsView", () => {
-	it("renders exactly `rows` lines, none wider than the pane, on both tabs at every width", () => {
-		for (const width of [1, 20, 40, 59, 60, 61, 80, 99, 120, 160, 200, 240, 319, 320]) {
+	// One case per width: each renders 40 frames, so no single test owns all 560 of them.
+	it.each([1, 20, 40, 59, 60, 61, 80, 99, 120, 160, 200, 240, 319, 320])(
+		"renders exactly `rows` lines, none wider than the pane, on both tabs at %i columns",
+		(width) => {
+			let checked = 0;
 			for (const rows of [4, 10, 24, 44, 80]) {
 				for (const tab of ["Overview", "Models"] as const) {
 					const { view } = make(rows);
@@ -124,11 +128,14 @@ describe("StatsView", () => {
 						const lines = view.render(width);
 						expect(lines).toHaveLength(Math.max(4, rows));
 						for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+						checked += lines.length;
 					}
 				}
 			}
-		}
-	});
+			// 5 heights x 2 tabs x 4 steps, each frame exactly its height: (4 + 10 + 24 + 44 + 80) x 8.
+			expect(checked).toBe(1296);
+		},
+	);
 
 	it("shows the heatmap, the numbers, the chart and the warning on Overview", () => {
 		const text = make(60).view.render(120).map(strip).join("\n");
@@ -304,21 +311,32 @@ describe("StatsView", () => {
 		expect(values.length).toBe(3);
 	});
 
-	it("never cuts a stat row it chose to lay out in several columns", () => {
-		// Labels are padded to their column's longest, so a short label with a long value (`Favorite
-		// model`) next to a long label with a short value must still fit the width the grid budgeted.
-		const LABELS = ["Favorite model", "Total tokens", "Sessions", "Longest session", "Active days"];
-		const LABELS2 = ["Longest streak", "Most active day", "Current streak", "Cache tokens", "Notional cost"];
-		const { view } = make(60);
-		for (let range = 0; range < 5; range++, view.handleInput("r"))
+	// One case per range: each sweeps 161 full renders, so no single test owns all 805 of them.
+	it.each(["all", "7d", "30d", "5h", "24h"].map((name, steps) => [name, steps] as const))(
+		"never cuts a stat row it chose to lay out in several columns, %s range",
+		(name, steps) => {
+			// Labels are padded to their column's longest, so a short label with a long value (`Favorite
+			// model`) next to a long label with a short value must still fit the width the grid budgeted.
+			const LABELS = ["Favorite model", "Total tokens", "Sessions", "Longest session", "Active days"];
+			const LABELS2 = ["Longest streak", "Most active day", "Current streak", "Cache tokens", "Notional cost"];
+			// Pinned to the fixture's day: against the real clock the hourly ranges hold no calls, lay out no
+			// grid, and would pass without checking a row. 24 rows lay out the same grid rows as 60 at every
+			// width here, with a shorter chart under them.
+			const { view } = make(24, sampleCalls(), at(TODAY, 13));
+			for (let step = 0; step < steps; step++) view.handleInput("r");
+			expect(view.state.range).toBe(name);
+			let checked = 0;
 			for (let width = 40; width <= 200; width++) {
 				const rows = view
 					.render(width)
 					.map(strip)
 					.filter((l) => [...LABELS, ...LABELS2].filter((label) => l.includes(label)).length > 1);
-				for (const row of rows) expect(row, `range ${range}, ${width} cols`).not.toContain("…");
+				for (const row of rows) expect(row, `${name}, ${width} cols`).not.toContain("…");
+				checked += rows.length;
 			}
-	});
+			expect(checked, `${name} laid out no multi-column row`).toBeGreaterThan(0);
+		},
+	);
 
 	it("aligns the x axis to the chart: baseline marks over the labels, today's end inside the plot", () => {
 		for (const width of [30, 40, 60, 80, 130]) {

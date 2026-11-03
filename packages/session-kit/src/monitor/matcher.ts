@@ -5,8 +5,11 @@
  * and conservatively mark pending/future lines matched: output still wakes rather than losing alerts.
  * Normal tests retain JS RegExp semantics and line ordering. close() interrupts work and awaits worker
  * termination; drain() waits for queued callbacks before the monitor's final output is delivered.
+ * Every deadline runs on the injected `Clock`, the manager's, so a scheduler-controlled clock decides
+ * when a worker counts as late rather than how loaded the host happens to be.
  */
 import { Worker } from "node:worker_threads";
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
 
 export const MATCH_TIMEOUT_MS = 100;
 export const MATCH_QUEUE_BYTES = 256 * 1024;
@@ -29,22 +32,25 @@ export class BoundedMatcher {
 	private active: Pending | undefined;
 	private readonly queue: Pending[] = [];
 	private bytes = 0;
-	private timer: NodeJS.Timeout | undefined;
+	private timer: TimerHandle | undefined;
 	private readonly drained: (() => void)[] = [];
 	private termination: Promise<unknown> = Promise.resolve();
 
-	constructor(source: string) {
+	constructor(
+		source: string,
+		private readonly clock: Clock = realClock,
+	) {
 		this.worker = new Worker(SOURCE, { eval: true, workerData: source });
-		this.timer = setTimeout(() => this.disable(), STARTUP_TIMEOUT_MS);
+		this.timer = this.clock.setTimeout(() => this.disable(), STARTUP_TIMEOUT_MS);
 		this.worker.once("online", () => {
 			if (!this.worker) return;
-			clearTimeout(this.timer);
+			this.timer?.cancel();
 			this.ready = true;
 			this.pump();
 		});
 		this.worker.on("message", (matched: boolean) => {
 			if (!this.worker || !this.active) return;
-			clearTimeout(this.timer);
+			this.timer?.cancel();
 			const item = this.active;
 			this.active = undefined;
 			this.bytes -= item.bytes;
@@ -73,11 +79,11 @@ export class BoundedMatcher {
 
 	async drain(): Promise<void> {
 		if (this.active || this.queue.length) {
-			const deadline = setTimeout(() => this.disable(), STARTUP_TIMEOUT_MS);
+			const deadline = this.clock.setTimeout(() => this.disable(), STARTUP_TIMEOUT_MS);
 			try {
 				await new Promise<void>((resolve) => this.drained.push(resolve));
 			} finally {
-				clearTimeout(deadline);
+				deadline.cancel();
 			}
 		}
 	}
@@ -94,12 +100,12 @@ export class BoundedMatcher {
 			for (const resolve of this.drained.splice(0)) resolve();
 			return;
 		}
-		this.timer = setTimeout(() => this.disable(), MATCH_TIMEOUT_MS);
+		this.timer = this.clock.setTimeout(() => this.disable(), MATCH_TIMEOUT_MS);
 		this.worker.postMessage(this.active.text);
 	}
 
 	private disable(): void {
-		clearTimeout(this.timer);
+		this.timer?.cancel();
 		const worker = this.worker;
 		this.worker = undefined;
 		if (worker) this.termination = worker.terminate();

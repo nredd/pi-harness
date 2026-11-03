@@ -181,7 +181,7 @@ export class MonitorManager {
 
 		let matcher: BoundedMatcher | undefined;
 		try {
-			matcher = regex ? new BoundedMatcher(regex.source) : undefined;
+			matcher = regex ? new BoundedMatcher(regex.source, this.clock) : undefined;
 		} catch (error) {
 			proc.killNow();
 			removePidfile(this.sessionDir, id);
