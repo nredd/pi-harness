@@ -207,7 +207,7 @@ Python `scripts/*.py` and `integration/harness/*.py`, boundary probes, executabl
 producer configurations are named **measurement-pending** inventories, not silently omitted.
 Existing Python gates are not coverage accounting: pytest-cov for `scripts/` and
 `integration/harness/` is follow-up work. `benchmarks/comparison` already has pytest-cov at 90%
-combined coverage and retains it; independent LCOV line/function accounting is still pending.
+combined coverage and retains it (always in local `make check`; in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); independent LCOV line/function accounting is still pending.
 The declaration-only `integration/harness/__init__.py` has an explicit reasoned exclusion.
 A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
@@ -397,6 +397,6 @@ settings change. A failed earlier test may prevent later packages from running; 
 reports correctly fail rather than pretending full coverage. Do not reuse stale local reports
 to claim a clean gate.
 
-The Python benchmark's existing combined line/branch 90% gate is unchanged. Instrumented runs
+The Python benchmark's existing combined line/branch 90% gate is unchanged: still in `make check`, and in CI on `main` pushes and on PRs that touch `benchmark_inputs` (NOT RUN otherwise). Instrumented runs
 must not refresh performance baselines. Quiet-runner benches and live platform/TCC checks are NOT RUN by this coverage gate.
 The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](ci.md) for platform boundaries.
