@@ -254,10 +254,11 @@ Native `STAY` fixtures exit themselves when their parent changes and signal noth
 worker-death fixture uses `STAY_GROUP`, which SIGKILLs its own detached group, addressed by its own
 pid; production commands and leader/descendant probes are not modified.
 Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
-Vitest regression, given its own isolated `HOME` since it bypasses `scripts/run-vitest.ts`, covers
-both a SIGKILLed worker and a failed assertion (via the fixture's own `afterEach` dispose) and
-observes both the detached `STAY_GROUP` leader and an in-group descendant disappearing. Liveness there is read from process state, so an unreaped zombie (non-reaping PID 1)
-counts as dead.
+Vitest regression bypasses `scripts/run-vitest.ts`, so it reuses the launcher's exported
+`isolatedHomeEnv` and checks the child saw that `HOME`. It covers both a SIGKILLed worker and a
+failed assertion (via the fixture's own `afterEach` dispose) and observes both the detached
+`STAY_GROUP` leader and an in-group descendant disappearing. Liveness there is read from process
+state, so an unreaped zombie (non-reaping PID 1) counts as dead.
 Native stop/dispose checks assert direct children are reaped when the operation resolves, then
 observe orphaned descendants disappearing with the existing bounded liveness check. Leader exit
 and pipe closure do not synchronize PID 1's reaping; on Linux, `kill(pid, 0)` can still succeed

@@ -41,7 +41,14 @@ it("starts a monitor then fails or waits to be killed", async () => {
 	const tmp = `${readyPath}.${process.pid}.tmp`;
 	writeFileSync(
 		tmp,
-		JSON.stringify({ workerPid: process.pid, monitorPid: monitor.pid, targetPid, descendantPid, token }),
+		JSON.stringify({
+			workerPid: process.pid,
+			monitorPid: monitor.pid,
+			targetPid,
+			descendantPid,
+			token,
+			home: process.env.HOME,
+		}),
 		{
 			mode: 0o600,
 		},
