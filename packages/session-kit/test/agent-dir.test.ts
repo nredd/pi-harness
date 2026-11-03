@@ -1,16 +1,16 @@
-/** Characterize the shared call-time directory resolver and its existing public exports. */
+/** Characterize the shared call-time directory resolver. */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { agentDir } from "../src/agent-dir.ts";
-import { agentDir as configAgentDir } from "../src/config.ts";
-import { agentDir as statsAgentDir } from "../src/stats/load.ts";
+import { agentDir, resolveAgentDir } from "../src/agent-dir.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("preserves the configuration and stats exports as one resolver", () => {
-	expect(configAgentDir).toBe(agentDir);
-	expect(statsAgentDir).toBe(agentDir);
+it("prefers an explicit agent directory over the injected home", () => {
+	vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
+	expect(resolveAgentDir({ agentDir: "/explicit-agent", homeDir: "/injected-home" })).toBe("/explicit-agent");
+	expect(resolveAgentDir({ homeDir: "/injected-home" })).toBe(join("/injected-home", ".pi", "agent"));
+	expect(resolveAgentDir({})).toBe(join(homedir(), ".pi", "agent"));
 });
 
 it("resolves the environment override at call time ahead of an injected home", () => {

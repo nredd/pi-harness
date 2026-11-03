@@ -3,14 +3,6 @@ import { realpathSync } from "node:fs";
 import { resolve as resolve2 } from "node:path";
 import { pathToFileURL } from "node:url";
 
-// src/stats/load.ts
-import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { dirname, join as join2, resolve, sep } from "node:path";
-import { createInterface } from "node:readline";
-import { setImmediate as tick } from "node:timers/promises";
-
 // src/agent-dir.ts
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +10,18 @@ function agentDir(homeDir = homedir()) {
   return process.env.PI_CODING_AGENT_DIR ?? join(homeDir, ".pi", "agent");
 }
 
+// src/stats/snapshot.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { link, lstat, mkdir as mkdir2, readdir as readdir2, readFile as readFile2, rename as rename2, unlink, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname2, join as join3 } from "node:path";
+
 // src/stats/load.ts
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { dirname, join as join2, resolve, sep } from "node:path";
+import { createInterface } from "node:readline";
+import { setImmediate as tick } from "node:timers/promises";
 var CACHE_VERSION = 2;
 var opaqueId = (value) => createHash("sha256").update(value).digest("hex");
 var EXCLUDED_PROVIDERS = /* @__PURE__ */ new Set(["faux", "faux-provider", "fake-provider", "router"]);
@@ -337,9 +340,6 @@ function flatten(files) {
 }
 
 // src/stats/snapshot.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-import { link, lstat, mkdir as mkdir2, readdir as readdir2, readFile as readFile2, rename as rename2, unlink, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname2, join as join3 } from "node:path";
 var SNAPSHOT_VERSION = 1;
 var UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 var HASH = /^[a-f0-9]{64}$/;

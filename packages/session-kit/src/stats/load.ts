@@ -18,8 +18,6 @@ import { dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
 import { agentDir } from "../agent-dir.ts";
-
-export { agentDir };
 export const CACHE_VERSION = 2;
 
 /** Stable opaque identifier: no transcript IDs or paths leave the machine. */
