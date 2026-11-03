@@ -58,20 +58,17 @@ const MINIMAL_FLAGS = ["[fb]", "!"] as const;
 
 /**
  * Wrap control text into a fixed row budget while preserving both its opening
- * and final diagnosis around an explicit omitted-rows marker.
+ * and final diagnosis around an explicit omitted-rows marker. The budget is at
+ * least three rows: one each for the opening, the marker and the diagnosis.
  */
 export function boundedWrappedRows(text: string, width: number, maxRows: number, marker: string): string[] {
   const rows = wrapTextWithAnsi(text, width);
-  const budget = Math.max(1, Math.trunc(maxRows));
+  const budget = Math.max(3, Math.trunc(maxRows));
   if (rows.length <= budget) return rows;
-  if (budget === 1) return [stripTerminalSequences(truncateToWidth(marker, width, ""))];
-  // Two rows have no room for a truthful omission marker, so retain the control
-  // text's opening and diagnosis rather than exceeding the caller's budget.
-  if (budget === 2) return [rows[0]!, rows.at(-1)!];
 
   // Reserve a row for the omission marker and favor the final rows: fallback
   // diagnoses live at the end, while the first row still names the control text.
-  // budget >= 3 here, so at least two rows are omitted.
+  // At least two rows are omitted, so the marker never replaces a single row.
   const firstCount = Math.max(1, Math.floor((budget - 1) / 2));
   const lastCount = budget - firstCount - 1;
   const omitted = rows.length - firstCount - lastCount;

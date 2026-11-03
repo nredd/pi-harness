@@ -119,8 +119,7 @@ describe("bounded wrapped control text", () => {
     expect(boundedWrappedRows("first\nsecond\nthird\nfourth\nlast", 80, 4, "…")).toEqual([
       "first", "… 2 more lines", "fourth", "last",
     ]);
-    expect(boundedWrappedRows("first\nsecond\nlast", 80, 2, "…")).toEqual(["first", "last"]);
-    expect(boundedWrappedRows("first\nlast", 80, 1, "…")).toEqual(["…"]);
+    expect(boundedWrappedRows("first\nsecond\nthird\nlast", 80, 1, "…")).toEqual(["first", "… 2 more lines", "last"]);
   });
 });
 
@@ -280,12 +279,14 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
   });
 
   it("keeps the workflow-dialog fallback disclosure intact at narrow render widths", () => {
-    for (const width of [40, 46, 60, 80]) {
+    // The selected row's pane ends at the divider; the flag degrades whole and the label keeps what remains.
+    const expected: [number, string][] = [
+      [40, "❯ ✔ [fb] │"], [46, "❯ ✔ [fb] ZZ"], [60, "❯ ✔ [fallback] │"], [80, "❯ ✔ [fallback] ZZ"],
+    ];
+    for (const [width, row] of expected) {
       const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ label: UGLY.ascii })], "agent")));
-      const listRow = lines.find(l => /\[fallback|\[fb\]|!/.test(l));
-      expect(listRow, `${width} columns:\n${lines.join("\n")}`).toBeDefined();
-      expect(listRow).toMatch(/\[fallback\]|\[fb\]|!/);
-      if (width === 46) expect(listRow).toContain("[fb] ZZ");
+      const listRow = lines.find(l => l.includes("❯ ✔"));
+      expect(listRow, `${width} columns:\n${lines.join("\n")}`).toContain(row);
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
   });
