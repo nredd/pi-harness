@@ -85,8 +85,9 @@ resource-sampler on Linux. Linux retains 47 lines / 8 functions in native `darwi
 an explicit per-OS floor, not an exclusion. Session-kit now has zero primary misses on both
 OSes after the deterministic formatter test removes the incidental comparator hit (#163).
 The earlier 110/32 transitional floor is historical only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
-on either outcome. All current Bun signals explicitly use `enforcement: "report-only"` with
-mandatory reasons linked to #160. They retain fail-closed LCOV parsing, expected-file checks,
+on either outcome. Bun signals for `preset`, `subscription-router` and `todo` are enforced at
+0/0 on both OSes (#320). The rest explicitly use `enforcement: "report-only"` with
+mandatory reasons linked to #160. Report-only signals retain fail-closed LCOV parsing, expected-file checks,
 per-OS references, inventory ratcheting, and text+LCOV reporter checks. Counts and signed deltas
 from references are logged and included under JSON `signals`; budget excess alone cannot fail
 these advisory signals. Primary budgets stay enforced and define the 100% goal. Never merge
@@ -412,6 +413,7 @@ runtime) and Bun the standalone target. Full Vitest runs on both engines for
 spawn-time home (the keys come from its exported `isolatedHomeEnv`, which nested runners such as
 session-kit's worker-death test reuse); `make check-ts` and both existing `owned` OS cells run it. Each invocation
 prints engine/OS/package duration and exit status and appends it to the CI step summary.
+The launcher's `bun` engine also appends the Bun signal's Istanbul coverage arguments.
 The shared guard checks `os.homedir() === HOME` at setup, before each test and after each test,
 failing with the offending file and an instruction to inject home directories. These are
 boundary checks, not interception of transient mutations between boundaries.

@@ -113,14 +113,15 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 	]) {
 		const manifest = JSON.parse(readFileSync(join(root, directory, "package.json"), "utf8"));
 		if (directory === "packages/subagents") {
-			// Full Bun remains blocked by the unrelated workflow stack-line issue #174.
+			// Native subset plus real-loader canary until the full-suite slice of #320.
 			expect(manifest.scripts["test:bun"]).toContain(
 				"node ../../scripts/run-vitest.ts bun test/resource-loader-home.test.ts",
 			);
 			expect(manifest.scripts["test:bun"]).toContain("bun test test/session-scenarios.test.ts");
 		} else {
+			// The launcher owns the coverage arguments; launcher.test.ts pins them.
 			expect(manifest.scripts["test:bun"]).toMatch(
-				/^node ..\/..\/scripts\/run-vitest.ts bun(?: --maxWorkers=1| --config .vitest.config.ts)? --coverage --coverage.provider=istanbul --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage\/bun$/,
+				/^node \.\.\/\.\.\/scripts\/run-vitest\.ts bun(?: --maxWorkers=1| --config \.vitest\.config\.ts)?$/,
 			);
 		}
 		expect(manifest.scripts.check).toContain("npm run test:bun");

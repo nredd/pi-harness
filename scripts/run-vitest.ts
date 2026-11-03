@@ -7,6 +7,15 @@ import { fileURLToPath } from "node:url";
 const FAILURE_EXIT_STATUS = 1;
 const MILLISECONDS_PER_SECOND = 1000;
 const TIMING_DECIMAL_PLACES = 2;
+// The Bun signal's one instrument: Istanbul, both reporters, independent of the primary report.
+const BUN_COVERAGE_ARGS = [
+	"--coverage",
+	"--coverage.provider=istanbul",
+	"--coverage.reporter=text",
+	"--coverage.reporter=lcov",
+	"--coverage.reportsDirectory=coverage/bun",
+];
+const COVERAGE_DISABLED_ARG = "--coverage.enabled=false";
 
 /** Every home-derived variable a Vitest child must not inherit; one place for each new guarded var. */
 export function isolatedHomeEnv(home: string): Record<string, string> {
@@ -21,8 +30,13 @@ export function isolatedHomeEnv(home: string): Record<string, string> {
 
 // Isolate before imports: Bun caches os.homedir(), and Pi can read global model policy.
 if (import.meta.main) {
-	const [, , engine, ...vitestArgs] = process.argv;
+	const [, , engine, ...packageArgs] = process.argv;
 	if (engine !== "bun" && engine !== "node") throw new Error("Expected engine: node or bun");
+	// A canary that disables coverage must not overwrite another signal's report.
+	const vitestArgs =
+		engine === "bun" && !packageArgs.includes(COVERAGE_DISABLED_ARG)
+			? [...packageArgs, ...BUN_COVERAGE_ARGS]
+			: packageArgs;
 	const home = mkdtempSync(join(tmpdir(), "pi-bun-vitest-"));
 	const start = performance.now();
 	let status = FAILURE_EXIT_STATUS;

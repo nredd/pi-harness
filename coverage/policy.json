@@ -133,8 +133,7 @@
           "report": "coverage/bun/lcov.info",
 
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
-          "enforcement": "report-only",
-          "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
+          "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
       }
@@ -267,8 +266,7 @@
           "report": "coverage/bun/lcov.info",
 
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
-          "enforcement": "report-only",
-          "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
+          "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
       }
@@ -289,8 +287,7 @@
           "report": "coverage/bun/lcov.info",
 
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
-          "enforcement": "report-only",
-          "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
+          "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
       }
