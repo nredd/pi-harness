@@ -128,6 +128,7 @@ vi.mock("../src/nested-tools.js", () => ({
   NESTED_WORKFLOW_ERROR: "Workflows are not available inside a subagent: mocked. Call Agent in the foreground.",
   NESTED_WORKFLOW_NO_AGENT_ERROR: "Workflows are not available inside a subagent: mocked. Nesting is disabled.",
   getMaxSubagentDepth: vi.fn(() => 2),
+  hasNestableTypes: vi.fn(() => true),
   createNestedSubagentTools: vi.fn(() => [
     { name: "Agent" },
     { name: "get_subagent_result" },
@@ -240,6 +241,7 @@ beforeEach(() => {
   settingsManagerGetSessionDir.mockReturnValue(undefined);
   settingsManagerCreate.mockClear();
   vi.mocked(createNestedSubagentTools).mockClear();
+  vi.mocked(hasNestableTypes).mockClear();
   loaderExtensionsRef.current = { extensions: [], errors: [], runtime: {} };
   lastSession = undefined;
 });
@@ -904,7 +906,7 @@ import {
   getConfig,
   getToolNamesForType,
 } from "../src/agent-types.js";
-import { createNestedSubagentTools, type NestedAgentManager } from "../src/nested-tools.js";
+import { createNestedSubagentTools, hasNestableTypes, type NestedAgentManager } from "../src/nested-tools.js";
 
 /** The runner only forwards the manager to the nested tools, which are mocked, so no method is ever called. */
 const unusedManager: NestedAgentManager = {
@@ -1649,6 +1651,27 @@ describe("agent-runner master tool allowlist", () => {
 
     expect(createNestedSubagentTools).not.toHaveBeenCalled();
     expect(lastToolsPassed()).not.toContain("Agent");
+  });
+
+  it("injects no nested tools when the allowlist resolves to no enabled agent (#331, #333)", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(
+      makeAgentConfig({ extensions: true, allowedSubagents: ["ghost"] }),
+    );
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    vi.mocked(hasNestableTypes).mockReturnValueOnce(false);
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+    });
+
+    expect(hasNestableTypes).toHaveBeenLastCalledWith(["ghost"], expect.objectContaining({ configCwd: expect.any(String) }));
+    expect(createNestedSubagentTools).not.toHaveBeenCalled();
+    expect(lastToolsPassed()).not.toContain("Agent");
+    expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).toMatchObject({ nestingDisabled: true });
   });
 
   describe("depth-capped agent that lists allowed_subagents", () => {

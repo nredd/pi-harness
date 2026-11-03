@@ -1,13 +1,14 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAvailableTypes, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
+import { getAvailableTypes, registerAgents, setDefaultsDisabled, setFallbackSubagent } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
 import {
   createNestedSubagentTools,
   getMaxSubagentDepth,
+  hasNestableTypes,
   NESTED_BACKGROUND_ERROR,
   NESTED_WORKFLOW_ERROR,
   NESTED_WORKFLOW_NO_AGENT_ERROR,
@@ -98,6 +99,49 @@ beforeEach(() => {
 afterEach(() => {
   setScopeModelsEnabled(false);
   rmSync(cwd, { recursive: true, force: true });
+});
+
+describe("nested type availability (#331, #333)", () => {
+  const opts = () => ({ configCwd: cwd, projectTrusted: true, homeDir: join(cwd, "home") });
+
+  it("is available for `all` and for any listed type that is enabled", () => {
+    expect(hasNestableTypes("all", opts())).toBe(true);
+    expect(hasNestableTypes(["scout"], opts())).toBe(true);
+    expect(hasNestableTypes(["ghost", "Reviewer"], opts())).toBe(true);
+  });
+
+  it("is unavailable when no listed type resolves to an enabled agent", () => {
+    writeAgent("disabled", "enabled: false\n");
+    expect(hasNestableTypes(["ghost"], opts())).toBe(false);
+    expect(hasNestableTypes(["disabled"], opts())).toBe(false);
+  });
+
+  it("is unavailable for `all` when the registry has no enabled agents", () => {
+    for (const name of ["scout", "reviewer"]) unlinkSync(join(cwd, ".pi", "agents", `${name}.md`));
+    setDefaultsDisabled(true);
+    try {
+      expect(hasNestableTypes("all", opts())).toBe(false);
+    } finally {
+      setDefaultsDisabled(false);
+    }
+  });
+
+  it("describes an empty list in words, not as a `none` type", () => {
+    const [agent] = tools(["ghost"]);
+
+    expect(agent.parameters.properties.subagent_type.description).toContain("no agent types are currently available");
+    expect(agent.parameters.properties.subagent_type.description).not.toMatch(/Available: none/);
+  });
+
+  it("never advertises `none` as a type once the last agent vanishes mid-session", async () => {
+    const [agent] = tools(["scout"]);
+    unlinkSync(join(cwd, ".pi", "agents", "scout.md"));
+    const result = await execute(agent, { subagent_type: "none", description: "x", prompt: "y" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("No nested agent types are available");
+    expect(result.content[0].text).not.toMatch(/Allowed: none/);
+  });
 });
 
 describe("child-safe nested Agent tools", () => {
