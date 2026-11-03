@@ -150,6 +150,23 @@ export function listGroupStates(pgid) {
 }
 
 /**
+ * Whether `pid` can name a process group we own. Pgid 1 would make `kill(-1, ...)` a broadcast to every
+ * process we may signal, and 0 or a negative ID names our own or a foreign group.
+ * @param {unknown} pid Child pid, used as its detached group's ID.
+ * @returns {boolean} True for an integer above 1.
+ * @throws {never} Pure.
+ */
+export function isOwnableGroup(pid) {
+	return Number.isInteger(pid) && pid > 1;
+}
+
+/**
+ * Cleanup state for one owned group. `seen` is whether the listing at the start of cleanup showed a member
+ * (never refreshed, never set by a syscall result); `pending` is the first `EPERM` no listing has explained.
+ * @typedef {{seen: boolean, pending?: Error}} OwnedGroup
+ */
+
+/**
  * Whether a `ps` listing shows a group holding only zombies: at least one member, every STAT `Z`-prefixed.
  * `ps` appends flags to the state letter (`ZN` for a niced zombie), so only the first letter is the state.
  * @param {string[]} states One `ps` STAT string per member, as from `listGroupStates`.
@@ -191,7 +208,7 @@ function classifyPermission(pgid, listStates, seen) {
  * signalling; `denied` throws that first error at once.
  * @param {number} pgid Owned process-group ID.
  * @param {(pgid: number) => string[]} listStates Member-state seam.
- * @param {{seen: boolean, pending?: Error}} owned Cleanup state for this group.
+ * @param {OwnedGroup} owned Cleanup state for this group.
  * @param {Error} error The `EPERM` being explained.
  * @returns {void}
  * @throws {Error} The first unexplained `EPERM` when the listing shows a live member or a never-seen empty group.
@@ -211,7 +228,7 @@ function explainPermission(pgid, listStates, owned, error) {
  * @param {number} pgid Owned process-group ID.
  * @param {(pid: number, signal: number|string) => boolean} kill Syscall seam.
  * @param {(pgid: number) => string[]} listStates Member-state seam.
- * @param {{seen: boolean, pending?: Error}} owned Cleanup state for this group.
+ * @param {OwnedGroup} owned Cleanup state for this group.
  * @returns {boolean} False only on ESRCH.
  * @throws {Error} Any non-`EPERM` probe failure, or an `EPERM` a listing shows is a real permission failure.
  */
@@ -237,9 +254,12 @@ function processGroupAlive(pgid, kill, listStates, owned) {
  * leaves the `EPERM` unexplained: no signal is sent, probing and re-listing continue, and if no listing has
  * explained it when the budget ends, that first `EPERM` rejects.
  * While any member lives the pgid cannot be reused, so ownership is held until quiescence. The budget is
- * 1.3s, capped from the start of cleanup. Listings can overrun it by at most three `PS_TIMEOUT_MS` (the TERM
- * stage's last probe, the SIGKILL, the KILL stage's first probe), so it stays inside the caller's 2s SIGKILL
- * backstop on this script's pid unless all three of those `ps` runs hit their bound.
+ * 1.3s from the start of cleanup, and each stage's deadline is capped at it, so a stage ends at its first
+ * probe past the budget; the 20ms pause between probes never extends it. Only a synchronous `ps` can overrun
+ * it, by at most three `PS_TIMEOUT_MS`: the TERM stage's last probe, the SIGKILL and the KILL stage's first
+ * probe. A group whose `EPERM` no listing explained rejects there, at the budget, not at the caller's 2s
+ * SIGKILL backstop on this script's pid; it reaches that backstop only if all three of those `ps` runs hit
+ * their bound.
  *
  * Residual risk, inherent to POSIX: once the last member dies the id may be reused, so a signal sent in
  * the instant between our liveness probe and `kill` could in theory hit a foreign group that got the same
@@ -247,10 +267,9 @@ function processGroupAlive(pgid, kill, listStates, owned) {
  * signal is ever sent after the probe reports the group empty or cannot establish permission.
  */
 export async function reapProcessGroup(pgid, kill = process.kill.bind(process), listStates = listGroupStates) {
-	// pgid 1 would become kill(-1, ...), a broadcast to every process we may signal.
-	if (!Number.isInteger(pgid) || pgid <= 1) throw new Error("Cleanup requires an owned positive process-group ID above 1.");
+	if (!isOwnableGroup(pgid)) throw new Error("Cleanup requires an owned positive process-group ID above 1.");
 	const budgetEnd = Date.now() + GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
-	/** @type {{seen: boolean, pending?: Error}} */
+	/** @type {OwnedGroup} */
 	const owned = { seen: false };
 	try { owned.seen = listStates(pgid).length > 0; } catch { /* unknown membership stays strict */ }
 	const signalGroup = (signal) => {
@@ -290,12 +309,12 @@ export async function reapProcessGroup(pgid, kill = process.kill.bind(process), 
  * when this script is terminated (the Pi session's setup deadline sends SIGTERM). Inconclusive cleanup
  * rejects rather than claiming no compiler survived; credential boundaries revoke further signalling.
  */
-export async function runCancellable(command, commandArgs, { kill = process.kill.bind(process), listStates = listGroupStates } = {}) {
+export async function runCancellable(command, commandArgs, { kill = process.kill.bind(process), listStates = listGroupStates, spawnChild = spawn } = {}) {
 	await new Promise((resolve, reject) => {
-		const child = spawn(command, commandArgs, { stdio: "inherit", detached: true });
+		const child = spawnChild(command, commandArgs, { stdio: "inherit", detached: true });
 		let reaping;
 		let reaped = false;
-		let maySignal = Number.isInteger(child.pid) && child.pid > 1;
+		let maySignal = isOwnableGroup(child.pid);
 		const ownedKill = (pid, signal) => {
 			try { return kill(pid, signal); }
 			catch (error) {
@@ -313,6 +332,7 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 			if (reaped || !maySignal) return;
 			try {
 				// Only a listing-explained or signalable group gets the exit KILL; an unexplained EPERM gets none.
+				/** @type {OwnedGroup} */
 				const owned = { seen: false };
 				if (processGroupAlive(child.pid, ownedKill, listStates, owned) && !owned.pending) ownedKill(-child.pid, "SIGKILL");
 			} catch { /* already reported by bounded cleanup, or exit-time ownership is inconclusive */ }
@@ -338,8 +358,8 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 				: error);
 		});
 		child.on("close", (code, signal) => {
-			// A failed spawn has no group; its error handler already rejected.
-			if (!Number.isInteger(child.pid) || child.pid <= 1) return;
+			// A failed spawn has no group and its error handler already rejected; `reapProcessGroup` refuses any
+			// ID that is not ownable before a listing or syscall, so this reap only settles the rejection.
 			const commandError = code === 0
 				? undefined
 				: new Error(`Command failed (${code ?? signal}): ${command} ${commandArgs.join(" ")}`);
