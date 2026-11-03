@@ -80,16 +80,29 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
 `git_commit {subject, why?, changes?, paths, push?=true}`:
 
 - `paths` is required; the repo root in any spelling, `..` segments, pathspec magic (`:/`) and
-  flags are rejected. The commit is `git commit -- <paths>`, so it contains exactly those files;
-  anything else already staged stays in the index. A rename needs both the old and the new path;
-  a deletion (unstaged or already staged) is named like any other path.
-  Nothing to commit is its own state
+  flags are rejected. Ordinary commits use `git commit -- <paths>`, so they contain exactly those
+  files and leave any other staged path in the index. During a real `MERGE_HEAD`, the tool stages
+  the named paths then requires every changed index path to be named and every conflict to be
+  resolved. Only then it commits the complete approved merge without pathspecs, preserving both
+  parents, signing and hooks. Approval checks cover the entire index even from a subdirectory
+  with `diff.relative=true`; configured relative hook paths still resolve from the worktree root.
+  Every hook in the configured hooks directory (e.g. `post-index-change`) still runs during a
+  merge commit. Absolute paths are matched after resolving symlinks in their parent directory,
+  so `/var` and `/private/var` spellings agree and an escaping symlink is rejected. A rejected
+  merge leaves the named paths staged and `MERGE_HEAD` in place. Only a "not a git repository"
+  answer from the merge probe falls through to an ordinary commit's `stage: "add"`; any other probe
+  failure (timeout, abort, dubious ownership, missing cwd) fails at `stage: "validate"`. A hook
+  path that is a directory behaves as in plain Git: a blocking hook such as `pre-commit` refuses
+  the commit, a `post-commit` one only prints the error.
+  A rename needs both the old and the new path; a deletion (unstaged
+  or already staged) is named like any other path. Nothing to commit is its own state
 - The subject must be a capitalized imperative, <= 72 chars, no trailing period, no
   conventional-commit prefix, no em or en dash. An `area:` prefix is fine
 - Message is `subject`, optional `why`, `Changes:` bullets, then
   `Co-Authored-By: Claude <noreply@anthropic.com>`, passed on stdin with `-F -`
 - Never `--no-verify`, `--amend` or `--no-gpg-sign`. Hook output is relayed on failure, and
-  `files were modified by this hook` is flagged as "re-stage and call again". Nothing retries
+  `files were modified by this hook` is flagged as "re-stage and call again". Merge hooks are
+  also checked for newly staged unapproved paths before Git can write the merge. Nothing retries
 - Push is `git push <remote> HEAD` where `<remote>` is `branch.<n>.pushRemote`, else
   `remote.pushDefault`, else `branch.<n>.remote`, else the only remote (with `-u`). Several remotes
   and none configured fails closed at `stage: "push"`; it never defaults to `origin`. A
