@@ -19,6 +19,8 @@ from harness import release_gate as gate
 
 SHA = "a" * 40
 ROOT = Path(__file__).resolve().parents[2]
+# The CI plan owns which owned gates and stack cells run; load it by path, `scripts/` is not a package.
+CI_PLAN: dict[str, Any] = runpy.run_path(str(ROOT / "scripts/ci_paths.py"))
 
 
 def evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -279,23 +281,21 @@ def test_workflow_execution_names_and_barriers() -> None:
 
 
 def test_stack_cells_are_exactly_the_executing_matrix() -> None:
-    """Require every stack cell that runs, and never a `not_run` required-check name.
+    """Require every stack cell the plan runs, and never a cell it reports NOT RUN.
 
     Returns:
-        None: The verifier's stack cells and platforms match `ci.yml`.
+        None: The verifier's stack cells and platforms match `ci.yml` and `CI_PLAN["STACK_NOT_RUN"]`.
     """
     matrix = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["stack"]["strategy"][
         "matrix"
     ]
-    include = matrix["include"]
-    idle = {(entry["os"], entry["stack"]) for entry in include if "not_run" in entry and "stack" in entry}
-    idle |= {
-        (entry["os"], stack)
-        for entry in include
-        if "not_run" in entry and "stack" not in entry
-        for stack in matrix["stack"]
+    # The plan owns which cells never run; the matrix only carries runner and platform for the rest.
+    idle = set(CI_PLAN["STACK_NOT_RUN"])
+    platform = {
+        entry["os"]: entry["platform"]
+        for entry in matrix["include"]
+        if "platform" in entry and (entry["os"], entry.get("stack")) not in idle
     }
-    platform = {entry["os"]: entry["platform"] for entry in include if "not_run" not in entry}
     executing = {
         (os, stack, platform[os])
         for os in matrix["os"]
@@ -306,6 +306,24 @@ def test_stack_cells_are_exactly_the_executing_matrix() -> None:
         f"stack ({os}, {stack})" for os, stack, _ in executing
     }
     assert set(gate.STACK_CELLS) == executing
+    assert not any(f"stack ({os}, {stack})" in gate.expected_jobs() for os, stack in idle)
+
+
+def test_owned_gate_steps_follow_the_plan_and_exist_in_the_workflow() -> None:
+    """Bind the verifier's owned steps to the planned gates and to the real split steps in `ci.yml`.
+
+    Returns:
+        None: Each system requires exactly its planned gate steps, all present in the owned job.
+    """
+    assert CI_PLAN["OWNED_GATES"] == gate.OWNED_GATES
+    assert set(gate.OWNED_GATE_STEPS) == {name for gates in CI_PLAN["OWNED_GATES"].values() for name in gates}
+    ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    steps = {step.get("name") for step in ci["jobs"]["owned"]["steps"]}
+    assert set(gate.OWNED_GATE_STEPS.values()) <= steps
+    for system, gates in CI_PLAN["OWNED_GATES"].items():
+        required = gate.expected_jobs()[f"owned ({system})"]
+        assert {gate.OWNED_GATE_STEPS[name] for name in gates} <= required
+        assert required.isdisjoint(gate.OWNED_GATE_STEPS[n] for n in gate.OWNED_GATE_STEPS if n not in gates)
 
 
 def test_discovery_reads_all_pages(monkeypatch: pytest.MonkeyPatch) -> None:
