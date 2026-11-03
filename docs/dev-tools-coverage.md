@@ -206,7 +206,10 @@ changed the count. Deterministic RED on `2f9160af`: creating one foreign
 `pi-dev-tools-nextest-*` dir in the shared tmpdir after the `before` count failed the
 unchanged test with `expected 1 to be +0`, while the tool had removed its own dirs.
 
-The test now stubs `TMPDIR` to its own `mkdtemp` dir, polls it during both runs to prove
-each run's config dir existed there (`seen.size` is 2), then requires none left. With the
-same foreign dir injected the fixed test passes; with the tool's `rmSync(cfgDir)` removed
-it fails listing both leaked dirs. No product code, retries or timeouts changed.
+The test now stubs `TMPDIR` to its own `mkdtemp` dir and asserts `tmpdir()` resolves to it, so
+a return to counting the shared tmpdir fails. It polls that dir during each run to prove the
+run's config dir existed there (one new dir per run), requires none left after each run, and
+removes the private dir in one `finally`. The tool does not expose the config dir, so the poll
+relies on the dir living for the whole nextest run. With the tool's `rmSync(cfgDir)` removed
+it fails on the leaked dir; with the `TMPDIR` stub removed it fails on the `tmpdir()` check.
+No product code, retries or timeouts changed.
