@@ -32,7 +32,8 @@ export function isolatedHomeEnv(home: string): Record<string, string> {
 if (import.meta.main) {
 	const [, , engine, ...packageArgs] = process.argv;
 	if (engine !== "bun" && engine !== "node") throw new Error("Expected engine: node or bun");
-	// A canary that disables coverage must not overwrite another signal's report.
+	// A canary that disables coverage must not overwrite another signal's report. Only this exact
+	// argument opts out; every current canary passes it verbatim (subagents, session-kit, plan-mode, dev-tools).
 	const vitestArgs =
 		engine === "bun" && !packageArgs.includes(COVERAGE_DISABLED_ARG)
 			? [...packageArgs, ...BUN_COVERAGE_ARGS]

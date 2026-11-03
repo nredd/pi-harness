@@ -81,7 +81,8 @@ report-only verification signals.
 Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
 are measured. `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin and linux
 since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary inventory,
-0/0 on both hosted OSes. The other six explicitly declare `enforcement: "report-only"`, with a
+0/0 in PR #332's own hosted macos-14, ubuntu-24.04 and wsl2 artifacts (run `41716990843`,
+receipt [here](../coverage/receipts/bun-enforced.md)). The other six explicitly declare `enforcement: "report-only"`, with a
 mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
 Their stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
@@ -92,7 +93,7 @@ They inherit the full explicit primary instrumentation inventory (no `files` sub
 `bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
 worker. Sampler and inprocess stay report-only until later #320 slices.
-Subagents retains its native subset plus main's guarded real-loader gate (#174); coverage is
+Subagents retains its native subset plus main's guarded real-loader gate; coverage is
 disabled for that extra canary so it cannot overwrite Node's primary report. The policy explicitly lists the files currently measured by each signal;
 missing expected files fail. Files outside that Bun subset remain mandatory in primary
 coverage. Imported sibling production source and dedicated test/helper directories are outside

@@ -43,16 +43,19 @@ Bun caches `os.homedir()` and ignores runtime HOME changes on both 1.3.14 and 1.
 `scripts/run-vitest.ts bun` therefore launches `bun --bun vitest run` with HOME, USERPROFILE and
 XDG config set to a fresh temporary directory **before process start**, removing it on exit.
 It preserves the child's failing exit status, including spawn failure, and never selects test
-files. The `bun` engine also owns the Bun signal's instrument: it appends `--coverage`, the
-Istanbul provider, the `text` and `lcov` reporters and `coverage/bun` after the package's own
-arguments. An explicit `--coverage.enabled=false` (the subagents real-loader canary) suppresses
-all of them, so the canary cannot overwrite another report. The `node` engine appends nothing. The inprocess Node suite uses the same launcher with `node`. Its fixtures retain
+files. The inprocess Node suite uses the same launcher with `node`. Its fixtures retain
 independent Pi/XDG directories without mutating HOME. This prevents reads of the owner's home
 while keeping the guard active; it does not isolate unrelated absolute paths or credentials
 explicitly supplied through other environment variables.
 
+The `bun` engine also owns the Bun signal's instrument. After the package's own arguments it
+appends `--coverage`, the Istanbul provider, the `text` and `lcov` reporters and `coverage/bun`.
+Only the exact argument `--coverage.enabled=false` opts out, and then it appends nothing, so a
+canary cannot overwrite another report. The `node` engine never appends coverage arguments.
+`scripts/tests/test_coverage_producers.py` pins that contract by running the real launcher.
+
 Unit tests cover matching, mismatched and missing homes, the six-workspace wiring contract,
-and launcher failure/cleanup/argument forwarding plus the appended Bun coverage arguments. Two subprocess fixtures pin the beforeEach
+and launcher failure/cleanup/argument forwarding. Two subprocess fixtures pin the beforeEach
 and afterEach boundaries independently, using canonicalized symlinked temporary homes:
 Bun/Vite's bundled config loader otherwise fails through macOS `/var` aliases before reaching
 the guard. A subprocess regression runs the real
@@ -73,8 +76,7 @@ native subsets while their injected-home canaries run through `scripts/run-vites
 leaves it out of its ordinary Node Vitest run and native Bun scenario list. On both engines the
 launcher installs disposable `HOME`/`USERPROFILE` values before the canary imports the SDK, so
 the mocked `node:fs` SSH probe works and Bun never starts with the real home.
-The workflow-runtime stack-line failure ([#174](https://github.com/nredd/pi-harness/issues/174))
-is fixed; switching subagents to the full Bun suite is a later slice of
+Switching subagents to the full Bun suite is a later slice of
 [#320](https://github.com/nredd/pi-harness/issues/320), gated on macOS minutes. These canaries
 pass `--coverage.enabled=false`, so the launcher appends no Bun coverage arguments to them.
 The guard is active for its full Node suite and any Bun Vitest invocation, including
@@ -111,8 +113,8 @@ coverage. Expected reports, relative to the repository root:
 Bun signals for `preset`, `subscription-router` and `todo` are **enforced** at 0/0 on both OSes
 since #320; the rest stay **report-only** with their reasons and per-OS references. Primary
 signals stay enforced. Changing producers is not an enforcement promotion, permission to merge engine
-counters, or permission to raise budgets. #162 must adapt its producer-contract tests and
-refresh clean macOS/Linux receipts for these full-suite signals.
+counters, or permission to raise budgets. The three promotions rest on #320's own hosted macOS
+and Ubuntu artifacts, recorded [here](../coverage/receipts/bun-enforced.md).
 
 On that rebase, #162 must also inventory `scripts/run-vitest.ts` and the new
 `integration/inprocess/verification/*` sources, specifically executable `home-guard.ts` and
@@ -133,5 +135,6 @@ cannot be added here: `coverage/policy.json` is not on main yet and belongs to #
    Keep it in the package's `check`, hence `make check-ts` and both existing `owned` cells.
 4. Extend the wiring regression test and this matrix. Record per-OS counts and the launcher's
    timings in the PR; hosted output is in the existing job summary. No new jobs are needed.
-5. Coverage inventory/provider/enforcement changes require the separate coverage policy review;
-   a green full Bun suite alone does not flip report-only signals to enforced.
+5. Coverage inventory/provider/enforcement changes require the separate coverage policy review.
+   A green full Bun suite alone does not flip a signal to enforced. Promotion needs the PR's own
+   hosted macOS and Ubuntu artifacts at 0/0 (or the measured floor), as in #320.
