@@ -298,6 +298,8 @@ The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s
 
 PR runs cancel each other per ref. `main` runs do not: `cancel-in-progress` is PR-only and the concurrency group is per SHA on push, because GitHub drops an older pending run in a shared group even without cancellation. A push cannot kill the run proving the previous merge.
 
+Selective main-push smoke is not release evidence. Combined-result release safety comes from the explicit full frozen-candidate dispatch, not repeated update-branch matrices, and unrelated main advancement does not invalidate an unchanged reviewed PR HEAD ([release verification](release-verification.md)).
+
 The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), with `strict_required_status_checks_policy: false`. It is not strict: advancing `main` does not invalidate a PR's previous green result, so the merged tree can differ from the tree CI saw. The `main` push run is what validates it.
 
 WSL2 is `matrix.os: wsl2` in the same `owned` and `contracts` jobs in `.github/workflows/ci.yml`; `stack` keeps the name only for its bypass cells. `matrix.runner: windows-2025` selects the host; `matrix.guest: wsl2` selects the explicit PowerShell -> WSL shell boundary, with Ubuntu-24.04 verified as version 2 and a non-`drvfs` guest checkout. Never a fictitious GitHub runner label or native Windows execution. There is no separate WSL workflow or duplicated WSL test job.
@@ -323,7 +325,7 @@ Run `40747213391` at `0d2bfb0` rejected every WSL cell in the pre-plan assertion
 
 Run `40742019252` at `45689e3` reached release installation in both WSL stack jobs, but their `PI_BIN` conversion caused failures before D/E could pass. Contracts failed earlier with HTTP403 in `setup-wsl`'s `wsl --update`. The action runs that only for `ImageOS == win22`, so `windows-2025` takes it out of the path entirely. `update` is independent: it only controls the apt `upgrade`, and `update: 'false'` drops that cost, while `additional-packages` still runs `apt-get update` first.
 
-Reproduce guest execution on a Windows machine with WSL2 Ubuntu-24.04 using the same setup action and `scripts/wsl2_shell.ps1 <step-script>`; run the ordinary Make targets and pytest entrypoints above. A local macOS shell test proves adapter behavior, not WSL execution. Acceptance of a WSL change requires the exact-HEAD hosted `owned (wsl2)` and `contracts (wsl2)` cells and their normal artifacts, plus the native cells; local tests are not a hosted receipt. CI triggers remain every pull request and main push, without workflow_call/dispatch or path filters; permissions stay contents-read and the concurrency group is per ref on PRs and per SHA on push.
+Reproduce guest execution on a Windows machine with WSL2 Ubuntu-24.04 using the same setup action and `scripts/wsl2_shell.ps1 <step-script>`; run the ordinary Make targets and pytest entrypoints above. A local macOS shell test proves adapter behavior, not WSL execution. Acceptance of a WSL change requires the exact-HEAD hosted `owned (wsl2)` and `contracts (wsl2)` cells and their normal artifacts, plus the native cells; local tests are not a hosted receipt. CI triggers on every pull request and main push, plus explicit full-verification manual dispatch, without path filters. Permissions stay contents-read; the concurrency group is per ref on PRs and per SHA otherwise, so unrelated main pushes cannot cancel a full dispatch. The dispatch skips every docs, WSL-input and stack-input shortcut and calls the reusable fork workflow.
 REA is retired, not pending WSL acceptance.
 
 `.github/workflows/installer.yml`, PRs and `main` pushes that change the installer or the harness modules it reuses, plus manual dispatch with a `stack_sha`:
@@ -341,6 +343,8 @@ It is not a required check and has no docs-only bypass; it only starts when its 
 | Job | Runs |
 | --- | --- |
 | `core (forks/pi)` | `npm ci`, the release's model data restored from npm `@earendil-works/pi-ai@<version>` (never the live fetch), `npm run build:offline`, the steps of the fork's `check` with Biome check-only (the step fails if the fork's `check` list changes), the env daemon, `./test.sh` |
+
+`ci.yml` full dispatches call it as `release-core` with no inputs, inheriting CI's context. Dispatches group per SHA and never cancel, so a second dispatch on `main` cannot kill an earlier frozen candidate's core gate; PR and push runs still cancel per ref (`test_dispatched_core_gates_never_cancel_each_other`, `test_forks_callee_contract`).
 
 `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
 
@@ -414,6 +418,11 @@ bootstrap exception. Istanbul consolidation is phase 3, not part of this produce
 Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-version`, uv `0.13.1`
 (Python from `.python-version` via uv). Every action is pinned to a commit SHA.
 
+PR freshness and release verification follow [the frozen-candidate policy](release-verification.md).
+Do not update-branch solely because main advanced. Keep exact final-HEAD checks and both reviews.
+Manual `ci.yml` dispatch runs the complete matrix and core fork gate without docs/smoke shortcuts;
+push/main smoke is not release evidence.
+
 Required checks on `main`, twelve contexts:
 
 - `owned (ubuntu-24.04)`, `owned (macos-14)` and `owned (wsl2)`
@@ -479,7 +488,7 @@ The twelve jobs are the configured required checks of ruleset `main required che
     <gate-history-file> nredd/pi-harness
   ```
   This uses real green checks and the same receipt/expected-head enforcement, not a bypass.
-  Any branch update invalidates both reviews. Refresh the distribution copy
+  Any actual conflict resolution or other HEAD change invalidates both reviews; unrelated base advancement does not. Refresh the distribution copy
   only after that reviewed merge. This procedure does not authorize merging router PR135,
   publishing packages, or activating live configuration
 - `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
