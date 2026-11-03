@@ -83,7 +83,7 @@ it("keeps ambient user skill content out of an injected-home preload", () => {
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 30000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -104,7 +104,7 @@ it("builds a real child prompt from the injected private package, not an ambient
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 60000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -127,7 +127,7 @@ it("keeps a native-disabled skill out of a real injected-home child prompt", () 
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 60000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -150,7 +150,7 @@ it.each(["disabled", "allowed"])("honors a project package %s filter in a privat
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 60000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
