@@ -1551,9 +1551,9 @@ function findBlockedSshExecCall(input, safeSubcommands = {}, platform = process.
   return blocked === void 0 ? void 0 : `remote command: ${blocked}`;
 }
 function findBlockedRemoteCommand(command, safeSubcommands, platform) {
-  return findBlockedCommandSegment(command, safeSubcommands, void 0, platform, [], true);
+  return findBlockedCommandSegment(command, safeSubcommands, void 0, platform, [], { remote: true });
 }
-function findBlockedCommandSegment(command, safeSubcommands = {}, workingDirectory, platform = process.platform, trustedDirectories = [], remote = false, homeDir = homedir()) {
+function findBlockedCommandSegment(command, safeSubcommands = {}, workingDirectory, platform = process.platform, trustedDirectories = [], { remote = false, homeDir = homedir() } = {}) {
   const segments = splitShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
   const roots = allowedRoots(remote ? void 0 : workingDirectory, remote ? [] : trustedDirectories, homeDir);
@@ -1572,7 +1572,7 @@ function findBlockedCommandSegment(command, safeSubcommands = {}, workingDirecto
   }
   return void 0;
 }
-function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, workingDirectory, trustedDirectories = [], homeDir = homedir()) {
+function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, workingDirectory, trustedDirectories = [], { homeDir = homedir() } = {}) {
   const segments = splitPowerShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
   const paths = {
@@ -2396,4 +2396,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-HYCAUST6.ts.map
+//# sourceMappingURL=chunk-4EBL3XM6.ts.map

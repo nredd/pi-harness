@@ -181,6 +181,17 @@ export function readCommand(input: unknown) {
   return typeof command?.command === "string" ? command.command : "";
 }
 
+/** Trailing path-policy options; an omitted home keeps the native one. */
+export interface PathPolicyOptions {
+  /** Home for `~` in trusted roots and directory arguments. */
+  homeDir?: string;
+}
+
+/** Bash-only options: `remote` re-validates an `ssh <host> <command>` on the other side. */
+export interface CommandPolicyOptions extends PathPolicyOptions {
+  remote?: boolean;
+}
+
 /** `ssh_exec` parameters Plan mode understands; anything else fails closed. `cwd` is a plain path. */
 const SSH_EXEC_ALLOWED_KEYS = new Set(["host", "command", "cwd", "timeout"]);
 
@@ -215,7 +226,7 @@ export function findBlockedSshExecCall(
 
 /** The remote side of `ssh <host> <command>` and `ssh_exec`: local directories mean nothing there. */
 function findBlockedRemoteCommand(command: string, safeSubcommands: SafeSubcommands, platform: NodeJS.Platform) {
-  return findBlockedCommandSegment(command, safeSubcommands, undefined, platform, [], true);
+  return findBlockedCommandSegment(command, safeSubcommands, undefined, platform, [], { remote: true });
 }
 
 /**
@@ -236,8 +247,7 @@ export function findBlockedCommandSegment(
   workingDirectory?: string,
   platform: NodeJS.Platform = process.platform,
   trustedDirectories: readonly string[] = [],
-  remote = false,
-  homeDir = homedir(),
+  { remote = false, homeDir = homedir() }: CommandPolicyOptions = {},
 ): string | undefined {
   const segments = splitShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
@@ -267,18 +277,11 @@ export function isSafeCommand(
   workingDirectory?: string,
   platform: NodeJS.Platform = process.platform,
   trustedDirectories: readonly string[] = [],
-  homeDir = homedir(),
+  options: PathPolicyOptions = {},
 ) {
   return (
-    findBlockedCommandSegment(
-      command,
-      safeSubcommands,
-      workingDirectory,
-      platform,
-      trustedDirectories,
-      false,
-      homeDir,
-    ) === undefined
+    findBlockedCommandSegment(command, safeSubcommands, workingDirectory, platform, trustedDirectories, options) ===
+    undefined
   );
 }
 
@@ -287,7 +290,7 @@ export function findBlockedPowerShellCommandSegment(
   safeSubcommands: SafeSubcommands = {},
   workingDirectory?: string,
   trustedDirectories: readonly string[] = [],
-  homeDir = homedir(),
+  { homeDir = homedir() }: PathPolicyOptions = {},
 ): string | undefined {
   const segments = splitPowerShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
@@ -308,10 +311,10 @@ export function isSafePowerShellCommand(
   safeSubcommands: SafeSubcommands = {},
   workingDirectory?: string,
   trustedDirectories: readonly string[] = [],
-  homeDir = homedir(),
+  options: PathPolicyOptions = {},
 ) {
   return (
-    findBlockedPowerShellCommandSegment(command, safeSubcommands, workingDirectory, trustedDirectories, homeDir) ===
+    findBlockedPowerShellCommandSegment(command, safeSubcommands, workingDirectory, trustedDirectories, options) ===
     undefined
   );
 }

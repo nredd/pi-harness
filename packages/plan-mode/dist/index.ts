@@ -60,7 +60,7 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-HYCAUST6.ts";
+} from "./chunks/chunk-4EBL3XM6.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -1062,7 +1062,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-7CZW2CZC.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-XJ5D2FYW.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1562,8 +1562,7 @@ function planMode(pi, dependencies = {}) {
         ctx.cwd,
         process.platform,
         settings.trustedDirectories,
-        false,
-        dependencies.homeDir
+        { homeDir: dependencies.homeDir }
       );
       if (blocked !== void 0) {
         return {
@@ -1589,7 +1588,7 @@ Blocked: ${blocked}`
         settings.safeSubcommands,
         ctx.cwd,
         settings.trustedDirectories,
-        dependencies.homeDir
+        { homeDir: dependencies.homeDir }
       );
       if (blocked !== void 0) {
         return {
