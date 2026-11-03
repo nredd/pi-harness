@@ -6,7 +6,8 @@
  * `renderNow(true)`, the same forced path a resize takes, including the terminal write. Then it
  * times `frames` steady frames: `renderNow()` with no invalidate, the path a keystroke or a
  * spinner tick takes, where every settled component should answer from its cache. After a GC
- * (when `--expose-gc` is on) it reads `heapUsed`. One JSON line is appended to
+ * (Node `--expose-gc`, or `Bun.gc(true)` in a compiled Bun standalone, which has no such flag and
+ * ignores `NODE_OPTIONS`) it reads `heapUsed`. One JSON line is appended to
  * `HARNESS_PROBE_OUT`:
  *   { "frames_ms": [..], "steady_frames_ms": [..], "heap_used": bytes, "gc": bool, "width": n, "height": n }
  */
@@ -18,6 +19,22 @@ import type { TUI } from "@earendil-works/pi-tui";
 const WIDGET_KEY = "harness-probe";
 const DEFAULT_FRAMES = 10;
 const WARMUP_FRAMES = 2;
+
+/** The runtime globals that can force a collection. */
+interface GcHost {
+	gc?: () => void;
+	Bun?: { gc: (sync: boolean) => void };
+}
+
+/**
+ * Pick the runtime's synchronous collector: Node's `--expose-gc` hook, else `Bun.gc(true)`.
+ * Returns `undefined` when neither exists so the reading is flagged `gc: false`, never faked.
+ */
+export function collector(host: GcHost): (() => void) | undefined {
+	if (host.gc) return host.gc;
+	const bun = host.Bun;
+	return bun ? () => bun.gc(true) : undefined;
+}
 
 function captureTui(setWidget: (key: string, content: unknown) => void): TUI | undefined {
 	let captured: TUI | undefined;
@@ -55,7 +72,7 @@ export default function harnessProbe(pi: ExtensionAPI): void {
 			const framesMs = Array.from({ length: frames }, () => timeFrame(tui));
 			for (let i = 0; i < WARMUP_FRAMES; i++) timeSteadyFrame(tui);
 			const steadyFramesMs = Array.from({ length: frames }, () => timeSteadyFrame(tui));
-			const gc = (globalThis as { gc?: () => void }).gc;
+			const gc = collector(globalThis as GcHost);
 			gc?.();
 			const record = {
 				frames_ms: framesMs,
