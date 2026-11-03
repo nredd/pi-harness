@@ -1140,6 +1140,10 @@ def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate() -> None:
         step for step in jobs()["owned"]["steps"] if step.get("name", "").startswith("Coverage accounting")
     )
     assert accounting["env"]["COVERAGE_HOST"] == "${{ matrix.guest }}"
+    # The WSL guest only sees variables named in WSLENV; without it the skip never reaches the guest make.
+    wslenv = re.search(r"\$env:WSLENV = '([^']*)'", (ROOT / "scripts/wsl2_shell.ps1").read_text())
+    assert wslenv
+    assert "COVERAGE_HOST" in wslenv[1].split(":")
     for name in ("python-scripts", "python-harness"):
         skipped = set(policy["packages"][name]["signals"]["primary"]["skip_hosts"])
         gate = "check-scripts" if name == "python-scripts" else "check-integration"
