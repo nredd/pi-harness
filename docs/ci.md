@@ -218,7 +218,7 @@ regular-file pattern: reject known nonregular entries before opening, then use `
 `O_NONBLOCK`, `O_NOCTTY` and descriptor `fstat` before reading. Final symlink/FIFO replacements cannot
 turn cleanup into a blocking FIFO read. Ancestry checks are observations, not a descriptor-anchored
 sandbox against concurrent malicious same-UID parent replacement. No broader filesystem-security
-claim is made. Pane reports use a strict `PaneExitEvidence` Pydantic model. Missing tmux, invalid UTF-8
+claim is made. Pane reports use a strict `PaneExitEvidence` Pydantic model, including a read-only `ps` subtree of the pane PID (`process_tree`; empty when the wrapper is gone, never a signal). Missing tmux, invalid UTF-8
 markers and capture/write failures cannot prevent server teardown. RPC evidence open/write/flush
 failures disable only the disk sink: bounded pipe drainage and in-memory diagnostics continue.
 This supplements, not duplicates, the separate standalone build/startup collector from #191.
