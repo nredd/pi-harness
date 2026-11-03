@@ -2047,6 +2047,17 @@ export class AgentManager {
   }
 
   /**
+   * How many of the session's own agents (see `isTopLevelAgent`) are still
+   * running or queued. Owned children report through their owner, so counting
+   * them would double-count the same work.
+   */
+  countOwnedPending(): number {
+    return [...this.agents.values()].filter(
+      r => isTopLevelAgent(r) && (r.status === "running" || r.status === "queued"),
+    ).length;
+  }
+
+  /**
    * Abort everything that cannot outlive its session and let the rest finish.
    * Survivors are running top-level background agents and their nested children:
    * they own their own session and report through a notification. Queued agents

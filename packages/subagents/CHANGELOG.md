@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Settling with agents still running is reported ([#292](https://github.com/nredd/pi-harness/issues/292)).** When a run settles while the session's own agents are running or queued, the parent shows `Run ended with N agents still running; the completion notice will resume this session`. Nested children are not counted.
+
 ### Fixed
 - **Named `skills:` preloads use Pi's configured resource discovery and project trust ([#264](https://github.com/nredd/pi-harness/issues/264), [#277](https://github.com/nredd/pi-harness/pull/277)).** Untrusted projects can no longer shadow global or package skills, and skills shipped by configured packages now preload.
 - **Preload edge cases follow Pi ([#264](https://github.com/nredd/pi-harness/issues/264)).** Native exclusions stay excluded, a rejected project symlink falls back to the global or package skill it aliased, missing packages are never installed, and an injected home no longer picks up the runtime home's `.agents/skills` -- see `docs/home-injection.md`.

@@ -382,3 +382,38 @@ describe("`group` join mode — one notification per turn's batch", () => {
     expect(sentContents(b)).toEqual([expect.stringContaining("sibling done")]);
   });
 });
+
+describe("settling with owned agents still running", () => {
+  const notices = (parentCtx: any): any[][] => parentCtx.ui.notify.mock.calls;
+
+  it("reports running agents when the run settles, then goes quiet once they finish", async () => {
+    vi.useFakeTimers();
+    const runs = controllableRuns();
+    const b = await boot();
+    await spawn(b, b.parentCtx, "alpha");
+    await spawn(b, b.parentCtx, "beta");
+    b.parentCtx.ui.notify.mockClear();
+
+    b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
+    expect(notices(b.parentCtx)).toEqual([
+      ["Run ended with 2 agents still running; the completion notice will resume this session", "info"],
+    ]);
+
+    runs.settle("alpha");
+    runs.settle("beta");
+    await vi.advanceTimersByTimeAsync(0);
+    b.parentCtx.ui.notify.mockClear();
+    b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
+    expect(notices(b.parentCtx)).toEqual([]);
+  });
+
+  it("says agent in the singular", async () => {
+    vi.useFakeTimers();
+    controllableRuns();
+    const b = await boot();
+    await spawn(b, b.parentCtx, "alpha");
+    b.parentCtx.ui.notify.mockClear();
+    b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
+    expect(notices(b.parentCtx)[0][0]).toContain("1 agent still running");
+  });
+});
