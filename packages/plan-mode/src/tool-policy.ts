@@ -132,16 +132,40 @@ export function isBuiltinTool(tool: ToolInfo) {
  * built-in extensions including native MCP (`builtin:mcp`), whose hints come from third-party
  * servers, and project-scope extensions, which an untrusted repository could ship.
  */
-export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
+function isTrustedExtensionTool(tool: ToolInfo) {
   const source = tool.sourceInfo;
-  if (!source?.source || source.source === "builtin" || source.path?.startsWith("builtin:")) return false;
-  if (source.scope === "project") return false;
-  return tool.annotations?.readOnlyHint === true;
+  return (
+    !!source?.source &&
+    source.source !== "builtin" &&
+    !source.path?.startsWith("builtin:") &&
+    source.scope !== "project"
+  );
+}
+
+/** The typed remote-shell tool Plan mode re-validates like `ssh <host> <command>`. */
+export const SSH_EXEC_TOOL_NAME = "ssh_exec";
+
+export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
+  return isTrustedExtensionTool(tool) && tool.annotations?.readOnlyHint === true;
+}
+
+/**
+ * `ssh_exec` is mutating outside Plan mode, so metadata cannot admit it. Plan instead admits this
+ * trusted tool by name and re-validates every host and remote command at the execution hook.
+ * This is risk reduction, not an operating-system sandbox for trusted extension code.
+ */
+export function isPlanSshExecTool(tool: ToolInfo) {
+  return tool.name === SSH_EXEC_TOOL_NAME && isTrustedExtensionTool(tool);
+}
+
+/** The single default-admission decision for extension tools: Plan mode's list and labels both use it. */
+export function isDefaultAdmittedExtensionTool(tool: ToolInfo) {
+  return isAnnotatedReadOnlyTool(tool) || isPlanSshExecTool(tool);
 }
 
 export function classifyPlanModeTool(tool: ToolInfo): PlanModeToolPolicy {
   if (!tool.sourceInfo?.source) return "blocked";
-  if (isAnnotatedReadOnlyTool(tool)) return "read-only";
+  if (isDefaultAdmittedExtensionTool(tool)) return "read-only";
   if (!isBuiltinTool(tool)) return "user-opt-in";
   if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "blocked";
   if (tool.name === "bash" || tool.name === "powershell") return "limited";
@@ -156,9 +180,6 @@ export function readCommand(input: unknown) {
   const command = input as { command?: unknown } | undefined;
   return typeof command?.command === "string" ? command.command : "";
 }
-
-/** The typed remote-shell tool Plan mode re-validates like `ssh <host> <command>`. */
-export const SSH_EXEC_TOOL_NAME = "ssh_exec";
 
 /** `ssh_exec` parameters Plan mode understands; anything else fails closed. `cwd` is a plain path. */
 const SSH_EXEC_ALLOWED_KEYS = new Set(["host", "command", "cwd", "timeout"]);
