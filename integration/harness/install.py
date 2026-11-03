@@ -2270,8 +2270,10 @@ def install_core(
 def install_packages(verified: Verified, npm: str, staging: Path, *, anchors: AnchoredStore) -> Path:
     """Replay the complete authenticated agent graph offline; never execute `pi install`.
 
-    The agent tree and its npm prefix are anchored when created and checked after replay and
-    after verification, so a substituted tree is refused rather than adopted.
+    The agent tree and its npm prefix are anchored when created. Their identity is checked after
+    replay and immediately before each in-process pathname read (`audit_install`,
+    `installed_identities`, `verify_owned_integrity`) and after the last one, so a substitution
+    present at any check is refused rather than adopted. See KNOWN WINDOW in `docs/install.md`.
 
     Parameters:
         verified (Verified): authenticated graph and archive inventory.
