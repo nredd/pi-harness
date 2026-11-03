@@ -20,6 +20,7 @@ import { layoutWorkflowCard, plainWorkflowCardLines, type WorkflowCardTask } fro
 import {
   initialWorkflowDialogState,
   layoutWorkflowDialog,
+  MIN_PANE_BODY_ROWS,
   plainWorkflowDialogLines,
   type WorkflowDialogInput,
 } from "../src/ui/workflow-dialog.js";
@@ -47,8 +48,8 @@ interface Case {
   render: (ugly: string, width: number) => string;
   /** Widths where this renderer shows a row at all (the agent-level dialog has no list pane when narrow). */
   widths?: number[];
-  /** Fleet rows compact the shared flag before clipping spend at narrow widths. */
-  compactFlagAt?: number;
+  /** Rows that compact the shared flag at narrow widths, and the exact marker they compact to. */
+  compactFlag?: { at: number; marker: string };
 }
 
 const record = (over: Partial<AgentRecord> = {}): AgentRecord =>
@@ -120,6 +121,9 @@ describe("bounded wrapped control text", () => {
       "first", "… 2 more lines", "fourth", "last",
     ]);
     expect(boundedWrappedRows("first\nsecond\nthird\nlast", 80, 1, "…")).toEqual(["first", "… 2 more lines", "last"]);
+    for (const maxRows of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(boundedWrappedRows("first\nsecond\nthird\nlast", 80, maxRows, "…"), String(maxRows)).toEqual(["first", "… 2 more lines", "last"]);
+    }
   });
 });
 
@@ -232,8 +236,8 @@ const CASES: Case[] = [
   },
   {
     name: "workflow dialog agent list row (agent level)",
-    compactFlagAt: 40,
-    render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })], "agent"))).find(l => /\[fallback|\[fb\]|!/.test(l)) ?? "",
+    compactFlag: { at: 40, marker: "[fb]" },
+    render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })], "agent"))).find(l => l.includes("❯")) ?? "",
   },
   {
     name: "conversation viewer invocation row",
@@ -247,7 +251,7 @@ const CASES: Case[] = [
       return lines.find(l => l.includes("↳")) ?? lines.join("\n");
     },
   },
-  { name: "fleet list row", compactFlagAt: 40, render: (u, w) => fleetLine(record({ description: u, invocation: { modelName: u } }), w) },
+  { name: "fleet list row", compactFlag: { at: 40, marker: "!" }, render: (u, w) => fleetLine(record({ description: u, invocation: { modelName: u } }), w) },
 ];
 
 describe("every renderer keeps a leading [fallback] flag that unbounded text cannot hide", () => {
@@ -257,9 +261,7 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
         it(`${c.name} / ${kind} / ${width} cols`, () => {
           const line = c.render(ugly, width);
           const text = strip(line);
-          const flagAt = c.compactFlagAt !== undefined && width <= c.compactFlagAt
-            ? text.search(/\[fallback|\[fb\]|!/)
-            : text.indexOf("[fallback");
+          const flagAt = text.indexOf(c.compactFlag && width <= c.compactFlag.at ? c.compactFlag.marker : "[fallback]");
           expect(flagAt, `flag missing in: ${JSON.stringify(text)}`).toBeGreaterThanOrEqual(0);
           const marker = strip(ugly)[0]!;
           const markerAt = text.indexOf(marker);
@@ -292,11 +294,22 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
   });
 
   it("separates a compact-pane flag from its label with exactly one space", () => {
-    for (const width of [100, 120]) {
+    // Agent level always renders the compact list pane: 46 degrades the flag, 100 keeps it whole.
+    for (const [width, row] of [[46, "❯ ✔ [fb] ZZ│"], [100, "❯ ✔ [fallback] ZZ│"]] as const) {
       const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ label: "ZZ" })], "agent")));
-      const listRow = lines.find(l => l.includes("ZZ") && /\[fallback|\[fb\]|!/.test(l));
-      expect(listRow, lines.join("\n")).toBeDefined();
-      expect(listRow).not.toMatch(/(?:\[fallback\]|\[fb\]) {2}ZZ/);
+      expect(lines.find(l => l.includes("❯")), `${width} columns:\n${lines.join("\n")}`).toContain(row);
+    }
+  });
+
+  it("keeps a long note's ending inside the minimum-height detail pane", () => {
+    // Status, stats and the four-row note fill exactly MIN_PANE_BODY_ROWS.
+    const ending = "ENDING-SENTINEL";
+    const entry = agentEntry({ modelNote: `Note: ${"Q".repeat(2000)} ${ending}`, thinking: "low", tokens: 1200, toolCalls: 3, durationMs: 4000 });
+    for (const width of [40, 80]) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog({ ...dialogInput(width, [entry], "agent"), bodyRows: MIN_PANE_BODY_ROWS }));
+      const body = lines.filter(l => l.includes("│"));
+      expect(body, `${width} columns:\n${lines.join("\n")}`).toHaveLength(MIN_PANE_BODY_ROWS);
+      expect(body.at(-1), `${width} columns:\n${lines.join("\n")}`).toContain(ending);
     }
   });
 

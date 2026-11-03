@@ -648,23 +648,23 @@ function agentRow(options: {
     { text: " " },
   ];
   const flag = entry.modelTier || hasFallback(entry) ? fallbackFlagText(1, entry) : "";
+  const flagColor = hasFallback(entry) ? "warning" as const : "dim" as const;
   // The narrow pane holds the label and nothing else; reserve its status prefix,
   // then let the shared flag degrade rather than clipping it to `[fal…`.
   if (options.compact && flag) {
     const flagWidth = Math.max(0, width - lineWidth(prefix));
-    // `withLeadingFlag` pads a fitting flag with a trailing space; the label row adds its own.
-    const compactFlag = withLeadingFlag("", flag, "", flagWidth).trimEnd();
+    const compactFlag = withLeadingFlag("", flag, "", flagWidth);
     const labelWidth = Math.max(0, flagWidth - visibleWidth(compactFlag) - 1);
     const label = truncateToWidth(entry.label, labelWidth, "");
     return [
       ...prefix,
-      { text: compactFlag, color: hasFallback(entry) ? "warning" : "dim" },
+      { text: compactFlag, color: flagColor },
       ...(label ? [{ text: ` ${label}`, color: selected ? "accent" as const : undefined }] : []),
     ];
   }
   const head: WorkflowCardLine = [
     ...prefix,
-    ...(flag ? [{ text: `${flag} `, color: hasFallback(entry) ? "warning" as const : "dim" as const }] : []),
+    ...(flag ? [{ text: `${flag} `, color: flagColor }] : []),
     { text: entry.label, color: selected ? "accent" : undefined },
   ];
   if (options.compact) return clampLine(head, width);
