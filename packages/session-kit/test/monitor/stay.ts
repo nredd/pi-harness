@@ -14,3 +14,13 @@ export const STAY = `setInterval(() => {
 export const STAY_GROUP = `setInterval(() => {
 	if (process.ppid !== ${process.pid} && process.pid > 1) process.kill(-process.pid, "SIGKILL");
 }, 100);`;
+
+/**
+ * Shell loop for `sh -c` fixtures: runs until `ownerPid` is gone, probed with `ps` (never a signal), so a
+ * `SIGKILL`ed worker cannot leave a `trap "" TERM` descendant running forever. Test fixtures only.
+ */
+export const stayWhileAlive = (ownerPid: number): string =>
+	`while /bin/ps -p ${ownerPid} >/dev/null 2>&1; do sleep 1; done`;
+
+/** `stayWhileAlive` bound to this worker. */
+export const STAY_SH = stayWhileAlive(process.pid);

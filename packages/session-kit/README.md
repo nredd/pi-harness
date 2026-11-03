@@ -251,6 +251,10 @@ workers/processes, and process-group kill/orphan recovery stays in the assembled
 Native `STAY` fixtures exit themselves when their parent changes and signal nothing. Only the
 worker-death fixture uses `STAY_GROUP`, which SIGKILLs its own detached group, addressed by its own
 pid; production commands and leader/descendant probes are not modified.
+Shell fixtures that outlive their test (`trap "" TERM` descendants, `sh -c` leaders with a background
+descendant in `manager.test.ts`, `pidfiles.test.ts`, `diff/git.test.ts`) loop on `STAY_SH`, which
+probes the worker's pid with `ps` and exits once it is gone, so an aborted gate leaves nothing
+behind. `stay.test.ts` covers the guard.
 Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
 Vitest regression, given its own isolated `HOME` since it bypasses `scripts/run-vitest.ts`, covers
 both a SIGKILLed worker and a failed assertion (via the fixture's own `afterEach` dispose) and
