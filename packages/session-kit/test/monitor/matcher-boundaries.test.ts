@@ -1,8 +1,11 @@
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
+import type { Clock } from "../../src/clock.ts";
 import { BoundedMatcher } from "../../src/monitor/matcher.ts";
 
-const workers = vi.hoisted(() => ({ instances: [] as (EventEmitter & { terminate: ReturnType<typeof vi.fn> })[] }));
+const workers = vi.hoisted(() => ({
+	instances: [] as (EventEmitter & { terminate: ReturnType<typeof vi.fn>; postMessage: ReturnType<typeof vi.fn> })[],
+}));
 vi.mock("node:worker_threads", () => ({
 	Worker: class extends EventEmitter {
 		readonly terminate = vi.fn(async () => 0);
@@ -60,5 +63,49 @@ it("a worker that never comes online fails open at its startup deadline and rele
 	]);
 	await matcher.close();
 	expect(workers.instances[0]?.terminate).toHaveBeenCalledOnce();
+	expect(vi.getTimerCount()).toBe(0);
+});
+
+it("runs every deadline on the injected clock, so host time alone never fails a responsive worker open", async () => {
+	vi.useFakeTimers();
+	const timers: { ms: number; fire: () => void; cancelled: boolean }[] = [];
+	const clock: Clock = {
+		now: () => 0,
+		setTimeout(fire, ms) {
+			const timer = { ms, fire, cancelled: false };
+			timers.push(timer);
+			return { cancel: () => (timer.cancelled = true) };
+		},
+		setInterval: () => {
+			throw new Error("BoundedMatcher schedules no intervals");
+		},
+	};
+	const matcher = new BoundedMatcher("READY", clock);
+	const worker = workers.instances[0];
+	if (!worker) throw new Error("Expected worker boundary");
+	const outcomes: [string, boolean][] = [];
+	matcher.test("slow", (matched) => outcomes.push(["slow", matched]));
+	expect(timers.map(({ ms, cancelled }) => [ms, cancelled])).toEqual([[1000, false]]);
+	await vi.advanceTimersByTimeAsync(60_000);
+	worker.emit("online");
+	expect(timers.map(({ ms, cancelled }) => [ms, cancelled])).toEqual([
+		[1000, true],
+		[100, false],
+	]);
+	expect(worker.postMessage).toHaveBeenCalledWith("slow");
+	const draining = matcher.drain();
+	expect(timers.map(({ ms, cancelled }) => [ms, cancelled])).toEqual([
+		[1000, true],
+		[100, false],
+		[1000, false],
+	]);
+	await vi.advanceTimersByTimeAsync(60_000);
+	expect(outcomes).toEqual([]);
+	timers[1]?.fire();
+	expect(outcomes).toEqual([["slow", true]]);
+	await draining;
+	expect(timers.map(({ cancelled }) => cancelled)).toEqual([true, true, true]);
+	await matcher.close();
+	expect(worker.terminate).toHaveBeenCalledOnce();
 	expect(vi.getTimerCount()).toBe(0);
 });
