@@ -512,6 +512,171 @@ def test_main_pushes_never_share_a_concurrency_group() -> None:
     )
 
 
+def render(template: str, context: dict[str, str]) -> str:
+    """Expand every `${{ }}` in a string template, e.g. a concurrency group.
+
+    Parameters:
+        template (str): Workflow string with embedded expressions.
+        context (dict[str, str]): Dotted context values for `evaluate`.
+
+    Returns:
+        str: The rendered value GitHub would compute.
+    """
+    return re.sub(r"\$\{\{(.*?)\}\}", lambda match: str(evaluate(match[1], context)), template)
+
+
+def test_dispatched_core_gates_never_cancel_each_other() -> None:
+    """Keep each frozen candidate's `release-core`, a reusable call that inherits CI's context."""
+    concurrency = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())["concurrency"]
+
+    def outcome(event: str, ref: str, sha: str) -> tuple[str, Any]:
+        """Return the group and cancellation one caller context selects.
+
+        Parameters:
+            event (str): Caller's triggering event.
+            ref (str): Caller's ref.
+            sha (str): Caller's commit.
+
+        Returns:
+            tuple[str, Any]: Rendered group and `cancel-in-progress` value.
+        """
+        context = {"github.workflow": "CI", "github.event_name": event, "github.ref": ref, "github.sha": sha}
+        cancel = concurrency["cancel-in-progress"]
+        return render(concurrency["group"], context), cancel if isinstance(cancel, bool) else evaluate(
+            cancel, context
+        )
+
+    first = outcome("workflow_dispatch", "refs/heads/main", "a" * 40)
+    second = outcome("workflow_dispatch", "refs/heads/main", "b" * 40)
+    frozen = outcome("workflow_dispatch", f"refs/heads/release-verification/{'c' * 40}", "c" * 40)
+    assert len({first[0], second[0], frozen[0]}) == 3
+    assert first[1] is second[1] is frozen[1] is False
+    pr = outcome("pull_request", "refs/pull/1/merge", "d" * 40)
+    assert pr == (outcome("pull_request", "refs/pull/1/merge", "e" * 40)[0], True)
+
+
+def test_forks_callee_contract() -> None:
+    """Pin the input-free `workflow_call` that `ci.yml` `release-core` relies on."""
+    forks = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())
+    assert forks[True]["workflow_call"] is None
+    assert forks["permissions"] == {"contents": "read"}
+    assert set(forks["jobs"]) == {"core"}
+    assert forks["jobs"]["core"]["name"] == "core (forks/pi)"
+
+
+def test_classify_base_and_head_follow_the_trigger() -> None:
+    """Diff a PR against its base, a push against `before`, and a dispatch against itself."""
+    step = next(step for step in jobs()["classify"]["steps"] if step.get("id") == "classify")
+    pr = {
+        "github.event.pull_request.base.sha": "base",
+        "github.event.pull_request.head.sha": "head",
+        "github.sha": "merge",
+    }
+    push = {"github.event.before": "before", "github.sha": "after"}
+    dispatch = {"github.sha": "frozen"}
+    assert [evaluate(step["env"]["BASE"], context) for context in (pr, push, dispatch)] == [
+        "base",
+        "before",
+        "frozen",
+    ]
+    assert [evaluate(step["env"]["HEAD"], context) for context in (pr, push, dispatch)] == [
+        "head",
+        "after",
+        "frozen",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("ref", "commit", "admitted"),
+    [
+        ("refs/heads/main", "tip", True),
+        ("refs/heads/release-verification/{sha}", "old", True),
+        ("refs/heads/release-verification/{other}", "old", False),
+        ("refs/heads/feature", "tip", False),
+        ("refs/heads/main", "side", False),
+        ("refs/heads/release-verification/{sha}", "side", False),
+    ],
+)
+def test_dispatch_classifies_only_frozen_main_candidates(
+    tmp_path: Path, ref: str, commit: str, admitted: bool
+) -> None:
+    """Run the real dispatch guard: exact ref, `origin/main` ancestry, then every full-lane flag.
+
+    Parameters:
+        tmp_path (Path): Disposable repository and output file.
+        ref (str): Dispatched ref template.
+        commit (str): Which fixture commit the dispatch froze.
+        admitted (bool): Whether the guard must admit the dispatch.
+    """
+    git = shutil.which("git")
+    assert git
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")} | {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_AUTHOR_NAME": "Fixture",
+        "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_NAME": "Fixture",
+        "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+    }
+
+    def command(*args: str) -> str:
+        """Run fixture Git with isolated configuration.
+
+        Parameters:
+            args (str): Literal Git arguments.
+
+        Returns:
+            str: Stripped stdout.
+        """
+        return subprocess.check_output([git, *args], cwd=repo, env=env, text=True).strip()
+
+    command("init", "--quiet", "--template=", "-b", "main")
+    commits = {}
+    for name in ("old", "tip"):
+        command("commit", "--quiet", "--allow-empty", "--no-gpg-sign", "-m", name)
+        commits[name] = command("rev-parse", "HEAD")
+    command("update-ref", "refs/remotes/origin/main", commits["tip"])
+    command("checkout", "--quiet", "-b", "side", commits["old"])
+    command("commit", "--quiet", "--allow-empty", "--no-gpg-sign", "-m", "side")
+    commits["side"] = command("rev-parse", "HEAD")
+    sha = commits[commit]
+    step = next(step for step in jobs()["classify"]["steps"] if step.get("id") == "classify")
+    script = tmp_path / "classify.sh"
+    script.write_text(step["run"])
+    output = tmp_path / "output"
+    output.touch()
+    result = subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+        cwd=repo,
+        env=env
+        | {
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_REF": ref.format(sha=sha, other="0" * 40),
+            "GITHUB_SHA": sha,
+            "GITHUB_OUTPUT": str(output),
+            "BASE": sha,
+            "HEAD": sha,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if admitted:
+        assert result.returncode == 0, result.stderr
+        assert output.read_text() == (
+            "docs_only=false\nwsl_inputs=true\nstack_inputs=true\n"
+            "changed_files=Full frozen release candidate\n"
+        )
+    else:
+        assert result.returncode != 0
+        assert output.read_text() == ""
+        if not ref.startswith("refs/heads/main") and "{sha}" not in ref:
+            assert "requires main or an exact frozen candidate ref" in result.stderr
+
+
 def test_bench_notice_moved_into_classify_summary(tmp_path: Path) -> None:
     """Run the real classify report and keep the NOT RUN disclosure without a job.
 

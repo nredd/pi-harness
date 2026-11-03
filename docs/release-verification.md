@@ -33,7 +33,10 @@ Record the run's exact `headSha`. All checkouts use that frozen event commit. If
 after dispatch, the run and release candidate remain valid; no newest-tip or timestamp freshness
 predicate exists. If the desired candidate is already an older ancestor of main, create a
 `release-verification/<full-sha>` branch at that exact commit and dispatch on that ref instead.
-The classification step requires both the exact SHA-encoded branch name and main ancestry.
+The classification step requires both the exact SHA-encoded branch name and main ancestry;
+`test_dispatch_classifies_only_frozen_main_candidates` runs that real step against a fixture repo.
+Each dispatch's `release-core` call groups per SHA without cancellation, so a later dispatch never
+cancels an earlier candidate's core gate.
 The verifier accepts only `main` or that exact frozen ref, never arbitrary PR branches. Delete
 the temporary ref after release evidence is retained. Rerunning the original dispatch also keeps
 the original commit. No branch is moved forward merely to satisfy release freshness.
@@ -41,8 +44,11 @@ the original commit. No branch is moved forward merely to satisfy release freshn
 `harness.release_gate` requires a successful `workflow_dispatch` run of `ci.yml`, its exact
 candidate `head_sha`, the current attempt's complete matrix and core jobs, the successful actual
 execution steps (not just successful job labels), and all retained, nonempty coverage, packed
-contract, Node stack and standalone stack artifacts bound to that run and SHA. Missing, skipped,
-failed, expired or mismatched evidence refuses. Ordinary push/main smoke and old PR checks are
+contract, Node stack and standalone stack artifacts bound to that run and SHA. The artifacts API
+has no attempt field, so an artifact must also be uploaded no earlier than the current attempt's
+`run_started_at`. Missing, skipped, failed, expired or mismatched evidence refuses, and so does a
+malformed REST page. `python -m harness.release_gate` exits 0 with evidence and 1 when refused; a
+harness defect raises instead of reading as a refusal. Ordinary push/main smoke and old PR checks are
 not fallbacks. Artifacts use normal Actions retention; expired evidence needs a real rerun, not
 a replacement receipt. The verifier paginates run, job and artifact collections. Ubuntu publication/promotion jobs use
 trusted `/usr/bin/gh`, not PATH lookup. Read-only local diagnostics on another platform must set

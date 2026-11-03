@@ -1087,6 +1087,76 @@ def test_verify_reports_a_failed_gh_call_without_a_traceback(
     assert "Traceback" not in err
 
 
+def test_build_candidate_records_the_full_dispatch_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The full-execution barrier runs before any other evidence and is the only stack run recorded."""
+    calls: list[str] = []
+    sha = "a" * 40
+
+    def gate(repo: str, source_sha: str) -> int:
+        """Record the barrier and return a distinctive dispatch run ID.
+
+        Parameters:
+            repo (str): Repository the barrier reads.
+            source_sha (str): Candidate commit.
+
+        Returns:
+            int: Synthetic full dispatch run ID.
+        """
+        calls.append(f"gate {repo} {source_sha}")
+        return 777
+
+    def gh_json(path: str) -> object:
+        """Record each later GitHub read.
+
+        Parameters:
+            path (str): Requested API path.
+
+        Returns:
+            object: An empty page list.
+        """
+        calls.append("gh")
+        return []
+
+    def build_gates(*args: Any) -> None:
+        """Capture the stack run IDs, then stop before snapshot construction.
+
+        Parameters:
+            args (Any): `build_gates` positional arguments; the third is the stack run IDs.
+
+        Raises:
+            RuntimeError: Always, to end the build after the recorded call.
+        """
+        calls.append(f"build_gates {args[2]}")
+        raise RuntimeError("stop")
+
+    personal = (CI_WORKFLOW.parents[2] / "integration/stacks/personal.json").read_text()
+    monkeypatch.setattr(promotion_verify, "require_full_verification", gate)
+    monkeypatch.setattr(promotion_verify, "gh_json", gh_json)
+    monkeypatch.setattr(promotion_verify, "required_checks", lambda _rules: [])
+    monkeypatch.setattr(promotion_verify, "verify_required_checks", lambda *_args: [])
+    monkeypatch.setattr(
+        promotion_verify, "run_command", lambda *_args: subprocess.CompletedProcess([], 0, personal, "")
+    )
+    monkeypatch.setattr(promotion_verify, "verify_core", lambda *_args: None)
+    monkeypatch.setattr(promotion_verify, "collect_owned_evidence", lambda *_args: [])
+    monkeypatch.setattr(promotion_verify, "build_gates", build_gates)
+    (tmp_path / "promo").mkdir()
+    ctx = promotion_verify.VerifyContext(
+        operation="verify-only",
+        requested_sha=sha,
+        repo="nredd/pi-harness",
+        workspace=tmp_path,
+        github_output=tmp_path / "output",
+        temp=tmp_path,
+        promo=tmp_path / "promo",
+    )
+    with pytest.raises(RuntimeError, match="stop"):
+        promotion_verify.build_candidate(ctx, sha)
+    assert calls == [f"gate nredd/pi-harness {sha}", "gh", "gh", "build_gates [777]"]
+
+
 def test_context_from_env_reports_every_missing_variable() -> None:
     """A missing required variable is a `ValueError` naming it, and `main` turns it into exit 1."""
     env = {"OPERATION": "promote", "GITHUB_REPOSITORY": "o/r"}

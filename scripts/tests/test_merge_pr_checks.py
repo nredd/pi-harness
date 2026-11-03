@@ -147,6 +147,36 @@ def test_main_advance_does_not_invalidate_reviewed_head() -> None:
 
 
 @pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("number",), 136),
+        (("head", "sha"), "e" * 40),
+        (("head", "ref"), "other"),
+        (("base", "ref"), "release"),
+        (("base", "repo", "id"), 1),
+    ],
+)
+def test_same_context_replacement_for_another_pr(path: tuple[str, ...], value: Any) -> None:
+    """A consistent old/new pair still has to belong to this PR's head, number and base branch.
+
+    Parameters:
+        path (tuple[str, ...]): Associated PR field to change on both executions.
+        value (Any): Identity of a different PR, head or base.
+
+    Returns:
+        None: The replacement identity check refuses, not an earlier context check.
+    """
+    gh = Replay()
+    for run in gh.data["runs"][:2]:
+        record = run["pull_requests"][0]
+        for key in path[:-1]:
+            record = record[key]
+        record[path[-1]] = value
+    with pytest.raises(checks.CheckError, match="current PR head/base identity"):
+        gh.gate()
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("conclusion", "cancelled"),
