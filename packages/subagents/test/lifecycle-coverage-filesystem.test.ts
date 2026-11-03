@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionTaskDir } from "../src/output-file.js";
 import { resolveDeclaredPaths } from "../src/package-resources.js";
@@ -11,7 +11,7 @@ import { preloadSkills } from "../src/skill-loader.js";
 import { listSavedWorkflows } from "../src/workflow/saved.js";
 import { createWorktree } from "../src/worktree.js";
 
-const faults = vi.hoisted(() => ({ removeAfterExists: "", removeBeforeStat: "", chmod: false }));
+const faults = vi.hoisted(() => ({ removeAfterExists: "", removeBeforeStat: "", unresolvable: "", chmod: false }));
 vi.mock("node:fs", async original => {
   const actual = await original<typeof fs>();
   return { ...actual,
@@ -23,6 +23,10 @@ vi.mock("node:fs", async original => {
       }
       return result;
     },
+    realpathSync: Object.assign((...args: Parameters<typeof fs.realpathSync>) => {
+      if (String(args[0]) === faults.unresolvable) throw Object.assign(new Error(`EACCES: realpath ${String(args[0])}`), { code: "EACCES" });
+      return actual.realpathSync(...args);
+    }, { native: actual.realpathSync.native }),
     statSync: (...args: Parameters<typeof fs.statSync>) => {
       if (String(args[0]) === faults.removeBeforeStat) {
         faults.removeBeforeStat = "";
@@ -41,7 +45,7 @@ beforeEach(() => {
   root = fs.mkdtempSync(join(tmpdir(), "lifecycle-filesystem-"));
   vi.stubEnv("PI_CODING_AGENT_DIR", join(root, "agent"));
 });
-afterEach(() => { faults.removeAfterExists = ""; faults.removeBeforeStat = ""; faults.chmod = false; vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { faults.removeAfterExists = ""; faults.removeBeforeStat = ""; faults.unresolvable = ""; faults.chmod = false; vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("resource filesystem races", () => {
   it("reports a git repository removed between validation and toplevel lookup", async () => {
@@ -65,15 +69,45 @@ describe("resource filesystem races", () => {
     expect(fs.existsSync(path)).toBe(false);
   });
 
-  it("continues user skill search when a root disappears before realpath", () => {
-    const path = join(root, "agent", "skills");
-    fs.mkdirSync(path, { recursive: true });
-    const fallback = join(root, ".agents", "skills");
-    fs.mkdirSync(fallback, { recursive: true });
-    fs.writeFileSync(join(fallback, "review.md"), "surviving skill");
-    faults.removeAfterExists = path;
-    expect(preloadSkills(["review"], join(root, "project"), root)).toEqual([{ name: "review", content: "surviving skill" }]);
-    expect(fs.existsSync(path)).toBe(false);
+  it("keeps preloading when an unrelated discovered skill cannot be canonicalized", async () => {
+    const cwd = join(root, "project");
+    const agentDir = join(root, "agent");
+    for (const [name, content] of [["review", "GLOBAL"], ["other", "OTHER"]]) {
+      fs.mkdirSync(join(agentDir, "skills", name), { recursive: true });
+      fs.writeFileSync(join(agentDir, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n${content}\n`);
+    }
+    // The rejected project alias is what makes the loader canonicalize every candidate.
+    fs.mkdirSync(join(cwd, ".pi", "skills"), { recursive: true });
+    fs.symlinkSync(join(agentDir, "skills", "review"), join(cwd, ".pi", "skills", "review"));
+    faults.unresolvable = join(agentDir, "skills", "other", "SKILL.md");
+
+    const skills = await preloadSkills(["review", "other"], cwd, { agentDir, settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted: true }) });
+
+    expect(skills.map(skill => skill.content.split("\n").at(-1))).toEqual(["GLOBAL", "OTHER"]);
+  });
+
+  it("does not restore an uncanonicalizable package skill behind a rejected project alias", async () => {
+    // Canonical root, so Pi's raw-path fallback for the faulted file still
+    // collapses the package behind the project alias on every platform.
+    const base = fs.realpathSync(root);
+    const cwd = join(base, "project");
+    const agentDir = join(base, "agent");
+    const skillDir = join(base, "package", "skills", "review");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(join(base, "package", "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
+    fs.writeFileSync(join(skillDir, "SKILL.md"), "---\nname: review\ndescription: review\n---\nPACKAGED\n");
+    const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: true });
+    settingsManager.setPackages([join(base, "package")]);
+    fs.mkdirSync(join(cwd, ".pi", "skills"), { recursive: true });
+    fs.symlinkSync(skillDir, join(cwd, ".pi", "skills", "review"));
+
+    const [control] = await preloadSkills(["review"], cwd, { agentDir, settingsManager });
+    faults.unresolvable = join(skillDir, "SKILL.md");
+    const [skill] = await preloadSkills(["review"], cwd, { agentDir, settingsManager });
+
+    expect(control?.content).toContain("PACKAGED");
+    expect(skill?.content).toBe("(Skill \"review\" not found in Pi's configured skill resources)");
   });
 
   it("omits a saved script removed between directory listing and stat", () => {

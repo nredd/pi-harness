@@ -1,6 +1,6 @@
 # Complete source accounting
 
-Actual Istanbul LCOV: `6d7b13cb` (#193 report) versus `b51e1774` (main including #182), then fresh merged lifecycle test contents. All 75 source files are present in both reports; current source bytes match `b51e1774` for every row. Ownership is not an exclusion. LF/FNF are instrumented denominators, not physical lines.
+Actual Istanbul LCOV: `6d7b13cb` (#193 report) versus `b51e1774` (main including #182), then fresh merged lifecycle test contents. All 75 source files are present in both reports; the table records those snapshots, not the current working tree. Ownership is not an exclusion. Later changes to `src/agent-runner.ts`, `src/resource-loader.ts`, and `src/skill-loader.ts` are tracked by the package coverage ratchet, not these rows. LF/FNF are instrumented denominators, not physical lines.
 
 | Source | Owner | 6d7b13cb LF/FNF | b51e1774 LF/FNF | Main missing L/F | Final missing L/F |
 | --- | --- | ---: | ---: | ---: | ---: |
