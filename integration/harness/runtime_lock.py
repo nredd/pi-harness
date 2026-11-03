@@ -25,7 +25,7 @@ import subprocess
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import IO, Any, Literal, Self
+from typing import IO, TYPE_CHECKING, Any, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -38,6 +38,9 @@ from harness.release import (
     release_package_urls,
 )
 from harness.stack import Stack, canonical_stack_bytes, source_string
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 LOGGER = logging.getLogger(__name__)
 ASSET = "dependency-graph.json"
@@ -520,7 +523,15 @@ def audit_install(graph: NpmGraph, root: Path, archives: dict[str, Path]) -> Non
             raise RuntimeLockError(f"Unexpected installed runtime entry '{path.relative_to(root)}'")
 
 
-def install_graph(graph: NpmGraph, root: Path, scratch: Path, npm: str, archives: dict[str, Path]) -> None:
+def install_graph(
+    graph: NpmGraph,
+    root: Path,
+    scratch: Path,
+    npm: str,
+    archives: dict[str, Path],
+    *,
+    checkpoint: Callable[[], None] = lambda: None,
+) -> None:
     """Replay one authenticated graph offline with scripts disabled, then audit all bytes.
 
     Parameters:
@@ -529,6 +540,8 @@ def install_graph(graph: NpmGraph, root: Path, scratch: Path, npm: str, archives
         scratch (Path): private native npm config/cache directory.
         npm (str): absolute preflight-selected native npm executable.
         archives (dict[str, Path]): previously verified complete tarball inventory.
+        checkpoint (Callable[[], None]): caller's identity check, run after replay and right
+            before the pathname audit reads the prefix.
 
     Returns:
         None: native offline replay and installed-byte audit both passed.
@@ -550,6 +563,7 @@ def install_graph(graph: NpmGraph, root: Path, scratch: Path, npm: str, archives
     for archive in dict.fromkeys(archives.values()):
         run_npm(npm, ["cache", "add", str(archive), "--offline", "--ignore-scripts"], root, env)
     run_npm(npm, ["ci", "--offline", "--ignore-scripts", "--include=optional", "--include=peer"], root, env)
+    checkpoint()
     audit_install(graph, root, archives)
 
 

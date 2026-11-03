@@ -15,6 +15,7 @@ import pytest
 
 from harness import install, promotion_verify, publish_gate, runtime_lock
 from harness.install import VerificationError
+from harness.install_paths import AnchoredStore
 from harness.promotion import (
     CoreEvidence,
     GateEvidence,
@@ -211,8 +212,8 @@ def test_installer_cannot_stage_legacy_verified_snapshot_without_a_runtime_graph
     """An evidence-only v1 snapshot is never enough to enter the old pi-install path."""
     snapshot, _ = inputs()
     verified = install.Verified(snapshot, [source_string(p) for p in snapshot.stack.sources], {})
-    with pytest.raises(VerificationError, match="legacy install refused"):
-        install.install_packages(verified, "/not-invoked/npm", tmp_path)
+    with AnchoredStore() as anchors, pytest.raises(VerificationError, match="legacy install refused"):
+        install.install_packages(verified, "/not-invoked/npm", tmp_path, anchors=anchors)
     assert list(tmp_path.iterdir()) == []
 
 

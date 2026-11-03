@@ -78,7 +78,7 @@ RAW_CHAIN_ALLOWLIST = {
         "read_journal": (2, "Local journal open and JSON parsing"),
         "load_journal": (1, "Local journal validation"),
         "check_restore_step": (2, "Local restore identity and missing-backup checks"),
-        "rollback": (1, "Local filesystem rollback failures"),
+        "rollback": (2, "Local filesystem parent admission and rollback failures"),
         "install_packages": (1, "Staged local manifest/identity validation AFTER subprocesses"),
         "locked": (3, "Local filesystem/lock admission"),
     },
