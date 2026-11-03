@@ -8,7 +8,7 @@
  * A separate static-import fixture checks shared state across module copies.
  */
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -296,19 +296,28 @@ describe("process budget across managers", () => {
       // (`fixtures/budget-host-sdk.mjs`). Transpiling the whole source
       // tree and cold-booting the real SDK cost seconds of CPU under the test
       // deadline, which timed out under load after every assertion passed.
+      // Rolldown fails the build on a missing named export (`MISSING_EXPORT`)
+      // even at `logLevel: "silent"`, so a new SDK import cannot stub to undefined.
       const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
+      const manager = realpathSync(new URL("../src/agent-manager.ts", import.meta.url));
       symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), join(dir, "node_modules"), "dir");
       await build({
         configFile: false, root: fileURLToPath(new URL("../", import.meta.url)), logLevel: "silent",
-        resolve: { alias: [
-          { find: /^\.\/agent-runner\.js$/, replacement: fixture("budget-scripted-runner.mjs") },
-          { find: /^@earendil-works\/pi-coding-agent$/, replacement: fixture("budget-host-sdk.mjs") },
-        ] },
+        // Script only the manager's own runner import, nothing else that happens to share the specifier.
+        plugins: [{
+          name: "scripted-runner", enforce: "pre",
+          resolveId: (source, importer) =>
+            source === "./agent-runner.js" && importer === manager ? fixture("budget-scripted-runner.mjs") : null,
+        }],
+        resolve: { alias: [{ find: /^@earendil-works\/pi-coding-agent$/, replacement: fixture("budget-host-sdk.mjs") }] },
         build: {
           ssr: fixture("budget-manager-reload-entry.ts"), outDir: dir, emptyOutDir: false, minify: false,
           rolldownOptions: { output: { entryFileNames: "old.mjs" } },
         },
       });
+      // The stub makes `BUILTIN_TOOL_NAMES` empty. Rolldown drops a binding nothing
+      // reads, so no declaration proves no bundled code depends on the tool names.
+      expect(readFileSync(join(dir, "old.mjs"), "utf8")).not.toMatch(/\bBUILTIN_TOOL_NAMES\s*=/);
       copyFileSync(join(dir, "old.mjs"), join(dir, "fresh.mjs"));
       copyFileSync(fixture("budget-manager-reload.mjs"), join(dir, "check.mjs"));
       expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
