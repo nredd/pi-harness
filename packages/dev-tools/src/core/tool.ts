@@ -6,7 +6,10 @@
 import { type TSchema, Type } from "typebox";
 import { toolResult } from "./result.ts";
 
-/** Reads nothing but the environment it inspects; Plan mode admits these. */
+/**
+ * Makes no direct edits to the workspace; Plan mode admits these. Not side-effect free: a tool may
+ * run repo code (`build.rs`, `conftest.py`, tests) that writes build or cache outputs.
+ */
 export const READ_ONLY = {
 	readOnlyHint: true,
 	destructiveHint: false,

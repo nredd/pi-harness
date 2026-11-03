@@ -45,8 +45,11 @@ Tool groups land one per PR. Current state is in the table below.
   coalesced into the same chunk or after the capture cap is reached. Listener errors are swallowed
 - Exit codes become named states (`violations`, `no-tests`, `tool-error`, ...), never a bare
   "exit 1"
-- `annotations.readOnlyHint` is set honestly. The `pi-plan-mode` fork admits annotated read-only
-  tools in Plan mode; everything else is denied there
+- `annotations.readOnlyHint` means no direct edits by the tool, *not* no side effects. The
+  `pi-plan-mode` fork admits annotated read-only tools in Plan mode; everything else is denied
+  there. `cargo_check`, `cargo_test`, `cargo_doc` and `py_test` run repo code (`build.rs`,
+  `conftest.py`, tests), which may write build or cache outputs (`target/`, `.coverage`,
+  `.pytest_cache`) or anything else that code chooses. Plan is not a sandbox
 - `outputSchema` + `structuredContent` on every tool, `isError: true` on red with the data intact
 - Default transcript renderer, so every call settles as one `call · summary` row
 
@@ -248,17 +251,19 @@ value and goes after `--`; `-k`/`-m` travel as `-k=EXPR`.
   `failed`, `interrupted` (2, collection error), `usage-error` (4), `no-tests` (5, not an
   error). Only failures are listed, from the short summary, with the failure block below them;
   `stoppedEarly` says the run hit `--maxfail`. There is no `extra_args`: verbatim flags such as
-  `--basetemp` or `-p` would let a read-only tool write, and Plan mode admits this tool
+  `--basetemp` or `-p` would let the model aim writes or load plugins, and Plan mode admits this
+  tool
 - `py_uv {action: sync|lock|add|remove, packages?, group?, dev?, all_extras?=true,
   all_groups?=true, locked?}`: `sync` defaults to `--all-extras --all-groups` (the Makefile
   uses `--all-extras`; groups are added so dev tools are present too); `locked` fails loudly on
   a stale lock
 
-Annotations: `py_typecheck` and `py_test` are read-only and admitted in Plan mode. `py_lint`
-and `py_format` carry a rewriting mode, so they are not (known cost: no lint or format check in
-Plan mode; splitting the fix modes into their own tool would lift it); `py_uv` reaches the
-network. All five are deferred by default (found via `search_tools`), per the always-active
-budget.
+Annotations: `py_typecheck` and `py_test` are read-only and admitted in Plan mode, though
+`py_test` runs `conftest.py` and test code, and `coverage`/`last_failed` write `.coverage` and
+`.pytest_cache`. `py_lint` and `py_format` carry a rewriting mode, so they are not (known cost:
+no lint or format check in Plan mode; splitting the fix modes into their own tool would lift
+it); `py_uv` reaches the network. All five are deferred by default (found via `search_tools`),
+per the always-active budget.
 
 ## cargo
 
@@ -308,8 +313,11 @@ on (level, code, primary span, message) because cargo emits one copy per target,
   started; baseline flags imply `--benches` because libtest harnesses reject them
 - `cargo_add {crates, dev?, build?, features?, optional?, dry_run?}` reports added `name@version` values; inspect the manifest separately for its diff
 
-Annotations: `cargo_check`, `cargo_test`, `cargo_doc` are read-only; `cargo_add` reaches the
-network; the rest write the tree or `target/`. All nine are deferred (found via `search_tools`).
+Annotations: `cargo_check`, `cargo_test`, `cargo_doc` are read-only and admitted in Plan mode:
+they make no direct edits, but run `build.rs`, proc macros and tests, which write `target/`.
+`cargo_add` reaches the network; `cargo_clippy` and `cargo_fmt` have a rewriting mode, and
+`cargo_build`, `cargo_run` and `cargo_bench` exist to produce or run binaries and baselines.
+All nine are deferred (found via `search_tools`).
 
 ## Development
 

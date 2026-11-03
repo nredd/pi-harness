@@ -12,6 +12,9 @@
   gone: a remote command already passes no working or trusted directory.
 - `ssh_exec` and `ssh_pull` are now mutating metadata; Plan admits a trusted-source `ssh_exec` by name
   and keeps the execution-time host and remote command gate. `ssh_pull` is no longer auto-admitted.
+- Document Plan's boundary as no direct edits by the agent, not a sandbox: `readOnlyHint` tools such as
+  `cargo_check`, `cargo_test`, `cargo_doc` and `py_test` stay admitted and may run repo code that writes
+  build or cache outputs.
 - First CI-attested release; no code change.
 - Rebase the released `v0.59.2-nredd.4` queue onto upstream 0.59.3, not unreleased main.
   Drop the absorbed custom-start patch and its duplicate regression in favor of upstream's
