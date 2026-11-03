@@ -556,7 +556,10 @@ Bun scope:
   proves hook admission and failures only, not assembled-stack behavior
 - No other selected D/E case uses preloads, scaled timers or `--expose-gc`. Clock-driven behavior
   moved to native suites. `providers/fast_timers.mjs` is no longer used by selected D/E scenarios;
-  `harness/probe.py`'s `--expose-gc` is used only by excluded `scenarios/bench/test_render.py`
+  `harness/probe.py`'s `--expose-gc` is used only by excluded `scenarios/bench/test_render.py`.
+  The render probe (`probes/render.ts`) picks its collector per runtime: Node's `--expose-gc` hook,
+  else `Bun.gc(true)` (compiled Bun has no such flag and ignores `NODE_OPTIONS`), else `gc: false`.
+  `render.test.ts` pins all three; `make check-probes` runs it
 - The adapter blocker is [here](https://github.com/nredd/pi-harness/issues/14). Previous references
   to #58 are stale: no such issue exists in this repository. The timer migration removed one
   dependency, not the remaining auth transport interception requirement
