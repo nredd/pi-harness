@@ -7,16 +7,20 @@ References:
 
 from __future__ import annotations
 
+import json
 import runpy
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import ci_paths
+import merge_pr_checks
 
 GIT = ci_paths.GIT
 
@@ -282,36 +286,22 @@ def test_write_github_output_preserves_changed_file_list(tmp_path: Path) -> None
         None: Assertions verify workflow output.
     """
     output = tmp_path / "output"
-    ci_paths.write_github_output(
-        output,
-        ci_paths.ChangeClassification(
-            paths=("docs/ci.md", "PLAN.md"),
-            docs_only=True,
-            wsl_inputs=False,
-            stack_inputs=False,
-            benchmark_inputs=False,
-        ),
+    result = ci_paths.ChangeClassification(
+        paths=("docs/ci.md", "PLAN.md"), docs_only=True, inputs={"wsl_inputs": False, "stack_inputs": False}
     )
+    ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, "push"))
     contents = output.read_text(encoding="utf-8")
     assert "docs_only=true\n" in contents
     assert "wsl_inputs=false\n" in contents
     assert "stack_inputs=false\n" in contents
-    assert "benchmark_inputs=false\n" in contents
     assert "docs/ci.md\nPLAN.md\n" in contents
 
 
 @pytest.mark.parametrize(
-    ("wsl_inputs", "stack_inputs", "benchmark_inputs"),
-    [
-        (True, False, False),
-        (False, True, False),
-        (False, False, True),
-        (True, True, True),
-        (False, False, False),
-    ],
+    ("wsl_inputs", "stack_inputs"), [(True, False), (False, True), (True, True), (False, False)]
 )
 def test_write_github_output_keeps_input_flags_independent(
-    tmp_path: Path, wsl_inputs: bool, stack_inputs: bool, benchmark_inputs: bool
+    tmp_path: Path, wsl_inputs: bool, stack_inputs: bool
 ) -> None:
     """Publish each input flag from its own field.
 
@@ -319,26 +309,18 @@ def test_write_github_output_keeps_input_flags_independent(
         tmp_path (Path): Pytest temporary directory.
         wsl_inputs (bool): Whether the fixture touches WSL inputs.
         stack_inputs (bool): Whether the fixture touches stack inputs.
-        benchmark_inputs (bool): Whether the fixture touches benchmark inputs.
 
     Returns:
         None: Assertions verify workflow output.
     """
     output = tmp_path / "output"
-    ci_paths.write_github_output(
-        output,
-        ci_paths.ChangeClassification(
-            paths=("a",),
-            docs_only=False,
-            wsl_inputs=wsl_inputs,
-            stack_inputs=stack_inputs,
-            benchmark_inputs=benchmark_inputs,
-        ),
+    result = ci_paths.ChangeClassification(
+        paths=("a",), docs_only=False, inputs={"wsl_inputs": wsl_inputs, "stack_inputs": stack_inputs}
     )
+    ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, "push"))
     lines = output.read_text(encoding="utf-8").splitlines()
     assert f"wsl_inputs={str(wsl_inputs).lower()}" in lines
     assert f"stack_inputs={str(stack_inputs).lower()}" in lines
-    assert f"benchmark_inputs={str(benchmark_inputs).lower()}" in lines
 
 
 @pytest.mark.parametrize(
@@ -378,7 +360,7 @@ def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> 
     Returns:
         None: Assertions verify classification.
     """
-    assert classify_change(repo, {path: "input\n"}).wsl_inputs
+    assert classify_change(repo, {path: "input\n"}).inputs["wsl_inputs"]
 
 
 @pytest.mark.parametrize(
@@ -404,7 +386,7 @@ def test_wsl_inputs_reject_paths_outside_the_guest_path(repo: Path, path: str) -
     Returns:
         None: Assertions verify classification.
     """
-    assert not classify_change(repo, {path: "input\n"}).wsl_inputs
+    assert not classify_change(repo, {path: "input\n"}).inputs["wsl_inputs"]
 
 
 @pytest.mark.parametrize(
@@ -441,7 +423,7 @@ def test_stack_inputs_accept_paths_the_personal_stack_reads(repo: Path, path: st
     Returns:
         None: Assertions verify classification.
     """
-    assert classify_change(repo, {path: "input\n"}).stack_inputs
+    assert classify_change(repo, {path: "input\n"}).inputs["stack_inputs"]
 
 
 @pytest.mark.parametrize(
@@ -467,7 +449,7 @@ def test_stack_inputs_reject_local_only_and_unrelated_paths(repo: Path, path: st
     Returns:
         None: Assertions verify classification.
     """
-    assert not classify_change(repo, {path: "input\n"}).stack_inputs
+    assert not classify_change(repo, {path: "input\n"}).inputs["stack_inputs"]
 
 
 @pytest.mark.parametrize(
@@ -496,7 +478,7 @@ def test_benchmark_inputs_accept_paths_the_unit_gate_reads(repo: Path, path: str
     Returns:
         None: Assertions verify classification.
     """
-    assert classify_change(repo, {path: "input\n"}).benchmark_inputs
+    assert classify_change(repo, {path: "input\n"}).inputs["benchmark_inputs"]
 
 
 @pytest.mark.parametrize(
@@ -526,7 +508,7 @@ def test_benchmark_inputs_reject_paths_the_unit_gate_never_reads(repo: Path, pat
     Returns:
         None: Assertions verify classification.
     """
-    assert not classify_change(repo, {path: "input\n"}).benchmark_inputs
+    assert not classify_change(repo, {path: "input\n"}).inputs["benchmark_inputs"]
 
 
 def test_benchmark_inputs_follow_any_changed_path(repo: Path) -> None:
@@ -539,8 +521,8 @@ def test_benchmark_inputs_follow_any_changed_path(repo: Path) -> None:
         None: Assertions verify classification.
     """
     result = classify_change(repo, {"packages/router/a.ts": "x\n", "benchmarks/comparison/uv.lock": "lock\n"})
-    assert result.benchmark_inputs
-    assert not result.wsl_inputs
+    assert result.inputs["benchmark_inputs"]
+    assert not result.inputs["wsl_inputs"]
 
 
 def test_mixed_change_reports_each_input_family(repo: Path) -> None:
@@ -553,7 +535,11 @@ def test_mixed_change_reports_each_input_family(repo: Path) -> None:
         None: Assertions verify classification.
     """
     result = classify_change(repo, {"docs/ci.md": "docs\n", "scripts/ci_paths.py": "code\n"})
-    assert (result.docs_only, result.wsl_inputs, result.stack_inputs) == (False, True, False)
+    assert (result.docs_only, result.inputs["wsl_inputs"], result.inputs["stack_inputs"]) == (
+        False,
+        True,
+        False,
+    )
 
 
 @pytest.mark.parametrize("case", ["invalid-base", "gitlink", "empty"])
@@ -574,113 +560,545 @@ def test_input_flags_fail_closed(repo: Path, case: str) -> None:
         git(repo, "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},forks/pi")
         commit(repo, "bump gitlink")
     result = ci_paths.classify(repo, base, "HEAD")
-    assert result.wsl_inputs
-    assert result.stack_inputs
-    assert result.benchmark_inputs
+    assert result.inputs["wsl_inputs"]
+    assert result.inputs["stack_inputs"]
+    assert result.inputs["benchmark_inputs"]
 
 
-def test_run_git_reports_a_missing_git_binary(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wrap a Git launch failure so `classify` can fail closed.
+PULL_REQUEST = "pull_request"
+PUSH = "push"
+ALL_NATIVE_GATES = ("check-ts", "check-scripts", "check-integration")
+WSL_GATES = ("check-ts", "check-probes", "check-import-audit")
+
+
+def plan_change(repo: Path, files: dict[str, str], event: str) -> dict[str, ci_paths.CellPlan]:
+    """Commit files and plan every cell for the resulting real Git diff.
 
     Parameters:
         repo (Path): Disposable repository.
-        monkeypatch (pytest.MonkeyPatch): Replaces the Git path with a missing binary.
+        files (dict[str, str]): Relative paths and contents to commit.
+        event (str): Triggering event name.
 
     Returns:
-        None: Assertions verify the raised error.
+        dict[str, ci_paths.CellPlan]: The plan per required check name.
+    """
+    return ci_paths.plan_cells(classify_change(repo, files), event)
+
+
+def test_plan_names_are_exactly_the_required_checks(repo: Path) -> None:
+    """Report every ruleset context, bypass cells included, on every event.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the plan keys.
+    """
+    for event in (PULL_REQUEST, PUSH):
+        assert set(plan_change(repo, {"a.txt": event}, event)) == merge_pr_checks.EXPECTED_MATRIX
+
+
+def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
+    """Run native `owned` with all three gates and keep WSL to its LCOV producers.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    plan = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
+    assert plan["owned (ubuntu-24.04)"] == ci_paths.CellPlan(True, True, ALL_NATIVE_GATES, "")
+    assert plan["owned (macos-14)"].gates == ALL_NATIVE_GATES
+    assert plan["contracts (macos-14)"] == ci_paths.CellPlan(True, True, (), "")
+    assert plan["stack (macos-14, local)"].scenarios
+    assert plan["stack (ubuntu-24.04, local)"].scenarios
+    # `packages/` feeds `local` only: the personal stack runs setup without scenarios.
+    assert plan["stack (ubuntu-24.04, personal)"].run
+    assert not plan["stack (ubuntu-24.04, personal)"].scenarios
+    assert "no stack inputs" in plan["stack (ubuntu-24.04, personal)"].reason
+    # No WSL inputs: WSL bypasses on a PR, with the reason named per job.
+    assert not plan["owned (wsl2)"].run
+    assert plan["owned (wsl2)"].reason.startswith(
+        "This pull request changes no CI or WSL inputs; owned (wsl2)"
+    )
+    assert plan["contracts (wsl2)"].reason.startswith(
+        "This pull request changes no CI or WSL inputs; contracts"
+    )
+
+
+def test_wsl_inputs_wake_wsl_with_only_the_lcov_producers(repo: Path) -> None:
+    """Run WSL on a PR that changes its inputs, without the duplicate Python unit suites.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    plan = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PULL_REQUEST)
+    assert plan["owned (wsl2)"] == ci_paths.CellPlan(True, True, WSL_GATES, "")
+    assert plan["contracts (wsl2)"].run
+    assert plan["stack (ubuntu-24.04, personal)"].scenarios
+
+
+def test_stack_inputs_wake_the_personal_scenarios(repo: Path) -> None:
+    """Run personal scenarios on a PR that changes the stack harness.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    plan = plan_change(repo, {"integration/harness/stack.py": "x\n"}, PULL_REQUEST)
+    assert plan["stack (ubuntu-24.04, personal)"] == ci_paths.CellPlan(True, True, (), "")
+    assert not plan["owned (wsl2)"].run
+
+
+@pytest.mark.parametrize("event", [PULL_REQUEST, PUSH])
+def test_docs_only_change_bypasses_native_cells_and_wsl_runs_on_main(repo: Path, event: str) -> None:
+    """Report NOT RUN for docs-only changes everywhere except a real WSL cell on `main`.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        event (str): Triggering event name.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    plan = plan_change(repo, {"docs/ci.md": "x\n"}, event)
+    for name in (
+        "owned (ubuntu-24.04)",
+        "owned (macos-14)",
+        "contracts (ubuntu-24.04)",
+        "contracts (macos-14)",
+    ):
+        assert plan[name] == ci_paths.CellPlan(False, False, (), ci_paths.NOT_RUN["docs_only"])
+    assert plan["stack (ubuntu-24.04, personal)"].reason == ci_paths.NOT_RUN["docs_only"]
+    assert plan["stack (macos-14, local)"].reason == ci_paths.NOT_RUN["docs_only"]
+    assert plan["owned (wsl2)"].run is (event == PUSH)
+    assert plan["contracts (wsl2)"].run is (event == PUSH)
+    if event == PUSH:
+        assert plan["owned (wsl2)"].gates == WSL_GATES
+
+
+@pytest.mark.parametrize("event", [PULL_REQUEST, PUSH])
+@pytest.mark.parametrize("stack_cell", [("macos-14", "personal"), ("wsl2", "personal"), ("wsl2", "local")])
+def test_permanent_stack_bypass_cells_report_why_on_every_change(
+    repo: Path, event: str, stack_cell: tuple[str, str]
+) -> None:
+    """Keep the three stack names that never run reporting NOT RUN, even for docs-only changes.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        event (str): Triggering event name.
+        stack_cell (tuple[str, str]): Matrix `os` and `stack`.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    for files in ({"docs/ci.md": "x\n"}, {".github/workflows/ci.yml": "x\n"}):
+        plan = plan_change(repo, files, event)[f"stack ({stack_cell[0]}, {stack_cell[1]})"]
+        assert plan == ci_paths.CellPlan(False, False, (), ci_paths.STACK_NOT_RUN[stack_cell])
+
+
+def test_main_push_keeps_only_the_ubuntu_personal_smoke(repo: Path) -> None:
+    """Run the merged-result smoke on `main` and skip the other running stack cells.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    plan = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PUSH)
+    # `stack_inputs` is false here, yet `main` ignores it for the smoke cell.
+    assert plan["stack (ubuntu-24.04, personal)"] == ci_paths.CellPlan(True, True, (), "")
+    for name in ("stack (ubuntu-24.04, local)", "stack (macos-14, local)"):
+        assert plan[name] == ci_paths.CellPlan(False, False, (), ci_paths.NOT_RUN["main_smoke"])
+    assert plan["owned (macos-14)"].gates == ALL_NATIVE_GATES
+    assert plan["owned (wsl2)"].gates == WSL_GATES
+
+
+@pytest.mark.parametrize("case", ["invalid-base", "gitlink", "empty"])
+def test_plan_fails_closed_to_running_everything(repo: Path, case: str) -> None:
+    """Never bypass work when the comparison cannot name what changed.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        case (str): Comparison the classifier cannot trust.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    base = git(repo, "rev-parse", "HEAD")
+    if case == "invalid-base":
+        base = "not-a-revision"
+    elif case == "gitlink":
+        git(repo, "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},forks/pi")
+        commit(repo, "bump gitlink")
+    plan = ci_paths.plan_cells(ci_paths.classify(repo, base, "HEAD"), PULL_REQUEST)
+    assert plan["owned (wsl2)"].run
+    assert plan["owned (macos-14)"].gates == ALL_NATIVE_GATES
+    assert plan["stack (ubuntu-24.04, personal)"].scenarios
+
+
+@pytest.mark.parametrize(
+    ("title", "number", "blocked"),
+    [
+        ("A" * 65, 305, False),
+        ("A" * 66, 305, True),
+        ("Pin the benchmark gate interpreter so pydantic-core stops compiling", 305, True),
+        ("Short title", 1234567, False),
+    ],
+)
+def test_squash_subject_problem_counts_the_appended_pull_number(
+    title: str, number: int, blocked: bool
+) -> None:
+    """Fail a PR title whose squash subject `<title> (#N)` is over 72 characters.
+
+    Parameters:
+        title (str): Pull request title.
+        number (int): Pull request number.
+        blocked (bool): Whether the subject is too long.
+
+    Returns:
+        None: Assertions verify the message.
+    """
+    problem = ci_paths.squash_subject_problem(title, number)
+    assert bool(problem) is blocked
+    if blocked:
+        assert f"this one is {len(title) + len(f' (#{number})')};" in problem
+        assert f"keep the title to {72 - len(f' (#{number})')})" in problem
+
+
+def test_long_title_blocks_every_cell_before_any_slot_runs(repo: Path) -> None:
+    """Fail all required names fast, on the cheap bypass path, with the same message.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    result = classify_change(repo, {"packages/dev-tools/src/index.ts": "x\n"})
+    plan = ci_paths.plan_cells(result, PULL_REQUEST, "too long")
+    assert set(plan) == merge_pr_checks.EXPECTED_MATRIX
+    assert all(cell == ci_paths.CellPlan(False, False, (), "too long", True) for cell in plan.values())
+
+
+def test_input_registry_drives_classification_and_outputs(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Add one input class with one registry entry, as the benchmark gate will.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Registry override.
+
+    Returns:
+        None: Assertions verify classification and output.
+    """
+    monkeypatch.setitem(ci_paths.INPUT_CLASSES, "bench_inputs", lambda path: path.startswith("benchmarks/"))
+    changed = classify_change(repo, {"benchmarks/comparison/x.py": "x\n"})
+    other = classify_change(repo, {"packages/dev-tools/src/index.ts": "x\n"})
+    assert changed.inputs["bench_inputs"]
+    assert not other.inputs["bench_inputs"]
+    output = repo / "output"
+    ci_paths.write_github_output(output, changed, ci_paths.plan_cells(changed, PULL_REQUEST))
+    assert "bench_inputs=true\n" in output.read_text(encoding="utf-8")
+
+
+def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: Path) -> None:
+    """Publish the plan as a single JSON line keyed by check name.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        None: Assertions verify workflow output.
+    """
+    result = classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    output = tmp_path / "out"
+    ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PULL_REQUEST))
+    plan = read_plan(output)
+    assert plan["owned (macos-14)"] == {
+        "run": True,
+        "scenarios": True,
+        "gates": "check-ts check-scripts check-integration",
+        "reason": "",
+        "blocked": False,
+    }
+    assert plan["stack (wsl2, local)"]["reason"] == ci_paths.STACK_NOT_RUN["wsl2", "local"]
+
+
+def read_plan(output: Path) -> dict[str, dict[str, Any]]:
+    """Return the plan JSON a run published.
+
+    Parameters:
+        output (Path): GitHub output file.
+
+    Returns:
+        dict[str, dict[str, Any]]: The plan keyed by check name.
+    """
+    (line,) = [line for line in output.read_text(encoding="utf-8").splitlines() if line.startswith("plan=")]
+    return json.loads(line.removeprefix("plan="))
+
+
+def run_cli(repo: Path, output: Path, *extra: str) -> int:
+    """Run the command-line entry point over the repository's last commit.
+
+    Parameters:
+        repo (Path): Disposable repository with at least two commits.
+        output (Path): GitHub output file.
+        *extra (str): Additional arguments.
+
+    Returns:
+        int: Exit status.
+    """
+    return ci_paths.main(
+        ["--repo", str(repo), "--base", "HEAD~1", "--head", "HEAD", "--github-output", str(output), *extra]
+    )
+
+
+def test_cli_plans_a_pull_request_and_a_push(repo: Path, tmp_path: Path) -> None:
+    """Write the plan through the real entry point for both events.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        None: Assertions verify workflow output.
+    """
+    classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    pr, push = tmp_path / "pr", tmp_path / "push"
+    assert run_cli(repo, pr, "--event", PULL_REQUEST, "--pr-title", "Fix the thing", "--pr-number", "7") == 0
+    assert run_cli(repo, push, "--event", PUSH) == 0
+    pr_plan = read_plan(pr)
+    push_plan = read_plan(push)
+    assert pr_plan["stack (ubuntu-24.04, local)"]["run"]
+    assert push_plan["stack (ubuntu-24.04, local)"]["run"] is False
+    assert not any(cell["blocked"] for cell in pr_plan.values())
+
+
+def test_cli_blocks_every_cell_for_a_long_title(repo: Path, tmp_path: Path) -> None:
+    """Block a PR whose squash subject would fail on `main`, without failing `classify` itself.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        None: Assertions verify workflow output.
+    """
+    classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    output = tmp_path / "out"
+    assert run_cli(repo, output, "--event", PULL_REQUEST, "--pr-title", "A" * 70, "--pr-number", "305") == 0
+    plan = read_plan(output)
+    assert all(cell["blocked"] and "squash subject" in cell["reason"] for cell in plan.values())
+
+
+def test_cli_blocks_every_cell_when_a_pull_request_has_no_title(repo: Path, tmp_path: Path) -> None:
+    """Block, never skip, a pull_request plan that cannot check the squash subject.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        None: Assertions verify the plan.
+    """
+    classify_change(repo, {"a.txt": "x\n"})
+    output = tmp_path / "out"
+    assert run_cli(repo, output, "--event", PULL_REQUEST) == 0
+    plan = read_plan(output)
+    assert set(plan) == merge_pr_checks.EXPECTED_MATRIX
+    assert all(cell["blocked"] and "--pr-title" in cell["reason"] for cell in plan.values())
+
+
+LINT = ci_paths.REPO_ROOT / "packages/computer-use/scripts/check-commit-messages.mjs"
+SUBJECT_CASES = [
+    ("Fix the thing", True),
+    ("rtl: Preserve the root target", True),
+    ("A" * 72, True),
+    ("A" * 73, False),
+    ("lowercase subject", False),
+    ("fix(browser): stabilize targeting", False),
+    ("Trailing period.", False),
+    # 70 emoji-free chars plus one astral character: 71 code points, 72 UTF-16 units.
+    ("A" * 70 + "\U0001f608", True),
+    # Trailing characters JavaScript's `\s` treats differently from Python's.
+    ("Trailing unit separator\x1f", True),
+    ("Trailing file separator\x1c", True),
+    ("Trailing next line\x85", True),
+    ("Trailing no-break space\u00a0", False),
+    ("Trailing line separator\u2028", False),
+    ("Trailing byte order mark\ufeff", False),
+    # 71 code points but 73 UTF-16 units: Python's len() would accept it, JS `.length` does not.
+    ("A" * 71 + "\U0001f608", False),
+]
+
+
+@pytest.mark.parametrize(("subject", "valid"), SUBJECT_CASES)
+def test_subject_rule_mirrors_the_commit_lint_for_each_rule(subject: str, valid: bool) -> None:
+    """Pin each rule of `validSubject`: capitalization, trailing period, and UTF-16 length.
+
+    Parameters:
+        subject (str): Commit subject.
+        valid (bool): Whether the lint accepts it.
+    """
+    assert ci_paths.is_valid_subject(subject) is valid
+
+
+def test_utf16_length_counts_astral_characters_twice() -> None:
+    """Match JavaScript `String.length` for an emoji."""
+    assert ci_paths.utf16_length("a\U0001f608") == 3
+    assert len("a\U0001f608") == 2
+
+
+@pytest.mark.parametrize(("subject", "valid"), SUBJECT_CASES)
+def test_subject_rule_agrees_with_the_real_lint(repo: Path, subject: str, valid: bool) -> None:
+    """Run `check-commit-messages.mjs` itself over each subject, so the mirror cannot drift from it.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        subject (str): Commit subject.
+        valid (bool): Whether the Python rule accepts it.
+    """
+    node = shutil.which("node")
+    assert node, "node is required to run the real commit lint"
+    # `--cleanup=verbatim` keeps trailing whitespace. The lint `.trim()`s the whole log, so the case sits
+    # between two valid commits: neither end of the output is its own last character.
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Fix the thing")
+    git(repo, "commit", "-q", "--allow-empty", "--cleanup=verbatim", "-m", subject)
+    git(repo, "commit", "-q", "--allow-empty", "-m", "Fix the thing")
+    result = subprocess.run(
+        [node, str(LINT), "HEAD~3..HEAD"], cwd=repo, capture_output=True, text=True, check=False
+    )
+    assert (result.returncode == 0) is ci_paths.is_valid_subject(subject) is valid, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("title", "fragment"),
+    [
+        ("lowercase title", "capital letter"),
+        ("A" * 70, "UTF-16 units"),
+        ("A" * 64 + "\U0001f608", "UTF-16 units"),
+    ],
+)
+def test_squash_subject_problem_names_the_broken_rule(title: str, fragment: str) -> None:
+    """Fail the squash subject `<title> (#N)` with a message that names what to fix.
+
+    Parameters:
+        title (str): Pull request title.
+        fragment (str): Expected message fragment.
+    """
+    assert fragment in ci_paths.squash_subject_problem(title, 305)
+    assert ci_paths.squash_subject_problem("Fix the thing", 305) == ""
+
+
+def test_run_git_reports_a_missing_git_binary(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail closed with a labelled error when Git cannot start.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Missing Git override.
+
+    Returns:
+        None: Assertions verify the error and the failed-closed classification.
     """
     monkeypatch.setattr(ci_paths, "GIT", str(repo / "no-such-git"))
     with pytest.raises(ci_paths.ClassificationError, match="Cannot run `git`"):
         ci_paths.run_git(repo, "status")
+    assert ci_paths.classify(repo, "HEAD", "HEAD").inputs == dict.fromkeys(ci_paths.INPUT_CLASSES, True)
 
 
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        (":100644 100644 a b M\0a.txt", "unterminated"),
-        (":100644 100644 a b M\0", "incomplete"),
-        ("bogus\0a.txt\0", "malformed"),
+        (":100644 100644 a b M\0a.txt", "unterminated record"),
+        (":100644 100644 a b M\0", "incomplete record"),
+        ("garbage\0a.txt\0", "malformed metadata"),
+        ("100644 100644 a b M\0a.txt\0", "malformed metadata"),
     ],
 )
-def test_changed_paths_rejects_malformed_git_output(
+def test_changed_paths_rejects_records_git_never_emits(
     repo: Path, monkeypatch: pytest.MonkeyPatch, raw: str, message: str
 ) -> None:
-    """Refuse `git diff --raw -z` output that does not parse, instead of guessing.
+    """Refuse a malformed `git diff --raw -z` record instead of guessing paths.
 
     Parameters:
         repo (Path): Disposable repository.
-        monkeypatch (pytest.MonkeyPatch): Replaces the diff output.
-        raw (str): Fabricated NUL-delimited diff output.
+        monkeypatch (pytest.MonkeyPatch): Canned Git output.
+        raw (str): Output to feed the parser.
         message (str): Expected error fragment.
 
     Returns:
-        None: Assertions verify the raised error.
+        None: Assertions verify the error.
     """
     real = ci_paths.run_git
     monkeypatch.setattr(
-        ci_paths, "run_git", lambda repo, *args: raw if args[0] == "diff" else real(repo, *args)
+        ci_paths, "run_git", lambda root, *args: raw if args[0] == "diff" else real(root, *args)
     )
     with pytest.raises(ci_paths.ClassificationError, match=message):
         ci_paths.changed_paths(repo, "HEAD", "HEAD")
 
 
-def test_main_publishes_every_flag_for_a_benchmark_diff(
+def test_script_entry_point_writes_the_plan(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Drive the real command line end to end against a disposable repository.
+    """Run the file as the workflow does and exit with its status.
 
     Parameters:
         repo (Path): Disposable repository.
         tmp_path (Path): Pytest temporary directory.
-        monkeypatch (pytest.MonkeyPatch): Supplies the command-line arguments.
+        monkeypatch (pytest.MonkeyPatch): Argument override.
 
     Returns:
-        None: Assertions verify the workflow output file.
+        None: Assertions verify exit status and output.
     """
-    base = git(repo, "rev-parse", "HEAD")
-    classify_change(repo, {"benchmarks/comparison/uv.lock": "lock\n"})
-    output = tmp_path / "github-output"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "ci_paths.py",
-            "--repo",
-            str(repo),
-            "--base",
-            base,
-            "--head",
-            "HEAD",
-            "--github-output",
-            str(output),
-        ],
-    )
-    assert ci_paths.main() == 0
-    lines = output.read_text(encoding="utf-8").splitlines()
-    assert "benchmark_inputs=true" in lines
-    assert "docs_only=false" in lines
-    assert "benchmarks/comparison/uv.lock" in lines
-
-
-def test_script_entry_point_exits_zero(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run the module as `python3 scripts/ci_paths.py`, as the workflow does.
-
-    Parameters:
-        repo (Path): Disposable repository.
-        tmp_path (Path): Pytest temporary directory.
-        monkeypatch (pytest.MonkeyPatch): Supplies the command-line arguments.
-
-    Returns:
-        None: Assertions verify the exit status and output.
-    """
-    output = tmp_path / "github-output"
-    base = git(repo, "rev-parse", "HEAD")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["ci_paths.py", "--repo", str(repo), "--base", base, "--head", base, "--github-output", str(output)],
-    )
+    classify_change(repo, {"a.txt": "x\n"})
+    output = tmp_path / "out"
+    argv = ["ci_paths.py", "--repo", str(repo), "--base", "HEAD~1", "--head", "HEAD"]
+    monkeypatch.setattr(sys, "argv", [*argv, "--event", PUSH, "--github-output", str(output)])
     with pytest.raises(SystemExit) as raised:
-        runpy.run_path(str(Path(ci_paths.__file__)), run_name="__main__")
+        runpy.run_path(ci_paths.__file__, run_name="__main__")
     assert raised.value.code == 0
-    assert "benchmark_inputs=true" in output.read_text(encoding="utf-8").splitlines()
+    assert set(read_plan(output)) == merge_pr_checks.EXPECTED_MATRIX
+
+
+def test_cli_full_plans_every_cell_to_run_without_reading_a_diff(tmp_path: Path) -> None:
+    """Plan a frozen release candidate: no base or head, every input true, only permanent bypass cells skip.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    output = tmp_path / "out"
+    assert ci_paths.main(["--full", "--event", "workflow_dispatch", "--github-output", str(output)]) == 0
+    lines = output.read_text(encoding="utf-8").splitlines()
+    for flag in ("docs_only=false", "wsl_inputs=true", "stack_inputs=true", "benchmark_inputs=true"):
+        assert flag in lines
+    assert ci_paths.FULL_RELEASE_CANDIDATE in lines
+    plan = read_plan(output)
+    assert {name for name, cell in plan.items() if not cell["run"]} == {
+        "stack (macos-14, personal)",
+        "stack (wsl2, personal)",
+        "stack (wsl2, local)",
+    }
+    assert plan["owned (wsl2)"]["gates"] == " ".join(WSL_GATES)
+    assert plan["stack (ubuntu-24.04, local)"]["scenarios"]
+
+
+def test_cli_requires_a_revision_range_unless_full(capsys: pytest.CaptureFixture[str]) -> None:
+    """Refuse to plan from nothing: a missing range is an error, not an empty diff.
+
+    Parameters:
+        capsys (pytest.CaptureFixture[str]): Captured usage error.
+    """
+    with pytest.raises(SystemExit) as raised:
+        ci_paths.parse_args(["--event", "push", "--github-output", "out"])
+    assert raised.value.code == 2
+    assert "--base and --head are required unless --full" in capsys.readouterr().err

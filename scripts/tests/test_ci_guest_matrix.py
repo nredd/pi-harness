@@ -8,12 +8,14 @@ References:
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,7 +37,8 @@ PLATFORMS = {
 }
 STACK_PLATFORMS = PLATFORMS | {"wsl2": ("ubuntu-24.04", "linux", "linux-x64")}
 RUNNER_OS = {"ubuntu-24.04": "Linux", "xcode-27": "macOS", "windows-2025": "Windows"}
-PLAN_ONLY = {"Report execution plan"}
+PLAN_ONLY = {"Check out the local actions", "Report execution plan"}
+REPORT_PLAN = ROOT / ".github/actions/report-plan/action.yml"
 PERSONAL_STEPS = {
     "Replay source-selected installer runtime locks without lifecycle scripts",
     "Strict standalone startup with failure-only diagnostics",
@@ -56,6 +59,8 @@ class Trigger:
         wsl_inputs (str): `classify` output, empty modelling a missing output.
         stack_inputs (str): `classify` output.
         benchmark_inputs (str): `classify` output.
+        title_problem (str): A PR title failure the plan turns into a blocked cell.
+        classify_result (str): The `classify` job's result; anything but `success` publishes no plan.
     """
 
     event: str = "pull_request"
@@ -63,6 +68,8 @@ class Trigger:
     wsl_inputs: str = "true"
     stack_inputs: str = "true"
     benchmark_inputs: str = "true"
+    title_problem: str = ""
+    classify_result: str = "success"
 
 
 PULL_REQUEST = Trigger()
@@ -166,6 +173,34 @@ def expand(name: str) -> dict[str, dict[str, str]]:
     return cells
 
 
+class Absent(dict[str, Any]):
+    """A parsed JSON object where a missing property is an empty object, like GitHub's null."""
+
+    def __missing__(self, key: str) -> Absent:
+        """Return an empty object for a missing property.
+
+        Parameters:
+            key (str): Missing property.
+
+        Returns:
+            Absent: An empty, falsy object.
+        """
+        return Absent()
+
+
+def github_format(template: str, *values: Any) -> str:
+    """Format like GitHub's `format('{0} {1}', a, b)`.
+
+    Parameters:
+        template (str): Template with indexed placeholders.
+        *values (Any): Replacement values.
+
+    Returns:
+        str: The formatted string.
+    """
+    return template.format(*values)
+
+
 def evaluate(expression: str, context: dict[str, str]) -> Any:
     """Evaluate the GitHub expression subset `ci.yml` uses with its real operators.
 
@@ -177,74 +212,148 @@ def evaluate(expression: str, context: dict[str, str]) -> Any:
         Any: The expression's value, keeping GitHub's operand-returning `&&` and `||`.
     """
     body = expression.strip().removeprefix("${{").removesuffix("}}")
-    body = body.replace("!cancelled()", "True").replace("always()", "True")
+    body = re.sub(r"!(?!=)", " not ", body)
     body = re.sub(r"(?<!['\w])[a-z]+(?:\.[a-z_]+)+", lambda match: repr(context.get(match[0], "")), body)
-    return eval(body.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}})
+    body = re.sub(r"\]\.(\w+)", r"]['\1']", body)  # `fromJSON(...)[key].property`
+    functions = {
+        "fromJSON": lambda text: json.loads(text, object_hook=Absent),
+        "format": github_format,
+        "contains": lambda haystack, needle: needle in haystack,
+        "cancelled": lambda: context.get("cancelled") == "true",
+        "always": lambda: True,
+    }
+    return eval(body.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}} | functions)
 
 
-def runner_for(name: str, cell: dict[str, str], event: str, wsl_inputs: str) -> str:
-    """Return the runner one cell really selects.
+def render(value: str, context: dict[str, str]) -> str:
+    """Render a scalar like GitHub: every `${{ }}` expression is replaced by its string value.
+
+    Parameters:
+        value (str): Scalar with zero or more expressions.
+        context (dict[str, str]): Dotted context values.
+
+    Returns:
+        str: The rendered value, with booleans as `true`/`false`.
+    """
+
+    def text(match: re.Match[str]) -> str:
+        result = evaluate(match[0], context)
+        if isinstance(result, Absent):
+            return ""
+        return str(result).lower() if isinstance(result, bool) else str(result)
+
+    return re.sub(r"\$\{\{.*?\}\}", text, value)
+
+
+def classify_outputs(trigger: Trigger) -> dict[str, str]:
+    """Publish the real `ci_paths` outputs for a trigger and read them back.
+
+    Parameters:
+        trigger (Trigger): Event and classification; an empty input flag models a missing output, so
+            the plan treats it as true. A `classify_result` other than `success` publishes nothing.
+
+    Returns:
+        dict[str, str]: `plan` and the other single-line outputs, as the `classify` job publishes them.
+    """
+    if trigger.classify_result != "success":
+        return {"plan": ""}
+    result = ci_paths.ChangeClassification(
+        paths=("a.txt",),
+        docs_only=trigger.docs_only == "true",
+        inputs={
+            "wsl_inputs": trigger.wsl_inputs != "false",
+            "stack_inputs": trigger.stack_inputs != "false",
+            "benchmark_inputs": trigger.benchmark_inputs != "false",
+        },
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / "classify-output"
+        output.write_text("")
+        plan = ci_paths.plan_cells(result, trigger.event, trigger.title_problem)
+        ci_paths.write_github_output(output, result, plan)
+        return dict(
+            line.split("=", 1) for line in output.read_text().splitlines() if "=" in line and "<<" not in line
+        )
+
+
+def classify_context(trigger: Trigger) -> dict[str, str]:
+    """Return the `needs.classify` context a job would see.
+
+    Parameters:
+        trigger (Trigger): Event and `classify` outputs.
+
+    Returns:
+        dict[str, str]: Dotted context values.
+    """
+    return {
+        "needs.classify.outputs.plan": classify_outputs(trigger)["plan"],
+        "needs.classify.outputs.changed_files": "a.txt",
+        "needs.classify.result": trigger.classify_result,
+        "github.event_name": trigger.event,
+    }
+
+
+def runner_for(name: str, cell: dict[str, str], trigger: Trigger = PULL_REQUEST) -> str:
+    """Return the runner one cell really selects from the plan.
 
     Parameters:
         name (str): Workflow job name.
         cell (dict[str, str]): Expanded matrix cell.
-        event (str): Triggering event.
-        wsl_inputs (str): `classify` output.
+        trigger (Trigger): Event and `classify` outputs.
 
     Returns:
         str: Selected runner label.
     """
     context = {f"matrix.{key}": value for key, value in cell.items()}
-    context |= {"github.event_name": event, "needs.classify.outputs.wsl_inputs": wsl_inputs}
-    return evaluate(jobs()[name]["runs-on"], context)
+    return evaluate(jobs()[name]["runs-on"], context | classify_context(trigger))
+
+
+def report_step() -> dict[str, Any]:
+    """Return the shared reporter's one real step.
+
+    Returns:
+        dict[str, Any]: The composite action's `report` step.
+    """
+    return yaml.safe_load(REPORT_PLAN.read_text())["runs"]["steps"][0]
 
 
 def run_plan(
-    name: str, check: str, tmp_path: Path, trigger: Trigger = PULL_REQUEST
+    name: str, check: str, tmp_path: Path, trigger: Trigger = PULL_REQUEST, *, check_status: bool = True
 ) -> tuple[dict[str, str], str, str]:
-    """Execute a cell's real `plan` step on the runner that cell selects.
+    """Execute a cell's real `plan` step, the shared composite's script, over the real plan.
 
     Parameters:
         name (str): Workflow job name.
         check (str): Required check name selecting the cell.
         tmp_path (Path): Disposable output directory.
         trigger (Trigger): Event and `classify` outputs.
+        check_status (bool): Whether a failing step raises; a blocked cell fails on purpose.
 
     Returns:
-        tuple[dict[str, str], str, str]: Step outputs, stdout and the step summary.
+        tuple[dict[str, str], str, str]: Step outputs, output text and the step summary.
     """
     cell = expand(name)[check]
-    step = next(step for step in jobs()[name]["steps"] if step.get("id") == "plan")
-    body = re.sub(r"\$\{\{ matrix\.(\w+) \}\}", lambda match: cell.get(match[1], ""), step["run"])
+    job_step = next(step for step in jobs()[name]["steps"] if step.get("id") == "plan")
+    assert job_step["uses"] == "./.github/actions/report-plan"
+    values = {f"matrix.{key}": value for key, value in cell.items()} | classify_context(trigger)
+    inputs = {f"inputs.{key}": render(value, values) for key, value in job_step["with"].items()}
+    step = report_step()
+    env = {key: render(value, inputs) for key, value in step["env"].items()}
     script = tmp_path / "plan.sh"
-    script.write_text(body)
+    script.write_text(step["run"])
     output = tmp_path / "output"
     summary = tmp_path / "summary"
     output.write_text("")
     summary.write_text("")
-    values = {
-        "needs.classify.outputs.docs_only": trigger.docs_only,
-        "needs.classify.outputs.stack_inputs": trigger.stack_inputs,
-        "needs.classify.outputs.changed_files": "a.txt",
-    }
-    values |= {f"matrix.{key}": value for key, value in cell.items()}
-    env = {key: evaluate(value, values) for key, value in step["env"].items()}
     result = subprocess.run(
         ["/bin/bash", "-e", str(script)],
-        env=os.environ
-        | env
-        | {
-            "GITHUB_EVENT_NAME": trigger.event,
-            "GITHUB_OUTPUT": str(output),
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "RUNNER_OS": RUNNER_OS[runner_for(name, cell, trigger.event, trigger.wsl_inputs)],
-        },
+        env=os.environ | env | {"GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary)},
         capture_output=True,
         text=True,
-        check=True,
+        check=check_status,
     )
     outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
-    return outputs, result.stdout, summary.read_text()
+    return outputs, result.stdout + result.stderr, summary.read_text()
 
 
 def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PULL_REQUEST) -> set[str]:
@@ -266,7 +375,7 @@ def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PUL
     context |= {
         "needs.classify.outputs.benchmark_inputs": trigger.benchmark_inputs,
         "github.event_name": trigger.event,
-        "runner.os": RUNNER_OS[runner_for(name, cell, trigger.event, trigger.wsl_inputs)],
+        "runner.os": RUNNER_OS[runner_for(name, cell, trigger)],
     }
     executed: set[str] = set()
     for step in jobs()[name]["steps"]:
@@ -309,8 +418,8 @@ def test_stack_cells_select_their_runner(check: str, runner: str, stack_cell_not
         stack_cell_not_run (bool): Whether the cell permanently reports NOT RUN.
     """
     cell = expand("stack")[check]
-    assert runner_for("stack", cell, "pull_request", "true") == runner
-    assert bool(cell.get("not_run")) is stack_cell_not_run
+    assert runner_for("stack", cell) == runner
+    assert ((cell["os"], cell["stack"]) in ci_paths.STACK_NOT_RUN) is stack_cell_not_run
 
 
 @pytest.mark.parametrize(
@@ -331,10 +440,12 @@ def test_stack_bypass_cells_report_not_run(tmp_path: Path, check: str, event: st
     trigger = Trigger(event=event, docs_only=docs_only)
     outputs, stdout, summary = run_plan("stack", check, tmp_path, trigger)
     assert outputs["run"] == "false"
-    assert "::notice title=stack cell NOT RUN::" in stdout
-    assert "### stack: NOT RUN" in summary
+    os_name, stack = check.removeprefix("stack (").removesuffix(")").split(", ")
+    reason = ci_paths.STACK_NOT_RUN[os_name, stack]
+    assert f"::notice title={check} NOT RUN::{reason}" in stdout
+    assert f"### {check} NOT RUN" in summary
     assert "not a pass" in summary
-    assert expand("stack")[check]["not_run"] in summary
+    assert reason in summary
     assert executed_steps("stack", check, tmp_path, trigger) == PLAN_ONLY
 
 
@@ -363,7 +474,7 @@ def test_wsl_cells_run_on_main_and_for_wsl_inputs(
         runs (bool): Whether the cell does real work.
     """
     check = f"{name} (wsl2)"
-    assert runner_for(name, expand(name)[check], trigger.event, trigger.wsl_inputs) == runner
+    assert runner_for(name, expand(name)[check], trigger) == runner
     outputs, stdout, summary = run_plan(name, check, tmp_path, trigger)
     assert outputs["run"] == str(runs).lower()
     steps = executed_steps(name, check, tmp_path, trigger)
@@ -374,7 +485,7 @@ def test_wsl_cells_run_on_main_and_for_wsl_inputs(
         return
     assert steps == PLAN_ONLY
     assert f"::notice title={name} (wsl2) NOT RUN::" in stdout
-    assert f"### {name} (wsl2): NOT RUN" in summary
+    assert f"### {name} (wsl2) NOT RUN" in summary
     assert "not a pass" in summary
 
 
@@ -389,7 +500,7 @@ def test_native_cells_ignore_wsl_inputs(tmp_path: Path, name: str, os_name: str)
         os_name (str): Native matrix cell.
     """
     check = f"{name} ({os_name})"
-    assert runner_for(name, expand(name)[check], "pull_request", "false") == PLATFORMS[os_name][0]
+    assert runner_for(name, expand(name)[check], Trigger(wsl_inputs="false")) == PLATFORMS[os_name][0]
     outputs, stdout, _ = run_plan(name, check, tmp_path, Trigger(wsl_inputs="false"))
     assert outputs["run"] == "true"
     assert "NOT RUN" not in stdout
@@ -408,7 +519,7 @@ def test_docs_only_bypass_still_covers_running_stack_cells(tmp_path: Path, check
     trigger = Trigger(docs_only="true", stack_inputs="false")
     outputs, stdout, _ = run_plan("stack", check, tmp_path, trigger)
     assert outputs["run"] == "false"
-    assert "docs-only CI bypass" in stdout
+    assert f"::notice title={check} NOT RUN::{ci_paths.NOT_RUN['docs_only']}" in stdout
     assert executed_steps("stack", check, tmp_path, trigger) == PLAN_ONLY
 
 
@@ -421,8 +532,8 @@ def test_personal_cell_keeps_setup_but_skips_personal_work_without_stack_inputs(
     check = "stack (ubuntu-24.04, personal)"
     trigger = Trigger(stack_inputs="false")
     outputs, stdout, summary = run_plan("stack", check, tmp_path, trigger)
-    assert outputs == {"run": "true", "scenarios": "false"}
-    assert "::notice title=personal stack NOT RUN::" in stdout
+    assert (outputs["run"], outputs["scenarios"]) == ("true", "false")
+    assert f"::notice title={check} scenarios NOT RUN::" in stdout
     assert "NOT RUN" in summary
     steps = executed_steps("stack", check, tmp_path, trigger)
     assert "Fetch exact Gitlinked core release, formula-equivalent install" in steps
@@ -474,14 +585,16 @@ def test_main_smoke_retains_only_ubuntu_personal(tmp_path: Path, check: str) -> 
     """
     outputs, stdout, _ = run_plan("stack", check, tmp_path, Trigger(event="push"))
     assert outputs["run"] == "false"
-    assert "main CI smoke" in stdout
+    assert ci_paths.NOT_RUN["main_smoke"] in stdout
 
 
 def test_standalone_uploads_cannot_collide_between_stack_cells() -> None:
     """Both Ubuntu cells now build, so the artifact name must include the stack."""
     steps = jobs()["stack"]["steps"]
     upload = next(step for step in steps if step.get("with", {}).get("name", "").startswith("standalone-${{"))
-    running = [cell for cell in expand("stack").values() if not cell.get("not_run")]
+    running = [
+        cell for cell in expand("stack").values() if (cell["os"], cell["stack"]) not in ci_paths.STACK_NOT_RUN
+    ]
     names = {
         upload["with"]["name"]
         .replace("${{ matrix.platform }}", cell["platform"])
@@ -514,19 +627,6 @@ def test_main_pushes_never_share_a_concurrency_group() -> None:
         evaluate(inner, {"github.event_name": "push", "github.ref": "refs/heads/main", "github.sha": "abc"})
         == "abc"
     )
-
-
-def render(template: str, context: dict[str, str]) -> str:
-    """Expand every `${{ }}` in a string template, e.g. a concurrency group.
-
-    Parameters:
-        template (str): Workflow string with embedded expressions.
-        context (dict[str, str]): Dotted context values for `evaluate`.
-
-    Returns:
-        str: The rendered value GitHub would compute.
-    """
-    return re.sub(r"\$\{\{(.*?)\}\}", lambda match: str(evaluate(match[1], context)), template)
 
 
 def test_dispatched_core_gates_never_cancel_each_other() -> None:
@@ -637,6 +737,8 @@ def test_dispatch_classifies_only_frozen_main_candidates(
         """
         return subprocess.check_output([git, *args], cwd=repo, env=env, text=True).strip()
 
+    (repo / "scripts").mkdir()
+    shutil.copy(ROOT / "scripts/ci_paths.py", repo / "scripts/ci_paths.py")
     command("init", "--quiet", "--template=", "-b", "main")
     commits = {}
     for name in ("old", "tip"):
@@ -657,7 +759,8 @@ def test_dispatch_classifies_only_frozen_main_candidates(
         cwd=repo,
         env=env
         | {
-            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "EVENT": "workflow_dispatch",
+            "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}",
             "GITHUB_REF": ref.format(sha=sha, other="0" * 40),
             "GITHUB_SHA": sha,
             "GITHUB_OUTPUT": str(output),
@@ -670,10 +773,15 @@ def test_dispatch_classifies_only_frozen_main_candidates(
     )
     if admitted:
         assert result.returncode == 0, result.stderr
-        assert output.read_text() == (
-            "docs_only=false\nwsl_inputs=true\nstack_inputs=true\n"
-            "changed_files=Full frozen release candidate\n"
-        )
+        lines = output.read_text().splitlines()
+        for flag in ("docs_only=false", "wsl_inputs=true", "stack_inputs=true", "benchmark_inputs=true"):
+            assert flag in lines
+        assert "Full frozen release candidate" in lines
+        plan = json.loads(next(line for line in lines if line.startswith("plan="))[5:])
+        # No diff to read: every required name runs for real, nothing is a bypass.
+        assert set(plan) == merge_pr_checks.EXPECTED_MATRIX
+        skipped = {name for name, cell in plan.items() if not cell["run"]}
+        assert skipped == {"stack (macos-14, personal)", "stack (wsl2, personal)", "stack (wsl2, local)"}
     else:
         assert result.returncode != 0
         assert output.read_text() == ""
@@ -835,19 +943,192 @@ def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
     assert "This is not a pass." in summary.read_text()
 
 
-def test_wsl_guest_gates_skip_duplicate_pytest_and_keep_lcov_producers() -> None:
-    """Keep every LCOV producer in the guest and drop only the Python unit suites."""
-    gates = {cell["os"]: cell["gates"] for cell in expand("owned").values()}
-    native = "check-ts check-scripts check-integration"
-    assert gates == {
-        "ubuntu-24.04": native,
-        "macos-14": native,
-        "wsl2": "check-ts check-probes check-import-audit",
+def test_every_planned_gate_has_a_step_that_survives_other_gate_failures() -> None:
+    """Give each gate the plan can list its own step, so one red gate never hides another's evidence."""
+    planned = {gate for gates in ci_paths.OWNED_GATES.values() for gate in gates}
+    steps = {
+        step["run"]: step
+        for step in jobs()["owned"]["steps"]
+        if step.get("name", "").startswith("Owned gate ")
     }
-    owned = jobs()["owned"]["steps"]
-    assert any(step.get("run") == "make ${{ matrix.gates }}" for step in owned)
-    setup = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
-    assert "update: 'false'" in setup
+    assert set(steps) == {f"make {gate}" for gate in planned}
+    for gate in planned:
+        condition = steps[f"make {gate}"]["if"]
+        assert "!cancelled()" in condition
+        assert "steps.install.outcome == 'success'" in condition
+        assert f"contains(steps.plan.outputs.gates, '{gate}')" in condition
+    assert not any("matrix.gates" in yaml.safe_dump(step) for step in jobs()["owned"]["steps"])
+
+
+def test_wsl_setup_does_not_upgrade_distribution_packages() -> None:
+    """Keep the guest on its image's packages; `additional-packages` still refreshes apt."""
+    assert "update: 'false'" in (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
+
+
+@pytest.mark.parametrize(
+    ("check", "gates"),
+    [
+        ("owned (ubuntu-24.04)", {"check-ts", "check-scripts", "check-integration"}),
+        ("owned (macos-14)", {"check-ts", "check-scripts", "check-integration"}),
+        ("owned (wsl2)", {"check-ts", "check-probes", "check-import-audit"}),
+    ],
+)
+def test_owned_cells_run_exactly_the_gates_the_plan_lists(
+    tmp_path: Path, check: str, gates: set[str]
+) -> None:
+    """Walk real step conditions over the real plan: one step per listed gate and no others.
+
+    Parameters:
+        tmp_path (Path): Disposable output directory.
+        check (str): Running owned cell.
+        gates (set[str]): Gates its steps must execute.
+    """
+    steps = executed_steps("owned", check, tmp_path, Trigger(event="push"))
+    assert {
+        step.removeprefix("Owned gate ").split(" ")[0] for step in steps if step.startswith("Owned gate ")
+    } == gates
+
+
+def test_blocked_plan_fails_every_cell_before_any_work(tmp_path: Path) -> None:
+    """Fail each required name, with the title message, when the squash subject is too long.
+
+    Parameters:
+        tmp_path (Path): Disposable output directory.
+    """
+    trigger = Trigger(title_problem="Shorten the PR title to at most 65 characters.")
+    for name in ("owned", "contracts", "stack"):
+        for check in expand(name):
+            work = tmp_path / check.replace(" ", "_").replace("(", "").replace(")", "").replace(",", "")
+            work.mkdir()
+            with pytest.raises(subprocess.CalledProcessError) as failed:
+                run_plan(name, check, work, trigger)
+            assert f"::error title={check} blocked::Shorten the PR title" in failed.value.stdout
+
+
+@pytest.mark.parametrize("result", ["failure", "skipped", "cancelled"])
+def test_a_failed_classify_fails_all_twelve_required_checks_instead_of_skipping_them(
+    tmp_path: Path, result: str
+) -> None:
+    """A skipped job satisfies a required check, so no `classify` outcome may skip a cell.
+
+    Parameters:
+        tmp_path (Path): Disposable output directory.
+        result (str): The `classify` job's result.
+    """
+    trigger = Trigger(classify_result=result)
+    names: set[str] = set()
+    for name in ("owned", "contracts", "stack"):
+        # The job still starts: its `if` holds when `needs.classify` did not succeed.
+        context = {"needs.classify.result": result}
+        assert evaluate(jobs()[name]["if"], context) is True
+        # ... but a cancelled run still stops, so the `if` is not a constant.
+        assert evaluate(jobs()[name]["if"], context | {"cancelled": "true"}) is False
+        for check, cell in expand(name).items():
+            names.add(check)
+            assert runner_for(name, cell, trigger) == "ubuntu-24.04"  # No macOS or Windows slot is spent.
+            work = tmp_path / f"{len(names)}"
+            work.mkdir()
+            with pytest.raises(subprocess.CalledProcessError) as failed:
+                run_plan(name, check, work, trigger)
+            assert (
+                f"::error title={check} has no plan::classify finished with '{result}'" in failed.value.stdout
+            )
+    assert names == merge_pr_checks.EXPECTED_MATRIX
+
+
+def test_a_cell_missing_from_a_successful_plan_fails_instead_of_passing_vacuously(tmp_path: Path) -> None:
+    """Never treat an absent decision as a skip, which would report a green name with no evidence.
+
+    Parameters:
+        tmp_path (Path): Disposable output directory.
+    """
+    step = report_step()
+    script = tmp_path / "plan.sh"
+    script.write_text(step["run"])
+    env = os.environ | {
+        "CELL": "owned (macos-14)",
+        "CLASSIFY_RESULT": "success",
+        "GITHUB_OUTPUT": str(tmp_path / "out"),
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+    }
+    result = subprocess.run(
+        ["/bin/bash", "-e", str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 1
+    assert "::error title=owned (macos-14) has no plan::" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        Trigger(),
+        Trigger(docs_only="true", wsl_inputs="false", stack_inputs="false"),
+        Trigger(wsl_inputs="false", stack_inputs="false"),
+        Trigger(event="push", wsl_inputs="false"),
+        Trigger(event="push", docs_only="true"),
+        Trigger(title_problem="too long"),
+    ],
+)
+def test_a_cell_holds_a_native_slot_only_when_the_plan_runs_it(trigger: Trigger) -> None:
+    """Take the macOS or Windows runner for a cell that does real work, and Ubuntu for every other one.
+
+    Parameters:
+        trigger (Trigger): Event and `classify` outputs.
+    """
+    published = json.loads(classify_outputs(trigger)["plan"])
+    for name in ("owned", "contracts", "stack"):
+        for check, cell in expand(name).items():
+            expected = cell["runner"] if published[check]["run"] else "ubuntu-24.04"
+            assert runner_for(name, cell, trigger) == expected, check
+
+
+def test_every_job_reports_through_the_one_shared_action() -> None:
+    """Keep the reporter in one composite action; the jobs differ only in the cell they name."""
+    cfg = jobs()
+    plans = {
+        name: next(step for step in cfg[name]["steps"] if step.get("id") == "plan")
+        for name in ("owned", "contracts", "stack")
+    }
+    assert {step["uses"] for step in plans.values()} == {"./.github/actions/report-plan"}
+    assert plans["owned"]["with"]["cell"] == "${{ format('owned ({0})', matrix.os) }}"
+    action = yaml.safe_load(REPORT_PLAN.read_text())
+    assert action["runs"]["using"] == "composite"
+    assert action["runs"]["steps"][0]["shell"] == "bash -e {0}"
+    for key in ("DOCS_ONLY", "STACK_INPUTS", "matrix."):
+        assert key not in REPORT_PLAN.read_text()
+    # The local action needs a checkout first; the sparse one precedes the plan, the full one follows it.
+    for name, plan in plans.items():
+        steps = cfg[name]["steps"]
+        sparse = next(step for step in steps if step.get("name") == "Check out the local actions")
+        assert steps.index(sparse) < steps.index(plan)
+        assert sparse["with"]["sparse-checkout"] == ".github/actions"
+
+
+def test_classify_step_threads_the_pr_title_into_the_plan(tmp_path: Path) -> None:
+    """Run the real `classify` step over this repository's last commit with a too-long title.
+
+    Parameters:
+        tmp_path (Path): Disposable output directory.
+    """
+    step = next(step for step in jobs()["classify"]["steps"] if step.get("id") == "classify")
+    script = tmp_path / "classify.sh"
+    script.write_text(step["run"])
+    output = tmp_path / "output"
+    output.write_text("")
+    env = os.environ | {
+        "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}",
+        "BASE": "HEAD~1",
+        "HEAD": "HEAD",
+        "EVENT": "pull_request",
+        "PR_TITLE": "A" * 70,
+        "PR_NUMBER": "305",
+        "GITHUB_OUTPUT": str(output),
+    }
+    subprocess.run(["/bin/bash", "-e", str(script)], cwd=ROOT, env=env, check=True, capture_output=True)
+    plan = json.loads(next(line for line in output.read_text().splitlines() if line.startswith("plan="))[5:])
+    assert set(plan) == merge_pr_checks.EXPECTED_MATRIX
+    assert all(cell["blocked"] for cell in plan.values())
+    assert plan["owned (macos-14)"]["reason"].startswith("The squash subject")
 
 
 @pytest.mark.parametrize("name", ["owned", "contracts", "stack"])
@@ -863,7 +1144,7 @@ def test_shared_guest_matrix(name: str) -> None:
     assert set(matrix) == ({"os", "stack", "include"} if name == "stack" else {"os", "include"})
     platforms = STACK_PLATFORMS if name == "stack" else PLATFORMS
     for cell in expand(name).values():
-        if cell.get("not_run"):
+        if (cell["os"], cell.get("stack")) in ci_paths.STACK_NOT_RUN:
             continue
         runner, guest, platform = platforms[cell["os"]]
         assert cell["runner"] == runner
@@ -874,14 +1155,16 @@ def test_shared_guest_matrix(name: str) -> None:
     assert job["strategy"]["fail-fast"] is False
     steps = job["steps"]
     plan = next(step for step in steps if step.get("id") == "plan")
-    assert plan["shell"] == "bash -e {0}"
+    assert plan["uses"] == "./.github/actions/report-plan"
+    assert plan["with"]["classify_result"] == "${{ needs.classify.result }}"
+    assert job["if"] == "${{ !cancelled() }}"  # A failed classify must fail the cells, never skip them.
     setup = next(i for i, step in enumerate(steps) if step.get("id") == "tools")
     assert steps[setup]["uses"] == "./.github/actions/setup-ci-tools"
     assert steps[setup]["with"]["guest"] == "${{ matrix.guest }}"
     shell_overrides = [step for step in steps[setup + 1 :] if "run" in step and "shell" in step]
     if name == "stack":
         # WSL runs no stack cell, so this job has no guest boundary to preserve.
-        assert job["runs-on"] == "${{ matrix.runner }}"
+        assert job["runs-on"].endswith("&& 'ubuntu-24.04' || matrix.runner }}")
         assert job["defaults"]["run"]["shell"] == "bash -e {0}"
         assert "wsl" not in yaml.safe_dump(steps).lower().replace("wsl2_host", "")
         assert shell_overrides == [
@@ -904,9 +1187,9 @@ def test_shared_guest_matrix(name: str) -> None:
     assert "$gitBin >> $env:GITHUB_PATH" in selection["run"]
     assert "--version" in selection["run"]
     assert "GITHUB_STEP_SUMMARY" in selection["run"]
-    assert steps[1] is plan
+    assert steps[2] is plan
+    assert steps[1]["with"]["sparse-checkout"] == ".github/actions"
     assert job["defaults"]["run"]["shell"].endswith("|| 'bash -e {0}' }}")
-    assert "!= wsl2" in plan["run"]  # A real WSL cell on `main` keeps its docs-only acceptance.
     assert any(step.get("with", {}).get("cleanup") == "cleanup" for step in steps)
     diagnostics = [
         step for step in steps if step.get("with", {}).get("path", "").endswith("/wsl2-diagnostics/")

@@ -1,0 +1,80 @@
+name: Report execution plan
+description: Report one cell's decision from the classify plan, and fail closed when there is none
+inputs:
+  cell:
+    description: Required check name, e.g. `owned (macos-14)`
+    required: true
+  plan:
+    description: The `plan` output of the classify job (empty when classify failed)
+    default: ''
+  classify_result:
+    description: The `result` of the classify job
+    required: true
+  changed_files:
+    description: Newline-delimited changed paths for the step summary
+    default: ''
+outputs:
+  run:
+    description: Whether the cell does real work
+    value: ${{ steps.report.outputs.run }}
+  scenarios:
+    description: Whether the cell's scenario steps run
+    value: ${{ steps.report.outputs.scenarios }}
+  gates:
+    description: Space-separated Make targets an owned cell runs
+    value: ${{ steps.report.outputs.gates }}
+runs:
+  using: composite
+  steps:
+    - id: report
+      shell: bash -e {0}
+      env:
+        CELL: ${{ inputs.cell }}
+        CLASSIFY_RESULT: ${{ inputs.classify_result }}
+        RUN: ${{ fromJSON(inputs.plan || '{}')[inputs.cell].run }}
+        SCENARIOS: ${{ fromJSON(inputs.plan || '{}')[inputs.cell].scenarios }}
+        GATES: ${{ fromJSON(inputs.plan || '{}')[inputs.cell].gates }}
+        REASON: ${{ fromJSON(inputs.plan || '{}')[inputs.cell].reason }}
+        BLOCKED: ${{ fromJSON(inputs.plan || '{}')[inputs.cell].blocked }}
+        CHANGED_FILES: ${{ inputs.changed_files }}
+      run: |
+        # Decisions live in scripts/ci_paths.py; this only reports them and fails closed. A job that needs
+        # `classify` runs even when classify failed, because a skipped job satisfies a required check.
+        echo "run=false" >>"$GITHUB_OUTPUT"
+        if [ "$CLASSIFY_RESULT" != success ]; then
+          echo "::error title=$CELL has no plan::classify finished with '$CLASSIFY_RESULT', so no cell may report a pass"
+          echo "### $CELL: no plan (classify $CLASSIFY_RESULT)" >>"$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+        if [ "$BLOCKED" = true ]; then
+          echo "::error title=$CELL blocked::$REASON"
+          {
+            echo "### $CELL: blocked"
+            echo "$REASON"
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+        if [ "$RUN" != true ] && [ "$RUN" != false ]; then
+          echo "::error title=$CELL has no plan::classify published no run decision for this cell"
+          exit 1
+        fi
+        {
+          echo "run=$RUN"
+          echo "scenarios=$SCENARIOS"
+          echo "gates=$GATES"
+        } >>"$GITHUB_OUTPUT"
+        if [ -z "$REASON" ]; then
+          echo "$CELL will run"
+          exit 0
+        fi
+        if [ "$RUN" = true ]; then title="$CELL scenarios NOT RUN"; else title="$CELL NOT RUN"; fi
+        echo "::notice title=$title::$REASON"
+        {
+          echo "### $title"
+          echo "$REASON This is not a pass."
+          if [ "$RUN" = false ]; then
+            echo '```text'
+            printf '%s\n' "$CHANGED_FILES"
+            echo '```'
+          fi
+        } >>"$GITHUB_STEP_SUMMARY"
