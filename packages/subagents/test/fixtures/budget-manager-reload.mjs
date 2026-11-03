@@ -1,11 +1,7 @@
-/** Static entry beside compiled copies of the actual source tree, not manager stand-ins. */
+/** Static entry beside two bundled copies of the actual manager and budget source, not manager stand-ins. */
 import assert from "node:assert/strict";
-import { AgentManager as FreshManager } from "./fresh/agent-manager.js";
-import { runs as freshRuns } from "./fresh/agent-runner.js";
-import { budgetUsage as freshUsage } from "./fresh/process-budget.js";
-import { AgentManager as OldManager } from "./old/agent-manager.js";
-import { runs } from "./old/agent-runner.js";
-import { budgetUsage, setBudgetPolicy } from "./old/process-budget.js";
+import { AgentManager as FreshManager, runs as freshRuns, budgetUsage as freshUsage } from "./fresh.mjs";
+import { budgetUsage, AgentManager as OldManager, runs, setBudgetPolicy } from "./old.mjs";
 
 assert.notEqual(OldManager, FreshManager);
 assert.notEqual(budgetUsage, freshUsage);
