@@ -84,6 +84,19 @@ describe("readKnownHosts", () => {
 			rmSync(home, { recursive: true, force: true });
 		}
 	});
+
+	it("falls back to an existing literal Include path that its own glob does not match", () => {
+		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
+		const config = join(home, ".ssh", "config");
+		mkdirSync(join(home, ".ssh"), { recursive: true });
+		writeFileSync(config, "Include ~/.ssh/inc[1].conf\n");
+		writeFileSync(join(home, ".ssh", "inc[1].conf"), "Host literal\n");
+		try {
+			expect([...readKnownHosts(config, undefined, undefined, undefined, home)]).toEqual(["literal"]);
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("validateHost", () => {
