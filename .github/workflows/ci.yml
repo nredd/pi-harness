@@ -149,11 +149,14 @@ jobs:
       - name: Install reviewer read dependencies (Ubuntu)
         if: steps.plan.outputs.run == 'true' && matrix.os == 'ubuntu-24.04'
         run: sudo apt-get update && sudo apt-get install --yes ripgrep fd-find
+      # fd-find 10.4.2+ ships binstall metadata matching its release assets; fail rather than compile from source.
       - name: Install reviewer read dependencies (macOS)
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'
+        env:
+          BINSTALL_DISABLE_STRATEGIES: compile
         with:
-          tool: ripgrep@14.1.1,fd-find@10.2.0
+          tool: ripgrep@14.1.1,fd-find@10.5.0
       - name: Verify reviewer read dependencies
         if: steps.plan.outputs.run == 'true'
         run: |
