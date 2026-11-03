@@ -25,6 +25,7 @@ export default defineConfig({
 				"src/git/guard.ts",
 				"src/git/push-remote.ts",
 				"src/git/index.ts",
+				"src/git/merge.ts",
 				"src/git/run.ts",
 				"src/git/status.ts",
 				"src/git/worktree.ts",

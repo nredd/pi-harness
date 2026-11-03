@@ -109,6 +109,27 @@ describe("git tools through a real session", () => {
 		expect(lease.text).not.toContain(GUARD_MARKER);
 	});
 
+	it("commits a fully approved resolved merge without pathspecs", async () => {
+		const { harness, repo } = await session();
+		git(repo, "reset", "--hard", "HEAD");
+		git(repo, "clean", "-fd");
+		git(repo, "switch", "-qc", "topic");
+		writeFileSync(join(repo, "b.txt"), "topic\n");
+		git(repo, "commit", "-am", "Topic");
+		git(repo, "switch", "-q", "main");
+		writeFileSync(join(repo, "b.txt"), "main\n");
+		git(repo, "commit", "-am", "Main");
+		expect(() => git(repo, "merge", "--no-commit", "topic")).toThrow();
+		writeFileSync(join(repo, "b.txt"), "resolved\n");
+
+		const [merged] = await runTools(harness, [
+			{ name: "git_commit", args: { subject: "Merge resolved topic", paths: ["b.txt"], push: false } },
+		]);
+		expect(merged.isError, merged.text).toBe(false);
+		expect(git(repo, "show", "-s", "--format=%P", "HEAD").trim().split(" ")).toHaveLength(2);
+		expect(git(repo, "show", "HEAD:b.txt").trim()).toBe("resolved");
+	});
+
 	it("worktree tools add, list, refuse and remove", async () => {
 		const { harness, repo } = await session();
 		const worktree = join(dirname(repo), "repo-feat-x");
