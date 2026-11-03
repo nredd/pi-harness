@@ -78,21 +78,25 @@ describe("readKnownHosts", () => {
 		writeFileSync(second, "Host isolated\n");
 		try {
 			expect(sshConfigPath(home)).toBe(config);
-			expect([...readKnownHosts(config, undefined, undefined, undefined, home)]).toEqual(["isolated"]);
+			expect([...readKnownHosts(config, { homeDir: home })]).toEqual(["isolated"]);
+			expect([...readKnownHosts(undefined, { homeDir: home })]).toEqual(["isolated"]);
 		} finally {
 			homeProbe.home = "";
 			rmSync(home, { recursive: true, force: true });
 		}
 	});
 
-	it("falls back to an existing literal Include path that its own glob does not match", () => {
+	it("follows only glob matches for an Include, like OpenSSH's glob(3)", () => {
+		// `ssh -G` with `Include inc[1].conf` reads `inc1.conf` and skips a file literally named `inc[1].conf`.
 		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
 		const config = join(home, ".ssh", "config");
 		mkdirSync(join(home, ".ssh"), { recursive: true });
 		writeFileSync(config, "Include ~/.ssh/inc[1].conf\n");
 		writeFileSync(join(home, ".ssh", "inc[1].conf"), "Host literal\n");
 		try {
-			expect([...readKnownHosts(config, undefined, undefined, undefined, home)]).toEqual(["literal"]);
+			expect(readKnownHosts(config, { homeDir: home }).size).toBe(0);
+			writeFileSync(join(home, ".ssh", "inc1.conf"), "Host matched\n");
+			expect([...readKnownHosts(config, { homeDir: home })]).toEqual(["matched"]);
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}

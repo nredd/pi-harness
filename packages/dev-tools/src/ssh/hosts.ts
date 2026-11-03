@@ -21,24 +21,28 @@ function expandIncludes(pattern: string, sshDir: string, homeDir: string): strin
 	const expanded = pattern.startsWith("~/") ? join(homeDir, pattern.slice(2)) : pattern;
 	const absolute = isAbsolute(expanded) ? expanded : resolve(sshDir, expanded);
 	try {
-		const matches = globSync(absolute).sort();
-		return matches.length > 0 ? matches : existsSync(absolute) ? [absolute] : [];
+		return globSync(absolute).sort();
 	} catch {
 		return existsSync(absolute) ? [absolute] : [];
 	}
+}
+
+/** Roots for known-host discovery; omitted values keep the native home. */
+export interface KnownHostsOptions {
+	/** Home for the default config path and `Include ~/...` expansion. */
+	homeDir?: string;
 }
 
 /**
  * Every concrete `Host` alias declared by `path` and the files it includes. Relative includes
  * resolve against the directory of the top-level config (`~/.ssh` in real life).
  */
-export function readKnownHosts(
-	path = sshConfigPath(),
-	sshDir = dirname(path),
-	depth = 0,
-	seen = new Set<string>(),
-	homeDir = homedir(),
-): Set<string> {
+export function readKnownHosts(path?: string, { homeDir = homedir() }: KnownHostsOptions = {}): Set<string> {
+	const config = path ?? sshConfigPath(homeDir);
+	return collectHosts(config, dirname(config), 0, new Set<string>(), homeDir);
+}
+
+function collectHosts(path: string, sshDir: string, depth: number, seen: Set<string>, homeDir: string): Set<string> {
 	const hosts = new Set<string>();
 	if (depth > MAX_INCLUDE_DEPTH || seen.has(path) || !existsSync(path)) return hosts;
 	seen.add(path);
@@ -58,7 +62,7 @@ export function readKnownHosts(
 		} else if (key === "include") {
 			for (const pattern of rest) {
 				for (const file of expandIncludes(pattern, sshDir, homeDir)) {
-					for (const h of readKnownHosts(file, sshDir, depth + 1, seen, homeDir)) hosts.add(h);
+					for (const h of collectHosts(file, sshDir, depth + 1, seen, homeDir)) hosts.add(h);
 				}
 			}
 		}
