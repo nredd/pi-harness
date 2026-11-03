@@ -337,16 +337,14 @@
       "owned": ["*.py"],
       "exclusions": [],
       "status": "measured",
-      "goal": "excluded",
-      "goal_reason": "Owner retains existing Python automation tests; Python is outside the eight-package 100-percent goal.",
-      "note": "pytest-cov LCOV from `make check-scripts` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest. Linux reference is provisional (equal to darwin) until the hosted Ubuntu measurement lands in this PR.",
+      "goal": "ratchet",
+      "goal_reason": "Owner decision on #314: Python is outside the eight-package zero target but its measured uncovered counts are an enforced downward ratchet per OS.",
+      "note": "pytest-cov LCOV from `make check-scripts` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest.",
       "signals": {
         "primary": {
           "report": "coverage/python/lcov.info",
-          "enforcement": "report-only",
-          "reason": "Python stays outside the eight-package 100-percent goal; measured here by pytest-cov LCOV and held as a downward ratchet in a separate owner-gated change.",
           "skip_hosts": ["wsl2"],
-          "max_uncovered": { "darwin": { "lines": 300, "functions": 13 }, "linux": { "lines": 300, "functions": 13 } },
+          "max_uncovered": { "darwin": { "lines": 300, "functions": 13 }, "linux": { "lines": 301, "functions": 13 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -359,16 +357,14 @@
         { "path": "conftest.py", "kind": "test-helper", "reason": "Pytest fixture configuration for integration scenarios, not production implementation." }
       ],
       "status": "measured",
-      "goal": "excluded",
-      "goal_reason": "Owner retains existing Python automation tests; Python is outside the eight-package 100-percent goal.",
-      "note": "pytest-cov LCOV from `make check-integration` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest. Linux reference is provisional (equal to darwin) until the hosted Ubuntu measurement lands in this PR.",
+      "goal": "ratchet",
+      "goal_reason": "Owner decision on #314: Python is outside the eight-package zero target but its measured uncovered counts are an enforced downward ratchet per OS.",
+      "note": "pytest-cov LCOV from `make check-integration` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest.",
       "signals": {
         "primary": {
           "report": "coverage/python/lcov.info",
-          "enforcement": "report-only",
-          "reason": "Python stays outside the eight-package 100-percent goal; measured here by pytest-cov LCOV and held as a downward ratchet in a separate owner-gated change.",
           "skip_hosts": ["wsl2"],
-          "max_uncovered": { "darwin": { "lines": 668, "functions": 71 }, "linux": { "lines": 668, "functions": 71 } },
+          "max_uncovered": { "darwin": { "lines": 667, "functions": 71 }, "linux": { "lines": 667, "functions": 71 } },
           "reporters": ["text", "lcov"]
         }
       }

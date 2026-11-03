@@ -468,12 +468,12 @@ def test_reviewed_missing_source_is_explicitly_pending(file: str) -> None:
     ]
     assert owners, file
     if file.endswith(".py"):
-        # Python has a pytest-cov LCOV producer: measured, report-only while outside the goal.
+        # Python has a pytest-cov LCOV producer: measured and held at its per-OS floor (`ratchet`).
         assert all(
             package.status == "measured"
-            and package.goal == "excluded"
+            and package.goal == "ratchet"
             and package.goal_reason.strip()
-            and package.signals["primary"].enforcement == "report-only"
+            and package.signals["primary"].enforcement == "enforced"
             for package in owners
         )
     else:

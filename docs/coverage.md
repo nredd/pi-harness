@@ -7,9 +7,16 @@ Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
 `goal: "report-only"` identifies verification infrastructure (helpers, probes, inprocess and
 producer configurations). `goal: "excluded"` records the owner's computer-use
-coverage-maintenance exclusion and Python's existing-test-only scope. Both require a nonblank
+coverage-maintenance exclusion. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
 goal must be report-only and still require complete, valid reports and per-OS references.
+`goal: "ratchet"` (owner decision on #314, reusable by #321) is the one mode outside the zero target
+that is enforced: a measured package whose enforced signals hold their per-OS `max_uncovered` as a
+floor. The target is not applied, and floors only go down (the existing enforced-to-enforced ratchet).
+A package cannot leave `ratchet`, an enforced signal cannot go report-only without a reasoned
+`enforcement_changes` entry, and a `ratchet` package must be measured with at least one enforced
+signal. The rule keeping `excluded`/`report-only` signals report-only is unchanged. A floor is a new
+enforced signal, not an allowance or waiver: it is the measured count on a named commit and OS.
 
 The initial integration checkpoint is recorded [here](../coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
@@ -242,6 +249,21 @@ pytest (`docs/ci.md`), so `check-coverage` there (`COVERAGE_HOST=wsl2`) reports 
 a skipped host. `benchmarks/comparison` keeps its own pytest-cov 90% combined gate unchanged (in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); it is not
 fed to accounting because a path-gated skip would otherwise fail as a missing report. The declaration-only `integration/harness/__init__.py` has an explicit
 reasoned exclusion.
+
+Both Python packages are `goal: "ratchet"` with an enforced `primary` signal (#314). First floors
+are the measured uncovered counts, never allowances; they only go down. Every Python line the PR
+added or changed is 0/0:
+
+| Signal | darwin lines/functions | linux lines/functions |
+| --- | --- | --- |
+| `python-scripts/primary` | 300/13 | 301/13 |
+| `python-harness/primary` | 667/71 | 667/71 |
+
+Measured: darwin on macOS 27.2 arm64 (Python 3.14.9) on the final tree of PR #323 (`pytest -n auto
+--dist loadfile`, three consecutive `python-harness` runs gave the same 667 uncovered lines);
+linux from hosted run `41702044725` (`ubuntu-24.04`, artifact `coverage-ubuntu-24.04`) on `3b457da7`,
+where only the `goal` validator and policy flip follow, with tests that cover every line they add.
+`python-scripts` linux is one line above darwin (host-dependent branches), so the floors differ per OS.
 A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files

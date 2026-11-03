@@ -190,8 +190,12 @@ class Package(StrictModel):
     )
     status: Literal["measured", "pending"] = Field(description="Whether clean-run coverage is accounted for.")
     note: str = Field(description="Measurement limitations and concrete pending follow-up.")
-    goal: Literal["100-percent", "report-only", "excluded"] = Field(
-        default="100-percent", description="Owner-approved scope of the global line/function goal."
+    goal: Literal["100-percent", "ratchet", "report-only", "excluded"] = Field(
+        default="100-percent",
+        description=(
+            "Owner-approved scope of the global line/function goal. `ratchet` is outside the zero target "
+            "but enforced: each enforced signal's per-OS `max_uncovered` is a floor that can only go down."
+        ),
     )
     goal_reason: str = Field(default="", description="Required reason for domains outside the global goal.")
     signals: dict[str, Signal] = Field(description="Independent primary and compatibility coverage signals.")
@@ -223,10 +227,15 @@ class Package(StrictModel):
             and self.signals["primary"].enforcement != "enforced"
         ):
             raise ValueError("Primary signals must remain enforced")
-        if self.goal != "100-percent" and any(
+        if self.goal not in {"100-percent", "ratchet"} and any(
             signal.enforcement != "report-only" for signal in self.signals.values()
         ):
             raise ValueError("Signals outside the global goal must remain report-only")
+        if self.goal == "ratchet" and (
+            self.status != "measured"
+            or not any(signal.enforcement == "enforced" for signal in self.signals.values())
+        ):
+            raise ValueError("A ratchet package must be measured with at least one enforced signal")
         if self.target_allowances and (
             self.status != "measured"
             or self.goal != "100-percent"
@@ -837,7 +846,7 @@ def check_ratchet(current: Policy, base: Policy) -> None:
         if name not in current.packages:
             raise ValueError(f"Removed package: '{name}'")
         package = current.packages[name]
-        if previous.goal == "100-percent" and package.goal != previous.goal:
+        if previous.goal in {"100-percent", "ratchet"} and package.goal != previous.goal:
             raise ValueError(f"Cannot remove package from global goal: '{name}'")
         for signal_name, old in previous.signals.items():
             if signal_name not in package.signals:

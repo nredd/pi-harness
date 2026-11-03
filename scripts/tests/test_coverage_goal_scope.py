@@ -109,3 +109,83 @@ def test_goal_exceptions_require_reason_and_report_only_signals() -> None:
     package["signals"]["primary"]["enforcement"] = "enforced"
     with pytest.raises(ValidationError, match="outside the global goal"):
         Policy.model_validate(data)
+
+
+def ratchet_policy(lines: int = 1, functions: int = 1) -> Policy:
+    """Return an enforced nonzero-floor package outside the zero target.
+
+    Parameters:
+        lines (int): Uncovered-line floor on every OS.
+        functions (int): Uncovered-function floor on every OS.
+    Returns:
+        Policy: Validated `ratchet` fixture with the global target enabled.
+    Raises:
+        ValidationError: The fixture declaration is invalid.
+    """
+    data = policy().model_dump()
+    data["enforce_target"] = True
+    package = data["packages"]["example"]
+    package["goal"] = "ratchet"
+    package["goal_reason"] = "Owner-approved downward ratchet at measured floors."
+    package["signals"]["primary"]["max_uncovered"] = {
+        host: {"lines": lines, "functions": functions} for host in ("darwin", "linux")
+    }
+    return Policy.model_validate(data)
+
+
+def test_ratchet_goal_enforces_its_nonzero_floor_not_the_zero_target(tmp_path: Path) -> None:
+    """Hold the measured floor exactly: at it passes, above it fails, even with the target enabled.
+
+    Parameters:
+        tmp_path (Path): Disposable report root with one uncovered line and function.
+    Returns:
+        None: The floor, not the zero target, is the budget in both directions.
+    Raises:
+        AssertionError: A regression passes or the zero target replaces the floor.
+    """
+    setup_report(tmp_path, "uncovered.info")
+    assert not account(tmp_path, ratchet_policy(1, 1))[1]
+    for lines, functions in ((0, 1), (1, 0)):
+        errors = account(tmp_path, ratchet_policy(lines, functions))[1]
+        assert "Budget exceeded: 1 lines, 1 functions" in errors[0]
+
+
+def test_ratchet_floor_only_goes_down(tmp_path: Path) -> None:
+    """Allow a lower floor, reject a higher one, and refuse to leave the mode.
+
+    Parameters:
+        tmp_path (Path): Unused disposable path keeping the fixture signature uniform.
+    Returns:
+        None: Floors ratchet per counter and the package cannot leave `ratchet`.
+    Raises:
+        AssertionError: A floor is raised or the goal is downgraded.
+    """
+    base = ratchet_policy(5, 5)
+    check_ratchet(ratchet_policy(4, 5), base)
+    check_ratchet(ratchet_policy(5, 5), base)
+    for lines, functions in ((6, 5), (5, 6)):
+        with pytest.raises(ValueError, match="Ratchet violation"):
+            check_ratchet(ratchet_policy(lines, functions), base)
+    data = ratchet_policy(5, 5).model_dump()
+    data["packages"]["example"]["goal"] = "report-only"
+    data["packages"]["example"]["signals"]["primary"]["enforcement"] = "report-only"
+    data["packages"]["example"]["signals"]["primary"]["reason"] = "Downgrade attempt."
+    with pytest.raises(ValueError, match=r"Enforcement downgrade|Cannot remove package"):
+        check_ratchet(Policy.model_validate(data), base)
+
+
+def test_ratchet_goal_requires_a_measured_enforced_signal() -> None:
+    """Keep `ratchet` from becoming a label that enforces nothing.
+
+    Parameters:
+        None.
+    Returns:
+        None: Pending status or only report-only signals are rejected.
+    Raises:
+        AssertionError: An empty ratchet declaration validates.
+    """
+    data = ratchet_policy().model_dump()
+    package = data["packages"]["example"]
+    package["signals"]["primary"] |= {"enforcement": "report-only", "reason": "Diagnostic only."}
+    with pytest.raises(ValidationError, match="at least one enforced signal"):
+        Policy.model_validate(data)
