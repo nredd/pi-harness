@@ -167,11 +167,14 @@ describe("AgentWidget", () => {
 
   // The model is opt-in: the row is already dense, and the same pair is on the
   // tool result and in the conversation viewer either way.
+  // `think:high`, as FleetView writes it, so the configured level cannot read
+  // as a duplicate of the live `thinking…` activity line beneath it (#144).
   it("names the model and thinking on a running row under showModel", () => {
     const manager = { listAgents: () => [makeRecord("bg", { isBackground: true })] };
 
-    expect(renderLines(manager, "bg", () => "background", true))
-      .toContain("sonnet 4.6 · thinking: high");
+    const row = renderLines(manager, "bg", () => "background", true);
+    expect(row).toContain("sonnet 4.6 · think:high");
+    expect(row).not.toContain("thinking: high");
   });
 
   it("renders the row exactly as before when showModel is off", () => {
@@ -196,7 +199,7 @@ describe("AgentWidget", () => {
     const manager = { listAgents: () => [record] };
 
     expect(renderLines(manager, "bg", () => "background", true))
-      .toContain("haiku 4.5 · thinking: high (asked max)");
+      .toContain("haiku 4.5 · think:high (asked max)");
   });
 
   // Queued agents stay a one-line count. A fan-out of ten would otherwise eat
