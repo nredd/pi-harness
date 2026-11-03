@@ -274,21 +274,42 @@ def probe_argv(child: str) -> list[str | Path]:
     ]
 
 
-def test_probe_timeout_kills_its_whole_process_group(tmp_path: Path) -> None:
+def test_probe_timeout_kills_its_whole_process_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Time out the real probe while its child waits for readiness: no grandchild may survive.
 
     The child is the FIFO's only writer and never prints `ready`, so the probe outlives the `run`
-    deadline. EOF on the FIFO after `run` returns proves every writer exited, without a reusable PID
-    probe; the first byte proves the child really opened it. On a regression the child still exits on
-    its own `WITNESS_EXIT_S` bound and the probe follows once readiness fails.
+    deadline. The real `communicate` and its 2s deadline start only once the child's byte arrived, so
+    a slow node boot under load cannot let the deadline kill the group before the grandchild exists.
+    EOF on the FIFO after `run` returns proves every writer exited, without a reusable PID probe. On a
+    regression the child still exits on its own `WITNESS_EXIT_S` bound and the probe follows once
+    readiness fails.
 
     Parameters:
         tmp_path (Path): Probe working directory holding the FIFO.
+        monkeypatch (pytest.MonkeyPatch): Delays the real `communicate` until the grandchild is running.
     """
+    communicate = subprocess.Popen.communicate
     with FifoWitness(tmp_path) as witness:
+
+        def after_start(
+            self: subprocess.Popen[str], data: str | None = None, timeout: float | None = None
+        ) -> tuple[str, str]:
+            """Run the real communication, with its deadline, only after the child opened its witness.
+
+            Parameters:
+                self (subprocess.Popen[str]): Probe leader.
+                data (str | None): Real communication input.
+                timeout (float | None): Real communication deadline, `run`'s 2s.
+
+            Returns:
+                tuple[str, str]: Real captured output; unreached here, the probe outlives the deadline.
+            """
+            assert witness.started(), "child never wrote to the FIFO"
+            return communicate(self, data, timeout)
+
+        monkeypatch.setattr(subprocess.Popen, "communicate", after_start)
         with pytest.raises(pc.ContractError, match="timed out after 2s"):
             pc.run(probe_argv(FifoWitness.NODE_WRITER), env=ENV, cwd=tmp_path, timeout=2, own_group=True)
-        assert witness.started(), "child never wrote to the FIFO"
         assert witness.gone(), "grandchild still holds the FIFO after the timeout"
 
 
