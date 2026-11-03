@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { ExhaustionTracker } from "../src/exhaustion.js";
+import { type RouteEnv, Router } from "../src/router.js";
 import { STALE_GRACE_MS, scoreQuota, selectCandidate } from "../src/selection.js";
 import { modelMatchesFamily, UsageService, type UsageTransport } from "../src/usage.js";
 
@@ -691,20 +693,29 @@ describe("Anthropic snapshots without a 5h window", () => {
 		expect(service.decisionFor(SONNET)).toEqual({ block: false });
 	});
 
-	it("a fresh read replaces a stale cached exhausted 5h, so it stops blocking", async () => {
+	it("a fresh read replaces a stale cached exhausted 5h, so admission stops parking", async () => {
 		const { service, clock, requests } = harness([
 			{ body: { five_hour: { utilization: 100, resets_at: FUTURE_RESET }, seven_day: SEVEN_DAY } },
 			{ body: "unavailable", status: 503 },
 			{ body: { seven_day: SEVEN_DAY } },
 		]);
+		// End to end through the router: the same admission subagent dispatches go through.
+		const router = new Router(service, new ExhaustionTracker(() => clock.now), () => clock.now);
+		// A physical ref never resolves chain entries or refreshes, so the env is inert.
+		const env: RouteEnv = { resolve: () => undefined, refresh: async () => undefined };
+		const admit = () => router.admit(`${SONNET.provider}/${SONNET.id}`, new Map(), env);
+		const parked = { ok: false, resetAt: FUTURE_RESET_MS, wait: true };
 		await service.get(ctx, "anthropic");
 		expect(service.decisionFor(SONNET)).toMatchObject({ block: true, window: "five_hour" });
+		expect(admit()).toEqual(parked);
 		clock.now += 6 * MINUTE;
 		const stale = await service.get(ctx, "anthropic");
 		// Failed refresh: the cached window survives and its future reset keeps blocking.
 		expect(stale.status).toBe("stale");
 		expect(stale.windows.map((window) => window.name)).toEqual(["five_hour", "seven_day"]);
 		expect(service.decisionFor(SONNET)).toMatchObject({ block: true, window: "five_hour" });
+		expect(router.blockedBy(SONNET)).toEqual({ reason: "five_hour exhausted", resetAt: FUTURE_RESET_MS });
+		expect(admit()).toEqual(parked);
 		clock.now += MINUTE + 1; // first backoff step
 		const fresh = await service.get(ctx, "anthropic");
 		expect(requests).toHaveLength(3);
@@ -712,6 +723,8 @@ describe("Anthropic snapshots without a 5h window", () => {
 		expect(fresh.windows.map((window) => window.name)).toEqual(["seven_day"]);
 		expect(service.peek("anthropic")?.windows.map((window) => window.name)).toEqual(["seven_day"]);
 		expect(service.decisionFor(SONNET)).toEqual({ block: false });
+		expect(router.blockedBy(SONNET)).toBeUndefined();
+		expect(admit()).toEqual({ ok: true, resolvedModel: `${SONNET.provider}/${SONNET.id}` });
 	});
 
 	it("every Anthropic key null is an unsupported shape (error, then backoff)", async () => {

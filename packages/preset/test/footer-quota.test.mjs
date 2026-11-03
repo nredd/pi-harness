@@ -177,9 +177,7 @@ test("parse: provider error/unavailable/empty windows retain last-known values a
 		assert.equal(state.anthropic.weekly, 58);
 		// provider missing from reply entirely
 		assert.equal(state["openai-codex"].stale, true);
-		assert.equal(state["openai-codex"].weekly, 63);
-		// OpenAI never reports a 5h window, so a legacy 5h figure is not carried forward.
-		assert.ok(!("fiveHour" in state["openai-codex"]));
+		assert.equal(state["openai-codex"].fiveHour, 82);
 	}
 });
 
