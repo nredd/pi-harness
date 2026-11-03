@@ -66,19 +66,23 @@ mod tests {
 	return dir;
 }
 
+// Plan admits check/test/doc by owner decision (#307): no direct edits, though `build.rs` and tests run
+// and write `target/`. Registration needs no toolchain, so this pin runs everywhere.
+it("annotates check/test/doc read-only and the rest not", () => {
+	const plain = createMockPi();
+	registerCargoTools(plain.pi);
+	for (const name of ["cargo_check", "cargo_test", "cargo_doc"])
+		expect(plain.tools.get(name)?.annotations?.readOnlyHint, name).toBe(true);
+	for (const name of ["cargo_clippy", "cargo_fmt", "cargo_build", "cargo_run", "cargo_bench", "cargo_add"])
+		expect(plain.tools.get(name)?.annotations?.readOnlyHint, name).toBe(false);
+});
+
 describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 	"cargo tools against a real workspace",
 	() => {
 		beforeAll(() => {
 			registerCargoTools(mock.pi);
 			root = buildWorkspace();
-		});
-
-		it("annotates check/test/doc read-only and the rest not", () => {
-			for (const name of ["cargo_check", "cargo_test", "cargo_doc"])
-				expect(mock.tools.get(name)?.annotations?.readOnlyHint, name).toBe(true);
-			for (const name of ["cargo_clippy", "cargo_fmt", "cargo_build", "cargo_run", "cargo_bench", "cargo_add"])
-				expect(mock.tools.get(name)?.annotations?.readOnlyHint, name).toBe(false);
 		});
 
 		it("finds the workspace root from a member crate", () => {

@@ -53,18 +53,22 @@ build-backend = "hatchling.build"
 	return dir;
 }
 
+// Plan admits py_test by owner decision (#307): no direct edits, though `conftest.py` and tests run
+// and may write `.coverage` or `.pytest_cache`. Registration needs no uv, so this pin runs everywhere.
+it("annotates typecheck and test read-only, lint/format/uv not", () => {
+	const plain = createMockPi();
+	registerPyTools(plain.pi);
+	expect(plain.tools.get("py_typecheck")?.annotations?.readOnlyHint).toBe(true);
+	expect(plain.tools.get("py_test")?.annotations?.readOnlyHint).toBe(true);
+	for (const name of ["py_lint", "py_format", "py_uv"])
+		expect(plain.tools.get(name)?.annotations?.readOnlyHint, name).toBe(false);
+});
+
 describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 	beforeAll(() => {
 		registerPyTools(mock.pi);
 		root = buildProject();
 	}, 180_000);
-
-	it("annotates typecheck and test read-only, lint/format/uv not", () => {
-		expect(mock.tools.get("py_typecheck")?.annotations?.readOnlyHint).toBe(true);
-		expect(mock.tools.get("py_test")?.annotations?.readOnlyHint).toBe(true);
-		for (const name of ["py_lint", "py_format", "py_uv"])
-			expect(mock.tools.get(name)?.annotations?.readOnlyHint, name).toBe(false);
-	});
 
 	it("finds the project root from a subdirectory and fails cleanly outside one", async () => {
 		expect(findProjectRoot(join(root, "src", "pt"))).toBe(realpathSync(root));

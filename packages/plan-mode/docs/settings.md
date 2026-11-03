@@ -210,6 +210,7 @@ A tool registered by an installed extension or package with `annotations: { read
 A session-selected list from **Choose tools, then start…** or `/plan tools` still takes precedence, and the usual activation and exposure rules apply.
 The hint is author-asserted and unverified, so it only covers user-scope extensions and packages and explicit `-e` files; native MCP tools (`builtin:mcp`), other built-in extensions, and project-scope extensions keep needing explicit opt-in even when they declare the hint. A user-installed package that proxies an MCP server is trusted as that package.
 A tool with a mutating mode must not declare the hint.
+The hint means the tool makes no direct edits, not that it has no side effects. Plan is not a sandbox: an admitted tool may run repo code such as `build.rs`, `conftest.py` and tests, which may write build or cache outputs (`target/`, `.coverage`, `.pytest_cache`). `pi-dev-tools` `cargo_check`, `cargo_test`, `cargo_doc` and `py_test` are admitted on that basis.
 
 `ssh_exec` is mutating outside Plan mode, so it carries no `readOnlyHint`; Plan admits a trusted-source tool named `ssh_exec` by name (same source rules as above) and gates every call as follows. `ssh_pull` and `ssh_push` get no such exception in default admission; an explicit opt-in of either gets no input gate. This is risk reduction, not an OS sandbox.
 
