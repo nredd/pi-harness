@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentDir } from "../src/agent-dir.ts";
 import { CHILD_ENTRY, isChildSession, isChildSessionName, registerChildIdentity } from "../src/child.ts";
 import {
@@ -21,6 +21,8 @@ vi.mock("node:os", async (importOriginal) => {
 	return { ...os, homedir: vi.fn(os.homedir) };
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("parseConfig", () => {
 	it("builds the config path from an injected agent directory", () => {
 		vi.mocked(homedir).mockClear();
@@ -28,6 +30,8 @@ describe("parseConfig", () => {
 		expect(homedir).not.toHaveBeenCalled();
 	});
 	it("derives all default config paths from an injected home", () => {
+		// Independent of the launcher's `PI_CODING_AGENT_DIR`, which `agent-dir.test.ts` pins as winning.
+		vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
 		expect(agentDir("/isolated/home")).toBe("/isolated/home/.pi/agent");
 		expect(configPath(undefined, "/isolated/home")).toBe("/isolated/home/.pi/agent/pi-session-kit.json");
 	});
