@@ -43,14 +43,15 @@ The installer never reads, copies or writes credentials or personal state. After
 ## Threat model
 
 The installer defends against accidental layouts, partial installs and interrupted runs. Installer-owned
-switch and recovery mutations anchor every directory component from `/` through the backup, agent,
-link, core, journal and state parents with `O_NOFOLLOW | O_DIRECTORY`. Renames use held descriptors
-for BOTH operands and never create a missing destination parent; atomic file creation/replacement, symlink creation, deletion and lock creation use
-held parents too. A parent renamed or substituted after admission cannot redirect those mutations
-into the substitute. Identity checks refuse further progress and retain the journal on a detected swap;
-a rename already in flight can have completed in the original, renamed directory. Restore the directory
-namespace manually before retrying. Explicit symlinked roots remain supported: layout resolution
-canonicalizes them before anchoring, rather than rejecting the user's chosen storage location.
+switch and recovery mutations anchor every directory component from `/` through the backup, agent, link,
+core, journal and state parents with `O_NOFOLLOW | O_DIRECTORY`. Renames use held descriptors for BOTH
+operands and never create a missing destination parent; atomic file creation/replacement, symlink
+creation, deletion and lock creation use held parents too. A parent renamed or substituted after
+admission cannot redirect those mutations into the substitute. Identity checks refuse further progress
+and retain the journal on a detected swap; a rename already in flight can have completed in the
+original, renamed directory. Restore the directory namespace manually before retrying. Explicit
+symlinked roots remain supported: layout resolution canonicalizes them before anchoring, rather than
+rejecting the user's chosen storage location.
 
 This is pathname-redirection hardening, NOT a same-UID sandbox or protection from arbitrary host
 compromise. That user can edit the installer, its files and the final entries directly, and package
@@ -66,7 +67,7 @@ Mutation/source-guard coverage:
 | --- | --- |
 | `locked`, `apply` | Pin existing root/agent/bin/core/backup ancestors before planning/staging; create absent tails only when needed. Lock, staging-directory creation and empty backup-directory removal use parent descriptors. |
 | `Journal.record` / `save` | Retain the live parent across write-ahead intent and move `live.name` into the held per-run backup directory. Both rename operands are descriptor-relative. |
-| `stage`, `install_core`, `install_packages`, `Journal.place` | Create and hold the per-run staging directory, the staged core prefix and the staged `agent`/`agent/npm` tree through those descriptors BEFORE npm replays into them, then keep them held through verification and switch. Identities are checked after replay, after verification and before switch, so a persistent substitution at any point refuses before switch. The core's `bin` directory and `bin/pi` launcher are created relative to the held prefix, only after the post-replay check. Hash replacement identities and rename using the same held source parent; the core's source parent is the per-run staging directory. Core cleanup and marker writes also retain the staged-core directory in the transaction. `Journal.place` explicitly retires the moved subtree's descriptors before its intended rename, retaining the source parent. |
+| `stage`, `install_core`, `install_packages`, `Journal.place` | Create and hold the per-run staging directory, the staged core prefix and the staged `agent`/`agent/npm` tree through those descriptors BEFORE npm replays into them, then keep them held through verification and switch. Identities are checked after replay, before and after each in-process read, and before switch; see KNOWN WINDOW below. The core's `bin` directory and `bin/pi` launcher are created relative to the held prefix, only after the post-replay check. Hash replacement identities and rename using the same held source parent; the core's source parent is the per-run staging directory. Core cleanup and marker writes also retain the staged-core directory in the transaction. `Journal.place` explicitly retires the moved subtree's descriptors before its intended rename, retaining the source parent. |
 | `switch_anchored`, `replace_file`, `write_atomic` | Hold live agent/bin/core/state/journal parents through mkdir, symlink, exclusive temporary creation, replace and temporary cleanup. Atomic writers outside a transaction own a short-lived descriptor scope. |
 | `rollback`, `rename_restore`, `finish_aside` | Hold backup and live parents through restore preflight, reversible target/aside renames, backup restoration, verified aside deletion, progress rewrites and journal unlink. Recursive deletion uses the standard library's descriptor-relative, symlink-resistant `rmtree`. |
 | `Journal.commit`, `run_preflighted` | Validate held directory identities before journal removal; stale staging cleanup uses the lock's held installer parent. |
@@ -74,15 +75,27 @@ Mutation/source-guard coverage:
 Scratch downloads in the independent verification temporary directory and `fetch_release`/npm/Pi
 subprocess internals are not descriptor-relative installer transactions. Staging checks its held source
 parents before/after those operations and refuses switch on a detected substitution, but cannot prevent
-a subprocess from writing through a substituted pathname during execution. KNOWN WINDOW: `install_graph`
-writes `package.json`/`package-lock.json` and npm replays by pathname under the held prefix, and
-`installed_identities`/`verify_owned_integrity` read the staged tree by pathname. A swap of
-`staging/<run>/core`, `staging/<run>/agent` or `agent/npm` that is restored before the next identity check
-(after replay, after verification) is invisible: replay output can land in, or verification can read,
-the substitute while the held original is what gets switched in. Closing it needs descriptor-relative
-replay and verification, not available through npm. Nor does parent anchoring
-freeze final files/trees or defend against new real entries deliberately moved into an authorized tree.
-Those are ordinary same-user code/filesystem privileges, not a sandbox supplied by this change.
+a subprocess from writing through a substituted pathname during execution.
+
+KNOWN WINDOW. `install_core` and `install_packages` create and hold the staged core prefix and
+`agent/npm` before replay, but everything inside them still goes by pathname:
+
+- `runtime_lock.install_graph` is NOT descriptor-relative. Its `mkdir(parents=True, exist_ok=True)` is a
+  no-op only because the installer created the prefix first, and it writes `package.json` and
+  `package-lock.json` by pathname. npm then replays by pathname.
+- `audit_install`, `installed_identities` and `verify_owned_integrity` are in-process Python, but they
+  read the staged tree by pathname (`rglob`, `resolve()`, `read_regular`), not through the held
+  descriptor.
+
+`anchors.check()` runs after replay and immediately before each of those three reads, and once more
+after the last one. A substitution present at any check is refused before switch. A swap made after one
+check and undone before the next is not seen: replay output can land in, or a read can verify, the
+substitute while the held original is switched in. The npm part cannot be closed from here. Making the
+three readers walk `dir_fd` descriptors would close the read part; it is not done.
+
+Nor does parent anchoring freeze final files/trees or defend against new real entries deliberately moved
+into an authorized tree. Those are ordinary same-user code/filesystem privileges, not a sandbox
+supplied by this change.
 
 ## Verification, before any change
 
@@ -229,6 +242,6 @@ To uninstall: remove `~/.local/bin/pi`, `~/.local/share/pi-stack`, `~/.pi/agent/
 
 Acceptance's installer-owned text anchors are stable contracts: missing prerequisites name each `` `<tool>` not found ``, plans use `CREATE`/`OVERWRITE` and name dropped sources, staging logs `pi install '<source>'`, and a healthy no-op rerun says `Already installed`. Unit tests exercise those message producers and exact network/CLI diagnostics. Version numbers and `pi list`'s `(filtered)` entries come from the pinned core itself, checked by the real acceptance and package-declaration units, not fabricated installer output.
 
-- Deterministic ancestor-swap regressions: `integration/tests/test_install_ancestors.py`, including swaps between `record()`/`save()` and at the actual restore and atomic-replace syscalls, plus the refusals for a non-canonical anchor path, a platform without symlink-safe `rmtree`, an interrupted install whose parents cannot be anchored (journal kept), a rename into a missing parent, staged core/agent swaps after replay and after verification, and a live parent swapped while the lock is held. These are disposable POSIX fixtures, not fuzzing or live-install checks.
+- Deterministic ancestor-swap regressions: `integration/tests/test_install_ancestors.py`, including swaps between `record()`/`save()` and at the actual restore and atomic-replace syscalls, plus the refusals for a non-canonical anchor path, a platform without symlink-safe `rmtree`, an interrupted install whose parents cannot be anchored (journal kept), a rename into a missing parent, staged core/agent swaps after replay, during the audit and integrity reads and between the post-replay check and launcher creation, staging failures (message, unchanged live tree, cleanup failure kept as a note), and a live parent swapped while the lock is held. These are disposable POSIX fixtures, not fuzzing or live-install checks.
 - Units, offline, against the real `stack/24889f7` snapshot bytes (the login-interoperability regressions require `gh`; they run only `gh auth token` against synthetic `hosts.yml`, never a network login): `integration/tests/test_install.py` (part of `make check-integration`).
 - Real acceptance, in throwaway HOMEs with real GitHub, `gh`, npm and core: `make -C integration installer INSTALLER_SPEC='git+https://github.com/nredd/pi-harness@<installer-sha>#subdirectory=integration' STACK_SHA=<stack-sha>`. It covers missing prerequisites, an unpromoted SHA, tampered bytes and foreign signer/ref against real `gh`, a fresh install compared with the snapshot (order, filtered preset, disabled computer-use, owned integrity, `pi --version`, `pi list`), a no-op rerun, consent with an existing setup whose credentials and unrelated settings survive, and a SIGKILL during staging followed by a successful rerun. The staging marker wait has a 1200-second deadline and one-MiB output limit; success, EOF and timeout all kill the child process group and reap its leader. Cleanup has a separate 60-second deadline and checks for live group members with `/bin/ps`, repeating SIGKILL when a concurrent fork survives the first signal. It keeps the leader unreaped as the process-group ownership anchor until signalling finishes, then reaps it within the remaining deadline. It fails closed if a live member remains, so the rerun cannot delete staging under an orphaned npm writer; unreaped zombies cannot write and do not block it. macOS answers `EPERM` to a signal sent at a group that holds only zombies; that is accepted only when `/bin/ps` shows no live member, and `EPERM` with a live member still fails. A marker failure and cleanup failures are reported together, preserving the marker failure first. Offline subprocess coverage includes an externally supervised fork-at-signal writer that accepts a write request only after cleanup returns. The test leader and writers arm independent hard lifetimes before the marker and before blocking for requests, so regression failure cleanup never signals a potentially recycled PID/PGID. `.github/workflows/installer.yml` runs it on `ubuntu-24.04` and `xcode-27` from the exact commit. Hosted runner IPs share GitHub's anonymous 60 requests/hour limit, so `main` pushes/dispatches and trusted same-repo pull requests (`head.repo.full_name == github.repository`) provision a temporary `gh` login using the read-only job token (`contents: read`, `attestations: read`, all other permissions disabled). A separate step pipes the token to `gh auth login`; acceptance uses a gh-only config shim. `make`/pytest receive only the nonsecret `INSTALLER_GH_CONFIG_DIR` path, not a token. Only the shim sets `GH_CONFIG_DIR` for `gh`; neither variable nor token reaches `uvx`, Git, package builds or other installer children. An always-running cleanup removes the temporary login. Fork pull requests and non-main dispatches remain anonymous and fail honestly when the limit refuses them. Same-repo authors are trusted, not fork-sandboxed. KNOWN RESIDUAL: package scripts still inherit the PATH shim and can use its login or read plaintext `hosts.yml`, even without token/config variables. No credential-capability isolation is claimed; see the trust assumption in [CI](ci.md).

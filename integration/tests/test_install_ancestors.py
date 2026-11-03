@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import errno
 import os
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from harness import install, install_paths
+from harness import install, install_paths, runtime_lock
 from harness.install import (
     InstallError,
     Journal,
@@ -29,7 +30,22 @@ from harness.install import (
     stage,
     write_atomic,
 )
-from tests.test_install import real_snapshot
+from harness.install_paths import AnchoredStore
+from tests.test_install import Harness, real_snapshot, seed_existing, tree
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+
+
+@pytest.fixture
+def anchors() -> Iterator[AnchoredStore]:
+    """Hold a transaction's parents for the whole test, as the installer lock does.
+
+    Yields:
+        AnchoredStore: descriptors closed at teardown.
+    """
+    with AnchoredStore() as store:
+        yield store
 
 
 def layout_at(path: Path) -> Layout:
@@ -47,7 +63,7 @@ def layout_at(path: Path) -> Layout:
     return layout
 
 
-def test_record_save_does_not_follow_swapped_agent(tmp_path: Path) -> None:
+def test_record_save_does_not_follow_swapped_agent(tmp_path: Path, anchors: AnchoredStore) -> None:
     """A swap between the write-ahead record and save cannot back up victim content."""
     layout = layout_at(tmp_path)
     target = layout.agent_dir / "settings.json"
@@ -55,7 +71,7 @@ def test_record_save_does_not_follow_swapped_agent(tmp_path: Path) -> None:
     victim = tmp_path / "victim"
     victim.mkdir()
     (victim / target.name).write_text("victim")
-    journal = Journal(layout, layout.backups / "run")
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
     with journal.open_backups():
         backup = journal.record(target, target.name)
         assert backup is not None
@@ -72,13 +88,13 @@ def test_record_save_does_not_follow_swapped_agent(tmp_path: Path) -> None:
 
 
 def test_restore_rename_does_not_follow_swapped_parent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
 ) -> None:
     """The actual backup-to-live syscall uses the previously opened target parent."""
     layout = layout_at(tmp_path)
     target = layout.agent_dir / "settings.json"
     target.write_text("original")
-    journal = Journal(layout, layout.backups / "run")
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
     with journal.open_backups():
         backup = journal.record(target, target.name)
         assert backup is not None
@@ -121,7 +137,7 @@ def test_restore_rename_does_not_follow_swapped_parent(
 
 @pytest.mark.parametrize("parent_kind", ["agent", "bin", "core", "state", "ancestor"])
 def test_save_syscall_anchors_both_parents(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_kind: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_kind: str, anchors: AnchoredStore
 ) -> None:
     """A swap at the actual save syscall cannot select a substituted source tree."""
     namespace = tmp_path / "namespace"
@@ -150,7 +166,7 @@ def test_save_syscall_anchors_both_parents(
         (victim_target / "payload").write_text("victim")
     else:
         victim_target.write_text("victim")
-    journal = Journal(layout, layout.backups / "run")
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
     original = os.replace
     swapped = False
 
@@ -288,8 +304,16 @@ def replay_fixture(monkeypatch: pytest.MonkeyPatch, swap: Any) -> Verified:
         Verified: real snapshot with an empty modeled archive inventory.
     """
 
-    def replay(graph: object, root: Path, scratch: Path, npm: str, archives: object) -> None:
-        """Write like npm does, by pathname, then inject the swap.
+    def replay(
+        graph: object,
+        root: Path,
+        scratch: Path,
+        npm: str,
+        archives: object,
+        *,
+        checkpoint: Callable[[], None],
+    ) -> None:
+        """Write like npm does, by pathname, inject the swap, then run the caller's checkpoint.
 
         Parameters:
             graph (object): ignored modeled graph.
@@ -297,14 +321,16 @@ def replay_fixture(monkeypatch: pytest.MonkeyPatch, swap: Any) -> Verified:
             scratch (Path): ignored npm scratch.
             npm (str): ignored npm path.
             archives (object): ignored archive inventory.
+            checkpoint (Callable[[], None]): caller's identity check before the audit.
 
         Returns:
-            None: the modeled replay and the injected swap completed.
+            None: the modeled replay, the injected swap and the checkpoint completed.
         """
         root.mkdir(parents=True, exist_ok=True)
         (root / "node_modules" / ".bin").mkdir(parents=True)
         (root / "package.json").write_text("{}")
         swap(root)
+        checkpoint()
 
     monkeypatch.setattr(install, "require_runtime", lambda verified: SimpleNamespace(runtime=None))
     monkeypatch.setattr(install, "selected_graphs", lambda runtime: {"core": None, "agent": None})
@@ -391,9 +417,11 @@ def test_staged_agent_is_anchored_from_creation(
     monkeypatch.setattr(
         install, "verify_owned_integrity", swap if point == "verification" else lambda *a: None
     )
+    # Replay-time swaps surface through the wrapped replay failure, verification-time ones raw.
+    expected = InstallError if point == "replay" else OSError
     with (
         install_paths.AnchoredStore() as anchors,
-        pytest.raises(OSError, match=r"Install directory '.*/agent' changed during the operation"),
+        pytest.raises(expected, match=r"Install directory '.*/agent' changed during the operation"),
     ):
         stage(layout, verified, Plan(install_packages=True), staging, anchors=anchors)
     assert swapped == [agent]
@@ -401,12 +429,12 @@ def test_staged_agent_is_anchored_from_creation(
     assert (held / "npm" / "package.json").read_text() == "{}"
 
 
-def test_rollback_refuses_missing_live_parent(tmp_path: Path) -> None:
+def test_rollback_refuses_missing_live_parent(tmp_path: Path, anchors: AnchoredStore) -> None:
     """Recovery never invents a live parent the interrupted switch did not journal."""
     layout = layout_at(tmp_path)
     target = layout.agent_dir / "settings.json"
     target.write_text("original")
-    journal = Journal(layout, layout.backups / "run")
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
     with journal.open_backups():
         backup = journal.record(target, target.name)
         assert backup is not None
@@ -473,3 +501,231 @@ def test_rename_refuses_missing_target_parent(tmp_path: Path) -> None:
         anchors.rename(source, missing / "target")
     assert not missing.exists()
     assert source.read_text() == "kept"
+
+
+def restore(directory: Path, held: Path) -> None:
+    """Undo `substitute`, so a later identity check sees the genuine directory again.
+
+    Parameters:
+        directory (Path): staged directory currently naming the substitute.
+        held (Path): where `substitute` kept the genuine directory.
+
+    Returns:
+        None: `directory` names the genuine directory again.
+    """
+    if directory.is_symlink():
+        directory.unlink()
+    else:
+        shutil.rmtree(directory)
+    held.rename(directory)
+
+
+def test_core_launcher_lands_in_held_prefix_after_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A prefix swapped between the post-replay check and `bin` creation still gets the launcher."""
+    layout = layout_at(tmp_path)
+    staging = layout.root / "staging" / "run"
+    prefix, held = staging / "core", tmp_path / "held-core"
+    verified = replay_fixture(monkeypatch, lambda root: None)
+    original = os.mkdir
+    swapped: list[Path] = []
+
+    def swap(path: str | Path, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        """Substitute the prefix immediately before the launcher directory is created.
+
+        Parameters:
+            path (str | Path): directory to create.
+            mode (int): permission bits.
+            dir_fd (int | None): parent descriptor, when descriptor-relative.
+
+        Returns:
+            None: the injected swap and the original mkdir completed.
+        """
+        if Path(path).name == "bin" and not swapped:
+            substitute(prefix, held, link=True)
+            swapped.append(prefix)
+        original(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", swap)
+    with (
+        install_paths.AnchoredStore() as anchors,
+        pytest.raises(InstallError, match=r"Install directory '.*/core' changed during the operation"),
+    ):
+        stage(layout, verified, Plan(install_core=True), staging, anchors=anchors)
+    assert swapped == [prefix]
+    assert (held / "bin" / "pi").readlink() == Path("../node_modules/.bin/pi")
+    assert not (tmp_path / "held-core-victim" / "bin").exists()
+
+
+@pytest.mark.parametrize("kind", ["core", "agent"])
+def test_replay_audit_reads_only_the_held_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A swap present while `audit_install` reads is refused even if it is undone afterwards."""
+    layout = layout_at(tmp_path)
+    staging = layout.root / "staging" / "run"
+    staged = staging / kind
+    held = tmp_path / f"held-{kind}"
+    audited: list[bool] = []
+
+    def npm(npm: str, args: list[str], root: Path, env: dict[str, str]) -> None:
+        """Model npm, substituting the staged tree once `ci` has run.
+
+        Parameters:
+            npm (str): ignored npm path.
+            args (list[str]): npm arguments.
+            root (Path): staged npm prefix.
+            env (dict[str, str]): ignored environment.
+
+        Returns:
+            None: the staged tree is substituted after `ci`.
+        """
+        if args[0] == "ci":
+            substitute(staged, held, link=False)
+
+    def audit(graph: object, root: Path, archives: object) -> None:
+        """Read the prefix by pathname, then undo the swap before the next check.
+
+        Parameters:
+            graph (object): ignored modeled graph.
+            root (Path): staged npm prefix.
+            archives (object): ignored archive inventory.
+
+        Returns:
+            None: the read happened and the swap was undone.
+        """
+        audited.append((staged / "forged").exists())
+        restore(staged, held)
+
+    graph = SimpleNamespace(manifest={}, lock={"packages": {}})
+    monkeypatch.setattr(install, "require_runtime", lambda verified: SimpleNamespace(runtime=None))
+    monkeypatch.setattr(install, "selected_graphs", lambda runtime: {"core": graph, "agent": graph})
+    monkeypatch.setattr(install, "installed_identities", lambda *args: [])
+    monkeypatch.setattr(install, "verify_owned_integrity", lambda *args: None)
+    monkeypatch.setattr(runtime_lock, "run_npm", npm)
+    monkeypatch.setattr(runtime_lock, "audit_install", audit)
+    verified = Verified(real_snapshot(), [], {}, archives={"core": {}, "agent": {}})
+    plan = Plan(install_core=kind == "core", install_packages=kind == "agent")
+    with (
+        install_paths.AnchoredStore() as anchors,
+        pytest.raises(InstallError, match=rf"Install directory '.*/{kind}' changed during the operation"),
+    ):
+        stage(layout, verified, plan, staging, anchors=anchors)
+    assert audited == []
+    assert (held / ("npm" if kind == "agent" else ".") / "package.json").is_file()
+
+
+def test_owned_integrity_reads_only_the_held_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A swap present while `verify_owned_integrity` reads is refused even if undone afterwards."""
+    layout = layout_at(tmp_path)
+    staging = layout.root / "staging" / "run"
+    agent, held = staging / "agent", tmp_path / "held-agent"
+    verified = replay_fixture(monkeypatch, lambda root: None)
+    read: list[bool] = []
+
+    def identities(*args: object) -> list[dict[str, str]]:
+        """Read the staged manifests, then substitute the agent tree.
+
+        Parameters:
+            args (object): ignored identity operands.
+
+        Returns:
+            list[dict[str, str]]: no modeled identities.
+        """
+        substitute(agent, held, link=False)
+        return []
+
+    def integrity(*args: object) -> None:
+        """Read the lockfile by pathname, then undo the swap before the final check.
+
+        Parameters:
+            args (object): ignored integrity operands.
+
+        Returns:
+            None: the read happened and the swap was undone.
+        """
+        read.append((agent / "forged").exists())
+        restore(agent, held)
+
+    monkeypatch.setattr(install, "installed_identities", identities)
+    monkeypatch.setattr(install, "verify_owned_integrity", integrity)
+    with (
+        install_paths.AnchoredStore() as anchors,
+        pytest.raises(OSError, match=r"Install directory '.*/agent' changed during the operation"),
+    ):
+        stage(layout, verified, Plan(install_packages=True), staging, anchors=anchors)
+    assert read == []
+
+
+@pytest.mark.parametrize("error", [OSError("injected"), ValueError("injected"), RuntimeError("injected")])
+def test_staging_failure_reports_unchanged_live_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """Every staging failure is reported as such and leaves the live install as it was."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    before = tree(harness.layout.agent_dir)
+
+    def fail(*args: object, **kwargs: object) -> None:
+        """Fail staging after the per-run directory exists.
+
+        Parameters:
+            args (object): ignored staging operands.
+            kwargs (object): ignored staging options.
+
+        Raises:
+            Exception: the parametrized staging failure.
+        """
+        raise error
+
+    monkeypatch.setattr(install, "stage", fail)
+    with pytest.raises(InstallError, match=r"^Staging failed; the live install was not changed: injected$"):
+        harness.run(yes=True)
+    assert tree(harness.layout.agent_dir) == before
+    assert list((harness.layout.root / "staging").iterdir()) == []
+    assert not harness.layout.journal.exists()
+
+
+def test_staging_cleanup_failure_keeps_the_staging_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed staging cleanup is attached to, never substituted for, the staging failure."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    original = install.remove
+
+    def fail(*args: object, **kwargs: object) -> None:
+        """Fail staging.
+
+        Parameters:
+            args (object): ignored staging operands.
+            kwargs (object): ignored staging options.
+
+        Raises:
+            OSError: always.
+        """
+        raise OSError("injected")
+
+    def stuck(path: Path, *, anchors: install_paths.AnchoredStore | None = None) -> None:
+        """Refuse to remove the per-run staging directory only.
+
+        Parameters:
+            path (Path): entry to remove.
+            anchors (install_paths.AnchoredStore | None): forwarded anchors.
+
+        Raises:
+            OSError: `path` is the per-run staging directory.
+        """
+        if path.parent.name == "staging":
+            raise OSError("cleanup refused")
+        original(path, anchors=anchors)
+
+    monkeypatch.setattr(install, "stage", fail)
+    monkeypatch.setattr(install, "remove", stuck)
+    with pytest.raises(
+        InstallError,
+        match=r"^Staging failed; the live install was not changed: injected\n"
+        r"Staging directory '.*/staging/[0-9a-f]{32}' was not removed: cleanup refused$",
+    ):
+        harness.run(yes=True)
