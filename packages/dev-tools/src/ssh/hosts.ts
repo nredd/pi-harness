@@ -16,14 +16,17 @@ export function sshConfigPath(homeDir = homedir()): string {
 	return join(homeDir, ".ssh", "config");
 }
 
-/** OpenSSH resolves a relative user-config `Include` against `~/.ssh`, not the including file. */
+/**
+ * OpenSSH resolves a relative user-config `Include` against `~/.ssh`, not the including file, and
+ * skips a pattern whose glob(3) fails or matches nothing.
+ */
 function expandIncludes(pattern: string, sshDir: string, homeDir: string): string[] {
 	const expanded = pattern.startsWith("~/") ? join(homeDir, pattern.slice(2)) : pattern;
 	const absolute = isAbsolute(expanded) ? expanded : resolve(sshDir, expanded);
 	try {
 		return globSync(absolute).sort();
 	} catch {
-		return existsSync(absolute) ? [absolute] : [];
+		return [];
 	}
 }
 
