@@ -44,10 +44,18 @@ the original commit. No branch is moved forward merely to satisfy release freshn
 `harness.release_gate` requires a successful `workflow_dispatch` run of `ci.yml`, its exact
 candidate `head_sha`, the current attempt's complete matrix and core jobs, the successful actual
 execution steps (not just successful job labels), and all retained, nonempty coverage, packed
-contract, Node stack and standalone stack artifacts bound to that run and SHA. The artifacts API
-has no attempt field, so an artifact must also be uploaded no earlier than the current attempt's
-`run_started_at`. Missing, skipped, failed, expired or mismatched evidence refuses, and so does a
-malformed REST page. `python -m harness.release_gate` exits 0 with evidence and 1 when refused; a
+contract, Node stack and standalone stack artifacts bound to that run and SHA.
+
+Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
+uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
+`stack-*` and `standalone-*` to their `stack (<os>, <stack>)` cell). That job must be in the
+current attempt's job list and successful, and exactly one upload of that name must have a
+`created_at` inside the job's `started_at`..`completed_at`, both bounds inclusive, compared as
+offset-aware instants. A naive timestamp refuses. Two uploads inside one window refuse, the newest
+never wins. After "Re-run failed jobs", the new attempt lists the carried-over successful jobs with
+their original timestamps, so their original uploads still qualify; a re-run job qualifies only
+through its new upload, never the failed attempt's same-named artifact. Missing, skipped, failed,
+expired or mismatched evidence refuses, and so does a malformed REST page. `python -m harness.release_gate` exits 0 with evidence and 1 when refused; a
 harness defect raises instead of reading as a refusal. Ordinary push/main smoke and old PR checks are
 not fallbacks. Artifacts use normal Actions retention; expired evidence needs a real rerun, not
 a replacement receipt. The verifier paginates run, job and artifact collections. Ubuntu publication/promotion jobs use
