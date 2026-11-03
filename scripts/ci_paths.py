@@ -55,6 +55,12 @@ STACK_INPUT_PREFIXES = (
     "integration/stacks/",
     "scripts/wsl2_",
 )
+# What `check-benchmark` and its macOS step read: the Makefile recipes, `UV_PYTHON` from `.python-version`,
+# the Node that installs the pinned Codex, and the workflow and tool setup that pin and run them.
+BENCHMARK_INPUT_FILES = frozenset(
+    {"Makefile", ".python-version", ".node-version", ".github/workflows/ci.yml"}
+)
+BENCHMARK_INPUT_PREFIXES = ("benchmarks/comparison/", ".github/actions/setup-ci-tools/")
 
 
 class ClassificationError(RuntimeError):
@@ -70,12 +76,14 @@ class ChangeClassification:
         docs_only (bool): Whether every changed path is safe documentation.
         wsl_inputs (bool): Whether a change reaches the WSL path, so a PR must run it.
         stack_inputs (bool): Whether a change reaches the personal stack scenarios.
+        benchmark_inputs (bool): Whether a change reaches the `benchmarks/comparison` unit gate.
     """
 
     paths: tuple[str, ...]
     docs_only: bool
     wsl_inputs: bool
     stack_inputs: bool
+    benchmark_inputs: bool
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -195,6 +203,18 @@ def is_stack_input(path: str) -> bool:
     return path in STACK_INPUT_FILES or path.startswith(STACK_INPUT_PREFIXES)
 
 
+def is_benchmark_input(path: str) -> bool:
+    """Return whether one changed path reaches the `benchmarks/comparison` unit gate.
+
+    Parameters:
+        path (str): Git-relative path with POSIX separators.
+
+    Returns:
+        bool: Whether a PR changing the path must run `check-benchmark` for real.
+    """
+    return path in BENCHMARK_INPUT_FILES or path.startswith(BENCHMARK_INPUT_PREFIXES)
+
+
 def classify(repo: Path, base: str, head: str) -> ChangeClassification:
     """Classify a real Git diff conservatively, failing closed on errors.
 
@@ -211,12 +231,15 @@ def classify(repo: Path, base: str, head: str) -> ChangeClassification:
         paths = changed_paths(repo, base, head)
     except ClassificationError as e:
         LOGGER.error(f"Failed to classify changed paths: {e}")
-        return ChangeClassification(paths=(), docs_only=False, wsl_inputs=True, stack_inputs=True)
+        return ChangeClassification(
+            paths=(), docs_only=False, wsl_inputs=True, stack_inputs=True, benchmark_inputs=True
+        )
     return ChangeClassification(
         paths=paths,
         docs_only=bool(paths) and all(map(is_documentation_path, paths)),
         wsl_inputs=not paths or any(map(is_wsl_input, paths)),
         stack_inputs=not paths or any(map(is_stack_input, paths)),
+        benchmark_inputs=not paths or any(map(is_benchmark_input, paths)),
     )
 
 
@@ -233,7 +256,7 @@ def write_github_output(path: Path, result: ChangeClassification) -> None:
     delimiter = f"CI_PATHS_{uuid.uuid4().hex}"
     changed = "\n".join(result.paths)
     with path.open("a", encoding="utf-8") as output:
-        for name in ("docs_only", "wsl_inputs", "stack_inputs"):
+        for name in ("docs_only", "wsl_inputs", "stack_inputs", "benchmark_inputs"):
             output.write(f"{name}={str(getattr(result, name)).lower()}\n")
         output.write(f"changed_files<<{delimiter}\n{changed}\n{delimiter}\n")
 

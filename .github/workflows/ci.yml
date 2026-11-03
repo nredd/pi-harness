@@ -22,6 +22,7 @@ jobs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       wsl_inputs: ${{ steps.classify.outputs.wsl_inputs }}
       stack_inputs: ${{ steps.classify.outputs.stack_inputs }}
+      benchmark_inputs: ${{ steps.classify.outputs.benchmark_inputs }}
       changed_files: ${{ steps.classify.outputs.changed_files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,9 +40,10 @@ jobs:
           DOCS_ONLY: ${{ steps.classify.outputs.docs_only }}
           WSL_INPUTS: ${{ steps.classify.outputs.wsl_inputs }}
           STACK_INPUTS: ${{ steps.classify.outputs.stack_inputs }}
+          BENCHMARK_INPUTS: ${{ steps.classify.outputs.benchmark_inputs }}
           CHANGED_FILES: ${{ steps.classify.outputs.changed_files }}
         run: |
-          echo "Changed-path classification: docs-only=$DOCS_ONLY wsl-inputs=$WSL_INPUTS stack-inputs=$STACK_INPUTS"
+          echo "Changed-path classification: docs-only=$DOCS_ONLY wsl-inputs=$WSL_INPUTS stack-inputs=$STACK_INPUTS benchmark-inputs=$BENCHMARK_INPUTS"
           echo "::notice title=bench not run::No quiet self-hosted runner yet; hosted runners cannot meet the bench admission policy"
           {
             echo "### CI path classification"
@@ -51,6 +53,8 @@ jobs:
             echo "WSL inputs: \`$WSL_INPUTS\`"
             echo
             echo "Stack inputs: \`$STACK_INPUTS\`"
+            echo
+            echo "Benchmark inputs: \`$BENCHMARK_INPUTS\`"
             echo
             echo "Changed files:"
             echo '```text'
@@ -206,7 +210,7 @@ jobs:
             node -e 'const m = require(process.argv[1]); if (!m.scripts["test:bun"]) console.log(`::notice title=bun test not run::${m.name} has no declared Bun suite yet`)' "./$manifest"
           done
       - name: Benchmark unit gate
-        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'
+        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS' && (needs.classify.outputs.benchmark_inputs == 'true' || github.event_name == 'push')
         run: |
           # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
           # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
@@ -221,6 +225,15 @@ jobs:
       - name: Benchmark unit gate (not run)
         if: steps.plan.outputs.run == 'true' && runner.os != 'macOS'
         run: echo "::notice title=check-benchmark not run::macOS only, its native_runtime test needs Seatbelt"
+      - name: Benchmark unit gate (not run, no benchmark inputs)
+        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS' && needs.classify.outputs.benchmark_inputs != 'true' && github.event_name != 'push'
+        run: |
+          why="This pull request changes no benchmark input (benchmarks/comparison, Makefile, .python-version, .node-version, ci.yml, setup-ci-tools); check-benchmark runs for real on main pushes and on PRs that change them."
+          echo "::notice title=check-benchmark NOT RUN::$why"
+          {
+            echo "### check-benchmark: NOT RUN"
+            echo "$why This is not a pass."
+          } >>"$GITHUB_STEP_SUMMARY"
       - uses: ./.github/actions/capture-ci-wsl
         if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
         with:
