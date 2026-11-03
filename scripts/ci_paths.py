@@ -56,9 +56,10 @@ STACK_INPUT_PREFIXES = (
     "scripts/wsl2_",
 )
 # What `check-benchmark` and its macOS step read: the Makefile recipes, `UV_PYTHON` from `.python-version`,
-# the Node that installs the pinned Codex, and the workflow and tool setup that pin and run them.
+# the Node that installs the pinned Codex, the workflow and tool setup that pin and run them, and this
+# classifier, so a broken predicate cannot switch the gate off on the PR that breaks it.
 BENCHMARK_INPUT_FILES = frozenset(
-    {"Makefile", ".python-version", ".node-version", ".github/workflows/ci.yml"}
+    {"Makefile", ".python-version", ".node-version", ".github/workflows/ci.yml", "scripts/ci_paths.py"}
 )
 BENCHMARK_INPUT_PREFIXES = ("benchmarks/comparison/", ".github/actions/setup-ci-tools/")
 

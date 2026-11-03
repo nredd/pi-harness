@@ -210,7 +210,7 @@ jobs:
             node -e 'const m = require(process.argv[1]); if (!m.scripts["test:bun"]) console.log(`::notice title=bun test not run::${m.name} has no declared Bun suite yet`)' "./$manifest"
           done
       - name: Benchmark unit gate
-        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS' && (needs.classify.outputs.benchmark_inputs == 'true' || github.event_name == 'push')
+        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS' && (needs.classify.outputs.benchmark_inputs != 'false' || github.event_name == 'push')
         run: |
           # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
           # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
@@ -226,9 +226,9 @@ jobs:
         if: steps.plan.outputs.run == 'true' && runner.os != 'macOS'
         run: echo "::notice title=check-benchmark not run::macOS only, its native_runtime test needs Seatbelt"
       - name: Benchmark unit gate (not run, no benchmark inputs)
-        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS' && needs.classify.outputs.benchmark_inputs != 'true' && github.event_name != 'push'
+        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS' && needs.classify.outputs.benchmark_inputs == 'false' && github.event_name != 'push'
         run: |
-          why="This pull request changes no benchmark input (benchmarks/comparison, Makefile, .python-version, .node-version, ci.yml, setup-ci-tools); check-benchmark runs for real on main pushes and on PRs that change them."
+          why="This pull request changes no benchmark input (BENCHMARK_INPUT_FILES and BENCHMARK_INPUT_PREFIXES in scripts/ci_paths.py); check-benchmark runs for real on main pushes and on PRs that change them."
           echo "::notice title=check-benchmark NOT RUN::$why"
           {
             echo "### check-benchmark: NOT RUN"

@@ -300,38 +300,18 @@ def test_write_github_output_preserves_changed_file_list(tmp_path: Path) -> None
     assert "docs/ci.md\nPLAN.md\n" in contents
 
 
-@pytest.mark.parametrize("benchmark_inputs", [True, False])
-def test_write_github_output_publishes_benchmark_inputs(tmp_path: Path, benchmark_inputs: bool) -> None:
-    """Publish `benchmark_inputs` from its own field, whatever the other flags say.
-
-    Parameters:
-        tmp_path (Path): Pytest temporary directory.
-        benchmark_inputs (bool): Whether the fixture touches benchmark inputs.
-
-    Returns:
-        None: Assertions verify workflow output.
-    """
-    output = tmp_path / "output"
-    ci_paths.write_github_output(
-        output,
-        ci_paths.ChangeClassification(
-            paths=("a",),
-            docs_only=False,
-            wsl_inputs=True,
-            stack_inputs=True,
-            benchmark_inputs=benchmark_inputs,
-        ),
-    )
-    assert (
-        f"benchmark_inputs={str(benchmark_inputs).lower()}" in output.read_text(encoding="utf-8").splitlines()
-    )
-
-
 @pytest.mark.parametrize(
-    ("wsl_inputs", "stack_inputs"), [(True, False), (False, True), (True, True), (False, False)]
+    ("wsl_inputs", "stack_inputs", "benchmark_inputs"),
+    [
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (True, True, True),
+        (False, False, False),
+    ],
 )
 def test_write_github_output_keeps_input_flags_independent(
-    tmp_path: Path, wsl_inputs: bool, stack_inputs: bool
+    tmp_path: Path, wsl_inputs: bool, stack_inputs: bool, benchmark_inputs: bool
 ) -> None:
     """Publish each input flag from its own field.
 
@@ -339,6 +319,7 @@ def test_write_github_output_keeps_input_flags_independent(
         tmp_path (Path): Pytest temporary directory.
         wsl_inputs (bool): Whether the fixture touches WSL inputs.
         stack_inputs (bool): Whether the fixture touches stack inputs.
+        benchmark_inputs (bool): Whether the fixture touches benchmark inputs.
 
     Returns:
         None: Assertions verify workflow output.
@@ -351,12 +332,13 @@ def test_write_github_output_keeps_input_flags_independent(
             docs_only=False,
             wsl_inputs=wsl_inputs,
             stack_inputs=stack_inputs,
-            benchmark_inputs=False,
+            benchmark_inputs=benchmark_inputs,
         ),
     )
     lines = output.read_text(encoding="utf-8").splitlines()
     assert f"wsl_inputs={str(wsl_inputs).lower()}" in lines
     assert f"stack_inputs={str(stack_inputs).lower()}" in lines
+    assert f"benchmark_inputs={str(benchmark_inputs).lower()}" in lines
 
 
 @pytest.mark.parametrize(
@@ -501,6 +483,7 @@ def test_stack_inputs_reject_local_only_and_unrelated_paths(repo: Path, path: st
         ".node-version",
         ".github/workflows/ci.yml",
         ".github/actions/setup-ci-tools/action.yml",
+        "scripts/ci_paths.py",
     ],
 )
 def test_benchmark_inputs_accept_paths_the_unit_gate_reads(repo: Path, path: str) -> None:
@@ -520,7 +503,7 @@ def test_benchmark_inputs_accept_paths_the_unit_gate_reads(repo: Path, path: str
     "path",
     [
         "packages/router/src/index.ts",
-        "scripts/ci_paths.py",
+        "scripts/ci_guest_x.py",
         "integration/pyproject.toml",
         "integration/uv.lock",
         "package.json",

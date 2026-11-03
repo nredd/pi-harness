@@ -34,7 +34,7 @@ Which cell does what. Every required check name reports, per the ruleset below. 
 
 | Check | PR | `main` push |
 | --- | --- | --- |
-| `owned` / `contracts (ubuntu-24.04, macos-14)` | Runs | Runs |
+| `owned` / `contracts (ubuntu-24.04, macos-14)` | Runs, except the macOS `check-benchmark` step, which runs only with `benchmark_inputs` | Runs |
 | `owned` / `contracts (wsl2)` | Runs on `windows-2025` only with `wsl_inputs`, otherwise bypass cell | Runs on `windows-2025` |
 | `stack (ubuntu-24.04, personal)` | Runs; without `stack_inputs` only setup runs and the personal steps report NOT RUN | Runs, ignoring `stack_inputs` |
 | `stack (ubuntu-24.04, local)` | Runs | Selective smoke, not run |
@@ -43,13 +43,13 @@ Which cell does what. Every required check name reports, per the ruleset below. 
 | `stack (wsl2, personal)` | Bypass cell | Bypass cell |
 | `stack (wsl2, local)` | Bypass cell | Bypass cell |
 
-`scripts/ci_paths.py` publishes all three inputs and fails closed: an unreadable comparison, an empty diff or a Gitlink change sets them all true. A missing `wsl_inputs` or `stack_inputs` output is treated as true too, because the workflow only tests for `false`. `benchmark_inputs` is the reverse: the gate runs only on an explicit `true`, so it always has `classify`'s output.
+`scripts/ci_paths.py` publishes all three inputs and fails closed: an unreadable comparison, an empty diff or a Gitlink change sets them all true. A missing output is treated as true too for all three, because the workflow only skips on an explicit `false`.
 
 - `wsl_inputs`: `.github/`, `scripts/wsl2_*`, `scripts/ci*`, `integration/probes/`, the lockfiles and `integration/pyproject.toml`, the guest bootstrap's `scripts/install_gh_linux.sh` and `scripts/install_wsl_owned_tools.sh`, the guest gates' `scripts/import_audit.ts`, `scripts/check-biome-paths.mjs`, `scripts/router_contract.mjs` and `scripts/run-vitest.ts`, `Makefile`, root `package.json` (`packageManager`), `.gitattributes` (the LF checkout), `.gitmodules`, `.node-version`, `.bun-version`, `.python-version`
 - `stack_inputs`: `integration/{stacks,harness,scenarios,providers,golden,probes}`, `integration/conftest.py`, `integration/pyproject.toml`, `integration/uv.lock`, `Makefile`, `.github/`, `forks/`, root `package.json` and `package-lock.json`, `.gitmodules`, the same version pins, `scripts/wsl2_*`. `packages/` is not one: `harness.stack` maps those paths into `local`, the personal stack installs published bytes
-- `benchmark_inputs`: `benchmarks/comparison/` (code, tests, `pyproject.toml`, `uv.lock`, results), `Makefile` (`install-benchmark`, `check-benchmark`, `PY_CHECK`), `.python-version` (the step's `UV_PYTHON`), `.node-version` (the Node that installs the pinned Codex), `.github/workflows/ci.yml` (the Codex pin and the step), `.github/actions/setup-ci-tools/`. Nothing else reads it: no product package imports it, and `coverage/policy.json` only inventories it
+- `benchmark_inputs`: `benchmarks/comparison/` (code, tests, `pyproject.toml`, `uv.lock`, results), `Makefile` (`install-benchmark`, `check-benchmark`, `PY_CHECK`), `.python-version` (the step's `UV_PYTHON`), `.node-version` (the Node that installs the pinned Codex), `.github/workflows/ci.yml` (the Codex pin and the step), `.github/actions/setup-ci-tools/`, `scripts/ci_paths.py` (a broken predicate cannot switch the gate off on the PR that breaks it). Nothing else reads it: no product package imports it, and `coverage/policy.json` only inventories it
 
-The macOS `Benchmark unit gate` (issue #315) is path-gated at step level, not by a workflow path filter, so `owned (macos-14)` still reports. It runs when `benchmark_inputs` is true or on every `push` to `main`, which still catches runner and image drift (#304). A PR without them prints `check-benchmark NOT RUN` with the reason in the log and step summary. That is not a pass. The 90% `fail_under` is unchanged and still blocks every PR that touches its inputs. `make check` still runs `check-benchmark` locally. A `benchmarks/comparison` break from a change outside the list above fails on the `main` push, after merge.
+The macOS `Benchmark unit gate` (issue #315) is path-gated at step level, not by a workflow path filter, so `owned (macos-14)` still reports. It runs when `benchmark_inputs` is true or on every `push` to `main`, which still catches runner and image drift (#304). A PR without them prints `check-benchmark NOT RUN` with the reason in the log and step summary. That is not a pass. The 90% `fail_under` is unchanged and still blocks every PR that touches its inputs. `make check` still runs `check-benchmark` locally. A `benchmarks/comparison` break from a change outside the list above, e.g. a root `package.json` `packageManager` bump, fails on the `main` push, after merge. The NOT RUN reason points at `BENCHMARK_INPUT_FILES` and `BENCHMARK_INPUT_PREFIXES` in `scripts/ci_paths.py` instead of copying the list.
 
 Evidence given up to cut queue time (issue #297):
 
