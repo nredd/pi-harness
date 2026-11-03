@@ -35,6 +35,7 @@ import type { ModelSelection } from "./model-selection.js";
 import {
   createNestedSubagentTools,
   getMaxSubagentDepth,
+  hasNestableTypes,
   NESTED_WORKFLOW_ERROR,
   NESTED_WORKFLOW_NO_AGENT_ERROR,
   type NestedAgentManager,
@@ -1065,10 +1066,13 @@ export async function runAgent(
     ? options.nestedRuntime
     : undefined;
   // One answer for the prompt and the workflow refusal: does this child end up with `Agent`?
-  const agentAvailable = Boolean(
+  // An allowlist that resolves to no enabled agent leaves Agent nothing to
+  // accept; omit the tools rather than advertise "none" as a type (#331, #333).
+  const nestingPossible = Boolean(
     agentConfig?.allowedSubagents && nestedRuntime && !isolated
-      && !agentConfig.disallowedTools?.includes("Agent"),
+      && hasNestableTypes(agentConfig.allowedSubagents, { homeDir: options.homeDir, configCwd, projectTrusted }),
   );
+  const agentAvailable = nestingPossible && !agentConfig?.disallowedTools?.includes("Agent");
   if (agentConfig?.allowedSubagents && !agentAvailable) extras.nestingDisabled = true;
 
   // Build system prompt from agent config
@@ -1275,7 +1279,7 @@ export async function runAgent(
   // set `allowed_subagents` and a nestedRuntime was provided — and never when
   // isolated. Their names collide with EXCLUDED_TOOL_NAMES by design, so the
   // scoping below re-admits them explicitly (registry deny + active-set narrow).
-  const nestedTools = agentConfig?.allowedSubagents && nestedRuntime && !isolated
+  const nestedTools = agentConfig?.allowedSubagents && nestedRuntime && nestingPossible
     ? createNestedSubagentTools({
         manager: nestedRuntime.manager,
         pi: options.pi,

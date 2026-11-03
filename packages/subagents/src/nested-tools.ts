@@ -186,19 +186,54 @@ function formatOutcome(record: AgentRecord, position: ResultPosition): string {
   return note ? `Nested agent${note}.\n\n${text}` : text;
 }
 
+type NestedRegistryScope = Pick<NestedToolContext, "homeDir" | "configCwd" | "projectTrusted">;
+
+function loadNestedRegistry(scope: NestedRegistryScope): Map<string, AgentConfig> {
+  return buildAgentRegistry(loadCustomAgents(scope.configCwd, false, { projectTrusted: scope.projectTrusted, homeDir: scope.homeDir }));
+}
+
+function allowedTypeSet(
+  registry: Map<string, AgentConfig>,
+  allowedSubagents: NestedToolContext["allowedSubagents"],
+): Set<string> | undefined {
+  return allowedSubagents === "all"
+    ? undefined
+    : new Set(allowedSubagents.map(name => resolveTypeIn(registry, name) ?? name));
+}
+
+function availableNestedTypes(
+  registry: Map<string, AgentConfig>,
+  allowedSubagents: NestedToolContext["allowedSubagents"],
+): string[] {
+  const allowed = allowedTypeSet(registry, allowedSubagents);
+  return getAvailableTypesIn(registry).filter(name => allowed === undefined || allowed.has(name));
+}
+
+/**
+ * Whether a parent with this allowlist could spawn anything at all. An
+ * allowlist naming only missing or disabled agents (or `all` over an empty
+ * registry) leaves `Agent` with nothing to accept; the runner must then not
+ * inject the tools, the same as `allowed_subagents` being unset (#331, #333).
+ */
+export function hasNestableTypes(
+  allowedSubagents: NestedToolContext["allowedSubagents"],
+  scope: NestedRegistryScope,
+): boolean {
+  return availableNestedTypes(loadNestedRegistry(scope), allowedSubagents).length > 0;
+}
+
 /** Build child-safe orchestration tools scoped to one parent agent instance. */
 export function createNestedSubagentTools(context: NestedToolContext): ToolDefinition[] {
   // Agents resolve from a registry built for THIS branch's config root (under
   // worktree isolation, the copy). Never via registerAgents — that is
   // process-global state shared with the main session and every other agent.
-  const loadRegistry = () => buildAgentRegistry(loadCustomAgents(context.configCwd, false, { projectTrusted: context.projectTrusted, homeDir: context.homeDir }));
-  const allowedTypesIn = (registry: Map<string, AgentConfig>): Set<string> | undefined =>
-    context.allowedSubagents === "all"
-      ? undefined
-      : new Set(context.allowedSubagents.map(name => resolveTypeIn(registry, name) ?? name));
-  const availableIn = (registry: Map<string, AgentConfig>): string[] => {
-    const allowed = allowedTypesIn(registry);
-    return getAvailableTypesIn(registry).filter(name => allowed === undefined || allowed.has(name));
+  const loadRegistry = () => loadNestedRegistry(context);
+  const allowedTypesIn = (registry: Map<string, AgentConfig>) => allowedTypeSet(registry, context.allowedSubagents);
+  const availableIn = (registry: Map<string, AgentConfig>) => availableNestedTypes(registry, context.allowedSubagents);
+  // Never the literal "none": a model reads it as a type name and calls it (#331, #333).
+  const listAvailable = (registry: Map<string, AgentConfig>): string => {
+    const names = availableIn(registry);
+    return names.length > 0 ? names.join(", ") : "no agent types are currently available";
   };
 
   const agentTool = defineTool({
@@ -210,7 +245,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     parameters: Type.Object({
       prompt: Type.String({ description: "Self-contained task for the nested agent." }),
       description: Type.String({ description: "Short 3-5 word task description." }),
-      subagent_type: Type.String({ description: `Allowed nested agent type. Available: ${availableIn(loadRegistry()).join(", ") || "none"}.` }),
+      subagent_type: Type.String({ description: `Allowed nested agent type. Available: ${listAvailable(loadRegistry())}.` }),
       model: Type.Optional(Type.String({ description: "Optional configured @tier or provider/model override; explicit values win over agentModels and the definition." })),
       thinking: Type.Optional(Type.String({ description: "Optional thinking level." })),
       max_turns: Type.Optional(Type.Number({ minimum: 1 })),
@@ -266,8 +301,14 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       // agents this parent may not reach.
       const resolvedType = resolveEnabledTypeIn(registry, rawType);
       if (resolvedType === undefined) {
+        if (availableIn(registry).length === 0) {
+          return textResult(
+            `No nested agent types are available to this parent, so Agent cannot spawn anything. Do the work yourself, inline.`,
+            true,
+          );
+        }
         return textResult(
-          `Unknown or disabled nested agent type: "${rawType}". Allowed: ${availableIn(registry).join(", ") || "none"}.`,
+          `Unknown or disabled nested agent type: "${rawType}". Allowed: ${availableIn(registry).join(", ")}.`,
           true,
         );
       }
