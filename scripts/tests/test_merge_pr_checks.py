@@ -29,6 +29,13 @@ FIXTURE = Path(__file__).parent / "fixtures" / "merge-pr-135.json"
 REPO = "nredd/pi-harness"
 REVIEWER_SKELETON_PATTERN = re.compile(r"```text\n(Axis: .*?)```", re.S)
 REVIEWER_CHECKED_LINE_PATTERN = re.compile(r"^- <rule.*$", re.M)
+# Template receipt modes -> explicit (inline_none, no_spec) rendering flags.
+TEMPLATE_MODES: dict[str, tuple[bool, bool]] = {
+    "template-skeleton": (False, False),
+    "template-inline-none": (True, False),
+    "template-no-spec": (False, True),
+    "template-no-spec-inline-none": (True, True),
+}
 
 
 class Replay(checks.GitHub):
@@ -587,10 +594,9 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
         elif mode == "conflicting-receipt":
             header += f"Reviewed HEAD: {'0' * 40}\n"
         report = header + "Checked:\n- Exact diff\nFindings:\nNone."
-        if mode.startswith("template-"):
-            report = reviewer_template_report(
-                axis, sha, inline_none=mode.endswith("inline-none"), no_spec="no-spec" in mode
-            )
+        if mode in TEMPLATE_MODES:
+            inline_none, no_spec = TEMPLATE_MODES[mode]
+            report = reviewer_template_report(axis, sha, inline_none=inline_none, no_spec=no_spec)
         if mode == "incidental-sha":
             report += f"\nPrior request mentioned {sha}; this conclusion reviews {reviewed}."
         messages = [

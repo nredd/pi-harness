@@ -57,7 +57,7 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn both sub-agents in parallel
 
-A top-level parent spawns two `Agent` calls in one message, both `subagent_type: "code-reviewer"`, `run_in_background: true`, and no `model` unless the user named one. A delegated session omits `run_in_background`, uses the supported blocking calls, and consumes both inline results before returning. The configured `agentModels` route selects the reviewer model. The agent is read-only and already carries the output template, the hard/judgement rule and the word cap: do NOT restate them. Each prompt names its axis and supplies only the axis material. If the review route is quota-parked, wait; do not silently substitute a model.
+A top-level parent spawns two `Agent` calls in one message, both `subagent_type: "code-reviewer"`, `run_in_background: true`, and no `model` override. A delegated session omits `run_in_background`, uses the supported blocking calls, and consumes both inline results before returning. The configured `agentModels` route selects the reviewer model. The agent is read-only and already carries the output template, the hard/judgement rule and the word cap: do NOT restate them. Each prompt names its axis and supplies only the axis material. If the review route is quota-parked, wait; do not silently substitute a model.
 
 **Standards prompt** (`Axis: Standards`) includes:
 

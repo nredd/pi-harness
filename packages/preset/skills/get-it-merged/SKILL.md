@@ -42,12 +42,12 @@ pollers. A worker returns the proposed monitor command instead. Keep model turns
 
 For the next unblocked PR in the order:
 
-- Confirm its exact current HEAD has separate Standards + Spec reviews without model overrides and a dedicated critic; both axes name the preserved original full merge-base, current full HEAD, and whole-PR range
+- When a worker or permitted critic receipt is present, confirm it names `critic`, its identity/model, original SHA-bound invocation, and tool-routing metadata; accept only its native `No findings.` or structured finding output. Never synthesize `Checked:` evidence for the critic. A worker's `Parent critic: PENDING` is not a critic receipt
+- Confirm its exact current HEAD has separate Standards + Spec reviews without model overrides; both axes name the preserved original full merge-base, current full HEAD, and whole-PR range
 - Confirm the Standards and Spec axes have `Checked:` evidence and every reviewer has a named identity/model
-- Confirm the critic receipt names `critic`, its identity/model, original SHA-bound invocation, and tool-routing metadata; accept only its native `No findings.` or structured finding output. Never synthesize `Checked:` evidence for the critic
-- Confirm neither axis nor the critic has an unresolved blocking finding
+- Confirm neither axis nor any present critic receipt has an unresolved blocking finding
 - Confirm normal required checks are green or pending-and-healthy on that exact HEAD. Use the repository's documented flake policy for any rerun: preserve attempts and rerun the whole permitted job, never a selected failed-test subset or an until-green loop
-- Run the parent's own final critic on the exact HEAD. Auto-merge stays off until it is consumed
+- Gate: run the parent's own final critic on the exact HEAD and resolve its blocking findings. It is mandatory even when a worker critic receipt is present. Auto-merge stays off until it is consumed
 
 ## 4. Merge and advance (parent)
 

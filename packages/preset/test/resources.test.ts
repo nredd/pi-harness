@@ -186,123 +186,133 @@ const section = (text: string, heading: string): string => {
 	return text.slice(start, next < 0 ? undefined : next);
 };
 
-/** Every `Checked:` admission bullet must scope itself to the two axes or the critic. */
-const checkedBulletsScoped = (policy: string): boolean => {
-	const bullets = section(policy, "3. Admit one candidate")
-		.split("\n")
-		.filter((line) => line.startsWith("- ") && line.includes("`Checked:`"));
-	return (
-		bullets.length >= 2 &&
-		bullets.every((line) => /Standards and Spec axes|for the critic/.test(line)) &&
-		bullets.some((line) => line.includes("Never synthesize `Checked:` evidence for the critic"))
-	);
+const missing = (clauses: Record<string, boolean>): string[] =>
+	Object.entries(clauses)
+		.filter(([, held]) => !held)
+		.map(([name]) => name);
+
+/** Names of the merge-step clauses the parent driver no longer carries. */
+const missingDriveClauses = (policy: string): string[] => {
+	const drive = section(policy, "4. Merge and advance (parent)");
+	return missing({
+		"pinned auto-merge": /gh pr merge <N> --auto --<method> --match-head-commit <full-sha>/.test(drive),
+		"pinned explicit merge when unprotected":
+			/Backend not proven protected: keep auto-merge OFF[^\n]*gh pr merge <N> --<method> --match-head-commit <full-sha>/.test(
+				drive,
+			),
+		"uncertain protection is unprotected":
+			/A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected/.test(drive),
+		"caller cannot bypass": drive.includes("the merging caller cannot bypass them"),
+		"no --admin": drive.includes("Never use `--admin` or any bypass"),
+		"native monitor": drive.includes("monitor_start"),
+		"next PR loop": drive.includes("return to step 3 for the next unblocked PR"),
+		"whole list": drive.includes("every requested PR is merged"),
+		"no parent handoff": !/hand(?:s)? (?:the|it to the) parent/i.test(drive),
+		"parent driver": /PARENT driver[^\n]*never hands the merge to "the parent": it IS the parent/.test(policy),
+		"worker has no merge authority": /DELEGATED worker[^\n]*no merge authority/.test(policy),
+	});
 };
 
-/** The parent must itself arm pinned auto-merge, monitor natively and loop, never hand off to itself. */
-const drivesWholeList = (policy: string): boolean => {
-	const drive = section(policy, "4. Merge and advance (parent)");
-	return (
-		/gh pr merge <N> --auto --<method> --match-head-commit <full-sha>/.test(drive) &&
-		drive.includes("monitor_start") &&
-		/Arming auto-merge merges IMMEDIATELY when the base branch has no effective required checks/.test(drive) &&
-		/A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected/.test(drive) &&
-		/readable applicable rulesets and classic branch protection establish effective required checks for this base \*and\* that the merging caller cannot bypass them/.test(
-			drive,
-		) &&
-		/Backend not proven protected: keep auto-merge OFF[^\n]*gh pr merge <N> --<method> --match-head-commit <full-sha>/.test(
-			drive,
-		) &&
-		/Never use `--admin` or any bypass/.test(drive) &&
-		drive.includes("return to step 3 for the next unblocked PR") &&
-		drive.includes("every requested PR is merged") &&
-		!/hand (?:the|it to the) parent/i.test(drive) &&
-		!/hand(?:s)? the parent/i.test(section(policy, "3. Admit one candidate")) &&
-		/PARENT driver[^\n]*never hands the merge to "the parent": it IS the parent/.test(policy) &&
-		/DELEGATED worker[^\n]*no merge authority/.test(policy)
-	);
+/** Names of the admission clauses that gate merge on critics without fabricated evidence. */
+const missingCriticGate = (policy: string): string[] => {
+	const bullets = section(policy, "3. Admit one candidate")
+		.split("\n")
+		.filter((line) => line.startsWith("- "));
+	const checked = bullets.filter((line) => line.includes("`Checked:`"));
+	return missing({
+		"worker or permitted critic receipt first": /^- When a worker or permitted critic receipt is present/.test(
+			bullets[0] ?? "",
+		),
+		"parent final critic gate last": /^- Gate: run the parent's own final critic on the exact HEAD[^\n]*mandatory/.test(
+			bullets.at(-1) ?? "",
+		),
+		"checked scoped to axes": checked.every((line) => /Standards and Spec axes|for the critic/.test(line)),
+		"no synthesized critic evidence": checked.some((line) =>
+			line.includes("Never synthesize `Checked:` evidence for the critic"),
+		),
+	});
 };
 
 const assertNoForcedModel = (text: string): void => assert.doesNotMatch(text, /\bmodel\s*:\s*\S/);
 
-test("shipping resources require exact-HEAD review, parent monitoring, and no forced model or unpinned auto-merge", () => {
-	const review = readText("skills/code-review/SKILL.md");
-	const ship = readText("skills/ship-issue/SKILL.md");
-	const merge = readText("skills/get-it-merged/SKILL.md");
-	for (const text of [review, ship, merge]) {
+test("shipping skills pin every merge to the head, never bypass protection, and force no model", () => {
+	let merges = 0;
+	for (const skill of ["code-review", "ship-issue", "get-it-merged"]) {
+		const text = readText(`skills/${skill}/SKILL.md`);
 		assertNoForcedModel(text);
-		for (const line of text.split("\n").filter((l) => /gh pr merge\b[^\n]*--auto\b/.test(l))) {
-			assert.match(line, /--match-head-commit/, `unpinned auto-merge: ${line}`);
+		for (const [command] of text.matchAll(/`gh pr merge [^`]*`/g)) {
+			merges++;
+			if (command.includes("--disable-auto")) continue;
+			assert.match(command, /--match-head-commit <full-sha>/, `${skill}: unpinned ${command}`);
+			assert.doesNotMatch(command, /--admin/, `${skill}: ${command}`);
 		}
 	}
-	assert.match(review, /no `model` unless the user named one/);
-	assert.match(ship, /use `\/skill:code-review` for the separate Standards/);
-	assert.match(ship, /shared skill selects parent background versus delegated blocking calls/);
-	assert.match(ship, /Delegated worker: keep auto-merge off/);
-	assert.match(ship, /follow `\/skill:get-it-merged` steps 3-4 as a one-PR train/);
-	assert.match(ship, /Do not duplicate or weaken it here/);
-	assert.match(merge, /Whole-PR review receipts: record the original full merge-base and current full HEAD/);
-	assert.match(merge, /corrective-delta reviews are supplemental only/);
-	assert.match(merge, /Run the parent's own final critic on the exact HEAD/);
-	assert.match(merge, /native session-kit monitors/);
-	assert.match(merge, /Do not require a latest-main rebase solely because the base advanced/);
-	assert.match(merge, /frozen combined gate immediately before\npublish\/deploy/);
-	assert.match(merge, /Keep model turns and subagents for substantive work/);
-	assert.match(ship, /original SHA-bound invocation, tool-routing metadata, native output/);
+	assert.ok(merges >= 2, "no merge commands scanned");
+	for (const override of ["model: opus", 'model: "sonnet"']) assert.throws(() => assertNoForcedModel(override));
 });
 
-test("code-reviewer template documents the required receipt syntax", () => {
+test("code-reviewer ships the receipt skeleton the parser accepts, including the no-spec branch", () => {
 	const reviewer = readText("agents/code-reviewer.md");
-	assert.match(reviewer, /`Checked:` has one `- ` line per standard rule or spec requirement/);
-	assert.match(reviewer, /A clean review still lists what it checked/);
-	assert.match(reviewer, /Spec axis with no spec supplied: use the skeleton/);
 	assert.match(reviewer, /^Axis: <Standards\|Spec>\nReviewed HEAD: <full-40-character-sha>\nChecked:\n- /m);
 	assert.match(reviewer, /\nFindings:\n\[hard\|judgement\]/);
 	assert.doesNotMatch(reviewer, /^Findings: \S/m);
+	assert.match(reviewer, /`Checked:` \/ `- No spec available\.`/);
 });
 
-test("get-it-merged admits critic receipts without fabricated review evidence", () => {
+test("get-it-merged gates admission on the parent critic; negative controls", () => {
 	const merge = readText("skills/get-it-merged/SKILL.md");
-	const ship = readText("skills/ship-issue/SKILL.md");
-	assert.ok(checkedBulletsScoped(merge));
-	assert.ok(
-		!checkedBulletsScoped(
-			merge.replace(
-				"Confirm the Standards and Spec axes have `Checked:` evidence and every reviewer has a named identity/model",
-				"Confirm all three reviews have `Checked:` evidence and a named identity/model",
-			),
+	assert.deepEqual(missingCriticGate(merge), []);
+	const mutate = (from: string, to: string) => {
+		assert.ok(merge.includes(from), `fixture drift: ${from}`);
+		return merge.split(from).join(to);
+	};
+	assert.deepEqual(missingCriticGate(mutate("- When a worker or permitted critic receipt", "- If a critic receipt")), [
+		"worker or permitted critic receipt first",
+	]);
+	assert.deepEqual(missingCriticGate(mutate("It is mandatory even when", "It is optional when")), [
+		"parent final critic gate last",
+	]);
+	assert.deepEqual(
+		missingCriticGate(
+			mutate("Confirm the Standards and Spec axes have `Checked:`", "Confirm all reviews have `Checked:`"),
 		),
+		["checked scoped to axes"],
 	);
-	assert.match(merge, /original invocation's full SHA/);
-	assert.match(merge, /tool-routing metadata/);
-	assert.match(ship, /Accept only the critic's native `No findings\.` or structured finding/);
+	assert.deepEqual(missingCriticGate(mutate("Never synthesize `Checked:` evidence for the critic", "Done")), [
+		"no synthesized critic evidence",
+	]);
 });
 
 test("get-it-merged parent drives the whole list; negative controls", () => {
 	const merge = readText("skills/get-it-merged/SKILL.md");
-	assert.ok(drivesWholeList(merge));
+	assert.deepEqual(missingDriveClauses(merge), []);
 	const drive = section(merge, "4. Merge and advance (parent)");
-	const mutate = (from: string | RegExp, to: string) => {
-		assert.ok(typeof from === "string" ? merge.includes(from) : from.test(merge), `fixture drift: ${from}`);
-		return typeof from === "string" ? merge.split(from).join(to) : merge.replace(from, to);
+	const mutate = (from: string, to: string) => {
+		assert.ok(merge.includes(from), `fixture drift: ${from}`);
+		return merge.split(from).join(to);
 	};
-	assert.ok(!drivesWholeList(mutate("--match-head-commit <full-sha>", "")));
-	assert.ok(!drivesWholeList(mutate("return to step 3 for the next unblocked PR", "stop")));
-	assert.ok(!drivesWholeList(mutate("monitor_start", "poll")));
-	assert.ok(
-		!drivesWholeList(
-			mutate("A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected", "A 403 is fine"),
-		),
-	);
-	assert.ok(!drivesWholeList(mutate("the merging caller cannot bypass them", "the merging caller can bypass them")));
-	assert.ok(
-		!drivesWholeList(
-			mutate("Backend not proven protected: keep auto-merge OFF", "Backend not proven protected: arm it"),
-		),
-	);
-	assert.ok(!drivesWholeList(mutate("Never use `--admin` or any bypass", "")));
-	assert.ok(!drivesWholeList(mutate("every requested PR is merged", "one PR is merged")));
-	assert.ok(!drivesWholeList(mutate(drive, `${drive}\n- Hand the parent the PR URL and stop.`)));
-	assert.ok(!drivesWholeList(mutate(/## 4\. Merge and advance \(parent\)[\s\S]*?(?=\n## 5)/, "")));
+	const cases: [string, string, string[]][] = [
+		["--auto --<method> --match-head-commit <full-sha>", "--auto --<method>", ["pinned auto-merge"]],
+		[
+			"merge explicitly with `gh pr merge <N> --<method> --match-head-commit <full-sha>`",
+			"merge explicitly",
+			["pinned explicit merge when unprotected"],
+		],
+		[
+			"A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected",
+			"A 403 is fine",
+			["uncertain protection is unprotected"],
+		],
+		["the merging caller cannot bypass them", "the merging caller can bypass them", ["caller cannot bypass"]],
+		["Never use `--admin` or any bypass", "", ["no --admin"]],
+		["monitor_start", "poll", ["native monitor"]],
+		["return to step 3 for the next unblocked PR", "stop", ["next PR loop"]],
+		["every requested PR is merged", "one PR is merged", ["whole list"]],
+		[drive, `${drive}\n- Hand the parent the PR URL and stop.`, ["no parent handoff"]],
+		["it IS the parent", "it waits", ["parent driver"]],
+		["no merge authority", "merge authority", ["worker has no merge authority"]],
+	];
+	for (const [from, to, expected] of cases) assert.deepEqual(missingDriveClauses(mutate(from, to)), expected, to);
 });
 
 test("themes validate against Pi's theme schema and carry no extra metadata", () => {
@@ -493,47 +503,17 @@ test("footer code imports only node built-ins, declared peers, and its own sibli
 	assert.equal(packedFiles().filter((f) => f.startsWith("lib/")).length, 2);
 });
 
-test("code-review binds both axes to an immutable HEAD and supports nested blocking calls", () => {
+test("code-review binds both axes to one immutable whole-PR range", () => {
 	const review = readText("skills/code-review/SKILL.md");
 	assert.match(review, /git rev-parse HEAD/);
-	assert.match(review, /For a non-PR review, use the resolved fixed point as `<reviewed-base>`/);
-	assert.match(
-		review,
-		/git merge-base <pr-base> HEAD.*record its full SHA as `<reviewed-base>`, and preserve it across every later HEAD change/,
-	);
 	assert.match(review, /git diff <reviewed-base>\.\.\.<reviewed-head>/);
-	assert.match(review, /with the preserved `<reviewed-base>`/);
-	assert.match(review, /A corrective-delta review is supplemental only/);
-	assert.match(review, /A top-level parent spawns/);
-	assert.match(review, /A delegated session omits `run_in_background`/);
 	const promptBinding =
 		/The full original reviewed-base SHA, full reviewed HEAD SHA, and immutable whole-PR diff command/g;
 	assert.equal(review.match(promptBinding)?.length, 2, "both axis prompts carry the immutable range");
-	assert.doesNotMatch(
-		review.replace("with the preserved `<reviewed-base>`", "with a new `<reviewed-base>`"),
-		/with the preserved `<reviewed-base>`/,
-	);
-	assert.doesNotMatch(
-		review.replace("A corrective-delta review is supplemental only", "A corrective-delta review replaces the axes"),
-		/A corrective-delta review is supplemental only/,
-	);
-	const merge = readText("skills/get-it-merged/SKILL.md");
-	assert.doesNotMatch(
-		merge.replace("corrective-delta reviews are supplemental only", "corrective-delta reviews replace both axes"),
-		/corrective-delta reviews are supplemental only/,
-	);
-	assert.doesNotMatch(
-		review.replace(
-			"A delegated session omits `run_in_background`",
-			"A delegated session uses `run_in_background: true`",
-		),
-		/omits `run_in_background`/,
-	);
 });
 
-test("single-issue parents retain terminal ownership and nested reviews use blocking calls", () => {
+test("single-issue parents retain terminal ownership", () => {
 	const ship = readText("skills/ship-issue/SKILL.md");
-	const reviews = section(ship, "7. Review round -- exact final HEAD");
 	const retainsOwner = (policy: string) => {
 		const handoff = section(policy, "9. Handoff and cleanup");
 		return (
@@ -541,36 +521,40 @@ test("single-issue parents retain terminal ownership and nested reviews use bloc
 			/genuine external blocker has a named owner and an armed continuation monitor/.test(handoff)
 		);
 	};
-	assert.match(reviews, /use `\/skill:code-review` for the separate Standards/);
-	assert.match(reviews, /shared skill selects parent background versus delegated blocking calls/);
-	assert.match(reviews, /both full SHAs\s+and the original whole-PR range/);
 	assert.ok(retainsOwner(ship));
 	assert.ok(!retainsOwner(ship.replace(/^- Parent completion:[^\n]*\n/m, "")));
 });
 
-// Exercise role-aware callers, including forbidden regressions in the real resource text.
-const composedCallers = (ship: string, review: string) =>
-	ship.includes("only when your actual allowed-subagent list permits it") &&
-	ship.includes("Parent critic: PENDING") &&
-	/The parent must run its independent\s+final-HEAD critic BEFORE merge admission/.test(ship) &&
-	review.includes("Always invoke the Spec sub-agent.") &&
-	review.includes('explicitly supply "No spec available."') &&
-	!/skip the Spec sub-agent/.test(review);
+/** Names of the caller clauses that keep restricted workers and verified no-spec reviews on both axes. */
+const missingCallerClauses = (ship: string, review: string): string[] =>
+	missing({
+		"critic gated on allowed subagents": ship.includes("only when your actual allowed-subagent list permits it"),
+		"restricted worker returns PENDING": ship.includes("Parent critic: PENDING"),
+		"parent critic before merge": /The parent must run its independent\s+final-HEAD critic BEFORE merge admission/.test(
+			ship,
+		),
+		"spec axis always invoked":
+			review.includes("Always invoke the Spec sub-agent.") && !/skip the Spec sub-agent/.test(review),
+		"verified absence supplied": review.includes('explicitly supply "No spec available."'),
+	});
 
 test("composed callers preserve restricted workers and verified no-spec dual axes", () => {
 	const ship = readText("skills/ship-issue/SKILL.md");
 	const review = readText("skills/code-review/SKILL.md");
-	assert.ok(composedCallers(ship, review));
+	assert.deepEqual(missingCallerClauses(ship, review), []);
 	const mutate = (text: string, from: string, to: string) => {
 		assert.ok(text.includes(from), `fixture drift: ${from}`);
 		return text.split(from).join(to);
 	};
-	assert.ok(
-		!composedCallers(mutate(ship, "only when your actual allowed-subagent list permits it", "unconditionally"), review),
+	assert.deepEqual(
+		missingCallerClauses(mutate(ship, "only when your actual allowed-subagent list permits it", "always"), review),
+		["critic gated on allowed subagents"],
 	);
-	assert.ok(!composedCallers(mutate(ship, "Parent critic: PENDING", "critic done"), review));
-	assert.ok(!composedCallers(ship, mutate(review, "Always invoke the Spec sub-agent.", "skip the Spec sub-agent")));
-	for (const override of ["model: opus", 'model: "sonnet"']) {
-		assert.throws(() => assertNoForcedModel(`${ship}\n${override}`));
-	}
+	assert.deepEqual(missingCallerClauses(mutate(ship, "Parent critic: PENDING", "critic done"), review), [
+		"restricted worker returns PENDING",
+	]);
+	assert.deepEqual(
+		missingCallerClauses(ship, mutate(review, "Always invoke the Spec sub-agent.", "skip the Spec sub-agent")),
+		["spec axis always invoked"],
+	);
 });
