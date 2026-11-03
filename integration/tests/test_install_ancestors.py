@@ -6,11 +6,13 @@ References:
 
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 
 import pytest
 
+from harness import install_paths
 from harness.install import Journal, Layout, RollbackError, journaled_path, rollback, write_atomic
 
 
@@ -214,3 +216,46 @@ def test_atomic_parent_swap_cannot_redirect_write(tmp_path: Path, monkeypatch: p
         write_atomic(parent / "state", "new")
     assert not list(victim.iterdir())
     assert (held / "state").read_text() == "new"
+
+
+@pytest.mark.parametrize("path", [Path("relative/agent"), Path("/tmp/store/../agent")])
+def test_anchor_refuses_noncanonical_path(path: Path) -> None:
+    """Relative or `..` spellings are refused before any descriptor is opened."""
+    with install_paths.AnchoredStore() as anchors:
+        with pytest.raises(ValueError, match=r"is not canonical and absolute"):
+            anchors.directory(path)
+        assert anchors.directories == {}
+
+
+def test_tree_removal_refuses_without_symlink_safe_rmtree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A platform whose `rmtree` follows symlinks refuses tree removal and keeps the tree."""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "payload").write_text("kept")
+    monkeypatch.setattr(install_paths, "RMTREE_SAFE", False)
+    with (
+        install_paths.AnchoredStore() as anchors,
+        pytest.raises(OSError, match=r"^Descriptor-relative tree removal is unavailable$"),
+    ):
+        anchors.remove(tree)
+    assert (tree / "payload").read_text() == "kept"
+
+
+def test_rollback_refuses_unanchorable_parent_and_keeps_journal(tmp_path: Path) -> None:
+    """A symlinked agent ancestor cannot be anchored, so recovery refuses and keeps the journal."""
+    real = tmp_path / "real"
+    (real / "agent").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real)
+    layout = Layout(tmp_path / "store", tmp_path / "link" / "agent", tmp_path / "bin")
+    layout.root.mkdir()
+    layout.bin_dir.mkdir()
+    layout.journal.write_text("{}")
+    with pytest.raises(RollbackError, match=r"^Could not anchor interrupted install parents: ") as caught:
+        rollback(layout)
+    cause = caught.value.__cause__
+    assert isinstance(cause, OSError)
+    assert cause.errno in {errno.ELOOP, errno.ENOTDIR}
+    assert str(caught.value).endswith(f"journal kept at '{layout.journal}'")
+    assert layout.journal.read_text() == "{}"
