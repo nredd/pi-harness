@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { psInfo } from "../../src/monitor/pidfiles.ts";
@@ -56,11 +56,19 @@ describe("monitor worker death", () => {
 			const targetPath = join(tmp.dir, "target.pid");
 			const childPath = join(tmp.dir, "child.pid");
 			const ackPath = join(tmp.dir, "ack");
+			// The nested Vitest bypasses `scripts/run-vitest.ts`, so it gets the same isolated home here.
+			const home = join(tmp.dir, "home");
+			mkdirSync(home);
 			try {
 				runner = spawn(process.execPath, [vitest, "run", "--config", config, "--coverage.enabled=false"], {
 					cwd: join(import.meta.dirname, "../.."),
 					env: {
 						...process.env,
+						HOME: home,
+						USERPROFILE: home,
+						XDG_CONFIG_HOME: join(home, ".config"),
+						PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+						PI_SUBAGENTS_CONFIG_DIR: join(home, ".pi", "agent"),
 						MONITOR_WORKER_READY: readyPath,
 						MONITOR_WORKER_ROOT: tmp.dir,
 						MONITOR_WORKER_TARGET: targetPath,

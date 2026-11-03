@@ -15,6 +15,134 @@ import {
 } from "../src/tool-policy.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
+test("injected homes govern trusted tilde roots for Bash and PowerShell", () => {
+  const home = "/isolated/home";
+  const roots = ["/isolated/home/trusted"];
+  for (const command of ["cd ~/trusted && git status", "git -C ~/trusted status"]) {
+    assert.equal(
+      isPolicySafeCommand(
+        command,
+        {},
+        { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, homeDir: home },
+      ),
+      true,
+      command,
+    );
+    assert.equal(
+      isPolicySafeCommand(
+        command,
+        {},
+        { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, homeDir: "/other/home" },
+      ),
+      false,
+      command,
+    );
+  }
+  assert.equal(
+    isSafePowerShellCommand(
+      "git -C ~/trusted status",
+      {},
+      { workingDirectory: "/work", trustedDirectories: roots, homeDir: home },
+    ),
+    true,
+  );
+  assert.equal(
+    isSafePowerShellCommand(
+      "git -C ~other/trusted status",
+      {},
+      { workingDirectory: "/work", trustedDirectories: roots, homeDir: home },
+    ),
+    false,
+  );
+});
+
+test("injected homes keep rejecting other users' tildes and traversal on the Bash path", () => {
+  const home = "/isolated/home";
+  const roots = ["~/trusted"];
+  const options = { homeDir: home };
+  assert.equal(
+    isPolicySafeCommand(
+      "git -C ~/trusted status",
+      {},
+      { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, ...options },
+    ),
+    true,
+  );
+  for (const command of [
+    "cd ~other/trusted && git status",
+    "git -C ~other/trusted status",
+    "cd ~/trusted/.. && git status",
+    "git -C ~/trusted/../escape status",
+  ]) {
+    assert.equal(
+      isPolicySafeCommand(
+        command,
+        {},
+        { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, ...options },
+      ),
+      false,
+      command,
+    );
+    assert.equal(
+      findBlockedCommandSegment(
+        command,
+        {},
+        { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, ...options },
+      ),
+      command.split(" && ")[0],
+    );
+  }
+  assert.equal(
+    isPolicySafeCommand(
+      "git -C /isolated/home/trusted status",
+      {},
+      { workingDirectory: "/work", platform: "darwin", trustedDirectories: ["~other/trusted"], ...options },
+    ),
+    false,
+  );
+});
+
+test("Plan registration forwards its injected home to Bash and PowerShell trusted roots", async () => {
+  const home = "/isolated/home";
+  const trusted = `${home}/trusted`;
+  const mock = createMockPi({
+    activeTools: ["bash", "powershell"],
+    allTools: [builtinTool("bash"), builtinTool("powershell")],
+  });
+  planMode(mock.pi, {
+    homeDir: home,
+    readSettings: async () => ({
+      kind: "loaded" as const,
+      settings: {
+        thinkingLevel: "inherit" as const,
+        defaultPlanTools: ["bash", "powershell"],
+        trustedDirectories: ["~/trusted"],
+      },
+    }),
+  });
+  const context = createMockContext();
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  const hook = mock.events.get("tool_call")?.[0];
+
+  for (const [toolName, command] of [
+    ["bash", `git -C ${trusted} status`],
+    ["powershell", `git -C ${trusted} status`],
+  ]) {
+    assert.equal(await hook?.({ toolName, input: { command } }, context.ctx), undefined, toolName);
+  }
+  for (const [toolName, command] of [
+    ["bash", `git -C ${home}/untrusted status`],
+    ["powershell", `git -C ${home}/untrusted status`],
+  ]) {
+    assert.equal(
+      ((await hook?.({ toolName, input: { command } }, context.ctx)) as { block?: boolean } | undefined)?.block,
+      true,
+      toolName,
+    );
+  }
+});
+
 test("tool selection allows safe built-ins and non-built-ins only", () => {
   type PlanTool = Parameters<typeof canSelectToolInPlanMode>[0];
   assert.equal(canSelectToolInPlanMode(builtinTool("read") as PlanTool), true);
@@ -120,7 +248,7 @@ test("Bash policy permits only conservative local system diagnostics", () => {
     'tasklist /FI "STATUS eq running"',
     "tasklist /M ntdll.dll /SVC",
   ]) {
-    assert.equal(isSafeCommand(command, {}, undefined, "win32"), true, command);
+    assert.equal(isSafeCommand(command, {}, { platform: "win32" }), true, command);
   }
   for (const command of [
     "tasklist /S remote-host",
@@ -130,9 +258,9 @@ test("Bash policy permits only conservative local system diagnostics", () => {
     "tasklist /FI",
     "tasklist /unknown",
   ]) {
-    assert.equal(isSafeCommand(command, {}, undefined, "win32"), false, command);
+    assert.equal(isSafeCommand(command, {}, { platform: "win32" }), false, command);
   }
-  assert.equal(isSafeCommand("tasklist", {}, undefined, "linux"), false);
+  assert.equal(isSafeCommand("tasklist", {}, { platform: "linux" }), false);
 });
 
 test("blocked command diagnostics identify the first rejected segment", () => {

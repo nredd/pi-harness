@@ -149,6 +149,8 @@ interface PlanModeDependencies {
     options?: UpdatePlanModeSettingsOptions,
   ): ReturnType<typeof updatePlanModeSettings>;
   settingsPath?: string;
+  /** Home for policy-only tilde expansion in SDK hosts. */
+  homeDir?: string;
   loadInteractiveUi?(): Promise<InteractiveUi>;
   /** Test seam for `createHeadlessTurns`. */
   headlessTurnStartTimeoutMs?: number;
@@ -722,13 +724,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       };
     }
     if (event.toolName === "bash") {
-      const blocked = findBlockedCommandSegment(
-        readCommand(event.input),
-        settings.safeSubcommands,
-        ctx.cwd,
-        process.platform,
-        settings.trustedDirectories,
-      );
+      const blocked = findBlockedCommandSegment(readCommand(event.input), settings.safeSubcommands, {
+        workingDirectory: ctx.cwd,
+        trustedDirectories: settings.trustedDirectories,
+        homeDir: dependencies.homeDir,
+      });
       if (blocked !== undefined) {
         return {
           block: true,
@@ -746,12 +746,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
     }
     if (event.toolName === "powershell") {
-      const blocked = findBlockedPowerShellCommandSegment(
-        readCommand(event.input),
-        settings.safeSubcommands,
-        ctx.cwd,
-        settings.trustedDirectories,
-      );
+      const blocked = findBlockedPowerShellCommandSegment(readCommand(event.input), settings.safeSubcommands, {
+        workingDirectory: ctx.cwd,
+        trustedDirectories: settings.trustedDirectories,
+        homeDir: dependencies.homeDir,
+      });
       if (blocked !== undefined) {
         return {
           block: true,

@@ -12,31 +12,40 @@ const HOST_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** OpenSSH's own limit. */
 const MAX_INCLUDE_DEPTH = 16;
 
-export function sshConfigPath(): string {
-	return join(homedir(), ".ssh", "config");
+export function sshConfigPath(homeDir = homedir()): string {
+	return join(homeDir, ".ssh", "config");
 }
 
-/** OpenSSH resolves a relative user-config `Include` against `~/.ssh`, not the including file. */
-function expandIncludes(pattern: string, sshDir: string): string[] {
-	const expanded = pattern.startsWith("~/") ? join(homedir(), pattern.slice(2)) : pattern;
+/**
+ * OpenSSH resolves a relative user-config `Include` against `~/.ssh`, not the including file, and
+ * skips a pattern whose glob(3) fails or matches nothing.
+ */
+function expandIncludes(pattern: string, sshDir: string, homeDir: string): string[] {
+	const expanded = pattern.startsWith("~/") ? join(homeDir, pattern.slice(2)) : pattern;
 	const absolute = isAbsolute(expanded) ? expanded : resolve(sshDir, expanded);
 	try {
 		return globSync(absolute).sort();
 	} catch {
-		return existsSync(absolute) ? [absolute] : [];
+		return [];
 	}
+}
+
+/** Roots for known-host discovery; omitted values keep the native home. */
+export interface KnownHostsOptions {
+	/** Home for the default config path and `Include ~/...` expansion. */
+	homeDir?: string;
 }
 
 /**
  * Every concrete `Host` alias declared by `path` and the files it includes. Relative includes
  * resolve against the directory of the top-level config (`~/.ssh` in real life).
  */
-export function readKnownHosts(
-	path = sshConfigPath(),
-	sshDir = dirname(path),
-	depth = 0,
-	seen = new Set<string>(),
-): Set<string> {
+export function readKnownHosts(path?: string, { homeDir = homedir() }: KnownHostsOptions = {}): Set<string> {
+	const config = path ?? sshConfigPath(homeDir);
+	return collectHosts(config, dirname(config), 0, new Set<string>(), homeDir);
+}
+
+function collectHosts(path: string, sshDir: string, depth: number, seen: Set<string>, homeDir: string): Set<string> {
 	const hosts = new Set<string>();
 	if (depth > MAX_INCLUDE_DEPTH || seen.has(path) || !existsSync(path)) return hosts;
 	seen.add(path);
@@ -55,8 +64,8 @@ export function readKnownHosts(
 			}
 		} else if (key === "include") {
 			for (const pattern of rest) {
-				for (const file of expandIncludes(pattern, sshDir)) {
-					for (const h of readKnownHosts(file, sshDir, depth + 1, seen)) hosts.add(h);
+				for (const file of expandIncludes(pattern, sshDir, homeDir)) {
+					for (const h of collectHosts(file, sshDir, depth + 1, seen, homeDir)) hosts.add(h);
 				}
 			}
 		}

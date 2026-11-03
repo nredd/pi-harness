@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add a `homeDir` option to `createSessionKit`: config, rules, title aliases and stats session/cache defaults derive from it when no `agentDir` is given; `PI_CODING_AGENT_DIR` still wins
+- Remove the `agentDir` re-exports from `src/config.ts` and `src/stats/load.ts`; deep imports now use `src/agent-dir.ts`. The rules `register` takes `{ agentDir, homeDir }` like titles and stats and resolves the user rule directory at use time
+
 - Make configured `titles.model` selection fail closed: invalid, unavailable and unauthenticated configured models now skip title generation rather than trying aliases or defaults
 
 - Make the portable stats CLI import-safe: importing `dist/pi-stats-export.mjs` no longer runs an operation; direct Node execution still runs it

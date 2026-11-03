@@ -4,6 +4,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type AgentDirOptions, resolveAgentDir } from "../agent-dir.ts";
 import { type Clock, realClock } from "../clock.ts";
 import type { KitConfig } from "../config.ts";
 import { say } from "../output.ts";
@@ -26,7 +27,7 @@ function problems({ errors, badLines }: Pick<Loaded, "errors" | "badLines">): st
 export function register(
 	pi: ExtensionAPI,
 	_config: KitConfig,
-	options: { agentDir?: string; clock?: Clock } = {},
+	options: AgentDirOptions & { clock?: Clock } = {},
 ): void {
 	const clock = options.clock ?? realClock;
 	pi.registerCommand("stats", {
@@ -41,7 +42,7 @@ export function register(
 			let loaded: Combined;
 			try {
 				loaded = await loadCombined(
-					options.agentDir,
+					resolveAgentDir(options),
 					tui ? (done, total) => ctx.ui.setStatus(STATUS_KEY, `stats: loading ${done}/${total}...`) : undefined,
 				);
 			} catch (error) {
