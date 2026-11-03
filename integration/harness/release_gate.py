@@ -56,7 +56,6 @@ class Execution(Origin):
     path: str = Field(description="Workflow source path")
     status: str = Field(description="Execution lifecycle")
     conclusion: str | None = Field(description="Terminal outcome")
-    run_started_at: AwareDatetime = Field(strict=False, description="Start of the current attempt")
 
 
 class Step(Record):
@@ -72,6 +71,8 @@ class Job(Record):
     head_sha: str = Field(description="Source commit")
     status: str = Field(description="Job lifecycle")
     conclusion: str | None = Field(description="Job outcome")
+    started_at: AwareDatetime = Field(strict=False, description="Start of the attempt that ran this job")
+    completed_at: AwareDatetime | None = Field(strict=False, description="End of that execution")
     steps: list[Step] = Field(description="Executed step records")
 
 
@@ -80,7 +81,7 @@ class Artifact(Record):
     expired: bool = Field(description="Whether bytes remain downloadable")
     size_in_bytes: int = Field(ge=0, description="Retained artifact size")
     workflow_run: Origin = Field(description="Artifact's source run and SHA")
-    created_at: AwareDatetime = Field(strict=False, description="Upload time, bounding the producing attempt")
+    created_at: AwareDatetime = Field(strict=False, description="Upload time inside its producing job")
 
 
 class RunsPage(Record):
@@ -127,17 +128,21 @@ def expected_jobs() -> dict[str, set[str]]:
     return expected
 
 
-def expected_artifacts() -> set[str]:
-    """Return the complete matrix's retained execution artifacts.
+def expected_artifacts() -> dict[str, str]:
+    """Return the complete matrix's retained execution artifacts and the job that uploads each.
 
     Returns:
-        set[str]: Coverage, packed contracts, Node and standalone stack evidence.
+        dict[str, str]: Coverage, packed contracts, Node and standalone stack evidence, each mapped
+        to its producing job name.
     """
     return {
-        *[f"coverage-{system}" for system in SYSTEMS],
-        *[f"contract-reports-{system}" for system in SYSTEMS],
-        *[f"stack-{system}-{stack}" for system, stack, _ in STACK_CELLS],
-        *[f"standalone-{platform}-{stack}" for _, stack, platform in STACK_CELLS],
+        **{f"coverage-{system}": f"owned ({system})" for system in SYSTEMS},
+        **{f"contract-reports-{system}": f"contracts ({system})" for system in SYSTEMS},
+        **{f"stack-{system}-{stack}": f"stack ({system}, {stack})" for system, stack, _ in STACK_CELLS},
+        **{
+            f"standalone-{platform}-{stack}": f"stack ({system}, {stack})"
+            for system, stack, platform in STACK_CELLS
+        },
     }
 
 
@@ -173,6 +178,7 @@ def validate_execution(
             "Full verification requires a successful exact-SHA CI dispatch "
             "on `main` or its frozen candidate ref"
         )
+    admitted: dict[str, Job] = {}
     for name, required_steps in expected_jobs().items():
         matches = [job for job in validated_jobs if job.name == name]
         if len(matches) != 1:
@@ -190,17 +196,27 @@ def validate_execution(
             and required_steps <= executed
         ):
             raise ValueError(f"Full verification steps did not execute: '{name}'")
-    retained = {
-        artifact.name
-        for artifact in validated_artifacts
-        if not artifact.expired
-        and artifact.size_in_bytes > 0
-        and artifact.workflow_run.id == execution.id
-        and artifact.workflow_run.head_sha == source_sha
-        # The artifacts API has no attempt field; an upload before this attempt started is stale.
-        and artifact.created_at >= execution.run_started_at
-    }
-    if missing := expected_artifacts() - retained:
+        admitted[name] = job
+    missing = []
+    for name, producer_name in expected_artifacts().items():
+        # Artifacts are per run, with no attempt field. "Re-run failed jobs" carries earlier
+        # successful jobs, and their uploads, into the new attempt, while a re-run job leaves the
+        # failed attempt's same-named upload behind. Bind each upload to its producing job's window.
+        producer = admitted[producer_name]
+        uploads = [
+            artifact
+            for artifact in validated_artifacts
+            if artifact.name == name
+            and not artifact.expired
+            and artifact.size_in_bytes > 0
+            and artifact.workflow_run.id == execution.id
+            and artifact.workflow_run.head_sha == source_sha
+            and producer.completed_at is not None
+            and producer.started_at <= artifact.created_at <= producer.completed_at
+        ]
+        if len(uploads) != 1:
+            missing.append(name)
+    if missing:
         raise ValueError(f"Missing retained full verification artifacts: {sorted(missing)}")
     return execution.id
 

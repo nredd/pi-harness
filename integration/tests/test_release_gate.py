@@ -36,7 +36,6 @@ def evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any
         "path": ".github/workflows/ci.yml",
         "status": "completed",
         "conclusion": "success",
-        "run_started_at": "2026-11-03T10:00:00Z",
     }
     jobs = [
         {
@@ -46,6 +45,8 @@ def evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any
             "head_sha": SHA,
             "status": "completed",
             "conclusion": "success",
+            "started_at": "2026-11-03T10:00:00Z",
+            "completed_at": "2026-11-03T11:00:00Z",
             "steps": [{"name": step, "status": "completed", "conclusion": "success"} for step in steps],
         }
         for name, steps in gate.expected_jobs().items()
@@ -198,6 +199,55 @@ def test_required_job_names_are_pinned() -> None:
         "Build the pi-env daemon",
         "Test (isolated HOME, no credentials)",
     }
+
+
+def rerun_failed_jobs_evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Shape evidence like run 41140655723 after "Re-run failed jobs" of `owned (macos-14)`.
+
+    Attempt 2 lists every job with `run_attempt` 2, but only the re-run job started after
+    `run_started_at`. Carried-over jobs and their artifacts keep attempt-1 timestamps, and the run
+    holds two `coverage-macos-14` artifacts, the failed attempt's and the re-run's.
+
+    Returns:
+        tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]: Run, jobs and artifacts.
+    """
+    run, jobs, artifacts = evidence()
+    run["run_started_at"] = "2026-11-03T16:46:17Z"
+    for job in jobs:
+        job["started_at"], job["completed_at"] = "2026-10-30T22:49:58Z", "2026-10-30T23:30:00Z"
+        if job["name"] == "owned (macos-14)":
+            job["started_at"], job["completed_at"] = "2026-11-03T16:46:22Z", "2026-11-03T17:13:30Z"
+    for artifact in artifacts:
+        artifact["created_at"] = "2026-10-30T23:02:47Z"
+        if artifact["name"] == "coverage-macos-14":
+            artifact["created_at"] = "2026-11-03T17:11:48Z"
+    stale = copy.deepcopy(next(item for item in artifacts if item["name"] == "coverage-macos-14"))
+    stale["created_at"] = "2026-10-30T23:34:09Z"
+    artifacts.insert(0, stale)
+    return run, jobs, artifacts
+
+
+def test_failed_jobs_rerun_admits_carried_over_evidence() -> None:
+    """Carried-over jobs keep their attempt-1 artifacts; the re-run job uses its own upload.
+
+    Returns:
+        None: The completed rerun qualifies.
+    """
+    assert gate.validate_execution(SHA, *rerun_failed_jobs_evidence()) == 42
+
+
+def test_failed_jobs_rerun_refuses_the_failed_attempts_artifact() -> None:
+    """Without the re-run's upload, the failed attempt's same-named artifact is not evidence.
+
+    Returns:
+        None: The stale artifact predates its producing job and refuses.
+    """
+    run, jobs, artifacts = rerun_failed_jobs_evidence()
+    artifacts = [item for item in artifacts if item["created_at"] != "2026-11-03T17:11:48Z"]
+    with pytest.raises(
+        ValueError, match=r"Missing retained full verification artifacts: \['coverage-macos-14'\]"
+    ):
+        gate.validate_execution(SHA, run, jobs, artifacts)
 
 
 def test_workflow_execution_names_and_barriers() -> None:
@@ -362,61 +412,137 @@ def test_malformed_pages_refuse(monkeypatch: pytest.MonkeyPatch, pages: list[dic
         gate.require_full_verification("nredd/pi-harness", SHA)
 
 
-def test_main_exit_codes(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize(
+    ("outcome", "code", "message"),
+    [
+        (42, 0, f"Full frozen candidate verification: {SHA}, CI run 42"),
+        (ValueError("no run"), 1, "Release verification refused: no run"),
+        (gate.EvidenceError("gh failed"), 1, "Release verification refused: gh failed"),
+        (KeyError("workflow_runs"), None, ""),
+    ],
+)
+def test_main_exit_codes(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    outcome: int | Exception,
+    code: int | None,
+    message: str,
+) -> None:
     """Zero with evidence, one when refused, and a harness bug is a traceback, not a refusal.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): Isolated barrier replacement.
         caplog (pytest.LogCaptureFixture): Captured barrier diagnostics.
+        outcome (int | Exception): Run ID returned, or error raised, by the barrier.
+        code (int | None): Expected exit code, `None` when the error must propagate.
+        message (str): Expected log line.
 
     Returns:
         None: Each outcome is distinguishable.
     """
-    argv = ["--repo", "nredd/pi-harness", "--source-sha", SHA]
-    caplog.set_level("INFO", logger=gate.LOGGER.name)
-    monkeypatch.setattr(gate, "require_full_verification", lambda _repo, _sha: 42)
-    assert gate.main(argv) == 0
-    assert f"Full frozen candidate verification: {SHA}, CI run 42" in caplog.text
-    for refusal in (ValueError("no run"), gate.EvidenceError("gh failed")):
 
-        def refuse(_repo: str, _sha: str, error: Exception = refusal) -> int:
-            """Refuse with one expected error.
-
-            Parameters:
-                _repo (str): Unused repository.
-                _sha (str): Unused candidate.
-                error (Exception): Refusal to raise.
-
-            Returns:
-                int: Never returns.
-
-            Raises:
-                Exception: Always, the given refusal.
-            """
-            raise error
-
-        monkeypatch.setattr(gate, "require_full_verification", refuse)
-        assert gate.main(argv) == 1
-        assert f"Release verification refused: {refusal}" in caplog.text
-
-    def bug(_repo: str, _sha: str) -> int:
-        """Simulate a harness defect.
+    def barrier(_repo: str, _sha: str) -> int:
+        """Return or raise the parametrized outcome.
 
         Parameters:
             _repo (str): Unused repository.
             _sha (str): Unused candidate.
 
         Returns:
-            int: Never returns.
+            int: The run ID outcome.
 
         Raises:
-            KeyError: Always.
+            Exception: The error outcome.
         """
-        raise KeyError("workflow_runs")
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
-    monkeypatch.setattr(gate, "require_full_verification", bug)
-    with pytest.raises(KeyError):
-        gate.main(argv)
+    caplog.set_level("INFO", logger=gate.LOGGER.name)
+    monkeypatch.setattr(gate, "require_full_verification", barrier)
+    argv = ["--repo", "nredd/pi-harness", "--source-sha", SHA]
+    if code is None:
+        with pytest.raises(KeyError):
+            gate.main(argv)
+        assert "refused" not in caplog.text
+    else:
+        assert gate.main(argv) == code
+        assert message in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("created_at", "admitted"),
+    [
+        ("2026-11-03T10:00:00Z", True),
+        ("2026-11-03T11:00:00Z", True),
+        ("2026-11-03T10:00:00+00:00", True),
+        ("2026-11-03T12:30:00+02:00", True),
+        ("2026-11-03T09:59:59Z", False),
+        ("2026-11-03T11:00:01Z", False),
+    ],
+)
+def test_artifact_must_fall_inside_its_producing_job(created_at: str, admitted: bool) -> None:
+    """Both bounds are inclusive and offsets compare as instants.
+
+    Parameters:
+        created_at (str): Upload timestamp for `coverage-ubuntu-24.04`, whose job ran 10:00-11:00Z.
+        admitted (bool): Whether the upload is evidence.
+
+    Returns:
+        None: Boundary and offset timestamps are judged as instants.
+    """
+    run, jobs, artifacts = evidence()
+    next(item for item in artifacts if item["name"] == "coverage-ubuntu-24.04")["created_at"] = created_at
+    if admitted:
+        assert gate.validate_execution(SHA, run, jobs, artifacts) == 42
+    else:
+        with pytest.raises(
+            ValueError, match=r"Missing retained full verification artifacts: \['coverage-ubuntu"
+        ):
+            gate.validate_execution(SHA, run, jobs, artifacts)
+
+
+@pytest.mark.parametrize("record", ["artifact", "job"])
+def test_naive_timestamps_refuse(record: str) -> None:
+    """A timestamp without an offset is not an instant and never compares.
+
+    Parameters:
+        record (str): Which record loses its offset.
+
+    Returns:
+        None: Validation refuses.
+    """
+    run, jobs, artifacts = evidence()
+    if record == "artifact":
+        artifacts[0]["created_at"] = "2026-11-03T10:30:00"
+    else:
+        jobs[0]["started_at"] = "2026-11-03T10:00:00"
+    with pytest.raises(ValueError, match="timezone"):
+        gate.validate_execution(SHA, run, jobs, artifacts)
+
+
+def test_two_uploads_inside_one_job_are_ambiguous() -> None:
+    """Never pick the newest of several same-named uploads from one producing job.
+
+    Returns:
+        None: Duplicate evidence refuses.
+    """
+    run, jobs, artifacts = evidence()
+    artifacts.append(copy.deepcopy(artifacts[0]) | {"created_at": "2026-11-03T10:45:00Z"})
+    with pytest.raises(ValueError, match="Missing retained"):
+        gate.validate_execution(SHA, run, jobs, artifacts)
+
+
+def test_unfinished_producer_has_no_upload_window() -> None:
+    """A producing job without `completed_at` cannot bound its uploads.
+
+    Returns:
+        None: Its artifact refuses.
+    """
+    run, jobs, artifacts = evidence()
+    next(job for job in jobs if job["name"] == "owned (wsl2)")["completed_at"] = None
+    with pytest.raises(ValueError, match=r"artifacts: \['coverage-wsl2'\]"):
+        gate.validate_execution(SHA, run, jobs, artifacts)
 
 
 def test_frozen_ref_survives_unrelated_main_advancement() -> None:
