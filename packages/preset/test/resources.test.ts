@@ -235,19 +235,60 @@ const missingCriticGate = (policy: string): string[] => {
 
 const assertNoForcedModel = (text: string): void => assert.doesNotMatch(text, /\bmodel\s*:\s*\S/);
 
+/** Replaces every occurrence of a clause that must exist, so a reworded skill fails as fixture drift. */
+const mutate = (text: string, from: string, to: string): string => {
+	assert.ok(text.includes(from), `fixture drift: ${from}`);
+	return text.split(from).join(to);
+};
+
+/** Every documented `gh pr merge` command: inline code spans plus fenced lines with `\` continuations joined. */
+const mergeCommands = (text: string): string[] => {
+	const fenced: string[] = [];
+	const prose = text.replace(/^(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^\1[ \t]*$/gm, (_match, _fence, body: string) => {
+		fenced.push(...body.replace(/[ \t]*\\\n[ \t]*/g, " ").split("\n"));
+		return "";
+	});
+	return [
+		...[...prose.matchAll(/`gh pr merge [^`]*`/g)].map(([span]) => span),
+		...fenced.filter((line) => /\bgh pr merge\b/.test(line)),
+	];
+};
+
+/** Merge commands that are not head-pinned or that bypass protection. */
+const unsafeMerges = (commands: string[]): string[] =>
+	commands.filter(
+		(command) =>
+			!command.includes("--disable-auto") &&
+			(!command.includes("--match-head-commit <full-sha>") || command.includes("--admin")),
+	);
+
 test("shipping skills pin every merge to the head, never bypass protection, and force no model", () => {
 	let merges = 0;
 	for (const skill of ["code-review", "ship-issue", "get-it-merged"]) {
 		const text = readText(`skills/${skill}/SKILL.md`);
 		assertNoForcedModel(text);
-		for (const [command] of text.matchAll(/`gh pr merge [^`]*`/g)) {
-			merges++;
-			if (command.includes("--disable-auto")) continue;
-			assert.match(command, /--match-head-commit <full-sha>/, `${skill}: unpinned ${command}`);
-			assert.doesNotMatch(command, /--admin/, `${skill}: ${command}`);
-		}
+		const commands = mergeCommands(text);
+		merges += commands.length;
+		assert.deepEqual(unsafeMerges(commands), [], skill);
 	}
 	assert.ok(merges >= 2, "no merge commands scanned");
+	const pinned = "gh pr merge 1 --auto --squash --match-head-commit <full-sha>";
+	const cases: [string, string[]][] = [
+		[`Run \`${pinned}\`.`, []],
+		["Run `gh pr merge 1 --auto --squash`.", ["`gh pr merge 1 --auto --squash`"]],
+		[
+			"Run `gh pr merge 1 --squash\n--match-head-commit <full-sha> --admin`.",
+			["`gh pr merge 1 --squash\n--match-head-commit <full-sha> --admin`"],
+		],
+		[`\`\`\`sh\n${pinned}\n\`\`\`\n`, []],
+		["```sh\ngh pr merge 1 --squash\n```\n", ["gh pr merge 1 --squash"]],
+		[
+			"~~~\ngh pr merge 1 --squash \\\n  --match-head-commit <full-sha> --admin\n~~~\n",
+			["gh pr merge 1 --squash --match-head-commit <full-sha> --admin"],
+		],
+		["```sh\ngh pr merge --disable-auto 1\n```\n", []],
+	];
+	for (const [text, expected] of cases) assert.deepEqual(unsafeMerges(mergeCommands(text)), expected, text);
 	for (const override of ["model: opus", 'model: "sonnet"']) assert.throws(() => assertNoForcedModel(override));
 });
 
@@ -262,23 +303,20 @@ test("code-reviewer ships the receipt skeleton the parser accepts, including the
 test("get-it-merged gates admission on the parent critic; negative controls", () => {
 	const merge = readText("skills/get-it-merged/SKILL.md");
 	assert.deepEqual(missingCriticGate(merge), []);
-	const mutate = (from: string, to: string) => {
-		assert.ok(merge.includes(from), `fixture drift: ${from}`);
-		return merge.split(from).join(to);
-	};
-	assert.deepEqual(missingCriticGate(mutate("- When a worker or permitted critic receipt", "- If a critic receipt")), [
-		"worker or permitted critic receipt first",
-	]);
-	assert.deepEqual(missingCriticGate(mutate("It is mandatory even when", "It is optional when")), [
+	assert.deepEqual(
+		missingCriticGate(mutate(merge, "- When a worker or permitted critic receipt", "- If a critic receipt")),
+		["worker or permitted critic receipt first"],
+	);
+	assert.deepEqual(missingCriticGate(mutate(merge, "It is mandatory even when", "It is optional when")), [
 		"parent final critic gate last",
 	]);
 	assert.deepEqual(
 		missingCriticGate(
-			mutate("Confirm the Standards and Spec axes have `Checked:`", "Confirm all reviews have `Checked:`"),
+			mutate(merge, "Confirm the Standards and Spec axes have `Checked:`", "Confirm all reviews have `Checked:`"),
 		),
 		["checked scoped to axes"],
 	);
-	assert.deepEqual(missingCriticGate(mutate("Never synthesize `Checked:` evidence for the critic", "Done")), [
+	assert.deepEqual(missingCriticGate(mutate(merge, "Never synthesize `Checked:` evidence for the critic", "Done")), [
 		"no synthesized critic evidence",
 	]);
 });
@@ -287,10 +325,6 @@ test("get-it-merged parent drives the whole list; negative controls", () => {
 	const merge = readText("skills/get-it-merged/SKILL.md");
 	assert.deepEqual(missingDriveClauses(merge), []);
 	const drive = section(merge, "4. Merge and advance (parent)");
-	const mutate = (from: string, to: string) => {
-		assert.ok(merge.includes(from), `fixture drift: ${from}`);
-		return merge.split(from).join(to);
-	};
 	const cases: [string, string, string[]][] = [
 		["--auto --<method> --match-head-commit <full-sha>", "--auto --<method>", ["pinned auto-merge"]],
 		[
@@ -312,7 +346,9 @@ test("get-it-merged parent drives the whole list; negative controls", () => {
 		["it IS the parent", "it waits", ["parent driver"]],
 		["no merge authority", "merge authority", ["worker has no merge authority"]],
 	];
-	for (const [from, to, expected] of cases) assert.deepEqual(missingDriveClauses(mutate(from, to)), expected, to);
+	for (const [from, to, expected] of cases) {
+		assert.deepEqual(missingDriveClauses(mutate(merge, from, to)), expected, to);
+	}
 });
 
 test("themes validate against Pi's theme schema and carry no extra metadata", () => {
@@ -525,6 +561,119 @@ test("single-issue parents retain terminal ownership", () => {
 	assert.ok(!retainsOwner(ship.replace(/^- Parent completion:[^\n]*\n/m, "")));
 });
 
+type ShippingSkills = { review: string; ship: string; merge: string };
+
+const shippingSkills = (): ShippingSkills => ({
+	review: readText("skills/code-review/SKILL.md"),
+	ship: readText("skills/ship-issue/SKILL.md"),
+	merge: readText("skills/get-it-merged/SKILL.md"),
+});
+
+/** Names of the #269 review, train and release clauses the shipping skills no longer carry. */
+const missingReviewPolicy = ({ review, ship, merge }: ShippingSkills): string[] =>
+	missing({
+		"reviewers spawn without a model override": review.includes("and no `model` override."),
+		"no user-named model carve-out": ![review, ship, merge].some((text) => /unless the user named/i.test(text)),
+		"non-PR fixed point is the base": review.includes(
+			"For a non-PR review, use the resolved fixed point as `<reviewed-base>`",
+		),
+		"merge-base preserved across HEAD changes":
+			review.includes("record its full SHA as `<reviewed-base>`, and preserve it across every later HEAD change") &&
+			review.includes("restart from this step with the preserved `<reviewed-base>`"),
+		"corrective delta supplemental in code-review": review.includes(
+			"A corrective-delta review is supplemental only and never replaces either required whole-PR axis",
+		),
+		"corrective delta supplemental in get-it-merged": merge.includes("corrective-delta reviews are supplemental only"),
+		"delegated worker keeps auto-merge off": ship.includes(
+			"Delegated worker: keep auto-merge off, do not merge or arm it",
+		),
+		"ship-issue merges as a one-PR train": ship.includes("follow `/skill:get-it-merged` steps 3-4 as a one-PR train"),
+		"ship-issue needs no base-advance rebase": ship.includes(
+			"Do not require a rebase merely because the base advanced",
+		),
+		"get-it-merged needs no latest-main rebase": merge.includes(
+			"Do not require a latest-main rebase solely because the base advanced",
+		),
+		"frozen combined gate before publish/deploy": /frozen combined gate immediately before\s+publish\/deploy/.test(
+			merge,
+		),
+		"parent-only native monitors": merge.includes("Parent only: use native session-kit monitors (`monitor_start`)"),
+	});
+
+test("shipping skills keep the #269 review, train and release clauses; negative controls", () => {
+	const skills = shippingSkills();
+	assert.deepEqual(missingReviewPolicy(skills), []);
+	const cases: [keyof ShippingSkills, string, string, string[]][] = [
+		[
+			"review",
+			"and no `model` override.",
+			"and no `model` unless the user named one.",
+			["reviewers spawn without a model override", "no user-named model carve-out"],
+		],
+		[
+			"merge",
+			"without model overrides",
+			"without model overrides unless the user named one",
+			["no user-named model carve-out"],
+		],
+		[
+			"review",
+			"For a non-PR review, use the resolved fixed point",
+			"For a non-PR review, use HEAD~1",
+			["non-PR fixed point is the base"],
+		],
+		[
+			"review",
+			", and preserve it across every later HEAD change",
+			", and recompute it after every HEAD change",
+			["merge-base preserved across HEAD changes"],
+		],
+		[
+			"review",
+			"with the preserved `<reviewed-base>`",
+			"with a fresh merge-base",
+			["merge-base preserved across HEAD changes"],
+		],
+		[
+			"review",
+			"A corrective-delta review is supplemental only",
+			"A corrective-delta review replaces the axes",
+			["corrective delta supplemental in code-review"],
+		],
+		[
+			"merge",
+			"corrective-delta reviews are supplemental only",
+			"corrective-delta reviews replace both axes",
+			["corrective delta supplemental in get-it-merged"],
+		],
+		[
+			"ship",
+			"Delegated worker: keep auto-merge off",
+			"Delegated worker: arm auto-merge",
+			["delegated worker keeps auto-merge off"],
+		],
+		["ship", "as a one-PR train", "as needed", ["ship-issue merges as a one-PR train"]],
+		["ship", "Do not require a rebase merely", "Always rebase", ["ship-issue needs no base-advance rebase"]],
+		[
+			"merge",
+			"Do not require a latest-main rebase",
+			"Require a latest-main rebase",
+			["get-it-merged needs no latest-main rebase"],
+		],
+		[
+			"merge",
+			"frozen combined gate immediately before",
+			"usual gate after",
+			["frozen combined gate before publish/deploy"],
+		],
+		["merge", "Parent only: use native session-kit monitors", "Use shell sleep loops", ["parent-only native monitors"]],
+	];
+	for (const [skill, from, to, expected] of cases) {
+		const mutated = { ...skills, [skill]: mutate(skills[skill], from, to) };
+		assert.deepEqual(missingReviewPolicy(mutated), expected, to);
+	}
+});
+
 /** Names of the caller clauses that keep restricted workers and verified no-spec reviews on both axes. */
 const missingCallerClauses = (ship: string, review: string): string[] =>
 	missing({
@@ -542,10 +691,6 @@ test("composed callers preserve restricted workers and verified no-spec dual axe
 	const ship = readText("skills/ship-issue/SKILL.md");
 	const review = readText("skills/code-review/SKILL.md");
 	assert.deepEqual(missingCallerClauses(ship, review), []);
-	const mutate = (text: string, from: string, to: string) => {
-		assert.ok(text.includes(from), `fixture drift: ${from}`);
-		return text.split(from).join(to);
-	};
 	assert.deepEqual(
 		missingCallerClauses(mutate(ship, "only when your actual allowed-subagent list permits it", "always"), review),
 		["critic gated on allowed subagents"],
