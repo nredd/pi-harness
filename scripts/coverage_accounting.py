@@ -385,6 +385,10 @@ def split_function_definition(value: str) -> tuple[int, str]:
         tuple[int, str]: Start line and function identity.
     Raises:
         ValueError: The line is not decimal or the name is empty.
+
+    `FN:1,2,g` is read as coverage.py's `<line>,<end>,<name>`. A lcov function literally named `2,g`
+    cannot occur (identifiers have no comma), and if its `FNDA` disagrees the identities no longer match
+    and `finish` fails closed with "Missing function counters".
     """
     line, _, rest = value.partition(",")
     end, comma, named = rest.partition(",")

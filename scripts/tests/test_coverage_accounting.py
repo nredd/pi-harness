@@ -553,3 +553,35 @@ def test_bare_source_record_is_only_accepted_from_coveragepy() -> None:
     with pytest.raises(ValueError, match="Missing LCOV totals"):
         parse_lcov(bare)
     assert parse_lcov(bare, bare_sources=True)["src/a.ts"].lines == 0
+
+
+@pytest.mark.parametrize(("producer", "error"), [("lcov", "Missing LCOV totals"), ("coverage.py", None)])
+def test_account_scopes_bare_records_by_signal_producer(
+    tmp_path: Path, producer: str, error: str | None
+) -> None:
+    """Gate the coverage.py-only bare-record acceptance at `account()`, where the policy is read.
+
+    Parameters:
+        tmp_path (Path): Disposable source root.
+        producer (str): The signal's declared report writer.
+        error (str | None): Expected accounting error, or None when the bare record is accepted.
+    Returns:
+        None: Only a `coverage.py` signal accepts a bare `SF`/`end_of_record` record.
+    Raises:
+        AssertionError: The producer check is bypassed or over-applied.
+    """
+    report = setup_report(tmp_path)
+    directory = tmp_path / "packages/example"
+    (directory / "src/other.ts").write_text("export const other = 1;\n")
+    report.write_text(
+        "SF:src/index.ts\nend_of_record\nSF:src/other.ts\nDA:1,1\nLF:1\nLH:1\nFNF:0\nFNH:0\nend_of_record\n"
+    )
+    data = policy().model_dump()
+    signal = data["packages"]["example"]["signals"]["primary"]
+    signal |= {"files": ["src/index.ts", "src/other.ts"], "producer": producer}
+    data["packages"]["example"]["owned"] = ["src/*.ts"]
+    _, errors = account(tmp_path, Policy.model_validate(data))
+    if error is None:
+        assert not errors
+    else:
+        assert any(error in item for item in errors)

@@ -207,3 +207,30 @@ def test_ratchet_goal_requires_a_measured_enforced_signal() -> None:
     package["signals"]["primary"] |= {"enforcement": "report-only", "reason": "Diagnostic only."}
     with pytest.raises(ValidationError, match="at least one enforced signal"):
         Policy.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("base_goal", "new_goal"),
+    [("ratchet", "excluded"), ("ratchet", "report-only"), ("100-percent", "ratchet")],
+)
+def test_goal_moves_that_loosen_are_rejected(base_goal: str, new_goal: str) -> None:
+    """Reject every goal move that leaves an enforced mode for a weaker one.
+
+    Parameters:
+        base_goal (str): Goal in the base policy.
+        new_goal (str): Weaker goal in the current policy.
+    Returns:
+        None: `check_ratchet` refuses each move even with a reasoned enforcement downgrade.
+    Raises:
+        AssertionError: A loosening move is accepted.
+    """
+    base = ratchet_policy(5, 5).model_dump()
+    base["packages"]["example"]["goal"] = base_goal
+    current = ratchet_policy(5, 5).model_dump()
+    package = current["packages"]["example"]
+    package["goal"] = new_goal
+    if new_goal != "ratchet":
+        package["signals"]["primary"] |= {"enforcement": "report-only", "reason": "Loosening attempt."}
+        current["enforcement_changes"] = [{"package": "example", "signal": "primary", "reason": "Loosening."}]
+    with pytest.raises(ValueError, match="Cannot remove package from global goal"):
+        check_ratchet(Policy.model_validate(current), Policy.model_validate(base))
