@@ -177,7 +177,7 @@ describe("session switch with a running background agent", () => {
     vi.restoreAllMocks();
   });
 
-  async function spawnRunning(tools: Map<string, any>, parent = ctx(sessionFile)) {
+  async function spawnRunning(tools: Map<string, any>, parent = ctx(sessionFile), name?: string) {
     let finish!: (v: any) => void;
     let signal: AbortSignal | undefined;
     vi.mocked(runAgent).mockImplementation(((_c: any, _t: any, _p: any, opts: any) => {
@@ -188,7 +188,7 @@ describe("session switch with a running background agent", () => {
     }) as any);
     const r = await tools.get("Agent").execute(
       "tc",
-      { prompt: "go", description: "long reviewer", subagent_type: "general-purpose", run_in_background: true },
+      { prompt: "go", description: "long reviewer", subagent_type: "general-purpose", run_in_background: true, ...(name ? { name } : {}) },
       undefined,
       undefined,
       parent,
@@ -263,6 +263,37 @@ describe("session switch with a running background agent", () => {
     agent.finish();
     await flush();
     expect(listRunningDetached(sessionFile)).toEqual([]);
+  });
+
+  it("lets the reopened session read and steer a survivor by id, handle and name (#330)", async () => {
+    const first = makePi();
+    subagentsExtension(first.pi);
+    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    const agent = await spawnRunning(first.tools, ctx(sessionFile), "auth-audit");
+    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    // Proves the survivor existed, with a handle, before the lookups below assert on it.
+    const [survivor] = listRunningDetached(sessionFile);
+    expect(survivor.record.id).toBe(agent.id);
+    const { handle, alias } = survivor.record;
+    expect(handle).toBeTruthy();
+    expect(alias).toBe("auth-audit");
+
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    for (const ref of [agent.id, handle!, alias!]) {
+      const got = await back.tools.get("get_subagent_result").execute("g", { agent_id: ref }, undefined, undefined, ctx(sessionFile));
+      expect(got.content[0].text).not.toContain("Agent not found");
+      expect(got.content[0].text).toContain("Status: running");
+      const steered = await back.tools.get("steer_subagent").execute("s", { agent_id: ref, message: "hi" }, undefined, undefined, ctx(sessionFile));
+      expect(steered.content[0].text).not.toContain("Agent not found");
+    }
+    const unknown = await back.tools.get("get_subagent_result").execute("g", { agent_id: "nope" }, undefined, undefined, ctx(sessionFile));
+    expect(unknown.content[0].text).toContain("Agent not found");
+
+    agent.finish();
+    await flush();
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("delivers immediately when the agent finishes while its session is open again", async () => {
