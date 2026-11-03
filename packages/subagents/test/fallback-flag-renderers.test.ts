@@ -13,13 +13,14 @@ import type { AgentRecord, NotificationDetails } from "../src/types.js";
 import { AgentResultView } from "../src/ui/agent-row.js";
 import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
-import { hasFallback } from "../src/ui/fallback-flag.js";
+import { boundedWrappedRows, hasFallback } from "../src/ui/fallback-flag.js";
 import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.js";
 import { groupSummary, renderNotification } from "../src/ui/notification-view.js";
 import { layoutWorkflowCard, plainWorkflowCardLines, type WorkflowCardTask } from "../src/ui/workflow-card.js";
 import {
   initialWorkflowDialogState,
   layoutWorkflowDialog,
+  MIN_PANE_BODY_ROWS,
   plainWorkflowDialogLines,
   type WorkflowDialogInput,
 } from "../src/ui/workflow-dialog.js";
@@ -47,8 +48,8 @@ interface Case {
   render: (ugly: string, width: number) => string;
   /** Widths where this renderer shows a row at all (the agent-level dialog has no list pane when narrow). */
   widths?: number[];
-  /** Fleet rows compact the shared flag before clipping spend at narrow widths. */
-  compactFlagAt?: number;
+  /** Rows that compact the shared flag at narrow widths, and the exact marker they compact to. */
+  compactFlag?: { at: number; marker: string };
 }
 
 const record = (over: Partial<AgentRecord> = {}): AgentRecord =>
@@ -111,6 +112,19 @@ function dialogInput(width: number, progress: WorkflowAgentEntry[], level: "phas
 
 const notice = (over: Partial<NotificationDetails>): NotificationDetails => ({
   id: "a", description: "d", status: "completed", toolUses: 1, turnCount: 1, totalTokens: 1, durationMs: 1, resultPreview: "r", ...over,
+});
+
+describe("bounded wrapped control text", () => {
+  it("reserves physical rows for an omission marker while retaining both ends", () => {
+    expect(boundedWrappedRows("one", 80, 4, "…")).toEqual(["one"]);
+    expect(boundedWrappedRows("first\nsecond\nthird\nfourth\nlast", 80, 4, "…")).toEqual([
+      "first", "… 2 more lines", "fourth", "last",
+    ]);
+    expect(boundedWrappedRows("first\nsecond\nthird\nlast", 80, 1, "…")).toEqual(["first", "… 2 more lines", "last"]);
+    for (const maxRows of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(boundedWrappedRows("first\nsecond\nthird\nlast", 80, maxRows, "…"), String(maxRows)).toEqual(["first", "… 2 more lines", "last"]);
+    }
+  });
 });
 
 const TIER_FLAGS: { modelTier: TierDisclosure; flag: string }[] = [
@@ -221,12 +235,9 @@ const CASES: Case[] = [
     render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })]))).find(l => l.includes("[fallback")) ?? "",
   },
   {
-    // At 40 columns the agent-level list pane is ~10 columns wide, so the flag is
-    // clipped to a fragment there; that KNOWN LIMIT is asserted below (and in the
-    // README), not in this matrix.
     name: "workflow dialog agent list row (agent level)",
-    widths: [80, 120],
-    render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })], "agent"))).find(l => l.includes("[fallback")) ?? "",
+    compactFlag: { at: 40, marker: "[fb]" },
+    render: (u, w) => plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(w, [agentEntry({ label: u })], "agent"))).find(l => l.includes("❯")) ?? "",
   },
   {
     name: "conversation viewer invocation row",
@@ -240,7 +251,7 @@ const CASES: Case[] = [
       return lines.find(l => l.includes("↳")) ?? lines.join("\n");
     },
   },
-  { name: "fleet list row", compactFlagAt: 40, render: (u, w) => fleetLine(record({ description: u, invocation: { modelName: u } }), w) },
+  { name: "fleet list row", compactFlag: { at: 40, marker: "!" }, render: (u, w) => fleetLine(record({ description: u, invocation: { modelName: u } }), w) },
 ];
 
 describe("every renderer keeps a leading [fallback] flag that unbounded text cannot hide", () => {
@@ -250,9 +261,7 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
         it(`${c.name} / ${kind} / ${width} cols`, () => {
           const line = c.render(ugly, width);
           const text = strip(line);
-          const flagAt = c.compactFlagAt !== undefined && width <= c.compactFlagAt
-            ? text.search(/\[fallback|\[fb\]|!/)
-            : text.indexOf("[fallback");
+          const flagAt = text.indexOf(c.compactFlag && width <= c.compactFlag.at ? c.compactFlag.marker : "[fallback]");
           expect(flagAt, `flag missing in: ${JSON.stringify(text)}`).toBeGreaterThanOrEqual(0);
           const marker = strip(ugly)[0]!;
           const markerAt = text.indexOf(marker);
@@ -263,29 +272,54 @@ describe("every renderer keeps a leading [fallback] flag that unbounded text can
     }
   }
 
-  it("the workflow dialog detail pane WRAPS the note instead of clamping it", () => {
-    const longNote = `Note: configured model "${"Q".repeat(120)}" did not resolve; running on parent model anthropic/x.`;
+  it("the workflow dialog detail pane wraps a note that fits", () => {
+    const longNote = `Note: configured model "${"Q".repeat(60)}" did not resolve; running on parent model anthropic/x.`;
     const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(70, [agentEntry({ modelNote: longNote })], "agent")));
     const joined = lines.map(l => l.replace(/[^A-Za-z]/g, "")).join("");
-    expect(joined).toContain("Q".repeat(120));
+    expect(joined).toContain("Q".repeat(60));
     for (const l of lines) expect(visibleWidth(l)).toBeLessThanOrEqual(70);
   });
 
-  describe("known limits: the workflow dialog at narrow widths (tracked in nredd/pi-harness issue, see README)", () => {
-    it("at 40 columns the agent-level list pane is narrow and shows only a fragment of the flag", () => {
-      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(40, [agentEntry({ label: UGLY.ascii })], "agent")));
-      const listRow = lines.find(l => l.includes("✔ [fal"));
-      expect(listRow, lines.join("\n")).toBeDefined();
-      expect(listRow).not.toContain("[fallback]");
-      for (const l of lines) expect(visibleWidth(l)).toBeLessThanOrEqual(40);
-    });
+  it("keeps the workflow-dialog fallback disclosure intact at narrow render widths", () => {
+    // The selected row's pane ends at the divider; the flag degrades whole and the label keeps what remains.
+    const expected: [number, string][] = [
+      [40, "❯ ✔ [fb] │"], [46, "❯ ✔ [fb] ZZ"], [60, "❯ ✔ [fallback] │"], [80, "❯ ✔ [fallback] ZZ"],
+    ];
+    for (const [width, row] of expected) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ label: UGLY.ascii })], "agent")));
+      const listRow = lines.find(l => l.includes("❯ ✔"));
+      expect(listRow, `${width} columns:\n${lines.join("\n")}`).toContain(row);
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
 
-    it("a very long note in the detail pane is clamped to the pane capacity, not shown in full", () => {
-      const longNote = `Note: ${"Q".repeat(2000)}`;
-      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(40, [agentEntry({ modelNote: longNote })], "agent")));
-      const shown = lines.join("").replace(/[^Q]/g, "").length;
-      expect(shown).toBeGreaterThan(0);
-      expect(shown).toBeLessThan(2000);
-    });
+  it("separates a compact-pane flag from its label with exactly one space", () => {
+    // Agent level always renders the compact list pane: 46 degrades the flag, 100 keeps it whole.
+    for (const [width, row] of [[46, "❯ ✔ [fb] ZZ│"], [100, "❯ ✔ [fallback] ZZ│"]] as const) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ label: "ZZ" })], "agent")));
+      expect(lines.find(l => l.includes("❯")), `${width} columns:\n${lines.join("\n")}`).toContain(row);
+    }
+  });
+
+  it("keeps a long note's ending inside the minimum-height detail pane", () => {
+    // Status, stats and the four-row note fill exactly MIN_PANE_BODY_ROWS.
+    const ending = "ENDING-SENTINEL";
+    const entry = agentEntry({ modelNote: `Note: ${"Q".repeat(2000)} ${ending}`, thinking: "low", tokens: 1200, toolCalls: 3, durationMs: 4000 });
+    for (const width of [40, 80]) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog({ ...dialogInput(width, [entry], "agent"), bodyRows: MIN_PANE_BODY_ROWS }));
+      const body = lines.filter(l => l.includes("│"));
+      expect(body, `${width} columns:\n${lines.join("\n")}`).toHaveLength(MIN_PANE_BODY_ROWS);
+      expect(body.at(-1), `${width} columns:\n${lines.join("\n")}`).toContain(ending);
+    }
+  });
+
+  it("middle-elides a long workflow-dialog note without losing its ending", () => {
+    const ending = "ENDING-SENTINEL";
+    const longNote = `Note: ${"Q".repeat(2000)} ${ending}`;
+    for (const width of [40, 60, 80]) {
+      const lines = plainWorkflowDialogLines(layoutWorkflowDialog(dialogInput(width, [agentEntry({ modelNote: longNote })], "agent")));
+      expect(lines.join("\n"), `${width} columns`).toContain(ending);
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
   });
 });
