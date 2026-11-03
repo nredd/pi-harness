@@ -98,6 +98,8 @@ export class UsageBus {
 	anthropic: readonly [number, number] | undefined = [20, 40];
 	codex: readonly [number, number] | undefined = [30, 50];
 	statuses: [string, string] = ["available", "available"];
+	/** Raw router windows replacing the anthropic fixture windows (e.g. no `five_hour`); `anthropic` still gates presence. */
+	anthropicWindows: readonly Record<string, unknown>[] | undefined = undefined;
 	/** Raw router windows replacing the codex fixture windows (spans, provenance); `codex` still gates presence. */
 	codexWindows: readonly Record<string, unknown>[] | undefined = undefined;
 	/** Router `resetAt` epoch ms per window ([5h-or-first, weekly]); unset means the router reported none. */
@@ -119,7 +121,12 @@ export class UsageBus {
 			data: {
 				snapshots: [
 					...(this.anthropic
-						? [snapshot("anthropic", this.anthropic, this.clock.now(), this.statuses[0], this.anthropicResets)]
+						? [
+								withWindows(
+									snapshot("anthropic", this.anthropic, this.clock.now(), this.statuses[0], this.anthropicResets),
+									this.anthropicWindows,
+								),
+							]
 						: []),
 					...(this.codex
 						? [

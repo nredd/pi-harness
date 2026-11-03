@@ -96,7 +96,8 @@ auth has no subscription window and is never blocked. Codex window names follow 
 `limit_window_seconds`, not their primary/secondary position: some plans expose only a weekly
 primary window. Missing durations retain the legacy positional fallback; other durations stay
 explicit in seconds rather than being mislabeled as 5h or weekly. Normalized windows carry optional
-`durationMs`: Anthropic's known 5h/7d durations and Codex's reported duration (legacy positional
+`durationMs`: Anthropic's known 5h/7d durations (5h only when `five_hour` is reported; an absent, `null` or
+`{ utilization: null }` window is dropped, and some plans report only `seven_day`) and Codex's reported duration (legacy positional
 fallback when absent). Older or third-party snapshots without durations still score safely. Windows also carry optional `spanSource` (`reported` when the provider stated the span: Anthropic's fixed windows and Codex `limit_window_seconds`; `assumed` for the Codex positional fallback). It is display provenance only, so a footer can avoid calling a guessed window 5h or weekly; scoring, admission and blocking never read it.
 
 Surfaces:
