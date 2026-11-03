@@ -181,15 +181,19 @@ export function readCommand(input: unknown) {
   return typeof command?.command === "string" ? command.command : "";
 }
 
-/** Trailing path-policy options; an omitted home keeps the native one. */
+/** Where a shell command runs and which directories it may reach; omitted values keep the defaults. */
 export interface PathPolicyOptions {
-  /** Home for `~` in trusted roots and directory arguments. */
+  /** Effective directory for relative `cd`/`git -C` targets; none means only trusted roots. */
+  workingDirectory?: string;
+  /** Extra roots `cd`/`git -C` may reach. */
+  trustedDirectories?: readonly string[];
+  /** Home for `~` in trusted roots and directory arguments; omitted keeps the native one. */
   homeDir?: string;
 }
 
-/** Bash-only options: `remote` re-validates an `ssh <host> <command>` on the other side. */
+/** Bash also needs the platform for its platform-specific inspection commands. */
 export interface CommandPolicyOptions extends PathPolicyOptions {
-  remote?: boolean;
+  platform?: NodeJS.Platform;
 }
 
 /** `ssh_exec` parameters Plan mode understands; anything else fails closed. `cwd` is a plain path. */
@@ -226,7 +230,7 @@ export function findBlockedSshExecCall(
 
 /** The remote side of `ssh <host> <command>` and `ssh_exec`: local directories mean nothing there. */
 function findBlockedRemoteCommand(command: string, safeSubcommands: SafeSubcommands, platform: NodeJS.Platform) {
-  return findBlockedCommandSegment(command, safeSubcommands, undefined, platform, [], { remote: true });
+  return findBlockedCommandSegment(command, safeSubcommands, { platform });
 }
 
 /**
@@ -237,22 +241,23 @@ function findBlockedRemoteCommand(command: string, safeSubcommands: SafeSubcomma
  *   of a `&&`/`||`/`;`/`|` list is validated independently.
  * - Redirections, substitutions, and piping into an interpreter are always rejected.
  * - `cd <dir>` and `git -C <dir>` are accepted only for directories under `workingDirectory` or one of
- *   `trustedDirectories`; `cd` moves the effective directory for the following segments.
- * - `remote` re-validates the command of an `ssh <host> <command>` on the other side, where local
- *   directories mean nothing, so `cd` and `git -C` are rejected.
+ *   `trustedDirectories`; `cd` moves the effective directory for the following segments. With
+ *   neither, as for the remote side of `ssh <host> <command>`, both are rejected.
  */
 export function findBlockedCommandSegment(
   command: string,
   safeSubcommands: SafeSubcommands = {},
-  workingDirectory?: string,
-  platform: NodeJS.Platform = process.platform,
-  trustedDirectories: readonly string[] = [],
-  { remote = false, homeDir = homedir() }: CommandPolicyOptions = {},
+  {
+    workingDirectory,
+    platform = process.platform,
+    trustedDirectories = [],
+    homeDir = homedir(),
+  }: CommandPolicyOptions = {},
 ): string | undefined {
   const segments = splitShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
-  const roots = allowedRoots(remote ? undefined : workingDirectory, remote ? [] : trustedDirectories, homeDir);
-  let base = remote ? undefined : workingDirectory;
+  const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
+  let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
     if (segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), INTERPRETERS)) return segment.text;
     const tokens = shellWords(segment.text);
@@ -274,23 +279,15 @@ export function findBlockedCommandSegment(
 export function isSafeCommand(
   command: string,
   safeSubcommands: SafeSubcommands = {},
-  workingDirectory?: string,
-  platform: NodeJS.Platform = process.platform,
-  trustedDirectories: readonly string[] = [],
-  options: PathPolicyOptions = {},
+  options: CommandPolicyOptions = {},
 ) {
-  return (
-    findBlockedCommandSegment(command, safeSubcommands, workingDirectory, platform, trustedDirectories, options) ===
-    undefined
-  );
+  return findBlockedCommandSegment(command, safeSubcommands, options) === undefined;
 }
 
 export function findBlockedPowerShellCommandSegment(
   command: string,
   safeSubcommands: SafeSubcommands = {},
-  workingDirectory?: string,
-  trustedDirectories: readonly string[] = [],
-  { homeDir = homedir() }: PathPolicyOptions = {},
+  { workingDirectory, trustedDirectories = [], homeDir = homedir() }: PathPolicyOptions = {},
 ): string | undefined {
   const segments = splitPowerShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
@@ -309,14 +306,9 @@ export function findBlockedPowerShellCommandSegment(
 export function isSafePowerShellCommand(
   command: string,
   safeSubcommands: SafeSubcommands = {},
-  workingDirectory?: string,
-  trustedDirectories: readonly string[] = [],
   options: PathPolicyOptions = {},
 ) {
-  return (
-    findBlockedPowerShellCommandSegment(command, safeSubcommands, workingDirectory, trustedDirectories, options) ===
-    undefined
-  );
+  return findBlockedPowerShellCommandSegment(command, safeSubcommands, options) === undefined;
 }
 
 type ShellSeparator = "start" | "&&" | "||" | ";" | "|";
