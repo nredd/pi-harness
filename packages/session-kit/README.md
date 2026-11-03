@@ -49,7 +49,8 @@ loading the config file, `agentDir` scopes config/rules/title aliases, `homeDir`
 cache/session defaults when no agent directory is supplied, and `monitorRoot` isolates
 monitor pidfiles and orphan sweeps. Optional `clock` (`now`, cancellable `setTimeout`/`setInterval`)
 and `spawnMonitor` seams control scheduling and child lifetime in SDK tests; the real manager,
-ring, coalescer, regex worker and host follow-up queue still run. Controlled stdout callbacks resolve
+ring, coalescer, regex worker and host follow-up queue still run. The regex worker's startup,
+per-line and drain deadlines use the same `clock`. Controlled stdout callbacks resolve
 after matching/ingestion; native pipe events need not await them. Omitted options keep the CLI defaults. No daemon or
 persistent cron is installed. Deferred-tool configurations need `goal_update` in `neverDefer`
 (without forcing it active), and `monitor_read` in `alwaysActive` and `neverDefer` for Plan mode.
@@ -246,7 +247,9 @@ stale deferred factories and stats load-error cleanup without replacing the inte
 Terminal fixtures route input chunks through pi-tui's real `StdinBuffer`, matching ProcessTerminal's
 keypress splitting (complete keys only; lone Escape is flushed immediately). Stats scroll-to-clamp
 checks batch input and settle once; intermediate-frame checks still settle per step. Both hourly
-tabs and exact provider totals remain covered at every width. Each stats-view body owns its fixture
+tabs and exact provider totals remain covered at every width. The full-render sweeps run one case per width
+(row count) or per range (stat grid), each asserting it checked something, so no single test owns hundreds of
+renders against the 20s bound; the hourly ranges pin `now` so they lay out a grid. Each stats-view body owns its fixture
 and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.

@@ -118,6 +118,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     const ctx: any = { cwd, getSystemPrompt: () => "PARENT", isProjectTrusted: () => projectTrusted, model, modelRegistry };
 
     let active: string[] = [];
+    lastSession = undefined;
     try {
       await runAgent(ctx, "e2e", "go", {
         ...runOpts,
@@ -278,9 +279,20 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
       );
     }
 
-    /** Whether the server behind `marker` started; it starts in the background after session_start. */
+    /**
+     * Whether the server behind `marker` started. It starts in the background after session_start, so
+     * first settle that startup through pi's own non-TUI `/mcp` status, which awaits every startup
+     * connection: the server ran and exited, or was never configured. Without the built-in loaded
+     * there is no command and nothing that could start a server.
+     */
     async function started(marker: string): Promise<boolean> {
-      for (let i = 0; i < 30 && !existsSync(marker); i++) await new Promise((r) => setTimeout(r, 50));
+      if (!lastSession) throw new Error("activeToolsFor built no session");
+      const mcp = lastSession.extensionRunner.getCommand("mcp");
+      if (mcp) {
+        const status: string[] = [];
+        await mcp.handler("", { mode: "print", ui: { notify: (message: string) => status.push(message) } });
+        expect(status).toHaveLength(1);
+      }
       return existsSync(marker);
     }
 
@@ -289,6 +301,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
       // negative tests below can't pass just because nothing ever starts.
       const marker = writeMcpConfig(cwd);
       await withEmptyAgentDir(() => activeToolsFor({ extensions: true }, true));
+      expect(lastSession.extensionRunner.getCommand("mcp")).toBeDefined();
       expect(await started(marker)).toBe(true);
     });
 
