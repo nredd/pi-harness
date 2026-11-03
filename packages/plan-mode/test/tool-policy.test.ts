@@ -19,11 +19,35 @@ test("injected homes govern trusted tilde roots for Bash and PowerShell", () => 
   const home = "/isolated/home";
   const roots = ["/isolated/home/trusted"];
   for (const command of ["cd ~/trusted && git status", "git -C ~/trusted status"]) {
-    assert.equal(isPolicySafeCommand(command, {}, "/work", "darwin", roots, home), true, command);
-    assert.equal(isPolicySafeCommand(command, {}, "/work", "darwin", roots, "/other/home"), false, command);
+    assert.equal(isPolicySafeCommand(command, {}, "/work", "darwin", roots, { homeDir: home }), true, command);
+    assert.equal(
+      isPolicySafeCommand(command, {}, "/work", "darwin", roots, { homeDir: "/other/home" }),
+      false,
+      command,
+    );
   }
-  assert.equal(isSafePowerShellCommand("git -C ~/trusted status", {}, "/work", roots, home), true);
-  assert.equal(isSafePowerShellCommand("git -C ~other/trusted status", {}, "/work", roots, home), false);
+  assert.equal(isSafePowerShellCommand("git -C ~/trusted status", {}, "/work", roots, { homeDir: home }), true);
+  assert.equal(isSafePowerShellCommand("git -C ~other/trusted status", {}, "/work", roots, { homeDir: home }), false);
+});
+
+test("injected homes keep rejecting other users' tildes and traversal on the Bash path", () => {
+  const home = "/isolated/home";
+  const roots = ["~/trusted"];
+  const options = { homeDir: home };
+  assert.equal(isPolicySafeCommand("git -C ~/trusted status", {}, "/work", "darwin", roots, options), true);
+  for (const command of [
+    "cd ~other/trusted && git status",
+    "git -C ~other/trusted status",
+    "cd ~/trusted/.. && git status",
+    "git -C ~/trusted/../escape status",
+  ]) {
+    assert.equal(isPolicySafeCommand(command, {}, "/work", "darwin", roots, options), false, command);
+    assert.equal(findBlockedCommandSegment(command, {}, "/work", "darwin", roots, options), command.split(" && ")[0]);
+  }
+  assert.equal(
+    isPolicySafeCommand("git -C /isolated/home/trusted status", {}, "/work", "darwin", ["~other/trusted"], options),
+    false,
+  );
 });
 
 test("Plan registration forwards its injected home to Bash and PowerShell trusted roots", async () => {

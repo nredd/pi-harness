@@ -730,8 +730,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         ctx.cwd,
         process.platform,
         settings.trustedDirectories,
-        false,
-        dependencies.homeDir,
+        { homeDir: dependencies.homeDir },
       );
       if (blocked !== undefined) {
         return {
@@ -755,7 +754,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         settings.safeSubcommands,
         ctx.cwd,
         settings.trustedDirectories,
-        dependencies.homeDir,
+        { homeDir: dependencies.homeDir },
       );
       if (blocked !== undefined) {
         return {
