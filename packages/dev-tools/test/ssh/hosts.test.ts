@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-const homeProbe = vi.hoisted(() => ({ home: "" }));
+const homeProbe = vi.hoisted(() => ({ home: "", globError: "" }));
 vi.mock("node:fs", async (importOriginal) => {
 	const fs = await importOriginal<typeof import("node:fs")>();
 	const rejectRealHomeProbe = (path: unknown): void => {
@@ -19,6 +19,7 @@ vi.mock("node:fs", async (importOriginal) => {
 		},
 		globSync: (...args: Parameters<typeof fs.globSync>) => {
 			rejectRealHomeProbe(args[0]);
+			if (homeProbe.globError && args[0] === homeProbe.globError) throw new Error(`glob failed: ${args[0]}`);
 			return fs.globSync(...args);
 		},
 		readFileSync: (...args: Parameters<typeof fs.readFileSync>) => {
@@ -98,6 +99,22 @@ describe("readKnownHosts", () => {
 			writeFileSync(join(home, ".ssh", "inc1.conf"), "Host matched\n");
 			expect([...readKnownHosts(config, { homeDir: home })]).toEqual(["matched"]);
 		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	it("skips an Include whose glob fails, like OpenSSH, even when the literal path exists", () => {
+		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
+		const config = join(home, ".ssh", "config");
+		const broken = join(home, ".ssh", "broken.conf");
+		mkdirSync(join(home, ".ssh"), { recursive: true });
+		writeFileSync(config, "Include broken.conf\nHost kept\n");
+		writeFileSync(broken, "Host literal\n");
+		homeProbe.globError = broken;
+		try {
+			expect([...readKnownHosts(config, { homeDir: home })]).toEqual(["kept"]);
+		} finally {
+			homeProbe.globError = "";
 			rmSync(home, { recursive: true, force: true });
 		}
 	});

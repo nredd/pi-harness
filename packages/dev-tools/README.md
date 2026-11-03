@@ -217,8 +217,9 @@ writes the remote destination. Failures are named: `missing`,
 
 `~/.ssh/config` parsing follows OpenSSH: relative `Include` paths resolve against `~/.ssh`, not
 the including file; `Host=x`, quoted names, trailing comments and CRLF are handled. An `Include`
-follows only glob matches, as OpenSSH's `glob(3)` does. SDK callers can pass
-`readKnownHosts(path, { homeDir })` to expand nested `~/` Includes against an injected home.
+follows only glob matches and is skipped when its glob fails, as OpenSSH's `glob(3)` does. SDK
+callers can pass `readKnownHosts(path, { homeDir })` to expand nested `~/` Includes against an
+injected home.
 
 ## py
 
