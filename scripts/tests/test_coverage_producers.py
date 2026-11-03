@@ -185,7 +185,8 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     assert {"ripgrep", "fd-find"}.issubset(packages)
     mac_install = owned.index("Install reviewer read dependencies (macOS)")
     assert mac_install < verify
-    assert "tool: ripgrep@14.1.1,fd-find@10.2.0" in owned
+    assert "tool: ripgrep@14.1.1,fd-find@10.5.0" in owned
+    assert "BINSTALL_DISABLE_STRATEGIES: compile" in owned
     assert "taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283" in owned
     assert "rg --version" in owned
     assert "fdfind --version" in owned
