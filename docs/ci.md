@@ -259,6 +259,15 @@ original nonzero/timeout failure and raw evidence survive cleanup; no assertions
 pins or runtime behavior are relaxed. The exact native trigger and a failing-CI pane-state capture
 remain unresolved. No capacity cancellation is classified as this failure.
 
+RPC EOF exit (#100): the 15s `RPC did not exit on EOF` timeout is a Bun `1.3.14` native exit crash, not a
+live-monitor shutdown bug, so EOF keeps its graceful contract and no test stops its monitor early. The
+captured failures hit session D (no monitors) and `test_children_die_when_pi_quits_mid_monitor[stop]`
+(monitor already stopped), while `[rpc]` EOF with a live monitor exits 0 and reaps its group on every
+passing run. Since Bun `1.4.4` (#197, 2026-10-29) the 73 PR runs among the latest 100 CI runs hold 61 passing macOS personal
+stack jobs and no EOF timeout or `Segmentation fault` in any failed run (measured on `ad747f42`). That is
+absence of recurrence, not a proven fix. `RpcProcess.__exit__` now puts the child's drained stderr in the
+`TimeoutError`, so a recurrence names the crash banner in the failure itself.
+
 Final privacy/cleanup proofs additionally reject internal parent/root links and a root `pi.stderr`
 FIFO without ever opening it for reading. Stale regular-file prechecks with a FIFO or final symlink
 replacement are refused through the descriptor checks; removing `O_NONBLOCK` fails a pre-open test
