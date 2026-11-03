@@ -56,7 +56,6 @@ const childFiles = readdirSync(LIB_DIR)
 
 const readExample = (dir: string, name: string) => readFileSync(join(dir, name), "utf-8");
 const instrumenter = createInstrumenter({ coverageGlobalScope: "globalThis", coverageGlobalScopeFunc: false });
-const workflowCoverage = createCoverageMap({});
 // Vitest 5 uses a separate host-side store; VM instrumentation retains Istanbul's default.
 const coverageGlobal = globalThis as typeof globalThis & { __VITEST_COVERAGE__?: unknown };
 const workflowSourcePaths = new Map(
@@ -73,7 +72,6 @@ const transformScriptBody: NonNullable<RunWorkflowOptions["transformScriptBody"]
 };
 
 function collectCoverage(coverage: unknown): void {
-  workflowCoverage.merge(coverage as never);
   // Do not add example records to the primary src-only report when this suite runs there.
   if (process.env.PI_WORKFLOW_EXAMPLE_COVERAGE === "1") {
     const map = createCoverageMap(coverageGlobal.__VITEST_COVERAGE__ as never);
@@ -187,12 +185,12 @@ function stubHost(options: { failsFor?: string[]; gateFailsFor?: string[]; fails
   return { host, spawns, resumes };
 }
 
-const runExample = (name: string, host: WorkflowHost) =>
+const runExample = (name: string, host: WorkflowHost, onScriptCoverage = collectCoverage) =>
   runWorkflow({
     script: readExample(EXAMPLES_DIR, name),
     host,
     args: SAMPLE_ARGS[name],
-    onScriptCoverage: collectCoverage,
+    onScriptCoverage,
     transformScriptBody,
   });
 
@@ -352,7 +350,18 @@ describe("shipped example workflows", () => {
     });
   });
 
-  it("collects counters from every executed workflow VM", () => {
+  it("collects counters from every executed workflow VM", async () => {
+    // Own the counters: shuffled, this can run before every other example run.
+    const workflowCoverage = createCoverageMap({});
+    const collectInto = (coverage: unknown) => {
+      workflowCoverage.merge(coverage as never);
+      collectCoverage(coverage);
+    };
+    // Every top-level example, sequentially; `compose.js` loads the `lib/` child.
+    for (const name of exampleFiles) {
+      const result = await runExample(name, stubHost().host, collectInto);
+      expect(result.status, `${name} must complete`).toBe("completed");
+    }
     const collected = workflowCoverage.toJSON();
     const expected = [
       ...exampleFiles.map(name => join(EXAMPLES_DIR, name)),
