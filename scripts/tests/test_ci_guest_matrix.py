@@ -23,6 +23,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import ci_paths
 import merge_pr_checks
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -592,6 +593,9 @@ BENCHMARK_SKIP_STEP = "Benchmark unit gate (not run, no benchmark inputs)"
         (Trigger(benchmark_inputs="false"), False),
         (Trigger(event="push", benchmark_inputs="false"), True),
         (Trigger(event="push", benchmark_inputs="true"), True),
+        # A missing or empty output must fail open, like `wsl_inputs` and `stack_inputs`.
+        (Trigger(benchmark_inputs=""), True),
+        (Trigger(event="push", benchmark_inputs=""), True),
     ],
 )
 def test_benchmark_gate_runs_on_inputs_or_main_push_only_on_macos(
@@ -615,6 +619,31 @@ def test_benchmark_gate_runs_on_inputs_or_main_push_only_on_macos(
         assert BENCHMARK_SKIP_STEP not in other
 
 
+@pytest.mark.parametrize("event", ["pull_request", "push"])
+@pytest.mark.parametrize("benchmark_inputs", ["true", "false", ""])
+@pytest.mark.parametrize("plan_run", ["true", "false"])
+def test_benchmark_run_and_skip_conditions_are_exact_complements(
+    event: str, benchmark_inputs: str, plan_run: str
+) -> None:
+    """Never both run and skip, and never neither, on a macOS cell that executes its plan.
+
+    Parameters:
+        event (str): Triggering event.
+        benchmark_inputs (str): `classify` output, empty modelling a missing output.
+        plan_run (str): Whether the cell's plan executes its work.
+    """
+    steps = {step.get("name"): step for step in jobs()["owned"]["steps"]}
+    context = {
+        "steps.plan.outputs.run": plan_run,
+        "runner.os": "macOS",
+        "github.event_name": event,
+        "needs.classify.outputs.benchmark_inputs": benchmark_inputs,
+    }
+    runs = bool(evaluate(steps[BENCHMARK_STEP]["if"], context))
+    skips = bool(evaluate(steps[BENCHMARK_SKIP_STEP]["if"], context))
+    assert runs != skips if plan_run == "true" else not (runs or skips)
+
+
 def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
     """Run the skip step's real script and keep the NOT RUN disclosure honest.
 
@@ -634,6 +663,9 @@ def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
     )
     assert "::notice title=check-benchmark NOT RUN::" in result.stdout
     assert "changes no benchmark input" in result.stdout
+    # One list, in `ci_paths.py`: the reason points there instead of copying it.
+    assert "BENCHMARK_INPUT_FILES" in result.stdout
+    assert "benchmarks/comparison" not in step["run"]
     assert "### check-benchmark: NOT RUN" in summary.read_text()
     assert "This is not a pass." in summary.read_text()
 
@@ -1180,3 +1212,14 @@ def test_setup_refuses_non_linux_filesystem(tmp_path: Path, filesystem: str) -> 
     assert result.returncode == 1
     assert "not on a Linux filesystem" in result.stderr
     assert "unexpected-download" not in result.stderr
+
+
+def test_docs_list_every_benchmark_input() -> None:
+    """Pin the `benchmark_inputs` bullet in `docs/ci.md` to the classifier's constants."""
+    bullet = next(
+        line
+        for line in (ROOT / "docs/ci.md").read_text().splitlines()
+        if line.startswith("- `benchmark_inputs`")
+    )
+    for entry in sorted(ci_paths.BENCHMARK_INPUT_FILES) + list(ci_paths.BENCHMARK_INPUT_PREFIXES):
+        assert f"`{entry}`" in bullet
