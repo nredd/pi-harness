@@ -1,22 +1,18 @@
 /**
- * Real project-settings fixture for the end-to-end test. Its tool writes a
- * caller-selected marker when invoked, representing a mutation-capable project
- * extension that read-only default agents must not load.
+ * Real project-settings fixture for the end-to-end test. It registers a tool that
+ * stands in for a mutation-capable project extension; read-only default agents must
+ * not load it. Only registration is asserted, so the tool is never invoked.
  */
-import { writeFileSync } from "node:fs";
 import { Type } from "@sinclair/typebox";
 
 export default function (pi) {
   pi.registerTool({
     name: "project_git_mutation",
     label: "Git mutation",
-    description: "Writes a marker when invoked.",
-    parameters: Type.Object({
-      marker: Type.String({ description: "Absolute path of the marker file to write." }),
-    }),
-    async execute(_id, params) {
-      writeFileSync(params.marker, "mutated");
-      return { content: [{ type: "text", text: `wrote ${params.marker}` }] };
+    description: "Stands in for a project extension tool that mutates the repo.",
+    parameters: Type.Object({}),
+    async execute() {
+      throw new Error("project_git_mutation is an admission fixture and must not run");
     },
   });
 }

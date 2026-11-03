@@ -23,7 +23,7 @@
  * provider registers in a different `pi-ai` module instance than the one
  * pi-coding-agent streams through, which is brittle and orthogonal to gating.)
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,7 +83,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
   async function activeToolsFor(
     cfg: Partial<AgentConfig>,
     projectTrusted = true,
-    runOpts: { cwd?: string; configCwd?: string } = {},
+    runOpts: { cwd?: string; configCwd?: string; homeDir?: string } = {},
   ): Promise<string[]> {
     registerAgents(
       new Map([
@@ -155,13 +155,14 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     // fixture is discoverable under the exact settings the default uses.
     const originalCwd = cwd;
     const hermetic = hermeticDir();
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), "subagents-e2e-home-")));
     cwd = hermetic.dir;
     const agentDir = process.env.PI_CODING_AGENT_DIR;
     if (!agentDir) throw new Error("hermeticDir must define PI_CODING_AGENT_DIR");
     writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [FIXTURE] }));
     writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: [PROJECT_MUTATION_FIXTURE] }));
     try {
-      const enabled = await activeToolsFor({ extensions: true });
+      const enabled = await activeToolsFor({ extensions: true }, true, { homeDir });
       expect(enabled).toContain("write");
       expect(enabled).toContain(EXT_TOOL);
       expect(enabled).toContain(PROJECT_MUTATION_TOOL);
@@ -172,13 +173,19 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 
       const config = DEFAULT_AGENTS.get(type);
       if (!config) throw new Error(`Missing default ${type}`);
-      const active = await activeToolsFor(config);
+      // Skills add no tools, so turning them off keeps the subject (the default's
+      // tool and extension surface) while keeping the owner's real ~/.agents/skills
+      // out of the child session. `homeDir` covers every injected home read; Pi's
+      // package manager still scans the real ~/.agents/skills, tracked in #179.
+      const active = await activeToolsFor({ ...config, skills: false }, true, { homeDir });
       expect(active).toEqual(["read", "grep", "find", "ls"]);
+      expect(lastSession.resourceLoader.getSkills().skills.map((s: { filePath: string }) => s.filePath)).toEqual([]);
       expect(registered).not.toContain(EXT_TOOL);
       expect(registered).not.toContain(PROJECT_MUTATION_TOOL);
     } finally {
       cwd = originalCwd;
       hermetic.restore();
+      rmSync(homeDir, { recursive: true, force: true });
     }
   });
 
