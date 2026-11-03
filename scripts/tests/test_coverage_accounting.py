@@ -533,5 +533,7 @@ def test_parse_lcov_keeps_commas_in_lcov_style_function_names() -> None:
     Raises:
         AssertionError: The identity is split or mismatched.
     """
-    text = "\n".join(["SF:a.ts", "DA:1,1", "FN:1,f,g", "FNDA:1,f,g", "FNF:1", "FNH:1", "LF:1", "LH:1", "end_of_record", ""])
+    text = "\n".join(
+        ["SF:a.ts", "DA:1,1", "FN:1,f,g", "FNDA:1,f,g", "FNF:1", "FNH:1", "LF:1", "LH:1", "end_of_record", ""]
+    )
     assert parse_lcov(text)["a.ts"].functions == 1
