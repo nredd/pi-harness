@@ -20,8 +20,10 @@ export const ERROR_AT = 5;
 const WEEK_MS = 604_800_000;
 
 /**
- * Providers shown, in order, with their router ids. A provider without a `fiveHour` window
- * name has no 5h quota (OpenAI Codex), so none is shown. `identify` says how the weekly
+ * Providers shown, in order, with their router ids. `fiveHour` is the name of the 5h window to
+ * look for, not a promise that one exists: its segment shows only while the provider's reading
+ * reports it (`ProviderQuota.fiveHourReported`), since some Anthropic plans have no 5h quota.
+ * A provider without the name never shows one (OpenAI Codex). `identify` says how the weekly
  * window is recognised: `name` (Anthropic's fixed `seven_day`), or `span` (OpenAI: a
  * reported 604800000 ms duration, or the legacy `7d` name on snapshots without `spanSource`).
  */
@@ -58,6 +60,11 @@ interface QuotaProviderSpec {
  * which also accounts for `expiresAt` passing.
  */
 export interface ProviderQuota {
+	/**
+	 * True when the reading has a provider-scoped 5h window; only then is a `5h` segment shown.
+	 * Distinct from `fiveHour`, whose `undefined` means reported but invalid (`--`).
+	 */
+	fiveHourReported?: boolean;
 	fiveHour?: number;
 	/** Epoch ms the 5h window resets, as reported by the router; absent when unknown. */
 	fiveHourResetAt?: number;
@@ -86,7 +93,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-type WindowReading = Pick<ProviderQuota, "fiveHour" | "fiveHourResetAt" | "weekly" | "weeklyResetAt" | "weeklyUnknown">;
+type WindowReading = Pick<
+	ProviderQuota,
+	"fiveHourReported" | "fiveHour" | "fiveHourResetAt" | "weekly" | "weeklyResetAt" | "weeklyUnknown"
+>;
 
 /** Epoch ms from a router `resetAt`; non-finite or non-positive -> `undefined`. */
 function resetAtOf(value: unknown): number | undefined {
@@ -124,6 +134,7 @@ function readWindows(windows: unknown[], spec: QuotaProviderSpec): WindowReading
 		const out: WindowReading = {};
 		for (const window of provider) {
 			const key = window.name === spec.fiveHour ? "fiveHour" : window.name === spec.weekly ? "weekly" : undefined;
+			if (key === "fiveHour") out.fiveHourReported = true;
 			if (key) Object.assign(out, readingOf(window, key));
 		}
 		return out;
@@ -143,10 +154,19 @@ function readWindows(windows: unknown[], spec: QuotaProviderSpec): WindowReading
 /**
  * Per window: a valid new percent brings its own reset time (and identity); otherwise the prior
  * pair is retained. An unidentified new reading never displaces a retained proven-weekly one.
+ * Whether a 5h window exists follows the last fresh reading (only a fresh one sets `expiresAt`),
+ * so a stale cache from before a plan change cannot bring a dropped 5h back. Before any fresh
+ * reading it follows the stale replies.
  */
 function mergeReadings(seen: WindowReading, prior: ProviderQuota | undefined): WindowReading {
 	const out: WindowReading = {};
-	for (const key of ["fiveHour", "weekly"] as const) {
+	const fiveHourReported =
+		prior?.expiresAt === undefined
+			? seen.fiveHourReported === true || prior?.fiveHourReported === true
+			: prior.fiveHourReported === true;
+	if (fiveHourReported) out.fiveHourReported = true;
+	const keys = fiveHourReported ? (["fiveHour", "weekly"] as const) : (["weekly"] as const);
+	for (const key of keys) {
 		const usable =
 			seen[key] !== undefined &&
 			!(key === "weekly" && seen.weeklyUnknown && prior?.weekly !== undefined && !prior.weeklyUnknown);
@@ -165,9 +185,11 @@ function mergeReadings(seen: WindowReading, prior: ProviderQuota | undefined): W
  *
  * A snapshot is fresh only if `status` is `available`, `windows` is a non-empty array and
  * `expiresAt` is finite and in the future. A fresh snapshot replaces the provider
- * wholesale (a missing or invalid window shows `--`). Anything else, including a
+ * wholesale (an invalid window shows `--`, a missing 5h window is not shown, a missing
+ * weekly one shows `--`). Anything else, including a
  * provider absent from the reply, is stale: values merge per field over `previous`
- * (valid snapshot values win, the rest are retained; a retained percent keeps its reset time).
+ * (valid snapshot values win, the rest are retained; a retained percent keeps its reset time),
+ * and never re-add a 5h window the last fresh reading did not report.
  */
 export function parseUsageReply(reply: unknown, now: number, previous?: QuotaState): QuotaState | undefined {
 	const envelope = asRecord(reply);
@@ -308,10 +330,11 @@ function providerRows(state: QuotaState, layout: Layout, colorize: Colorize, opt
 	const dim = (text: string) => colorize("dim", text);
 	const resolved = { ...opts, now: opts.now ?? Date.now() };
 	const segments = (QUOTA_PROVIDERS as readonly QuotaProviderSpec[]).map((spec) => {
+		// No reading yet: the tier is unknown, so only the weekly placeholder is shown.
 		const quota = state[spec.id] ?? { stale: true };
 		const label = `${full ? spec.full : spec.compact}${quota.stale ? " (stale)" : ""}`;
 		const windows: string[] = [];
-		if (spec.fiveHour !== undefined)
+		if (quota.fiveHourReported)
 			windows.push(windowText("5h", quota.fiveHour, quota.fiveHourResetAt, false, layout, colorize, resolved));
 		const unidentified = quota.weeklyUnknown === true;
 		const weeklyLabel = unidentified ? "quota" : full ? "weekly" : "7d";
@@ -326,7 +349,8 @@ function providerRows(state: QuotaState, layout: Layout, colorize: Colorize, opt
 }
 
 /**
- * Single row text for one tier, with reset times; always lists both providers. Labels are
+ * Single row text for one tier, with reset times; always lists both providers, Anthropic's 5h
+ * only when reported. Labels are
  * dimmed and low values colored individually, so a value color never bleeds into the rest.
  * Windows with an unknown or already-past reset omit it (the percent is unchanged); OpenAI shows only its weekly window, or an `unknown window` quota when the router could not prove the span.
  */

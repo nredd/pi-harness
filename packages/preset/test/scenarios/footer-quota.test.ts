@@ -394,6 +394,42 @@ it("usage envelopes validate providers and omit missing snapshots", () => {
 		fixture.clock.now(),
 	);
 	expect(Object.keys(parsed ?? {})).toEqual(["anthropic", "openai-codex"]);
-	expect(parsed?.anthropic).toMatchObject({ fiveHour: 90, weekly: 80, stale: true });
-	expect(parsed?.["openai-codex"]).toMatchObject({ fiveHour: undefined, weekly: undefined, stale: true });
+	expect(parsed?.anthropic).toMatchObject({ fiveHourReported: true, fiveHour: 90, weekly: 80, stale: true });
+	expect(parsed?.["openai-codex"]).toStrictEqual({ weekly: undefined, stale: true, expiresAt: undefined });
+});
+
+const WEEKLY_ONLY = [{ name: "seven_day", scope: "provider", usedPercent: 40 }] as const;
+
+it("Anthropic without a reported 5h window shows weekly only; fresh snapshots add or drop it", async () => {
+	fixture = new FooterFixture();
+	fixture.usage.anthropicWindows = WEEKLY_ONLY;
+	const host = await fixture.start();
+	host.resize(200, 40);
+	await host.settle();
+	expect(quotaRows(host)).toEqual(["Quota left: Anthropic weekly 60% | OpenAI weekly 50%"]);
+	host.resize(25, 30);
+	await host.settle();
+	expect(quotaRows(host)).toEqual(["Left: Anth 7d 60%", "OAI 7d 50%"]);
+	// The router's stale snapshot still carries a pre-change 5h window: it must not come back.
+	fixture.usage.anthropicWindows = undefined;
+	fixture.usage.statuses = ["stale", "available"];
+	await fixture.advance(60_000);
+	expect(quotaRows(host)).toEqual(["Left: Anth (stale) 7d 60%", "OAI 7d 50%"]);
+	// A fresh snapshot that reports 5h again (plan change) adds the segment without a restart.
+	fixture.usage.statuses = ["available", "available"];
+	await fixture.advance(60_000);
+	expect(quotaRows(host)).toEqual(["Left: Anth 5h 80% 7d 60%", "OAI 7d 50%"]);
+	fixture.usage.anthropicWindows = WEEKLY_ONLY;
+	await fixture.advance(60_000);
+	expect(quotaRows(host)).toEqual(["Left: Anth 7d 60%", "OAI 7d 50%"]);
+	expect(host.viewport().join("\n")).not.toMatch(/\b5h\b/);
+});
+
+it("Anthropic missing from the first reply shows only a weekly placeholder", async () => {
+	fixture = new FooterFixture();
+	fixture.usage.anthropic = undefined;
+	const host = await fixture.start();
+	host.resize(200, 40);
+	await host.settle();
+	expect(quotaRows(host)).toEqual(["Quota left: Anthropic (stale) weekly -- | OpenAI weekly 50%"]);
 });
