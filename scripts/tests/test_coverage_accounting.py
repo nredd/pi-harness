@@ -444,3 +444,94 @@ def test_test_helper_cannot_overlap_owned_inventory(tmp_path: Path) -> None:
     cfg.packages["example"].test_helpers = ["src/index.ts"]
     with pytest.raises(ValueError, match="overlap"):
         inventory(tmp_path, cfg.packages["example"])
+
+
+def test_parse_lcov_accepts_real_coveragepy_report() -> None:
+    """Parse a coverage.py 7.17.1 LCOV capture without rewriting it.
+
+    Parameters:
+        None.
+    Returns:
+        None: `FN:<line>,<end>,<name>` rows, nested names and empty sources parse into exact counters.
+    Raises:
+        AssertionError: A coverage.py row shape is rejected or miscounted.
+    """
+    records = parse_lcov((FIXTURES / "coveragepy-7.17.1.info").read_text())
+    assert records["__init__.py"].lines == 0
+    module = records["mod.py"]
+    assert (module.lines, module.uncovered_lines) == (9, 1)
+    assert (module.functions, module.uncovered_functions) == (4, 1)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        ("FN:4,5,covered", "FN:x,5,covered"),
+        ("FNDA:0,uncovered", "FNDA:0,missing"),
+        ("FN:4,5,covered", "FN:4,5,"),
+    ],
+)
+def test_parse_lcov_rejects_malformed_coveragepy_functions(mutation: tuple[str, str]) -> None:
+    """Keep the stricter validation for malformed coverage.py function rows.
+
+    Parameters:
+        mutation (tuple[str, str]): Real row and its corrupted replacement.
+    Returns:
+        None: Every corruption is rejected.
+    Raises:
+        AssertionError: A corrupted row is accepted.
+    """
+    text = (FIXTURES / "coveragepy-7.17.1.info").read_text().replace(*mutation)
+    with pytest.raises(ValueError, match="function"):
+        parse_lcov(text)
+
+
+def test_skipped_host_reports_not_run_but_other_hosts_still_fail_closed(tmp_path: Path) -> None:
+    """Scope a signal to hosts that run its producer without loosening anyone else.
+
+    Parameters:
+        tmp_path (Path): Disposable source root with no LCOV report.
+    Returns:
+        None: The skipped host reports nothing, every other host still fails on the missing report.
+    Raises:
+        AssertionError: A skipped host is gated or a non-skipped host is exempt.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "packages/example/coverage/lcov.info").unlink()
+    scoped = policy()
+    scoped.packages["example"].signals["primary"].skip_hosts = ["wsl2"]
+    assert account(tmp_path, scoped, host="wsl2") == ([], [])
+    for host in (None, "linux", "macos"):
+        _, errors = account(tmp_path, scoped, host=host)
+        assert errors, host
+
+
+def test_ratchet_rejects_adding_skipped_hosts() -> None:
+    """Keep `skip_hosts` from becoming a way to exempt a host after the fact.
+
+    Parameters:
+        None.
+    Returns:
+        None: Widening the skipped set against the base policy fails; shrinking it passes.
+    Raises:
+        AssertionError: A new skipped host is accepted.
+    """
+    base, current = policy(), policy()
+    current.packages["example"].signals["primary"].skip_hosts = ["wsl2"]
+    with pytest.raises(ValueError, match="Cannot add skipped hosts"):
+        check_ratchet(current, base)
+    check_ratchet(base, current)
+
+
+def test_parse_lcov_keeps_commas_in_lcov_style_function_names() -> None:
+    """Treat everything after `FN:<line>,` as the name when no end line is present.
+
+    Parameters:
+        None.
+    Returns:
+        None: A comma-bearing identity matches between its FN and FNDA rows.
+    Raises:
+        AssertionError: The identity is split or mismatched.
+    """
+    text = "\n".join(["SF:a.ts", "DA:1,1", "FN:1,f,g", "FNDA:1,f,g", "FNF:1", "FNH:1", "LF:1", "LH:1", "end_of_record", ""])
+    assert parse_lcov(text)["a.ts"].functions == 1

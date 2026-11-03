@@ -226,20 +226,30 @@ mocked argument/path/error tests still run. Existing native/platform checks rema
 `dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
-Python `scripts/*.py` and `integration/harness/*.py`, boundary probes, executable providers and
-producer configurations are named **measurement-pending** inventories, not silently omitted.
-Existing Python gates are not coverage accounting: pytest-cov for `scripts/` and
-`integration/harness/` is follow-up work. `benchmarks/comparison` already has pytest-cov at 90%
-combined coverage and retains it (always in local `make check`; in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); independent LCOV line/function accounting is still pending.
-The declaration-only `integration/harness/__init__.py` has an explicit reasoned exclusion.
+Boundary probes, executable providers and producer configurations are named **measurement-pending**
+inventories, not silently omitted. Python `scripts/*.py` (`python-scripts`) and
+`integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
+the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root>` writing LCOV to
+`scripts/coverage/python/lcov.info` and `integration/coverage/python/lcov.info`. The path is
+deliberately not `coverage/primary`, which is import-audit's report. The `--cov` source is the project
+root (`.` and `harness`), so the policy `owned` globs stay the only copy of the inventory.
+`scripts/pyproject.toml` sets coverage's `patch = ["subprocess"]` so the CLI tests that spawn
+`coverage_accounting.py` count. `pytest-cov` is locked in `integration/pyproject.toml`.
+`parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows and the bare record it writes for a
+file with no executable lines. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
+pytest (`docs/ci.md`), so `check-coverage` there (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
+`skip_hosts` to exactly the matrix cells whose `gates` omit the producer, and the ratchet rejects adding
+a skipped host. `benchmarks/comparison` keeps its own pytest-cov 90% combined gate unchanged (in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); it is not
+fed to accounting because a path-gated skip would otherwise fail as a missing report. The declaration-only `integration/harness/__init__.py` has an explicit
+reasoned exclusion.
 A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
 explicit owned/pending declaration or reasoned verification classification. Existing producer
 configurations remain pending/report-only in the policy. All inventories are expanded and
-validated; only eligible pending inventories block the final target flip. Python keeps its
-existing tests and benchmark gate, outside this eight-package goal.
+validated; only eligible pending inventories block the final target flip. Python is outside this
+eight-package goal; its measured signals are report-only here.
 
 ## Add a source file
 

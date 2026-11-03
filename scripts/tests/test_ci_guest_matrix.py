@@ -1131,6 +1131,21 @@ def test_classify_step_threads_the_pr_title_into_the_plan(tmp_path: Path) -> Non
     assert plan["owned (macos-14)"]["reason"].startswith("The squash subject")
 
 
+def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate() -> None:
+    """Scope each Python LCOV signal to the cells that run its producer, and no others."""
+    # `ci_paths` owns each owned cell's gates (#318); the matrix maps the cell's `os` to its `guest`.
+    gates = {cell["guest"]: ci_paths.OWNED_GATES[cell["os"]] for cell in expand("owned").values()}
+    policy = json.loads((ROOT / "coverage/policy.json").read_text())
+    accounting = next(
+        step for step in jobs()["owned"]["steps"] if step.get("name", "").startswith("Coverage accounting")
+    )
+    assert accounting["env"]["COVERAGE_HOST"] == "${{ matrix.guest }}"
+    for name in ("python-scripts", "python-harness"):
+        skipped = set(policy["packages"][name]["signals"]["primary"]["skip_hosts"])
+        gate = "check-scripts" if name == "python-scripts" else "check-integration"
+        assert skipped == {guest for guest, ran in gates.items() if gate not in ran}
+
+
 @pytest.mark.parametrize("name", ["owned", "contracts", "stack"])
 def test_shared_guest_matrix(name: str) -> None:
     """Expand every supported cell and reject unsupported hosts/platforms.

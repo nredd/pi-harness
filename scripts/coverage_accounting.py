@@ -116,6 +116,10 @@ class Signal(StrictModel):
     reason: str = Field(
         default="", description="Mandatory explanation and migration issue for report-only signals."
     )
+    skip_hosts: list[str] = Field(
+        default_factory=list,
+        description="CI hosts whose gate list never runs this signal's producer; reported NOT RUN there.",
+    )
 
     @model_validator(mode="after")
     def text_and_lcov(self) -> Signal:
@@ -396,13 +400,18 @@ class LcovRecord:
         Raises:
             ValueError: A function record is malformed or duplicated.
         """
-        number, comma, name = value.partition(",")
-        if not comma or not number.isdecimal() or not name:
+        # FNDA is `<hits>,<name>`. FN is `<line>,<name>` (lcov) or `<line>,<end>,<name>` (coverage.py).
+        fields = value.split(",", 1 if key == "FNDA" else 2)
+        name = fields[-1]
+        numbers = fields[:-1]
+        if key == "FN" and len(fields) == 3 and not fields[1].isdecimal():
+            numbers, name = fields[:1], ",".join(fields[1:])
+        if not numbers or not all(n.isdecimal() for n in numbers) or not name:
             raise ValueError(f"Malformed function counter: '{value}'")
         counters = self.definitions if key == "FN" else self.functions
         if name in counters:
             raise ValueError(f"Duplicate function counter: '{value}'")
-        counters[name] = int(number)
+        counters[name] = int(numbers[0])
 
     def add_branch(self, value: str) -> None:
         """Validate a branch identity and its optional hit count.
@@ -434,6 +443,9 @@ class LcovRecord:
         """
         if set(self.definitions) != set(self.functions):
             raise ValueError("Missing function counters")
+        if not (self.lines or self.functions or self.branches or self.summaries):
+            # coverage.py writes a bare `SF`/`end_of_record` pair for a source with no executable lines.
+            return FileCoverage(0, 0, 0, 0, 0, 0)
         totals = {
             "LF": len(self.lines),
             "LH": sum(value > 0 for value in self.lines.values()),
@@ -831,6 +843,8 @@ def check_ratchet(current: Policy, base: Policy) -> None:
             if signal_name not in package.signals:
                 raise ValueError(f"Removed signal: '{name}/{signal_name}'")
             new = package.signals[signal_name]
+            if not set(new.skip_hosts) <= set(old.skip_hosts):
+                raise ValueError(f"Cannot add skipped hosts: '{name}/{signal_name}'")
             for runner_os, floor in old.max_uncovered.items():
                 if runner_os not in new.max_uncovered:
                     raise ValueError(f"Missing OS floor: '{name}/{signal_name}/{runner_os}'")
@@ -969,6 +983,8 @@ def account(
     runner_os: str = sys.platform,
     reports_root: Path | None = None,
     measure: bool = False,
+    *,
+    host: str | None = None,
 ) -> tuple[list[dict[str, object]], list[str]]:
     """Account for independent package/file counters and retain signal failures.
 
@@ -978,6 +994,7 @@ def account(
         runner_os (str): Measured runner platform; only darwin and linux are supported.
         reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
         measure (bool): Report validated measurements without enforcing budgets; not a gate.
+        host (str | None): CI host class; signals listing it in `skip_hosts` are reported NOT RUN.
     Returns:
         tuple[list[dict[str, object]], list[str]]: Per-file metrics and explicit accounting failures.
     Raises:
@@ -996,6 +1013,9 @@ def account(
             continue
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
+            if host is not None and host in signal.skip_hosts:
+                LOGGER.warning(f"NOT RUN on host '{host}': '{label}' has no producer in that cell")
+                continue
             try:
                 validate_signal_inventory(owned, signal_name, signal)
                 if not measure and runner_os not in signal.max_uncovered:
@@ -1117,6 +1137,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--base", help="Git base required for gating; not used by --measure.")
     parser.add_argument("--os", default=sys.platform, choices=["darwin", "linux"])
+    parser.add_argument("--host", help="CI host class (e.g. wsl2) selecting signals' `skip_hosts`.")
     parser.add_argument("--reports-root", type=Path, help="Root of downloaded CI artifacts.")
     parser.add_argument("--measure", action="store_true", help="Print measured policy diff; NOT a gate.")
     parser.add_argument("--summary", type=Path, default=Path("coverage/summary.json"))
@@ -1171,7 +1192,7 @@ def main() -> int:
             base = Policy.model_validate_json(previous)
             check_ratchet(policy, base)
             check_inventory_ratchet(root, policy, base, args.base)
-        results, errors = account(root, policy, args.os, args.reports_root, args.measure)
+        results, errors = account(root, policy, args.os, args.reports_root, args.measure, host=args.host)
     except subprocess.CalledProcessError as error:
         errors.append(f"Git metadata read failed: '{error.output}'")
     except (OSError, ValueError, KeyError, TypeError) as error:

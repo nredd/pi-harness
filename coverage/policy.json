@@ -336,11 +336,20 @@
       "root": "scripts",
       "owned": ["*.py"],
       "exclusions": [],
-      "status": "pending",
+      "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner retains existing Python automation tests; Python is outside the eight-package 100-percent goal.",
-      "note": "Existing formatter, linter, type checker and pytest gates remain required. No LCOV coverage claim.",
-      "signals": {}
+      "note": "pytest-cov LCOV from `make check-scripts` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest. Linux reference is provisional (equal to darwin) until the hosted Ubuntu measurement lands in this PR.",
+      "signals": {
+        "primary": {
+          "report": "coverage/python/lcov.info",
+          "enforcement": "report-only",
+          "reason": "Python stays outside the eight-package 100-percent goal; measured here by pytest-cov LCOV and held as a downward ratchet in a separate owner-gated change.",
+          "skip_hosts": ["wsl2"],
+          "max_uncovered": { "darwin": { "lines": 300, "functions": 13 }, "linux": { "lines": 300, "functions": 13 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "python-harness": {
       "root": "integration",
@@ -349,11 +358,20 @@
         { "path": "harness/__init__.py", "kind": "type-only", "reason": "Declaration-only package marker containing only a module docstring; no executable implementation." },
         { "path": "conftest.py", "kind": "test-helper", "reason": "Pytest fixture configuration for integration scenarios, not production implementation." }
       ],
-      "status": "pending",
+      "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner retains existing Python automation tests; Python is outside the eight-package 100-percent goal.",
-      "note": "Existing formatter, linter, type checker and pytest gates remain required. No LCOV coverage claim.",
-      "signals": {}
+      "note": "pytest-cov LCOV from `make check-integration` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest. Linux reference is provisional (equal to darwin) until the hosted Ubuntu measurement lands in this PR.",
+      "signals": {
+        "primary": {
+          "report": "coverage/python/lcov.info",
+          "enforcement": "report-only",
+          "reason": "Python stays outside the eight-package 100-percent goal; measured here by pytest-cov LCOV and held as a downward ratchet in a separate owner-gated change.",
+          "skip_hosts": ["wsl2"],
+          "max_uncovered": { "darwin": { "lines": 668, "functions": 71 }, "linux": { "lines": 668, "functions": 71 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "python-benchmarks": {
       "root": "benchmarks/comparison",
