@@ -4,13 +4,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MonitorError, MonitorManager } from "../../src/monitor/manager.ts";
 import type { MonitorMessage } from "../../src/monitor/types.ts";
 import { alive, tempDir, waitFor } from "./helpers.ts";
+import { STAY } from "./stay.ts";
 
 let tmp: ReturnType<typeof tempDir>;
 let sent: MonitorMessage[];
 let mgr: MonitorManager;
 
 const node = (code: string) => ["node", "-e", code];
-const STAY = "setInterval(() => {}, 1000);";
 
 function make(coalesceMs = 80, killGraceMs = 300): MonitorManager {
 	return new MonitorManager({
@@ -254,11 +254,14 @@ describe("MonitorManager", () => {
 
 	it("keeps another session's directory untouched", async () => {
 		const other = new MonitorManager({ sessionId: "sess-2", root: tmp.dir, send: () => {} });
-		const o = await other.start({ argv: node(STAY), name: "o" }, tmp.dir);
-		await mgr.start({ argv: node(STAY), name: "w" }, tmp.dir);
-		await mgr.dispose();
-		expect(alive(o.pid)).toBe(true);
-		expect(existsSync(join(tmp.dir, `sess-2.${process.pid}`, `${o.id}.json`))).toBe(true);
-		await other.dispose();
+		try {
+			const o = await other.start({ argv: node(STAY), name: "o" }, tmp.dir);
+			await mgr.start({ argv: node(STAY), name: "w" }, tmp.dir);
+			await mgr.dispose();
+			expect(alive(o.pid)).toBe(true);
+			expect(existsSync(join(tmp.dir, `sess-2.${process.pid}`, `${o.id}.json`))).toBe(true);
+		} finally {
+			await other.dispose();
+		}
 	});
 });

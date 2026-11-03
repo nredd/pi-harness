@@ -1,9 +1,12 @@
+import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { signalGroup, spawnMonitor } from "../../src/monitor/process.ts";
+import { STAY } from "./stay.ts";
 
-export const SLEEPER = ["node", "-e", "setInterval(() => {}, 1000)"];
+export const SLEEPER = ["node", "-e", STAY];
 
 export function tempDir(): { dir: string; cleanup: () => void } {
 	const dir = mkdtempSync(join(tmpdir(), "psk-monitor-test-"));
@@ -16,6 +19,39 @@ export function alive(pid: number): boolean {
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+const execFileAsync = promisify(execFile);
+
+/** Test seams for `running`: the `ps` binary and its deadline. */
+export interface RunningOptions {
+	ps?: string;
+	timeoutMs?: number;
+}
+
+/**
+ * Whether `pid` is a live (non-zombie) process. `kill(pid, 0)` also succeeds for zombies, which
+ * never get reaped on hosts whose PID 1 does not reap (some containers, WSL2). `ps` exiting
+ * non-zero with no output means the pid is absent; a spawn failure or timeout rethrows, since a
+ * broken probe must not read as "dead".
+ */
+export async function running(
+	pid: number,
+	{ ps = "/bin/ps", timeoutMs = 5_000 }: RunningOptions = {},
+): Promise<boolean> {
+	if (!alive(pid)) return false;
+	try {
+		const { stdout } = await execFileAsync(ps, ["-o", "stat=", "-p", String(pid)], {
+			env: { ...process.env, LC_ALL: "C" },
+			timeout: timeoutMs,
+		});
+		const stat = stdout.trim();
+		return stat !== "" && !stat.startsWith("Z");
+	} catch (error) {
+		const { code, killed, stdout } = error as { code?: unknown; killed?: boolean; stdout?: string };
+		if (typeof code === "number" && !killed && !stdout?.trim()) return false;
+		throw error;
 	}
 }
 
