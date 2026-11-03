@@ -9,7 +9,7 @@
  * building their own marker; `test/fallback-flag-renderers.test.ts` walks every
  * renderer and fails the ones that do not.
  */
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { TierDisclosure } from "../model-tiers.js";
 
 /** Minimal theme surface, so this module has no dependency on the widgets that use it. */
@@ -57,6 +57,29 @@ export function fallbackFlag(theme: FlagTheme, carrier: FallbackCarrier | undefi
 const MINIMAL_FLAGS = ["[fb]", "!"] as const;
 
 /**
+ * Wrap control text into a fixed row budget while preserving both its opening
+ * and final diagnosis around an explicit omitted-rows marker. The budget is at
+ * least three rows: one each for the opening, the marker and the diagnosis.
+ * A non-finite `maxRows` gets that floor rather than poisoning the slices.
+ */
+export function boundedWrappedRows(text: string, width: number, maxRows: number, marker: string): string[] {
+  const rows = wrapTextWithAnsi(text, width);
+  const budget = Number.isFinite(maxRows) ? Math.max(3, Math.trunc(maxRows)) : 3;
+  if (rows.length <= budget) return rows;
+
+  // Reserve a row for the omission marker and favor the final rows: fallback
+  // diagnoses live at the end, while the first row still names the control text.
+  // At least two rows are omitted, so the marker never replaces a single row.
+  const firstCount = Math.max(1, Math.floor((budget - 1) / 2));
+  const lastCount = budget - firstCount - 1;
+  const omitted = rows.length - firstCount - lastCount;
+  const omission = stripTerminalSequences(
+    truncateToWidth(`${marker} ${omitted} more lines`, width, ""),
+  );
+  return [...rows.slice(0, firstCount), omission, ...rows.slice(-lastCount)];
+}
+
+/**
  * `prefix + flag + rest`, never wider than `width`, and the flag is never cut.
  *
  * Normal case: the prefix and the flag are reserved first and `rest` (a string,
@@ -65,7 +88,8 @@ const MINIMAL_FLAGS = ["[fb]", "!"] as const;
  * Narrow case, when `prefix + flag + " "` exceeds `width`: the prefix and then
  * the rest are dropped before the flag is. If the flag alone still does not
  * fit, it degrades to a plain `[fb]`, then `!`. Only a zero width renders
- * nothing.
+ * nothing. An empty string `rest` renders no separator after the flag, so a
+ * caller sizing the flag alone gets just the flag.
  */
 export function withLeadingFlag(
   prefix: string,
@@ -73,7 +97,7 @@ export function withLeadingFlag(
   rest: string | ((inner: number) => string),
   width: number,
 ): string {
-  const lead = flag ? `${prefix}${flag} ` : prefix;
+  const lead = flag ? `${prefix}${flag}${rest === "" ? "" : " "}` : prefix;
   if (!flag || visibleWidth(lead) <= width) {
     const inner = Math.max(0, width - visibleWidth(lead));
     const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
@@ -82,7 +106,7 @@ export function withLeadingFlag(
   const flagWidth = visibleWidth(flag);
   if (flagWidth <= width) {
     const inner = width - flagWidth - 1;
-    if (inner < 1) return flag;
+    if (inner < 1 || rest === "") return flag;
     const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
     return truncateToWidth(`${flag} ${body}`, width);
   }
