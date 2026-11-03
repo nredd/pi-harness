@@ -244,7 +244,7 @@ def coverage_summary_step() -> dict[str, str]:
     steps = [
         step
         for job in workflow["jobs"].values()
-        for step in job["steps"]
+        for step in job.get("steps", [])  # reusable-workflow jobs have no steps
         if step.get("name") == "Report coverage exclusions"
     ]
     assert len(steps) == 1

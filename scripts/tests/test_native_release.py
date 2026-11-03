@@ -122,7 +122,8 @@ def test_build_attestation_credential_boundary() -> None:
     """
     jobs = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]
     assert "macos-15" in jobs["verify"]["runs-on"]
-    assert jobs["verify"]["permissions"] == {"contents": "read"}
+    # `actions: read` lets the frozen-candidate evidence check read workflow runs.
+    assert jobs["verify"]["permissions"] == {"contents": "read", "actions": "read"}
     attest = jobs["attest"]
     assert attest["needs"] == "verify"
     assert attest["permissions"] == {"contents": "read", "id-token": "write", "attestations": "write"}
