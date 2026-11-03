@@ -90,7 +90,11 @@ def rename_path(operand: Any, kwargs: dict[str, Any], key: str) -> Path:
         return path
     if sys.platform == "darwin":
         assert install.fcntl is not None
-        parent = Path(os.fsdecode(install.fcntl.fcntl(descriptor, 50, bytes(1024)).split(b"\0", 1)[0]))
+        parent = Path(
+            os.fsdecode(
+                install.fcntl.fcntl(descriptor, install.fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0]
+            )
+        )
     else:
         parent = Path(f"/proc/self/fd/{descriptor}").readlink()
     return parent / path
@@ -290,7 +294,9 @@ class Harness:
         monkeypatch.setattr(install, "install_core", self.stage_core)
         monkeypatch.setattr(install, "install_packages", self.stage_packages)
 
-    def stage_core(self, verified: Verified, prefix: Path, staging: Path, npm: str) -> Path:
+    def stage_core(
+        self, verified: Verified, prefix: Path, staging: Path, npm: str, *, anchors: AnchoredStore
+    ) -> Path:
         """Model authenticated core staging without downloading packages.
 
         Parameters:
@@ -298,19 +304,21 @@ class Harness:
             prefix (Path): staged core destination.
             staging (Path): transaction scratch.
             npm (str): selected native npm path.
+            anchors (AnchoredStore): transaction parents; the model writes by pathname.
 
         Returns:
             Path: recording fixture executable.
         """
         return self.fetch_release(verified.stack.core.tag, prefix, checksums=verified.core_checksums)
 
-    def stage_packages(self, verified: Verified, npm: str, staging: Path) -> Path:
+    def stage_packages(self, verified: Verified, npm: str, staging: Path, *, anchors: AnchoredStore) -> Path:
         """Model package staging for transaction tests using only our recording fixture.
 
         Parameters:
             verified (Verified): modeled verified input.
             npm (str): selected native npm path.
             staging (Path): transaction scratch.
+            anchors (AnchoredStore): transaction parents; the model writes by pathname.
 
         Returns:
             Path: modeled staged agent tree.
@@ -319,7 +327,8 @@ class Harness:
             InstallError: modeled install or manifest verification failed.
         """
         agent, home = staging / "agent", staging / "home"
-        agent.mkdir(parents=True)
+        # Anchor at creation like `install.install_packages`; the rest writes by pathname.
+        anchors.directory(agent, create=True)
         home.mkdir()
         binary = staging / "fixture-recorder"
         binary.write_text(
@@ -6054,7 +6063,9 @@ def configure_tool_interpreters(
         monkeypatch.setenv("PATH", f"{decoy}{os.pathsep}./bin{os.pathsep}{os.defpath}")
 
 
-def shim_stage_core(verified: Verified, prefix: Path, staging: Path, npm: str) -> Path:
+def shim_stage_core(
+    verified: Verified, prefix: Path, staging: Path, npm: str, *, anchors: AnchoredStore
+) -> Path:
     """Exercise the real runtime npm child boundary with a recording executable.
 
     Parameters:
@@ -6062,6 +6073,7 @@ def shim_stage_core(verified: Verified, prefix: Path, staging: Path, npm: str) -
         prefix (Path): staged core destination.
         staging (Path): scratch config/cache location.
         npm (str): preflight-selected native npm dispatcher.
+        anchors (AnchoredStore): transaction parents; the shim writes by pathname.
 
     Returns:
         Path: modeled staged core executable.
