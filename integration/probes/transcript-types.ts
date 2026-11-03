@@ -137,16 +137,17 @@ export default function transcriptTypes(pi: ExtensionAPI): void {
 				return;
 			}
 			mkdirSync(directory, { recursive: true, mode: 0o700 });
-			fd = openSync(join(directory, `transcript-types-${randomUUID()}.jsonl`), "wx", 0o600);
+			const handle = openSync(join(directory, `transcript-types-${randomUUID()}.jsonl`), "wx", 0o600);
+			fd = handle;
 			bytes = 0;
 			lastNormalized = "";
 			pendingSession = false;
+			// Reachable only here and through `trace`, which `close()` clears together with `fd`.
 			const emit = (record: SafeRecord): void => {
-				if (fd === undefined) return;
 				try {
 					const line = `${JSON.stringify({ pid: process.pid, time: Date.now(), ...record })}\n`;
 					if (bytes + Buffer.byteLength(line) > MAX_BYTES) {
-						writeSync(fd, '{"stage":"capture_limit"}\n');
+						writeSync(handle, '{"stage":"capture_limit"}\n');
 						const closed = close();
 						ctx.ui.notify(
 							closed
@@ -156,7 +157,7 @@ export default function transcriptTypes(pi: ExtensionAPI): void {
 						);
 						return;
 					}
-					writeSync(fd, line);
+					writeSync(handle, line);
 					bytes += Buffer.byteLength(line);
 				} catch {
 					close();
@@ -166,7 +167,7 @@ export default function transcriptTypes(pi: ExtensionAPI): void {
 			trace = new TypeTrace(emit);
 			emit({ stage: "start" });
 		} catch {
-			close();
+			// Only mkdir/open throw here, before `fd` is assigned; `close()` above already ran.
 			ctx.ui.notify("Transcript type capture could not start", "warning");
 		}
 	});

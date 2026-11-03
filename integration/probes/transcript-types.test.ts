@@ -105,70 +105,82 @@ test("invalid provider indices and structures cannot escape the projector", () =
 	assert.equal(blockTypes(Array(1000).fill(null)).truncated, true);
 });
 
-test("extension is inert without opt-in; opt-in writes private bounded metadata and closes on shutdown", () => {
+type Handler = (event: never, ctx: never) => unknown;
+
+/** Register the extension against a recording API and a private trace directory. */
+function harness(prefix: string, sessionManager?: unknown) {
 	const previous = process.env.PI_TRANSCRIPT_TYPES_DIR;
-	const root = mkdtempSync(join(tmpdir(), "pi-type-probe-test-"));
-	const handlers = new Map<string, (event: never, ctx: never) => unknown>();
+	const root = mkdtempSync(join(tmpdir(), prefix));
+	const directory = join(root, "trace");
+	const handlers = new Map<string, Handler>();
 	const api = {
-		on: (name: string, handler: (event: never, ctx: never) => unknown) => {
+		on: (name: string, handler: Handler) => {
 			handlers.set(name, handler);
 		},
-	};
+	} as unknown as ExtensionAPI;
 	const notices: string[] = [];
-	const ctx = {
-		ui: { notify: (message: string) => notices.push(message) },
-		sessionManager: {
-			getLeafId: () => "before",
-			getBranch: () => [
-				{
-					id: "after",
-					type: "message",
-					message: {
-						role: "assistant",
-						api: "anthropic-messages",
-						content: [{ type: "text", text: secret }],
-					},
-				},
-			],
-		},
-	};
+	const ctx = { ui: { notify: (message: string) => notices.push(message) }, sessionManager };
 	const emit = (name: string, event: unknown = {}) => handlers.get(name)?.(event as never, ctx as never);
-	try {
-		delete process.env.PI_TRANSCRIPT_TYPES_DIR;
-		transcriptTypes(api as unknown as ExtensionAPI);
-		assert.equal(handlers.size, 0);
-		process.env.PI_TRANSCRIPT_TYPES_DIR = join(root, "trace");
-		transcriptTypes(api as unknown as ExtensionAPI);
-		assert.deepEqual(readdirSync(root), []); // Registration does no filesystem work.
-		emit("session_start");
-		emit("provider_stream_event", {
-			api: "anthropic-messages",
-			data: { type: "message_start" },
-		});
-		emit("provider_stream_event", {
-			api: "anthropic-messages",
-			data: {
-				type: "content_block_start",
-				index: 0,
-				content_block: { type: "text", text: secret },
-			},
-		});
-		const message = {
-			role: "assistant",
-			api: "anthropic-messages",
-			content: [{ type: "text", text: secret }],
-		};
-		emit("message_update", { message });
-		emit("message_update", { message });
-		emit("message_end", { message });
-		emit("agent_settled");
-		emit("agent_settled");
+	const register = (enabled = true) => {
+		if (enabled) process.env.PI_TRANSCRIPT_TYPES_DIR = directory;
+		else delete process.env.PI_TRANSCRIPT_TYPES_DIR;
+		transcriptTypes(api);
+	};
+	const cleanup = () => {
 		emit("session_shutdown");
-		const files = readdirSync(join(root, "trace"));
-		assert.equal(files.length, 1);
-		const [name] = files;
-		assert.ok(name);
-		const file = join(root, "trace", name);
+		if (previous === undefined) delete process.env.PI_TRANSCRIPT_TYPES_DIR;
+		else process.env.PI_TRANSCRIPT_TYPES_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	};
+	return { root, directory, handlers, notices, emit, register, cleanup };
+}
+
+/** The only trace file in `directory`. */
+function onlyFile(directory: string): string {
+	const files = readdirSync(directory);
+	assert.equal(files.length, 1);
+	const [name] = files;
+	assert.ok(name);
+	return join(directory, name);
+}
+
+/** An assistant message whose 128 thinking blocks project to one ~840-byte record. */
+const wideMessage = {
+	role: "assistant",
+	api: "anthropic-messages",
+	content: Array.from({ length: 128 }, () => ({ type: "thinking", thinking: secret })),
+};
+
+test("extension is inert without opt-in; opt-in writes private bounded metadata and closes on shutdown", () => {
+	const h = harness("pi-type-probe-test-", {
+		getLeafId: () => "before",
+		getBranch: () => [
+			{
+				id: "after",
+				type: "message",
+				message: { role: "assistant", api: "anthropic-messages", content: [{ type: "text", text: secret }] },
+			},
+		],
+	});
+	try {
+		h.register(false);
+		assert.equal(h.handlers.size, 0);
+		h.register();
+		assert.deepEqual(readdirSync(h.root), []); // Registration does no filesystem work.
+		h.emit("session_start");
+		h.emit("provider_stream_event", { api: "anthropic-messages", data: { type: "message_start" } });
+		h.emit("provider_stream_event", {
+			api: "anthropic-messages",
+			data: { type: "content_block_start", index: 0, content_block: { type: "text", text: secret } },
+		});
+		const message = { role: "assistant", api: "anthropic-messages", content: [{ type: "text", text: secret }] };
+		h.emit("message_update", { message });
+		h.emit("message_update", { message });
+		h.emit("message_end", { message });
+		h.emit("agent_settled");
+		h.emit("agent_settled");
+		h.emit("session_shutdown");
+		const file = onlyFile(h.directory);
 		assert.equal(statSync(file).mode & 0o777, 0o600);
 		const content = readFileSync(file, "utf8");
 		assert.equal(content.includes(secret), false);
@@ -179,31 +191,17 @@ test("extension is inert without opt-in; opt-in writes private bounded metadata 
 				.map((line) => JSON.parse(line).stage),
 			["start", "raw_start", "raw_block", "normalized", "message_end", "session"],
 		);
-		emit("message_end", { message });
+		h.emit("message_end", { message });
 		assert.equal(readFileSync(file, "utf8"), content);
-		assert.deepEqual(notices, []);
+		assert.deepEqual(h.notices, []);
 	} finally {
-		emit("session_shutdown");
-		if (previous === undefined) delete process.env.PI_TRANSCRIPT_TYPES_DIR;
-		else process.env.PI_TRANSCRIPT_TYPES_DIR = previous;
-		rmSync(root, { recursive: true, force: true });
+		h.cleanup();
 	}
 });
 
 for (const failure of ["size-limit", "open-error", "close-error"]) {
 	test(`capture safely stops on ${failure}`, () => {
-		const previous = process.env.PI_TRANSCRIPT_TYPES_DIR;
-		const root = mkdtempSync(join(tmpdir(), "pi-type-probe-failure-"));
-		const handlers = new Map<string, (event: never, ctx: never) => unknown>();
-		const api = {
-			on: (name: string, handler: (event: never, ctx: never) => unknown) => {
-				handlers.set(name, handler);
-			},
-		};
-		const notices: string[] = [];
-		const ctx = { ui: { notify: (message: string) => notices.push(message) } };
-		const emit = (name: string, event: unknown = {}) => handlers.get(name)?.(event as never, ctx as never);
-		const directory = join(root, "trace");
+		const h = harness("pi-type-probe-failure-");
 		const originalClose = fs.closeSync;
 		const closeMock =
 			failure === "close-error"
@@ -214,35 +212,24 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 				: undefined;
 		syncBuiltinESMExports();
 		try {
-			if (failure === "open-error") writeFileSync(directory, "do not overwrite");
-			process.env.PI_TRANSCRIPT_TYPES_DIR = directory;
-			transcriptTypes(api as unknown as ExtensionAPI);
-			emit("session_start");
-			const message = {
-				role: "assistant",
-				api: "anthropic-messages",
-				content: Array.from({ length: 128 }, () => ({
-					type: "thinking",
-					thinking: secret,
-				})),
-			};
-			for (let i = 0; i < (failure === "close-error" ? 1 : 2500); i++) emit("message_end", { message });
-			assert.doesNotThrow(() => emit("session_shutdown"));
+			if (failure === "open-error") writeFileSync(h.directory, "do not overwrite");
+			h.register();
+			h.emit("session_start");
+			for (let i = 0; i < (failure === "close-error" ? 1 : 2500); i++) h.emit("message_end", { message: wideMessage });
+			assert.doesNotThrow(() => h.emit("session_shutdown"));
 			closeMock?.mock.restore();
 			syncBuiltinESMExports();
-			assert.equal(notices.length, 1);
-			const [notice] = notices;
+			assert.equal(h.notices.length, 1);
+			const [notice] = h.notices;
 			assert.ok(notice);
 			assert.equal(notice.includes(secret), false);
 			if (failure === "open-error") {
-				assert.equal(readFileSync(directory, "utf8"), "do not overwrite");
+				assert.equal(readFileSync(h.directory, "utf8"), "do not overwrite");
 				assert.match(notice, /could not start/);
 			} else if (failure === "close-error") {
 				assert.match(notice, /close failure/);
 			} else {
-				const [name] = readdirSync(directory);
-				assert.ok(name);
-				const file = join(directory, name);
+				const file = onlyFile(h.directory);
 				assert.ok(statSync(file).size <= 2 * 1024 * 1024 + 30);
 				const content = readFileSync(file, "utf8");
 				assert.equal(content.includes(secret), false);
@@ -252,10 +239,7 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 		} finally {
 			closeMock?.mock.restore();
 			syncBuiltinESMExports();
-			emit("session_shutdown");
-			if (previous === undefined) delete process.env.PI_TRANSCRIPT_TYPES_DIR;
-			else process.env.PI_TRANSCRIPT_TYPES_DIR = previous;
-			rmSync(root, { recursive: true, force: true });
+			h.cleanup();
 		}
 	});
 }
@@ -280,29 +264,15 @@ test("block indices past the cap record one truncation marker per raw message", 
 
 for (const failure of ["write-error", "restart-close-error"]) {
 	test(`capture safely stops on ${failure} after a successful start`, () => {
-		const previous = process.env.PI_TRANSCRIPT_TYPES_DIR;
-		const root = mkdtempSync(join(tmpdir(), "pi-type-probe-started-"));
-		const handlers = new Map<string, (event: never, ctx: never) => unknown>();
-		const api = {
-			on: (name: string, handler: (event: never, ctx: never) => unknown) => {
-				handlers.set(name, handler);
-			},
-		};
-		const notices: string[] = [];
-		const ctx = { ui: { notify: (message: string) => notices.push(message) } };
-		const emit = (name: string, event: unknown = {}) => handlers.get(name)?.(event as never, ctx as never);
-		const directory = join(root, "trace");
+		const h = harness("pi-type-probe-started-");
 		const message = { role: "assistant", api: "anthropic-messages", content: [{ type: "text", text: secret }] };
 		const originalClose = fs.closeSync;
 		let fsMock: ReturnType<typeof mock.method> | undefined;
 		try {
-			process.env.PI_TRANSCRIPT_TYPES_DIR = directory;
-			transcriptTypes(api as unknown as ExtensionAPI);
-			emit("session_start");
-			assert.equal(notices.length, 0);
-			const [name] = readdirSync(directory);
-			assert.ok(name);
-			const file = join(directory, name);
+			h.register();
+			h.emit("session_start");
+			assert.equal(h.notices.length, 0);
+			const file = onlyFile(h.directory);
 			const started = readFileSync(file, "utf8");
 			assert.match(started, /"stage":"start"/);
 			fsMock =
@@ -315,27 +285,60 @@ for (const failure of ["write-error", "restart-close-error"]) {
 							throw new Error(secret);
 						});
 			syncBuiltinESMExports();
-			if (failure === "write-error") emit("message_end", { message });
-			else emit("session_start");
+			if (failure === "write-error") h.emit("message_end", { message });
+			else h.emit("session_start");
 			fsMock.mock.restore();
 			syncBuiltinESMExports();
 			assert.ok(fsMock.mock.callCount() >= 1);
-			assert.equal(notices.length, 1);
-			const [notice] = notices;
+			assert.equal(h.notices.length, 1);
+			const [notice] = h.notices;
 			assert.ok(notice);
 			assert.equal(notice.includes(secret), false);
 			assert.match(notice, failure === "write-error" ? /I\/O failure/ : /close failure/);
 			// Capture is closed: later events neither write nor reopen a trace.
-			emit("message_end", { message });
-			assert.deepEqual(readdirSync(directory), [name]);
+			h.emit("message_end", { message });
+			assert.equal(onlyFile(h.directory), file);
 			assert.equal(readFileSync(file, "utf8"), started);
 		} finally {
 			fsMock?.mock.restore();
 			syncBuiltinESMExports();
-			emit("session_shutdown");
-			if (previous === undefined) delete process.env.PI_TRANSCRIPT_TYPES_DIR;
-			else process.env.PI_TRANSCRIPT_TYPES_DIR = previous;
-			rmSync(root, { recursive: true, force: true });
+			h.cleanup();
 		}
 	});
 }
+
+test("a restarted session gets a fresh byte budget and a fresh file", () => {
+	const h = harness("pi-type-probe-restart-");
+	// ~1.1 MiB per session: under the 2 MiB cap alone, over it if the first session's bytes carried over.
+	const records = 1300;
+	try {
+		h.register();
+		h.emit("session_start");
+		for (let i = 0; i < records; i++) h.emit("message_end", { message: wideMessage });
+		// A streamed update left pending at restart must not suppress the same shape in the next session.
+		h.emit("message_update", { message: wideMessage });
+		const first = onlyFile(h.directory);
+		const firstSize = statSync(first).size;
+		assert.ok(firstSize > 1024 * 1024 && firstSize < 2 * 1024 * 1024, `first session wrote ${firstSize} bytes`);
+		h.emit("session_start");
+		h.emit("message_update", { message: wideMessage });
+		for (let i = 0; i < records; i++) h.emit("message_end", { message: wideMessage });
+		h.emit("session_shutdown");
+		assert.deepEqual(h.notices, []);
+		assert.equal(statSync(first).size, firstSize);
+		const files = readdirSync(h.directory).map((name) => join(h.directory, name));
+		assert.equal(files.length, 2);
+		const second = files.find((file) => file !== first);
+		assert.ok(second);
+		const content = readFileSync(second, "utf8");
+		assert.doesNotMatch(content, /capture_limit/);
+		const stages = content
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line).stage);
+		assert.deepEqual(stages.slice(0, 2), ["start", "normalized"]);
+		assert.equal(stages.length, records + 2);
+	} finally {
+		h.cleanup();
+	}
+});
