@@ -10,8 +10,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { agentDir } from "./agent-dir.ts";
 
-export { agentDir };
-
 export const FEATURES = ["titles", "rules", "goal", "loop", "monitor", "diff", "stats", "mon"] as const;
 export type Feature = (typeof FEATURES)[number];
 

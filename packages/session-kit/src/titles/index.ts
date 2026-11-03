@@ -4,6 +4,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type AgentDirOptions, resolveAgentDir } from "../agent-dir.ts";
 import { isChildSession } from "../child.ts";
 import type { KitConfig } from "../config.ts";
 import { loadModelAliases } from "./aliases.ts";
@@ -21,8 +22,8 @@ const TITLE_TIMEOUT_MS = 20_000;
 const TITLE_MAX_TOKENS = 128;
 
 /** First candidate the registry can resolve and has credentials for. */
-function resolveModel(ctx: ExtensionContext, titleModel?: string, agentDir?: string) {
-	for (const { provider, id } of modelCandidates(titleModel, loadModelAliases(agentDir))) {
+function resolveModel(ctx: ExtensionContext, dirs: AgentDirOptions, titleModel?: string) {
+	for (const { provider, id } of modelCandidates(titleModel, loadModelAliases(resolveAgentDir(dirs)))) {
 		const model = ctx.modelRegistry.find(provider, id);
 		if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return model;
 	}
@@ -33,11 +34,11 @@ function resolveModel(ctx: ExtensionContext, titleModel?: string, agentDir?: str
 async function generateTitle(
 	ctx: ExtensionContext,
 	prompt: string,
+	dirs: AgentDirOptions,
 	titleModel?: string,
-	agentDir?: string,
 ): Promise<string | undefined> {
 	try {
-		const model = resolveModel(ctx, titleModel, agentDir);
+		const model = resolveModel(ctx, dirs, titleModel);
 		if (!model) return undefined;
 		const stream = ctx.modelRegistry.streamSimple(
 			model,
@@ -55,7 +56,7 @@ async function generateTitle(
 	}
 }
 
-export function register(pi: ExtensionAPI, config: KitConfig, agentDir?: string): void {
+export function register(pi: ExtensionAPI, config: KitConfig, dirs: AgentDirOptions = {}): void {
 	let attempted = false;
 	let generation = 0;
 
@@ -76,7 +77,7 @@ export function register(pi: ExtensionAPI, config: KitConfig, agentDir?: string)
 
 		attempted = true;
 		const started = generation;
-		const title = await generateTitle(ctx, buildTitlePrompt(exchange), config.titleModel, agentDir);
+		const title = await generateTitle(ctx, buildTitlePrompt(exchange), dirs, config.titleModel);
 		if (!title || started !== generation || pi.getSessionName()?.trim()) return;
 		try {
 			pi.setSessionName(title);

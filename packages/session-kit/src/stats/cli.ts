@@ -2,7 +2,7 @@
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentDir } from "./load.ts";
+import { agentDir } from "../agent-dir.ts";
 import { exportStats, importStats } from "./snapshot.ts";
 
 /** Parse the portable CLI argv, run its selected operation, and report JSON to stdout. */

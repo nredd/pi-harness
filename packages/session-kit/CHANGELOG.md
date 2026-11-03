@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a `homeDir` option to `createSessionKit`: config, rules, title aliases and stats session/cache defaults derive from it when no `agentDir` is given; `PI_CODING_AGENT_DIR` still wins
+
 - Make configured `titles.model` selection fail closed: invalid, unavailable and unauthenticated configured models now skip title generation rather than trying aliases or defaults
 
 - Make the portable stats CLI import-safe: importing `dist/pi-stats-export.mjs` no longer runs an operation; direct Node execution still runs it
