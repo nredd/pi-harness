@@ -100,10 +100,11 @@ the producer wiring and reviewed signal inventory, not the accounting algorithm 
 The policy decision's roughly **1-7%** small-subset characterization must not be mistaken for a
 measured source-coverage percentage or a universal suite ratio. Hosted run `40455349710` measured
 8 Bun tests versus 539 primary tests for plan-mode (1.5%), 22 versus 3078 for subagents (0.7%) and
-2 versus 387 for todo (0.5%). There are exceptions: preset runs all 127 tests under Bun, and the
-in-process host runs the same 64 cases (one intentionally skipped on Linux). Other package ratios
-also differ. LCOV imported-file denominators and JSC/V8/Istanbul executable counters differ, so
-these test-count ratios cannot be presented as percentages of production source covered.
+2 versus 387 for todo (0.5%). There are exceptions: preset runs its whole suite under Bun (173
+tests on both engines, `npm run check -w @nredd/pi-preset` at `dcc7903b`), and the in-process host
+runs the same 64 cases (one intentionally skipped on Linux). Other package ratios also differ.
+LCOV imported-file denominators and JSC/V8/Istanbul executable counters differ, so these
+test-count ratios cannot be presented as percentages of production source covered.
 
 A strict uncovered-count Bun ratchet penalized primary-tested source additions that the small Bun
 suite never exercises: after main #153, subagents Bun rose from 7728/512 to 7763/515 uncovered
