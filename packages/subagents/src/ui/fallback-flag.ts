@@ -60,10 +60,11 @@ const MINIMAL_FLAGS = ["[fb]", "!"] as const;
  * Wrap control text into a fixed row budget while preserving both its opening
  * and final diagnosis around an explicit omitted-rows marker. The budget is at
  * least three rows: one each for the opening, the marker and the diagnosis.
+ * A non-finite `maxRows` gets that floor rather than poisoning the slices.
  */
 export function boundedWrappedRows(text: string, width: number, maxRows: number, marker: string): string[] {
   const rows = wrapTextWithAnsi(text, width);
-  const budget = Math.max(3, Math.trunc(maxRows));
+  const budget = Number.isFinite(maxRows) ? Math.max(3, Math.trunc(maxRows)) : 3;
   if (rows.length <= budget) return rows;
 
   // Reserve a row for the omission marker and favor the final rows: fallback
@@ -87,7 +88,8 @@ export function boundedWrappedRows(text: string, width: number, maxRows: number,
  * Narrow case, when `prefix + flag + " "` exceeds `width`: the prefix and then
  * the rest are dropped before the flag is. If the flag alone still does not
  * fit, it degrades to a plain `[fb]`, then `!`. Only a zero width renders
- * nothing.
+ * nothing. An empty string `rest` renders no separator after the flag, so a
+ * caller sizing the flag alone gets just the flag.
  */
 export function withLeadingFlag(
   prefix: string,
@@ -95,7 +97,7 @@ export function withLeadingFlag(
   rest: string | ((inner: number) => string),
   width: number,
 ): string {
-  const lead = flag ? `${prefix}${flag} ` : prefix;
+  const lead = flag ? `${prefix}${flag}${rest === "" ? "" : " "}` : prefix;
   if (!flag || visibleWidth(lead) <= width) {
     const inner = Math.max(0, width - visibleWidth(lead));
     const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
@@ -104,7 +106,7 @@ export function withLeadingFlag(
   const flagWidth = visibleWidth(flag);
   if (flagWidth <= width) {
     const inner = width - flagWidth - 1;
-    if (inner < 1) return flag;
+    if (inner < 1 || rest === "") return flag;
     const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
     return truncateToWidth(`${flag} ${body}`, width);
   }

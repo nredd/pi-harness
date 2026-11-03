@@ -962,7 +962,7 @@ export class FleetList {
       // the flag, before sacrificing any spend cell. Rendering an empty body in
       // the flag budget selects [fb] or ! with the same policy as every renderer.
       const flagBudget = Math.max(1, width - visibleWidth(prefix) - visibleWidth(stats) - 1);
-      flag = withLeadingFlag("", flag, "", flagBudget).trimEnd();
+      flag = withLeadingFlag("", flag, "", flagBudget);
     }
     // Every row preserves spend, not just rows carrying a fallback marker.
     const markerWidth = flag ? visibleWidth(flag) + 1 : 0;
