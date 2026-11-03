@@ -150,6 +150,17 @@ export function listGroupStates(pgid) {
 }
 
 /**
+ * Whether a `ps` listing shows a group holding only zombies: at least one member, every STAT `Z`-prefixed.
+ * `ps` appends flags to the state letter (`ZN` for a niced zombie), so only the first letter is the state.
+ * @param {string[]} states One `ps` STAT string per member, as from `listGroupStates`.
+ * @returns {boolean} True when the listing is non-empty and every member is a zombie.
+ * @throws {never} Pure.
+ */
+export function zombieOnlyListing(states) {
+	return states.length > 0 && states.every((state) => state.startsWith("Z"));
+}
+
+/**
  * Whether an `EPERM` from signalling `pgid` is a group that is only draining. Darwin refuses to signal a
  * group whose every member is a zombie awaiting its parent's `wait`, so `EPERM` alone cannot tell that
  * apart from a real credential boundary. A listing with at least one member, all of them zombies, proves
@@ -167,7 +178,7 @@ export function listGroupStates(pgid) {
 function onlyZombies(pgid, listStates, seen) {
 	try {
 		const states = listStates(pgid);
-		return states.length === 0 ? seen : states.every((state) => state.startsWith("Z"));
+		return states.length === 0 ? seen : zombieOnlyListing(states);
 	} catch {
 		return false;
 	}

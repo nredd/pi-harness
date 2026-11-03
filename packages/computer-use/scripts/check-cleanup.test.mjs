@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { listGroupStates, reapProcessGroup } from "./setup-helper.mjs";
+import { listGroupStates, reapProcessGroup, zombieOnlyListing } from "./setup-helper.mjs";
 
 const execute = promisify(execFile);
 const setupUrl = new URL("./setup-helper.mjs", import.meta.url).href;
@@ -178,7 +179,7 @@ function scriptedKill(script) {
 
 /** @returns {Promise<void>} Verifies a zombie-only EPERM group is waited on until ESRCH, probe or signal side. @throws {Error} On assertion failure. */
 async function verifyDrainingZombieGroup() {
-	const zombies = () => ["Z", "Z+"];
+	const zombies = () => ["Z", "Z+", "ZN"];
 	for (const script of [
 		[["EPERM"], ["EPERM"], ["ESRCH"]],
 		[["ok"], ["EPERM"], ["EPERM"], ["ESRCH"]],
@@ -245,79 +246,170 @@ async function verifyListGroupStates() {
 	assert.deepEqual(listGroupStates(child.pid), [], "a reaped group has no members");
 }
 
+/** Wall-clock readiness budget for a real zombie group; the leader exits at once, so this is not a timeout. */
+const ZOMBIE_READY_MS = 2000;
+
 /**
- * Start a group holding only a zombie whose parent has not waited yet. SIGUSR1 makes the parent reap it.
- * @returns {Promise<{pgid: number, holder: import('node:child_process').ChildProcess, reap: () => void, reaped: Promise<void>}>} Group and its reap trigger.
- * @throws {Error} When the holder never reports its group, or the leader never becomes a zombie in time.
+ * Synchronously sleep, for the `listStates` seam, which `reapProcessGroup` calls synchronously.
+ * @param {number} ms Milliseconds to block.
+ * @returns {void}
+ * @throws {never} Blocks only this thread.
+ */
+function sleepSync(ms) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Read one process row for a premise or failure message.
+ * @param {number} pid Process to describe.
+ * @returns {string} The `pid ppid pgid stat` row, or why `ps` could not produce one.
+ * @throws {never} Failures are described in the returned text.
+ */
+function processRow(pid) {
+	try {
+		return execFileSync("/bin/ps", ["-o", "pid=,ppid=,pgid=,stat=", "-p", String(pid)], { encoding: "utf8", timeout: 5000, killSignal: "SIGKILL" }).trim();
+	} catch (error) {
+		return `no row: ps -p ${pid} failed (${error.status ?? error.code ?? error.message})`;
+	}
+}
+
+/**
+ * Start a group holding only a zombie whose parent has not waited yet. `release` makes the parent reap it and
+ * exit; the parent otherwise blocks on stdin, so it holds the zombie until released or this process exits.
+ * Readiness uses the production rule (`zombieOnlyListing`), so a flagged zombie such as `ZN` counts.
+ * @returns {Promise<{pgid: number, holder: import('node:child_process').ChildProcess, release: () => void, reaped: Promise<void>}>} Group and its reap trigger.
+ * @throws {Error} When the holder never reports its group, or the group is not ours and zombie-only within `ZOMBIE_READY_MS`.
  */
 async function zombieOnlyGroup() {
-	// perl forks a setpgrp'd leader that exits at once, then reaps it only on SIGUSR1.
-	const script = '$|=1; my $p=fork(); if(!$p){setpgrp(0,0); exit 0} $SIG{USR1}=sub{waitpid($p,0); exit 0}; print "$p\\n"; sleep 60;';
-	const holder = spawn("/usr/bin/perl", ["-e", script], { stdio: ["ignore", "pipe", "inherit"] });
+	// perl forks a setpgrp'd leader that exits at once, then reaps it only on SIGUSR1. Stdin EOF also exits.
+	const script = '$|=1; my $p=fork(); if(!$p){setpgrp(0,0); exit 0} $SIG{USR1}=sub{waitpid($p,0); exit 0}; print "$p\\n"; my $eof=<STDIN>; exit 3;';
+	const holder = spawn("/usr/bin/perl", ["-e", script], { stdio: ["pipe", "pipe", "inherit"] });
+	const reaped = new Promise((resolve) => holder.once("close", resolve));
+	// ChildProcess.kill never signals once the holder has exited and been reaped, so release is idempotent.
+	const release = () => holder.kill("SIGUSR1");
 	const pgid = await new Promise((resolve, reject) => {
 		holder.once("error", reject);
 		holder.stdout.once("data", (chunk) => resolve(Number(String(chunk).trim())));
 	});
-	const reaped = new Promise((resolve) => holder.once("close", resolve));
-	// Readiness bound, not a timeout: the leader exits at once, so failing to see it as a zombie is a broken premise.
-	for (let attempts = 0; listGroupStates(pgid).join() !== "Z"; attempts++) {
-		assert.ok(attempts < 5000, `premise: group ${pgid} never became zombie-only: ${listGroupStates(pgid)}`);
-		await new Promise((resolve) => setImmediate(resolve));
+	const fail = async (message) => {
+		release();
+		await reaped;
+		assert.fail(message);
+	};
+	if (!Number.isInteger(pgid) || pgid <= 1) await fail(`premise: holder reported no usable group: ${pgid}`);
+	const deadline = Date.now() + ZOMBIE_READY_MS;
+	let lastListing = [];
+	let psFailures = 0;
+	let lastPsFailure = "none";
+	for (;;) {
+		try {
+			const states = listGroupStates(pgid);
+			if (states.length > 0) lastListing = states;
+			if (zombieOnlyListing(states)) break;
+		} catch (error) {
+			psFailures++;
+			lastPsFailure = error.message;
+		}
+		if (Date.now() >= deadline) {
+			await fail(`premise: group ${pgid} not zombie-only within ${ZOMBIE_READY_MS}ms; last non-empty listing [${lastListing}], leader row "${processRow(pgid)}", ps failures ${psFailures} (last: ${lastPsFailure})`);
+		}
+		await delay(10);
 	}
-	return { pgid, holder, reap: () => holder.kill("SIGUSR1"), reaped };
+	// Ownership before any real group syscall: the zombie leads its own group and is the holder's child.
+	const row = processRow(pgid);
+	const [pid, ppid, group] = row.split(/\s+/).map(Number);
+	if (pid !== pgid || ppid !== holder.pid || group !== pgid) await fail(`premise: group ${pgid} is not the holder's (${holder.pid}) zombie leader: "${row}"`);
+	return { pgid, holder, release, reaped };
+}
+
+/**
+ * Run `reapProcessGroup` against a real group, re-reporting any `ps` failure that the production classifier
+ * swallows as inconclusive, so a slow or killed `ps` on a loaded runner is named instead of surfacing as bare EPERM.
+ * @param {number} pgid Owned process-group ID, proven by `zombieOnlyGroup`.
+ * @param {(pid: number, signal: number|string) => boolean} [kill] Syscall seam.
+ * @param {(pgid: number) => string[]} [listStates] Listing seam.
+ * @returns {Promise<void>} Settles as `reapProcessGroup` does.
+ * @throws {Error} The reap failure, wrapped with the `ps` failures when any occurred.
+ */
+async function reapNamingPsFailures(pgid, kill = process.kill.bind(process), listStates = listGroupStates) {
+	const psFailures = [];
+	try {
+		await reapProcessGroup(pgid, kill, (group) => {
+			try {
+				return listStates(group);
+			} catch (error) {
+				psFailures.push(error.message);
+				throw error;
+			}
+		});
+	} catch (error) {
+		if (psFailures.length === 0) throw error;
+		throw new Error(`${error.message}; ps listing failed ${psFailures.length}x (${psFailures.join("; ")})`, { cause: error });
+	}
 }
 
 /** @returns {Promise<void>} Reproduces Darwin's EPERM for a real zombie-only group and requires it to drain to ESRCH. @throws {Error} On assertion failure. */
 async function verifyRealDarwinZombieGroup() {
-	const { pgid, reap, reaped } = await zombieOnlyGroup();
-	assert.throws(() => process.kill(-pgid, 0), { code: "EPERM" }, "premise: Darwin refuses to signal a zombie-only group");
-	let released = false;
-	await reapProcessGroup(pgid, (pid, signal) => {
-		try {
-			return process.kill(pid, signal);
-		} finally {
-			// Let the parent reap right after the first EPERM observation, so draining is real.
-			if (!released) {
-				released = true;
-				reap();
+	const { pgid, release, reaped } = await zombieOnlyGroup();
+	try {
+		assert.throws(() => process.kill(-pgid, 0), { code: "EPERM" }, "premise: Darwin refuses to signal a zombie-only group");
+		let released = false;
+		await reapNamingPsFailures(pgid, (pid, signal) => {
+			try {
+				return process.kill(pid, signal);
+			} finally {
+				// Let the parent reap right after the first EPERM observation, so draining is real.
+				if (!released) {
+					released = true;
+					release();
+				}
 			}
-		}
-	});
-	await reaped;
+		});
+	} finally {
+		release();
+		await reaped;
+	}
 	assert.throws(() => process.kill(-pgid, 0), { code: "ESRCH" });
 }
 
 /** @returns {Promise<void>} The race the seen rule exists for: the zombie is reaped between the EPERM and the `ps` listing. @throws {Error} On assertion failure. */
 async function verifyRealReapBeforeListing() {
-	const { pgid, holder, reap, reaped } = await zombieOnlyGroup();
+	const { pgid, holder, release, reaped } = await zombieOnlyGroup();
 	let listings = 0;
-	await reapProcessGroup(pgid, process.kill.bind(process), (group) => {
-		// First call is the up-front membership snapshot. The second is the post-EPERM listing: reap first.
-		if (listings++ === 0) return listGroupStates(group);
-		reap();
-		for (let attempts = 0; ; attempts++) {
-			try {
-				process.kill(-group, 0);
-			} catch (error) {
-				if (error.code === "ESRCH") break;
-				assert.equal(error.code, "EPERM", "premise: only EPERM or ESRCH while the zombie drains");
+	try {
+		await reapNamingPsFailures(pgid, process.kill.bind(process), (group) => {
+			// First call is the up-front membership snapshot. The second is the post-EPERM listing: reap first.
+			if (listings++ === 0) return listGroupStates(group);
+			release();
+			// The seam is synchronous, so wait for the drain with short blocking sleeps, bounded by wall clock.
+			const deadline = Date.now() + ZOMBIE_READY_MS;
+			for (;;) {
+				try {
+					process.kill(-group, 0);
+				} catch (error) {
+					if (error.code === "ESRCH") break;
+					assert.equal(error.code, "EPERM", "premise: only EPERM or ESRCH while the zombie drains");
+				}
+				assert.ok(Date.now() < deadline, `premise: holder ${holder.pid} never reaped group ${group} within ${ZOMBIE_READY_MS}ms; leader row "${processRow(group)}"`);
+				sleepSync(1);
 			}
-			assert.ok(attempts < 2_000_000, "premise: the holder never reaped the zombie");
-		}
-		return listGroupStates(group);
-	});
-	await reaped;
+			return listGroupStates(group);
+		});
+	} finally {
+		release();
+		await reaped;
+	}
 	assert.equal(listings, 2, "the empty post-EPERM listing was classified once, then ESRCH ended the reap");
 	assert.equal(holder.exitCode, 0);
 }
 
 /** @returns {Promise<void>} A zombie-only group that never drains is reported unreaped, never resolved. @throws {Error} On assertion failure. */
 async function verifyRealPersistentZombieGroup() {
-	const { pgid, reap, reaped } = await zombieOnlyGroup();
+	const { pgid, release, reaped } = await zombieOnlyGroup();
 	try {
-		await assert.rejects(reapProcessGroup(pgid), /remained non-empty after SIGKILL/);
+		await assert.rejects(reapNamingPsFailures(pgid), /remained non-empty after SIGKILL/);
 	} finally {
-		reap();
+		release();
 		await reaped;
 	}
 }
