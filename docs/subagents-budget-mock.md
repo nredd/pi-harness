@@ -11,9 +11,11 @@ compiler, reproduced the two missing-`ModuleKind` failures (37 other tests pass)
 The global partial mock intercepts SDK imports too and assumes named exports;
 a namespace spread cannot supply them when the compiler is under `default`.
 Replacing that shared mock with a fixture-local `vi.fn(TypeScript.transpileModule)`
-passes all 39 in the same controlled namespace. Exact compile-count, reload and
-cross-module budget assertions remain. This demonstrates mock fragility, not the
-recovered historical cause.
+passes all 39 in the same controlled namespace. Reload and cross-module budget
+assertions remain. This demonstrates mock fragility, not the recovered historical
+cause. Since #303 only the budget-only fixture calls the compiler, directly
+through `TypeScript.transpileModule`; the manager reload fixture is bundled by
+Vite, so there is no compile count left to spy on.
 
 Reproduction: a temporary module exports only the default from the resolved real
 package-local `typescript/lib/typescript.js`; a temporary Vitest config imports

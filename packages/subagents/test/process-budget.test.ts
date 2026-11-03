@@ -8,18 +8,18 @@
  * A separate static-import fixture checks shared state across module copies.
  */
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import TypeScript from "typescript";
+import { build } from "vite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Count this fixture's compilation only. A module-wide TypeScript mock also
+// Use the real compiler API directly. A module-wide TypeScript mock also
 // intercepts the real SDK loader, and spreading a default-only CJS namespace
-// drops ModuleKind. Keep the real compiler API and wrap only our own calls.
-const { ModuleKind } = TypeScript;
-const transpileModule = vi.fn(TypeScript.transpileModule);
+// drops ModuleKind.
+const { ModuleKind, transpileModule } = TypeScript;
 
 vi.mock("../src/agent-runner.js", () => ({
   runAgent: vi.fn(),
@@ -287,39 +287,31 @@ describe("process budget across managers", () => {
     releaseBudget(held);
   });
 
-  it("settles an old manager to wake a genuine reloaded manager's waiter", () => {
+  it("settles an old manager to wake a genuine reloaded manager's waiter", async () => {
     const dir = mkdtempSync(join(tmpdir(), "manager-reload-"));
-    const sourceDir = fileURLToPath(new URL("../src/", import.meta.url));
-    vi.mocked(transpileModule).mockClear();
     try {
-      const sources = readdirSync(sourceDir, { recursive: true, withFileTypes: true })
-        .filter(entry => entry.isFile() && entry.name.endsWith(".ts"));
-      // Compile once, then write separate ESM identities. Compiling the whole
-      // tree for each identity needlessly burns the test's wall-clock budget.
-      // Only the LLM runner is scripted, as in the manager tests above.
+      // Bundle the real manager's import closure once, natively, and write it
+      // as two ESM identities. The LLM runner is scripted, as in the manager
+      // tests above, and the host SDK the scenario never calls is stubbed
+      // (`fixtures/budget-host-sdk.mjs`). Transpiling the whole source
+      // tree and cold-booting the real SDK cost seconds of CPU under the test
+      // deadline, which timed out under load after every assertion passed.
+      const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
       symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), join(dir, "node_modules"), "dir");
-      const roots = ["old", "fresh"].map(name => join(dir, name));
-      for (const root of roots) {
-        mkdirSync(root);
-        writeFileSync(join(root, "package.json"), '{"type":"module"}');
-      }
-      for (const entry of sources) {
-        const sourcePath = join(entry.parentPath, entry.name);
-        const { outputText } = transpileModule(readFileSync(sourcePath, "utf8"), {
-          compilerOptions: { module: ModuleKind.ESNext },
-        });
-        for (const root of roots) {
-          const outputPath = join(root, relative(sourceDir, sourcePath).replace(/\.ts$/, ".js"));
-          mkdirSync(dirname(outputPath), { recursive: true });
-          writeFileSync(outputPath, outputText);
-        }
-      }
-      for (const root of roots) {
-        copyFileSync(new URL("./fixtures/budget-scripted-runner.mjs", import.meta.url), join(root, "agent-runner.js"));
-      }
-      copyFileSync(new URL("./fixtures/budget-manager-reload.mjs", import.meta.url), join(dir, "check.mjs"));
+      await build({
+        configFile: false, root: fileURLToPath(new URL("../", import.meta.url)), logLevel: "silent",
+        resolve: { alias: [
+          { find: /^\.\/agent-runner\.js$/, replacement: fixture("budget-scripted-runner.mjs") },
+          { find: /^@earendil-works\/pi-coding-agent$/, replacement: fixture("budget-host-sdk.mjs") },
+        ] },
+        build: {
+          ssr: fixture("budget-manager-reload-entry.ts"), outDir: dir, emptyOutDir: false, minify: false,
+          rolldownOptions: { output: { entryFileNames: "old.mjs" } },
+        },
+      });
+      copyFileSync(join(dir, "old.mjs"), join(dir, "fresh.mjs"));
+      copyFileSync(fixture("budget-manager-reload.mjs"), join(dir, "check.mjs"));
       expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
-      expect(transpileModule).toHaveBeenCalledTimes(sources.length);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
