@@ -517,6 +517,19 @@ describe("preloadSkills", () => {
     expect(isAmbientUserAgentsSkill(skill("/injected/.agents/skills/a/SKILL.md", "user", "auto"), "/injected", "/runtime")).toBe(false);
   });
 
+  it("skips package discovery when no skills are named", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const resolve = vi.spyOn(DefaultPackageManager.prototype, "resolve");
+
+    try {
+      expect(await preloadSkills([], box.cwd, box)).toEqual([]);
+      expect(resolve).not.toHaveBeenCalled();
+    } finally {
+      resolve.mockRestore();
+    }
+  });
+
   it("reports a missing named skill without reading a path", async () => {
     const box = createSandbox(false);
     roots.push(box.root);

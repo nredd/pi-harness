@@ -33,6 +33,7 @@ export async function preloadSkills(
   cwd: string,
   options: SkillPreloadOptions,
 ): Promise<PreloadedSkill[]> {
+  if (skillNames.length === 0) return [];
   const primary = createHomePackageManager({ cwd, agentDir: options.agentDir, settingsManager: options.settingsManager }, options.homeDir);
   const primaryResources = await primary.resolve(skipMissingSource);
   const fallbackSettings = SettingsManager.create(cwd, options.agentDir, { projectTrusted: false });
@@ -40,12 +41,17 @@ export async function preloadSkills(
   const fallbackResources = await fallback.resolve(skipMissingSource);
 
   const rejectedProjectPaths = new Set(primaryResources.skills
-    .filter(resource => resource.metadata.origin === "top-level" && resource.metadata.scope === "project" && isSymlinkedProjectSkill(resource, cwd))
+    .filter(resource => isTier(resource, "project") && isSymlinkedProjectSkill(resource, cwd))
     .map(resource => canonicalPath(resource.path)));
+  // A path that cannot be canonicalized never matches, so it is never restored.
+  const isBehindRejectedAlias = (resource: ResolvedResource): boolean => {
+    const canonical = canonicalPath(resource.path);
+    return canonical !== undefined && rejectedProjectPaths.has(canonical);
+  };
   // Package candidates collapsed behind a rejected project alias, resolved with
   // Pi's own project package filters applied.
   const aliasFreeSkills = rejectedProjectPaths.size === 0 ? [] : await resolveAliasFreePackageSkills(cwd, options);
-  const recoveredPackages = aliasFreeSkills.filter(resource => rejectedProjectPaths.has(canonicalPath(resource.path)));
+  const recoveredPackages = aliasFreeSkills.filter(isBehindRejectedAlias);
 
   const disabledNames = new Set([
     ...discoveredSkillNames(primaryResources.skills.filter(resource => !resource.enabled), cwd, options.agentDir),
@@ -53,7 +59,7 @@ export async function preloadSkills(
     ...discoveredSkillNames(recoveredPackages.filter(resource => !resource.enabled), cwd, options.agentDir),
   ]);
   const project = discoveredSkills(
-    primaryResources.skills.filter(resource => resource.enabled && resource.metadata.origin === "top-level" && resource.metadata.scope === "project" && !isSymlinkedProjectSkill(resource, cwd)),
+    primaryResources.skills.filter(resource => resource.enabled && isTier(resource, "project") && !isSymlinkedProjectSkill(resource, cwd)),
     cwd,
     options.agentDir,
   );
@@ -62,8 +68,8 @@ export async function preloadSkills(
       ...primaryResources.skills,
       // Only restore a user candidate Pi collapsed behind a rejected project alias.
       // Other fallback user resources could bypass Pi's project filters.
-      ...fallbackResources.skills.filter(resource => rejectedProjectPaths.has(canonicalPath(resource.path))),
-    ].filter(resource => resource.enabled && resource.metadata.origin === "top-level" && resource.metadata.scope === "user" && !isAmbientUserAgentsSkill(resource, options.homeDir)),
+      ...fallbackResources.skills.filter(isBehindRejectedAlias),
+    ].filter(resource => resource.enabled && isTier(resource, "user") && !isAmbientUserAgentsSkill(resource, options.homeDir)),
     cwd,
     options.agentDir,
   );
@@ -72,7 +78,7 @@ export async function preloadSkills(
       ...primaryResources.skills,
       // Only restore a package candidate Pi collapsed behind a rejected project alias.
       ...recoveredPackages,
-    ].filter(resource => resource.enabled && resource.metadata.origin === "package" && !isAmbientUserAgentsSkill(resource, options.homeDir)),
+    ].filter(resource => resource.enabled && isTier(resource, "package") && !isAmbientUserAgentsSkill(resource, options.homeDir)),
     cwd,
     options.agentDir,
   );
@@ -86,6 +92,11 @@ export async function preloadSkills(
           ?? findInRoots(userLegacySkillRoots(options.agentDir, options.homeDir), name, true));
     return { name, content: content ?? `(Skill "${name}" not found in Pi's configured skill resources)` };
   });
+}
+
+/** Precedence tier of a resolved skill: top-level project or user resources, or package resources. */
+function isTier(resource: ResolvedResource, tier: "project" | "user" | "package"): boolean {
+  return tier === "package" ? resource.metadata.origin === "package" : resource.metadata.origin === "top-level" && resource.metadata.scope === tier;
 }
 
 /** Absolutize an existing local project package source, which Pi resolves against `<cwd>/.pi`. */
@@ -111,16 +122,20 @@ async function resolveAliasFreePackageSkills(cwd: string, options: SkillPreloadO
       mkdirSync(join(scratch, ".pi"), { recursive: true });
       symlinkSync(real, join(scratch, ".pi", dir), "dir");
     }
-    const settingsManager = SettingsManager.create(scratch, options.agentDir, { projectTrusted: options.settingsManager.isProjectTrusted() });
-    Object.assign(settingsManager, {
-      getGlobalSettings: () => options.settingsManager.getGlobalSettings(),
-      getProjectSettings: () => {
-        const project = options.settingsManager.getProjectSettings();
-        return { ...project, packages: project.packages?.map(pkg => typeof pkg === "string"
-          ? absolutizeProjectSource(pkg, cwd)
-          : { ...pkg, source: absolutizeProjectSource(pkg.source, cwd) }) };
-      },
-    });
+    const project = options.settingsManager.getProjectSettings();
+    const settings = {
+      global: options.settingsManager.getGlobalSettings(),
+      project: { ...project, packages: project.packages?.map(pkg => typeof pkg === "string"
+        ? absolutizeProjectSource(pkg, cwd)
+        : { ...pkg, source: absolutizeProjectSource(pkg.source, cwd) }) },
+    };
+    // Pi's public storage seam replaces the scratch cwd's settings with the real
+    // ones. `normalizeHomeResourceSettings` cannot: it only rewrites a manager's
+    // own settings, and `createHomePackageManager` still applies it on top.
+    const settingsManager = SettingsManager.fromStorage(
+      { withLock: (scope, read) => void read(JSON.stringify(settings[scope])) },
+      { projectTrusted: options.settingsManager.isProjectTrusted() },
+    );
     const manager = createHomePackageManager({ cwd: scratch, agentDir: options.agentDir, settingsManager }, options.homeDir);
     return (await manager.resolve(skipMissingSource)).skills.filter(resource => resource.metadata.origin === "package");
   } finally {
@@ -170,7 +185,8 @@ function findInRoot(root: string, name: string, trusted: boolean): string | unde
     if (!trusted && isPathThroughSymlink(dirname(root), current)) continue;
     if (trusted) {
       const canonical = canonicalPath(current);
-      if (seen.has(canonical)) continue;
+      // A directory raced away since it was queued has nothing left to read.
+      if (canonical === undefined || seen.has(canonical)) continue;
       seen.add(canonical);
     }
     let entries: Dirent<string>[];
@@ -214,9 +230,18 @@ function isDirectoryTarget(path: string): boolean {
   }
 }
 
-/** Match Pi's realpath identity without importing its private path utility. */
-function canonicalPath(path: string): string {
-  return realpathSync(path);
+/**
+ * Match Pi's realpath identity without importing its private path utility.
+ *
+ * Unlike Pi, an uncanonicalizable path (raced away, EACCES) yields undefined
+ * rather than the raw path, so it can never match a rejected alias.
+ */
+function canonicalPath(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Exclude Pi's ambient user root when a caller supplies a distinct injected home. */
@@ -246,6 +271,7 @@ function projectSkillRoots(cwd: string): string[] {
   return roots;
 }
 
+/** Textual containment. Unlike `isInside` in `package-resources.ts`, it must not canonicalize: that would erase the symlinks callers look for. */
 function isPathWithin(root: string, path: string): boolean {
   const relativePath = relative(resolve(root), resolve(path));
   return relativePath === "" || (!relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath));
