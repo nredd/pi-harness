@@ -61,7 +61,7 @@ local themes, skills, agents and their configuration. Restart sessions after act
   have none): `Quota left: Anthropic weekly 35% (resets Nov 2 09:00) | OpenAI weekly 76% (resets Nov 3 11:05)`.
   A stale reply never brings back a 5h that the last fresh reading left out, and before the first reply
   the placeholder is `Anthropic (stale) weekly --`. A reported idle window (`{ utilization: 0, resets_at: null }`)
-  renders as `5h 100%` with no reset; if Anthropic ever ships that shape as a placeholder, this is where it shows. OpenAI
+  renders as `5h 100%` with no reset. OpenAI
   shows weekly only (it has no 5h quota, so a window with a reported 18000s span is ignored; a window whose span the router only assumed is shown as an unidentified quota, see below). Each window is
   followed by its reset, taken from the router's `windows[].resetAt` (epoch ms), never computed
   or guessed. With a 5h window: `Quota left: Anthropic 5h 66% (resets 14:30) weekly 35% (resets Nov 2 09:00) | OpenAI weekly 76% (resets Nov 3 11:05)`.

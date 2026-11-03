@@ -131,10 +131,11 @@ function readWindows(windows: unknown[], spec: QuotaProviderSpec): WindowReading
 		return window?.scope === "provider" ? [window] : [];
 	});
 	if (spec.identify === "name") {
-		const out: WindowReading = {};
+		const out: WindowReading = provider.some((window) => window.name === spec.fiveHour)
+			? { fiveHourReported: true }
+			: {};
 		for (const window of provider) {
 			const key = window.name === spec.fiveHour ? "fiveHour" : window.name === spec.weekly ? "weekly" : undefined;
-			if (key === "fiveHour") out.fiveHourReported = true;
 			if (key) Object.assign(out, readingOf(window, key));
 		}
 		return out;
@@ -151,21 +152,27 @@ function readWindows(windows: unknown[], spec: QuotaProviderSpec): WindowReading
 	return limiting ? { ...readingOf(limiting, "weekly"), weeklyUnknown: true } : {};
 }
 
+/** Whether `prior` descends from a fresh reading: only a fresh snapshot sets `expiresAt`, and stale merges carry it. */
+function hasFreshReading(prior: ProviderQuota | undefined): prior is ProviderQuota & { expiresAt: number } {
+	return prior?.expiresAt !== undefined;
+}
+
 /**
  * Per window: a valid new percent brings its own reset time (and identity); otherwise the prior
  * pair is retained. An unidentified new reading never displaces a retained proven-weekly one.
- * Whether a 5h window exists follows the last fresh reading (only a fresh one sets `expiresAt`),
- * so a stale cache from before a plan change cannot bring a dropped 5h back. Before any fresh
- * reading it follows the stale replies.
+ * For a provider with a 5h window name, whether that window exists follows the last fresh reading,
+ * so a stale cache from before a plan change cannot bring a dropped 5h back; before any fresh
+ * reading it follows the stale replies. A provider without one (OpenAI) merges its 5h figure as
+ * before; it is never shown.
  */
-function mergeReadings(seen: WindowReading, prior: ProviderQuota | undefined): WindowReading {
+function mergeReadings(seen: WindowReading, prior: ProviderQuota | undefined, spec: QuotaProviderSpec): WindowReading {
 	const out: WindowReading = {};
-	const fiveHourReported =
-		prior?.expiresAt === undefined
-			? seen.fiveHourReported === true || prior?.fiveHourReported === true
-			: prior.fiveHourReported === true;
+	const fiveHourReported = hasFreshReading(prior)
+		? prior.fiveHourReported === true
+		: seen.fiveHourReported === true || prior?.fiveHourReported === true;
 	if (fiveHourReported) out.fiveHourReported = true;
-	const keys = fiveHourReported ? (["fiveHour", "weekly"] as const) : (["weekly"] as const);
+	const keys =
+		fiveHourReported || spec.fiveHour === undefined ? (["fiveHour", "weekly"] as const) : (["weekly"] as const);
 	for (const key of keys) {
 		const usable =
 			seen[key] !== undefined &&
@@ -222,7 +229,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		}
 		const seen = windows ? readWindows(windows, spec) : {};
 		state[spec.id] = {
-			...mergeReadings(seen, prior),
+			...mergeReadings(seen, prior, spec),
 			stale: true,
 			expiresAt: prior?.expiresAt,
 		};
