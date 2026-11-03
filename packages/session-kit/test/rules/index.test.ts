@@ -89,6 +89,14 @@ describe("rules tool_result", () => {
 		expect(out?.content[1]?.text).not.toContain("no frontmatter");
 	});
 
+	it("resolves the user rule directory on each tool result, not once at register", () => {
+		const t = setup();
+		const moved = path.join(root, "moved-agent");
+		rule(path.join(moved, "rules"), "u.md", "src/**", "moved rule");
+		process.env.PI_CODING_AGENT_DIR = moved;
+		expect(t.result("read", { path: "src/a.ts" })?.content[1]?.text ?? "").toContain("moved rule");
+	});
+
 	it("rebuilds the injected set from the branch at session_start", () => {
 		rule(path.join(cwd, ".pi", "rules"), "ts.md", "src/**");
 		const probe = setup();

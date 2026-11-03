@@ -12,5 +12,5 @@ export const STAY = `setInterval(() => {
  * descendant, so it SIGKILLs its own group, addressed by its own pid, never another value.
  */
 export const STAY_GROUP = `setInterval(() => {
-	if (process.ppid !== ${process.pid} && process.pid > 1) process.kill(-process.pid, "SIGKILL");
+	if (process.ppid !== ${process.pid}) process.kill(-process.pid, "SIGKILL");
 }, 100);`;

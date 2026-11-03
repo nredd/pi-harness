@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { isolatedHomeEnv } from "../../../../scripts/run-vitest.ts";
 import { psInfo } from "../../src/monitor/pidfiles.ts";
 import { signalGroup } from "../../src/monitor/process.ts";
 import { running, tempDir, waitFor } from "./helpers.ts";
@@ -13,6 +14,7 @@ interface WorkerReady {
 	targetPid: number;
 	descendantPid: number;
 	token: string;
+	home: string | undefined;
 }
 
 const config = join(import.meta.dirname, "worker-death.vitest.config.ts");
@@ -64,11 +66,7 @@ describe("monitor worker death", () => {
 					cwd: join(import.meta.dirname, "../.."),
 					env: {
 						...process.env,
-						HOME: home,
-						USERPROFILE: home,
-						XDG_CONFIG_HOME: join(home, ".config"),
-						PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
-						PI_SUBAGENTS_CONFIG_DIR: join(home, ".pi", "agent"),
+						...isolatedHomeEnv(home),
 						MONITOR_WORKER_READY: readyPath,
 						MONITOR_WORKER_ROOT: tmp.dir,
 						MONITOR_WORKER_TARGET: targetPath,
@@ -82,6 +80,7 @@ describe("monitor worker death", () => {
 				await waitFor(() => existsSync(readyPath));
 				ready = JSON.parse(readFileSync(readyPath, "utf8")) as WorkerReady;
 				expect(ready.token).toBe(token);
+				expect(ready.home).toBe(home);
 				expect(ready.targetPid).toBe(ready.monitorPid);
 				expect(await running(ready.monitorPid)).toBe(true);
 				expect(await running(ready.descendantPid)).toBe(true);

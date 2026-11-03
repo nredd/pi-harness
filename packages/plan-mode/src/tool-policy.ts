@@ -187,7 +187,7 @@ export function readCommand(input: unknown) {
 }
 
 /** Where a shell command runs and which directories it may reach; omitted values keep the defaults. */
-export interface PathPolicyOptions {
+export interface ShellPolicyOptions {
   /** Effective directory for relative `cd`/`git -C` targets; none means only trusted roots. */
   workingDirectory?: string;
   /** Extra roots `cd`/`git -C` may reach. */
@@ -197,7 +197,7 @@ export interface PathPolicyOptions {
 }
 
 /** Bash also needs the platform for its platform-specific inspection commands. */
-export interface CommandPolicyOptions extends PathPolicyOptions {
+export interface CommandPolicyOptions extends ShellPolicyOptions {
   platform?: NodeJS.Platform;
 }
 
@@ -292,7 +292,7 @@ export function isSafeCommand(
 export function findBlockedPowerShellCommandSegment(
   command: string,
   safeSubcommands: SafeSubcommands = {},
-  { workingDirectory, trustedDirectories = [], homeDir = homedir() }: PathPolicyOptions = {},
+  { workingDirectory, trustedDirectories = [], homeDir = homedir() }: ShellPolicyOptions = {},
 ): string | undefined {
   const segments = splitPowerShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
@@ -311,7 +311,7 @@ export function findBlockedPowerShellCommandSegment(
 export function isSafePowerShellCommand(
   command: string,
   safeSubcommands: SafeSubcommands = {},
-  options: PathPolicyOptions = {},
+  options: ShellPolicyOptions = {},
 ) {
   return findBlockedPowerShellCommandSegment(command, safeSubcommands, options) === undefined;
 }

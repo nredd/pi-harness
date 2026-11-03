@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentDir } from "../../src/agent-dir.ts";
 import {
 	CACHE_VERSION,
@@ -25,12 +25,15 @@ beforeEach(() => {
 	cache = join(dir, "cache", "stats-cache.json");
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => vi.unstubAllEnvs());
 
 const opus = (day: string, input: number, output: number, extra = {}) =>
 	assistantLine({ ms: at(day), provider: "anthropic", model: "claude-opus-5-5", input, output, ...extra });
 
 describe("agent paths", () => {
 	it("derives session and cache defaults from an injected home", () => {
+		// Independent of the launcher's `PI_CODING_AGENT_DIR`, which `agent-dir.test.ts` pins as winning.
+		vi.stubEnv("PI_CODING_AGENT_DIR", undefined);
 		const agent = agentDir("/isolated/home");
 		expect(agent).toBe("/isolated/home/.pi/agent");
 		expect(sessionsDir(agent)).toBe("/isolated/home/.pi/agent/sessions");
