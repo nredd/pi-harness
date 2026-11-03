@@ -5,8 +5,11 @@
 ### Changed
 
 - Add a `homeDir` dependency for SDK hosts: Bash and PowerShell policy expand `~/` in trusted
-  roots and `cd`/`git -C` targets against it. `~user` and `..` stay rejected. The policy helpers take a trailing
-  `{ homeDir }` options object, and Bash's `findBlockedCommandSegment` also takes `remote` there.
+  roots and `cd`/`git -C` targets against it. `~user` and `..` stay rejected.
+- The Bash and PowerShell policy helpers (`findBlockedCommandSegment`, `isSafeCommand` and their
+  PowerShell twins) take `{ workingDirectory, trustedDirectories, homeDir }` (plus `platform` for
+  Bash) after `safeSubcommands` in place of positional arguments. The redundant `remote` flag is
+  gone: a remote command already passes no working or trusted directory.
 - `ssh_exec` and `ssh_pull` are now mutating metadata; Plan admits a trusted-source `ssh_exec` by name
   and keeps the execution-time host and remote command gate. `ssh_pull` is no longer auto-admitted.
 - First CI-attested release; no code change.

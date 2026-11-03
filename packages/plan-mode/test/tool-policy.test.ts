@@ -19,33 +19,85 @@ test("injected homes govern trusted tilde roots for Bash and PowerShell", () => 
   const home = "/isolated/home";
   const roots = ["/isolated/home/trusted"];
   for (const command of ["cd ~/trusted && git status", "git -C ~/trusted status"]) {
-    assert.equal(isPolicySafeCommand(command, {}, "/work", "darwin", roots, { homeDir: home }), true, command);
     assert.equal(
-      isPolicySafeCommand(command, {}, "/work", "darwin", roots, { homeDir: "/other/home" }),
+      isPolicySafeCommand(
+        command,
+        {},
+        { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, homeDir: home },
+      ),
+      true,
+      command,
+    );
+    assert.equal(
+      isPolicySafeCommand(
+        command,
+        {},
+        { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, homeDir: "/other/home" },
+      ),
       false,
       command,
     );
   }
-  assert.equal(isSafePowerShellCommand("git -C ~/trusted status", {}, "/work", roots, { homeDir: home }), true);
-  assert.equal(isSafePowerShellCommand("git -C ~other/trusted status", {}, "/work", roots, { homeDir: home }), false);
+  assert.equal(
+    isSafePowerShellCommand(
+      "git -C ~/trusted status",
+      {},
+      { workingDirectory: "/work", trustedDirectories: roots, homeDir: home },
+    ),
+    true,
+  );
+  assert.equal(
+    isSafePowerShellCommand(
+      "git -C ~other/trusted status",
+      {},
+      { workingDirectory: "/work", trustedDirectories: roots, homeDir: home },
+    ),
+    false,
+  );
 });
 
 test("injected homes keep rejecting other users' tildes and traversal on the Bash path", () => {
   const home = "/isolated/home";
   const roots = ["~/trusted"];
   const options = { homeDir: home };
-  assert.equal(isPolicySafeCommand("git -C ~/trusted status", {}, "/work", "darwin", roots, options), true);
+  assert.equal(
+    isPolicySafeCommand(
+      "git -C ~/trusted status",
+      {},
+      { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, ...options },
+    ),
+    true,
+  );
   for (const command of [
     "cd ~other/trusted && git status",
     "git -C ~other/trusted status",
     "cd ~/trusted/.. && git status",
     "git -C ~/trusted/../escape status",
   ]) {
-    assert.equal(isPolicySafeCommand(command, {}, "/work", "darwin", roots, options), false, command);
-    assert.equal(findBlockedCommandSegment(command, {}, "/work", "darwin", roots, options), command.split(" && ")[0]);
+    assert.equal(
+      isPolicySafeCommand(
+        command,
+        {},
+        { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, ...options },
+      ),
+      false,
+      command,
+    );
+    assert.equal(
+      findBlockedCommandSegment(
+        command,
+        {},
+        { workingDirectory: "/work", platform: "darwin", trustedDirectories: roots, ...options },
+      ),
+      command.split(" && ")[0],
+    );
   }
   assert.equal(
-    isPolicySafeCommand("git -C /isolated/home/trusted status", {}, "/work", "darwin", ["~other/trusted"], options),
+    isPolicySafeCommand(
+      "git -C /isolated/home/trusted status",
+      {},
+      { workingDirectory: "/work", platform: "darwin", trustedDirectories: ["~other/trusted"], ...options },
+    ),
     false,
   );
 });
@@ -196,7 +248,7 @@ test("Bash policy permits only conservative local system diagnostics", () => {
     'tasklist /FI "STATUS eq running"',
     "tasklist /M ntdll.dll /SVC",
   ]) {
-    assert.equal(isSafeCommand(command, {}, undefined, "win32"), true, command);
+    assert.equal(isSafeCommand(command, {}, { platform: "win32" }), true, command);
   }
   for (const command of [
     "tasklist /S remote-host",
@@ -206,9 +258,9 @@ test("Bash policy permits only conservative local system diagnostics", () => {
     "tasklist /FI",
     "tasklist /unknown",
   ]) {
-    assert.equal(isSafeCommand(command, {}, undefined, "win32"), false, command);
+    assert.equal(isSafeCommand(command, {}, { platform: "win32" }), false, command);
   }
-  assert.equal(isSafeCommand("tasklist", {}, undefined, "linux"), false);
+  assert.equal(isSafeCommand("tasklist", {}, { platform: "linux" }), false);
 });
 
 test("blocked command diagnostics identify the first rejected segment", () => {

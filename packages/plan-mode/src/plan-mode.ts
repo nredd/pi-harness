@@ -724,14 +724,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       };
     }
     if (event.toolName === "bash") {
-      const blocked = findBlockedCommandSegment(
-        readCommand(event.input),
-        settings.safeSubcommands,
-        ctx.cwd,
-        process.platform,
-        settings.trustedDirectories,
-        { homeDir: dependencies.homeDir },
-      );
+      const blocked = findBlockedCommandSegment(readCommand(event.input), settings.safeSubcommands, {
+        workingDirectory: ctx.cwd,
+        trustedDirectories: settings.trustedDirectories,
+        homeDir: dependencies.homeDir,
+      });
       if (blocked !== undefined) {
         return {
           block: true,
@@ -749,13 +746,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
     }
     if (event.toolName === "powershell") {
-      const blocked = findBlockedPowerShellCommandSegment(
-        readCommand(event.input),
-        settings.safeSubcommands,
-        ctx.cwd,
-        settings.trustedDirectories,
-        { homeDir: dependencies.homeDir },
-      );
+      const blocked = findBlockedPowerShellCommandSegment(readCommand(event.input), settings.safeSubcommands, {
+        workingDirectory: ctx.cwd,
+        trustedDirectories: settings.trustedDirectories,
+        homeDir: dependencies.homeDir,
+      });
       if (blocked !== undefined) {
         return {
           block: true,
