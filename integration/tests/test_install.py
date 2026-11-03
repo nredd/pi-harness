@@ -56,6 +56,7 @@ from harness.install import (
     verify_release,
     verify_snapshot,
 )
+from harness.install_paths import AnchoredStore
 from harness.promotion import (
     SNAPSHOT_REPO,
     SNAPSHOT_SIGNER_WORKFLOW,
@@ -68,7 +69,59 @@ from harness.stack import install_overrides, package_declarations, source_string
 from scenarios.installer import test_installer as acceptance
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterator, Mapping
+
+
+@pytest.fixture
+def anchors() -> Iterator[AnchoredStore]:
+    """Hold a transaction's parents for the whole test, as the installer lock does.
+
+    Yields:
+        AnchoredStore: descriptors closed at teardown.
+    """
+    with AnchoredStore() as store:
+        yield store
+
+
+def rename_path(operand: Any, kwargs: dict[str, Any], key: str) -> Path:
+    """Resolve a syscall operand for the fault-injection oracle, not for mutation.
+
+    Parameters:
+        operand (Any): pathname operand.
+        kwargs (dict[str, Any]): syscall descriptor options.
+        key (str): source or destination descriptor key.
+
+    Returns:
+        Path: absolute operand spelling.
+    """
+    path = Path(operand)
+    descriptor = kwargs.get(key)
+    if path.is_absolute() or descriptor is None:
+        return path
+    if sys.platform == "darwin":
+        assert install.fcntl is not None
+        parent = Path(
+            os.fsdecode(
+                install.fcntl.fcntl(descriptor, install.fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0]
+            )
+        )
+    else:
+        parent = Path(f"/proc/self/fd/{descriptor}").readlink()
+    return parent / path
+
+
+def restoring_backup(src: Any, kwargs: dict[str, Any]) -> bool:
+    """Distinguish backup restores from other descriptor-relative renames.
+
+    Parameters:
+        src (Any): syscall source.
+        kwargs (dict[str, Any]): syscall options.
+
+    Returns:
+        bool: whether the source is inside a per-run backup directory.
+    """
+    return rename_path(src, kwargs, "src_dir_fd").parent.parent.name == "backups"
+
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stack-snapshot-24889f7.json"
 INTEGRATION = Path(__file__).resolve().parent.parent
@@ -251,7 +304,9 @@ class Harness:
         monkeypatch.setattr(install, "install_core", self.stage_core)
         monkeypatch.setattr(install, "install_packages", self.stage_packages)
 
-    def stage_core(self, verified: Verified, prefix: Path, staging: Path, npm: str) -> Path:
+    def stage_core(
+        self, verified: Verified, prefix: Path, staging: Path, npm: str, *, anchors: AnchoredStore
+    ) -> Path:
         """Model authenticated core staging without downloading packages.
 
         Parameters:
@@ -259,19 +314,23 @@ class Harness:
             prefix (Path): staged core destination.
             staging (Path): transaction scratch.
             npm (str): selected native npm path.
+            anchors (AnchoredStore): transaction parents; the prefix is anchored at creation.
 
         Returns:
             Path: recording fixture executable.
         """
+        # Anchor at creation like `install.install_core`; the model then writes by pathname.
+        anchors.directory(prefix, create=True)
         return self.fetch_release(verified.stack.core.tag, prefix, checksums=verified.core_checksums)
 
-    def stage_packages(self, verified: Verified, npm: str, staging: Path) -> Path:
+    def stage_packages(self, verified: Verified, npm: str, staging: Path, *, anchors: AnchoredStore) -> Path:
         """Model package staging for transaction tests using only our recording fixture.
 
         Parameters:
             verified (Verified): modeled verified input.
             npm (str): selected native npm path.
             staging (Path): transaction scratch.
+            anchors (AnchoredStore): transaction parents; the agent tree is anchored at creation.
 
         Returns:
             Path: modeled staged agent tree.
@@ -280,7 +339,8 @@ class Harness:
             InstallError: modeled install or manifest verification failed.
         """
         agent, home = staging / "agent", staging / "home"
-        agent.mkdir(parents=True)
+        # Anchor at creation like `install.install_packages`; the rest writes by pathname.
+        anchors.directory(agent, create=True)
         home.mkdir()
         binary = staging / "fixture-recorder"
         binary.write_text(
@@ -593,13 +653,13 @@ def test_installer_root_creation_failure_is_clean_refusal(
         root.write_text("not an installer directory")
     else:
         number = {"eacces": errno.EACCES, "enospc": errno.ENOSPC, "erofs": errno.EROFS}[failure]
-        original = Path.mkdir
+        original = os.mkdir
 
-        def refuse(path: Path, *args: Any, **kwargs: Any) -> None:
+        def refuse(path: Path | str, *args: Any, **kwargs: Any) -> None:
             """Inject the actual filesystem error at installer-root creation only.
 
             Parameters:
-                path (Path): directory to create.
+                path (Path | str): directory to create.
                 *args (Any): mkdir arguments.
                 **kwargs (Any): mkdir options.
 
@@ -609,11 +669,11 @@ def test_installer_root_creation_failure_is_clean_refusal(
             Raises:
                 OSError: installer-root creation failed.
             """
-            if path == root:
+            if rename_path(path, kwargs, "dir_fd") == root:
                 raise OSError(number, os.strerror(number), str(path))
             original(path, *args, **kwargs)
 
-        monkeypatch.setattr(Path, "mkdir", refuse)
+        monkeypatch.setattr(os, "mkdir", refuse)
     before = tree(harness.home)
     assert install.main([SHA, "--yes"]) == ExitCode.UNSUPPORTED
     assert "UNSUPPORTED:" in caplog.text
@@ -664,14 +724,16 @@ def test_switch_failure_rolls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         """
         raise OSError("disk full")
 
-    monkeypatch.setattr(install.Path, "symlink_to", refuse)
+    monkeypatch.setattr(os, "symlink", lambda *args, **kwargs: refuse(args[1], args[0]))
     with pytest.raises(InstallError, match="rolled back"):
         harness.run(yes=True)
     assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
     assert not harness.layout.journal.exists()
 
 
-def test_interrupted_switch_is_restored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_interrupted_switch_is_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
+) -> None:
     """A switch killed midway (no rollback ran) is restored exactly from its journal."""
     harness = Harness(tmp_path, monkeypatch)
     seed_existing(harness.home)
@@ -697,9 +759,15 @@ def test_interrupted_switch_is_restored(tmp_path: Path, monkeypatch: pytest.Monk
         raise Killed
 
     with monkeypatch.context() as patch:
-        patch.setattr(install.Path, "symlink_to", kill)
+        patch.setattr(os, "symlink", lambda *args, **kwargs: kill(args[1], args[0]))
         with pytest.raises(Killed):
-            switch(layout, harness.verified, plan, staged, Journal(layout, layout.root / "backups" / "b"))
+            switch(
+                layout,
+                harness.verified,
+                plan,
+                staged,
+                Journal(layout, layout.root / "backups" / "b", anchors=anchors),
+            )
     assert layout.journal.exists()
     assert json.loads((layout.agent_dir / "settings.json").read_text())["quietStartup"] is True
     with pytest.raises(ConsentError):
@@ -738,8 +806,8 @@ def test_unstarted_backup_rename_rolls_back_cleanly(
             KeyboardInterrupt: interrupted before the selected backup rename.
             OSError: an unrelated rename failed.
         """
-        if Path(src) == layout.agent_dir / "npm":
-            attempts.append(Path(src))
+        if rename_path(src, kwargs, "src_dir_fd") == layout.agent_dir / "npm":
+            attempts.append(rename_path(src, kwargs, "src_dir_fd"))
             if failure == "eacces":
                 raise PermissionError(errno.EACCES, "backup rename refused")
             raise KeyboardInterrupt
@@ -781,7 +849,7 @@ def test_missing_backup_after_pending_rename_still_fails_loudly(
             OSError: rename or fixture mutation failed.
         """
         original(src, dst, **kwargs)
-        if Path(src) == layout.agent_dir / "npm":
+        if rename_path(src, kwargs, "src_dir_fd") == layout.agent_dir / "npm":
             (backup,) = layout.backups.glob("*/npm")
             install.remove(backup)
             (layout.agent_dir / "npm").mkdir()
@@ -900,7 +968,7 @@ def test_backup_store_swap_cannot_redirect_backups(
         Raises:
             OSError: the underlying rename failed.
         """
-        if Path(src) != layout.agent_dir / "npm":
+        if rename_path(src, kwargs, "src_dir_fd") != layout.agent_dir / "npm":
             original_replace(src, dst, **kwargs)
             return
         swap_store()
@@ -961,7 +1029,7 @@ def test_rollback_store_swap_restores_from_open_directory(
             OSError: the underlying rename failed.
         """
         nonlocal attacked
-        if Path(dst) == layout.agent_dir / "npm":
+        if rename_path(dst, kwargs, "dst_dir_fd") == layout.agent_dir / "npm":
             attacked = True
             layout.backups.rename(held)
             layout.backups.symlink_to(outside)
@@ -978,7 +1046,7 @@ def test_rollback_store_swap_restores_from_open_directory(
 
 
 def test_rerun_after_interruption_recovers_then_installs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
 ) -> None:
     """With consent, a rerun restores the interrupted switch and then installs cleanly."""
     harness = Harness(tmp_path, monkeypatch)
@@ -986,7 +1054,7 @@ def test_rerun_after_interruption_recovers_then_installs(
     plan = plan_install(layout, harness.verified)
     layout.root.mkdir(parents=True)
     staged = install.stage(layout, harness.verified, plan, layout.root / "staging" / "x")
-    journal = Journal(layout, layout.root / "backups" / "b")
+    journal = Journal(layout, layout.root / "backups" / "b", anchors=anchors)
     journal.backups.mkdir(parents=True)
     journal.record(layout.agent_dir / "npm", "npm")
     layout.agent_dir.mkdir(parents=True)
@@ -1601,7 +1669,7 @@ def test_unreadable_existing_settings_are_never_overwritten(
 
 
 def test_interrupted_update_restores_the_previous_state_record(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
 ) -> None:
     """Killed right after the new `installed.json` lands, rollback restores the old record and tree."""
     harness = Harness(tmp_path, monkeypatch)
@@ -1637,7 +1705,13 @@ def test_interrupted_update_restores_the_previous_state_record(
 
     monkeypatch.setattr(install, "replace_file", kill_after_state)
     with pytest.raises(Killed):
-        switch(layout, harness.verified, plan, staged, Journal(layout, layout.root / "backups" / "b"))
+        switch(
+            layout,
+            harness.verified,
+            plan,
+            staged,
+            Journal(layout, layout.root / "backups" / "b", anchors=anchors),
+        )
     assert json.loads(manifest.read_text())["version"] == "0.4.2"
     assert "note" not in json.loads(layout.state.read_text())
     rollback(layout)
@@ -1819,10 +1893,16 @@ def interrupt(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
         """
         raise Killed
 
-    with monkeypatch.context() as patch:
-        patch.setattr(install.Path, "symlink_to", kill)
+    with monkeypatch.context() as patch, AnchoredStore() as anchors:
+        patch.setattr(os, "symlink", lambda *args, **kwargs: kill(args[1], args[0]))
         with pytest.raises(Killed):
-            switch(layout, harness.verified, plan, staged, Journal(layout, layout.root / "backups" / "b"))
+            switch(
+                layout,
+                harness.verified,
+                plan,
+                staged,
+                Journal(layout, layout.root / "backups" / "b", anchors=anchors),
+            )
     assert layout.journal.exists()
 
 
@@ -2153,6 +2233,123 @@ def test_plan_reports_a_pending_journal_without_planning(
     assert tree(harness.home) == before
 
 
+@pytest.mark.parametrize("moment", ["cleanup", "marker"])
+def test_core_staging_mutations_keep_transaction_ancestors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moment: str
+) -> None:
+    """Swapping a real staging ancestor cannot delete or overwrite a substitute's contents."""
+    harness = Harness(tmp_path, monkeypatch)
+    staging, held, victim = tmp_path / "run", tmp_path / "held", tmp_path / "victim"
+    (victim / "core" / "fetch-home").mkdir(parents=True)
+    valuable = victim / "core" / "fetch-home" / "valuable"
+    valuable.write_bytes(b"preserve cleanup victim")
+    marker = victim / "core" / install.CORE_MARKER
+    marker.write_bytes(b"preserve marker victim")
+    original_remove, original_write = install.remove, install.write_atomic
+    swapped = False
+
+    def swap() -> None:
+        """Replace an admitted staging ancestor with a different real directory.
+
+        Returns:
+            None: the original namespace is held aside and the substitute occupies its name.
+
+        Raises:
+            OSError: fixture renames fail.
+        """
+        nonlocal swapped
+        assert not swapped
+        staging.rename(held)
+        victim.rename(staging)
+        swapped = True
+
+    def remove(path: Path, **kwargs: Any) -> None:
+        """Swap immediately before installer-owned core cleanup uses its parent.
+
+        Parameters:
+            path (Path): cleanup entry.
+            kwargs (Any): forwarded descriptor owner.
+
+        Returns:
+            None: the underlying cleanup completes unless the namespace is refused.
+
+        Raises:
+            OSError: fixture setup or cleanup fails.
+        """
+        if moment == "cleanup" and not swapped and path == staging / "core" / "fetch-home":
+            swap()
+        original_remove(path, **kwargs)
+
+    def write(path: Path, text: str, mode: int | None = None, **kwargs: Any) -> None:
+        """Swap immediately before the installer-owned core marker write.
+
+        Parameters:
+            path (Path): marker destination.
+            text (str): marker JSON.
+            mode (int | None): requested file mode.
+            kwargs (Any): forwarded descriptor owner.
+
+        Returns:
+            None: the underlying write completes unless the namespace is refused.
+
+        Raises:
+            OSError: fixture setup or atomic writing fails.
+        """
+        if moment == "marker" and not swapped and path == staging / "core" / install.CORE_MARKER:
+            swap()
+        original_write(path, text, mode, **kwargs)
+
+    monkeypatch.setattr(install, "remove", remove)
+    monkeypatch.setattr(install, "write_atomic", write)
+    with pytest.raises(OSError, match="changed during"):
+        install.stage(harness.layout, harness.verified, install.Plan(install_core=True), staging)
+    assert swapped
+    assert (staging / "core" / "fetch-home" / "valuable").read_bytes() == b"preserve cleanup victim"
+    assert (staging / "core" / install.CORE_MARKER).read_bytes() == b"preserve marker victim"
+    assert (held / "core" / "bin" / "pi").is_file()
+
+
+def test_staged_source_parent_swap_is_refused_before_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real-directory swap after package verification cannot replace the admitted source tree."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    before = tree(harness.layout.agent_dir)
+    original = install.stage
+    forged: Path | None = None
+
+    def swap(*args: Any, **kwargs: Any) -> Path | None:
+        """Substitute a real staged agent directory immediately after verification.
+
+        Parameters:
+            args (Any): forwarded staging arguments.
+            kwargs (Any): forwarded staging options.
+
+        Returns:
+            Path | None: the original source spelling, now naming a substitute.
+
+        Raises:
+            OSError: fixture setup or the original stage failed.
+        """
+        nonlocal forged
+        staged = original(*args, **kwargs)
+        assert staged is not None
+        staged.rename(tmp_path / "held-source")
+        staged.mkdir()
+        forged = staged / "npm" / "forged"
+        forged.parent.mkdir()
+        forged.write_text("not the verified source")
+        return staged
+
+    monkeypatch.setattr(install, "stage", swap)
+    with pytest.raises(InstallError, match="changed during"):
+        harness.run(yes=True)
+    assert forged is not None
+    assert tree(harness.layout.agent_dir) == before
+    assert not harness.layout.journal.exists()
+
+
 def test_existing_git_tree_is_replaced_as_planned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The plan's `git` overwrite happens even though the stack stages no git package, and rolls back."""
     harness = Harness(tmp_path, monkeypatch)
@@ -2176,7 +2373,7 @@ def test_existing_git_tree_is_replaced_as_planned(tmp_path: Path, monkeypatch: p
         raise OSError("disk full")
 
     with monkeypatch.context() as patch:
-        patch.setattr(install.Path, "symlink_to", refuse)
+        patch.setattr(os, "symlink", lambda *args, **kwargs: refuse(args[1], args[0]))
         with pytest.raises(InstallError, match="rolled back"):
             harness.run(yes=True)
     assert {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k} == before
@@ -2245,7 +2442,7 @@ def test_unsupported_existing_kind_is_refused_before_consent(
 
 
 def test_kind_changed_after_planning_never_enters_the_journal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
 ) -> None:
     """A target that turns unsupported mid-run is refused unjournaled, so the journal still restores."""
     harness = Harness(tmp_path, monkeypatch)
@@ -2257,7 +2454,13 @@ def test_kind_changed_after_planning_never_enters_the_journal(
     make_unsupported(layout, "bin-pi-directory")
     before = {k: v for k, v in tree(harness.home).items() if "pi-stack" not in k}
     with pytest.raises(UnsupportedError, match="bin") as raised:
-        switch(layout, harness.verified, plan, staged, Journal(layout, layout.root / "backups" / "b"))
+        switch(
+            layout,
+            harness.verified,
+            plan,
+            staged,
+            Journal(layout, layout.root / "backups" / "b", anchors=anchors),
+        )
     assert "nothing changed" not in str(raised.value)
     steps = json.loads(layout.journal.read_text())["steps"]
     assert str(layout.link) not in [step["target"] for step in steps]
@@ -2931,7 +3134,7 @@ def test_special_core_prefix_is_refused_before_staging(
 
 @pytest.mark.parametrize("interrupt_switch", [False, True])
 def test_core_replacement_is_backed_up_and_offline_recoverable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupt_switch: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupt_switch: bool, anchors: AnchoredStore
 ) -> None:
     """A drifted live core is backed up, and an interrupted switch restores it offline."""
     harness = Harness(tmp_path, monkeypatch)
@@ -2949,7 +3152,7 @@ def test_core_replacement_is_backed_up_and_offline_recoverable(
     staged_agent = install.stage(harness.layout, harness.verified, plan, staging)
     assert tree(harness.home) == before
     backups = harness.layout.root / "backups" / "core-replacement"
-    journal = Journal(harness.layout, backups)
+    journal = Journal(harness.layout, backups, anchors=anchors)
     if interrupt_switch:
 
         def interrupt_file(*args: object) -> None:
@@ -3556,10 +3759,11 @@ def pending_file_restore(harness: Harness) -> dict[Path, bytes]:
     for path, contents in originals.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(contents)
-    journal = Journal(layout, layout.backups / "retry")
-    with journal.open_backups():
-        for path in originals:
-            install.replace_file(journal, path, path.name, '{"replacement":true}')
+    with AnchoredStore() as anchors:
+        journal = Journal(layout, layout.backups / "retry", anchors=anchors)
+        with journal.open_backups():
+            for path in originals:
+                install.replace_file(journal, path, path.name, '{"replacement":true}')
     return originals
 
 
@@ -3585,8 +3789,8 @@ def test_partial_rollback_resumes_completed_restores(tmp_path: Path, monkeypatch
         Raises:
             OSError: the selected second rename failed.
         """
-        if kwargs.get("src_dir_fd") is not None:
-            attempts.append(Path(dst))
+        if restoring_backup(src, kwargs):
+            attempts.append(rename_path(dst, kwargs, "dst_dir_fd"))
             if Path(dst).name == install.SETTINGS_FILE:
                 raise OSError(errno.EIO, "second restore refused")
         original_replace(src, dst, **kwargs)
@@ -3624,7 +3828,7 @@ def test_recorded_restore_rejects_changed_live_state(tmp_path: Path, monkeypatch
         Raises:
             OSError: the next restore was refused.
         """
-        if kwargs.get("src_dir_fd") is not None and Path(dst).name == install.SETTINGS_FILE:
+        if restoring_backup(src, kwargs) and Path(dst).name == install.SETTINGS_FILE:
             raise OSError("second restore refused")
         original_replace(src, dst, **kwargs)
 
@@ -3647,13 +3851,13 @@ def test_rollback_unlink_failure_leaves_completed_journal(
     harness = Harness(tmp_path, monkeypatch)
     originals = pending_file_restore(harness)
     layout = harness.layout
-    original_unlink = Path.unlink
+    original_unlink = os.unlink
 
-    def fail_cleanup(path: Path, *args: Any, **kwargs: Any) -> None:
+    def fail_cleanup(path: Path | str, *args: Any, **kwargs: Any) -> None:
         """Refuse transaction cleanup after all restore renames have succeeded.
 
         Parameters:
-            path (Path): unlink destination.
+            path (Path | str): unlink destination.
             *args (Any): unlink arguments.
             **kwargs (Any): unlink options.
 
@@ -3663,12 +3867,12 @@ def test_rollback_unlink_failure_leaves_completed_journal(
         Raises:
             OSError: journal unlink failed.
         """
-        if path == layout.journal:
+        if rename_path(path, kwargs, "dir_fd") == layout.journal:
             raise OSError(errno.EACCES, "journal cleanup refused")
         original_unlink(path, *args, **kwargs)
 
     with monkeypatch.context() as patch:
-        patch.setattr(Path, "unlink", fail_cleanup)
+        patch.setattr(os, "unlink", fail_cleanup)
         with pytest.raises(RollbackError, match="journal cleanup refused"):
             rollback(layout)
     assert {path: path.read_bytes() for path in originals} == originals
@@ -3819,13 +4023,14 @@ def test_restore_every_call_boundary_is_retryable(
                 if index == point and after:
                     raise failure("restore boundary")
 
-            def write(path: Path, text: str, mode: int | None = None) -> None:
+            def write(path: Path, text: str, mode: int | None = None, **kwargs: Any) -> None:
                 """Fault only the atomic journal rewrite seam.
 
                 Parameters:
                     path (Path): write destination.
                     text (str): new contents.
                     mode (int | None): requested permissions.
+                    kwargs (Any): held parent descriptors.
 
                 Returns:
                     None: the atomic write completes unless interrupted.
@@ -3833,7 +4038,7 @@ def test_restore_every_call_boundary_is_retryable(
                 Raises:
                     OSError | KeyboardInterrupt: injected interruption.
                 """
-                fault(lambda: original_write(path, text, mode))
+                fault(lambda: original_write(path, text, mode, **kwargs))
 
             def rename(src: Any, dst: Any, **kwargs: Any) -> None:
                 """Fault only backup-to-live renames, not journal replacements.
@@ -3849,7 +4054,7 @@ def test_restore_every_call_boundary_is_retryable(
                 Raises:
                     OSError | KeyboardInterrupt: injected interruption.
                 """
-                if kwargs.get("src_dir_fd") is not None:
+                if restoring_backup(src, kwargs):
                     fault(lambda: original_replace(src, dst, **kwargs))
                 else:
                     original_replace(src, dst, **kwargs)
@@ -3891,7 +4096,7 @@ def test_restore_intent_does_not_excuse_lost_backup(
             KeyboardInterrupt: the backup rename completed before interruption.
         """
         original(src, dst, **kwargs)
-        if kwargs.get("src_dir_fd") is not None:
+        if restoring_backup(src, kwargs):
             raise KeyboardInterrupt
 
     with monkeypatch.context() as patch:
@@ -3969,19 +4174,20 @@ def saved_recovery_entry(harness: Harness, kind: str) -> tuple[Journal, Path]:
     target = {"file": layout.state, "directory": layout.agent_dir / "npm", "symlink": layout.link}[kind]
     recovery_entry(target, kind, "ORIGINAL")
     name, _ = install.journaled_path(layout, target)
-    journal = Journal(layout, layout.backups / "content")
-    with journal.open_backups():
-        backup = journal.record(target, name)
-        assert backup is not None
-        journal.save(target, backup)
-        replacement = target.with_name(target.name + ".new-fixture")
-        recovery_entry(replacement, kind, "NEW FILE")
-        place = getattr(journal, "place", None)
-        if place is None:
-            # Exercise the old switch protocol too when production is reverted for regression proofs.
-            replacement.replace(target)
-        else:
-            place(replacement, target)
+    with AnchoredStore() as anchors:
+        journal = Journal(layout, layout.backups / "content", anchors=anchors)
+        with journal.open_backups():
+            backup = journal.record(target, name)
+            assert backup is not None
+            journal.save(target, backup)
+            replacement = target.with_name(target.name + ".new-fixture")
+            recovery_entry(replacement, kind, "NEW FILE")
+            place = getattr(journal, "place", None)
+            if place is None:
+                # Exercise the old switch protocol too when production is reverted for regression proofs.
+                replacement.replace(target)
+            else:
+                place(replacement, target)
     return journal, target
 
 
@@ -4040,7 +4246,7 @@ def test_restore_intent_rejects_preserved_metadata_forgery(
             KeyboardInterrupt: restore completed before progress was saved.
         """
         original_replace(src, dst, **kwargs)
-        if kwargs.get("src_dir_fd") is not None:
+        if restoring_backup(src, kwargs):
             raise KeyboardInterrupt
 
     with monkeypatch.context() as patch:
@@ -4068,13 +4274,14 @@ def test_backup_content_is_rechecked_after_restore_intent(
     original_write = install.write_atomic
     attacked = False
 
-    def tamper(path: Path, text: str, mode: int | None = None) -> None:
+    def tamper(path: Path, text: str, mode: int | None = None, **kwargs: Any) -> None:
         """Modify the backup immediately after write-ahead intent becomes durable.
 
         Parameters:
             path (Path): atomic write destination.
             text (str): serialized journal.
             mode (int | None): requested permissions.
+            kwargs (Any): held parent descriptors.
 
         Returns:
             None: the write and selected corruption complete.
@@ -4083,7 +4290,7 @@ def test_backup_content_is_rechecked_after_restore_intent(
             OSError: the atomic write failed.
         """
         nonlocal attacked
-        original_write(path, text, mode)
+        original_write(path, text, mode, **kwargs)
         if path == harness.layout.journal and not attacked:
             attacked = True
             forge_recovery_entry(backup, kind, replace=replace)
@@ -4742,7 +4949,7 @@ def test_content_bound_restore_resumes_after_rename(
             KeyboardInterrupt: restore completed before progress was saved.
         """
         original(src, dst, **kwargs)
-        if kwargs.get("src_dir_fd") is not None:
+        if restoring_backup(src, kwargs):
             raise KeyboardInterrupt
 
     with monkeypatch.context() as patch:
@@ -4849,11 +5056,13 @@ def test_legacy_unknown_replacement_refuses_new_live_content(
     assert tree(harness.home) == before
 
 
-def test_legacy_unknown_new_target_is_never_deleted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_unknown_new_target_is_never_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
+) -> None:
     """Original absence in an old journal does not authorize deleting an unidentified live file."""
     harness = Harness(tmp_path, monkeypatch)
     layout = harness.layout
-    journal = Journal(layout, layout.backups / "legacy-new")
+    journal = Journal(layout, layout.backups / "legacy-new", anchors=anchors)
     with journal.open_backups():
         journal.record(layout.state, layout.state.name)
     layout.state.write_text("unidentified newer state")
@@ -4877,14 +5086,14 @@ def test_all_live_steps_are_checked_before_any_restore(
 
 
 def test_replacement_identity_is_durable_before_switch_rename(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
 ) -> None:
     """There is no rename-to-journal-update gap in identifying the installer's replacement."""
     harness = Harness(tmp_path, monkeypatch)
     layout = harness.layout
     layout.root.mkdir(parents=True)
     layout.state.write_bytes(b"ORIGINAL")
-    journal = Journal(layout, layout.backups / "replacement-intent")
+    journal = Journal(layout, layout.backups / "replacement-intent", anchors=anchors)
     original_replace = os.replace
     observed = False
 
@@ -4905,11 +5114,11 @@ def test_replacement_identity_is_durable_before_switch_rename(
             OSError: rename failed.
         """
         nonlocal observed
-        if Path(dst) == layout.state and kwargs.get("src_dir_fd") is None:
+        if rename_path(dst, kwargs, "dst_dir_fd") == layout.state and Path(src).name.endswith(".replacement"):
             document = json.loads(layout.journal.read_text())
             replacement = document["steps"][-1].get("replacement")
             assert replacement is not None
-            info = Path(src).stat()
+            info = rename_path(src, kwargs, "src_dir_fd").stat()
             assert replacement["sha256"] == hashlib.sha256(b"NEW FILE").hexdigest()
             assert (replacement["device"], replacement["inode"]) == (info.st_dev, info.st_ino)
             observed = True
@@ -4949,7 +5158,7 @@ def test_failed_backup_rename_preserves_live_and_backup(
         Raises:
             OSError: the selected restore syscall failed.
         """
-        if kwargs.get("src_dir_fd") is not None:
+        if restoring_backup(src, kwargs):
             raise OSError(failure, os.strerror(failure))
         original(src, dst, **kwargs)
 
@@ -4974,7 +5183,7 @@ def test_interrupted_restore_aside_reconciles_without_losing_entries(
     """Every new aside window is journaled, including a rename that succeeded before interruption."""
     harness = Harness(tmp_path, monkeypatch)
     _, target = saved_recovery_entry(harness, "file")
-    original_replace, original_unlink = os.replace, Path.unlink
+    original_replace, original_unlink = os.replace, os.unlink
 
     def rename(src: Any, dst: Any, **kwargs: Any) -> None:
         """Interrupt after one of the two restore renames, not journal rewrites.
@@ -4991,16 +5200,16 @@ def test_interrupted_restore_aside_reconciles_without_losing_entries(
             KeyboardInterrupt: the selected rename completed.
         """
         original_replace(src, dst, **kwargs)
-        if (moment == "aside-moved" and Path(src) == target) or (
-            moment == "backup-restored" and kwargs.get("src_dir_fd") is not None
+        if (moment == "aside-moved" and rename_path(src, kwargs, "src_dir_fd") == target) or (
+            moment == "backup-restored" and restoring_backup(src, kwargs)
         ):
             raise KeyboardInterrupt
 
-    def unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+    def unlink(path: Path | str, *args: Any, **kwargs: Any) -> None:
         """Interrupt after cleanup consumed the aside but before progress was recorded.
 
         Parameters:
-            path (Path): entry to unlink.
+            path (Path | str): entry to unlink.
             *args (Any): unlink arguments.
             **kwargs (Any): unlink options.
 
@@ -5011,12 +5220,12 @@ def test_interrupted_restore_aside_reconciles_without_losing_entries(
             KeyboardInterrupt: the aside was consumed.
         """
         original_unlink(path, *args, **kwargs)
-        if moment == "aside-deleted" and ".pi-stack-restore-" in path.name:
+        if moment == "aside-deleted" and ".pi-stack-restore-" in Path(path).name:
             raise KeyboardInterrupt
 
     with monkeypatch.context() as patch:
         patch.setattr(os, "replace", rename)
-        patch.setattr(Path, "unlink", unlink)
+        patch.setattr(os, "unlink", unlink)
         with pytest.raises(KeyboardInterrupt):
             rollback(harness.layout)
     rollback(harness.layout)
@@ -5314,7 +5523,7 @@ def test_partial_directory_aside_cleanup_retries(
         """
         nonlocal aside
         if ".pi-stack-restore-" in Path(path).name:
-            aside = Path(path)
+            aside = rename_path(path, {"dir_fd": dir_fd}, "dir_fd")
             (aside / "child").unlink()
             (aside / "nested" / "removed").unlink()
             raise failure("partial cleanup")
@@ -5370,11 +5579,12 @@ def test_cleaning_aside_rejects_recreated_user_data(
     original_remove = install.remove
     consumed: list[Path] = []
 
-    def interrupted(path: Path) -> None:
+    def interrupted(path: Path, *, anchors: AnchoredStore | None = None) -> None:
         """Interrupt after deletion, before completion is journaled.
 
         Parameters:
             path (Path): cleanup operand.
+            anchors (AnchoredStore | None): held parent descriptors.
 
         Returns:
             None: non-aside removals complete normally.
@@ -5382,7 +5592,7 @@ def test_cleaning_aside_rejects_recreated_user_data(
         Raises:
             OSError: the aside was consumed.
         """
-        original_remove(path)
+        original_remove(path, anchors=anchors)
         if ".pi-stack-restore-" in path.name:
             consumed.append(path)
             raise OSError("cleanup interrupted after removal")
@@ -5617,6 +5827,8 @@ def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
     "module",
     [
         "test_install.py",
+        "test_install_ancestors.py",
+        "../harness/install_paths.py",
         "test_release.py",
         "test_installer_process.py",
         "test_promotion.py",
@@ -5625,10 +5837,10 @@ def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
     ],
 )
 def test_test_helpers_have_typed_contracts(module: str) -> None:
-    """Keep helper and nested callback contracts consistent across all installer test modules.
+    """Keep installer test helpers and the descriptor owner's typed contracts consistent.
 
     Parameters:
-        module (str): test module to inspect independently of production code.
+        module (str): test/helper module path relative to the installer test directory.
 
     Returns:
         None: every helper documents typed inputs and its result or failure contract.
@@ -5893,7 +6105,9 @@ def configure_tool_interpreters(
         monkeypatch.setenv("PATH", f"{decoy}{os.pathsep}./bin{os.pathsep}{os.defpath}")
 
 
-def shim_stage_core(verified: Verified, prefix: Path, staging: Path, npm: str) -> Path:
+def shim_stage_core(
+    verified: Verified, prefix: Path, staging: Path, npm: str, *, anchors: AnchoredStore
+) -> Path:
     """Exercise the real runtime npm child boundary with a recording executable.
 
     Parameters:
@@ -5901,11 +6115,12 @@ def shim_stage_core(verified: Verified, prefix: Path, staging: Path, npm: str) -
         prefix (Path): staged core destination.
         staging (Path): scratch config/cache location.
         npm (str): preflight-selected native npm dispatcher.
+        anchors (AnchoredStore): transaction parents; the prefix is anchored at creation.
 
     Returns:
         Path: modeled staged core executable.
     """
-    prefix.mkdir(parents=True)
+    anchors.directory(prefix, create=True)
     runtime_lock.run_npm(
         npm,
         ["ci", "--offline", "--ignore-scripts", "--prefix", str(prefix)],
