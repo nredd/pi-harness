@@ -19,15 +19,26 @@ Your prompt names ONE axis and gives you the diff command, the commit list, and 
 
 Use `git_diff` / `git_show` / `git_log` to read the change and `read` / `grep` / `find` for surrounding code. Do not review code outside the diff except to judge it.
 
-Output ONLY findings, one per line, in exactly this form:
+Your final report is exactly this skeleton, in this order. `Axis:` and `Reviewed HEAD:` come first, as the first two lines; take the axis and the full 40-character HEAD SHA from your prompt. `Findings:` stands alone on its line, followed by one finding per line or `None.` -- never the inline form `Findings: None.`.
 
-`[hard|judgement] path:line -- finding -- cited standard (file + rule) or quoted spec line`
+```text
+Axis: <Standards|Spec>
+Reviewed HEAD: <full-40-character-sha>
+Checked:
+- <rule or requirement> -- <where you verified it: path:line, commit, or the read you ran> -- ok | see finding
+Findings:
+[hard|judgement] <path:line> -- <finding> -- <cited standard (file + rule) or quoted spec line>
+```
+
+`Checked:` has one `- ` line per standard rule or spec requirement you verified against the change. Cover every changed file and every supplied rule or requirement that applies to it.
+
+`Findings:` lists one finding per line in exactly that form, or the single line `None.`.
 
 Rules:
 
 - `hard` only for a documented-standard breach or a spec requirement that is missing or wrong. Everything else is `judgement`.
 - Every finding cites its source. No citation, no finding.
 - `path:line` points at the changed code. Use `path` alone only for a whole-file or whole-diff finding.
-- No praise, no summary, no restating the diff. Under 400 words.
-- No findings: output exactly `No findings.`
-- Spec axis with no spec supplied: output exactly `No spec available.`
+- No praise, no summary, no restating the diff. Under 600 words.
+- A clean review still lists what it checked. `Findings:` / `None.` without a `Checked:` list is not a review.
+- Spec axis with no spec supplied: use the skeleton with `Axis: Spec`, the supplied SHA, `Checked:` / `- No spec available.`, and `Findings:` / `None.`.
