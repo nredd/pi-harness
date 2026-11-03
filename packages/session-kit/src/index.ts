@@ -35,7 +35,7 @@ type Register = (pi: ExtensionAPI, config: KitConfig, options: SessionKitOptions
 
 const MODULES: Record<Feature, Register> = {
 	titles: registerTitles,
-	rules: (pi, config, options) => registerRules(pi, config, resolveAgentDir(options), options.homeDir),
+	rules: registerRules,
 	goal: (pi, config, options) => registerGoal(pi, config, options.clock),
 	loop: (pi, config, options) => registerLoop(pi, config, options.clock),
 	monitor: (pi, config, options) =>

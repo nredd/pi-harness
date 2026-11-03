@@ -6,7 +6,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { agentDir } from "./agent-dir.ts";
 
@@ -79,7 +78,8 @@ export function resolveCollapseKey(raw: unknown): string {
 	return isValidKeySpec(key) ? key : DEFAULT_COLLAPSE_KEY;
 }
 
-export function configPath(directory?: string, homeDir = homedir()): string {
+/** An explicit `directory` wins; otherwise the agent directory under `homeDir` (or the native home). */
+export function configPath(directory?: string, homeDir?: string): string {
 	return join(directory ?? agentDir(homeDir), "pi-session-kit.json");
 }
 

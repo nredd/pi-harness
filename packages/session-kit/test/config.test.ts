@@ -1,5 +1,5 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { agentDir } from "../src/agent-dir.ts";
@@ -16,9 +16,16 @@ import {
 } from "../src/config.ts";
 import { fakePi } from "./goal/fake-pi.ts";
 
+vi.mock("node:os", async (importOriginal) => {
+	const os = await importOriginal<typeof import("node:os")>();
+	return { ...os, homedir: vi.fn(os.homedir) };
+});
+
 describe("parseConfig", () => {
 	it("builds the config path from an injected agent directory", () => {
+		vi.mocked(homedir).mockClear();
 		expect(configPath("/isolated/agent")).toBe("/isolated/agent/pi-session-kit.json");
+		expect(homedir).not.toHaveBeenCalled();
 	});
 	it("derives all default config paths from an injected home", () => {
 		expect(agentDir("/isolated/home")).toBe("/isolated/home/.pi/agent");
