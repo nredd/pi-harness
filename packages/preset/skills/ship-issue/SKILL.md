@@ -101,10 +101,15 @@ ship on a gate you did not actually run -- "the imports resolved" is not evidenc
 
 ## 7. Review round -- exact final HEAD
 
-After the gate, run one dedicated `critic` and use `/skill:code-review` for the separate Standards
-and Spec axes. The shared skill selects parent background versus delegated blocking calls, supplies
-both full SHAs and the original whole-PR range, and renews it after a HEAD change. Pass the issue/spec
-and repo rules; do not use the ambiguous `/code-review` workflow command.
+After the gate, use `/skill:code-review` for the separate Standards and Spec axes. Run one dedicated
+`critic` only when your actual allowed-subagent list permits it. A delegated worker restricted to
+`code-reviewer` opens the PR and returns the original axis reports and concrete handles with
+`Parent critic: PENDING`. Keep permissions unchanged. The parent must run its independent
+final-HEAD critic BEFORE merge admission, even if a permitted worker ran one.
+
+The shared skill selects parent background versus delegated blocking calls, supplies both full SHAs
+and the original whole-PR range, and renews it after a HEAD change. Pass the issue/spec and repo
+rules; do not use the ambiguous `/code-review` workflow command.
 
 The critic is supplementary, never a substitute for either axis. It is read-only and already
 carries the refute-before-report rule, so name the final diff and issue only. Its receipt preserves
@@ -115,7 +120,7 @@ the parent-owned final critic. A parent driver consumes its own final-HEAD criti
 hand that responsibility to itself or repeat an unchanged review merely to change its label.
 
 - Fix every real blocking finding, rerun the affected gate, and push the follow-up
-- Every change to HEAD invalidates the critic and both review axes. Re-run all three on the final SHA
+- Every change to HEAD invalidates the critic and both review axes. Renew both axes and every permitted critic on the final SHA; a restricted worker leaves the parent critic explicitly PENDING
 - Record reviewer identities/models, reviewed SHA, and `Checked:`/`Findings:` reports for the two axes; record the critic's original SHA-bound invocation, tool-routing metadata, native output, and each finding disposition
 - Document a concrete rationale for any retained judgement finding
 
@@ -131,7 +136,7 @@ Body, in order:
   dotted module path
 - `Verification:` plus prose bullets carrying REAL command output. Fence it when long. Test
   counts, coverage numbers, and actual failure transcripts, not "tests pass"
-- Exact-HEAD Standards and Spec receipts with `Checked:`/`Findings:`, plus the critic's original SHA-bound invocation, tool-routing metadata, native output, and finding dispositions
+- Exact-HEAD Standards and Spec receipts with `Checked:`/`Findings:`, plus the permitted critic's original SHA-bound invocation, tool-routing metadata, native output, and finding dispositions; otherwise `Parent critic: PENDING` with concrete review handles
 - The continuation record: PR URL, final SHA, concrete CI run IDs or commands, and its owner. A delegated worker names the parent; a parent driver keeps ownership
 - The `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer
 

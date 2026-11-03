@@ -147,8 +147,11 @@ and one full reviewed HEAD, binds both axis diffs and prompts to that entire ran
 reports if HEAD changes. Renewed axes retain the original base through the new final HEAD; corrective
 deltas are supplemental only. Top-level parents
 launch the separate Standards and Spec `code-reviewer` calls without a model override; delegated
-workers use blocking calls and consume their inline results. `ship-issue` uses one supplementary
-critic and requires the continuing parent to run its independent final critic after exact-HEAD review.
+workers use blocking calls and consume their inline results. Verified absence of a spec still
+invokes the Spec reviewer, which returns its SHA-bound `- No spec available.` receipt. `ship-issue`
+runs one supplementary critic only when the caller's allowed-subagent list permits it; a worker
+restricted to `code-reviewer` keeps its permissions and returns `Parent critic: PENDING`. Either way
+the continuing parent runs its independent final critic after exact-HEAD review.
 Parent sessions keep ownership through the single PR's terminal outcome; auto-merge is permitted
 only when applicable protection is readable, effective and not bypassable by the merging caller.
 Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.

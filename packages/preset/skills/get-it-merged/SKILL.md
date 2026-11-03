@@ -28,8 +28,8 @@ One pass, before touching anything. Scope is the full requested set, not the fir
 - Live CI: record concrete run IDs and states
 
 Disable any armed auto-merge before a PR's HEAD changes, then renew every review from the preserved original merge-base through the new full HEAD; corrective-delta reviews are supplemental only.
-Use native session-kit monitors (`monitor_start`) for passive waiting, including bounded-interval
-pollers. Keep model turns and subagents for substantive work, not repeated status polling.
+Parent only: use native session-kit monitors (`monitor_start`) for passive waiting, including bounded-interval
+pollers. A worker returns the proposed monitor command instead. Keep model turns and subagents for substantive work, not repeated status polling.
 
 ## 2. Order candidates
 

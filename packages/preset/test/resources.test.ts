@@ -222,12 +222,14 @@ const drivesWholeList = (policy: string): boolean => {
 	);
 };
 
+const assertNoForcedModel = (text: string): void => assert.doesNotMatch(text, /\bmodel\s*:\s*\S/);
+
 test("shipping resources require exact-HEAD review, parent monitoring, and no forced model or unpinned auto-merge", () => {
 	const review = readText("skills/code-review/SKILL.md");
 	const ship = readText("skills/ship-issue/SKILL.md");
 	const merge = readText("skills/get-it-merged/SKILL.md");
 	for (const text of [review, ship, merge]) {
-		assert.doesNotMatch(text, /model:\s*"/);
+		assertNoForcedModel(text);
 		for (const line of text.split("\n").filter((l) => /gh pr merge\b[^\n]*--auto\b/.test(l))) {
 			assert.match(line, /--match-head-commit/, `unpinned auto-merge: ${line}`);
 		}
@@ -248,7 +250,7 @@ test("shipping resources require exact-HEAD review, parent monitoring, and no fo
 	assert.match(ship, /original SHA-bound invocation, tool-routing metadata, native output/);
 });
 
-test("code-reviewer template is the literal skeleton the receipt parser accepts", () => {
+test("code-reviewer template documents the required receipt syntax", () => {
 	const reviewer = readText("agents/code-reviewer.md");
 	assert.match(reviewer, /`Checked:` has one `- ` line per standard rule or spec requirement/);
 	assert.match(reviewer, /A clean review still lists what it checked/);
@@ -541,7 +543,34 @@ test("single-issue parents retain terminal ownership and nested reviews use bloc
 	};
 	assert.match(reviews, /use `\/skill:code-review` for the separate Standards/);
 	assert.match(reviews, /shared skill selects parent background versus delegated blocking calls/);
-	assert.match(reviews, /both full SHAs and the original whole-PR range/);
+	assert.match(reviews, /both full SHAs\s+and the original whole-PR range/);
 	assert.ok(retainsOwner(ship));
 	assert.ok(!retainsOwner(ship.replace(/^- Parent completion:[^\n]*\n/m, "")));
+});
+
+// Exercise role-aware callers, including forbidden regressions in the real resource text.
+const composedCallers = (ship: string, review: string) =>
+	ship.includes("only when your actual allowed-subagent list permits it") &&
+	ship.includes("Parent critic: PENDING") &&
+	/The parent must run its independent\s+final-HEAD critic BEFORE merge admission/.test(ship) &&
+	review.includes("Always invoke the Spec sub-agent.") &&
+	review.includes('explicitly supply "No spec available."') &&
+	!/skip the Spec sub-agent/.test(review);
+
+test("composed callers preserve restricted workers and verified no-spec dual axes", () => {
+	const ship = readText("skills/ship-issue/SKILL.md");
+	const review = readText("skills/code-review/SKILL.md");
+	assert.ok(composedCallers(ship, review));
+	const mutate = (text: string, from: string, to: string) => {
+		assert.ok(text.includes(from), `fixture drift: ${from}`);
+		return text.split(from).join(to);
+	};
+	assert.ok(
+		!composedCallers(mutate(ship, "only when your actual allowed-subagent list permits it", "unconditionally"), review),
+	);
+	assert.ok(!composedCallers(mutate(ship, "Parent critic: PENDING", "critic done"), review));
+	assert.ok(!composedCallers(ship, mutate(review, "Always invoke the Spec sub-agent.", "skip the Spec sub-agent")));
+	for (const override of ["model: opus", 'model: "sonnet"']) {
+		assert.throws(() => assertNoForcedModel(`${ship}\n${override}`));
+	}
 });

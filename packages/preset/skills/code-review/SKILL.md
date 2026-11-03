@@ -29,7 +29,7 @@ Look for the originating spec, in this order:
 1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.), fetched via the workflow in `docs/agents/issue-tracker.md`.
 2. A path the user passed as an argument.
 3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
-4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+4. If nothing is found, ask the user where the spec is. If they confirm there is none, record that verified absence and still invoke the **Spec** sub-agent.
 
 ### 3. Identify the standards sources
 
@@ -69,7 +69,7 @@ A top-level parent spawns two `Agent` calls in one message, both `subagent_type:
 - The full original reviewed-base SHA, full reviewed HEAD SHA, and immutable whole-PR diff command and commit list bound to both.
 - The path or fetched contents of the spec, with line numbers so findings can quote them.
 
-If the spec is missing, skip the Spec sub-agent and note this in the final report.
+Always invoke the Spec sub-agent. When absence is verified in step 2, explicitly supply "No spec available." and the full reviewed HEAD so it returns the authentic SHA-bound no-spec skeleton. An unlocated spec without confirmation is not verified absence; ask before dispatch. A delegated worker asks its parent for that confirmation rather than claiming absence.
 
 If a sub-agent returns something that does not match the template (including a bare verdict with no `Checked:` list), report it verbatim under its axis, say so, and re-run that axis; do not reformat or re-derive findings.
 
