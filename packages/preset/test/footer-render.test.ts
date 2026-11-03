@@ -174,7 +174,8 @@ it("uses USERPROFILE then the OS home when HOME is empty", () => {
 		"~/project",
 	);
 	expect(formatCwd(join(homedir(), "project"), undefined, { HOME: "", USERPROFILE: "" })).toBe("~/project");
-	expect(formatCwd("/private/fixture/project", "")).toBe("/private/fixture/project");
+	// An explicit empty home disables `~` even when the cwd sits under the environment home.
+	expect(formatCwd("/private/fixture/project", "", { HOME: "/private/fixture" })).toBe("/private/fixture/project");
 });
 
 it("cwd branch session and sorted sanitized statuses preserve their rows", async () => {
