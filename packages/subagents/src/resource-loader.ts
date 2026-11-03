@@ -1,5 +1,5 @@
 /** Normalize explicit settings paths before Pi's real package manager resolves them. */
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager, DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { normalizeHomePath } from "./home-paths.js";
 
 type ResourceLoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
@@ -35,10 +35,10 @@ export function normalizeResourceSettings(settings: ResourceSettings, homeDir: s
   return normalized;
 }
 
-/** Use the real loader/manager while preventing ambient-home expansion of explicit settings. */
-export function createHomeResourceLoader(options: ResourceLoaderOptions, homeDir?: string): DefaultResourceLoader {
-  if (homeDir === undefined) return new DefaultResourceLoader(options);
-  const settingsManager = options.settingsManager ?? SettingsManager.create(options.cwd, options.agentDir);
+type PackageManagerOptions = ConstructorParameters<typeof DefaultPackageManager>[0];
+
+/** Wrap settings readers once so Pi receives injected-home resource paths. */
+function normalizeHomeResourceSettings(settingsManager: SettingsManager, homeDir: string): SettingsManager {
   const globalSettings = settingsManager.getGlobalSettings.bind(settingsManager);
   const projectSettings = settingsManager.getProjectSettings.bind(settingsManager);
   // Wrap the public readers, not a cached snapshot: reload and project-trust
@@ -47,5 +47,18 @@ export function createHomeResourceLoader(options: ResourceLoaderOptions, homeDir
     getGlobalSettings: () => normalizeResourceSettings(globalSettings(), homeDir),
     getProjectSettings: () => normalizeResourceSettings(projectSettings(), homeDir),
   });
-  return new DefaultResourceLoader({ ...options, settingsManager });
+  return settingsManager;
+}
+
+/** Build Pi's package manager with injected-home settings normalization. */
+export function createHomePackageManager(options: PackageManagerOptions, homeDir?: string): DefaultPackageManager {
+  if (homeDir === undefined) return new DefaultPackageManager(options);
+  return new DefaultPackageManager({ ...options, settingsManager: normalizeHomeResourceSettings(options.settingsManager, homeDir) });
+}
+
+/** Use the real loader/manager while preventing ambient-home expansion of explicit settings. */
+export function createHomeResourceLoader(options: ResourceLoaderOptions, homeDir?: string): DefaultResourceLoader {
+  if (homeDir === undefined) return new DefaultResourceLoader(options);
+  const settingsManager = options.settingsManager ?? SettingsManager.create(options.cwd, options.agentDir);
+  return new DefaultResourceLoader({ ...options, settingsManager: normalizeHomeResourceSettings(settingsManager, homeDir) });
 }

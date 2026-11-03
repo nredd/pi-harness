@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { normalizeResourceSettings } from "../src/resource-loader.js";
+import { hermeticDir } from "./helpers/boot-extension.js";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const helper = fileURLToPath(new URL("./helpers/real-loader-home.ts", import.meta.url));
@@ -71,6 +72,100 @@ describe("real resource-loader settings home", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+  }
+});
+
+it("keeps ambient user skill content out of an injected-home preload", () => {
+  const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+  const ambient = join(root, "ambient");
+  mkdirSync(ambient);
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: ambient, USERPROFILE: ambient, XDG_CONFIG_HOME: join(ambient, ".config"), PI_OFFLINE: "1", PI_HOME_FIXTURE_ROOT: root, PI_HOME_FIXTURE_MODE: "preload", PI_HOME_FIXTURE_SCOPE: "global" };
+  delete env.PI_CODING_AGENT_DIR;
+  delete env.PI_CODING_AGENT_SESSION_DIR;
+  try {
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 30000 });
+    expect(child.status, child.stdout + child.stderr).toBe(0);
+    const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+    expect(result.runtime).toBe(process.versions.bun ?? "node");
+    // The decoy is the only skill with this name: any ambient leak would read as its text.
+    expect(result.content).toContain("not found");
+    expect(result.content).not.toContain("AMBIENT-SKILL");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("builds a real child prompt from the injected private package, not an ambient decoy", () => {
+  const fixture = hermeticDir();
+  const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+  const ambient = join(root, "ambient");
+  mkdirSync(ambient);
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: ambient, USERPROFILE: ambient, XDG_CONFIG_HOME: join(ambient, ".config"), PI_OFFLINE: "1", PI_HOME_FIXTURE_ROOT: root, PI_HOME_FIXTURE_MODE: "child", PI_HOME_FIXTURE_SCOPE: "global" };
+  delete env.PI_CODING_AGENT_DIR;
+  delete env.PI_CODING_AGENT_SESSION_DIR;
+  try {
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 60000 });
+    expect(child.status, child.stdout + child.stderr).toBe(0);
+    const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+    expect(result.runtime).toBe(process.versions.bun ?? "node");
+    expect(result.childPrompt).toContain("PACKAGED-PRIVATE-SKILL");
+    expect(result.childPrompt).toContain("INJECTED-AGENTS-SKILL");
+    expect(result.childPrompt).toContain("not found");
+    expect(result.childPrompt).not.toContain("AMBIENT-SKILL");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    fixture.restore();
+  }
+});
+
+it("keeps a native-disabled skill out of a real injected-home child prompt", () => {
+  const fixture = hermeticDir();
+  const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+  const ambient = join(root, "ambient");
+  mkdirSync(ambient);
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: ambient, USERPROFILE: ambient, XDG_CONFIG_HOME: join(ambient, ".config"), PI_OFFLINE: "1", PI_HOME_FIXTURE_ROOT: root, PI_HOME_FIXTURE_MODE: "child-disabled", PI_HOME_FIXTURE_SCOPE: "global" };
+  delete env.PI_CODING_AGENT_DIR;
+  delete env.PI_CODING_AGENT_SESSION_DIR;
+  try {
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 60000 });
+    expect(child.status, child.stdout + child.stderr).toBe(0);
+    const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+    expect(result.runtime).toBe(process.versions.bun ?? "node");
+    expect(result.childPrompt).toContain("PACKAGED-PRIVATE-SKILL");
+    expect(result.childPrompt).toContain("INJECTED-AGENTS-SKILL");
+    expect(result.childPrompt).toContain("not found");
+    expect(result.childPrompt).not.toContain("DISABLED-GLOBAL-SKILL");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    fixture.restore();
+  }
+});
+
+it.each(["disabled", "allowed"])("honors a project package %s filter in a private real child behind a rejected alias", filter => {
+  const fixture = hermeticDir();
+  const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+  const ambient = join(root, "ambient");
+  mkdirSync(ambient);
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: ambient, USERPROFILE: ambient, XDG_CONFIG_HOME: join(ambient, ".config"), PI_OFFLINE: "1", PI_HOME_FIXTURE_ROOT: root, PI_HOME_FIXTURE_MODE: `child-package-${filter}`, PI_HOME_FIXTURE_SCOPE: "global" };
+  delete env.PI_CODING_AGENT_DIR;
+  delete env.PI_CODING_AGENT_SESSION_DIR;
+  try {
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 60000 });
+    expect(child.status, child.stdout + child.stderr).toBe(0);
+    const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+    expect(result.runtime).toBe(process.versions.bun ?? "node");
+    expect(result.childPrompt).toContain("INJECTED-AGENTS-SKILL");
+    expect(result.childPrompt).not.toContain("AMBIENT-SKILL");
+    if (filter === "allowed") {
+      expect(result.childPrompt).toContain("PACKAGED-PRIVATE-SKILL");
+      expect(result.childPrompt).not.toContain('Skill \\"packaged\\" not found');
+    } else {
+      expect(result.childPrompt).not.toContain("PACKAGED-PRIVATE-SKILL");
+      expect(result.childPrompt).toContain('Skill \\"packaged\\" not found');
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    fixture.restore();
   }
 });
 

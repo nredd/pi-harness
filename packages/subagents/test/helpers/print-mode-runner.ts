@@ -62,6 +62,7 @@ import {
   type AgentSessionEvent,
   createAgentSession,
   DefaultResourceLoader,
+  type ExtensionFactory,
   getAgentDir,
   SessionManager,
   SettingsManager,
@@ -140,6 +141,11 @@ export interface RunPrintModeOptions {
   signal?: AbortSignal;
   /** Additional extension paths loaded only for this test run. */
   extensionPaths?: string[];
+  /**
+   * Load this factory instead of the default-path extension, e.g. a
+   * `createSubagentsExtension({ homeDir })` bound to an injected home.
+   */
+  subagentsFactory?: ExtensionFactory;
   /** Called once after the real parent session is created and extensions are bound. */
   onParentSession?: (session: AgentSession, manager: ManagerHandle | undefined) => void;
   /**
@@ -348,7 +354,8 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
-    additionalExtensionPaths: [EXTENSION_PATH, ...(options.extensionPaths ?? [])],
+    additionalExtensionPaths: [...(options.subagentsFactory ? [] : [EXTENSION_PATH]), ...(options.extensionPaths ?? [])],
+    ...(options.subagentsFactory ? { extensionFactories: [options.subagentsFactory] } : {}),
     systemPromptOverride: () => options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
     appendSystemPromptOverride: () => [],
     noPromptTemplates: true,
