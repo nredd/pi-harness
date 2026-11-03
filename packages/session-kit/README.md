@@ -41,9 +41,12 @@ Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
 }
 ```
 
-Every module defaults on. Malformed config reports a diagnostic and uses defaults. SDK hosts can use
-`createSessionKit({ config, agentDir, monitorRoot })` from `src/index.ts`: explicit `config` avoids
-loading the config file, `agentDir` scopes config/rules/title aliases, and `monitorRoot` isolates
+Every module defaults on. Malformed config reports a diagnostic and uses defaults. Config, rules,
+title aliases and stats share one call-time agent-directory resolver, preserving the environment override.
+SDK hosts can use
+`createSessionKit({ config, agentDir, homeDir, monitorRoot })` from `src/index.ts`: explicit `config` avoids
+loading the config file, `agentDir` scopes config/rules/title aliases, `homeDir` derives those paths and stats
+cache/session defaults when no agent directory is supplied, and `monitorRoot` isolates
 monitor pidfiles and orphan sweeps. Optional `clock` (`now`, cancellable `setTimeout`/`setInterval`)
 and `spawnMonitor` seams control scheduling and child lifetime in SDK tests; the real manager,
 ring, coalescer, regex worker and host follow-up queue still run. Controlled stdout callbacks resolve
@@ -245,12 +248,13 @@ tabs and exact provider totals remain covered at every width. Each stats-view bo
 and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
 Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
 workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
-Native `STAY` fixtures share a worker-death guard that kills only their own live process group
-when their parent changes; production commands and leader/descendant probes are not modified.
+Native `STAY` fixtures exit themselves when their parent changes and signal nothing. Only the
+worker-death fixture uses `STAY_GROUP`, which SIGKILLs its own detached group, addressed by its own
+pid; production commands and leader/descendant probes are not modified.
 Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
-Vitest regression covers both a SIGKILLed worker and a failed assertion (via the fixture's own
-`afterEach` dispose) and observes both the detached `STAY` leader and an in-group descendant
-disappearing. Liveness there is read from process state, so an unreaped zombie (non-reaping PID 1)
+Vitest regression, given its own isolated `HOME` since it bypasses `scripts/run-vitest.ts`, covers
+both a SIGKILLed worker and a failed assertion (via the fixture's own `afterEach` dispose) and
+observes both the detached `STAY_GROUP` leader and an in-group descendant disappearing. Liveness there is read from process state, so an unreaped zombie (non-reaping PID 1)
 counts as dead.
 Native stop/dispose checks assert direct children are reaped when the operation resolves, then
 observe orphaned descendants disappearing with the existing bounded liveness check. Leader exit

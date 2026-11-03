@@ -11,7 +11,8 @@ import { builtinTool, createMockContext, createMockPi } from "./support.js";
 const CWD = join(homedir(), "code", "pi-plan-mode");
 const TRUSTED = ["~/code", "~/.local/share/chezmoi"];
 const SAFE = { ssh: ["home"] };
-const check = (command: string) => isSafeCommand(command, SAFE, CWD, "darwin", TRUSTED);
+const POLICY = { workingDirectory: CWD, platform: "darwin", trustedDirectories: TRUSTED } as const;
+const check = (command: string) => isSafeCommand(command, SAFE, POLICY);
 
 test("the allow/block table holds with trusted directories and the ssh prefix", () => {
   for (const command of [
@@ -34,7 +35,7 @@ test("the allow/block table holds with trusted directories and the ssh prefix", 
     "curl -X GET https://x",
     "curl --request GET https://x",
   ]) {
-    assert.equal(findBlockedCommandSegment(command, SAFE, CWD, "darwin", TRUSTED), undefined, `allow: ${command}`);
+    assert.equal(findBlockedCommandSegment(command, SAFE, POLICY), undefined, `allow: ${command}`);
   }
   for (const command of [
     "cd .. && ls",
@@ -49,15 +50,15 @@ test("the allow/block table holds with trusted directories and the ssh prefix", 
     "curl https://x -o ~/.zshrc",
     "sed -i s/a/b/ f",
   ]) {
-    assert.notEqual(findBlockedCommandSegment(command, SAFE, CWD, "darwin", TRUSTED), undefined, `block: ${command}`);
+    assert.notEqual(findBlockedCommandSegment(command, SAFE, POLICY), undefined, `block: ${command}`);
   }
 });
 
 test("blocked diagnostics name the offending segment", () => {
-  assert.equal(findBlockedCommandSegment("cd ~/code/pi && rm x", SAFE, CWD, "darwin", TRUSTED), "rm x");
-  assert.equal(findBlockedCommandSegment("ssh home ls; rm x", SAFE, CWD, "darwin", TRUSTED), "rm x");
-  assert.equal(findBlockedCommandSegment("cd /tmp && git status", SAFE, CWD, "darwin", TRUSTED), "cd /tmp");
-  assert.equal(findBlockedCommandSegment("ssh home rm -rf ~", SAFE, CWD, "darwin", TRUSTED), "ssh home rm -rf ~");
+  assert.equal(findBlockedCommandSegment("cd ~/code/pi && rm x", SAFE, POLICY), "rm x");
+  assert.equal(findBlockedCommandSegment("ssh home ls; rm x", SAFE, POLICY), "rm x");
+  assert.equal(findBlockedCommandSegment("cd /tmp && git status", SAFE, POLICY), "cd /tmp");
+  assert.equal(findBlockedCommandSegment("ssh home rm -rf ~", SAFE, POLICY), "ssh home rm -rf ~");
 });
 
 test("cd accepts a single plain path under the cwd or a trusted directory and nothing else", () => {
@@ -80,9 +81,13 @@ test("cd accepts a single plain path under the cwd or a trusted directory and no
   }
   assert.equal(check(`cd ${join(homedir(), "code", "pi")} && git status`), true);
   assert.equal(check("cd ~/code/pi; git status"), true);
-  assert.equal(isSafeCommand("cd src", {}, CWD, "darwin", []), true);
-  assert.equal(isSafeCommand("cd ~/code/pi", {}, CWD, "darwin", []), false, "no trusted directories configured");
-  assert.equal(isSafeCommand("cd src", {}, undefined, "darwin", []), false, "no cwd and no trusted directory");
+  assert.equal(isSafeCommand("cd src", {}, { workingDirectory: CWD, platform: "darwin" }), true);
+  assert.equal(
+    isSafeCommand("cd ~/code/pi", {}, { workingDirectory: CWD, platform: "darwin" }),
+    false,
+    "no trusted directories configured",
+  );
+  assert.equal(isSafeCommand("cd src", {}, { platform: "darwin" }), false, "no cwd and no trusted directory");
 });
 
 test("cd moves the base for relative git -C paths", () => {
@@ -106,12 +111,18 @@ test("git -C rejects unsafe globals even under trusted directories", () => {
 });
 
 test("PowerShell git -C honors trusted directories", () => {
-  assert.equal(isSafePowerShellCommand("git -C ~/code/pi log", {}, CWD, TRUSTED), true);
-  assert.equal(isSafePowerShellCommand("git -C /tmp log", {}, CWD, TRUSTED), false);
+  assert.equal(
+    isSafePowerShellCommand("git -C ~/code/pi log", {}, { workingDirectory: CWD, trustedDirectories: TRUSTED }),
+    true,
+  );
+  assert.equal(
+    isSafePowerShellCommand("git -C /tmp log", {}, { workingDirectory: CWD, trustedDirectories: TRUSTED }),
+    false,
+  );
 });
 
 test("ssh needs a configured prefix and re-validates the remote command", () => {
-  assert.equal(isSafeCommand("ssh home ls", {}, CWD, "darwin", TRUSTED), false, "no prefix configured");
+  assert.equal(isSafeCommand("ssh home ls", {}, POLICY), false, "no prefix configured");
   for (const command of [
     "ssh home",
     "ssh other ls",
@@ -152,7 +163,11 @@ test("gh api is GET only", () => {
     assert.equal(check(command), false, command);
   }
   assert.equal(check("gh api repos/x -H 'Accept: x' -i"), true);
-  assert.equal(isSafeCommand("gh api -X DELETE repos/x", { gh: ["api"] }, CWD), false, "a prefix cannot unlock writes");
+  assert.equal(
+    isSafeCommand("gh api -X DELETE repos/x", { gh: ["api"] }, { workingDirectory: CWD }),
+    false,
+    "a prefix cannot unlock writes",
+  );
 });
 
 test("curl rejects output, data, upload, config, and non-GET flags", () => {
@@ -194,7 +209,11 @@ test("curl rejects output, data, upload, config, and non-GET flags", () => {
   }
   assert.equal(check("curl -s https://x | head -5"), true);
   assert.equal(check("curl -s https://x | jq .name"), true);
-  assert.equal(isSafeCommand("curl -o f https://x", { curl: [""] }, CWD), false, "a prefix cannot unlock output");
+  assert.equal(
+    isSafeCommand("curl -o f https://x", { curl: [""] }, { workingDirectory: CWD }),
+    false,
+    "a prefix cannot unlock output",
+  );
 });
 
 test("sed -i stays blocked while rg/grep -i stay allowed", () => {

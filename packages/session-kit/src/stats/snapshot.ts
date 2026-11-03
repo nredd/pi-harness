@@ -2,16 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import {
-	agentDir,
-	cachePath,
-	dedupCalls,
-	type Loaded,
-	loadUsage,
-	mergeSessionMetadata,
-	opaqueId,
-	sessionsDir,
-} from "./load.ts";
+import { agentDir } from "../agent-dir.ts";
+import { cachePath, dedupCalls, type Loaded, loadUsage, mergeSessionMetadata, opaqueId, sessionsDir } from "./load.ts";
 
 export const SNAPSHOT_VERSION = 1;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;

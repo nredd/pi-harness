@@ -37,10 +37,11 @@ function formatTokens(count: number): string {
 }
 
 /** Replace home directory with ~. Mirrors the stock footer's formatCwdForFooter. */
-function formatCwd(cwd: string, home: string | undefined): string {
-	if (!home) return cwd;
+export function formatCwd(cwd: string, home?: string, environment: NodeJS.ProcessEnv = process.env): string {
+	const resolvedHomeInput = home === undefined ? environment.HOME || environment.USERPROFILE || homedir() : home;
+	if (!resolvedHomeInput) return cwd;
 	const resolvedCwd = resolve(cwd);
-	const resolvedHome = resolve(home);
+	const resolvedHome = resolve(resolvedHomeInput);
 	const relativeToHome = relative(resolvedHome, resolvedCwd);
 	const isInsideHome =
 		relativeToHome === "" ||
@@ -95,8 +96,11 @@ const realClock: FooterClock = {
 /**
  * Mount the expanded footer; omitted options preserve the real clock and timers.
  * `timeZone` (IANA) only pins the quota reset labels; default is the process-local zone.
+ * `homeDir` pins cwd presentation for SDK hosts without mutating process environment.
  */
-export function createExpandedFooter(options: { clock?: FooterClock; timeZone?: string } = {}): ExtensionFactory {
+export function createExpandedFooter(
+	options: { clock?: FooterClock; timeZone?: string; homeDir?: string } = {},
+): ExtensionFactory {
 	const clock = options.clock ?? realClock;
 	return (pi: ExtensionAPI) => {
 		let stopQuota: (() => void) | undefined;
@@ -153,7 +157,7 @@ export function createExpandedFooter(options: { clock?: FooterClock; timeZone?: 
 					invalidate() {},
 					render(width: number): string[] {
 						// --- Line 1: cwd / branch / session name (unchanged from stock) ---
-						let pwd = formatCwd(ctx.cwd, process.env.HOME || process.env.USERPROFILE || homedir());
+						let pwd = formatCwd(ctx.cwd, options.homeDir);
 						const branch = footerData.getGitBranch();
 						if (branch) pwd = `${pwd} (${branch})`;
 						const sessionName = ctx.sessionManager.getSessionName();

@@ -4,6 +4,7 @@
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { resolveAgentDir } from "./agent-dir.ts";
 import type { Clock } from "./clock.ts";
 import { configPath, type Feature, type KitConfig, loadConfig } from "./config.ts";
 import { register as registerDiff } from "./diff/index.ts";
@@ -21,6 +22,8 @@ import { register as registerTitles } from "./titles/index.ts";
 export interface SessionKitOptions {
 	config?: KitConfig;
 	agentDir?: string;
+	/** Home for user-scoped defaults when an agent directory is not supplied. */
+	homeDir?: string;
 	monitorRoot?: string;
 	/** Time for stats ranges, loops, goal wakes, monitor batching/timeouts and /mon cadence. Defaults to real time. */
 	clock?: Clock;
@@ -31,8 +34,8 @@ export interface SessionKitOptions {
 type Register = (pi: ExtensionAPI, config: KitConfig, options: SessionKitOptions) => void;
 
 const MODULES: Record<Feature, Register> = {
-	titles: (pi, config, options) => registerTitles(pi, config, options.agentDir),
-	rules: (pi, config, options) => registerRules(pi, config, options.agentDir),
+	titles: registerTitles,
+	rules: registerRules,
 	goal: (pi, config, options) => registerGoal(pi, config, options.clock),
 	loop: (pi, config, options) => registerLoop(pi, config, options.clock),
 	monitor: (pi, config, options) =>
@@ -45,7 +48,7 @@ const MODULES: Record<Feature, Register> = {
 /** Create the real kit without requiring a machine-local agent configuration. */
 export function createSessionKit(options: SessionKitOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
-		const config = options.config ?? loadConfig(configPath(options.agentDir));
+		const config = options.config ?? loadConfig(configPath(resolveAgentDir(options)));
 		for (const [feature, register] of Object.entries(MODULES) as [Feature, Register][]) {
 			if (config.features[feature]) register(pi, config, options);
 		}

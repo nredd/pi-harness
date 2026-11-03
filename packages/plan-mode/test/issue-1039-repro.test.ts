@@ -140,14 +140,14 @@ test("issue 1039: reviewed git -C inspections stay in Pi's working directory", a
     `git -C ${quotedWorkingDirectory} status --short`,
     "git -C packages status --short",
   ]) {
-    assert.equal(isSafeCommand(command, {}, workingDirectory), true, `Bash: ${command}`);
-    assert.equal(isSafePowerShellCommand(command, {}, workingDirectory), true, `PowerShell: ${command}`);
+    assert.equal(isSafeCommand(command, {}, { workingDirectory }), true, `Bash: ${command}`);
+    assert.equal(isSafePowerShellCommand(command, {}, { workingDirectory }), true, `PowerShell: ${command}`);
   }
   const configured = "git -C . rev-parse --show-toplevel";
-  assert.equal(isSafeCommand(configured, {}, workingDirectory), false);
-  assert.equal(isSafePowerShellCommand(configured, {}, workingDirectory), false);
-  assert.equal(isSafeCommand(configured, { git: ["rev-parse"] }, workingDirectory), true);
-  assert.equal(isSafePowerShellCommand(configured, { git: ["rev-parse"] }, workingDirectory), true);
+  assert.equal(isSafeCommand(configured, {}, { workingDirectory }), false);
+  assert.equal(isSafePowerShellCommand(configured, {}, { workingDirectory }), false);
+  assert.equal(isSafeCommand(configured, { git: ["rev-parse"] }, { workingDirectory }), true);
+  assert.equal(isSafePowerShellCommand(configured, { git: ["rev-parse"] }, { workingDirectory }), true);
 
   const fixture = await startPlan({
     activeTools: ["bash", "powershell"],
@@ -176,7 +176,7 @@ test("issue 1039: git -C rejects other repositories and unsafe commands", () => 
     "git -C . log --show-signature -1",
     "git --git-dir=/tmp/repository status",
   ]) {
-    assert.equal(isSafeCommand(command, {}, workingDirectory), false, `Bash: ${command}`);
-    assert.equal(isSafePowerShellCommand(command, {}, workingDirectory), false, `PowerShell: ${command}`);
+    assert.equal(isSafeCommand(command, {}, { workingDirectory }), false, `Bash: ${command}`);
+    assert.equal(isSafePowerShellCommand(command, {}, { workingDirectory }), false, `PowerShell: ${command}`);
   }
 });
