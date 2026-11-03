@@ -342,6 +342,8 @@ It is not a required check and has no docs-only bypass; it only starts when its 
 | --- | --- |
 | `core (forks/pi)` | `npm ci`, the release's model data restored from npm `@earendil-works/pi-ai@<version>` (never the live fetch), `npm run build:offline`, the steps of the fork's `check` with Biome check-only (the step fails if the fork's `check` list changes), the env daemon, `./test.sh` |
 
+`ci.yml` full dispatches call it as `release-core` with no inputs, inheriting CI's context. Dispatches group per SHA and never cancel, so a second dispatch on `main` cannot kill an earlier frozen candidate's core gate; PR and push runs still cancel per ref (`test_dispatched_core_gates_never_cancel_each_other`, `test_forks_callee_contract`).
+
 `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
 
 - `make install-owned` first runs `make verify-root-overrides` (see [releases](releases.md)); `owned`, `contracts`, `stack` (a dedicated step before `npm ci`, plus the core fetch) and `publish.yml` verify pass the read-only job token as `GH_TOKEN` to those steps only, for non-legacy core tags. Hosted Linux and macOS runners ship a `gh` with `attestation`.

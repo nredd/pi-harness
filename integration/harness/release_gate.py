@@ -15,9 +15,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
 
-from harness.promotion import EvidenceError, run_command
+from harness.promotion import SHA_PATTERN, EvidenceError, run_command
 
 LOGGER = logging.getLogger(__name__)
 SYSTEMS = ("ubuntu-24.04", "macos-14", "wsl2")
@@ -56,6 +56,7 @@ class Execution(Origin):
     path: str = Field(description="Workflow source path")
     status: str = Field(description="Execution lifecycle")
     conclusion: str | None = Field(description="Terminal outcome")
+    run_started_at: AwareDatetime = Field(strict=False, description="Start of the current attempt")
 
 
 class Step(Record):
@@ -79,6 +80,19 @@ class Artifact(Record):
     expired: bool = Field(description="Whether bytes remain downloadable")
     size_in_bytes: int = Field(ge=0, description="Retained artifact size")
     workflow_run: Origin = Field(description="Artifact's source run and SHA")
+    created_at: AwareDatetime = Field(strict=False, description="Upload time, bounding the producing attempt")
+
+
+class RunsPage(Record):
+    workflow_runs: list[Origin] = Field(description="Listed candidate executions")
+
+
+class JobsPage(Record):
+    jobs: list[dict[str, Any]] = Field(description="Current-attempt job records")
+
+
+class ArtifactsPage(Record):
+    artifacts: list[dict[str, Any]] = Field(description="Run artifact records")
 
 
 def expected_jobs() -> dict[str, set[str]]:
@@ -183,6 +197,8 @@ def validate_execution(
         and artifact.size_in_bytes > 0
         and artifact.workflow_run.id == execution.id
         and artifact.workflow_run.head_sha == source_sha
+        # The artifacts API has no attempt field; an upload before this attempt started is stale.
+        and artifact.created_at >= execution.run_started_at
     }
     if missing := expected_artifacts() - retained:
         raise ValueError(f"Missing retained full verification artifacts: {sorted(missing)}")
@@ -219,49 +235,56 @@ def require_full_verification(repo: str, source_sha: str) -> int:
         int: Qualifying full verification run ID.
 
     Raises:
-        ValueError: No complete evidence exists. Historical main-smoke runs cannot qualify.
+        ValueError: No complete evidence exists, or a response is malformed. Historical main-smoke
+            runs cannot qualify.
         EvidenceError: GitHub evidence could not be read.
     """
-    if len(source_sha) != 40 or any(char not in "0123456789abcdef" for char in source_sha):
+    if SHA_PATTERN.fullmatch(source_sha) is None:
         raise ValueError("Release candidate must be a full lowercase commit SHA")
     prefix = f"repos/{repo}/actions"
-    pages = api(f"{prefix}/workflows/ci.yml/runs?head_sha={source_sha}&event=workflow_dispatch&per_page=100")
-    for page in pages:
-        for entry in page["workflow_runs"]:
-            run = api(f"{prefix}/runs/{entry['id']}")[0]
-            if run.get("status") != "completed" or run.get("conclusion") != "success":
+    listed = api(f"{prefix}/workflows/ci.yml/runs?head_sha={source_sha}&event=workflow_dispatch&per_page=100")
+    for page in TypeAdapter(list[RunsPage]).validate_python(listed):
+        for entry in page.workflow_runs:
+            (run,) = TypeAdapter(tuple[dict[str, Any]]).validate_python(api(f"{prefix}/runs/{entry.id}"))
+            execution = Execution.model_validate(run)
+            if execution.status != "completed" or execution.conclusion != "success":
                 continue
-            jobs = [
-                job
-                for p in api(f"{prefix}/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100")
-                for job in p["jobs"]
-            ]
-            artifacts = [
-                artifact
-                for p in api(f"{prefix}/runs/{run['id']}/artifacts?per_page=100")
-                for artifact in p["artifacts"]
-            ]
+            run_path = f"{prefix}/runs/{execution.id}"
+            jobs = TypeAdapter(list[JobsPage]).validate_python(
+                api(f"{run_path}/attempts/{execution.run_attempt}/jobs?per_page=100")
+            )
+            artifacts = TypeAdapter(list[ArtifactsPage]).validate_python(
+                api(f"{run_path}/artifacts?per_page=100")
+            )
             try:
-                return validate_execution(source_sha, run, jobs, artifacts)
+                return validate_execution(
+                    source_sha,
+                    run,
+                    [job for p in jobs for job in p.jobs],
+                    [artifact for p in artifacts for artifact in p.artifacts],
+                )
             except ValueError as error:
-                LOGGER.info(f"CI run {run['id']} does not qualify: {error}")
+                LOGGER.info(f"CI run {execution.id} does not qualify: {error}")
     raise ValueError(f"No executed full release verification for '{source_sha}'; dispatch `ci.yml` on `main`")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run the fail-closed publication/promotion barrier.
 
+    Parameters:
+        argv (list[str] | None): Arguments, `sys.argv` when omitted.
+
     Returns:
-        int: Zero only with full execution evidence.
+        int: Zero only with full execution evidence, one when refused. A harness bug raises.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
     parser.add_argument("--source-sha", required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         run_id = require_full_verification(args.repo, args.source_sha)
-    except (ValueError, EvidenceError, KeyError, TypeError) as error:
+    except (ValueError, EvidenceError) as error:
         LOGGER.error(f"Release verification refused: {error}")
         return 1
     LOGGER.info(f"Full frozen candidate verification: {args.source_sha}, CI run {run_id}")

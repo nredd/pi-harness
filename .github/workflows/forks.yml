@@ -10,9 +10,11 @@ on:
   workflow_dispatch:
   workflow_call:
 
+# A dispatch, including CI's `release-core` call, is a frozen candidate: one group per SHA and no
+# cancellation, so a later dispatch never kills an earlier candidate's core evidence.
 concurrency:
-  group: forks-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: forks-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 permissions:
   contents: read
