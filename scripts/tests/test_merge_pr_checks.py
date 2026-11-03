@@ -135,6 +135,17 @@ def test_captured_superseded_placeholders() -> None:
     assert len(gh.data["rules"][0]["parameters"]["required_status_checks"]) == 9
 
 
+def test_main_advance_does_not_invalidate_reviewed_head() -> None:
+    """Accept unchanged final HEAD evidence after unrelated main advancement.
+
+    Returns:
+        None: The real merge predicate accepts the captured successful replacement.
+    """
+    gh = Replay()
+    gh.data["pr"]["base"]["sha"] = "f" * 40
+    gh.gate()
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

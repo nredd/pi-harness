@@ -27,17 +27,16 @@ from harness.promotion import (
     PromotionError,
     build_gates,
     build_snapshot,
-    candidate_run_ids,
     collect_owned_evidence,
     descends_from,
     flatten_pages,
-    registry_stack_runs,
     required_checks,
     run_command,
     select_source_sha,
     verify_core,
     verify_required_checks,
 )
+from harness.release_gate import require_full_verification
 from harness.runtime_lock import ASSET, SOURCE_LOCK, DependencyGraph, RuntimeLocks, acquire
 from harness.stack import Stack
 
@@ -118,36 +117,6 @@ def gh_json(path: str) -> object:
         raise EvidenceError(f"Unreadable response from gh api {path}: {error}") from error
 
 
-def fetch_stack_runs(ctx: VerifyContext, source_sha: str) -> list[int]:
-    """Read the CI runs and artifact pages for the selected commit and qualify runs.
-
-    Parameters:
-        ctx (VerifyContext): runner context.
-        source_sha (str): selected commit.
-
-    Returns:
-        list[int]: qualifying run IDs.
-
-    Raises:
-        EvidenceError: GitHub could not provide the evidence.
-        ValueError: no run qualifies or a response is malformed.
-    """
-    listed = run_command(
-        "gh", "run", "list",
-        "--repo", ctx.repo,
-        "--workflow", "ci.yml",
-        "--commit", source_sha,
-        "--limit", "100",
-        "--json", "databaseId,status,conclusion,event,headBranch,headSha",
-    )  # fmt: skip
-    entries = flatten_pages([json.loads(listed.stdout)])
-    artifacts = {
-        str(run_id): gh_json(f"repos/{ctx.repo}/actions/runs/{run_id}/artifacts?per_page=100")
-        for run_id in candidate_run_ids(entries, source_sha)
-    }
-    return registry_stack_runs(entries, artifacts, source_sha)
-
-
 def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
     """Verify every gate for the commit and write the candidate snapshot.
 
@@ -159,11 +128,13 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
         PromotionError: a gate failed.
         ValueError: evidence is malformed or insufficient.
     """
+    full_run = require_full_verification(ctx.repo, source_sha)
     rules = gh_json(f"repos/{ctx.repo}/rules/branches/main")
     pages = gh_json(f"repos/{ctx.repo}/commits/{source_sha}/check-runs?per_page=100")
     required = required_checks(flatten_pages(rules))
     checks = verify_required_checks(required, flatten_pages(pages), source_sha)
-    stack_runs = fetch_stack_runs(ctx, source_sha)
+    # Record the actual full dispatch, not the selective push/main smoke.
+    stack_runs = [full_run]
     stack_path = ctx.promo / "personal.json"
     stack_path.write_text(
         run_command(

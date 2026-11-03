@@ -271,8 +271,16 @@ def superseded(gh: GitHub, repo: str, pr: PullRequest, check: ReportedCheck, run
         or new.conclusion != "success"
     ):
         raise CheckError("Latest workflow execution is not a later successful same-context replacement")
-    if new.pull_requests[0] != pr:
-        raise CheckError("Replacement does not match the current PR head/base")
+    replacement = new.pull_requests[0]
+    # Both executions must share their tested base SHA (run_context above), but
+    # unrelated main advances do not invalidate an unchanged reviewed PR HEAD.
+    if (
+        replacement.number != pr.number
+        or replacement.head != pr.head
+        or replacement.base.ref != pr.base.ref
+        or replacement.base.repo != pr.base.repo
+    ):
+        raise CheckError("Replacement does not match the current PR head/base identity")
     for run in (old, new):
         suite = Suite.model_validate(gh.api(f"{prefix}/check-suites/{run.check_suite_id}"))
         if suite.app.id != ACTIONS_APP or suite.head_sha != pr.head.sha:

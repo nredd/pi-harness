@@ -8,9 +8,10 @@ on:
     branches: [main]
     paths: [forks/**, .gitmodules, .github/workflows/forks.yml]
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
-  group: forks-${{ github.ref }}
+  group: forks-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

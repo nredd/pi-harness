@@ -667,7 +667,12 @@ def test_git_bash_selection_is_one_ordered_candidate_in_every_job() -> None:
 def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> None:
     """Keep exact scenario selectors and gates."""
     cfg = jobs()
-    assert set(cfg) == {"classify", "owned", "contracts", "stack"}
+    assert set(cfg) == {"classify", "owned", "contracts", "stack", "release-core"}
+    assert cfg["release-core"] == {
+        "if": "github.event_name == 'workflow_dispatch'",
+        "needs": "classify",
+        "uses": "./.github/workflows/forks.yml",
+    }
     owned = cfg["owned"]["steps"]
     arm = next(step for step in owned if step.get("name") == "Add the aarch64 Linux compile target")
     assert "matrix.guest != 'macos'" in arm["if"]
