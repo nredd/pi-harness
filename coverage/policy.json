@@ -425,7 +425,7 @@
           "report": "coverage/primary/lcov.info",
           "enforcement": "report-only",
           "reason": "Verification probe retained for diagnostics, not a production-package 100-percent target.",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 16, "functions": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         }
       }
