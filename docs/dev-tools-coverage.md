@@ -197,3 +197,16 @@ The checked-in parameterization remains only `[false, true]`. Full final gates w
 Use `coverage-istanbul-macosfix` for this final primary run, preserving both original provider
 reports. Reports are local generated artifacts, not committed. No network host mutations,
 merge/rebase/force, release, install activation, or other worktree changes are part of this work.
+
+## Shared tmpdir nextest race (#302)
+
+The `cargo_test` cleanup test counted `pi-dev-tools-nextest-*` dirs in the shared
+`os.tmpdir()` before and after its runs, so any concurrent gate's in-flight `cargo_test`
+changed the count. Deterministic RED on `2f9160af`: creating one foreign
+`pi-dev-tools-nextest-*` dir in the shared tmpdir after the `before` count failed the
+unchanged test with `expected 1 to be +0`, while the tool had removed its own dirs.
+
+The test now stubs `TMPDIR` to its own `mkdtemp` dir, polls it during both runs to prove
+each run's config dir existed there (`seen.size` is 2), then requires none left. With the
+same foreign dir injected the fixed test passes; with the tool's `rmSync(cfgDir)` removed
+it fails listing both leaked dirs. No product code, retries or timeouts changed.

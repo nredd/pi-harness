@@ -162,20 +162,34 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 		it("layers the junit profile under the repo's nextest config and cleans its temp dir", async () => {
 			mkdirSync(join(root, ".config"), { recursive: true });
 			writeFileSync(join(root, ".config", "nextest.toml"), "[profile.default]\nretries = 1\n");
-			const before = readdirSync(tmpdir()).filter((d) => d.startsWith("pi-dev-tools-nextest-")).length;
-			const not = await mock.call("cargo_test", { package: "good", filter: "not test(fails)", doc: false }, root);
-			expect((not.structuredContent as { state: string; tests: number }).state).toBe("passed");
-			expect((not.structuredContent as { tests: number }).tests).toBe(1);
+			// A private TMPDIR: concurrent runs share the real tmpdir, so counting it races (#302).
+			const own = mkdtempSync(join(tmpdir(), "pi-dev-tools-cargo-tmp-"));
+			const nextestDirs = () => readdirSync(own).filter((d) => d.startsWith("pi-dev-tools-nextest-"));
+			const seen = new Set<string>();
+			vi.stubEnv("TMPDIR", own);
+			const poll = setInterval(() => {
+				for (const d of nextestDirs()) seen.add(d);
+			}, 10);
 			try {
+				const not = await mock.call("cargo_test", { package: "good", filter: "not test(fails)", doc: false }, root);
+				expect((not.structuredContent as { state: string; tests: number }).state).toBe("passed");
+				expect((not.structuredContent as { tests: number }).tests).toBe(1);
 				const r = await mock.call("cargo_test", { package: "good", filter: "fails", doc: false }, root);
 				expect((r.structuredContent as { state: string }).state).toBe("failed");
 				// retries=1 from the repo config applied: the junit body mentions the retry.
 				expect(mock.text(r)).toMatch(/fails/);
 			} finally {
+				clearInterval(poll);
+				vi.unstubAllEnvs();
 				rmSync(join(root, ".config"), { recursive: true, force: true });
 			}
-			const after = readdirSync(tmpdir()).filter((d) => d.startsWith("pi-dev-tools-nextest-")).length;
-			expect(after).toBe(before);
+			try {
+				// Each run's config dir existed under the private TMPDIR, so its absence is not vacuous.
+				expect(seen.size).toBe(2);
+				expect(nextestDirs()).toEqual([]);
+			} finally {
+				rmSync(own, { recursive: true, force: true });
+			}
 		}, 180_000);
 
 		it.each(["absolute", "relative"])(
