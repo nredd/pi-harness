@@ -226,6 +226,15 @@ export function buildInvocationTags(
   return { modelName: invocation.modelName, modelId: invocation.modelId, tags };
 }
 
+/**
+ * The thinking tag from {@link buildInvocationTags} as `think:high`, or "" when
+ * there is none. Both agent lists use it so the configured level cannot read as
+ * a duplicate of the live `thinking · 4s` activity on the same row (#144).
+ */
+export function compactThinkingTag(tags: readonly string[]): string {
+  return (tags.find(tag => tag.startsWith("thinking: ")) ?? "").replace(/^thinking: /, "think:");
+}
+
 /** Truncate text to a single line, max `len` chars. */
 function truncateLine(text: string, len = 60): string {
   const line = text.split("\n").find(l => l.trim())?.trim() ?? "";
@@ -497,7 +506,7 @@ export class AgentWidget {
         // rebuilt so the "(asked X)" annotation survives.
         const { modelName, tags } = buildInvocationTags(a.invocation);
         if (modelName) parts.push(modelName);
-        const thinkingTag = tags.find(tag => tag.startsWith("thinking: "));
+        const thinkingTag = compactThinkingTag(tags);
         if (thinkingTag) parts.push(thinkingTag);
       }
         if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));

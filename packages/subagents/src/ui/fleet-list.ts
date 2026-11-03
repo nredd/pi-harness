@@ -20,7 +20,7 @@ import type { RunningDetached } from "../detached-results.js";
 import { describeModelCall } from "../model-call.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
-import { type AgentActivity, buildInvocationTags, fgPreservingNestedStyles, formatCost, type Theme } from "./agent-widget.js";
+import { type AgentActivity, buildInvocationTags, compactThinkingTag, fgPreservingNestedStyles, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
 import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.js";
 import { FleetJournal, type FleetJournalEntry, type FleetSnapshot, fleetAlert, MAX_COMPACT_ALERT_COUNT } from "./fleet-state.js";
@@ -116,22 +116,31 @@ function rightAlign(left: string, right: string, width: number): string {
   return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
 }
 
-/**
- * Agent-row tail columns, left to right. `align` names the padding side:
- * `start` keeps the cell's right edge aligned, `end` keeps its left edge aligned.
- * `drop` ranks how early a column goes on a narrow terminal (1 first); an
- * undefined rank is never dropped, so state, elapsed, tokens and cost survive
- * and the description is what truncates (#144).
- */
-const TAIL_SLOTS = [
-  { align: "end" }, // state: glyph + label
-  { align: "start", drop: 3 }, // model
-  { align: "start", drop: 2 }, // thinking level
-  { align: "start", drop: 1 }, // live model-call activity
-  { align: "start" }, // elapsed
-  { align: "start" }, // tokens
-  { align: "start" }, // cost
-] as const;
+/** One agent-row tail column. */
+interface TailSlot {
+  /**
+   * Pad after the cell, left-aligning it. Unset pads before the cell, so every
+   * other column ends on the same right edge whether or not a row has a value.
+   */
+  readonly padEnd?: true;
+  /**
+   * How early the column goes on a narrow terminal (1 first). Unset is never
+   * dropped, so state, elapsed, tokens and cost survive and the description is
+   * what truncates (#144).
+   */
+  readonly drop?: number;
+}
+
+/** Agent-row tail columns, left to right. */
+const TAIL_SLOTS: readonly TailSlot[] = [
+  { padEnd: true }, // state: glyph + label
+  { drop: 3 }, // model
+  { drop: 2 }, // thinking level
+  { drop: 1 }, // live model-call activity
+  {}, // elapsed
+  {}, // tokens
+  {}, // cost
+];
 
 /** Columns reserved for the bullet, name and the start of the description. */
 const MIN_LEFT_WIDTH = 24;
@@ -889,7 +898,7 @@ export class FleetList {
       return used.reduce((sum, w) => sum + w, 0) + 3 * Math.max(0, used.length - 1);
     };
     const droppable = TAIL_SLOTS
-      .map((slot, i) => ({ i, rank: "drop" in slot ? slot.drop : 0 }))
+      .map((slot, i) => ({ i, rank: slot.drop ?? 0 }))
       .filter(c => c.rank > 0)
       .sort((x, y) => x.rank - y.rank);
     for (const { i } of droppable) {
@@ -912,9 +921,7 @@ export class FleetList {
       // Leading, and paired: a thinking level means nothing without its model.
       const { modelName, tags } = buildInvocationTags(record.invocation);
       model = modelName ?? "";
-      // `think:high` here, so the configured level cannot read as a duplicate
-      // of the live `thinking · 4s` activity beside it.
-      thinking = (tags.find(tag => tag.startsWith("thinking: ")) ?? "").replace(/^thinking: /, "think:");
+      thinking = compactThinkingTag(tags);
     }
     const state = agentState(record.status);
     // What the in-flight model call is doing, only while the agent is running:
@@ -954,7 +961,7 @@ export class FleetList {
     let stats = TAIL_SLOTS.map((slot, i) => {
       if (colWidths[i] === 0) return undefined;
       const pad = " ".repeat(colWidths[i] - visibleWidth(cells[i] ?? ""));
-      return slot.align === "end" ? (cells[i] ?? "") + pad : pad + (cells[i] ?? "");
+      return slot.padEnd ? (cells[i] ?? "") + pad : pad + (cells[i] ?? "");
     }).filter((c): c is string => c !== undefined).join(" · ");
     let flag = fallbackFlag(theme, record);
     if (flag && visibleWidth(prefix + flag) + 1 + visibleWidth(stats) > width) {

@@ -1104,17 +1104,12 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
 
   /** A visible mixed-state fixture matching the owner-visible FleetView surface. */
   function snapshotRows(): AgentRecord[] {
-    const rows = mixed().slice(0, 5).map(row => ({
+    const costById: Record<string, number> = { p: 1.57, c1: 0.8078, c2: 0.0012, q: 0.0042, d: 0.05 };
+    return mixed().filter(row => row.id in costById).map(row => ({
       ...row,
       invocation: { modelName: row.id === "c2" ? "gpt-6-luna" : "gpt-5.6-terra", modelId: "openai/test", thinking: "medium" },
-      lifetimeUsage: { ...row.lifetimeUsage },
+      lifetimeUsage: { ...row.lifetimeUsage, cost: costById[row.id] },
     }));
-    rows[0].lifetimeUsage.cost = 1.57;
-    rows[1].lifetimeUsage.cost = 0.8078;
-    rows[2].lifetimeUsage.cost = 0.0012;
-    rows[3].lifetimeUsage.cost = 0.0042;
-    rows[4].lifetimeUsage.cost = 0.05;
-    return rows;
   }
 
   /** Real ANSI colour, so width maths and truncation run over escapes (the plain theme hides them). */
