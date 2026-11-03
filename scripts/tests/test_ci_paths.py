@@ -1102,3 +1102,22 @@ def test_cli_requires_a_revision_range_unless_full(capsys: pytest.CaptureFixture
         ci_paths.parse_args(["--event", "push", "--github-output", "out"])
     assert raised.value.code == 2
     assert "--base and --head are required unless --full" in capsys.readouterr().err
+
+
+def test_main_publishes_every_flag_for_a_benchmark_diff(repo: Path, tmp_path: Path) -> None:
+    """Drive the real command line over a `benchmarks/comparison/uv.lock` diff and read the output file.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        tmp_path (Path): Pytest temporary directory.
+    """
+    base = git(repo, "rev-parse", "HEAD")
+    classify_change(repo, {"benchmarks/comparison/uv.lock": "lock\n"})
+    output = tmp_path / "github-output"
+    argv = ["--repo", str(repo), "--base", base, "--head", "HEAD", "--github-output", str(output)]
+    assert ci_paths.main([*argv, "--event", PUSH]) == 0
+    lines = output.read_text(encoding="utf-8").splitlines()
+    assert "benchmark_inputs=true" in lines
+    assert "docs_only=false" in lines
+    assert "benchmarks/comparison/uv.lock" in lines
+    assert "wsl_inputs=false" in lines
