@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -284,21 +285,33 @@ def test_write_github_output_preserves_changed_file_list(tmp_path: Path) -> None
     ci_paths.write_github_output(
         output,
         ci_paths.ChangeClassification(
-            paths=("docs/ci.md", "PLAN.md"), docs_only=True, wsl_inputs=False, stack_inputs=False
+            paths=("docs/ci.md", "PLAN.md"),
+            docs_only=True,
+            wsl_inputs=False,
+            stack_inputs=False,
+            benchmark_inputs=False,
         ),
     )
     contents = output.read_text(encoding="utf-8")
     assert "docs_only=true\n" in contents
     assert "wsl_inputs=false\n" in contents
     assert "stack_inputs=false\n" in contents
+    assert "benchmark_inputs=false\n" in contents
     assert "docs/ci.md\nPLAN.md\n" in contents
 
 
 @pytest.mark.parametrize(
-    ("wsl_inputs", "stack_inputs"), [(True, False), (False, True), (True, True), (False, False)]
+    ("wsl_inputs", "stack_inputs", "benchmark_inputs"),
+    [
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (True, True, True),
+        (False, False, False),
+    ],
 )
 def test_write_github_output_keeps_input_flags_independent(
-    tmp_path: Path, wsl_inputs: bool, stack_inputs: bool
+    tmp_path: Path, wsl_inputs: bool, stack_inputs: bool, benchmark_inputs: bool
 ) -> None:
     """Publish each input flag from its own field.
 
@@ -306,6 +319,7 @@ def test_write_github_output_keeps_input_flags_independent(
         tmp_path (Path): Pytest temporary directory.
         wsl_inputs (bool): Whether the fixture touches WSL inputs.
         stack_inputs (bool): Whether the fixture touches stack inputs.
+        benchmark_inputs (bool): Whether the fixture touches benchmark inputs.
 
     Returns:
         None: Assertions verify workflow output.
@@ -314,12 +328,17 @@ def test_write_github_output_keeps_input_flags_independent(
     ci_paths.write_github_output(
         output,
         ci_paths.ChangeClassification(
-            paths=("a",), docs_only=False, wsl_inputs=wsl_inputs, stack_inputs=stack_inputs
+            paths=("a",),
+            docs_only=False,
+            wsl_inputs=wsl_inputs,
+            stack_inputs=stack_inputs,
+            benchmark_inputs=benchmark_inputs,
         ),
     )
     lines = output.read_text(encoding="utf-8").splitlines()
     assert f"wsl_inputs={str(wsl_inputs).lower()}" in lines
     assert f"stack_inputs={str(stack_inputs).lower()}" in lines
+    assert f"benchmark_inputs={str(benchmark_inputs).lower()}" in lines
 
 
 @pytest.mark.parametrize(
@@ -451,6 +470,79 @@ def test_stack_inputs_reject_local_only_and_unrelated_paths(repo: Path, path: st
     assert not classify_change(repo, {path: "input\n"}).stack_inputs
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "benchmarks/comparison/src/pi_harness_benchmark/usage.py",
+        "benchmarks/comparison/tests/test_usage.py",
+        "benchmarks/comparison/pyproject.toml",
+        "benchmarks/comparison/uv.lock",
+        "benchmarks/comparison/results/runs/a/result.json",
+        "Makefile",
+        ".python-version",
+        ".node-version",
+        ".github/workflows/ci.yml",
+        ".github/actions/setup-ci-tools/action.yml",
+        "scripts/ci_paths.py",
+    ],
+)
+def test_benchmark_inputs_accept_paths_the_unit_gate_reads(repo: Path, path: str) -> None:
+    """Run the gate for its code, tests, lockfile, pins, Makefile recipes and workflow step.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Path `check-benchmark` or its CI step reads.
+
+    Returns:
+        None: Assertions verify classification.
+    """
+    assert classify_change(repo, {path: "input\n"}).benchmark_inputs
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/router/src/index.ts",
+        "scripts/ci_guest_x.py",
+        "integration/pyproject.toml",
+        "integration/uv.lock",
+        "package.json",
+        ".bun-version",
+        ".github/workflows/release.yml",
+        ".github/actions/setup-ci-wsl/action.yml",
+        "benchmarks/other/pyproject.toml",
+        "benchmarks/comparison-notes.md",
+        "docs/ci.md",
+        "coverage/policy.json",
+    ],
+)
+def test_benchmark_inputs_reject_paths_the_unit_gate_never_reads(repo: Path, path: str) -> None:
+    """Skip the gate for product code, other Python projects, other workflows and docs.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Path `check-benchmark` does not read.
+
+    Returns:
+        None: Assertions verify classification.
+    """
+    assert not classify_change(repo, {path: "input\n"}).benchmark_inputs
+
+
+def test_benchmark_inputs_follow_any_changed_path(repo: Path) -> None:
+    """Run the gate when one benchmark path rides along with unrelated changes.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify classification.
+    """
+    result = classify_change(repo, {"packages/router/a.ts": "x\n", "benchmarks/comparison/uv.lock": "lock\n"})
+    assert result.benchmark_inputs
+    assert not result.wsl_inputs
+
+
 def test_mixed_change_reports_each_input_family(repo: Path) -> None:
     """Keep the input flags independent of `docs_only` and of each other.
 
@@ -484,3 +576,111 @@ def test_input_flags_fail_closed(repo: Path, case: str) -> None:
     result = ci_paths.classify(repo, base, "HEAD")
     assert result.wsl_inputs
     assert result.stack_inputs
+    assert result.benchmark_inputs
+
+
+def test_run_git_reports_a_missing_git_binary(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wrap a Git launch failure so `classify` can fail closed.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Replaces the Git path with a missing binary.
+
+    Returns:
+        None: Assertions verify the raised error.
+    """
+    monkeypatch.setattr(ci_paths, "GIT", str(repo / "no-such-git"))
+    with pytest.raises(ci_paths.ClassificationError, match="Cannot run `git`"):
+        ci_paths.run_git(repo, "status")
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (":100644 100644 a b M\0a.txt", "unterminated"),
+        (":100644 100644 a b M\0", "incomplete"),
+        ("bogus\0a.txt\0", "malformed"),
+    ],
+)
+def test_changed_paths_rejects_malformed_git_output(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, raw: str, message: str
+) -> None:
+    """Refuse `git diff --raw -z` output that does not parse, instead of guessing.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Replaces the diff output.
+        raw (str): Fabricated NUL-delimited diff output.
+        message (str): Expected error fragment.
+
+    Returns:
+        None: Assertions verify the raised error.
+    """
+    real = ci_paths.run_git
+    monkeypatch.setattr(
+        ci_paths, "run_git", lambda repo, *args: raw if args[0] == "diff" else real(repo, *args)
+    )
+    with pytest.raises(ci_paths.ClassificationError, match=message):
+        ci_paths.changed_paths(repo, "HEAD", "HEAD")
+
+
+def test_main_publishes_every_flag_for_a_benchmark_diff(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drive the real command line end to end against a disposable repository.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Supplies the command-line arguments.
+
+    Returns:
+        None: Assertions verify the workflow output file.
+    """
+    base = git(repo, "rev-parse", "HEAD")
+    classify_change(repo, {"benchmarks/comparison/uv.lock": "lock\n"})
+    output = tmp_path / "github-output"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ci_paths.py",
+            "--repo",
+            str(repo),
+            "--base",
+            base,
+            "--head",
+            "HEAD",
+            "--github-output",
+            str(output),
+        ],
+    )
+    assert ci_paths.main() == 0
+    lines = output.read_text(encoding="utf-8").splitlines()
+    assert "benchmark_inputs=true" in lines
+    assert "docs_only=false" in lines
+    assert "benchmarks/comparison/uv.lock" in lines
+
+
+def test_script_entry_point_exits_zero(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the module as `python3 scripts/ci_paths.py`, as the workflow does.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Supplies the command-line arguments.
+
+    Returns:
+        None: Assertions verify the exit status and output.
+    """
+    output = tmp_path / "github-output"
+    base = git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ci_paths.py", "--repo", str(repo), "--base", base, "--head", base, "--github-output", str(output)],
+    )
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_path(str(Path(ci_paths.__file__)), run_name="__main__")
+    assert raised.value.code == 0
+    assert "benchmark_inputs=true" in output.read_text(encoding="utf-8").splitlines()
