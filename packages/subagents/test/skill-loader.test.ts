@@ -404,6 +404,9 @@ describe("preloadSkills", () => {
     };
     bare(join(legacy, "aaa"), "SIBLING");
     bare(join(legacy, "group", "nested"), "NESTED");
+    // An unreadable same-named entry must not end the search before a later match.
+    mkdirSync(join(legacy, "a", "retry", "SKILL.md"), { recursive: true });
+    bare(join(legacy, "b", "retry"), "RETRIED");
     bare(join(box.root, "external"), "LINKED");
     symlinkSync(join(box.root, "external"), join(legacy, "linked"), "dir");
     symlinkSync(join(box.root, "nowhere"), join(legacy, "dangling"), "dir");
@@ -411,11 +414,44 @@ describe("preloadSkills", () => {
     chmodSync(join(legacy, "locked"), 0o000);
 
     try {
-      const found = await preloadSkills(["nested", "linked", "absent"], box.cwd, { ...box, homeDir: box.homeDir });
-      expect(found.map(skill => skill.content)).toEqual(["NESTED", "LINKED", "(Skill \"absent\" not found in Pi's configured skill resources)"]);
+      const found = await preloadSkills(["nested", "linked", "retry", "absent"], box.cwd, { ...box, homeDir: box.homeDir });
+      expect(found.map(skill => skill.content)).toEqual(["NESTED", "LINKED", "RETRIED", "(Skill \"absent\" not found in Pi's configured skill resources)"]);
     } finally {
       chmodSync(join(legacy, "locked"), 0o700);
     }
+  });
+
+  it("resolves a bare relative project package source and ignores unresolvable ones", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const packageRoot = join(box.cwd, ".pi", "localpkg");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
+    writeSkill(join(packageRoot, "skills"), "review", "BARE-RELATIVE-REVIEW");
+    box.settingsManager.setPackages([packageRoot]);
+    box.settingsManager.setProjectPackages([{ source: "localpkg", skills: ["-skills/review"] }, "npm:not-installed-anywhere"]);
+    mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
+    symlinkSync(join(packageRoot, "skills", "review"), join(box.cwd, ".pi", "skills", "review"));
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("not found");
+  });
+
+  it("does not let an untrusted project skill shadow a package skill", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    const packageRoot = join(box.root, "package");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
+    writeSkill(join(packageRoot, "skills"), "review", "PACKAGED");
+    box.settingsManager.setPackages([packageRoot]);
+    writeSkill(join(box.cwd, ".pi", "skills"), "review", "HOSTILE");
+
+    const [skill] = await preloadSkills(["review"], box.cwd, box);
+
+    expect(skill?.content).toContain("PACKAGED");
+    expect(skill?.content).not.toContain("HOSTILE");
   });
 
   it("ignores a dangling project skill symlink", async () => {

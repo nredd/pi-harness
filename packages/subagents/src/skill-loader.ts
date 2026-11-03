@@ -88,9 +88,10 @@ export async function preloadSkills(
   });
 }
 
-/** Absolutize a project package's relative local source, which Pi resolves against `<cwd>/.pi`. */
+/** Absolutize an existing local project package source, which Pi resolves against `<cwd>/.pi`. */
 function absolutizeProjectSource(source: string, cwd: string): string {
-  return /^\.{1,2}($|[\\/])/.test(source) ? resolve(cwd, ".pi", source) : source;
+  const local = resolve(cwd, ".pi", source);
+  return !source.startsWith("npm:") && existsSync(local) ? local : source;
 }
 
 /**
@@ -186,7 +187,8 @@ function findInRoot(root: string, name: string, trusted: boolean): string | unde
       if (!isDirectory) continue;
       const skillFile = join(path, "SKILL.md");
       if (existsSync(skillFile)) {
-        if (entry.name === name) return readSkillFile(skillFile, trusted)?.trim();
+        const content = entry.name === name ? readSkillFile(skillFile, trusted)?.trim() : undefined;
+        if (content !== undefined) return content;
         continue;
       }
       queue.push(path);
