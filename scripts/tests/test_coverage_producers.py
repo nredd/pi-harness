@@ -160,6 +160,7 @@ def test_python_signals_match_the_shared_python_gate() -> None:
         source = sources[package["root"]]
         assert {Path(pattern).parent.as_posix() for pattern in package["owned"]} == {source}, name
         assert primary["skip_hosts"] == ["wsl2"], name
+        assert primary["producer"] == "coverage.py", name
     assert set(sources) == {"scripts", "integration"}
 
 

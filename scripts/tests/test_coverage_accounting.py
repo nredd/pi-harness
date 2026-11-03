@@ -456,7 +456,7 @@ def test_parse_lcov_accepts_real_coveragepy_report() -> None:
     Raises:
         AssertionError: A coverage.py row shape is rejected or miscounted.
     """
-    records = parse_lcov((FIXTURES / "coveragepy-7.17.1.info").read_text())
+    records = parse_lcov((FIXTURES / "coveragepy-7.17.1.info").read_text(), bare_sources=True)
     assert records["__init__.py"].lines == 0
     module = records["mod.py"]
     assert (module.lines, module.uncovered_lines) == (9, 1)
@@ -483,7 +483,7 @@ def test_parse_lcov_rejects_malformed_coveragepy_functions(mutation: tuple[str, 
     """
     text = (FIXTURES / "coveragepy-7.17.1.info").read_text().replace(*mutation)
     with pytest.raises(ValueError, match="function"):
-        parse_lcov(text)
+        parse_lcov(text, bare_sources=True)
 
 
 def test_skipped_host_reports_not_run_but_other_hosts_still_fail_closed(tmp_path: Path) -> None:
@@ -537,3 +537,19 @@ def test_parse_lcov_keeps_commas_in_lcov_style_function_names() -> None:
         ["SF:a.ts", "DA:1,1", "FN:1,f,g", "FNDA:1,f,g", "FNF:1", "FNH:1", "LF:1", "LH:1", "end_of_record", ""]
     )
     assert parse_lcov(text)["a.ts"].functions == 1
+
+
+def test_bare_source_record_is_only_accepted_from_coveragepy() -> None:
+    """Keep a truncated Istanbul/Bun record from parsing as a zero-line source.
+
+    Parameters:
+        None.
+    Returns:
+        None: coverage.py's empty-source record passes only when the producer is declared `coverage.py`.
+    Raises:
+        AssertionError: A bare record is accepted for a plain LCOV producer.
+    """
+    bare = "TN:\nSF:src/a.ts\nend_of_record\nSF:src/b.ts\nDA:1,1\nLF:1\nLH:1\nFNF:0\nFNH:0\nend_of_record\n"
+    with pytest.raises(ValueError, match="Missing LCOV totals"):
+        parse_lcov(bare)
+    assert parse_lcov(bare, bare_sources=True)["src/a.ts"].lines == 0

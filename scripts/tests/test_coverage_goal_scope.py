@@ -150,11 +150,11 @@ def test_ratchet_goal_enforces_its_nonzero_floor_not_the_zero_target(tmp_path: P
         assert "Budget exceeded: 1 lines, 1 functions" in errors[0]
 
 
-def test_ratchet_floor_only_goes_down(tmp_path: Path) -> None:
+def test_ratchet_floor_only_goes_down() -> None:
     """Allow a lower floor, reject a higher one, and refuse to leave the mode.
 
     Parameters:
-        tmp_path (Path): Unused disposable path keeping the fixture signature uniform.
+        None.
     Returns:
         None: Floors ratchet per counter and the package cannot leave `ratchet`.
     Raises:
@@ -170,8 +170,26 @@ def test_ratchet_floor_only_goes_down(tmp_path: Path) -> None:
     data["packages"]["example"]["goal"] = "report-only"
     data["packages"]["example"]["signals"]["primary"]["enforcement"] = "report-only"
     data["packages"]["example"]["signals"]["primary"]["reason"] = "Downgrade attempt."
-    with pytest.raises(ValueError, match=r"Enforcement downgrade|Cannot remove package"):
-        check_ratchet(Policy.model_validate(data), base)
+    enforcement = {
+        "enforcement_changes": [{"package": "example", "signal": "primary", "reason": "Downgrade."}]
+    }
+    with pytest.raises(ValueError, match="Cannot remove package from global goal"):
+        check_ratchet(Policy.model_validate(data | enforcement), base)
+
+
+def test_ratchet_may_graduate_to_the_zero_target() -> None:
+    """Allow the one upward move: a ratchet package joining the 100-percent goal.
+
+    Parameters:
+        None.
+    Returns:
+        None: `ratchet` -> `100-percent` passes the goal check.
+    Raises:
+        AssertionError: Graduation is rejected.
+    """
+    data = ratchet_policy(5, 5).model_dump()
+    data["packages"]["example"]["goal"] = "100-percent"
+    check_ratchet(Policy.model_validate(data), ratchet_policy(5, 5))
 
 
 def test_ratchet_goal_requires_a_measured_enforced_signal() -> None:

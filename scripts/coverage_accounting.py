@@ -116,6 +116,10 @@ class Signal(StrictModel):
     reason: str = Field(
         default="", description="Mandatory explanation and migration issue for report-only signals."
     )
+    producer: Literal["lcov", "coverage.py"] = Field(
+        default="lcov",
+        description="Report writer; only coverage.py legitimately writes a bare record for an empty source.",
+    )
     skip_hosts: list[str] = Field(
         default_factory=list,
         description="CI hosts whose gate list never runs this signal's producer; reported NOT RUN there.",
@@ -356,6 +360,40 @@ class FileCoverage:
     uncovered_branches: int
 
 
+def split_function_hits(value: str) -> tuple[int, str]:
+    """Split an `FNDA` payload, `<hits>,<name>`, in both LCOV dialects.
+
+    Parameters:
+        value (str): Text after `FNDA:`.
+    Returns:
+        tuple[int, str]: Hit count and function identity.
+    Raises:
+        ValueError: The count is not decimal or the name is empty.
+    """
+    count, _, name = value.partition(",")
+    if not count.isdecimal() or not name:
+        raise ValueError(value)
+    return int(count), name
+
+
+def split_function_definition(value: str) -> tuple[int, str]:
+    """Split an `FN` payload: `<line>,<name>` (lcov, Istanbul) or `<line>,<end>,<name>` (coverage.py).
+
+    Parameters:
+        value (str): Text after `FN:`.
+    Returns:
+        tuple[int, str]: Start line and function identity.
+    Raises:
+        ValueError: The line is not decimal or the name is empty.
+    """
+    line, _, rest = value.partition(",")
+    end, comma, named = rest.partition(",")
+    name = named if comma and end.isdecimal() else rest
+    if not line.isdecimal() or not name:
+        raise ValueError(value)
+    return int(line), name
+
+
 @dataclass
 class LcovRecord:
     """Accumulate one LCOV source record without merging independent counters."""
@@ -409,18 +447,14 @@ class LcovRecord:
         Raises:
             ValueError: A function record is malformed or duplicated.
         """
-        # FNDA is `<hits>,<name>`. FN is `<line>,<name>` (lcov) or `<line>,<end>,<name>` (coverage.py).
-        fields = value.split(",", 1 if key == "FNDA" else 2)
-        name = fields[-1]
-        numbers = fields[:-1]
-        if key == "FN" and len(fields) == 3 and not fields[1].isdecimal():
-            numbers, name = fields[:1], ",".join(fields[1:])
-        if not numbers or not all(n.isdecimal() for n in numbers) or not name:
-            raise ValueError(f"Malformed function counter: '{value}'")
+        try:
+            number, name = (split_function_hits if key == "FNDA" else split_function_definition)(value)
+        except ValueError as error:
+            raise ValueError(f"Malformed function counter: '{value}'") from error
         counters = self.definitions if key == "FN" else self.functions
         if name in counters:
             raise ValueError(f"Duplicate function counter: '{value}'")
-        counters[name] = int(numbers[0])
+        counters[name] = number
 
     def add_branch(self, value: str) -> None:
         """Validate a branch identity and its optional hit count.
@@ -440,11 +474,12 @@ class LcovRecord:
             raise ValueError(f"Duplicate or malformed branch: '{value}'")
         self.branches[identity] = 0 if parts[3] == "-" else int(parts[3])
 
-    def finish(self) -> FileCoverage:
+    def finish(self, bare_source: bool = False) -> FileCoverage:
         """Check producer summaries against actual executable counters.
 
         Parameters:
-            None.
+            bare_source (bool): Accept a record with no rows at all, as coverage.py writes for a source
+                without executable lines. Other producers must emit totals, so a bare record is truncation.
         Returns:
             FileCoverage: Validated executable line, function and branch counters.
         Raises:
@@ -452,8 +487,7 @@ class LcovRecord:
         """
         if set(self.definitions) != set(self.functions):
             raise ValueError("Missing function counters")
-        if not (self.lines or self.functions or self.branches or self.summaries):
-            # coverage.py writes a bare `SF`/`end_of_record` pair for a source with no executable lines.
+        if bare_source and not (self.lines or self.functions or self.branches or self.summaries):
             return FileCoverage(0, 0, 0, 0, 0, 0)
         totals = {
             "LF": len(self.lines),
@@ -484,11 +518,12 @@ class LcovRecord:
         )
 
 
-def parse_lcov(text: str) -> dict[str, FileCoverage]:
+def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCoverage]:
     """Parse LCOV strictly, checking counters rather than trusting summary fields.
 
     Parameters:
         text (str): Complete LCOV document.
+        bare_sources (bool): Treat a bare `SF`/`end_of_record` pair as an empty source (coverage.py only).
     Returns:
         dict[str, FileCoverage]: Records keyed by the original source path.
     Raises:
@@ -509,7 +544,7 @@ def parse_lcov(text: str) -> dict[str, FileCoverage]:
         if source is None:
             raise ValueError(f"LCOV data outside a source record: '{row}'")
         if row == "end_of_record":
-            records[source] = record.finish()
+            records[source] = record.finish(bare_sources)
             source = None
             continue
         record.add(row)
@@ -846,7 +881,8 @@ def check_ratchet(current: Policy, base: Policy) -> None:
         if name not in current.packages:
             raise ValueError(f"Removed package: '{name}'")
         package = current.packages[name]
-        if previous.goal in {"100-percent", "ratchet"} and package.goal != previous.goal:
+        graduates = previous.goal == "ratchet" and package.goal == "100-percent"
+        if previous.goal in {"100-percent", "ratchet"} and package.goal != previous.goal and not graduates:
             raise ValueError(f"Cannot remove package from global goal: '{name}'")
         for signal_name, old in previous.signals.items():
             if signal_name not in package.signals:
@@ -882,7 +918,10 @@ def scoped_records(
         ValueError: LCOV, membership, expected files or total owned executable lines are invalid.
     """
     expected = set(signal.files) if signal.files is not None else inventory(root, package)
-    raw = parse_lcov(((reports_root or root) / package.root / signal.report).read_text())
+    raw = parse_lcov(
+        ((reports_root or root) / package.root / signal.report).read_text(),
+        bare_sources=signal.producer == "coverage.py",
+    )
     records: dict[str, FileCoverage] = {}
     known = {
         (root / other.root / file).resolve()

@@ -13,7 +13,7 @@ goal must be report-only and still require complete, valid reports and per-OS re
 `goal: "ratchet"` (owner decision on #314, reusable by #321) is the one mode outside the zero target
 that is enforced: a measured package whose enforced signals hold their per-OS `max_uncovered` as a
 floor. The target is not applied, and floors only go down (the existing enforced-to-enforced ratchet).
-A package cannot leave `ratchet`, an enforced signal cannot go report-only without a reasoned
+A package cannot leave `ratchet` except to graduate to `100-percent`, an enforced signal cannot go report-only without a reasoned
 `enforcement_changes` entry, and a `ratchet` package must be measured with at least one enforced
 signal. The rule keeping `excluded`/`report-only` signals report-only is unchanged. A floor is a new
 enforced signal, not an allowance or waiver: it is the measured count on a named commit and OS.
@@ -242,8 +242,9 @@ deliberately not `coverage/primary`, which is import-audit's report. The `--cov`
 root (`.` and `harness`), so the policy `owned` globs stay the only copy of the inventory.
 `scripts/pyproject.toml` sets coverage's `patch = ["subprocess"]` so the CLI tests that spawn
 `coverage_accounting.py` count. `pytest-cov` is locked in `integration/pyproject.toml`.
-`parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows and the bare record it writes for a
-file with no executable lines. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
+`parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows. Only a signal declaring
+`producer: "coverage.py"` may contain the bare `SF`/`end_of_record` record coverage.py writes for a
+file with no executable lines; for any other producer a bare record is a truncated report and fails. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
 pytest (`docs/ci.md`), so `check-coverage` there (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
 `skip_hosts` to exactly the matrix cells whose `gates` omit the producer, and the ratchet rejects adding
 a skipped host. `benchmarks/comparison` keeps its own pytest-cov 90% combined gate unchanged (in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); it is not
@@ -271,7 +272,7 @@ are not. There is no implicit `*.config.*` exemption: executable tool configurat
 explicit owned/pending declaration or reasoned verification classification. Existing producer
 configurations remain pending/report-only in the policy. All inventories are expanded and
 validated; only eligible pending inventories block the final target flip. Python is outside this
-eight-package goal; its measured signals are report-only here.
+eight-package zero target; its two measured signals are the enforced `ratchet` floors above.
 
 ## Add a source file
 
