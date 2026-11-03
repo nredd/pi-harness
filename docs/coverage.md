@@ -257,14 +257,18 @@ added or changed is 0/0:
 
 | Signal | darwin lines/functions | linux lines/functions |
 | --- | --- | --- |
-| `python-scripts/primary` | 284/11 | 301/13 |
-| `python-harness/primary` | 636/70 | 667/71 |
+| `python-scripts/primary` | 284/11 | 285/11 |
+| `python-harness/primary` | 636/70 | 636/70 |
 
-Measured: darwin on macOS 27.2 arm64 (Python 3.14.9) on the final tree of PR #323 (`pytest -n auto
---dist loadfile`, three consecutive `python-harness` runs gave the same 667 uncovered lines);
-linux from hosted run `41702044725` (`ubuntu-24.04`, artifact `coverage-ubuntu-24.04`) on `3b457da7`,
-where only the `goal` validator and policy flip follow, with tests that cover every line they add.
-`python-scripts` linux is one line above darwin (host-dependent branches), so the floors differ per OS.
+Measured on the final tree of PR #323 from its own hosted artifacts, `--measure` on each: darwin from
+`coverage-macos-14`, linux from `coverage-ubuntu-24.04`, both run `41718792020` on commit `6912a7b5`
+(tree after rebasing onto `d85cde54`; only policy and docs follow it). A local macOS 27.2 arm64 run
+(Python 3.14.9) gave the same darwin counts. `python-scripts` is one line higher on linux than on
+darwin, so the floors differ per OS. An earlier run (`41702044725`, before
+the rebase) is not a source: it predates `harness/install_paths.py` and `harness/release_gate.py`.
+Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and
+`integration` 143s, against 199s and 281s serial.
+
 A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
