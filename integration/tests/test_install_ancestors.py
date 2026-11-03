@@ -7,11 +7,12 @@ References:
 from __future__ import annotations
 
 import errno
+import json
 import os
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -293,12 +294,14 @@ def test_rollback_refuses_unanchorable_parent_and_keeps_journal(tmp_path: Path) 
     assert layout.journal.read_text() == "{}"
 
 
-def replay_fixture(monkeypatch: pytest.MonkeyPatch, swap: Any) -> Verified:
+def replay_fixture(monkeypatch: pytest.MonkeyPatch, swap: Any, *, audit: Any = None) -> Verified:
     """Replace authenticated npm replay with a pathname writer that runs `swap` afterwards.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): module patcher.
         swap (Any): callable receiving the replay root once its bytes are written.
+        audit (Any): callable receiving the replay root after the checkpoint, modeling the audit
+            read; `None` reads nothing.
 
     Returns:
         Verified: real snapshot with an empty modeled archive inventory.
@@ -331,6 +334,8 @@ def replay_fixture(monkeypatch: pytest.MonkeyPatch, swap: Any) -> Verified:
         (root / "package.json").write_text("{}")
         swap(root)
         checkpoint()
+        if audit is not None:
+            audit(root)
 
     monkeypatch.setattr(install, "require_runtime", lambda verified: SimpleNamespace(runtime=None))
     monkeypatch.setattr(install, "selected_graphs", lambda runtime: {"core": None, "agent": None})
@@ -729,3 +734,71 @@ def test_staging_cleanup_failure_keeps_the_staging_error(
         r"Staging directory '.*/staging/[0-9a-f]{32}' was not removed: cleanup refused$",
     ):
         harness.run(yes=True)
+
+
+def test_installed_identities_read_only_the_held_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A swap after the audit is refused before `installed_identities` reads, even if undone after."""
+    layout = layout_at(tmp_path)
+    staging = layout.root / "staging" / "run"
+    agent, held = staging / "agent", tmp_path / "held-agent"
+    verified = replay_fixture(
+        monkeypatch, lambda root: None, audit=lambda root: substitute(agent, held, link=False)
+    )
+    read: list[bool] = []
+
+    def identities(*args: object) -> list[dict[str, str]]:
+        """Read the staged manifests by pathname, then undo the swap before the next check.
+
+        Parameters:
+            args (object): ignored identity operands.
+
+        Returns:
+            list[dict[str, str]]: no modeled identities.
+        """
+        read.append((agent / "forged").exists())
+        restore(agent, held)
+        return []
+
+    monkeypatch.setattr(install, "installed_identities", identities)
+    monkeypatch.setattr(install, "verify_owned_integrity", lambda *args: None)
+    with (
+        AnchoredStore() as anchors,
+        pytest.raises(OSError, match=r"Install directory '.*/agent' changed during the operation"),
+    ):
+        stage(layout, verified, Plan(install_packages=True), staging, anchors=anchors)
+    assert read == []
+
+
+@pytest.mark.parametrize("parent", ["agent", "core"])
+def test_commit_refuses_swapped_held_parent_and_keeps_journal(
+    tmp_path: Path, anchors: AnchoredStore, parent: str
+) -> None:
+    """Commit checks every held parent, not just the journal's, and keeps the journal on a swap."""
+    layout = layout_at(tmp_path)
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
+    with journal.open_backups():
+        journal.persist()
+    swapped = {"agent": layout.agent_dir, "core": layout.root / "core"}[parent]
+    substitute(swapped, tmp_path / f"held-{parent}", link=False)
+    with pytest.raises(OSError, match=rf"Install directory '.*/{parent}' changed during the operation"):
+        journal.commit()
+    assert json.loads(layout.journal.read_text()) == {"backups": str(journal.backups), "steps": []}
+
+
+def test_install_graph_runs_checkpoint_before_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`install_graph` itself orders the caller's checkpoint between replay and the pathname audit."""
+    events: list[str] = []
+    monkeypatch.setattr(runtime_lock, "run_npm", lambda npm, args, root, env: events.append(args[0]))
+    monkeypatch.setattr(runtime_lock, "audit_install", lambda *args: events.append("audit"))
+    graph = SimpleNamespace(manifest={}, lock={"packages": {}})
+    runtime_lock.install_graph(
+        cast("runtime_lock.NpmGraph", graph),
+        tmp_path / "prefix",
+        tmp_path / "scratch",
+        "/not-invoked/npm",
+        {},
+        checkpoint=lambda: events.append("checkpoint"),
+    )
+    assert events == ["ci", "checkpoint", "audit"]
