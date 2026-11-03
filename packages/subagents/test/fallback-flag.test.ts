@@ -39,6 +39,12 @@ describe("withLeadingFlag", () => {
     }
   });
 
+  it("renders an empty rest as the bare flag with no trailing separator", () => {
+    expect(withLeadingFlag("", FLAG, "", 20)).toBe("[fallback]");
+    expect(withLeadingFlag("", FLAG, "", 9)).toBe("[fb]");
+    expect(withLeadingFlag("", FLAG, "", 3)).toBe("!");
+  });
+
   it("is plain truncation when there is no flag", () => {
     const line = withLeadingFlag("> ", "", REST, 10);
     expect(line.startsWith("> RRRRR")).toBe(true);
