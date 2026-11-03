@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { ExhaustionTracker } from "../src/exhaustion.js";
+import { type RouteEnv, Router } from "../src/router.js";
 import { STALE_GRACE_MS, scoreQuota, selectCandidate } from "../src/selection.js";
 import { modelMatchesFamily, UsageService, type UsageTransport } from "../src/usage.js";
 
@@ -640,5 +642,104 @@ describe("UsageService.decisionFor scope", () => {
 			resetAt: FUTURE_RESET_MS,
 		});
 		expect(service.decisionFor({ provider: "anthropic", id: "claude-opus-5-5" }).block).toBe(false);
+	});
+});
+
+// Characterization (#311): Anthropic plans without a 5h quota. These pin existing behavior.
+describe("Anthropic snapshots without a 5h window", () => {
+	const SEVEN_DAY = { utilization: 10, resets_at: FUTURE_RESET };
+
+	it.each([
+		["absent", {}],
+		["null", { five_hour: null }],
+		["null utilization", { five_hour: { utilization: null, resets_at: null } }],
+	])("five_hour %s: only seven_day is kept, it never blocks, and the prompt omits 5h", async (_name, extra) => {
+		const { service } = harness([{ body: { ...extra, seven_day: SEVEN_DAY } }]);
+		const snapshot = await service.get(ctx, "anthropic");
+		expect(snapshot.status).toBe("available");
+		expect(snapshot.windows.map((window) => window.name)).toEqual(["seven_day"]);
+		expect(service.decisionFor(SONNET)).toEqual({ block: false });
+		expect(service.formatForPrompt(snapshot)).toBe("seven_day <25%");
+		expect(scoreQuota(SONNET, snapshot, T0)).toMatchObject({ kind: "measured", window: "seven_day" });
+	});
+
+	it("keeps a reported idle 5h window (0% used, no reset) and scores it as idle", async () => {
+		const { service } = harness([
+			{ body: { five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 50 } } },
+		]);
+		const snapshot = await service.get(ctx, "anthropic");
+		expect(snapshot.windows[0]).toEqual({
+			name: "five_hour",
+			usedPercent: 0,
+			resetAt: undefined,
+			durationMs: 18_000_000,
+			spanSource: "reported",
+			scope: "provider",
+			families: undefined,
+		});
+		// An idle window scores 1 (full quota over the whole span), so the 50%-used weekly limits.
+		expect(scoreQuota(SONNET, snapshot, T0)).toMatchObject({ kind: "measured", window: "seven_day", score: 0.5 });
+		expect(service.decisionFor(SONNET)).toEqual({ block: false });
+	});
+
+	it("still gates a family on its model window when 5h is absent", async () => {
+		const { service } = harness([{ body: { seven_day: SEVEN_DAY, seven_day_opus: { utilization: 100 } } }]);
+		await service.get(ctx, "anthropic");
+		expect(service.decisionFor({ provider: "anthropic", id: "claude-opus-5" })).toMatchObject({
+			block: true,
+			window: "seven_day_opus",
+			scope: "model",
+		});
+		expect(service.decisionFor(SONNET)).toEqual({ block: false });
+	});
+
+	it("a fresh read replaces a stale cached exhausted 5h, so admission stops parking", async () => {
+		const { service, clock, requests } = harness([
+			{ body: { five_hour: { utilization: 100, resets_at: FUTURE_RESET }, seven_day: SEVEN_DAY } },
+			{ body: "unavailable", status: 503 },
+			{ body: { seven_day: SEVEN_DAY } },
+		]);
+		// End to end through the router: the same admission subagent dispatches go through.
+		const router = new Router(service, new ExhaustionTracker(() => clock.now), () => clock.now);
+		// A physical ref never resolves chain entries or refreshes, so the env is inert.
+		const env: RouteEnv = { resolve: () => undefined, refresh: async () => undefined };
+		const admit = () => router.admit(`${SONNET.provider}/${SONNET.id}`, new Map(), env);
+		const parked = { ok: false, resetAt: FUTURE_RESET_MS, wait: true };
+		await service.get(ctx, "anthropic");
+		expect(service.decisionFor(SONNET)).toMatchObject({ block: true, window: "five_hour" });
+		expect(admit()).toEqual(parked);
+		clock.now += 6 * MINUTE;
+		const stale = await service.get(ctx, "anthropic");
+		// Failed refresh: the cached window survives and its future reset keeps blocking.
+		expect(stale.status).toBe("stale");
+		expect(stale.windows.map((window) => window.name)).toEqual(["five_hour", "seven_day"]);
+		expect(service.decisionFor(SONNET)).toMatchObject({ block: true, window: "five_hour" });
+		expect(router.blockedBy(SONNET)).toEqual({ reason: "five_hour exhausted", resetAt: FUTURE_RESET_MS });
+		expect(admit()).toEqual(parked);
+		clock.now += MINUTE + 1; // first backoff step
+		const fresh = await service.get(ctx, "anthropic");
+		expect(requests).toHaveLength(3);
+		expect(fresh.status).toBe("available");
+		expect(fresh.windows.map((window) => window.name)).toEqual(["seven_day"]);
+		expect(service.peek("anthropic")?.windows.map((window) => window.name)).toEqual(["seven_day"]);
+		expect(service.decisionFor(SONNET)).toEqual({ block: false });
+		expect(router.blockedBy(SONNET)).toBeUndefined();
+		expect(admit()).toEqual({ ok: true, resolvedModel: `${SONNET.provider}/${SONNET.id}` });
+	});
+
+	it("every Anthropic key null is an unsupported shape (error, then backoff)", async () => {
+		const { service, clock, requests } = harness([
+			{ body: { five_hour: null, seven_day: null, seven_day_opus: null, seven_day_sonnet: null } },
+		]);
+		const snapshot = await service.get(ctx, "anthropic");
+		expect(snapshot).toMatchObject({
+			status: "error",
+			message: "Usage response had an unsupported shape.",
+			windows: [],
+		});
+		clock.now += 10_000;
+		expect((await service.get(ctx, "anthropic", { fresh: true })).message).toMatch(/Backing off/);
+		expect(requests).toHaveLength(1);
+		expect(service.decisionFor(SONNET)).toEqual({ block: false });
 	});
 });
