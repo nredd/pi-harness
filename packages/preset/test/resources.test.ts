@@ -244,10 +244,13 @@ const mutate = (text: string, from: string, to: string): string => {
 /** Every documented `gh pr merge` command: inline code spans plus fenced lines with `\` continuations joined. */
 const mergeCommands = (text: string): string[] => {
 	const fenced: string[] = [];
-	const prose = text.replace(/^(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^\1[ \t]*$/gm, (_match, _fence, body: string) => {
-		fenced.push(...body.replace(/[ \t]*\\\n[ \t]*/g, " ").split("\n"));
-		return "";
-	});
+	const prose = text.replace(
+		/^[ \t]*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^[ \t]*\1[ \t]*$/gm,
+		(_match, _fence, body: string) => {
+			fenced.push(...body.replace(/[ \t]*\\\n[ \t]*/g, " ").split("\n"));
+			return "";
+		},
+	);
 	return [
 		...[...prose.matchAll(/`gh pr merge [^`]*`/g)].map(([span]) => span),
 		...fenced.filter((line) => /\bgh pr merge\b/.test(line)),
@@ -287,6 +290,7 @@ test("shipping skills pin every merge to the head, never bypass protection, and 
 			["gh pr merge 1 --squash --match-head-commit <full-sha> --admin"],
 		],
 		["```sh\ngh pr merge --disable-auto 1\n```\n", []],
+		["- Merge:\n  ```sh\n  gh pr merge 1 --squash\n  ```\n", ["  gh pr merge 1 --squash"]],
 	];
 	for (const [text, expected] of cases) assert.deepEqual(unsafeMerges(mergeCommands(text)), expected, text);
 	for (const override of ["model: opus", 'model: "sonnet"']) assert.throws(() => assertNoForcedModel(override));
@@ -569,11 +573,22 @@ const shippingSkills = (): ShippingSkills => ({
 	merge: readText("skills/get-it-merged/SKILL.md"),
 });
 
+/** Auto-merge appears only in the handoff, after the review round, never in an earlier step. */
+const armsAfterReviews = (ship: string): boolean => {
+	const reviews = ship.indexOf("## 7. Review round");
+	const handoff = ship.indexOf("## 9. Handoff and cleanup");
+	return reviews >= 0 && reviews < handoff && !/auto-merge|--auto\b/i.test(ship.slice(0, handoff));
+};
+
+/** A reviewer-model exception for a user choice, in either clause order. */
+const MODEL_CARVE_OUT =
+	/\bmodel\b[^.\n]*\b(?:unless|except)\b[^.\n]*\buser\b|\b(?:unless|except)\b[^.\n]*\buser\b[^.\n]*\bmodel\b/i;
+
 /** Names of the #269 review, train and release clauses the shipping skills no longer carry. */
 const missingReviewPolicy = ({ review, ship, merge }: ShippingSkills): string[] =>
 	missing({
 		"reviewers spawn without a model override": review.includes("and no `model` override."),
-		"no user-named model carve-out": ![review, ship, merge].some((text) => /unless the user named/i.test(text)),
+		"no user-named model carve-out": ![review, ship, merge].some((text) => MODEL_CARVE_OUT.test(text)),
 		"non-PR fixed point is the base": review.includes(
 			"For a non-PR review, use the resolved fixed point as `<reviewed-base>`",
 		),
@@ -598,6 +613,17 @@ const missingReviewPolicy = ({ review, ship, merge }: ShippingSkills): string[] 
 			merge,
 		),
 		"parent-only native monitors": merge.includes("Parent only: use native session-kit monitors (`monitor_start`)"),
+		"no EnterWorktree tool": ship.includes("Do NOT use the `EnterWorktree` tool"),
+		"no ambiguous /code-review command":
+			ship.includes("use `/skill:code-review` for the separate Standards") &&
+			ship.includes("do not use the ambiguous `/code-review` workflow command"),
+		"whole-job reruns only": merge.includes(
+			"rerun the whole permitted job, never a selected failed-test subset or an until-green loop",
+		),
+		"early rollups are not terminal CI": merge.includes(
+			"Early check rollups may contain only classification jobs and are not terminal workflow evidence",
+		),
+		"ship-issue arms auto-merge only after reviews": armsAfterReviews(ship),
 	});
 
 test("shipping skills keep the #269 review, train and release clauses; negative controls", () => {
@@ -667,6 +693,38 @@ test("shipping skills keep the #269 review, train and release clauses; negative 
 			["frozen combined gate before publish/deploy"],
 		],
 		["merge", "Parent only: use native session-kit monitors", "Use shell sleep loops", ["parent-only native monitors"]],
+		[
+			"review",
+			"and no `model` override.",
+			"and no `model` override. Except when the user picks one, pass that model.",
+			["no user-named model carve-out"],
+		],
+		["ship", "Do NOT use the `EnterWorktree` tool", "Use the `EnterWorktree` tool", ["no EnterWorktree tool"]],
+		[
+			"ship",
+			"do not use the ambiguous `/code-review` workflow command",
+			"run the `/code-review` workflow command",
+			["no ambiguous /code-review command"],
+		],
+		["merge", "rerun the whole permitted job, never", "rerun only the failed tests, never", ["whole-job reruns only"]],
+		[
+			"merge",
+			"and are not terminal workflow evidence",
+			"and are terminal workflow evidence",
+			["early rollups are not terminal CI"],
+		],
+		[
+			"ship",
+			"## 8. Open the PR",
+			"- Arm auto-merge: `gh pr merge <N> --auto --squash --match-head-commit <full-sha>`\n\n## 8. Open the PR",
+			["ship-issue arms auto-merge only after reviews"],
+		],
+		[
+			"ship",
+			"## 7. Review round -- exact final HEAD",
+			"## 7. Arm auto-merge, then review the exact final HEAD",
+			["ship-issue arms auto-merge only after reviews"],
+		],
 	];
 	for (const [skill, from, to, expected] of cases) {
 		const mutated = { ...skills, [skill]: mutate(skills[skill], from, to) };
