@@ -133,3 +133,20 @@ def test_rpc_driver_preserves_raw_stderr_on_timeout_or_eof(
         process.process.kill()
         process.__exit__(AssertionError, AssertionError("original failure"), None)
     assert process.stderr_path.read_bytes() == RAW_STDERR
+
+
+def test_rpc_eof_timeout_carries_child_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A session that ignores EOF reports its own stderr (e.g. a Bun crash banner), not just argv."""
+    box = build_sandbox(tmp_path / "box")
+    child = tmp_path / "child.py"
+    child.write_text(
+        f"import os,sys,time\nos.write(2, {RAW_STDERR!r})\nsys.stdin.readline()\ntime.sleep(60)\n"
+    )
+    monkeypatch.setattr(rpc, "pi_command", lambda: [sys.executable, str(child)])
+    monkeypatch.setattr(rpc, "EOF_EXIT_TIMEOUT_S", 0.5)
+    process = rpc.RpcProcess(box, {})
+    process.send({"type": "get_state"})
+    with pytest.raises(TimeoutError, match="native panic"):
+        process.__exit__(None, None, None)
+    assert process.process.returncode is not None
+    assert process.stderr_path.read_bytes() == RAW_STDERR

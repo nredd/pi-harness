@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 MAX_OUTPUT = 8 * 1024 * 1024
+EOF_EXIT_TIMEOUT_S = 15
 
 
 class Rpc:
@@ -293,12 +294,17 @@ class RpcProcess:
         assert self.process.stdin is not None
         self.process.stdin.close()
         try:
-            self.process.wait(timeout=15)
+            self.process.wait(timeout=EOF_EXIT_TIMEOUT_S)
         except subprocess.TimeoutExpired as error:
             self.process.kill()
             self.process.wait(timeout=10)
             if exc is None:
-                raise TimeoutError(f"RPC did not exit on EOF: {error}") from error
+                # A native crash handler (e.g. Bun's) can hang the exit; its banner is the diagnosis.
+                for reader in self.readers:
+                    reader.join(timeout=5)
+                raise TimeoutError(
+                    f"RPC did not exit on EOF: {error}; stderr: {''.join(self.stderr)}"
+                ) from error
         finally:
             for reader in self.readers:
                 reader.join(timeout=5)
