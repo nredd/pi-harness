@@ -10,10 +10,11 @@ from __future__ import annotations
 import os
 import shutil
 import stat
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
     from types import TracebackType
 
@@ -141,10 +142,10 @@ class AnchoredStore:
             None: the source entry has replaced the target through held parents.
 
         Raises:
-            OSError: either parent cannot be anchored or the rename fails.
+            OSError: either parent is missing or cannot be anchored, or the rename fails.
         """
         source_fd = self.directory(source.parent)
-        target_fd = self.directory(target.parent, create=True)
+        target_fd = self.directory(target.parent)
         os.replace(source.name, target.name, src_dir_fd=source_fd, dst_dir_fd=target_fd)
 
     def discard(self, path: Path) -> None:
@@ -186,3 +187,20 @@ class AnchoredStore:
         else:
             os.unlink(path.name, dir_fd=parent)
         self.discard(path)
+
+
+@contextmanager
+def anchoring(anchors: AnchoredStore | None) -> Iterator[AnchoredStore]:
+    """Borrow a caller's held parents, or own operation-local ones for this call only.
+
+    Parameters:
+        anchors (AnchoredStore | None): the caller's store, or `None` for a new one.
+
+    Yields:
+        AnchoredStore: the borrowed store, left open, or a new store closed on exit.
+    """
+    if anchors is not None:
+        yield anchors
+        return
+    with AnchoredStore() as opened:
+        yield opened

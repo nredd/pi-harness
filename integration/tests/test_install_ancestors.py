@@ -9,11 +9,27 @@ from __future__ import annotations
 import errno
 import os
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from harness import install_paths
-from harness.install import Journal, Layout, RollbackError, journaled_path, rollback, write_atomic
+from harness import install, install_paths
+from harness.install import (
+    InstallError,
+    Journal,
+    Layout,
+    Plan,
+    RollbackError,
+    UnsupportedError,
+    Verified,
+    journaled_path,
+    locked,
+    rollback,
+    stage,
+    write_atomic,
+)
+from tests.test_install import real_snapshot
 
 
 def layout_at(path: Path) -> Layout:
@@ -259,3 +275,201 @@ def test_rollback_refuses_unanchorable_parent_and_keeps_journal(tmp_path: Path) 
     assert cause.errno in {errno.ELOOP, errno.ENOTDIR}
     assert str(caught.value).endswith(f"journal kept at '{layout.journal}'")
     assert layout.journal.read_text() == "{}"
+
+
+def replay_fixture(monkeypatch: pytest.MonkeyPatch, swap: Any) -> Verified:
+    """Replace authenticated npm replay with a pathname writer that runs `swap` afterwards.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): module patcher.
+        swap (Any): callable receiving the replay root once its bytes are written.
+
+    Returns:
+        Verified: real snapshot with an empty modeled archive inventory.
+    """
+
+    def replay(graph: object, root: Path, scratch: Path, npm: str, archives: object) -> None:
+        """Write like npm does, by pathname, then inject the swap.
+
+        Parameters:
+            graph (object): ignored modeled graph.
+            root (Path): staged npm prefix.
+            scratch (Path): ignored npm scratch.
+            npm (str): ignored npm path.
+            archives (object): ignored archive inventory.
+
+        Returns:
+            None: the modeled replay and the injected swap completed.
+        """
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "node_modules" / ".bin").mkdir(parents=True)
+        (root / "package.json").write_text("{}")
+        swap(root)
+
+    monkeypatch.setattr(install, "require_runtime", lambda verified: SimpleNamespace(runtime=None))
+    monkeypatch.setattr(install, "selected_graphs", lambda runtime: {"core": None, "agent": None})
+    monkeypatch.setattr(install, "install_graph", replay)
+    monkeypatch.setattr(install, "installed_identities", lambda *args: [])
+    return Verified(real_snapshot(), [], {}, archives={"core": {}, "agent": {}})
+
+
+def substitute(directory: Path, held: Path, *, link: bool) -> None:
+    """Move a staged directory aside and plant a symlink or a forged real directory.
+
+    Parameters:
+        directory (Path): staged directory to substitute.
+        held (Path): where the genuine directory is kept.
+        link (bool): plant a symlink to a victim rather than an unverified real directory.
+
+    Returns:
+        None: `directory` now names the substitute.
+    """
+    directory.rename(held)
+    victim = held.with_name(f"{held.name}-victim")
+    victim.mkdir()
+    if link:
+        directory.symlink_to(victim)
+    else:
+        directory.mkdir()
+        (directory / "forged").write_text("unverified")
+
+
+def test_core_launcher_is_not_created_through_swapped_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A staged core swapped after replay never receives the `bin/pi` launcher."""
+    layout = layout_at(tmp_path)
+    staging = layout.root / "staging" / "run"
+    held = tmp_path / "held-core"
+    verified = replay_fixture(monkeypatch, lambda root: substitute(root, held, link=True))
+    with (
+        install_paths.AnchoredStore() as anchors,
+        pytest.raises(InstallError, match=r"changed during the operation"),
+    ):
+        stage(layout, verified, Plan(install_core=True), staging, anchors=anchors)
+    assert not (tmp_path / "held-core-victim" / "bin").exists()
+    assert not (held / "bin").exists()
+
+
+def test_core_launcher_is_created_through_held_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a swap, the launcher is created relative to the prefix held since its creation."""
+    layout = layout_at(tmp_path)
+    staging = layout.root / "staging" / "run"
+    verified = replay_fixture(monkeypatch, lambda root: None)
+    with install_paths.AnchoredStore() as anchors:
+        assert stage(layout, verified, Plan(install_core=True), staging, anchors=anchors) is None
+        assert staging / "core" / "bin" in anchors.directories
+    assert (staging / "core" / "bin" / "pi").readlink() == Path("../node_modules/.bin/pi")
+    assert (staging / "core" / install.CORE_MARKER).is_file()
+
+
+@pytest.mark.parametrize("point", ["replay", "verification"])
+def test_staged_agent_is_anchored_from_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, point: str
+) -> None:
+    """An unverified real directory swapped in after creation is never adopted as the agent."""
+    layout = layout_at(tmp_path)
+    staging = layout.root / "staging" / "run"
+    agent, held = staging / "agent", tmp_path / "held-agent"
+    swapped: list[Path] = []
+
+    def swap(*args: object) -> None:
+        """Substitute the staged agent at the parametrized point.
+
+        Parameters:
+            args (object): ignored replay or verification operands.
+
+        Returns:
+            None: the staged agent was substituted once.
+        """
+        substitute(agent, held, link=False)
+        swapped.append(agent)
+
+    verified = replay_fixture(monkeypatch, swap if point == "replay" else lambda root: None)
+    monkeypatch.setattr(
+        install, "verify_owned_integrity", swap if point == "verification" else lambda *a: None
+    )
+    with (
+        install_paths.AnchoredStore() as anchors,
+        pytest.raises(OSError, match=r"Install directory '.*/agent' changed during the operation"),
+    ):
+        stage(layout, verified, Plan(install_packages=True), staging, anchors=anchors)
+    assert swapped == [agent]
+    assert (agent / "forged").read_text() == "unverified"
+    assert (held / "npm" / "package.json").read_text() == "{}"
+
+
+def test_rollback_refuses_missing_live_parent(tmp_path: Path) -> None:
+    """Recovery never invents a live parent the interrupted switch did not journal."""
+    layout = layout_at(tmp_path)
+    target = layout.agent_dir / "settings.json"
+    target.write_text("original")
+    journal = Journal(layout, layout.backups / "run")
+    with journal.open_backups():
+        backup = journal.record(target, target.name)
+        assert backup is not None
+        journal.save(target, backup)
+    layout.agent_dir.rmdir()
+    with pytest.raises(RollbackError, match=r"^Could not restore an interrupted install: .*No such file"):
+        rollback(layout)
+    assert not layout.agent_dir.exists()
+    assert (layout.backups / "run" / backup.relative_to(layout.backups / "run")).read_text() == "original"
+    assert layout.journal.exists()
+
+
+def test_locked_refuses_parent_swapped_while_held(tmp_path: Path) -> None:
+    """A live parent replaced during the locked body is reported once the body returns."""
+    layout = layout_at(tmp_path)
+    with (
+        pytest.raises(InstallError, match=r"^Install directory changed while locked: .*agent"),
+        locked(layout),
+    ):
+        substitute(layout.agent_dir, tmp_path / "held-agent", link=False)
+    assert (tmp_path / "held-agent").is_dir()
+
+
+def test_locked_refuses_non_file_lock(tmp_path: Path) -> None:
+    """A lock path that is not a regular file is refused before it is opened."""
+    layout = layout_at(tmp_path)
+    (layout.root / "lock").mkdir()
+    with (
+        pytest.raises(UnsupportedError, match=r"^Lock '.*/lock' is a directory; move it aside"),
+        locked(layout),
+    ):
+        pytest.fail("the body must not run")
+
+
+def test_locked_refuses_unopenable_lock(tmp_path: Path) -> None:
+    """A lock that cannot be created in the held root refuses without changing anything."""
+    layout = layout_at(tmp_path)
+    layout.root.chmod(0o500)
+    try:
+        with (
+            pytest.raises(
+                UnsupportedError, match=r"^Cannot safely open lock '.*/lock'; nothing changed: .*Permission"
+            ),
+            locked(layout),
+        ):
+            pytest.fail("the body must not run")
+    finally:
+        layout.root.chmod(0o700)
+    assert not (layout.root / "lock").exists()
+
+
+def test_locked_keeps_body_errors_unrelabeled(tmp_path: Path) -> None:
+    """Only the post-body namespace check is reported as a changed install directory."""
+    layout = layout_at(tmp_path)
+    with pytest.raises(FileNotFoundError, match=r"^body failure$"), locked(layout):
+        raise FileNotFoundError("body failure")
+
+
+def test_rename_refuses_missing_target_parent(tmp_path: Path) -> None:
+    """A rename never creates its destination parent; callers create journaled parents explicitly."""
+    source, missing = tmp_path / "source", tmp_path / "missing"
+    source.write_text("kept")
+    with install_paths.AnchoredStore() as anchors, pytest.raises(FileNotFoundError):
+        anchors.rename(source, missing / "target")
+    assert not missing.exists()
+    assert source.read_text() == "kept"
