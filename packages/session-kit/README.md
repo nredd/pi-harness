@@ -207,7 +207,9 @@ each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
   `paths: ["src/**/*.ts"]`. No `paths`, no injection. Successful read/edit/write results receive
   matching rules once per context lifetime. Compaction resets deduplication. Eight rules per turn,
   4096 UTF-8 bytes per appended block. The system prompt is not rewritten. Rules injected after an
-  edit inform subsequent work, not the edit already performed.
+  edit inform subsequent work, not the edit already performed. The agent directory is resolved on
+  each tool result, like title aliases and stats, so a later `PI_CODING_AGENT_DIR` change applies
+  to the next result.
 
 ## Subagents and verification
 
