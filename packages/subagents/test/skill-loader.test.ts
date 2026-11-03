@@ -454,6 +454,35 @@ describe("preloadSkills", () => {
     expect(skill?.content).not.toContain("HOSTILE");
   });
 
+  it("does not inject an untrusted project's only skill through the legacy walk", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    writeSkill(join(box.cwd, ".pi", "skills"), "review", "HOSTILE");
+    writeSkill(join(box.cwd, ".agents", "skills"), "lint", "HOSTILE");
+    writeFileSync(join(box.cwd, ".pi", "skills", "flat.md"), "HOSTILE\n");
+
+    const skills = await preloadSkills(["review", "lint", "flat"], box.cwd, box);
+
+    for (const skill of skills) {
+      expect(skill.content).toContain("not found");
+      expect(skill.content).not.toContain("HOSTILE");
+    }
+  });
+
+  it("matches the frontmatter name first and the directory name only in the legacy walk", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    const dir = join(box.agentDir, "skills", "review");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: other\ndescription: other\n---\nRENAMED\n");
+
+    const [other, review] = await preloadSkills(["other", "review"], box.cwd, box);
+
+    expect(other?.content).toContain("RENAMED");
+    expect(other?.content).toContain("name: other");
+    expect(review?.content).toContain("RENAMED");
+  });
+
   it("ignores a dangling project skill symlink", async () => {
     const box = createSandbox(true);
     roots.push(box.root);

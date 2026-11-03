@@ -53,11 +53,12 @@ export async function preloadSkills(
   const aliasFreeSkills = rejectedProjectPaths.size === 0 ? [] : await resolveAliasFreePackageSkills(cwd, options);
   const recoveredPackages = aliasFreeSkills.filter(isBehindRejectedAlias);
 
-  const disabledNames = new Set([
-    ...discoveredSkillNames(primaryResources.skills.filter(resource => !resource.enabled), cwd, options.agentDir),
-    ...discoveredSkillNames(fallbackResources.skills.filter(resource => !resource.enabled), cwd, options.agentDir),
-    ...discoveredSkillNames(recoveredPackages.filter(resource => !resource.enabled), cwd, options.agentDir),
-  ]);
+  // Resolve native disabled paths through Pi's parser, preserving every filter form it supports.
+  const disabledNames = new Set(loadTier(
+    [...primaryResources.skills, ...fallbackResources.skills, ...recoveredPackages].filter(resource => !resource.enabled),
+    cwd,
+    options.agentDir,
+  ).map(skill => skill.name));
   const project = discoveredSkills(
     primaryResources.skills.filter(resource => resource.enabled && isTier(resource, "project") && !isSymlinkedProjectSkill(resource, cwd)),
     cwd,
@@ -83,13 +84,16 @@ export async function preloadSkills(
     options.agentDir,
   );
 
+  // Historical user roots, including their raw top-level `<name>.md` lookup.
+  const home = resolve(options.homeDir ?? homedir());
+  const legacyUserRoots = [join(options.agentDir, "skills"), join(home, ".agents", "skills"), join(home, ".pi", "skills")];
   return skillNames.map(name => {
     const native = project.get(name) ?? user.get(name) ?? packages.get(name);
     const content = native
       ?? (disabledNames.has(name)
         ? undefined
         : (options.settingsManager.isProjectTrusted() ? findInRoots(projectSkillRoots(cwd).map(root => join(root, "skills")), name, false) : undefined)
-          ?? findInRoots(userLegacySkillRoots(options.agentDir, options.homeDir), name, true));
+          ?? findInRoots(legacyUserRoots, name, true));
     return { name, content: content ?? `(Skill "${name}" not found in Pi's configured skill resources)` };
   });
 }
@@ -143,21 +147,14 @@ async function resolveAliasFreePackageSkills(cwd: string, options: SkillPreloadO
   }
 }
 
-/** Resolve native disabled paths through Pi's parser, preserving every filter form it supports. */
-function discoveredSkillNames(resources: ResolvedResource[], cwd: string, agentDir: string): Set<string> {
-  return new Set(loadSkills({ cwd, agentDir, skillPaths: resources.map(resource => resource.path), includeDefaults: false }).skills.map(skill => skill.name));
+/** Parse resolved skill paths with Pi's own loader and validation. */
+function loadTier(resources: ResolvedResource[], cwd: string, agentDir: string): ReturnType<typeof loadSkills>["skills"] {
+  return loadSkills({ cwd, agentDir, skillPaths: resources.map(resource => resource.path), includeDefaults: false }).skills;
 }
 
 /** Load Pi-valid skills from a precedence tier, retaining the first declared name. */
 function discoveredSkills(resources: ResolvedResource[], cwd: string, agentDir: string): Map<string, string> {
-  const skills = loadSkills({ cwd, agentDir, skillPaths: resources.map(resource => resource.path), includeDefaults: false }).skills;
-  return new Map(skills.map(skill => [skill.name, readFileSync(skill.filePath, "utf-8").trim()]));
-}
-
-/** Preserve the historical legacy user roots and raw top-level `<name>.md` lookup. */
-function userLegacySkillRoots(agentDir: string, homeDir?: string): string[] {
-  const home = resolve(homeDir ?? homedir());
-  return [join(agentDir, "skills"), join(home, ".agents", "skills"), join(home, ".pi", "skills")];
+  return new Map(loadTier(resources, cwd, agentDir).map(skill => [skill.name, readFileSync(skill.filePath, "utf-8").trim()]));
 }
 
 /** Find a named legacy skill under roots in order without broadening Pi discovery. */
@@ -234,7 +231,9 @@ function isDirectoryTarget(path: string): boolean {
  * Match Pi's realpath identity without importing its private path utility.
  *
  * Unlike Pi, an uncanonicalizable path (raced away, EACCES) yields undefined
- * rather than the raw path, so it can never match a rejected alias.
+ * rather than the raw path, so it can never match a rejected alias. That is
+ * also why `realOrSelf` in `package-resources.ts` is not reused: it falls back
+ * to the realpath of the nearest existing parent.
  */
 function canonicalPath(path: string): string | undefined {
   try {
