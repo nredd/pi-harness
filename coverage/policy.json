@@ -344,7 +344,7 @@
         "primary": {
           "report": "coverage/python/lcov.info",
           "skip_hosts": ["wsl2"],
-          "max_uncovered": { "darwin": { "lines": 300, "functions": 13 }, "linux": { "lines": 301, "functions": 13 } },
+          "max_uncovered": { "darwin": { "lines": 284, "functions": 11 }, "linux": { "lines": 301, "functions": 13 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -364,7 +364,7 @@
         "primary": {
           "report": "coverage/python/lcov.info",
           "skip_hosts": ["wsl2"],
-          "max_uncovered": { "darwin": { "lines": 667, "functions": 71 }, "linux": { "lines": 667, "functions": 71 } },
+          "max_uncovered": { "darwin": { "lines": 636, "functions": 70 }, "linux": { "lines": 667, "functions": 71 } },
           "reporters": ["text", "lcov"]
         }
       }

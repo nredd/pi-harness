@@ -256,8 +256,8 @@ added or changed is 0/0:
 
 | Signal | darwin lines/functions | linux lines/functions |
 | --- | --- | --- |
-| `python-scripts/primary` | 300/13 | 301/13 |
-| `python-harness/primary` | 667/71 | 667/71 |
+| `python-scripts/primary` | 284/11 | 301/13 |
+| `python-harness/primary` | 636/70 | 667/71 |
 
 Measured: darwin on macOS 27.2 arm64 (Python 3.14.9) on the final tree of PR #323 (`pytest -n auto
 --dist loadfile`, three consecutive `python-harness` runs gave the same 667 uncovered lines);
