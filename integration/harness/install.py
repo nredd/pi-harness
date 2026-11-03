@@ -40,7 +40,7 @@ import sys
 import tarfile
 import tempfile
 import uuid
-from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import IntEnum
@@ -1165,29 +1165,21 @@ def consent(plan: Plan, assume_yes: bool, ask: Callable[[str], str] | None) -> N
 class Journal:
     """Durable list of switch-over steps, so an interrupted switch can be restored exactly."""
 
-    def __init__(self, layout: Layout, backups: Path, *, anchors: AnchoredStore | None = None) -> None:
+    def __init__(self, layout: Layout, backups: Path, *, anchors: AnchoredStore) -> None:
         """Start an empty journal.
 
         Parameters:
             layout (Layout): installer paths.
             backups (Path): directory receiving the replaced state.
-            anchors (AnchoredStore | None): parents retained by the surrounding installer lock.
+            anchors (AnchoredStore): parents the caller holds from switch through commit, so
+                every check covers every parent the transaction touched.
         """
         self.layout = layout
         self.path = layout.journal
         self.backups = backups
         self.steps: list[dict[str, Any]] = []
         self.backup_fd: int | None = None
-        self.owns_anchors = anchors is None
-        self.anchors = anchors if anchors is not None else AnchoredStore()
-
-    def holding(self) -> AbstractContextManager[AnchoredStore]:
-        """Hold this journal's anchors, closing them afterwards only when the journal owns them.
-
-        Returns:
-            AbstractContextManager[AnchoredStore]: the owned store, or the borrowed one unchanged.
-        """
-        return self.anchors if self.owns_anchors else nullcontext(self.anchors)
+        self.anchors = anchors
 
     @contextmanager
     def open_backups(self, *, create: bool = True) -> Iterator[None]:
@@ -1199,23 +1191,22 @@ class Journal:
         Yields:
             None: directory descriptors remain open for the operation.
         """
-        with self.holding():
+        self.anchors.check()
+        store_fd = self.anchors.directory(self.layout.backups, create=create)
+        if create:
+            os.mkdir(self.backups.name, mode=0o700, dir_fd=store_fd)
+        self.backup_fd = self.anchors.directory(self.backups)
+        try:
+            # Hold live parents across record/save and every recovery transition. Missing
+            # roots in legacy recovery need not be created until a target requires them.
+            for parent in self.layout.parents:
+                if create or parent.exists(follow_symlinks=False):
+                    self.anchors.directory(parent, create=create)
             self.anchors.check()
-            store_fd = self.anchors.directory(self.layout.backups, create=create)
-            if create:
-                os.mkdir(self.backups.name, mode=0o700, dir_fd=store_fd)
-            self.backup_fd = self.anchors.directory(self.backups)
-            try:
-                # Hold live parents across record/save and every recovery transition. Missing
-                # roots in legacy recovery need not be created until a target requires them.
-                for parent in self.layout.parents:
-                    if create or parent.exists(follow_symlinks=False):
-                        self.anchors.directory(parent, create=create)
-                self.anchors.check()
-                yield
-                self.anchors.check()
-            finally:
-                self.backup_fd = None
+            yield
+            self.anchors.check()
+        finally:
+            self.backup_fd = None
 
     def save(self, live: Path, backup: Path) -> None:
         """Move an original into the anchored run directory, ignoring replaced ancestor paths.
@@ -1308,11 +1299,10 @@ class Journal:
 
     def commit(self) -> None:
         """Mark the switch complete; nothing will be rolled back."""
-        with self.holding():
-            self.anchors.directory(self.path.parent)
-            self.anchors.check()
-            remove(self.path, anchors=self.anchors)
-            self.anchors.check()
+        self.anchors.directory(self.path.parent)
+        self.anchors.check()
+        remove(self.path, anchors=self.anchors)
+        self.anchors.check()
 
 
 def write_atomic(
@@ -2266,7 +2256,9 @@ def install_core(
     """
     graph = selected_graphs(require_runtime(verified).runtime)["core"]
     prefix_fd = anchors.directory(prefix, create=True)
-    install_graph(graph, prefix, staging / "core-npm", npm, verified.archives["core"])
+    install_graph(
+        graph, prefix, staging / "core-npm", npm, verified.archives["core"], checkpoint=anchors.check
+    )
     anchors.check()
     binary = prefix / "bin" / "pi"
     os.mkdir(binary.parent.name, dir_fd=prefix_fd)
@@ -2302,7 +2294,14 @@ def install_packages(verified: Verified, npm: str, staging: Path, *, anchors: An
         LOGGER.info(f"Stage authenticated package '{source}' (scripts disabled)")
     anchors.directory(agent / "npm", create=True)
     try:
-        install_graph(graph, agent / "npm", staging / "agent-npm", npm, verified.archives["agent"])
+        install_graph(
+            graph,
+            agent / "npm",
+            staging / "agent-npm",
+            npm,
+            verified.archives["agent"],
+            checkpoint=anchors.check,
+        )
     except (OSError, ValueError) as error:
         failure = detached_exception(InstallError(f"Authenticated package staging failed: {error}"), error)
     else:
@@ -2314,6 +2313,7 @@ def install_packages(verified: Verified, npm: str, staging: Path, *, anchors: An
         installed_identities(verified.stack, verified.sources, agent)
     except (OSError, ValueError) as error:
         raise InstallError(f"Staged packages do not match the snapshot: {error}") from error
+    anchors.check()
     verify_owned_integrity(verified.snapshot, agent)
     anchors.check()
     return agent
@@ -2533,9 +2533,12 @@ def apply(
                 # Staging is slow: check the store again just before the first journaled step.
                 require_backup_store(layout)
                 held.check()
-            except OSError as error:
-                # Staging runs npm children; never chain their raw errors.
-                failure = detached_exception(InstallError(f"Staging failed, nothing changed: {error}"), error)
+            except (OSError, ValueError, RuntimeError) as error:
+                # Staging runs npm children; never chain their raw errors. Only the private
+                # installer root and this run's staging directory exist yet.
+                failure = detached_exception(
+                    InstallError(f"Staging failed; the live install was not changed: {error}"), error
+                )
             if failure is not None:
                 raise failure from failure.__cause__
             journal = Journal(layout, backups, anchors=held)
@@ -2562,8 +2565,14 @@ def apply(
             if failure is not None:
                 raise failure from failure.__cause__
             journal.commit()
-        finally:
-            remove(staging, anchors=held)
+        except BaseException as error:
+            # A cleanup failure must never replace the error that explains the run.
+            try:
+                remove(staging, anchors=held)
+            except OSError as cleanup:
+                error.add_note(f"Staging directory '{staging}' was not removed: {cleanup}")
+            raise
+        remove(staging, anchors=held)
         if backups.exists() and not any(backups.iterdir()):
             os.rmdir(backups.name, dir_fd=held.directory(backups.parent))
             held.discard(backups)
