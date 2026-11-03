@@ -1,12 +1,5 @@
 import assert from "node:assert/strict";
-import fs, {
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import fs, { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -101,20 +94,14 @@ test("invalid provider indices and structures cannot escape the projector", () =
 			content_block: { type: secret },
 		});
 	}
-	for (const value of [null, secret, [], {}, { type: secret }])
-		trace.raw(value);
+	for (const value of [null, secret, [], {}, { type: secret }]) trace.raw(value);
 	assert.deepEqual(records, []);
 	assert.deepEqual(blockTypes(secret), { blocks: [], truncated: false });
 	assert.deepEqual(blockTypes([null]), {
 		blocks: ["unknown"],
 		truncated: false,
 	});
-	assert.equal(
-		blockTypes(
-			Array.from({ length: 1000 }, () => ({ type: "text", text: secret })),
-		).blocks?.length,
-		128,
-	);
+	assert.equal(blockTypes(Array.from({ length: 1000 }, () => ({ type: "text", text: secret }))).blocks?.length, 128);
 	assert.equal(blockTypes(Array(1000).fill(null)).truncated, true);
 });
 
@@ -145,8 +132,7 @@ test("extension is inert without opt-in; opt-in writes private bounded metadata 
 			],
 		},
 	};
-	const emit = (name: string, event: unknown = {}) =>
-		handlers.get(name)?.(event as never, ctx as never);
+	const emit = (name: string, event: unknown = {}) => handlers.get(name)?.(event as never, ctx as never);
 	try {
 		delete process.env.PI_TRANSCRIPT_TYPES_DIR;
 		transcriptTypes(api as unknown as ExtensionAPI);
@@ -180,7 +166,9 @@ test("extension is inert without opt-in; opt-in writes private bounded metadata 
 		emit("session_shutdown");
 		const files = readdirSync(join(root, "trace"));
 		assert.equal(files.length, 1);
-		const file = join(root, "trace", files[0]);
+		const [name] = files;
+		assert.ok(name);
+		const file = join(root, "trace", name);
 		assert.equal(statSync(file).mode & 0o777, 0o600);
 		const content = readFileSync(file, "utf8");
 		assert.equal(content.includes(secret), false);
@@ -189,14 +177,7 @@ test("extension is inert without opt-in; opt-in writes private bounded metadata 
 				.trim()
 				.split("\n")
 				.map((line) => JSON.parse(line).stage),
-			[
-				"start",
-				"raw_start",
-				"raw_block",
-				"normalized",
-				"message_end",
-				"session",
-			],
+			["start", "raw_start", "raw_block", "normalized", "message_end", "session"],
 		);
 		emit("message_end", { message });
 		assert.equal(readFileSync(file, "utf8"), content);
@@ -221,8 +202,7 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 		};
 		const notices: string[] = [];
 		const ctx = { ui: { notify: (message: string) => notices.push(message) } };
-		const emit = (name: string, event: unknown = {}) =>
-			handlers.get(name)?.(event as never, ctx as never);
+		const emit = (name: string, event: unknown = {}) => handlers.get(name)?.(event as never, ctx as never);
 		const directory = join(root, "trace");
 		const originalClose = fs.closeSync;
 		const closeMock =
@@ -234,8 +214,7 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 				: undefined;
 		syncBuiltinESMExports();
 		try {
-			if (failure === "open-error")
-				writeFileSync(directory, "do not overwrite");
+			if (failure === "open-error") writeFileSync(directory, "do not overwrite");
 			process.env.PI_TRANSCRIPT_TYPES_DIR = directory;
 			transcriptTypes(api as unknown as ExtensionAPI);
 			emit("session_start");
@@ -247,28 +226,111 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 					thinking: secret,
 				})),
 			};
-			for (let i = 0; i < (failure === "close-error" ? 1 : 2500); i++)
-				emit("message_end", { message });
+			for (let i = 0; i < (failure === "close-error" ? 1 : 2500); i++) emit("message_end", { message });
 			assert.doesNotThrow(() => emit("session_shutdown"));
 			closeMock?.mock.restore();
 			syncBuiltinESMExports();
 			assert.equal(notices.length, 1);
-			assert.equal(notices.join().includes(secret), false);
+			const [notice] = notices;
+			assert.ok(notice);
+			assert.equal(notice.includes(secret), false);
 			if (failure === "open-error") {
 				assert.equal(readFileSync(directory, "utf8"), "do not overwrite");
-				assert.match(notices[0], /could not start/);
+				assert.match(notice, /could not start/);
 			} else if (failure === "close-error") {
-				assert.match(notices[0], /close failure/);
+				assert.match(notice, /close failure/);
 			} else {
-				const file = join(directory, readdirSync(directory)[0]);
+				const [name] = readdirSync(directory);
+				assert.ok(name);
+				const file = join(directory, name);
 				assert.ok(statSync(file).size <= 2 * 1024 * 1024 + 30);
 				const content = readFileSync(file, "utf8");
 				assert.equal(content.includes(secret), false);
 				assert.match(content, /"stage":"capture_limit"/);
-				assert.match(notices[0], /2 MiB limit/);
+				assert.match(notice, /2 MiB limit/);
 			}
 		} finally {
 			closeMock?.mock.restore();
+			syncBuiltinESMExports();
+			emit("session_shutdown");
+			if (previous === undefined) delete process.env.PI_TRANSCRIPT_TYPES_DIR;
+			else process.env.PI_TRANSCRIPT_TYPES_DIR = previous;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+}
+
+test("block indices past the cap record one truncation marker per raw message", () => {
+	const records: unknown[] = [];
+	const trace = new TypeTrace((record) => records.push(record));
+	const overflow = { type: "content_block_start", index: 128, content_block: { type: "text", text: secret } };
+	trace.raw({ type: "message_start" });
+	trace.raw(overflow);
+	trace.raw({ ...overflow, index: 129 });
+	trace.raw({ type: "message_start" });
+	trace.raw(overflow);
+	assert.equal(JSON.stringify(records).includes(secret), false);
+	assert.deepEqual(records, [
+		{ stage: "raw_start", request: 1 },
+		{ stage: "raw_block", request: 1, truncated: true },
+		{ stage: "raw_start", request: 2 },
+		{ stage: "raw_block", request: 2, truncated: true },
+	]);
+});
+
+for (const failure of ["write-error", "restart-close-error"]) {
+	test(`capture safely stops on ${failure} after a successful start`, () => {
+		const previous = process.env.PI_TRANSCRIPT_TYPES_DIR;
+		const root = mkdtempSync(join(tmpdir(), "pi-type-probe-started-"));
+		const handlers = new Map<string, (event: never, ctx: never) => unknown>();
+		const api = {
+			on: (name: string, handler: (event: never, ctx: never) => unknown) => {
+				handlers.set(name, handler);
+			},
+		};
+		const notices: string[] = [];
+		const ctx = { ui: { notify: (message: string) => notices.push(message) } };
+		const emit = (name: string, event: unknown = {}) => handlers.get(name)?.(event as never, ctx as never);
+		const directory = join(root, "trace");
+		const message = { role: "assistant", api: "anthropic-messages", content: [{ type: "text", text: secret }] };
+		const originalClose = fs.closeSync;
+		let fsMock: ReturnType<typeof mock.method> | undefined;
+		try {
+			process.env.PI_TRANSCRIPT_TYPES_DIR = directory;
+			transcriptTypes(api as unknown as ExtensionAPI);
+			emit("session_start");
+			assert.equal(notices.length, 0);
+			const [name] = readdirSync(directory);
+			assert.ok(name);
+			const file = join(directory, name);
+			const started = readFileSync(file, "utf8");
+			assert.match(started, /"stage":"start"/);
+			fsMock =
+				failure === "write-error"
+					? mock.method(fs, "writeSync", () => {
+							throw new Error(secret);
+						})
+					: mock.method(fs, "closeSync", (fd: number) => {
+							originalClose(fd);
+							throw new Error(secret);
+						});
+			syncBuiltinESMExports();
+			if (failure === "write-error") emit("message_end", { message });
+			else emit("session_start");
+			fsMock.mock.restore();
+			syncBuiltinESMExports();
+			assert.ok(fsMock.mock.callCount() >= 1);
+			assert.equal(notices.length, 1);
+			const [notice] = notices;
+			assert.ok(notice);
+			assert.equal(notice.includes(secret), false);
+			assert.match(notice, failure === "write-error" ? /I\/O failure/ : /close failure/);
+			// Capture is closed: later events neither write nor reopen a trace.
+			emit("message_end", { message });
+			assert.deepEqual(readdirSync(directory), [name]);
+			assert.equal(readFileSync(file, "utf8"), started);
+		} finally {
+			fsMock?.mock.restore();
 			syncBuiltinESMExports();
 			emit("session_shutdown");
 			if (previous === undefined) delete process.env.PI_TRANSCRIPT_TYPES_DIR;

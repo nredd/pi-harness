@@ -444,7 +444,7 @@ def test_audit_detects_uninventoried_new_ts_and_python(tmp_path: Path) -> None:
         "integration/probes/latency.ts",
         "integration/probes/render.ts",
         "integration/probes/session-kit-child-scope.ts",
-        "integration/probes/transcript-types.ts",
+        "integration/probes/stack-resources.ts",
         "integration/providers/faux.ts",
         "integration/providers/usage_fixture.ts",
     ],

@@ -11,19 +11,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MAX_BLOCKS = 128;
 const MAX_BYTES = 2 * 1024 * 1024;
-const BLOCK_TYPES = new Set([
-	"text",
-	"thinking",
-	"redacted_thinking",
-	"tool_use",
-	"toolCall",
-]);
-const DELTA_TYPES = new Set([
-	"text_delta",
-	"thinking_delta",
-	"signature_delta",
-	"input_json_delta",
-]);
+const BLOCK_TYPES = new Set(["text", "thinking", "redacted_thinking", "tool_use", "toolCall"]);
+const DELTA_TYPES = new Set(["text_delta", "thinking_delta", "signature_delta", "input_json_delta"]);
 
 type SafeRecord = {
 	stage:
@@ -44,17 +33,12 @@ type SafeRecord = {
 };
 
 /** Project only allowlisted labels. Never stringify an input event or message. */
-export function blockTypes(
-	content: unknown,
-): Pick<SafeRecord, "blocks" | "truncated"> {
+export function blockTypes(content: unknown): Pick<SafeRecord, "blocks" | "truncated"> {
 	if (!Array.isArray(content)) return { blocks: [], truncated: false };
 	return {
 		blocks: content.slice(0, MAX_BLOCKS).map((block: unknown) => {
-			if (!block || typeof block !== "object" || !("type" in block))
-				return "unknown";
-			return typeof block.type === "string" && BLOCK_TYPES.has(block.type)
-				? block.type
-				: "unknown";
+			if (!block || typeof block !== "object" || !("type" in block)) return "unknown";
+			return typeof block.type === "string" && BLOCK_TYPES.has(block.type) ? block.type : "unknown";
 		}),
 		truncated: content.length > MAX_BLOCKS,
 	};
@@ -84,13 +68,7 @@ export class TypeTrace {
 			this.emit({ stage: "raw_stop", request: this.request });
 			return;
 		}
-		if (
-			!("index" in data) ||
-			typeof data.index !== "number" ||
-			!Number.isInteger(data.index) ||
-			data.index < 0
-		)
-			return;
+		if (!("index" in data) || typeof data.index !== "number" || !Number.isInteger(data.index) || data.index < 0) return;
 		if (data.index >= MAX_BLOCKS) {
 			if (!this.overflow) {
 				this.overflow = true;
@@ -112,12 +90,8 @@ export class TypeTrace {
 			});
 		} else if (data.type === "content_block_delta" && "delta" in data) {
 			const delta = data.delta;
-			const type =
-				delta && typeof delta === "object" && "type" in delta
-					? delta.type
-					: undefined;
-			const block =
-				typeof type === "string" && DELTA_TYPES.has(type) ? type : "unknown";
+			const type = delta && typeof delta === "object" && "type" in delta ? delta.type : undefined;
+			const block = typeof type === "string" && DELTA_TYPES.has(type) ? type : "unknown";
 			const key = `${data.index}:${block}`;
 			if (this.deltas.has(key)) return;
 			this.deltas.add(key);
@@ -130,10 +104,7 @@ export class TypeTrace {
 		}
 	}
 
-	message(
-		stage: "normalized" | "message_end" | "session",
-		content: unknown,
-	): void {
+	message(stage: "normalized" | "message_end" | "session", content: unknown): void {
 		this.emit({ stage, request: this.request, ...blockTypes(content) });
 	}
 }
@@ -162,18 +133,11 @@ export default function transcriptTypes(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		try {
 			if (!close()) {
-				ctx.ui.notify(
-					"Transcript type capture stopped after a close failure",
-					"warning",
-				);
+				ctx.ui.notify("Transcript type capture stopped after a close failure", "warning");
 				return;
 			}
 			mkdirSync(directory, { recursive: true, mode: 0o700 });
-			fd = openSync(
-				join(directory, `transcript-types-${randomUUID()}.jsonl`),
-				"wx",
-				0o600,
-			);
+			fd = openSync(join(directory, `transcript-types-${randomUUID()}.jsonl`), "wx", 0o600);
 			bytes = 0;
 			lastNormalized = "";
 			pendingSession = false;
@@ -196,10 +160,7 @@ export default function transcriptTypes(pi: ExtensionAPI): void {
 					bytes += Buffer.byteLength(line);
 				} catch {
 					close();
-					ctx.ui.notify(
-						"Transcript type capture stopped after an I/O failure",
-						"warning",
-					);
+					ctx.ui.notify("Transcript type capture stopped after an I/O failure", "warning");
 				}
 			};
 			trace = new TypeTrace(emit);
@@ -214,21 +175,14 @@ export default function transcriptTypes(pi: ExtensionAPI): void {
 	});
 	pi.on("message_update", (event) => {
 		if (!trace) return;
-		if (
-			event.message.role !== "assistant" ||
-			event.message.api !== "anthropic-messages"
-		)
-			return;
+		if (event.message.role !== "assistant" || event.message.api !== "anthropic-messages") return;
 		const shape = JSON.stringify(blockTypes(event.message.content));
 		if (shape === lastNormalized) return;
 		lastNormalized = shape;
 		trace?.message("normalized", event.message.content);
 	});
 	pi.on("message_end", (event) => {
-		if (
-			event.message.role === "assistant" &&
-			event.message.api === "anthropic-messages"
-		) {
+		if (event.message.role === "assistant" && event.message.api === "anthropic-messages") {
 			trace?.message("message_end", event.message.content);
 			pendingSession = trace !== undefined;
 			lastNormalized = "";
@@ -240,23 +194,13 @@ export default function transcriptTypes(pi: ExtensionAPI): void {
 		// Snapshot only after a newly observed assistant message, never on capture startup.
 		const latest = ctx.sessionManager
 			.getBranch()
-			.findLast(
-				(entry) =>
-					entry.type === "message" && entry.message.role === "assistant",
-			);
-		if (!latest || latest.type !== "message") return;
-		if (
-			latest.message.role === "assistant" &&
-			latest.message.api === "anthropic-messages"
-		) {
+			.findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+		if (latest?.type !== "message") return;
+		if (latest.message.role === "assistant" && latest.message.api === "anthropic-messages") {
 			trace.message("session", latest.message.content);
 		}
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
-		if (!close())
-			ctx.ui.notify(
-				"Transcript type capture stopped after a close failure",
-				"warning",
-			);
+		if (!close()) ctx.ui.notify("Transcript type capture stopped after a close failure", "warning");
 	});
 }
