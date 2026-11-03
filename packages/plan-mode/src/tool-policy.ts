@@ -145,6 +145,11 @@ function isTrustedExtensionTool(tool: ToolInfo) {
 /** The typed remote-shell tool Plan mode re-validates like `ssh <host> <command>`. */
 export const SSH_EXEC_TOOL_NAME = "ssh_exec";
 
+/**
+ * A trusted extension tool declaring `readOnlyHint: true`. The hint means no direct edits, not no
+ * side effects: Plan is not a sandbox, and an admitted tool may run repo code (`build.rs`,
+ * `conftest.py`, tests) that writes build or cache outputs.
+ */
 export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
   return isTrustedExtensionTool(tool) && tool.annotations?.readOnlyHint === true;
 }
