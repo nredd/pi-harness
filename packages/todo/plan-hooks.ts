@@ -194,6 +194,7 @@ export function registerPlanHooks(
 	// A settle with `in_progress` todos is a stop with owned work pending. The reminder above only
 	// covers plan items and only once, so report the state instead of leaving a quiet prompt.
 	pi.on("agent_settled", (_event, ctx) => {
+		if (isPlanning(ctx, [])) return;
 		const message = formatInProgressNotice(getState(sid(ctx)));
 		if (message) ctx.ui.notify(message, "warning");
 	});

@@ -396,7 +396,7 @@ describe("settling with owned agents still running", () => {
 
     b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
     expect(notices(b.parentCtx)).toEqual([
-      ["Run ended with 2 agents still running; the completion notice will resume this session", "info"],
+      ["Run ended with 2 agents still running or queued", "info"],
     ]);
 
     runs.settle("alpha");
@@ -414,6 +414,6 @@ describe("settling with owned agents still running", () => {
     await spawn(b, b.parentCtx, "alpha");
     b.parentCtx.ui.notify.mockClear();
     b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
-    expect(notices(b.parentCtx)[0][0]).toContain("1 agent still running");
+    expect(notices(b.parentCtx)[0][0]).toContain("1 agent still running or queued");
   });
 });

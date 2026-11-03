@@ -1745,11 +1745,14 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   pi.on("agent_settled", () => {
     outbox.onAgentEnd();
     // The run is over but owned agents are not: say so, instead of leaving a
-    // quiet prompt that looks like finished work. Their completion notice wakes the parent.
+    // quiet prompt that looks like finished work. No wake claim: foreground and
+    // non-waking join-mode agents never notify this session. `currentCtx` is set
+    // at `session_start` and cleared only at `session_shutdown`, and pi settles
+    // a run only inside a live session, so it is defined here.
     const pending = manager.countOwnedPending();
     if (pending > 0) {
       currentCtx?.ui.notify(
-        `Run ended with ${pending} agent${pending === 1 ? "" : "s"} still running; the completion notice will resume this session`,
+        `Run ended with ${pending} agent${pending === 1 ? "" : "s"} still running or queued`,
         "info",
       );
     }

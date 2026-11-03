@@ -334,6 +334,27 @@ describe("settling with in_progress todos", () => {
 		expect(formatInProgressNotice(state)).toBe("Run ended with 5 in_progress todos: #1 t1, #2 t2, #3 t3, +2 more");
 	});
 
+	it("strips terminal escapes from the subjects", () => {
+		const state = {
+			tasks: [{ id: 1, subject: "a\u001b[31mred\u001b[0m", status: "in_progress" }],
+			nextId: 2,
+		} as never;
+		expect(formatInProgressNotice(state)).toBe("Run ended with 1 in_progress todo: #1 ared");
+	});
+
+	it("stays silent in Plan mode", async () => {
+		const { handler, call } = setup();
+		const ctx = createMockCtx({ sessionId: "s1" });
+		await handler("session_start")({}, ctx);
+		await call(ctx, { action: "create", subject: "Ship the thing" });
+		await call(ctx, { action: "update", id: 1, status: "in_progress" });
+		(ctx.sessionManager as { getBranch: () => unknown[] }).getBranch = () => [
+			{ type: "custom", customType: "plan-mode-state", data: { enabled: true } },
+		];
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		expect(notices(ctx)).toEqual([]);
+	});
+
 	it("stays silent when nothing is in_progress", async () => {
 		const { handler, call } = setup();
 		const ctx = createMockCtx({ sessionId: "s1" });
