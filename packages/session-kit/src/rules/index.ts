@@ -8,7 +8,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { agentDir } from "../agent-dir.ts";
+import { type AgentDirOptions, resolveAgentDir } from "../agent-dir.ts";
 import type { KitConfig } from "../config.ts";
 import {
 	formatRules,
@@ -45,7 +45,7 @@ export function loadRuleDir(dir: string, source: "project" | "user"): Rule[] {
 	return rules;
 }
 
-export function register(pi: ExtensionAPI, _config: KitConfig, userAgentDir = agentDir(), homeDir?: string): void {
+export function register(pi: ExtensionAPI, _config: KitConfig, dirs: AgentDirOptions = {}): void {
 	let injected = new Set<string>();
 	let turnCount = 0;
 
@@ -66,12 +66,12 @@ export function register(pi: ExtensionAPI, _config: KitConfig, userAgentDir = ag
 		if (event.isError || !TOOLS_WITH_PATH.has(event.toolName)) return;
 		const raw = event.input.path;
 		if (typeof raw !== "string") return;
-		const rel = relativeToCwd(raw, ctx.cwd, homeDir);
+		const rel = relativeToCwd(raw, ctx.cwd, dirs.homeDir);
 		if (rel === undefined) return;
 
 		const rules = [
 			...loadRuleDir(path.join(ctx.cwd, ".pi", "rules"), "project"),
-			...loadRuleDir(path.join(userAgentDir, "rules"), "user"),
+			...loadRuleDir(path.join(resolveAgentDir(dirs), "rules"), "user"),
 		];
 		const fresh: Rule[] = [];
 		for (const rule of rules) {
