@@ -1332,11 +1332,13 @@ def test_audit_manifest_rejects_malformed_fields(mutation: dict[str, object], fi
 
 
 @pytest.mark.parametrize("manifest", [[], "x", None, 3])
-def test_audit_manifest_rejects_non_object(manifest: object) -> None:
+def test_audit_manifest_rejects_non_object(manifest: Any) -> None:
     """A manifest that is not a JSON object is reported, not crashed on.
 
+    `audit_tarball` hands over untyped `json.loads` output, so the declared mapping is not enforced there.
+
     Parameters:
-        manifest (object): Non-object JSON value.
+        manifest (Any): Non-object JSON value, as `json.loads` returns it.
     """
     problems = pc.audit_manifest(DEV_TOOLS, manifest, ["src/index.ts"])
     assert any("malformed" in problem for problem in problems), problems
@@ -3458,15 +3460,6 @@ def test_macos_helper_refuses_a_non_regular_member(tmp_path: Path) -> None:
         pc.check_macos_helper(tarball, "arm64")
 
 
-def test_audit_manifest_refuses_a_library_manifest_that_is_not_an_object() -> None:
-    """A library manifest handed over as an already-validated model, not JSON, is reported, not read."""
-    manifest = pc.PackedManifest(
-        name=pc.RESOURCE_SAMPLER_CONTRACT.name, publishConfig=pc.PackedPublishConfig(access="public")
-    )
-    problems = pc.audit_manifest(pc.RESOURCE_SAMPLER_CONTRACT, manifest, [])
-    assert problems[-1] == "library manifest must be an object"
-
-
 @pytest.mark.parametrize(
     ("stdout", "message"),
     [
@@ -3713,7 +3706,11 @@ def test_script_entrypoint_exits_with_mains_status(tmp_path: Path) -> None:
     """
     (tmp_path / "stale").write_text("x")
     done = subprocess.run(
-        [sys.executable, pc.__file__, "--work-dir", str(tmp_path)],
+        # `-E -s`, not `-I`: isolation's `-P` drops the script directory, which the real entrypoint
+        # needs for its sibling `faux_provider` import.
+        [sys.executable, "-E", "-s", pc.__file__, "--work-dir", str(tmp_path)],
+        # Scrubbed, except coverage.py's own `patch = ["subprocess"]` hook so the entrypoint is measured.
+        env={"PATH": "/usr/bin:/bin"} | {k: v for k, v in os.environ.items() if k.startswith("COVERAGE_")},
         capture_output=True,
         text=True,
         check=False,

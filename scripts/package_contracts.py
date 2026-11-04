@@ -1944,7 +1944,9 @@ def shared_library_pin_problems(contract: PackageContract) -> list[str]:
     ]
 
 
-def audit_manifest(contract: PackageContract, manifest: object, expected_files: Sequence[str]) -> list[str]:
+def audit_manifest(
+    contract: PackageContract, manifest: Mapping[str, object], expected_files: Sequence[str]
+) -> list[str]:
     """Check the packed `package.json` for independence and publication safety.
 
     Only the audited fields are validated (see `PackedManifest`); other npm metadata is ignored on
@@ -1952,7 +1954,7 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
 
     Parameters:
         contract (PackageContract): Expectations.
-        manifest (object): Parsed packed manifest JSON value.
+        manifest (Mapping[str, object]): Parsed packed manifest JSON object.
         expected_files (Sequence[str]): Files that must be reachable through `pi.extensions`.
 
     Returns:
@@ -2009,8 +2011,6 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
         if declared_range != expected_range:
             problems.append(f"peer '{name}' must use the range '{expected_range}', not '{declared_range}'")
     if contract.library:
-        if not isinstance(manifest, dict):
-            return [*problems, "library manifest must be an object"]
         if "pi" in manifest or peers:
             problems.append("library must not declare `pi` resources or host peers")
         expected = {
