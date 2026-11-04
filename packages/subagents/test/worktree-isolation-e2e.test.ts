@@ -3,8 +3,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import { setWorktreeIsolationEnabled } from "../src/worktree.js";
-import { answer, calls, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
+import { answer, barrier, calls, nextEvent, notices, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
 
 const MARKER_FILE = "agent-work.txt";
 const CHILD_MARKER = "CHILD-EDITED-ITS-TREE";
@@ -108,5 +109,46 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
     expect(git(target, "branch", "--list", "pi-agent-*")).toBe("");
     expect(git(target, "worktree", "list").split("\n")).toHaveLength(1);
     expect(result.text).not.toContain("Changes saved to branch");
+  });
+
+  // #443: a stop goes through the usual settle, so a child's edits survive on
+  // its branch and the one notice names it. The stop lands while the child's
+  // next model turn is already in flight with a tool call, which must not run.
+  it("keeps a parent-stopped child's branch and names it in the one notice", async () => {
+    fixture = new ScenarioSession({ agentModels: { "*": "kid/child" } });
+    const target = repo();
+    process.chdir(target);
+    const atBoundary = barrier();
+    const proceed = barrier();
+    fixture.physical("kid", "child", [
+      calls({ name: "write", args: { path: MARKER_FILE, content: "isolated\n" } }),
+      async () => {
+        atBoundary.resolve();
+        await proceed.promise;
+        return calls({ name: "write", args: { path: "after-stop.txt", content: "kept going\n" } });
+      },
+      answer("NEVER"),
+    ]);
+    const h = await fixture.start({ harness: { cwd: target } });
+    h.setResponses([calls(spawn("worktree work", { isolation: "worktree" })), answer("SPAWNED")]);
+    await h.session.prompt("Delegate the work.");
+    const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1] ?? "";
+    await atBoundary.promise;
+
+    h.setResponses([calls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOPPED")]);
+    await h.session.prompt("Stop it.");
+    expect(outcomes(h, "stop_subagent")[0]?.text).toContain(`Agent ${id} stopped.`);
+    // The notice wakes the parent; its turn must settle before reading the transcript.
+    const woke = nextEvent(h, e => e.type === "agent_settled");
+    proceed.resolve();
+    await fixture.record(id).promise;
+    fixture.clock.advance(NOTIFICATION_HOLD_MS);
+    await woke;
+
+    expect(fixture.record(id)).toMatchObject({ status: "stopped", stoppedBy: "parent", toolUses: 1 });
+    expect(notices(h)).toHaveLength(1);
+    const branch = branchOf(notices(h)[0] ?? "");
+    expect(git(target, "ls-tree", "--name-only", branch)).toContain(MARKER_FILE);
+    expect(git(target, "ls-tree", "--name-only", branch)).not.toContain("after-stop.txt");
   });
 });

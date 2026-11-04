@@ -78,6 +78,8 @@ export interface WorkflowTask {
   logs: string[];
 
   abortController: AbortController;
+  /** Set when the parent stopped the run with `stop_subagent`; unset for a human stop. */
+  stoppedBy?: "parent";
   startTime: number;
   endTime?: number;
   /** Excluded from the elapsed clock the header shows. */
@@ -293,7 +295,7 @@ export function formatWorkflowNotification(task: WorkflowTask, now = Date.now())
   const totals = stats(task.workflowProgress, task.agentCount);
   const status =
     task.status === "completed" ? "Done"
-    : task.status === "killed" ? "Stopped"
+    : task.status === "killed" ? (task.stoppedBy === "parent" ? "Stopped by the parent with stop_subagent" : "Stopped")
     : `Error: ${task.error ?? "unknown"}`;
   const result = workflowResultText(task);
   return [

@@ -39,6 +39,7 @@ vi.mock("../src/ui/fleet-list.js", () => ({
     setUICtx = vi.fn();
     setWorkflowSource = vi.fn();
     setParkedSource = vi.fn();
+    setStopAll = vi.fn();
     restoreSession = vi.fn();
     ingestFailure = vi.fn();
     acknowledgeFailure = vi.fn();
