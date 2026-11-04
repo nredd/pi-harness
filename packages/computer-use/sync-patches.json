@@ -271,9 +271,7 @@
 		"scripts/check-docs.mjs",
 		"scripts/check-invariants.mjs",
 		"scripts/check-linux-build-scripts.mjs",
-		"scripts/check-linux-native.mjs",
 		"scripts/check-local-signing.mjs",
-		"scripts/check-macos-helper-live.mjs",
 		"scripts/check-macos-native-pure.mjs",
 		"scripts/check-macos-observe-target.mjs",
 		"scripts/check-package-assets.mjs",
@@ -284,6 +282,7 @@
 		"docs/rust-coverage.md",
 		"scripts/check-tool-schemas.mjs",
 		"scripts/check-upstream-sync.mjs",
+		"scripts/check-windows-build-scripts.mjs",
 		"scripts/docs-generators/generate-tool-reference.mjs",
 		"scripts/fixtures/alert-app.swift",
 		"scripts/fixtures/event-probe.swift",
@@ -305,7 +304,10 @@
 		"test/find-params.test.mjs",
 		"test/invariants.test.mjs",
 		"test/linux-build-scripts.test.mjs",
+		"test/linux-live.test.mjs",
+		"test/linux-native.test.mjs",
 		"test/local-signing.test.mjs",
+		"test/macos-helper-live.test.mjs",
 		"test/macos-helper-path.test.mjs",
 		"test/macos-native-pure.test.mjs",
 		"test/macos-observe-target.test.mjs",
@@ -317,6 +319,7 @@
 		"test/sync-ledger.test.mjs",
 		"test/tool-schemas.test.mjs",
 		"test/unpaired-act.test.mjs",
+		"test/windows-build-scripts.test.mjs",
 		"vitest.config.ts"
 	]
 }
