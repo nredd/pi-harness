@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+  readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages["workflow-examples"];
 
 export default defineConfig({
   test: {
@@ -10,7 +15,8 @@ export default defineConfig({
       reporter: ["text", "lcov"],
       reportsDirectory: "coverage/workflow-examples",
       reportOnFailure: true,
-      include: ["examples/**/*.js"],
+      include: owned,
+      exclude: exclusions.map(({ path }) => path),
     },
     include: ["test/workflow-examples.test.ts"],
   },

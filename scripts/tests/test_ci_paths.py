@@ -341,6 +341,7 @@ def test_write_github_output_keeps_input_flags_independent(
         ".python-version",
         ".gitattributes",
         ".gitmodules",
+        "coverage/policy.json",
         "package-lock.json",
         "integration/pyproject.toml",
         "integration/uv.lock",
