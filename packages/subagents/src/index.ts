@@ -19,7 +19,7 @@ import { Type } from "typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
-import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed } from "./agent-manager.js";
+import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
@@ -216,6 +216,23 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
 }
 
 /** Build AgentDetails from a base + record-specific fields. */
+/**
+ * The settle report for owned agents still pending, or `undefined` when none
+ * are: how many, then what is armed to wake the parent. Foreground and
+ * detached agents are named as not armed, so a stop that nothing will resume
+ * never reads as one that something will.
+ */
+function formatOwnedPendingNotice({ notifying, silent }: OwnedPending): string | undefined {
+  const total = notifying + silent;
+  if (total === 0) return undefined;
+  const plural = (n: number) => (n === 1 ? "" : "s");
+  const armed = notifying > 0
+    ? `${notifying} completion notice${plural(notifying)} ${notifying === 1 ? "wakes" : "wake"} the parent`
+    : "nothing wakes the parent";
+  const unarmed = silent > 0 ? `; ${silent} foreground or detached agent${plural(silent)} will not` : "";
+  return `Run ended with ${total} agent${plural(total)} running or queued, armed: ${armed}${unarmed}`;
+}
+
 function buildDetails(
   base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "modelNote" | "modelFallback" | "modelTier" | "tags">,
   record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; outputFile?: string; lifetimeUsage: LifetimeUsage },
@@ -1749,18 +1766,14 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   pi.on("agent_end", () => outbox.onAgentEnd());
   pi.on("agent_settled", () => {
     outbox.onAgentEnd();
-    // The run is over but owned agents are not: say so, instead of leaving a
-    // quiet prompt that looks like finished work. No wake claim: foreground and
-    // non-waking join-mode agents never notify this session. `currentCtx` is set
-    // at `session_start` and cleared only at `session_shutdown`, and pi settles
-    // a run only inside a live session, so it is defined here.
-    const pending = manager.countOwnedPending();
-    if (pending > 0) {
-      currentCtx?.ui.notify(
-        `Run ended with ${pending} agent${pending === 1 ? "" : "s"} still running or queued`,
-        "info",
-      );
-    }
+    // The run is over but owned agents are not: say so, and say what will
+    // wake the parent, instead of leaving a quiet prompt that looks like
+    // finished work. `currentCtx` is set at `session_start` and cleared only at
+    // `session_shutdown`, and pi settles a run only inside a live session, so
+    // it is defined here.
+    const pending = manager.ownedPending();
+    const message = formatOwnedPendingNotice(pending);
+    if (message) currentCtx?.ui.notify(message, pending.notifying > 0 ? "info" : "warning");
   });
 
   /** Build the full type list text dynamically from available agents only. */

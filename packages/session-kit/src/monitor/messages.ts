@@ -28,6 +28,22 @@ function exitNote(info: MonitorInfo): string {
 	}
 }
 
+/**
+ * What wakes the parent from a running monitor: every batch with `wake`, else a `match` line, and
+ * always a natural exit or timeout. Only `monitor_stop` ends one without a wake.
+ */
+function armedOn(info: MonitorInfo): string {
+	const on = info.wake ? "every batch or " : info.match ? `/${info.match}/ or ` : "";
+	return `${info.id} "${info.name}" on ${on}exit`;
+}
+
+/** The settle report for running monitors, or `undefined` when none are running. */
+export function formatPendingMonitors(running: MonitorInfo[]): string | undefined {
+	if (running.length === 0) return undefined;
+	const plural = running.length === 1 ? "" : "s";
+	return `Run ended with ${running.length} monitor${plural} running, armed: ${running.map(armedOn).join(", ")}`;
+}
+
 /** A wake names its event and cursor without replaying passive buffered output. */
 export function formatMessage(
 	info: MonitorInfo,

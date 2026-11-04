@@ -123,13 +123,17 @@ export function formatPlanReminder(state: TaskState): string {
 	return lines.join("\n");
 }
 
-/** One-line report of `in_progress` todos a run stopped with, or `undefined` when there are none. */
+/**
+ * One-line report of `in_progress` todos a run stopped with, or `undefined` when there are none.
+ * Todos arm nothing: unlike a background agent or monitor, no todo wakes the parent, so the report
+ * says so rather than leaving the stop to read as resumable.
+ */
 export function formatInProgressNotice(state: TaskState): string | undefined {
 	const active = state.tasks.filter((t) => t.status === "in_progress");
 	if (!active.length) return undefined;
 	const shown = active.slice(0, 3).map((t) => `#${t.id} ${sanitizeTerminalText(t.subject)}`);
 	const more = active.length > shown.length ? `, +${active.length - shown.length} more` : "";
-	return `Run ended with ${active.length} in_progress todo${active.length === 1 ? "" : "s"}: ${shown.join(", ")}${more}`;
+	return `Run ended with ${active.length} in_progress todo${active.length === 1 ? "" : "s"}: ${shown.join(", ")}${more}; armed: no wake from todos`;
 }
 
 /**

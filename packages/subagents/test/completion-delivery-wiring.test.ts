@@ -385,8 +385,12 @@ describe("`group` join mode — one notification per turn's batch", () => {
 
 describe("settling with owned agents still running", () => {
   const notices = (parentCtx: any): any[][] => parentCtx.ui.notify.mock.calls;
+  const settled = (b: BootedPi) => b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
+  /** A detached start, as RPC and `@handle` make it: running, but its settle notifies nobody. */
+  const spawnDetached = (b: BootedPi, parentCtx: any, prompt: string): string =>
+    (globalThis as any)[MANAGER_KEY].spawn(b.pi, parentCtx, "general-purpose", prompt, { description: prompt });
 
-  it("reports running agents when the run settles, then goes quiet once they finish", async () => {
+  it("reports running agents and the completion notices armed to wake the parent, then goes quiet once they finish", async () => {
     vi.useFakeTimers();
     const runs = controllableRuns();
     const b = await boot();
@@ -394,26 +398,63 @@ describe("settling with owned agents still running", () => {
     await spawn(b, b.parentCtx, "beta");
     b.parentCtx.ui.notify.mockClear();
 
-    b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
+    settled(b);
     expect(notices(b.parentCtx)).toEqual([
-      ["Run ended with 2 agents still running or queued", "info"],
+      ["Run ended with 2 agents running or queued, armed: 2 completion notices wake the parent", "info"],
     ]);
 
     runs.settle("alpha");
     runs.settle("beta");
     await vi.advanceTimersByTimeAsync(0);
     b.parentCtx.ui.notify.mockClear();
-    b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
+    settled(b);
     expect(notices(b.parentCtx)).toEqual([]);
   });
 
-  it("says agent in the singular", async () => {
+  it("says agent and notice in the singular", async () => {
     vi.useFakeTimers();
     controllableRuns();
     const b = await boot();
     await spawn(b, b.parentCtx, "alpha");
     b.parentCtx.ui.notify.mockClear();
-    b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
-    expect(notices(b.parentCtx)[0][0]).toContain("1 agent still running or queued");
+    settled(b);
+    expect(notices(b.parentCtx)).toEqual([
+      ["Run ended with 1 agent running or queued, armed: 1 completion notice wakes the parent", "info"],
+    ]);
+  });
+
+  it("names the agents whose completion will not wake the parent", async () => {
+    vi.useFakeTimers();
+    controllableRuns();
+    const b = await boot();
+    await spawn(b, b.parentCtx, "alpha");
+    spawnDetached(b, b.parentCtx, "gamma");
+    spawnDetached(b, b.parentCtx, "delta");
+    b.parentCtx.ui.notify.mockClear();
+    settled(b);
+    expect(notices(b.parentCtx)).toEqual([
+      ["Run ended with 3 agents running or queued, armed: 1 completion notice wakes the parent; 2 foreground or detached agents will not", "info"],
+    ]);
+  });
+
+  it("warns when nothing is armed to wake the parent", async () => {
+    vi.useFakeTimers();
+    controllableRuns();
+    const b = await boot();
+    spawnDetached(b, b.parentCtx, "gamma");
+    b.parentCtx.ui.notify.mockClear();
+    settled(b);
+    expect(notices(b.parentCtx)).toEqual([
+      ["Run ended with 1 agent running or queued, armed: nothing wakes the parent; 1 foreground or detached agent will not", "warning"],
+    ]);
+  });
+
+  it("stays silent when no owned agent is pending", async () => {
+    vi.useFakeTimers();
+    controllableRuns();
+    const b = await boot();
+    b.parentCtx.ui.notify.mockClear();
+    settled(b);
+    expect(notices(b.parentCtx)).toEqual([]);
   });
 });

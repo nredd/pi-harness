@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, formatMessage } from "../../src/monitor/messages.ts";
+import { formatDuration, formatMessage, formatPendingMonitors } from "../../src/monitor/messages.ts";
 import type { MonitorInfo } from "../../src/monitor/types.ts";
 
 const info = (over: Partial<MonitorInfo> = {}): MonitorInfo => ({
@@ -90,4 +90,25 @@ describe("formatDuration", () => {
 		[61_000, "1m01s"],
 		[3_660_000, "1h01m"],
 	])("%d ms -> %s", (ms, out) => expect(formatDuration(ms)).toBe(out));
+});
+
+describe("formatPendingMonitors", () => {
+	it("names what each running monitor is armed to wake the parent on", () => {
+		const running = [
+			info({ id: "m1", name: "ci", match: "PASS|FAIL" }),
+			info({ id: "m2", name: "log" }),
+			info({ id: "m3", name: "tail", wake: true, match: "x" }),
+		];
+		expect(formatPendingMonitors(running)).toBe(
+			'Run ended with 3 monitors running, armed: m1 "ci" on /PASS|FAIL/ or exit, m2 "log" on exit, m3 "tail" on every batch or exit',
+		);
+	});
+
+	it("says monitor in the singular", () => {
+		expect(formatPendingMonitors([info()])).toBe('Run ended with 1 monitor running, armed: m1 "build" on exit');
+	});
+
+	it("reports nothing when no monitor is running", () => {
+		expect(formatPendingMonitors([])).toBeUndefined();
+	});
 });

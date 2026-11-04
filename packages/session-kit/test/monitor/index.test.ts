@@ -202,6 +202,40 @@ describe("monitor extension", () => {
 		expect(ctx.ui.notify.mock.calls.at(-1)?.[1]).toBe("warning");
 	});
 
+	it("reports running monitors and what wakes the parent when a run settles, and nothing once they stop", async () => {
+		const f = fakePi();
+		register(f.pi, defaultConfig());
+		const ctx = fakeCtx();
+		await f.emit("session_start", ctx);
+		await f.emit("agent_settled", ctx);
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+
+		const start = (name: string, extra: Record<string, unknown> = {}) =>
+			f.tools
+				.get("monitor_start")
+				.execute("1", { argv: ["node", "-e", STAY], name, ...extra }, undefined, undefined, ctx);
+		expect((await start("ci", { match: "PASS|FAIL" })).isError).toBe(false);
+		expect((await start("log")).isError).toBe(false);
+		await f.emit("agent_settled", ctx);
+		expect(ctx.ui.notify.mock.calls).toEqual([
+			['Run ended with 2 monitors running, armed: m1 "ci" on /PASS|FAIL/ or exit, m2 "log" on exit', "info"],
+		]);
+
+		await f.commands.get("monitor").handler("stop all", ctx);
+		ctx.ui.notify.mockClear();
+		await f.emit("agent_settled", ctx);
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+	});
+
+	it("reports nothing at settle in a child session", async () => {
+		const f = fakePi("general-purpose#0123abcd");
+		register(f.pi, defaultConfig());
+		const ctx = fakeCtx();
+		await f.emit("session_start", ctx);
+		await f.emit("agent_settled", ctx);
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+	});
+
 	it("kills every child on session_shutdown, whatever the reason", async () => {
 		for (const reason of ["quit", "reload", "new", "resume", "fork"]) {
 			const f = fakePi();

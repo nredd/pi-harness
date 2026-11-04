@@ -214,6 +214,14 @@ function assertValidSpawnCwd(cwd: unknown): asserts cwd is string | undefined | 
   }
 }
 
+/** The session's own pending agents, split by whether their completion wakes the parent. */
+export interface OwnedPending {
+  /** Background agents whose completion notice starts a parent turn. */
+  notifying: number;
+  /** Foreground or detached agents whose settle notifies nobody. */
+  silent: number;
+}
+
 /**
  * Whether a record occupies one of the `maxConcurrent` background slots.
  * Nested children don't: their parent already holds a slot, so counting (and
@@ -2047,14 +2055,19 @@ export class AgentManager {
   }
 
   /**
-   * How many of the session's own agents (see `isTopLevelAgent`) are still
-   * running or queued. Owned children report through their owner, so counting
+   * The session's own agents (see `isTopLevelAgent`) still running or queued,
+   * split by whether their completion wakes the parent. A background agent's
+   * settle sends a completion notice that starts a turn; a foreground or
+   * detached one (`isBackground` unset) is marked consumed at settle and
+   * notifies nobody. Owned children report through their owner, so counting
    * them would double-count the same work.
    */
-  countOwnedPending(): number {
-    return [...this.agents.values()].filter(
+  ownedPending(): OwnedPending {
+    const pending = [...this.agents.values()].filter(
       r => isTopLevelAgent(r) && (r.status === "running" || r.status === "queued"),
-    ).length;
+    );
+    const notifying = pending.filter(r => r.isBackground).length;
+    return { notifying, silent: pending.length - notifying };
   }
 
   /**
