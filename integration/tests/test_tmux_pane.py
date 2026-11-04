@@ -32,7 +32,7 @@ from scenarios.test_stack import wait_dead
 from tests.stub_pi import EARLY_EXIT, stub_pi_command
 from tests.stub_pi_session import (
     FakeClock,
-    assert_exits,
+    assert_server_gone,
     kill_and_prove_gone,
     process_alive,
     stub_sandbox,
@@ -109,6 +109,7 @@ def test_submit_closes_autocomplete_before_enter(pane: TmuxPane) -> None:
     interactive.submit(pane, "plain")
     pane.wait_for(r"^> plain$")
     rows = pane.wait_stable(quiet_s=SETTLE_S)
+    assert len(rows) == pane.height
     first = find_row(rows, r"^> /model$")
     assert rows[first + 1] == "> plain"
 
@@ -184,6 +185,29 @@ def test_wait_stable_times_out_on_a_changing_screen(monkeypatch: pytest.MonkeyPa
     assert caught.value.capture == f"frame {len(clock.sleeps)}"
 
 
+# A form feed (or `\x0b`, `\x1c`-`\x1e`, `\x85`, U+2028/9) inside a row is screen content, not a row break.
+FORM_FEED_SCREEN = "top\x0cstill top   \nsecond\n"
+
+
+def test_rows_split_only_on_newlines(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`rows` keeps a form feed inside its row and drops only the capture's trailing newline."""
+    pane = TmuxPane(tmp_path / "unused.sock", "ff", height=2)
+    monkeypatch.setattr(pane, "capture", lambda: FORM_FEED_SCREEN)
+    assert pane.rows() == ["top\x0cstill top", "second"]
+
+
+def test_wait_stable_returns_height_rows_with_a_form_feed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A settled screen comes back as exactly `height` rows, form feed and all."""
+    pane = TmuxPane(tmp_path / "unused.sock", "ff", height=2)
+    monkeypatch.setattr(pane, "capture", lambda: FORM_FEED_SCREEN)
+    monkeypatch.setattr(tmux, "time", FakeClock())
+    rows = pane.wait_stable(quiet_s=1.0, timeout_s=5.0)
+    assert rows == ["top\x0cstill top", "second"]
+    assert len(rows) == pane.height
+
+
 def test_quit_leaves_a_dead_pane_for_capture(pane: TmuxPane, box: Sandbox) -> None:
     """The stub's own exit keeps the pane (remain-on-exit) and records the wrapper status."""
     assert pane.is_alive()
@@ -233,7 +257,7 @@ def test_reap_stale_servers_kills_only_old_private_servers(tmp_path: Path, box: 
         assert reap_stale_servers(root, max_age_s=3600) == [stale]
         assert not stale.exists()
         assert fresh.is_dir()
-        assert_exits(server_pid)
+        assert_server_gone(old.socket)
     finally:
         # Only this test's own server, by its own socket; a no-op once the reaper ran.
         old.kill()

@@ -18,8 +18,9 @@ from harness.fleet_load import dump, launch_fleet, make_sandboxes
 from harness.latency import LATENCY_EXTENSION
 from tests.stub_pi_session import (
     IDLE_SCRIPT,
-    assert_exits,
-    kill_and_prove_gone,
+    assert_server_gone,
+    kill_all_and_prove_gone,
+    process_alive,
     stub_sandbox,
     tmux_query,
     use_stub_pi,
@@ -49,9 +50,7 @@ def test_fleet_metrics_combine_every_pane(tmp_path: Path, monkeypatch: pytest.Mo
         readings = fleet.readings()
         metrics = fleet.metrics()
     finally:
-        panes = list(fleet.panes)
-        for pane in panes:
-            kill_and_prove_gone(pane)
+        kill_all_and_prove_gone(fleet.panes)
     assert [len(reading.input_to_paint_ms) for reading in readings] == [2, 1]
     assert metrics == {
         "loop_lag_p99_ms": 1.5,
@@ -92,7 +91,7 @@ def test_launch_fleet_kills_started_panes_on_failure(tmp_path: Path, monkeypatch
     use_stub_pi(monkeypatch)
     real_launch = fleet_load.launch_tui
     started: list[TmuxPane] = []
-    servers: list[int] = []
+    servers_were_alive: list[bool] = []
     failure = RuntimeError("second pane failed")
 
     def launch_once(box: Sandbox, script: dict[str, Any], **kwargs: Any) -> TmuxPane:
@@ -100,7 +99,7 @@ def test_launch_fleet_kills_started_panes_on_failure(tmp_path: Path, monkeypatch
             raise failure
         started.append(real_launch(box, script, **kwargs))
         assert started[0].is_alive()
-        servers.append(int(tmux_query(started[0], "#{pid}")))
+        servers_were_alive.append(process_alive(int(tmux_query(started[0], "#{pid}"))))
         return started[0]
 
     monkeypatch.setattr(fleet_load, "launch_tui", launch_once)
@@ -111,5 +110,6 @@ def test_launch_fleet_kills_started_panes_on_failure(tmp_path: Path, monkeypatch
     assert caught.value is failure
     (pane,) = started
     assert not pane.socket.parent.exists()
+    assert servers_were_alive == [True]
     assert not pane.is_alive()
-    assert_exits(servers[0])
+    assert_server_gone(pane.socket)
