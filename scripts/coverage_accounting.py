@@ -26,6 +26,8 @@ GIT = Path("/usr/bin/git")
 # Package keys a base policy may still carry after their support was deleted. The current policy
 # rejects them (`extra="forbid"`); only the base read drops them, so a ratchet against an older
 # commit keeps working. `target_allowances` went with #375, when the last allowance reached 0/0.
+# Delete `RETIRED_PACKAGE_KEYS` and `base_policy` once no ratchet base carries `target_allowances`,
+# then parse the base with `Policy.model_validate_json` again.
 RETIRED_PACKAGE_KEYS = ("target_allowances",)
 # Intentionally narrow ESM grammar: no comments, imports, expressions, attributes or declarations.
 # These static local named re-exports only link bindings; their targets remain executable inventory.
