@@ -120,9 +120,13 @@ def test_cleanup_keeps_leader_unreaped_until_group_quiescence(monkeypatch: pytes
         wait(timeout=3)
 
 
-@pytest.mark.parametrize("failure", ["permission", "process-table", "reap"])
+@pytest.mark.parametrize("failure", ["permission", "unexplained", "process-table", "reap"])
 def test_cleanup_preserves_marker_and_cleanup_errors(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
-    """A cleanup failure reports both errors, with the marker failure first."""
+    """A cleanup failure reports both errors, with the marker failure first.
+
+    `killpg` is always injected, so each case pins one outcome: `permission` and `unexplained`
+    are refused (live member, failed listing), `process-table` and `reap` are delivered.
+    """
     process = subprocess.Popen(
         [sys.executable, "-c", "print('no marker')"],
         stdout=subprocess.PIPE,
@@ -130,6 +134,7 @@ def test_cleanup_preserves_marker_and_cleanup_errors(monkeypatch: pytest.MonkeyP
         start_new_session=True,
     )
     error = PermissionError("live group denied") if failure == "permission" else OSError(failure)
+    refused = error if failure == "permission" else PermissionError("unexplained refusal")
     wait = process.wait
 
     def failed_reap(timeout: float | None = None) -> int:
@@ -148,23 +153,21 @@ def test_cleanup_preserves_marker_and_cleanup_errors(monkeypatch: pytest.MonkeyP
         wait(timeout=timeout)
         raise error
 
-    def denied(pgid: int, sig: int) -> None:
-        """Inject a live-group permission failure without signalling another group.
+    def injected(pgid: int, sig: int) -> None:
+        """Refuse or pretend delivery, never signalling; the fixture exits by itself.
 
         Parameters:
             pgid (int): owned process group.
             sig (int): requested kill signal.
 
-        Returns:
-            None: never returned.
-
         Raises:
-            PermissionError: signalling the live group is denied.
+            PermissionError: the selected refusal.
             AssertionError: signal or group is incorrect.
         """
         assert pgid == process.pid
         assert sig == signal.SIGKILL
-        raise error
+        if failure in {"permission", "unexplained"}:
+            raise refused
 
     def live_members(pgid: int, timeout: float) -> bool:
         """Inject a process-table failure or an observable live member.
@@ -182,24 +185,23 @@ def test_cleanup_preserves_marker_and_cleanup_errors(monkeypatch: pytest.MonkeyP
         """
         assert pgid == process.pid
         assert timeout > 0
-        if failure == "process-table":
+        if failure in {"unexplained", "process-table"}:
             raise error
         return failure == "permission"
 
     try:
         with monkeypatch.context() as patch:
             patch.setattr(process_group, "group_has_live_members", live_members)
+            patch.setattr(os, "killpg", injected)
             if failure == "reap":
                 patch.setattr(process, "wait", failed_reap)
-            if failure == "permission":
-                patch.setattr(os, "killpg", denied)
             with pytest.raises(BaseExceptionGroup) as caught:
                 kill_at_marker(process, "MARKER", 3)
         primary, cleanup = caught.value.exceptions
         assert isinstance(primary, AssertionError)
         assert "Child exited" in str(primary)
-        if failure == "process-table" and isinstance(cleanup, PermissionError):
-            # Darwin refused the real exited group: the failed listing cannot explain that EPERM.
+        if failure == "unexplained":
+            assert cleanup is refused
             assert cleanup.__cause__ is error
         else:
             assert cleanup is error

@@ -252,6 +252,7 @@ def collect_json_process(
         RuntimeError: an output cap was exceeded.
         PermissionError: killing the session group was refused and not explained as zombie-only,
             see `harness.process_group.kill_owned_group`.
+        OSError: waiting for the leader's exit failed.
     """
     events: list[dict[str, Any]] = []
     noise: list[str] = []
@@ -320,18 +321,6 @@ def collect_json_process(
     )
 
 
-def kill_process_group(pid: int) -> None:
-    """SIGKILL the run's own session group under the shared `EPERM` policy.
-
-    Parameters:
-        pid (int): unreaped session leader, see `harness.process_group.kill_owned_group`.
-
-    Raises:
-        PermissionError: the kill was refused and not explained as a zombie-only group.
-    """
-    process_group.kill_owned_group(pid, GROUP_LISTING_TIMEOUT_S)
-
-
 def finish_process(
     process: subprocess.Popen[str], readers: list[Thread], timeout_s: float, wake: Event, overflow: Event
 ) -> bool:
@@ -352,26 +341,40 @@ def finish_process(
         bool: whether the process exceeded its deadline.
 
     Raises:
-        PermissionError: killing the group was refused and not explained as zombie-only.
+        PermissionError: killing the group was refused and not explained as zombie-only, see
+            `harness.process_group.kill_owned_group`.
+        OSError: waiting for the leader's exit failed.
         RuntimeError: a process outside the group kept the output pipes open.
         subprocess.TimeoutExpired: the leader survived SIGKILL.
+
+    On `PermissionError` or `OSError` the group may still be alive, so this neither reaps the
+    leader nor closes the pipes: reaping could block and closing could race the readers. The
+    leader stays a child of this process and the daemon readers end when the pipes do.
     """
     deadline = time.monotonic() + timeout_s
     exited = Event()
 
+    watch_errors: list[OSError] = []
+
     def watch_leader() -> None:
         """Wake the main thread when the leader exits, leaving it unreaped as the PGID anchor."""
-        # ECHILD only if something reaped it anyway; it has exited either way.
-        with suppress(ChildProcessError):
-            os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
-        exited.set()
-        wake.set()
+        try:
+            # ECHILD only if something reaped it anyway; it has exited either way.
+            with suppress(ChildProcessError):
+                os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        except OSError as error:
+            watch_errors.append(error)
+        finally:
+            exited.set()
+            wake.set()
 
     Thread(target=watch_leader, daemon=True).start()
     timed_out = not wake.wait(timeout_s)
+    if watch_errors:
+        raise watch_errors[0]
     killed = timed_out or overflow.is_set()
     if killed:
-        kill_process_group(process.pid)
+        process_group.kill_owned_group(process.pid, GROUP_LISTING_TIMEOUT_S)
         exited.wait(10)
     for reader in readers:
         reader.join(timeout=max(0, deadline - time.monotonic()))
@@ -379,7 +382,7 @@ def finish_process(
     # A descendant can overflow after the leader exited: that still kills the group, once.
     if stuck or (overflow.is_set() and not killed):
         timed_out = timed_out or stuck
-        kill_process_group(process.pid)
+        process_group.kill_owned_group(process.pid, GROUP_LISTING_TIMEOUT_S)
         for reader in readers:
             reader.join(timeout=2)
     # Reap only now: no signal follows, readers never send one.

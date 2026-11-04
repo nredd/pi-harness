@@ -6,6 +6,7 @@ References:
 
 from __future__ import annotations
 
+import errno
 import os
 import signal
 import subprocess
@@ -342,6 +343,99 @@ def test_inherited_pipe_kill_keeps_the_leader_as_pgid_anchor(
         assert seams.anchored == [True]
         assert process.returncode == 0
     finally:
+        process.communicate(timeout=10)
+
+
+def spawn_pipe_holder(tmp_path: Path, hold_s: float) -> tuple[subprocess.Popen[str], Path]:
+    """Start a leader whose descendant, in its own session, holds stdout until released or `hold_s`.
+
+    The leader exits once the holder is ready. The holder exits by itself when the test creates
+    the release file, so cleanup never needs a signal.
+
+    Parameters:
+        tmp_path (Path): readiness and release markers.
+        hold_s (float): longest the holder keeps the pipe open.
+
+    Returns:
+        tuple[subprocess.Popen[str], Path]: the leader and the release file.
+    """
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    holder = (
+        f"import pathlib,time; pathlib.Path({str(ready)!r}).touch(); end = time.monotonic() + {hold_s}\n"
+        f"while time.monotonic() < end and not pathlib.Path({str(release)!r}).exists(): time.sleep(0.02)\n"
+    )
+    leader = (
+        "import os,subprocess,sys,time\n"
+        f"subprocess.Popen([sys.executable,'-c',{holder!r}],start_new_session=True)\n"
+        f"while not os.path.exists({str(ready)!r}): time.sleep(0.01)\n"
+    )
+    return spawn_session(leader), release
+
+
+def test_pipes_held_past_the_join_are_reported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A holder outside the group that outlives the post-kill join is an error, after the reap.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): recording seams.
+        tmp_path (Path): holder markers.
+    """
+    process, release = spawn_pipe_holder(tmp_path, 30)
+    try:
+        seams = record_owned_group(monkeypatch, process, deny=False)
+        with pytest.raises(RuntimeError, match="inherited output pipes"):
+            headless.collect_json_process(process, ["held"], time.monotonic(), 0.3)
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+        assert seams.anchored == [True]
+        assert process.returncode == 0
+    finally:
+        release.touch()
+        process.communicate(timeout=10)
+
+
+def test_a_failed_leader_watch_surfaces_at_once(
+    monkeypatch: pytest.MonkeyPatch, thread_deaths: list[BaseException | None]
+) -> None:
+    """A watcher `waitid` failure wakes the main thread and surfaces, instead of a late `TimeoutError`.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): a `waitid` that fails only off the main thread.
+        thread_deaths (list[BaseException | None]): escaped thread exceptions.
+    """
+    failure = OSError(errno.EINVAL, "Invalid argument")
+    waitid = os.waitid
+
+    def failing(idtype: int, ident: int, options: int) -> os.waitid_result | None:
+        """Fail the watcher thread's wait; the main thread keeps the real call.
+
+        Parameters:
+            idtype (int): id type.
+            ident (int): process id.
+            options (int): wait options.
+
+        Returns:
+            os.waitid_result | None: the real result on the main thread.
+
+        Raises:
+            OSError: always, off the main thread.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            raise failure
+        return waitid(idtype, ident, options)
+
+    process = spawn_session("import time; time.sleep(30)")
+    try:
+        seams = record_owned_group(monkeypatch, process, deny=False)
+        monkeypatch.setattr(os, "waitid", failing)
+        started = time.monotonic()
+        with pytest.raises(OSError, match="Invalid argument") as caught:
+            headless.collect_json_process(process, ["watch"], time.monotonic(), 5)
+        assert caught.value is failure
+        assert time.monotonic() - started < 3
+        assert thread_deaths == []
+        assert seams.signalled == []
+    finally:
+        process.kill()
         process.communicate(timeout=10)
 
 
