@@ -99,7 +99,8 @@ export function watchDetached(sessionFile: string, onSpooled: () => void): () =>
 export interface RunningDetached {
   record: AgentRecord;
   activity?: AgentActivity;
-  abort(): boolean;
+  /** `by` as for `AgentManager.abort`: `"parent"` for `stop_subagent`, omitted for a human. */
+  abort(by?: AgentRecord["stoppedBy"]): boolean;
   steer(message: string): boolean;
 }
 

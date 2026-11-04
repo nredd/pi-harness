@@ -100,6 +100,18 @@ describe("Plan consumes stack annotations", () => {
 		expect(existsSync(missing)).toBe(false);
 	});
 
+	// #443: stopping a child edits nothing and starts nothing, so default Plan
+	// must keep it callable. #450 gates Agent/SubagentWorkflow/steer_subagent in
+	// Plan; this fails if stop_subagent is ever gated along with them.
+	it("Plan admits stop_subagent by its readOnlyHint", async () => {
+		const h = await open([await loadFork("pi-subagents")]);
+		await h.session.prompt("/plan start");
+		const [stop] = await runTools(h, [{ name: "stop_subagent", args: { agent_id: "nope" } }]);
+		expect(stop.text).not.toContain("Plan mode blocks");
+		expect(stop.text.toLowerCase()).not.toContain("plan mode");
+		expect(stop.text).toBe('No agent or workflow "nope", so there is nothing to stop.\nNothing is running or queued.');
+	});
+
 	it("Plan admits only monitor_read", async () => {
 		const clock = new FakeClock();
 		const processes = new ControlledProcesses(clock);

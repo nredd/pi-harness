@@ -5,6 +5,7 @@
  *   Agent             — LLM-callable: spawn a sub-agent
  *   get_subagent_result  — LLM-callable: check background agent status/result
  *   steer_subagent       — LLM-callable: steer a running agent, or resume a finished one
+ *   stop_subagent        — LLM-callable: stop a running or queued agent, or a workflow run
  *
  * Commands:
  *   /agents                 — Interactive agent management menu
@@ -208,7 +209,7 @@ function formatTaskNotification(record: AgentRecord, showCost = false): NoticeFr
     record.toolCallId ? `<tool-use-id>${escapeXml(record.toolCallId)}</tool-use-id>` : null,
     record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
     `<status>${escapeXml(status)}</status>`,
-    `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}${hint ? ` (${hint})` : ""}</summary>`,
+    `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status, record.stoppedBy)}${hint ? ` (${hint})` : ""}</summary>`,
     modelNote ? `<model-note>${escapeXml(modelNote)}</model-note>` : null,
   ].filter(Boolean).join('\n');
   const tail = [
@@ -1401,7 +1402,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         registerRunningDetached(sessionFile, {
           record,
           activity: agentActivity.get(record.id),
-          abort: () => manager.abort(record.id),
+          abort: (by) => manager.abort(record.id, by),
           steer: (message) => manager.steer(record.id, message),
         });
       }
@@ -1525,6 +1526,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // Agents the previous instance of this session left running (/reload, /new, ...).
     () => listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.()), clock);
   fleet.setParkedSource(() => scheduler.list().filter(job => job.enabled && job.quotaParked && job.lastStatus !== "running").length);
+  fleet.setStopAll(stopAllRunning);
   /** Replay UI-only state from the active branch, like workflow/goal custom snapshots. */
   function restoreFleetDisclosure(ctx: ExtensionContext): void {
     fleet.restoreSession(() => ctx.sessionManager?.getBranch?.() ?? [], state => {
@@ -2053,6 +2055,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - **Don't race**: after launching a background agent, you know nothing about its results. Never fabricate or predict them in any format — not as prose, summary, or structured output. The completion notification arrives in a later turn; it is never something you write yourself. If the user asks before it lands, say the agent is still running — give status, not a guess.
 - Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
 - Use steer_subagent to message an agent: it steers a running agent mid-run and resumes a finished one in the background, like resume.
+- Use stop_subagent to end an agent or workflow you no longer need, e.g. once a sibling has answered. A steer asking it to stop is read only after its current tool call and can be ignored.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
 - Use model to select a configured tier (e.g. "@cheap"), an exact "provider/modelId", or a fuzzy tool-call input (e.g. "haiku").
@@ -2889,7 +2892,7 @@ Terse command-style prompts produce shallow, generic work.
         if (costText) statsParts.push(costText);
       }
       return textResult(
-        `${fallbackNoteFor(record)}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n\n` +
+        `${fallbackNoteFor(record)}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status, record.stoppedBy)}.\n\n` +
         (record.result?.trim() || "No output."),
         details,
       );
@@ -3439,7 +3442,7 @@ Terse command-style prompts produce shallow, generic work.
 
       let output =
         `Agent: ${record.id}\n` +
-        `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
+        `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status, record.stoppedBy)} | ${statsParts.join(" | ")}\n` +
         `Description: ${record.description}\n` +
         (modelSelectionNote(record) ? `${modelSelectionNote(record)}\n` : "") +
         `\n`;
@@ -3480,7 +3483,7 @@ Terse command-style prompts produce shallow, generic work.
       "Send a message to an agent. A running agent is interrupted after its current tool execution and the message is injected into its conversation, " +
       "allowing you to redirect its work mid-run. A queued agent gets the message when it starts. A finished agent is resumed in the background " +
       "with its full history and the message as its next prompt, exactly like Agent's resume; you will be notified when it completes. " +
-      "An agent the user stopped is not resumed.",
+      "A stopped agent is not resumed. To end an agent's run, use stop_subagent: a steer is read only after its current tool call, and the agent may ignore it.",
     promptSnippet: "Send a message to a background agent: steer it mid-run, or resume it once finished",
     parameters: Type.Object({
       agent_id: Type.String({
@@ -3502,7 +3505,7 @@ Terse command-style prompts produce shallow, generic work.
         const finished = record ?? manager.getEvictedNote(latest);
         if (!finished) return textResult(agentNotFound(params.agent_id));
         if (finished.status === "stopped") {
-          return textResult(`Agent "${finished.id}" was stopped by the user (status: stopped). steer_subagent does not resume an agent the user stopped.`);
+          return textResult(`Agent "${finished.id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`);
         }
         // The Agent tool's own resume path, not a copy: same reopen, turn
         // budget, transcript and result. `subagent_type` is the record's own,
@@ -3551,6 +3554,107 @@ Terse command-style prompts produce shallow, generic work.
     },
   }));
 
+  // ---- stop_subagent tool ----
+
+  /** A workflow run a stop can still reach: running or paused, not already told to stop. */
+  const isLiveWorkflow = (task: WorkflowTask) => (task.status === "running" || task.status === "paused") && !task.abortController.signal.aborted;
+
+  /** Survivors of a session switch, still running in the orphaned manager (#330). */
+  const runningSurvivors = () => listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.());
+
+  /**
+   * Agents a stop can reach: this session's own running or queued top-level
+   * agents, then survivors. Never a nested or workflow child: those belong to
+   * their owner, which stops them with itself (#446's ownership invariant).
+   */
+  function stoppableAgents(): AgentRecord[] {
+    const own = manager.listAgents().filter(r => isTopLevelAgent(r) && (r.status === "running" || r.status === "queued"));
+    return [...own, ...runningSurvivors().map(d => d.record).filter(r => r.status === "running")];
+  }
+
+  /** Stop one top-level agent through the manager that owns it, this one or an orphan's. */
+  function stopAgent(record: AgentRecord, by?: AgentRecord["stoppedBy"]): boolean {
+    if (manager.getRecord(record.id) === record) return manager.abort(record.id, by);
+    return runningSurvivors().find(d => d.record === record)?.abort(by) ?? false;
+  }
+
+  /** What a stop that matched nothing lists instead: everything still running or queued. */
+  function describeStoppable(): string {
+    const lines = [
+      ...stoppableAgents().map(r => `- ${r.id} @${r.alias ?? r.handle} (${r.status}): ${r.description}`),
+      ...[...workflowTasks.values()].filter(isLiveWorkflow).map(t => `- ${t.id} workflow "${t.meta?.name ?? t.id}" (${t.status})`),
+    ];
+    return lines.length > 0 ? `Running or queued:\n${lines.join("\n")}` : "Nothing is running or queued.";
+  }
+
+  /**
+   * Stop every running or queued top-level agent, survivor, and workflow run
+   * (whose agents stop with it). A scheduled job that has not fired is not
+   * running, so it is untouched. The human-side stop: records stay unmarked.
+   */
+  function stopAllRunning(): { agents: number; workflows: number } {
+    const runs = [...workflowTasks.values()].filter(isLiveWorkflow);
+    for (const task of runs) task.abortController.abort();
+    return { agents: stoppableAgents().filter(record => stopAgent(record)).length, workflows: runs.length };
+  }
+
+  registerToolReportingUsage(defineTool({
+    name: SUBAGENT_TOOL_NAMES.STOP,
+    label: "Stop Agent",
+    description:
+      "Stop (cancel, kill) a running or queued background agent, or a SubagentWorkflow run by the run id it returned. " +
+      "Use it when an agent's work is no longer wanted, e.g. a sibling already answered. Unlike steer_subagent, the agent cannot ignore it: " +
+      "the run is aborted at once, its current tool call gets the abort signal, and it starts no further tool call. Its status becomes `stopped`. " +
+      "A running agent's partial output, and any worktree branch with changes, arrives in one completion notice; a queued agent never starts. " +
+      "A workflow stops with all of its agents. A stopped agent is not resumed. " +
+      "A run of another extension's `workflow` tool is not ours to stop: use that extension's control (e.g. `workflow_control` with action `stop`).",
+    promptSnippet: "Stop or cancel a running background agent or workflow",
+    // Plan mode admits a trusted tool only on `readOnlyHint`. Stopping edits no
+    // file and starts nothing; it only ends work already running, so it must
+    // stay callable in Plan, where an orchestrator should still be able to
+    // stand a fan-out down.
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    parameters: Type.Object({
+      agent_id: Type.String({
+        description: "The agent ID to stop. Its handle or name also works. A SubagentWorkflow run id stops that workflow run.",
+      }),
+    }),
+    execute: async (_toolCallId, params) => {
+      const task = workflowTasks.get(params.agent_id);
+      if (task && isLiveWorkflow(task)) {
+        // Marked first: the run's notice is written when it settles, after this returns.
+        task.stoppedBy = "parent";
+        task.abortController.abort();
+        return textResult(`Workflow "${task.meta?.name ?? task.id}" (${task.id}) stopped, with its agents. A completion notice follows.`);
+      }
+      if (task && (task.status === "running" || task.status === "paused")) {
+        // Told to stop, still unwinding: not "not running", and nothing more to do.
+        return textResult(`Workflow "${task.meta?.name ?? task.id}" (${task.id}) is already stopping. A completion notice follows.`);
+      }
+      const latest = manager.latestId(params.agent_id);
+      const found = resolveAgentRef(latest);
+      const record = found && isTopLevelAgent(found) ? found : undefined;
+      if (record?.status !== "running" && record?.status !== "queued") {
+        const status = record?.status ?? task?.status ?? manager.getEvictedNote(latest)?.status;
+        const what = status ? `"${params.agent_id}" is not running (status: ${status})` : `No agent or workflow "${params.agent_id}"`;
+        return { ...textResult(`${what}, so there is nothing to stop.\n${describeStoppable()}`), isError: true };
+      }
+      const wasQueued = record.status === "queued";
+      stopAgent(record, "parent");
+      const statsParts = [`Tool uses: ${record.toolUses}`];
+      const tokens = formatLifetimeTokens(record);
+      if (tokens) statsParts.push(tokens);
+      return textResult(
+        `Agent ${record.id} stopped.\n` +
+        `Type: ${getDisplayName(record.type)} | Status: ${record.status} | ${statsParts.join(" | ")}\n` +
+        `Description: ${record.description}\n\n` +
+        (wasQueued
+          ? "It was still queued, so it never started and no completion notice follows."
+          : "It starts no further tool call. One completion notice with its partial output follows."),
+      );
+    },
+  }));
+
   // ---- /agents interactive menu ----
 
   // Directory resolution and the frontmatter edits live in agent-file-toggle.ts
@@ -3591,6 +3695,9 @@ Terse command-style prompts produce shallow, generic work.
       const done = agents.filter(a => a.status === "completed" || a.status === "steered").length;
       options.push(`Running agents (${agents.length}) — ${running} running, ${done} done`);
     }
+    // Survivors and workflow runs count too: they are what the chord stops.
+    const stoppable = stoppableAgents().length + [...workflowTasks.values()].filter(isLiveWorkflow).length;
+    if (stoppable > 0) options.push(`Stop all running (${stoppable})`);
 
     // Agent types list
     if (allNames.length > 0) {
@@ -3628,6 +3735,12 @@ Terse command-style prompts produce shallow, generic work.
 
     if (choice.startsWith("Running agents (")) {
       await showRunningAgents(ctx);
+      await showAgentsMenu(ctx);
+    } else if (choice.startsWith("Stop all running (")) {
+      if (await ctx.ui.confirm("Stop all running", "Stop every running or queued agent and workflow?")) {
+        const { agents: stoppedAgents, workflows } = stopAllRunning();
+        ctx.ui.notify(`Stopped ${stoppedAgents} agent(s) and ${workflows} workflow(s).`, "info");
+      }
       await showAgentsMenu(ctx);
     } else if (choice.startsWith("Agent types (")) {
       await showAllAgentsList(ctx);

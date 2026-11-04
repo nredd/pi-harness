@@ -114,7 +114,7 @@ it("refuses an agent the user stopped, naming why", async () => {
   expect(fixture.record(id).status).toBe("stopped");
 
   const steered = await steerOnce(h, id, "carry on");
-  expect(steered.text).toBe(`Agent "${id}" was stopped by the user (status: stopped). steer_subagent does not resume an agent the user stopped.`);
+  expect(steered.text).toBe(`Agent "${id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`);
   expect(fixture.record(id).status).toBe("stopped");
 });
 
