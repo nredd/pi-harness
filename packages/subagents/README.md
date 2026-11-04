@@ -1233,19 +1233,22 @@ A child started while the parent session is in [`pi-plan-mode`](../plan-mode/REA
 
 - `edit` and `write` are refused at call time, `bash` and `powershell` run only Plan's reviewed read-only commands (`git status` runs, `rm -rf x` does not), and extension tools run only when Plan would admit them (trusted `readOnlyHint`, or selected in the Plan policy). Tool schemas stay visible, as in the planner, so the child's prompt cache and a later resume are unaffected
 - The child never needs Plan mode loaded itself: the policy is enforced by this extension, including for `extensions: false` and `isolated` agents. Explore and Plan keep their read-only surfaces unchanged
-- Every spawn path asks: the `Agent` tool, `@handle` mentions, RPC, schedules and `SubagentWorkflow` stages, each as it starts. Nested `allowed_subagents` children also inherit their owner's restriction, even after the parent leaves Plan
-- The decision is per run. A child spawned during Plan keeps the restriction after you approve and leave Plan, since it was briefed as a planner; resuming it after Plan gets its normal surface back, and resuming any agent during Plan restricts that run. Both hold for `Agent` `resume` and for `steer_subagent` on a finished agent, which resumes through the same path. An agent started before Plan keeps its surface, and `steer_subagent` still reaches it
+- Every spawn path asks: the `Agent` tool, `@handle` mentions, RPC, schedules created before Plan and `SubagentWorkflow` stages, each as it starts. Nested `allowed_subagents` children also inherit their owner's restriction, even after the parent leaves Plan
+- The decision is per run. A child spawned during Plan keeps the restriction after you approve and leave Plan, since it was briefed as a planner; resuming it after Plan gets its normal surface back, and resuming any agent during Plan restricts that run. Both hold for `Agent` `resume` and for `steer_subagent` on a finished agent, which resumes through the same path. An agent started before Plan keeps its surface while it runs
 - `isolation: "worktree"` is refused while planning: a worktree exists to make edits
+- Nothing Plan's model starts may outlive Plan unrestricted: `Agent` with `schedule` is refused while planning, and so is parking a quota-blocked background dispatch (it fails with the reset instead). Both would fire as fresh spawns after Plan
+- `steer_subagent` is refused while planning for a running or queued agent that runs without Plan's restrictions (one started before Plan), so a steer cannot drive it into edits. Its running gate is never changed underneath it: wait for it to finish and steer it then (that resumes it read-only), stop it from `/agents`, or leave Plan first. An agent already running under Plan stays steerable
+- A malformed answer to the state query (wrong version, no boolean `active`) never counts as Plan being off: it restricts like an unusable one
 - The child's prompt says it is in Plan mode, and its expanded `Agent` row and conversation viewer tags read `plan`
 - Extension tools are classified from the child's own tool metadata (`sourceInfo`): a tool the planner selected is admitted only from the same source path, so a project-scope copy, or a project-scope `readOnlyHint`, stays blocked
 - An answer saying Plan is active but carrying no policy this extension understands fails closed to `read`, `grep`, `find` and `ls`. Without `pi-plan-mode` nothing answers and nothing changes
-- Plan mode and this extension shake hands (`pi-plan-mode:gate-query`): Plan blocks `Agent`, `SubagentWorkflow` and `steer_subagent` while active unless this gate answers (only those three: `get_subagent_result` and stopping an agent mutate nothing and stay available in Plan), and once Plan mode has shown itself a state query nobody answers refuses the spawn (a resume runs fail-closed). Needs `@nredd/pi-plan-mode` newer than `0.59.3-nredd.3` with this extension newer than `0.22.0-nredd.8`; update both together
+- Plan mode and this extension shake hands (`pi-plan-mode:gate-query`): Plan blocks `Agent`, `SubagentWorkflow` and `steer_subagent` while active unless this gate answers (only those three, by name: `get_subagent_result` and any other tool that starts no child stay available in Plan), and once Plan mode has shown itself a state query nobody answers refuses the spawn (a resume runs fail-closed). Needs `@nredd/pi-plan-mode` newer than `0.59.3-nredd.3` with this extension newer than `0.22.0-nredd.8`; update both together
 
 What Plan does not reach:
 
-- A child queued before Plan starts later with its full surface: the decision was made when it was spawned
-- A parent in Plan can still steer a running pre-Plan child, which keeps its full surface
-- A schedule job created during Plan fires as a fresh spawn, so it runs unrestricted once Plan has ended. The job stores no policy; delete it from `/agents` if it should not run
+- A child queued before Plan starts later with its full surface: the decision was made when it was spawned. Plan's model cannot steer it meanwhile
+- A schedule created before Plan fires during Plan as a fresh spawn, and is restricted then like any other
+- Steering from `/agents`, the conversation viewer, `@handle` and RPC is not Plan's model and is not refused
 - A nested child of a pre-Plan owner is restricted when Plan is on at its own spawn
 
 ## Worktree Isolation
