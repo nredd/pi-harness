@@ -695,6 +695,7 @@ PLAN_MODE_CONTRACT = PackageContract(
         "docs/settings.md",
         "package.json",
         "src/active-implementation-menu.ts",
+        "src/child-policy.ts",
         "src/command.ts",
         "src/completion-tool.ts",
         "src/decline-contract.ts",

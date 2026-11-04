@@ -148,7 +148,7 @@ export class ScenarioSession {
   }
 
   /** Bind the actual extension; admission replies are an optional advisory-service double. */
-  async start(options: { terminal?: boolean; noRouter?: boolean; factories?: ExtensionFactory[]; harness?: HarnessOptions } = {}) {
+  async start(options: { terminal?: boolean; noRouter?: boolean; factories?: NonNullable<HarnessOptions["extensionFactories"]>; harness?: HarnessOptions } = {}) {
     const observer: ExtensionFactory = pi => {
       this.pi = pi;
       pi.events.on("router:rpc:admit", raw => {

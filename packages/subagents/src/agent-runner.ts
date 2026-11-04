@@ -40,6 +40,7 @@ import {
   NESTED_WORKFLOW_NO_AGENT_ERROR,
   type NestedAgentManager,
 } from "./nested-tools.js";
+import { type PlanGate, planGateReason } from "./plan-mode-children.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { createHomeResourceLoader } from "./resource-loader.js";
 import { preloadSkills } from "./skill-loader.js";
@@ -396,8 +397,14 @@ export function installExtensionToolScope(
   };
 }
 
-/** Set once the child's tool scope is installed; until then the gate admits everything. */
-type NestedCallGate = { allows?: (name: string) => boolean };
+/**
+ * Set once the child's tool scope (and, while planning, its Plan check) is
+ * installed; until then the gate admits everything.
+ */
+type NestedCallGate = {
+  allows?: (name: string) => boolean;
+  planReason?: (toolName: string, input: unknown, cwd: string) => string | undefined;
+};
 
 /**
  * Inline extension that applies the subagent's tool scope to calls a tool makes
@@ -413,11 +420,13 @@ function scopeGateExtension(gate: NestedCallGate): InlineExtension {
     name: SCOPE_GATE_NAME,
     hidden: true,
     factory: (ext) => {
-      ext.on("tool_call", (event) =>
-        gate.allows?.(event.toolName) === false
-          ? { block: true, reason: `Tool "${event.toolName}" is not available to this subagent.` }
-          : undefined,
-      );
+      ext.on("tool_call", (event, ctx) => {
+        if (gate.allows?.(event.toolName) === false) {
+          return { block: true, reason: `Tool "${event.toolName}" is not available to this subagent.` };
+        }
+        const reason = gate.planReason?.(event.toolName, event.input, ctx.cwd);
+        return reason === undefined ? undefined : { block: true, reason };
+      });
     },
   };
 }
@@ -602,6 +611,11 @@ export interface RunOptions {
    * fails at the call that wrote it rather than inside the child.
    */
   structuredOutput?: CompiledSchema;
+  /**
+   * The Plan restriction for this child's runs (#437). Installed once on the
+   * session and read per call; the manager sets `policy` per run.
+   */
+  planGate?: PlanGate;
   /** Runtime bridge for opt-in child-safe nested delegation. */
   nestedRuntime?: {
     manager: NestedAgentManager;
@@ -1015,6 +1029,7 @@ export async function runAgent(
   const extras: PromptExtras = {};
   if (options.worktreeBase) extras.worktreeBase = options.worktreeBase;
   if (options.workflow && !options.structuredOutput) extras.workflowChild = true;
+  if (options.planGate?.policy) extras.planMode = true;
 
   // Resolved here, not by each caller: mention and RPC spawns pass no `isolated`,
   // and the agent file's value must hold on every path.
@@ -1487,6 +1502,21 @@ export async function runAgent(
       nestedCallGate,
       workflowError,
     });
+  }
+
+  // Plan mode (#437): outermost, so a call Plan refuses reaches no other hook.
+  // Read per call, because the manager decides the gate per run (spawn, resume).
+  const planGate = options.planGate;
+  if (planGate) {
+    const planReason = (toolName: string, input: unknown, cwd: string) =>
+      planGateReason(planGate, { toolName, input, cwd }, () => session.getAllTools(), readmitToolNames);
+    nestedCallGate.planReason = planReason;
+    const priorBeforeToolCall = session.agent.beforeToolCall;
+    session.agent.beforeToolCall = async (context, signal) => {
+      const reason = planReason(context.toolCall.name, context.args, effectiveCwd);
+      if (reason !== undefined) return { block: true, reason };
+      return priorBeforeToolCall?.(context, signal);
+    };
   }
 
   options.onSessionCreated?.(session);

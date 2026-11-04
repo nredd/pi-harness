@@ -34,6 +34,7 @@ import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualMo
 import { admitModelSelection, describeSelection, type ModelSelection, modelSelectionNote, selectModel } from "./model-selection.js";
 import { type TierDisclosure, tierDisclosure } from "./model-tiers.js";
 import { appendModelFallbackEntry, appendModelTierEntry } from "./output-file.js";
+import { type PlanToolPolicy, queryPlanPolicy } from "./plan-mode-children.js";
 import {
   assertWithinBudgetDepth,
   BUDGET_QUEUE_FULL_ERROR,
@@ -642,6 +643,23 @@ export class AgentManager {
     this.cleanupInterval.unref?.();
   }
 
+  /**
+   * Put a run under Plan mode's policy when its owning agent's run is (a nested
+   * child) or the parent session is planning right now (everything else, a
+   * workflow stage included). The gate object is kept, since the child's hooks
+   * hold it.
+   */
+  private decidePlanGate(record: AgentRecord, query: () => PlanToolPolicy | undefined): void {
+    const owner = record.parentAgentId === undefined ? undefined : this.agents.get(record.parentAgentId);
+    const policy = owner?.planGate?.policy ?? query();
+    record.planGate ??= {};
+    record.planGate.policy = policy;
+    if (policy || record.invocation?.planMode) {
+      record.invocation ??= {};
+      record.invocation.planMode = policy ? true : undefined;
+    }
+  }
+
   /** Update the max concurrent background agents limit. */
   setMaxConcurrent(n: number) {
     this.maxConcurrent = Math.max(1, n);
@@ -773,6 +791,8 @@ export class AgentManager {
       maxSubagentDepth: options.maxSubagentDepth,
       rootSessionId: options.rootSessionId,
     };
+    this.decidePlanGate(record, () => queryPlanPolicy(pi.events));
+    record.planQuery = () => queryPlanPolicy(pi.events, "restrict");
     this.agents.set(id, record);
     // After the insert, so `takenHandles()` already counts this record's own
     // handle — a spawn named after its own type gets `explore-2`, not a
@@ -1069,6 +1089,11 @@ export class AgentManager {
     const isolation = options.workflowId !== undefined
       ? options.isolation
       : getAgentConfig(type)?.isolation ?? options.isolation;
+    // A worktree exists to make edits, which a child started while planning may not.
+    if (isolation === "worktree" && record.planGate?.policy) {
+      this.chargePool(record.chargedPool, -1);
+      throw new Error('Cannot run with isolation: "worktree" while Plan mode is active: a worktree exists to make edits. Omit `isolation`, or leave Plan mode first.');
+    }
     let worktreeCwd: string | undefined;
     if (isolation === "worktree" && isWorktreeIsolationEnabled()) {
       let wt: WorktreeInfo;
@@ -1146,6 +1171,7 @@ export class AgentManager {
       inheritContext: options.inheritContext,
       thinkingLevel: options.thinkingLevel,
       structuredOutput: options.structuredOutput,
+      planGate: record.planGate,
       resumeSessionFile: options.resumeSessionFile,
       nested: options.parentAgentId !== undefined,
       workflow: options.workflowId !== undefined,
@@ -1537,6 +1563,8 @@ export class AgentManager {
     // both paths flip the status synchronously, so a second call made in the
     // same tick is refused too. The caller decides whether to wait or steer.
     if (record.status === "running" || record.status === "queued") return undefined;
+    // Decided per run: a resume after the parent left Plan gets its full surface back.
+    if (record.planQuery) this.decidePlanGate(record, record.planQuery);
 
     // Background resume: settle asynchronously and notify on completion exactly
     // like a background spawn, returning immediately with the record still
