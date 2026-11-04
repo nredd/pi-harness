@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness.isolation import admit_serial_tier, process_tag
+from harness.isolation import admit_serial_tier, check_tier, process_tag
 
 
 def test_process_tags_have_disjoint_worker_slots_and_exact_width() -> None:
@@ -45,3 +45,20 @@ def test_bench_refuses_unidentified_or_busy_runner() -> None:
         admit_serial_tier("bench", None, quiet=True, load=5, cpus=8)
     admit_serial_tier("bench", 0, quiet=True, load=1, cpus=8)
     admit_serial_tier("live", None, quiet=False, load=100, cpus=1)
+
+
+def test_check_tier_reads_the_real_runner_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Admission reads `PI_BENCH_QUIET_RUNNER` from the environment, before any load comparison.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): runner identity.
+    """
+    monkeypatch.delenv("PI_BENCH_QUIET_RUNNER", raising=False)
+    with pytest.raises(ValueError, match="NOT RUN"):
+        check_tier("bench", None)
+    monkeypatch.setenv("PI_BENCH_QUIET_RUNNER", "yes")
+    with pytest.raises(ValueError, match="NOT RUN"):
+        check_tier("bench", "0")
+    with pytest.raises(ValueError, match="serial"):
+        check_tier("live", "auto")
+    check_tier("live", None)

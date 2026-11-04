@@ -10,7 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import runpy
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +39,7 @@ from harness.stack import (
     validate_release_identity,
     validate_shipped_stack,
 )
-from harness.stack_fixture import golden_fixture, golden_stack
+from harness.stack_fixture import FIXTURE_PATH, golden_fixture, golden_stack
 
 CORE = {
     "tag": "v1.3.0-nredd.7",
@@ -222,6 +224,21 @@ def test_producer_canonical_fixture_is_generated_from_the_real_serializer() -> N
     assert fixture == golden_fixture()
     assert fixture["sha256"] == "cd9eadbcd7ae585f17b86dad2af279daf83b5e83cd98f117e0fbf55b89deea61"
     assert hashlib.sha256(canonical_stack_bytes(golden_stack())).hexdigest() == fixture["sha256"]
+
+
+def test_fixture_module_entrypoint_writes_the_committed_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`python -m harness.stack_fixture` regenerates exactly the committed fixture, at its path.
+
+    The write is captured so a parallel reader of the committed file never sees a truncated copy.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): captured `Path.write_text` and a fresh module import.
+    """
+    writes: list[tuple[Path, str]] = []
+    monkeypatch.setattr(Path, "write_text", lambda path, text, *_, **__: writes.append((path, text)))
+    monkeypatch.delitem(sys.modules, "harness.stack_fixture")
+    runpy.run_module("harness.stack_fixture", run_name="__main__")
+    assert writes == [(FIXTURE_PATH, FIXTURE_PATH.read_text())]
 
 
 def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> None:
@@ -646,3 +663,54 @@ def test_package_agents_gate_follows_filtered_sources_not_stack_name() -> None:
     )
     assert sandbox.subagents_policy(plain) == {"workflowsEnabled": False}
     assert sandbox.subagents_policy(filtered) == {"workflowsEnabled": False, "packageAgents": False}
+
+
+def test_failed_pi_install_carries_the_installer_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A real failing installer stops the stack with the tail of its own diagnostics.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): explicit failing `PI_BIN`.
+        tmp_path (Path): private package-set document, installer and installation root.
+    """
+    stack_path = tmp_path / "stack.json"
+    stack_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "name": "fixture",
+                "core": CORE,
+                "sources": ["npm:one@1.2.3", "npm:two@1.2.3"],
+                "settings": {},
+                "disabled_extensions": {},
+            }
+        )
+    )
+    installer = tmp_path / "fake-pi"
+    log = tmp_path / "installer.log"
+    installer.write_text(f'#!/bin/sh\necho "$*" >> "{log}"\necho "npm error 404 Not Found: $2" >&2\nexit 1\n')
+    installer.chmod(0o755)
+    monkeypatch.setenv("PI_BIN", str(installer))
+    with pytest.raises(
+        RuntimeError, match=r"`pi install` failed for 'npm:one@1\.2\.3': npm error 404"
+    ) as failure:
+        sandbox.install_stack(tmp_path / "install", stack_path)
+    assert isinstance(failure.value.__cause__, subprocess.CalledProcessError)
+    assert log.read_text() == "install npm:one@1.2.3\n"
+
+
+def test_enable_faux_models_appends_once_and_keeps_existing(tmp_path: Path) -> None:
+    """Declared faux models join `enabledModels` in order, without duplicates or losing settings.
+
+    Parameters:
+        tmp_path (Path): private sandbox root.
+    """
+    box = sandbox.build_sandbox(tmp_path / "box")
+    sandbox.enable_faux_models(box, ["faux/main", "fauxchild/child", "faux/main"])
+    assert box.settings()["enabledModels"] == ["faux/main", "fauxchild/child"]
+    box.patch_json("settings.json", {"enabledModels": ["anthropic/claude-opus-5-5", "faux/main"]})
+    sandbox.enable_faux_models(box, ["fauxchild/child", "faux/main"])
+    settings = box.settings()
+    assert settings["enabledModels"] == ["anthropic/claude-opus-5-5", "faux/main", "fauxchild/child"]
+    assert settings["retry"] == {"enabled": False}

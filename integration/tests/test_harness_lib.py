@@ -63,6 +63,8 @@ def test_bench_threshold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     with pytest.raises(AssertionError, match="regressed"):
         bench.check_against_baseline("m", 1.25)
     assert bench.measure(iter([3.0, 1.0, 2.0]).__next__, samples=3) == 2.0
+    with pytest.raises(ValueError, match="`samples` must be positive, got '0'"):
+        bench.measure(iter([1.0]).__next__, samples=0)
 
 
 def test_transcript_invariant() -> None:
@@ -93,6 +95,10 @@ def test_transcript_invariant() -> None:
     assert transcript_region([*rows[:-1], "▾ ● Todos (0/1)", "─" * 40], r"^\s*go\s*$", r"^DONE$") == (2, 12)
     with pytest.raises(AssertionError, match="Editor rule"):
         transcript_region(rows[:-1], r"^\s*go\s*$")
+    with pytest.raises(AssertionError, match="Prompt row /never typed/ not on screen"):
+        transcript_region(rows, "never typed")
+    with pytest.raises(AssertionError, match="Last row /NOT DONE/ not in the transcript"):
+        transcript_region(rows, r"^\s*go\s*$", "NOT DONE")
 
 
 def test_transcript_static_entries_stay_one_line() -> None:

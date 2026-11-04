@@ -55,6 +55,11 @@ def test_summarize_filters_by_time_and_reduces() -> None:
     assert summarize(records, since_ms=10_000) == Reading(0.0, 0.0, 0, 0.0, 0.0, [])
 
 
+def test_input_p95_is_the_nearest_rank_of_input_to_paint() -> None:
+    assert Reading(0.0, 0.0, 0, 0.0, 0.0, [float(n) for n in range(20, 0, -1)]).input_p95_ms == 19.0
+    assert Reading(0.0, 0.0, 0, 0.0, 0.0, []).input_p95_ms == 0.0
+
+
 def test_combine_uses_median_for_p99_and_worst_for_max() -> None:
     readings = [Reading(p, p * 2, 1, 100.0, p, []) for p in (10.0, 20.0, 90.0)]
     fleet = combine(readings)
