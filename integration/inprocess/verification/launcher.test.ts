@@ -46,6 +46,45 @@ process.exitCode = ${CHILD_FAILURE_STATUS};\n`,
 	}
 });
 
+test("launcher keeps the account's Rust toolchain reachable under the isolated HOME", () => {
+	const fixture = mkdtempSync(join(tmpdir(), "pi-launcher-rust-"));
+	try {
+		const bin = join(fixture, "bin");
+		mkdirSync(bin);
+		writeFileSync(
+			join(bin, "bun"),
+			`#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";
+writeFileSync(process.env.RECEIPT, JSON.stringify({ home: process.env.HOME, cargo: process.env.CARGO_HOME ?? null, rustup: process.env.RUSTUP_HOME ?? null }));\n`,
+			{ mode: EXECUTABLE_MODE },
+		);
+		const run = (toolchain: Record<string, string>) => {
+			const receipt = join(fixture, `receipt-${Object.keys(toolchain).length}.json`);
+			const { CARGO_HOME: _cargo, RUSTUP_HOME: _rustup, ...inherited } = process.env;
+			const result = spawnSync("node", [launcher, "bun"], {
+				env: { ...inherited, ...toolchain, PATH: `${bin}:${process.env.PATH}`, RECEIPT: receipt },
+				encoding: "utf8",
+			});
+			expect(result.error).toBeUndefined();
+			expect(result.status).toBe(0);
+			return JSON.parse(readFileSync(receipt, "utf8"));
+		};
+		// rustup's proxies resolve both homes from HOME when unset, so the isolated HOME would hide them.
+		// The launcher runs on Node, whose `userInfo()` reads passwd; Bun's follows this suite's isolated HOME.
+		const account = spawnSync("node", ["-p", "require('node:os').userInfo().homedir"], {
+			encoding: "utf8",
+		}).stdout.trim();
+		const defaults = run({});
+		expect(defaults.home).not.toBe(account);
+		expect(defaults.cargo).toBe(join(account, ".cargo"));
+		expect(defaults.rustup).toBe(join(account, ".rustup"));
+		const explicit = run({ CARGO_HOME: join(fixture, "cargo"), RUSTUP_HOME: join(fixture, "rustup") });
+		expect(explicit.cargo).toBe(join(fixture, "cargo"));
+		expect(explicit.rustup).toBe(join(fixture, "rustup"));
+	} finally {
+		rmSync(fixture, { recursive: true, force: true });
+	}
+});
+
 test("launcher keeps a real extension load out of the shared jiti cache", () => {
 	const fixture = mkdtempSync(join(tmpdir(), "pi-launcher-jiti-"));
 	try {

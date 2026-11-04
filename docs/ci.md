@@ -443,7 +443,9 @@ runtime) and Bun the standalone target. Full Vitest runs on both engines for
 `test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
 spawn-time home (the keys come from its exported `isolatedHomeEnv`, which nested runners such as
 session-kit's worker-death test reuse); `make check-ts` and the native `owned` cells' TypeScript shards run it.
-The launcher also sets `JITI_FS_CACHE=false`. The `test:bun` scripts that start with native
+The launcher also sets `JITI_FS_CACHE=false`, and pins `CARGO_HOME`/`RUSTUP_HOME` to the account's
+(`toolchainHomeEnv`, explicit values win): rustup's proxies otherwise look under the disposable home,
+so dev-tools' real cargo suite silently skipped on Bun on the hosted runners. The `test:bun` scripts that start with native
 `bun test` (session-kit, subagents) set it for that half through an inline
 prefix, not the launcher, as do the direct `vitest` scripts; see `docs/verification-engines.md`. Each
 invocation prints engine/OS/package duration and exit status and appends it to the CI step summary.
