@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  "files": [
+    "extension_inventory.test.ts",
+    "extension_inventory.ts",
+    "faux.test.ts",
+    "faux.ts",
+    "preloads.test.ts",
+    "usage_fixture.test.ts",
+    "usage_fixture.ts",
+    "vitest.config.ts"
+  ]
+}

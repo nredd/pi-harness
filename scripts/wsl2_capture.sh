@@ -38,6 +38,7 @@ shopt -s nullglob
 for report in "$WSL_HOST_WORKSPACE"/packages/*/coverage/*/lcov.info \
   "$WSL_HOST_WORKSPACE"/integration/inprocess/coverage/*/lcov.info \
   "$WSL_HOST_WORKSPACE"/integration/probes/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/integration/providers/coverage/*/lcov.info \
   "$WSL_HOST_WORKSPACE"/scripts/coverage/*/lcov.info \
   "$WSL_HOST_WORKSPACE"/coverage/summary.json; do
   rm -f "$report"
@@ -45,6 +46,7 @@ done
 for report in "$worktree"/packages/*/coverage/*/lcov.info \
   "$worktree"/integration/inprocess/coverage/*/lcov.info \
   "$worktree"/integration/probes/coverage/*/lcov.info \
+  "$worktree"/integration/providers/coverage/*/lcov.info \
   "$worktree"/scripts/coverage/*/lcov.info \
   "$worktree"/coverage/summary.json; do
   [ -f "$report" ] || continue

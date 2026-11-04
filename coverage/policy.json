@@ -28,11 +28,6 @@
     { "path": "integration/inprocess/verification/home-guard.ts", "reason": "Verification-only assertion checks worker home boundaries; imported only by test setup and guard regressions, never shipped." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest-only lifecycle setup installs home-boundary assertions; never shipped or invoked by production." },
     { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
-    { "path": "integration/providers/auth_guard.mjs", "reason": "Auth-scenario fixture verifies mock transport readiness and refused egress before synthetic credentials can dispatch; never shipped." },
-    { "path": "integration/providers/auth_transport.mjs", "reason": "Shared verification-only readiness assertion extracted from auth_guard.mjs for the compiled runtime fixture; never shipped." },
-    { "path": "integration/providers/auth_runtime_fixture.mjs", "reason": "Tiny compiled-host assertion fixture exercises the real auth redirect and readiness failures using fake-only loopback input; not a production entrypoint or compiled-Pi receipt." },
-    { "path": "integration/providers/redirect_anthropic.mjs", "reason": "Test-only Node preload redirects synthetic auth requests to loopback and records forbidden credential access; never installed." },
-    { "path": "integration/providers/fast_timers.mjs", "reason": "Scenario-only preload substitutes selected timer delays for verification; never installed in the product." },
     { "path": "packages/computer-use/scripts/check-commit-messages.mjs", "reason": "Repository commit-message policy checker, not runtime code or a published package file." },
     { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
     { "path": "packages/computer-use/scripts/check-package-assets.mjs", "reason": "Packed-asset and package-manifest verification harness, including Linux source checks from #150; not shipped." },
@@ -356,17 +351,21 @@
     },
     "providers": {
       "root": "integration/providers",
-      "owned": ["*.ts"],
-      "exclusions": [{ "path": "extension_inventory.ts", "kind": "test-helper", "reason": "Test-only extension registry observer injected by integration fixtures; no production provider behavior." }],
-      "status": "pending",
-      "goal": "report-only",
-      "goal_reason": "Synthetic verification providers are test infrastructure, outside the production-package goal.",
-      "note": "faux.ts and usage_fixture.ts remain inventoried. Existing scenario gates are not coverage measurements.",
-      "signals": {}
+      "owned": ["auth_guard.mjs", "auth_runtime_fixture.mjs", "auth_transport.mjs", "extension_inventory.ts", "faux.ts", "redirect_anthropic.mjs", "usage_fixture.ts"],
+      "exclusions": [],
+      "status": "measured",
+      "note": "Synthetic providers and auth preloads, measured by `check-providers` against recording registries and a loopback mock; joins the 100-percent goal at 0/0.",
+      "signals": {
+        "primary": {
+          "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "coverage-configurations": {
       "root": ".",
-      "owned": ["packages/*/vitest*.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts", "integration/probes/vitest.config.ts", "scripts/vitest.config.ts"],
+      "owned": ["packages/*/vitest*.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts", "integration/probes/vitest.config.ts", "integration/providers/vitest.config.ts", "scripts/vitest.config.ts"],
       "exclusions": [],
       "status": "pending",
       "goal": "report-only",

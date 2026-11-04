@@ -480,8 +480,6 @@ def test_audit_detects_uninventoried_new_ts_and_python(tmp_path: Path) -> None:
         "integration/probes/render.ts",
         "integration/probes/session-kit-child-scope.ts",
         "integration/probes/stack-resources.ts",
-        "integration/providers/faux.ts",
-        "integration/providers/usage_fixture.ts",
     ],
 )
 def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
@@ -521,6 +519,38 @@ def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
         )
     else:
         assert all(package.status == "pending" and package.note.strip() for package in owners)
+
+
+def test_providers_are_measured_in_the_goal_at_zero() -> None:
+    """Hold the synthetic providers and auth preloads to the enforced 0/0 goal (#378).
+
+    Parameters:
+        None.
+    Returns:
+        None: Every provider source is owned by one enforced primary signal with zero budgets.
+    Raises:
+        AssertionError: A provider leaves the inventory, the goal or the zero budget.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    providers = cfg.packages["providers"]
+    sources = {
+        path.name
+        for path in (ROOT / "integration/providers").iterdir()
+        if path.suffix in {".ts", ".mjs"}
+        and not path.name.endswith(".test.ts")
+        and path.name != "vitest.config.ts"
+    }
+    assert inventory(ROOT, providers) == sources
+    assert providers.status == "measured"
+    assert providers.goal == "100-percent"
+    primary = providers.signals["primary"]
+    assert primary.enforcement == "enforced"
+    assert {os: (budget.lines, budget.functions) for os, budget in primary.max_uncovered.items()} == {
+        "darwin": (0, 0),
+        "linux": (0, 0),
+    }
+    helpers = {helper.path for helper in cfg.verification_helpers}
+    assert not any(path.startswith("integration/providers/") for path in helpers)
 
 
 @pytest.mark.parametrize(

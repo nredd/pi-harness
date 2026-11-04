@@ -1,6 +1,6 @@
 """Helpers for the quota-footer scenarios: usage fixture state and pane environment.
 
-The router stand-in is `providers/usage_fixture.ts`; the timer preload is `providers/fast_timers.mjs`.
+The router stand-in is `providers/usage_fixture.ts`.
 
 References:
 - Router usage RPC: `router:rpc:usage` in `nredd/pi-subscription-router` `src/index.ts`
@@ -23,13 +23,6 @@ if TYPE_CHECKING:
     from harness.sandbox import Sandbox
 
 USAGE_FIXTURE_EXTENSION = PROVIDERS_DIR / "usage_fixture.ts"
-FAST_TIMERS_PRELOAD = PROVIDERS_DIR / "fast_timers.mjs"
-# The footer's real constants, and the scaled values the fast-timer scenarios run with.
-POLL_MS = 60_000
-REQUEST_TIMEOUT_MS = 12_000
-FAST_POLL_MS = 1_500
-FAST_TIMEOUT_MS = 800
-FAST_TIMERS = {POLL_MS: FAST_POLL_MS, REQUEST_TIMEOUT_MS: FAST_TIMEOUT_MS}
 # `expiresAt` offset of a fresh snapshot; long, so the footer's wall-clock expiry never fires mid-test.
 FRESH_FOR_MS = 3_600_000
 ROUTER_PACKAGE = "pi-subscription-router"
@@ -153,24 +146,13 @@ def install_usage_fixture(box: Sandbox, *, keep_router: bool = False) -> UsageFi
     return fixture
 
 
-def fixture_env(fixture: UsageFixture | None, timers: dict[int, int] | None = None) -> dict[str, str]:
+def fixture_env(fixture: UsageFixture) -> dict[str, str]:
     """Environment for a pane running the fixture.
 
     Parameters:
-        fixture (UsageFixture | None): state and log locations; `None` sets only the timers.
-        timers (dict[int, int] | None): timer delay map for `fast_timers.mjs`; `None` keeps real time.
+        fixture (UsageFixture): state and log locations.
 
     Returns:
         dict[str, str]: variables to pass to `launch_tui(env=...)`.
     """
-    env = (
-        {"HARNESS_USAGE_STATE": str(fixture.state_path), "HARNESS_USAGE_LOG": str(fixture.log_path)}
-        if fixture
-        else {}
-    )
-    if timers:
-        env |= {
-            "HARNESS_TIMER_MAP": json.dumps({str(k): v for k, v in timers.items()}),
-            "NODE_OPTIONS": f"--import {FAST_TIMERS_PRELOAD}",
-        }
-    return env
+    return {"HARNESS_USAGE_STATE": str(fixture.state_path), "HARNESS_USAGE_LOG": str(fixture.log_path)}
