@@ -625,6 +625,32 @@ def base_policy(text: str) -> Policy:
     return Policy.model_validate_json(json.dumps(data))
 
 
+def divergence_base(root: Path, reference: str) -> str:
+    """Resolve where HEAD diverged from a comparison ref, so newer target-only files are not losses.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        reference (str): Comparison ref, e.g. `origin/main`.
+    Returns:
+        str: The single merge base of HEAD and the reference.
+    Raises:
+        ValueError: The ref is missing or empty, shares no history with HEAD or has several merge bases.
+    """
+    try:
+        bases = git_read(root, ["merge-base", "--all", "--end-of-options", "HEAD", reference]).split()
+    except subprocess.CalledProcessError as error:
+        detail = error.output.strip() or "no common ancestor"
+        raise ValueError(
+            f"Cannot resolve the coverage base from '{reference}': '{detail}'. Fetch it or pass `BASE=<sha>`"
+        ) from error
+    if len(bases) != 1:
+        raise ValueError(
+            f"Expected one merge base of HEAD and '{reference}', found {len(bases)}: '{sorted(bases)}'"
+        )
+    LOGGER.info(f"Coverage base: '{bases[0]}', where HEAD diverged from '{reference}'")
+    return bases[0]
+
+
 def repository_files(root: Path, revision: str | None = None) -> set[str]:
     """Enumerate an immutable Git tree or current nonignored working files.
 
@@ -1076,17 +1102,19 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
-    parser.add_argument("--base", help="Git base required for gating; not used by --measure.")
+    bases = parser.add_mutually_exclusive_group()
+    bases.add_argument("--base", help="Explicit Git base for gating, used unchanged; not used by --measure.")
+    bases.add_argument("--compare-ref", help="Gate against the merge base of HEAD and this ref instead.")
     parser.add_argument("--os", default=sys.platform, choices=["darwin", "linux"])
     parser.add_argument("--host", help="CI host class (e.g. wsl2) selecting signals' `skip_hosts`.")
     parser.add_argument("--reports-root", type=Path, help="Root of downloaded CI artifacts.")
     parser.add_argument("--measure", action="store_true", help="Print measured policy diff; NOT a gate.")
     parser.add_argument("--summary", type=Path, default=Path("coverage/summary.json"))
     args = parser.parse_args()
-    if not args.measure and not args.base:
-        parser.error("--base is required unless --measure is selected")
-    if args.measure and args.base:
-        parser.error("--measure cannot enforce --base; use a separate gating invocation")
+    if not args.measure and not args.base and args.compare_ref is None:
+        parser.error("--base or --compare-ref is required unless --measure is selected")
+    if args.measure and (args.base or args.compare_ref is not None):
+        parser.error("--measure cannot enforce --base or --compare-ref; use a separate gating invocation")
     return args
 
 
@@ -1108,6 +1136,8 @@ def main() -> int:
     pending: dict[str, str] = {}
     policy: Policy | None = None
     try:
+        if args.compare_ref is not None:
+            args.base = divergence_base(root, args.compare_ref)
         policy = Policy.model_validate_json((root / "coverage/policy.json").read_text())
         pending = {
             name: package.note for name, package in policy.packages.items() if package.status == "pending"
