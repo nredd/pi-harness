@@ -209,6 +209,41 @@ def test_unresolvable_comparison_ref_fails_closed(tmp_path: Path, reference: str
     assert message in errors[0]
 
 
+def test_shallow_clone_without_shared_history_fails_closed(tmp_path: Path) -> None:
+    """Reject a depth-1 clone whose `origin/main` tip shares no fetched history with HEAD.
+
+    Parameters:
+        tmp_path (Path): Disposable source repository plus its shallow clone.
+    Returns:
+        None: The gate fails before accounting instead of guessing a base.
+    Raises:
+        AssertionError: A truncated history becomes an accepted base.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    source_history(source)
+    clone = tmp_path / "clone"
+    git_read(
+        tmp_path,
+        [
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            "--no-single-branch",
+            "--branch",
+            "topic",
+            source.as_uri(),
+            str(clone),
+        ],
+    )
+    assert git_read(clone, ["rev-parse", "--is-shallow-repository"]).strip() == "true"
+    result, errors = gate(clone, "--compare-ref", "origin/main")
+    assert result.returncode == 1
+    assert len(errors) == 1
+    assert "Cannot resolve the coverage base from 'origin/main': 'no common ancestor'" in errors[0]
+
+
 def test_multiple_merge_bases_fail_closed(tmp_path: Path) -> None:
     """Reject criss-cross history rather than picking one of several divergences.
 
@@ -262,21 +297,24 @@ def test_base_selection_arguments_are_exclusive(tmp_path: Path, args: list[str],
 
 
 @pytest.mark.parametrize(
-    ("overrides", "expected"),
+    ("overrides", "exported", "expected"),
     [
-        ([], "--compare-ref origin/main"),
-        (["BASE=0123abcd"], '--base "0123abcd"'),
-        (["BASE="], '--base ""'),
+        ([], {}, "--compare-ref origin/main"),
+        (["BASE=0123abcd"], {}, '--base "0123abcd"'),
+        (["BASE="], {}, '--base ""'),
+        ([], {"BASE": "4567cdef"}, '--base "4567cdef"'),
+        ([], {"BASE": ""}, '--base ""'),
     ],
 )
 def test_make_defaults_to_divergence_and_passes_explicit_base(
-    tmp_path: Path, overrides: list[str], expected: str
+    tmp_path: Path, overrides: list[str], exported: dict[str, str], expected: str
 ) -> None:
     """Select divergence only when `BASE` is unset; pass any explicit `BASE`, even empty, through.
 
     Parameters:
         tmp_path (Path): Empty make working directory.
         overrides (list[str]): Make command-line variables.
+        exported (dict[str, str]): `BASE` exported from the environment, which is explicit too.
         expected (str): Base selection the recipe must print.
     Returns:
         None: `make -n` prints the expected accounting arguments.
@@ -286,7 +324,8 @@ def test_make_defaults_to_divergence_and_passes_explicit_base(
     result = subprocess.run(
         ["make", "-f", str(ROOT / "Makefile"), "-n", "check-coverage", *overrides],
         cwd=tmp_path,
-        env={key: value for key, value in os.environ.items() if key not in {"MAKEFLAGS", "MFLAGS", "BASE"}},
+        env={key: value for key, value in os.environ.items() if key not in {"MAKEFLAGS", "MFLAGS", "BASE"}}
+        | exported,
         capture_output=True,
         text=True,
         check=True,

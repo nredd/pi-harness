@@ -332,10 +332,16 @@ make check-coverage
 With `BASE` unset this compares against `git merge-base HEAD origin/main`, where the topic diverged,
 and logs that SHA (`--compare-ref origin/main`). Comparing an older topic with the moving
 `origin/main` tree instead reads every file added only on newer main as a topic deletion. A missing or
-empty ref, no common ancestor or several merge bases (criss-cross history) fail closed, there is no
-fallback. Fetch `origin/main`, or pass the base yourself. An explicit `BASE` is used unchanged, even an
-empty one, which fails: hosted CI passes the event's base SHA for its synthetic merge checkout, and
-frozen acceptance and artifact replay pass the base of the exact tree they verify.
+empty ref, no common ancestor (e.g. a `--depth 1` clone) or several merge bases (criss-cross history)
+fail closed, there is no fallback. Fetch `origin/main`, or pass the base yourself.
+
+This local default is advisory. It reads your local `origin/main`, so a stale one yields an older and
+possibly looser base. Run `git fetch origin` first. CI's explicit event `BASE` is authoritative.
+
+An explicit `BASE` is used unchanged. That includes one exported from the environment, not only
+`make check-coverage BASE=<sha>`, and an empty one fails closed. Hosted CI passes the event's base SHA
+for its synthetic merge checkout, and frozen acceptance and artifact replay pass the base of the exact
+tree they verify.
 
 All Git base/inventory reads honor the explicit repository root: inherited `GIT_*` routing,
 alternate index/object paths and injected config entries are removed, and global/system config
