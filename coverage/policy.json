@@ -8,6 +8,10 @@
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: pure static ESM named re-export facade, with zero statements/functions in source/emitted-ESM Istanbul maps. Strict shape validation rejects executable additions; every UI target remains owned and measured." },
     { "package": "probes", "signal": "owned", "path": "integration/probes/stack-resources.ts", "reason": "Relative to b2dfa554: `check-probes` never imports stack-resources.ts (0/45 lines, 0/1 functions on every OS); it is a `pi -e` extension loaded only by live scenarios, like its probe-boundaries siblings. Moved to probe-boundaries, still inventoried." },
     { "package": "probe-boundaries", "signal": "owned", "path": "integration/probes/transcript-types.ts", "reason": "Relative to b2dfa554: transcript-types.test.ts imports and executes transcript-types.ts under `check-probes`, so the pending note is false for it. Moved to the measured probes signal, which now measures it." },
+    { "package": "probe-boundaries", "signal": "owned", "path": "integration/probes/latency.ts", "reason": "Relative to f2d607eb: `latency.test.ts` registers it against a recording ExtensionAPI with fake timers under `check-probes`. Moved to the measured, enforced probes signal; probe-boundaries is deleted." },
+    { "package": "probe-boundaries", "signal": "owned", "path": "integration/probes/render.ts", "reason": "Relative to f2d607eb: `render.test.ts` already imported it; it now also runs the `/harness-probe` command against a recording TUI under `check-probes`. Moved to the measured, enforced probes signal; probe-boundaries is deleted." },
+    { "package": "probe-boundaries", "signal": "owned", "path": "integration/probes/session-kit-child-scope.ts", "reason": "Relative to f2d607eb: `session-kit-child-scope.test.ts` fires its hook and runs its tool against a recording ExtensionAPI under `check-probes`. Moved to the measured, enforced probes signal; probe-boundaries is deleted." },
+    { "package": "probe-boundaries", "signal": "owned", "path": "integration/probes/stack-resources.ts", "reason": "Relative to f2d607eb: `stack-resources.test.ts` runs its hook against the real package manager on a disposable preset under `check-probes`. Moved to the measured, enforced probes signal; probe-boundaries is deleted." },
     { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." }
   ],
   "enforcement_changes": [],
@@ -24,7 +28,6 @@
     { "path": "integration/inprocess/verification/home-guard.ts", "reason": "Verification-only assertion checks worker home boundaries; imported only by test setup and guard regressions, never shipped." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest-only lifecycle setup installs home-boundary assertions; never shipped or invoked by production." },
     { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
-    { "path": "integration/probes/anthropic-block-types.mjs", "reason": "Offline assertion probe for synthetic Anthropic block classification; no production entrypoint or real credentials." },
     { "path": "integration/providers/auth_guard.mjs", "reason": "Auth-scenario fixture verifies mock transport readiness and refused egress before synthetic credentials can dispatch; never shipped." },
     { "path": "integration/providers/auth_transport.mjs", "reason": "Shared verification-only readiness assertion extracted from auth_guard.mjs for the compiled runtime fixture; never shipped." },
     { "path": "integration/providers/auth_runtime_fixture.mjs", "reason": "Tiny compiled-host assertion fixture exercises the real auth redirect and readiness failures using fake-only loopback input; not a production entrypoint or compiled-Pi receipt." },
@@ -378,16 +381,6 @@
       "note": "Existing pytest-cov gate remains unchanged; no independent LCOV claim.",
       "signals": {}
     },
-    "probe-boundaries": {
-      "root": "integration/probes",
-      "owned": ["latency.ts", "render.ts", "session-kit-child-scope.ts", "stack-resources.ts"],
-      "exclusions": [],
-      "status": "pending",
-      "goal": "report-only",
-      "goal_reason": "Owner classifies verification probes as report-only, outside the production-package goal.",
-      "note": "Executable boundary probes remain inventoried; scenario/Node gates do not establish source-complete coverage.",
-      "signals": {}
-    },
     "providers": {
       "root": "integration/providers",
       "owned": ["*.ts"],
@@ -424,17 +417,13 @@
     },
     "probes": {
       "root": "integration/probes",
-      "owned": ["transcript-types.ts"],
+      "owned": ["anthropic-block-types.mjs", "latency.ts", "render.ts", "session-kit-child-scope.ts", "stack-resources.ts", "transcript-types.ts"],
       "exclusions": [],
       "status": "measured",
-      "goal": "report-only",
-      "goal_reason": "Owner classifies verification probes as report-only, outside the production-package goal.",
-      "note": "Node verification utility imported and executed by `transcript-types.test.ts` under `check-probes`. Enforcement waits on the enforced-floor goal mode: https://github.com/nredd/pi-harness/issues/321.",
+      "note": "Every executable probe runs in process under `check-probes`: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Joins the 100-percent goal at 0/0.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "enforcement": "report-only",
-          "reason": "Verification probe retained for diagnostics, not a production-package 100-percent target.",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         }

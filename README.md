@@ -93,10 +93,10 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
 - `check-import-audit`: Biome, strict `tsc` and Vitest (V8 coverage, `scripts/vitest.config.ts`) for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, the only mock forces a project lookup miss), enforced at 0/0
 - `check-integration`: ruff, ty, unit tests for `integration/`, then `check-probes`
-- `check-probes`: Biome and strict `tsc` for `integration/probes/process-lifecycle.test.ts`, `render.ts`, `render.test.ts`,
-  `stack-resources.ts`, `transcript-types.ts` and `transcript-types.test.ts` (real `dev-tools` and `session-kit` runner
-  sources), then Vitest with V8 coverage over `transcript-types.ts` on the explicit `transcript-types.test.ts`,
-  `process-lifecycle.test.ts` and `render.test.ts` (no glob, `integration/probes/vitest.config.ts`)
+- `check-probes`: Biome and strict `tsc` for every `integration/probes` source and test (real `dev-tools` and
+  `session-kit` runner sources; Biome only for `anthropic-block-types.mjs`), then Vitest with V8 coverage over
+  `anthropic-block-types.mjs`, `latency.ts`, `render.ts`, `session-kit-child-scope.ts`, `stack-resources.ts` and
+  `transcript-types.ts`, enforced at 0/0, on the config's explicit test files (no glob, `integration/probes/vitest.config.ts`)
 - `check-benchmark`: ruff, ty, all unit tests with the 90% coverage threshold for
   `benchmarks/comparison`, including the `native_runtime` Codex sandbox test (see below)
 

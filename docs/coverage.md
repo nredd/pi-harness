@@ -2,10 +2,11 @@
 
 Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`,
 `session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`, plus the
-`runtime-build-tooling`, `workflow-examples` and `import-audit` (`scripts/import_audit.ts`, 0/0 since #321) signals.
+`runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321) and
+`probes` (every executable `integration/probes` source, 0/0 since #377) signals.
 `goal: "100-percent"` is the default and cannot be downgraded relative to an established
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
-`goal: "report-only"` identifies verification infrastructure (helpers, probes, inprocess and
+`goal: "report-only"` identifies verification infrastructure (helpers, inprocess and
 producer configurations). `goal: "excluded"` records the owner's computer-use
 coverage-maintenance exclusion. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
@@ -91,16 +92,22 @@ runs the measured source itself, so Node's compile cache no longer reaches it: t
 `NODE_COMPILE_CACHE` exported. Vitest coverage does not follow child processes, which c8 did, so the
 import-audit CLI runs in process through `main()` as well as through the real subprocess; the
 one-line `import.meta.main` dispatch is asserted only by the subprocess tests.
-`import-audit` is in the goal and enforced at 0/0. `probes` measures `integration/probes/transcript-types.ts`,
-the module its suite actually imports, and stays report-only until #321's enforced-floor
-goal mode lands. The counters changed with the producer, the floors did not: c8 counted every
+`import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
+executable probe in process under `check-probes`: `transcript-types.ts`, `render.ts` (its
+`/harness-probe` command against a recording TUI), the `pi -e` extensions `latency.ts`,
+`session-kit-child-scope.ts` and `stack-resources.ts` registered against recording `ExtensionAPI`
+fakes (`stack-resources.ts` drives the real package manager over a disposable preset), and the
+`anthropic-block-types.mjs` CLI, re-imported per test with its own argv against the installed pi-ai
+build, a misclassifying fake build and no argument. `latency.test.ts` fakes only the probe's `/proc`
+reads and schedules with fake timers, so the Linux mount/WSL path and the non-Linux fallback both run
+on every OS. With those five files in `coverage.include` and no new tests, darwin on `f2d607eb`
+left 182 of 291 lines and 46 of 63 functions uncovered; with the tests it is 0/0. The
+`probe-boundaries` pending package and the `anthropic-block-types.mjs` `verification_helpers` row
+are gone. The counters changed with the producer, the floors did not: c8 counted every
 physical line and only the functions V8 reported (`transcript-types.ts` 207 lines / 8 functions,
 `import_audit.ts` 161 / 7), Vitest's AST-based V8 remap counts statement lines and every function
 including anonymous callbacks (`transcript-types.ts` 103 / 15, `import_audit.ts` 63 / 8 with the new
 `main`). Both are 0 uncovered on darwin and linux before and after.
-`stack-resources.ts` is a `pi -e` extension loaded only by live scenarios, so it
-sits with the other measurement-pending `probe-boundaries`; before #321 c8 measured it at 0/45
-lines on every OS, an empty measurement rather than a coverage claim.
 
 Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
 are measured. `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin and linux
@@ -244,7 +251,7 @@ mocked argument/path/error tests still run. Existing native/platform checks rema
 `dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
-Boundary probes, executable providers and producer configurations are named **measurement-pending**
+Executable providers and producer configurations are named **measurement-pending**
 inventories, not silently omitted. Python `scripts/*.py` (`python-scripts`) and
 `integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
 the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root>` writing LCOV to
@@ -370,7 +377,9 @@ repository-relative base path and scope, with a substantive reviewed reason:
 ```
 
 Use `signal: "owned"` for production membership; compatibility subsets require their own named
-signal entry when they lose membership too. For a deletion or genuine role change, omit
+signal entry when they lose membership too. A measured package can never be removed; a pending one
+(no signals, so no budget) can, once every file it owned has an entry here, e.g. `probe-boundaries`
+in #377. For a deletion or genuine role change, omit
 `replacement` (or use null). A replacement must exist in the current inventory for that scope.
 Entries name exact files, not waiver globs. Old historical entries cannot authorize a new loss;
 duplicate, unrelated or invalid new entries fail. Reclassification never permits budget increases

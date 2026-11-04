@@ -441,6 +441,7 @@ def test_audit_detects_uninventoried_new_ts_and_python(tmp_path: Path) -> None:
     [
         "scripts/coverage_accounting.py",
         "integration/harness/paths.py",
+        "integration/probes/anthropic-block-types.mjs",
         "integration/probes/latency.ts",
         "integration/probes/render.ts",
         "integration/probes/session-kit-child-scope.ts",
@@ -449,15 +450,15 @@ def test_audit_detects_uninventoried_new_ts_and_python(tmp_path: Path) -> None:
         "integration/providers/usage_fixture.ts",
     ],
 )
-def test_reviewed_missing_source_is_explicitly_pending(file: str) -> None:
+def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
     """Keep the review's identified executable source visible without inventing baselines.
 
     Parameters:
         file (str): Previously unaccounted executable repository path.
     Returns:
-        None: A named pending package owns the source and explains the follow-up.
+        None: A package owns the source: measured by a real producer, or pending with a follow-up.
     Raises:
-        AssertionError: The source is omitted or silently treated as measured.
+        AssertionError: The source is omitted or treated as measured without a producer.
     """
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     owners = [
@@ -473,6 +474,14 @@ def test_reviewed_missing_source_is_explicitly_pending(file: str) -> None:
             package.status == "measured"
             and package.goal == "ratchet"
             and package.goal_reason.strip()
+            and package.signals["primary"].enforcement == "enforced"
+            for package in owners
+        )
+    elif file.startswith("integration/probes/"):
+        # Since #377 every probe runs in process under `check-probes`: measured and enforced at 0/0.
+        assert all(
+            package.status == "measured"
+            and package.goal == "100-percent"
             and package.signals["primary"].enforcement == "enforced"
             for package in owners
         )
