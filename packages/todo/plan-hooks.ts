@@ -123,6 +123,15 @@ export function formatPlanReminder(state: TaskState): string {
 	return lines.join("\n");
 }
 
+/** One-line report of `in_progress` todos a run stopped with, or `undefined` when there are none. */
+export function formatInProgressNotice(state: TaskState): string | undefined {
+	const active = state.tasks.filter((t) => t.status === "in_progress");
+	if (!active.length) return undefined;
+	const shown = active.slice(0, 3).map((t) => `#${t.id} ${sanitizeTerminalText(t.subject)}`);
+	const more = active.length > shown.length ? `, +${active.length - shown.length} more` : "";
+	return `Run ended with ${active.length} in_progress todo${active.length === 1 ? "" : "s"}: ${shown.join(", ")}${more}`;
+}
+
 /**
  * Register the plan-approval listener and the wrap-up reminder.
  *
@@ -181,6 +190,14 @@ export function registerPlanHooks(
 		return { entries: [...event.entries, draft], continue: true };
 	};
 	pi.on("agent_before_settle", onSettle);
+
+	// A settle with `in_progress` todos is a stop with owned work pending. The reminder above only
+	// covers plan items and only once, so report the state instead of leaving a quiet prompt.
+	pi.on("agent_settled", (_event, ctx) => {
+		if (isPlanning(ctx, [])) return;
+		const message = formatInProgressNotice(getState(sid(ctx)));
+		if (message) ctx.ui.notify(message, "warning");
+	});
 
 	pi.on("context", async (event, ctx) => {
 		if (isPlanning(ctx, event.messages)) return undefined;

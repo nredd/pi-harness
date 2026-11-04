@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
-import { PLAN_REMINDER_MARKER, remindedSinceLastPrompt } from "./plan-hooks.ts";
+import { formatInProgressNotice, PLAN_REMINDER_MARKER, remindedSinceLastPrompt } from "./plan-hooks.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import { getState } from "./state/store.ts";
 import { __resetState } from "./todo.ts";
@@ -312,5 +312,55 @@ describe("TaskDetails snapshot", () => {
 		await announce(approval("p1"));
 		const result = await call(ctx, { action: "create", subject: "x" });
 		expect((result?.details as TaskDetails | undefined)?.plan).toEqual({ id: "p1", title: "Add widgets" });
+	});
+});
+
+describe("settling with in_progress todos", () => {
+	const notices = (ctx: { ui: { notify: unknown } }) => (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls;
+
+	it("reports the in_progress todos once the run settles", async () => {
+		const { handler, call } = setup();
+		const ctx = createMockCtx({ sessionId: "s1" });
+		await handler("session_start")({}, ctx);
+		await call(ctx, { action: "create", subject: "Ship the thing" });
+		await call(ctx, { action: "update", id: 1, status: "in_progress" });
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		expect(notices(ctx)).toEqual([["Run ended with 1 in_progress todo: #1 Ship the thing", "warning"]]);
+	});
+
+	it("caps the list at three and counts the rest", () => {
+		const task = (id: number, status: string) => ({ id, subject: `t${id}`, status });
+		const state = { tasks: [1, 2, 3, 4, 5].map((id) => task(id, "in_progress")), nextId: 6 } as never;
+		expect(formatInProgressNotice(state)).toBe("Run ended with 5 in_progress todos: #1 t1, #2 t2, #3 t3, +2 more");
+	});
+
+	it("strips terminal escapes from the subjects", () => {
+		const state = {
+			tasks: [{ id: 1, subject: "a\u001b[31mred\u001b[0m", status: "in_progress" }],
+			nextId: 2,
+		} as never;
+		expect(formatInProgressNotice(state)).toBe("Run ended with 1 in_progress todo: #1 ared");
+	});
+
+	it("stays silent in Plan mode", async () => {
+		const { handler, call } = setup();
+		const ctx = createMockCtx({ sessionId: "s1" });
+		await handler("session_start")({}, ctx);
+		await call(ctx, { action: "create", subject: "Ship the thing" });
+		await call(ctx, { action: "update", id: 1, status: "in_progress" });
+		(ctx.sessionManager as { getBranch: () => unknown[] }).getBranch = () => [
+			{ type: "custom", customType: "plan-mode-state", data: { enabled: true } },
+		];
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		expect(notices(ctx)).toEqual([]);
+	});
+
+	it("stays silent when nothing is in_progress", async () => {
+		const { handler, call } = setup();
+		const ctx = createMockCtx({ sessionId: "s1" });
+		await handler("session_start")({}, ctx);
+		await call(ctx, { action: "create", subject: "Later" });
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		expect(notices(ctx)).toEqual([]);
 	});
 });
