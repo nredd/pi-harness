@@ -42,12 +42,12 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 244 }, "linux": { "lines": 0, "functions": 0, "branches": 245 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 243 }, "linux": { "lines": 0, "functions": 0, "branches": 244 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 244 }, "linux": { "lines": 0, "functions": 0, "branches": 246 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 243 }, "linux": { "lines": 0, "functions": 0, "branches": 244 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
@@ -66,12 +66,12 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 227 }, "linux": { "lines": 0, "functions": 0, "branches": 227 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 226 }, "linux": { "lines": 0, "functions": 0, "branches": 226 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 227 }, "linux": { "lines": 0, "functions": 0, "branches": 227 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 226 }, "linux": { "lines": 0, "functions": 0, "branches": 226 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
@@ -311,7 +311,7 @@
           "report": "coverage/python/lcov.info",
           "producer": "coverage.py",
           "skip_hosts": ["wsl2"],
-          "max_uncovered": { "darwin": { "lines": 284, "functions": 11, "branches": 73 }, "linux": { "lines": 285, "functions": 11, "branches": 74 } },
+          "max_uncovered": { "darwin": { "lines": 284, "functions": 11, "branches": 73 }, "linux": { "lines": 285, "functions": 11, "branches": 73 } },
           "reporters": ["text", "lcov"]
         }
       }

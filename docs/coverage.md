@@ -76,13 +76,13 @@ Python measures branches: `PY_GATE` in the `Makefile` passes `--cov-branch`, so 
 producers emit `BRDA` rows like the benchmark's `branch = true` producer already did (`-` for a branch whose line never ran, named targets such as `jump to line 9`).
 `test_real_coveragepy_branch_report_parses` runs real coverage.py to pin that shape.
 
-Starting caps are the counts measured on this policy's introducing PR, per OS, from hosted artifacts
-(WSL folded into `linux` as the max): run `41925923830` (`5a0a596e`, #429). Every cap equals that run
-except where another run on an unchanged source tree measured more, which keeps the max: `plan-mode`
-227 (`src/plan-mode.ts` 69 in main run `41914882314` versus 68), `dev-tools/bun` linux 246
-(`src/resource/index.ts` 10 versus 9 in #429 run `41930895814`) and `python-scripts` linux 74
-(`package_contracts.py` 8 versus 7 in `41930895814`; its only change was a contract list entry). They
-are references on the way down, not waivers: #404-#424 each
+Starting caps are the counts measured on this policy's introducing PR, per OS, from the hosted
+artifacts of its final HEAD (WSL folded into `linux` as the max). A cap is never a max over runs: a branch
+whose coverage changed between runs on an unchanged tree gets a deterministic test first. #429 found three,
+each reached only by the real host: `formatMetric`'s non-`available` arm and `rankProcesses`'s pid
+tiebreak in `packages/dev-tools/src/resource/index.ts`, and `stop_hostile_child()`'s already-exited arm in
+`scripts/package_contracts.py` (whether the marker's exit status was collected before cleanup). Fixture
+tests now pin all three. Caps are references on the way down, not waivers: #404-#424 each
 lower their own signal's cap toward 0 and never raise one, then #425 locks every cap and `target.branches`
 at 0.
 
