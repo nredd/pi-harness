@@ -8,8 +8,9 @@ export default defineConfig({
 		// `dev-tools`, one worker like `resource-sampler`.
 		pool: "forks",
 		maxWorkers: 1,
-		// The `dev-tools` default. Slowest case on an M-series Mac is ~10.1 s (`async` signal observer);
-		// the two `async` cases that wait out TERM/KILL escalation carry their own derived budgets.
+		// The `dev-tools` default. Slowest warm case on an M-series Mac is ~10.1 s (`async` signal
+		// observer). The two `async` cases that wait out TERM/KILL escalation and the two cold-cache
+		// `swiftc` invariants (INV-8, INV-17) carry their own derived budgets.
 		testTimeout: 20_000,
 		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
 		// `istanbul` like the other Pi-loading packages; report-only, see `coverage/policy.json`.

@@ -302,7 +302,10 @@ test("INV-20 bounded broad root discovery", () => {
 // NOT RUN elsewhere (requires macOS xcrun): Vitest reports the skip, never a pass.
 const testMacosOnly = test.skipIf(process.platform !== "darwin");
 
-testMacosOnly("INV-8 swift typecheck", () => {
+// Both swiftc cases start with an empty `-module-cache-path` on a fresh hosted runner, so swiftc
+// rebuilds the AppKit/SwiftUI framework modules first. Warm local runs take ~2 s; budgets are ~2x
+// the cold `owned (macos-14)` cost (3-core M1) from job 126326304071, not the suite default.
+testMacosOnly("INV-8 swift typecheck", { timeout: 90_000 /* cold CI: 43532 ms */ }, () => {
 	const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
 	execFileSync("xcrun", [
 		"swiftc", "-target", triple, "-parse-as-library",
@@ -320,7 +323,7 @@ testMacosOnly("INV-8 swift typecheck", () => {
 	], { cwd: root, stdio: "pipe" });
 });
 
-testMacosOnly("INV-17 macOS agent cursor lifecycle", () => {
+testMacosOnly("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 /* cold CI: 23953 ms */ }, () => {
 	const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
 	const binary = path.join(os.tmpdir(), `pi-computer-use-cursor-tests-${process.pid}`);
 	try {
