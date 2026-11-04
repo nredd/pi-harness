@@ -30,9 +30,9 @@ def test_primary_configs_match_policy_inventory() -> None:
         AssertionError: Producer includes or failure-reporting requirements drift.
     """
     policy = json.loads((ROOT / "coverage/policy.json").read_text())
-    for package in policy["packages"].values():
+    for name, package in policy["packages"].items():
         primary = package["signals"].get("primary")
-        if not primary:
+        if not primary or name.startswith("python-"):
             continue
         directory = ROOT / package["root"]
         report_directory = Path(primary["report"]).parent.as_posix()
@@ -142,6 +142,35 @@ def test_bun_launcher_owns_istanbul_reporters_and_directory(tmp_path: Path) -> N
     assert argv[2:] == ["run", "--maxWorkers=1", *BUN_COVERAGE_ARGS]
     canary = launch_bun(tmp_path, "test/resource-loader-home.test.ts", "--coverage.enabled=false")
     assert canary[2:] == ["run", "test/resource-loader-home.test.ts", "--coverage.enabled=false"]
+
+
+def test_python_signals_match_the_shared_python_gate() -> None:
+    """Bind each Python signal to the one `PY_GATE` recipe that produces its LCOV.
+
+    Parameters:
+        None.
+    Returns:
+        None: Every Python package is gated through `PY_GATE` with a project-root `--cov` source,
+            parallel pytest, and the policy's report path.
+    Raises:
+        AssertionError: The recipe, its coverage source, the report path or skipped hosts drift.
+    """
+    makefile = (ROOT / "Makefile").read_text()
+    recipe = makefile[makefile.index("define PY_GATE") : makefile.index("endef")]
+    assert "-n auto --dist loadfile" in recipe
+    sources = dict(re.findall(r"\$\(call PY_GATE,(\w+),[^,]*,[^,]*,([^)]+)\)", makefile))
+    policy = json.loads((ROOT / "coverage/policy.json").read_text())
+    python = {name: pkg for name, pkg in policy["packages"].items() if name.startswith("python-")}
+    for name, package in python.items():
+        if name == "python-benchmarks":
+            continue
+        primary = package["signals"]["primary"]
+        assert f"--cov-report=lcov:{primary['report']}" in recipe, name
+        source = sources[package["root"]]
+        assert {Path(pattern).parent.as_posix() for pattern in package["owned"]} == {source}, name
+        assert primary["skip_hosts"] == ["wsl2"], name
+        assert primary["producer"] == "coverage.py", name
+    assert set(sources) == {"scripts", "integration"}
 
 
 def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:

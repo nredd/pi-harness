@@ -2,6 +2,14 @@
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
+# One Python gate: ruff, ty, then pytest across cores (`--dist loadfile` keeps each test file on one worker)
+# with LCOV written under `<dir>/coverage/python/` for `scripts/coverage_accounting.py`.
+# $(1) project dir (cwd, so LCOV paths are project-relative), $(2) extra uv flags, $(3) pytest paths, $(4) --cov source.
+define PY_GATE
+cd $(1) && uv run --locked $(2) ruff format --check . && uv run --locked $(2) ruff check --no-fix --ignore-noqa . && uv run --locked $(2) ty check
+cd $(1) && uv run --locked $(2) pytest $(3) -n auto --dist loadfile -p no:cacheprovider --cov=$(4) --cov-report=lcov:coverage/python/lcov.info --cov-report=term:skip-covered
+endef
+
 help:  ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
@@ -25,16 +33,14 @@ check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace
 	npm run check
 
 check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos)
-	cd scripts && uv run --locked --project ../integration ruff format --check . && uv run --locked --project ../integration ruff check --no-fix --ignore-noqa . && uv run --locked --project ../integration ty check
-	uv run --locked --project integration pytest scripts -c scripts/pyproject.toml -p no:cacheprovider
+	$(call PY_GATE,scripts,--project ../integration,,.)
 	$(MAKE) check-import-audit
 
 check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE
-	uv run --locked --project integration python scripts/coverage_accounting.py --base "$(or $(BASE),origin/main)"
+	uv run --locked --project integration python scripts/coverage_accounting.py --base "$(or $(BASE),origin/main)"$(if $(COVERAGE_HOST), --host "$(COVERAGE_HOST)")
 
 check-integration:  ## integration units; requires initialized `forks/pi` Gitlink (no pi, tmux, or scenarios)
-	cd integration && $(PY_CHECK)
-	cd integration && uv run --locked pytest tests -p no:cacheprovider
+	$(call PY_GATE,integration,,tests,harness)
 	$(MAKE) check-probes
 
 check-probes:  ## Probes (process-lifecycle, render, stack-resources, transcript-types) Biome + strict tsc against real sources, then Vitest on the config's explicit files (no glob)

@@ -116,6 +116,14 @@ class Signal(StrictModel):
     reason: str = Field(
         default="", description="Mandatory explanation and migration issue for report-only signals."
     )
+    producer: Literal["lcov", "coverage.py"] = Field(
+        default="lcov",
+        description="Report writer; only coverage.py legitimately writes a bare record for an empty source.",
+    )
+    skip_hosts: list[str] = Field(
+        default_factory=list,
+        description="CI hosts whose gate list never runs this signal's producer; reported NOT RUN there.",
+    )
 
     @model_validator(mode="after")
     def text_and_lcov(self) -> Signal:
@@ -186,8 +194,12 @@ class Package(StrictModel):
     )
     status: Literal["measured", "pending"] = Field(description="Whether clean-run coverage is accounted for.")
     note: str = Field(description="Measurement limitations and concrete pending follow-up.")
-    goal: Literal["100-percent", "report-only", "excluded"] = Field(
-        default="100-percent", description="Owner-approved scope of the global line/function goal."
+    goal: Literal["100-percent", "ratchet", "report-only", "excluded"] = Field(
+        default="100-percent",
+        description=(
+            "Owner-approved scope of the global line/function goal. `ratchet` is outside the zero target "
+            "but enforced: each enforced signal's per-OS `max_uncovered` is a floor that can only go down."
+        ),
     )
     goal_reason: str = Field(default="", description="Required reason for domains outside the global goal.")
     signals: dict[str, Signal] = Field(description="Independent primary and compatibility coverage signals.")
@@ -219,10 +231,15 @@ class Package(StrictModel):
             and self.signals["primary"].enforcement != "enforced"
         ):
             raise ValueError("Primary signals must remain enforced")
-        if self.goal != "100-percent" and any(
+        if self.goal not in {"100-percent", "ratchet"} and any(
             signal.enforcement != "report-only" for signal in self.signals.values()
         ):
             raise ValueError("Signals outside the global goal must remain report-only")
+        if self.goal == "ratchet" and (
+            self.status != "measured"
+            or not any(signal.enforcement == "enforced" for signal in self.signals.values())
+        ):
+            raise ValueError("A ratchet package must be measured with at least one enforced signal")
         if self.target_allowances and (
             self.status != "measured"
             or self.goal != "100-percent"
@@ -343,6 +360,44 @@ class FileCoverage:
     uncovered_branches: int
 
 
+def split_function_hits(value: str) -> tuple[int, str]:
+    """Split an `FNDA` payload, `<hits>,<name>`, in both LCOV dialects.
+
+    Parameters:
+        value (str): Text after `FNDA:`.
+    Returns:
+        tuple[int, str]: Hit count and function identity.
+    Raises:
+        ValueError: The count is not decimal or the name is empty.
+    """
+    count, _, name = value.partition(",")
+    if not count.isdecimal() or not name:
+        raise ValueError(value)
+    return int(count), name
+
+
+def split_function_definition(value: str) -> tuple[int, str]:
+    """Split an `FN` payload: `<line>,<name>` (lcov, Istanbul) or `<line>,<end>,<name>` (coverage.py).
+
+    Parameters:
+        value (str): Text after `FN:`.
+    Returns:
+        tuple[int, str]: Start line and function identity.
+    Raises:
+        ValueError: The line is not decimal or the name is empty.
+
+    `FN:1,2,g` is read as coverage.py's `<line>,<end>,<name>`. A lcov function literally named `2,g`
+    cannot occur (identifiers have no comma), and if its `FNDA` disagrees the identities no longer match
+    and `finish` fails closed with "Missing function counters".
+    """
+    line, _, rest = value.partition(",")
+    end, comma, named = rest.partition(",")
+    name = named if comma and end.isdecimal() else rest
+    if not line.isdecimal() or not name:
+        raise ValueError(value)
+    return int(line), name
+
+
 @dataclass
 class LcovRecord:
     """Accumulate one LCOV source record without merging independent counters."""
@@ -396,13 +451,14 @@ class LcovRecord:
         Raises:
             ValueError: A function record is malformed or duplicated.
         """
-        number, comma, name = value.partition(",")
-        if not comma or not number.isdecimal() or not name:
-            raise ValueError(f"Malformed function counter: '{value}'")
+        try:
+            number, name = (split_function_hits if key == "FNDA" else split_function_definition)(value)
+        except ValueError as error:
+            raise ValueError(f"Malformed function counter: '{value}'") from error
         counters = self.definitions if key == "FN" else self.functions
         if name in counters:
             raise ValueError(f"Duplicate function counter: '{value}'")
-        counters[name] = int(number)
+        counters[name] = number
 
     def add_branch(self, value: str) -> None:
         """Validate a branch identity and its optional hit count.
@@ -422,11 +478,12 @@ class LcovRecord:
             raise ValueError(f"Duplicate or malformed branch: '{value}'")
         self.branches[identity] = 0 if parts[3] == "-" else int(parts[3])
 
-    def finish(self) -> FileCoverage:
+    def finish(self, bare_source: bool = False) -> FileCoverage:
         """Check producer summaries against actual executable counters.
 
         Parameters:
-            None.
+            bare_source (bool): Accept a record with no rows at all, as coverage.py writes for a source
+                without executable lines. Other producers must emit totals, so a bare record is truncation.
         Returns:
             FileCoverage: Validated executable line, function and branch counters.
         Raises:
@@ -434,6 +491,8 @@ class LcovRecord:
         """
         if set(self.definitions) != set(self.functions):
             raise ValueError("Missing function counters")
+        if bare_source and not (self.lines or self.functions or self.branches or self.summaries):
+            return FileCoverage(0, 0, 0, 0, 0, 0)
         totals = {
             "LF": len(self.lines),
             "LH": sum(value > 0 for value in self.lines.values()),
@@ -463,11 +522,12 @@ class LcovRecord:
         )
 
 
-def parse_lcov(text: str) -> dict[str, FileCoverage]:
+def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCoverage]:
     """Parse LCOV strictly, checking counters rather than trusting summary fields.
 
     Parameters:
         text (str): Complete LCOV document.
+        bare_sources (bool): Treat a bare `SF`/`end_of_record` pair as an empty source (coverage.py only).
     Returns:
         dict[str, FileCoverage]: Records keyed by the original source path.
     Raises:
@@ -488,7 +548,7 @@ def parse_lcov(text: str) -> dict[str, FileCoverage]:
         if source is None:
             raise ValueError(f"LCOV data outside a source record: '{row}'")
         if row == "end_of_record":
-            records[source] = record.finish()
+            records[source] = record.finish(bare_sources)
             source = None
             continue
         record.add(row)
@@ -825,12 +885,15 @@ def check_ratchet(current: Policy, base: Policy) -> None:
         if name not in current.packages:
             raise ValueError(f"Removed package: '{name}'")
         package = current.packages[name]
-        if previous.goal == "100-percent" and package.goal != previous.goal:
+        graduates = previous.goal == "ratchet" and package.goal == "100-percent"
+        if previous.goal in {"100-percent", "ratchet"} and package.goal != previous.goal and not graduates:
             raise ValueError(f"Cannot remove package from global goal: '{name}'")
         for signal_name, old in previous.signals.items():
             if signal_name not in package.signals:
                 raise ValueError(f"Removed signal: '{name}/{signal_name}'")
             new = package.signals[signal_name]
+            if not set(new.skip_hosts) <= set(old.skip_hosts):
+                raise ValueError(f"Cannot add skipped hosts: '{name}/{signal_name}'")
             for runner_os, floor in old.max_uncovered.items():
                 if runner_os not in new.max_uncovered:
                     raise ValueError(f"Missing OS floor: '{name}/{signal_name}/{runner_os}'")
@@ -859,7 +922,10 @@ def scoped_records(
         ValueError: LCOV, membership, expected files or total owned executable lines are invalid.
     """
     expected = set(signal.files) if signal.files is not None else inventory(root, package)
-    raw = parse_lcov(((reports_root or root) / package.root / signal.report).read_text())
+    raw = parse_lcov(
+        ((reports_root or root) / package.root / signal.report).read_text(),
+        bare_sources=signal.producer == "coverage.py",
+    )
     records: dict[str, FileCoverage] = {}
     known = {
         (root / other.root / file).resolve()
@@ -969,6 +1035,8 @@ def account(
     runner_os: str = sys.platform,
     reports_root: Path | None = None,
     measure: bool = False,
+    *,
+    host: str | None = None,
 ) -> tuple[list[dict[str, object]], list[str]]:
     """Account for independent package/file counters and retain signal failures.
 
@@ -978,6 +1046,7 @@ def account(
         runner_os (str): Measured runner platform; only darwin and linux are supported.
         reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
         measure (bool): Report validated measurements without enforcing budgets; not a gate.
+        host (str | None): CI host class; signals listing it in `skip_hosts` are reported NOT RUN.
     Returns:
         tuple[list[dict[str, object]], list[str]]: Per-file metrics and explicit accounting failures.
     Raises:
@@ -996,6 +1065,9 @@ def account(
             continue
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
+            if host is not None and host in signal.skip_hosts:
+                LOGGER.warning(f"NOT RUN on host '{host}': '{label}' has no producer in that cell")
+                continue
             try:
                 validate_signal_inventory(owned, signal_name, signal)
                 if not measure and runner_os not in signal.max_uncovered:
@@ -1117,6 +1189,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--base", help="Git base required for gating; not used by --measure.")
     parser.add_argument("--os", default=sys.platform, choices=["darwin", "linux"])
+    parser.add_argument("--host", help="CI host class (e.g. wsl2) selecting signals' `skip_hosts`.")
     parser.add_argument("--reports-root", type=Path, help="Root of downloaded CI artifacts.")
     parser.add_argument("--measure", action="store_true", help="Print measured policy diff; NOT a gate.")
     parser.add_argument("--summary", type=Path, default=Path("coverage/summary.json"))
@@ -1171,7 +1244,7 @@ def main() -> int:
             base = Policy.model_validate_json(previous)
             check_ratchet(policy, base)
             check_inventory_ratchet(root, policy, base, args.base)
-        results, errors = account(root, policy, args.os, args.reports_root, args.measure)
+        results, errors = account(root, policy, args.os, args.reports_root, args.measure, host=args.host)
     except subprocess.CalledProcessError as error:
         errors.append(f"Git metadata read failed: '{error.output}'")
     except (OSError, ValueError, KeyError, TypeError) as error:

@@ -333,11 +333,19 @@
       "root": "scripts",
       "owned": ["*.py"],
       "exclusions": [],
-      "status": "pending",
-      "goal": "excluded",
-      "goal_reason": "Owner retains existing Python automation tests; Python is outside the eight-package 100-percent goal.",
-      "note": "Existing formatter, linter, type checker and pytest gates remain required. No LCOV coverage claim.",
-      "signals": {}
+      "status": "measured",
+      "goal": "ratchet",
+      "goal_reason": "Owner decision on #314: Python is outside the eight-package zero target but its measured uncovered counts are an enforced downward ratchet per OS.",
+      "note": "pytest-cov LCOV from `make check-scripts` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest.",
+      "signals": {
+        "primary": {
+          "report": "coverage/python/lcov.info",
+          "producer": "coverage.py",
+          "skip_hosts": ["wsl2"],
+          "max_uncovered": { "darwin": { "lines": 284, "functions": 11 }, "linux": { "lines": 285, "functions": 11 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "python-harness": {
       "root": "integration",
@@ -346,11 +354,19 @@
         { "path": "harness/__init__.py", "kind": "type-only", "reason": "Declaration-only package marker containing only a module docstring; no executable implementation." },
         { "path": "conftest.py", "kind": "test-helper", "reason": "Pytest fixture configuration for integration scenarios, not production implementation." }
       ],
-      "status": "pending",
-      "goal": "excluded",
-      "goal_reason": "Owner retains existing Python automation tests; Python is outside the eight-package 100-percent goal.",
-      "note": "Existing formatter, linter, type checker and pytest gates remain required. No LCOV coverage claim.",
-      "signals": {}
+      "status": "measured",
+      "goal": "ratchet",
+      "goal_reason": "Owner decision on #314: Python is outside the eight-package zero target but its measured uncovered counts are an enforced downward ratchet per OS.",
+      "note": "pytest-cov LCOV from `make check-integration` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest.",
+      "signals": {
+        "primary": {
+          "report": "coverage/python/lcov.info",
+          "producer": "coverage.py",
+          "skip_hosts": ["wsl2"],
+          "max_uncovered": { "darwin": { "lines": 628, "functions": 69 }, "linux": { "lines": 628, "functions": 69 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "python-benchmarks": {
       "root": "benchmarks/comparison",

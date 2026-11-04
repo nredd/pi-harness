@@ -7,9 +7,16 @@ Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
 `goal: "report-only"` identifies verification infrastructure (helpers, probes, inprocess and
 producer configurations). `goal: "excluded"` records the owner's computer-use
-coverage-maintenance exclusion and Python's existing-test-only scope. Both require a nonblank
+coverage-maintenance exclusion. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
 goal must be report-only and still require complete, valid reports and per-OS references.
+`goal: "ratchet"` (owner decision on #314, reusable by #321) is the one mode outside the zero target
+that is enforced: a measured package whose enforced signals hold their per-OS `max_uncovered` as a
+floor. The target is not applied, and floors only go down (the existing enforced-to-enforced ratchet).
+A package cannot leave `ratchet` except to graduate to `100-percent`, an enforced signal cannot go report-only without a reasoned
+`enforcement_changes` entry, and a `ratchet` package must be measured with at least one enforced
+signal. The rule keeping `excluded`/`report-only` signals report-only is unchanged. A floor is a new
+enforced signal, not an allowance or waiver: it is the measured count on a named commit and OS.
 
 The initial integration checkpoint is recorded [here](../coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
@@ -237,20 +244,53 @@ mocked argument/path/error tests still run. Existing native/platform checks rema
 `dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
-Python `scripts/*.py` and `integration/harness/*.py`, boundary probes, executable providers and
-producer configurations are named **measurement-pending** inventories, not silently omitted.
-Existing Python gates are not coverage accounting: pytest-cov for `scripts/` and
-`integration/harness/` is follow-up work. `benchmarks/comparison` already has pytest-cov at 90%
-combined coverage and retains it (always in local `make check`; in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); independent LCOV line/function accounting is still pending.
-The declaration-only `integration/harness/__init__.py` has an explicit reasoned exclusion.
+Boundary probes, executable providers and producer configurations are named **measurement-pending**
+inventories, not silently omitted. Python `scripts/*.py` (`python-scripts`) and
+`integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
+the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root>` writing LCOV to
+`scripts/coverage/python/lcov.info` and `integration/coverage/python/lcov.info`. The path is
+deliberately not `coverage/primary`, which is import-audit's report. The `--cov` source is the project
+root (`.` and `harness`), so the policy `owned` globs stay the only copy of the inventory.
+`scripts/pyproject.toml` sets coverage's `patch = ["subprocess"]` so the CLI tests that spawn
+`coverage_accounting.py` count. `pytest-cov` is locked in `integration/pyproject.toml`.
+`parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows. Only a signal declaring
+`producer: "coverage.py"` may contain the bare `SF`/`end_of_record` record coverage.py writes for a
+file with no executable lines; for any other producer a bare record is a truncated report and fails. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
+pytest (`docs/ci.md`), so `check-coverage` there (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
+`skip_hosts` to exactly the matrix cells whose `gates` omit the producer, and the ratchet rejects adding
+a skipped host. `benchmarks/comparison` keeps its own pytest-cov 90% combined gate unchanged (in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); it is not
+fed to accounting because a path-gated skip would otherwise fail as a missing report. The declaration-only `integration/harness/__init__.py` has an explicit
+reasoned exclusion.
+
+Both Python packages are `goal: "ratchet"` with an enforced `primary` signal (#314). First floors
+are the measured uncovered counts, never allowances; they only go down. Every Python line the PR
+added or changed is 0/0:
+
+| Signal | darwin lines/functions | linux lines/functions |
+| --- | --- | --- |
+| `python-scripts/primary` | 284/11 | 285/11 |
+| `python-harness/primary` | 628/69 | 628/69 |
+
+`python-scripts` was measured on the final tree of PR #323 from its own hosted artifacts, `--measure` on each:
+darwin from `coverage-macos-14`, linux from `coverage-ubuntu-24.04`, both run `41718792020` on commit `6912a7b5`.
+After rebasing onto `2862cd80` (#332), main's `harness/tmux.py`/`harness/rpc.py` changes and their tests
+lowered `python-harness` by 8 lines and 1 function. Re-measured on commit `3be0ba22`: linux from
+`coverage-ubuntu-24.04` of run `41749183215`, darwin from a local macOS 27.2 arm64 `make check-integration`
+(Python 3.14.9), which also reproduced `python-scripts` 284/11 and earlier matched the hosted darwin counts.
+Both OSes gave 628/69. `python-scripts` is one line higher on linux than on darwin, so its floors differ per OS.
+An earlier run (`41702044725`, before the first rebase) is not a source: it predates `harness/install_paths.py`
+and `harness/release_gate.py`.
+Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and
+`integration` 143s, against 199s and 281s serial.
+
 A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
 explicit owned/pending declaration or reasoned verification classification. Existing producer
 configurations remain pending/report-only in the policy. All inventories are expanded and
-validated; only eligible pending inventories block the final target flip. Python keeps its
-existing tests and benchmark gate, outside this eight-package goal.
+validated; only eligible pending inventories block the final target flip. Python is outside this
+eight-package zero target; its two measured signals are the enforced `ratchet` floors above.
 
 ## Add a source file
 

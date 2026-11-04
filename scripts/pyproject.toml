@@ -29,3 +29,7 @@ respect-type-ignore-comments = false
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# CLI tests spawn `sys.executable`; measure those child processes so `main()` counts like any other code.
+patch = ["subprocess"]
