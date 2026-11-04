@@ -983,6 +983,23 @@ def not_run_reason(signal: Signal, host: str | None, skipped_gates: frozenset[st
     return ""
 
 
+def require_declared_gates(policy: Policy, skipped_gates: frozenset[str]) -> None:
+    """Reject skipped gates no policy signal declares, so a typo cannot silently skip nothing.
+
+    Parameters:
+        policy (Policy): Policy whose signals declare their producer gates.
+        skipped_gates (frozenset[str]): Make targets this run planned but skipped.
+    Returns:
+        None: The gates are all declared.
+    Raises:
+        ValueError: A skipped gate is declared by no policy signal.
+    """
+    declared = {signal.gate for package in policy.packages.values() for signal in package.signals.values()}
+    undeclared = sorted(skipped_gates - (declared - {""}))
+    if undeclared:
+        raise ValueError(f"Skipped gates no policy signal declares: {undeclared}")
+
+
 def account(
     root: Path,
     policy: Policy,
@@ -1007,10 +1024,12 @@ def account(
     Returns:
         tuple[list[dict[str, object]], list[str]]: Per-file metrics and explicit accounting failures.
     Raises:
-        ValueError: A package inventory cannot be expanded.
+        ValueError: The OS is unmeasured, a skipped gate is declared by no policy signal, or a package
+            inventory cannot be expanded.
     """
     if runner_os not in {"darwin", "linux"}:
         raise ValueError(f"Coverage is not measured on OS: '{runner_os}'")
+    require_declared_gates(policy, skipped_gates)
     results: list[dict[str, object]] = []
     errors: list[str] = []
     for name, package in policy.packages.items():

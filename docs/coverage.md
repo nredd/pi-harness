@@ -292,7 +292,8 @@ Its enforced `primary` signal is 0/0 on darwin only and declares `skip_hosts: ["
 test needs Seatbelt, so only the macOS cell runs the producer. The CI step is path-gated (#315), so the signal also
 declares `gate: "check-benchmark"`. `scripts/ci_paths.py` lists a skipped gate in the cell's `skipped_gates`, the fan-in
 passes it as `COVERAGE_SKIPPED_GATES` (`--skipped-gates`), and the signal reports NOT RUN on that run only; a run
-that executes the gate requires the report. The ratchet rejects changing a signal's `gate`, as it rejects adding a
+that executes the gate requires the report. Accounting fails closed on a `--skipped-gates` token no policy signal
+declares, so a typo cannot skip nothing silently, and a test keeps every `PATH_GATED_GATES` key declared. The ratchet rejects changing a signal's `gate`, as it rejects adding a
 skipped host. Before #387 the gate was 90% with 85 statements and 58 partial branches missed (run `41755991256`). The declaration-only `integration/harness/__init__.py` has an explicit
 reasoned exclusion.
 

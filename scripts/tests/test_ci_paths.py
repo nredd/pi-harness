@@ -1427,3 +1427,11 @@ def test_full_verification_runs_every_path_gated_gate() -> None:
     plan = ci_paths.plan_cells(ci_paths.full_classification(), "workflow_dispatch")
     assert all(cell.skipped_gates == () for cell in plan.values())
     assert set(ci_paths.PATH_GATED_GATES.values()) <= set(ci_paths.INPUT_CLASSES)
+    # Accounting rejects a skipped gate no policy signal declares, so every path-gated gate needs its signal.
+    policy = json.loads((ci_paths.REPO_ROOT / "coverage/policy.json").read_text())
+    declared = {
+        signal.get("gate")
+        for package in policy["packages"].values()
+        for signal in package["signals"].values()
+    }
+    assert set(ci_paths.PATH_GATED_GATES) <= declared

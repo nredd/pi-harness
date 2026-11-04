@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -628,7 +629,7 @@ def test_skipped_producer_gate_reports_not_run_but_a_run_gate_requires_its_repor
     Parameters:
         tmp_path (Path): Disposable source root with no LCOV report.
     Returns:
-        None: A skipped gate reports nothing; an unskipped or unnamed gate fails on the missing report.
+        None: A skipped gate reports nothing; an unskipped gate fails on the missing report.
     Raises:
         AssertionError: A skipped gate is gated, or a run gate's missing report passes.
     """
@@ -637,13 +638,31 @@ def test_skipped_producer_gate_reports_not_run_but_a_run_gate_requires_its_repor
     gated = policy()
     gated.packages["example"].signals["primary"].gate = "check-benchmark"
     assert account(tmp_path, gated, skipped_gates=frozenset({"check-benchmark"})) == ([], [])
-    for skipped in (frozenset(), frozenset({"check-scripts"})):
-        _, errors = account(tmp_path, gated, skipped_gates=skipped)
-        missing = tmp_path / "packages/example/coverage/lcov.info"
-        assert errors == [f"example/primary: [Errno 2] No such file or directory: '{missing}'"], skipped
-    # A signal that names no gate is never skipped by a gate list.
-    _, errors = account(tmp_path, policy(), skipped_gates=frozenset({""}))
-    assert errors
+    _, errors = account(tmp_path, gated)
+    missing = tmp_path / "packages/example/coverage/lcov.info"
+    assert errors == [f"example/primary: [Errno 2] No such file or directory: '{missing}'"]
+
+
+@pytest.mark.parametrize(
+    "skipped", [frozenset({"check-benchmrk"}), frozenset({"check-benchmark", "check-ts"})]
+)
+def test_skipped_gates_reject_a_gate_no_signal_declares(tmp_path: Path, skipped: frozenset[str]) -> None:
+    """Fail closed on a skipped-gate token no policy signal declares, so a typo cannot skip nothing silently.
+
+    Parameters:
+        tmp_path (Path): Disposable source root with a passing report.
+        skipped (frozenset[str]): Skipped gates holding at least one undeclared token.
+    Returns:
+        None: Accounting refuses the whole gate list before reading any report.
+    Raises:
+        AssertionError: An undeclared token is ignored.
+    """
+    setup_report(tmp_path)
+    gated = policy()
+    gated.packages["example"].signals["primary"].gate = "check-benchmark"
+    unknown = sorted(skipped - {"check-benchmark"})
+    with pytest.raises(ValueError, match=re.escape(f"Skipped gates no policy signal declares: {unknown}")):
+        account(tmp_path, gated, skipped_gates=skipped)
 
 
 def test_skipped_gates_cli_reports_not_run(tmp_path: Path) -> None:
@@ -665,7 +684,7 @@ def test_skipped_gates_cli_reports_not_run(tmp_path: Path) -> None:
     git_read(tmp_path, ["init", "-q", "--template="])
     command = [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--measure", "--os", "linux"]
     skipped = subprocess.run(
-        [*command, "--skipped-gates", "check-ts check-benchmark"], capture_output=True, text=True, check=False
+        [*command, "--skipped-gates", "check-benchmark"], capture_output=True, text=True, check=False
     )
     assert skipped.returncode == 0, skipped.stderr
     assert (
@@ -674,6 +693,11 @@ def test_skipped_gates_cli_reports_not_run(tmp_path: Path) -> None:
     required = subprocess.run(command, capture_output=True, text=True, check=False)
     assert required.returncode == 1
     assert "example/primary: [Errno 2] No such file or directory" in required.stderr
+    typo = subprocess.run(
+        [*command, "--skipped-gates", "check-benchmrk"], capture_output=True, text=True, check=False
+    )
+    assert typo.returncode == 1
+    assert "Skipped gates no policy signal declares: ['check-benchmrk']" in typo.stderr
 
 
 def test_ratchet_rejects_changing_a_signal_producer_gate() -> None:
